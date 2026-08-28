@@ -194,5 +194,14 @@ export function pickTarget(current: string | undefined, wanted?: string | null, 
     const candidates = accounts.map((a) => ({ a, until: ledger[a.name]?.until ?? 0 }))
     candidates.sort((x, y) => x.until - y.until)
     const soonest = candidates[0]
+
+    // A park whose deadline has ALREADY PASSED is not a park — that account
+    // has headroom right now. Returning it as one is a livelock: the launcher
+    // parks for zero milliseconds, wakes, asks again, gets the same answer,
+    // and spins as fast as the event loop allows. This is the ordinary end of
+    // every park, because the account we wake up FOR is usually the one we are
+    // already sitting on, and `others` has excluded it from the search above.
+    if (soonest.until <= now) return { kind: 'account', account: soonest.a }
+
     return { kind: 'parked', until: soonest.until, account: soonest.a }
 }

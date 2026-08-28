@@ -26,6 +26,7 @@ import { basename } from 'node:path'
 import { logger } from '@/ui/logger'
 import {
     type DroverAccount,
+    accountByName,
     currentAccount,
     defaultCooldownMs,
     pickTarget,
@@ -99,11 +100,58 @@ export class FlipController {
     claudeSessionId: string | null = null
     readonly pane: string | null = process.env.TMUX_PANE ?? null
 
+    /**
+     * Which account this session is on RIGHT NOW.
+     *
+     * This cannot be read from the environment more than once, and that is not
+     * a nicety. `drover account` stamps DROVER_ACCOUNT and CLAUDE_CONFIG_DIR
+     * into the process once, at spawn; a flip changes the account by writing
+     * `session.claudeEnvVars` for the NEXT child, and the happy process's own
+     * env is deliberately left alone. So after one flip the environment still
+     * names the account we LEFT, and asking it again gets a confident wrong
+     * answer — which made the second flip in any session:
+     *
+     *   - compute `from` as the original account, so a flip "to alt" while
+     *     already on alt looked like a move instead of a no-op;
+     *   - carry the transcript out of the ORIGINAL account's config dir,
+     *     overwriting the newer one and losing everything said since the first
+     *     flip;
+     *   - record the cooldown against the wrong account on an auto-flip, so
+     *     the account that actually ran out kept being chosen.
+     *
+     * Undefined until first read so the environment still seeds it.
+     */
+    private current: DroverAccount | undefined
+    private currentKnown = false
+
     constructor(
         private readonly cwd: string,
         /** Say something the phone and the terminal can both see. */
         private readonly announce: (message: string) => void,
     ) {}
+
+    /** The account this session is on, environment first, then whatever we flipped to. */
+    private here(): DroverAccount | undefined {
+        if (!this.currentKnown) {
+            this.current = currentAccount()
+            this.currentKnown = true
+        }
+        return this.current
+    }
+
+    /**
+     * Say which account this session started on, when the caller knows better
+     * than the environment does (a session spawned with explicit env vars
+     * rather than through the `drover account` wrapper).
+     */
+    startedOn(name: string | undefined): void {
+        if (!name) return
+        this.current = accountByName(name) ?? {
+            name,
+            configDir: process.env.CLAUDE_CONFIG_DIR || '',
+        }
+        this.currentKnown = true
+    }
 
     // --- triggers -----------------------------------------------------------
 
@@ -196,7 +244,7 @@ export class FlipController {
         const hit = detectLimit(read.text)
         if (!hit) return
 
-        const current = currentAccount()
+        const current = this.here()
         const until = hit.resetsAt ?? Date.now() + defaultCooldownMs
         if (current) setCooldown(current.name, until, hit.quote)
         logger.debug(`[flip] usage limit detected: ${hit.quote}`)
@@ -242,7 +290,7 @@ export class FlipController {
      * launcher should do next; it owns the relaunch, because it owns the loop.
      */
     apply(req: FlipRequest, claudeSessionId: string | null): ApplyResult {
-        const from = currentAccount()
+        const from = this.here()
         const choice = pickTarget(from?.name, req.account)
         logger.debug(
             `[flip] applying: from=${from?.name ?? '(unknown)'} choice=${choice.kind}` +
@@ -271,7 +319,14 @@ export class FlipController {
 
         const target = choice.account
         if (from && target.name === from.name) {
-            return { kind: 'refused', note: `Cattle Drover: already on ${target.name}.` }
+            // Waking from a park onto our own account is the NORMAL end of a
+            // park, not a mistake, so it says so rather than reading like a
+            // refusal to do what was asked.
+            const note =
+                req.reason === 'cooldown expired'
+                    ? `Cattle Drover: ${target.name} has headroom again — carrying on here.`
+                    : `Cattle Drover: already on ${target.name}.`
+            return { kind: 'refused', note }
         }
 
         const carried = claudeSessionId
@@ -296,6 +351,11 @@ export class FlipController {
             override: req.prompt,
             account: target,
         })
+
+        // We are on the target from here on. Recorded BEFORE the caller acts,
+        // because the caller may never come back to tell us it worked.
+        this.current = target
+        this.currentKnown = true
 
         return {
             kind: 'flipped',

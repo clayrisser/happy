@@ -20,27 +20,30 @@ export type LauncherResult = { type: 'switch' } | { type: 'exit', code: number }
  */
 async function applyPendingFlip(session: Session, resetAbort: () => void): Promise<boolean> {
     const flip = session.flip;
-    const request = flip?.take();
+    let request = flip?.take();
     if (!flip || !request) return false;
 
-    const result = flip.apply(request, session.sessionId);
+    // A park is resolved HERE, in a loop, rather than by queueing another
+    // request for the next child to trip over. Queueing it meant the flip sat
+    // pending for the whole of the next conversation, so when Clay eventually
+    // quit claude the launcher found a stale request and relaunched instead of
+    // exiting — a session that would not close.
+    let result = flip.apply(request, session.sessionId);
+    while (result.kind === 'parked') {
+        session.client.sendSessionEvent({ type: 'message', message: result.note });
+        flip.say(result.note);
+        await flip.park(result.until);
+        // The ledger has moved on, so ask again. `take()` first, in case a
+        // human flipped by hand while we were parked — their choice wins.
+        request = flip.take() ?? { account: null, reason: 'cooldown expired', by: 'auto' };
+        result = flip.apply(request, session.sessionId);
+    }
 
     if (result.kind === 'refused') {
         // Say why, in the session, and carry on where we are. A refused flip
         // must never take the session down with it.
         session.client.sendSessionEvent({ type: 'message', message: result.note });
         flip.say(result.note);
-        resetAbort();
-        return true;
-    }
-
-    if (result.kind === 'parked') {
-        session.client.sendSessionEvent({ type: 'message', message: result.note });
-        flip.say(result.note);
-        await flip.park(result.until);
-        // Waking up is just another flip attempt: the ledger has moved on, so
-        // pickTarget now has something to choose. Re-queue and go round again.
-        flip.request({ account: null, reason: 'cooldown expired', by: 'auto' });
         resetAbort();
         return true;
     }
