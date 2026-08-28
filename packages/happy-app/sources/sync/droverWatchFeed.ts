@@ -47,6 +47,7 @@ export function collectGates(): DroverGate[] {
             const tool = (request as { tool?: string }).tool ?? 'Tool';
             const args = (request as { arguments?: unknown }).arguments;
             const createdAt = (request as { createdAt?: number }).createdAt ?? Date.now();
+            const account = session?.metadata?.droverAccount;
             gates.push({
                 id: `${sessionId}:${requestId}`,
                 title: tool === 'AskUserQuestion' ? 'Question' : `Run ${tool}`,
@@ -54,7 +55,11 @@ export function collectGates(): DroverGate[] {
                 preview: previewFor(tool, args),
                 kind: tool === 'AskUserQuestion' ? 'question' : 'permission',
                 createdAt: new Date(createdAt).toISOString(),
-                account: session?.metadata?.droverAccount ?? null,
+                // Omitted, never null: WatchConnectivity payloads take
+                // property-list types only and JSON null becomes NSNull,
+                // which fails the whole publish. Swift sanitizes too, but
+                // not emitting it is the honest fix.
+                ...(account ? { account } : {}),
             });
         }
     }

@@ -38,16 +38,33 @@ struct DroverSnapshot: Codable, Equatable {
     static let appGroupSuiteName = "group.com.ex3ndr.happy.drover"
     static let storageKey = "drover.snapshot.v1"
 
+    /// The phone sends dates as ISO-8601 strings (JS `toISOString`), which is
+    /// NOT what JSONDecoder assumes by default — it expects seconds since
+    /// 2001, so a default decoder fails the whole snapshot silently and the
+    /// wrist just never updates. Both coders are shared so the app-group copy
+    /// the widget reads round-trips through the same format.
+    static let decoder: JSONDecoder = {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return decoder
+    }()
+
+    static let encoder: JSONEncoder = {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        return encoder
+    }()
+
     static func load(from defaults: UserDefaults? = UserDefaults(suiteName: appGroupSuiteName)) -> DroverSnapshot {
         guard let data = defaults?.data(forKey: storageKey),
-              let decoded = try? JSONDecoder().decode(DroverSnapshot.self, from: data) else {
+              let decoded = try? decoder.decode(DroverSnapshot.self, from: data) else {
             return .empty
         }
         return decoded
     }
 
     func save(to defaults: UserDefaults? = UserDefaults(suiteName: DroverSnapshot.appGroupSuiteName)) {
-        guard let data = try? JSONEncoder().encode(self) else { return }
+        guard let data = try? DroverSnapshot.encoder.encode(self) else { return }
         defaults?.set(data, forKey: DroverSnapshot.storageKey)
     }
 }

@@ -54,6 +54,26 @@ final class DroverWatchDelegate: NSObject, WCSessionDelegate {
     }
 }
 
+/// WatchConnectivity payloads accept property-list types only, and JSON null
+/// decodes to NSNull, which is not one — a single `"account": null` fails the
+/// whole publish with WCErrorCodePayloadUnsupportedTypes. Optional fields
+/// decode from a MISSING key just as well as from a null one, so dropping
+/// nulls is lossless here.
+private func plistSanitized(_ value: Any) -> Any? {
+    if value is NSNull { return nil }
+    if let dict = value as? [String: Any] {
+        var out: [String: Any] = [:]
+        for (key, child) in dict {
+            if let kept = plistSanitized(child) { out[key] = kept }
+        }
+        return out
+    }
+    if let array = value as? [Any] {
+        return array.compactMap { plistSanitized($0) }
+    }
+    return value
+}
+
 public final class DroverWatchModule: Module {
     private let watchDelegate = DroverWatchDelegate()
 
@@ -98,7 +118,8 @@ public final class DroverWatchModule: Module {
             let session = WCSession.default
             guard session.activationState == .activated else { return false }
             guard let data = json.data(using: .utf8),
-                  let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                  let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let dict = plistSanitized(raw) as? [String: Any] else {
                 throw Exception(name: "DroverWatch", description: "snapshot was not a JSON object")
             }
             do {

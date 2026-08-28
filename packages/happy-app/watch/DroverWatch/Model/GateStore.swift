@@ -67,7 +67,7 @@ final class GateStore: NSObject, ObservableObject {
 
     fileprivate func apply(_ context: [String: Any]) {
         guard let data = try? JSONSerialization.data(withJSONObject: context),
-              let decoded = try? JSONDecoder().decode(DroverSnapshot.self, from: data) else { return }
+              let decoded = try? DroverSnapshot.decoder.decode(DroverSnapshot.self, from: data) else { return }
         snapshot = decoded
         decoded.save()
         // Anything the phone no longer lists is settled; stop holding it back.
