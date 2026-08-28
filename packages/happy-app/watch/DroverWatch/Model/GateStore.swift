@@ -18,6 +18,9 @@ final class GateStore: NSObject, ObservableObject {
     /// Gates this watch has answered but the phone has not yet confirmed
     /// gone. They render as pending-dismissal so a double tap is impossible.
     @Published private(set) var answering: Set<String> = []
+    /// Sessions with a flip in flight, so the row can say so and a double tap
+    /// cannot queue two.
+    @Published private(set) var flipping: Set<String> = []
     @Published private(set) var lastError: String?
 
     private var session: WCSession?
@@ -37,19 +40,52 @@ final class GateStore: NSObject, ObservableObject {
             .sorted { $0.createdAt > $1.createdAt }
     }
 
+    var sessions: [DroverSession] {
+        snapshot.sessions.sorted { lhs, rhs in
+            // Running sessions first — those are the ones worth flipping.
+            if lhs.active != rhs.active { return lhs.active }
+            return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+        }
+    }
+
+    var accounts: [String] { snapshot.accounts }
+
     func answer(_ gate: DroverGate, allow: Bool, optionId: String? = nil) {
         answering.insert(gate.id)
         let answer = DroverAnswer(id: gate.id, allow: allow, optionId: optionId)
-        guard let payload = try? JSONEncoder().encode(answer),
-              let dict = try? JSONSerialization.jsonObject(with: payload) as? [String: Any] else {
+        if !send(answer, describing: "answer") {
             answering.remove(gate.id)
-            lastError = "Could not encode the answer"
+        }
+    }
+
+    /// Move a session onto another account. `account` nil means "next one with
+    /// headroom" — the CLI owns that choice, because it holds the cooldowns.
+    func flip(_ session: DroverSession, to account: String? = nil) {
+        flipping.insert(session.id)
+        if !send(DroverFlip(sessionId: session.id, account: account), describing: "flip") {
+            flipping.remove(session.id)
             return
         }
+        // Nothing acknowledges a flip on this channel — the session simply
+        // starts reporting the new account in the next snapshot. So the
+        // in-flight mark is cleared on a timer rather than left to stick.
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 6_000_000_000)
+            self?.flipping.remove(session.id)
+        }
+    }
+
+    /// One transport for both messages. Reachable gets it now; unreachable
+    /// queues it, so a tap out of range is delivered rather than dropped.
+    private func send<T: Encodable>(_ message: T, describing what: String) -> Bool {
+        guard let payload = try? JSONEncoder().encode(message),
+              let dict = try? JSONSerialization.jsonObject(with: payload) as? [String: Any] else {
+            lastError = "Could not encode the \(what)"
+            return false
+        }
         guard let session, session.activationState == .activated else {
-            answering.remove(gate.id)
             lastError = "Watch is not paired with the phone app"
-            return
+            return false
         }
         if session.isReachable {
             session.sendMessage(dict, replyHandler: nil) { [weak self] error in
@@ -63,6 +99,7 @@ final class GateStore: NSObject, ObservableObject {
         } else {
             session.transferUserInfo(dict)
         }
+        return true
     }
 
     fileprivate func apply(_ context: [String: Any]) {

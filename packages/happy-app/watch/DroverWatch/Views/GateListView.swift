@@ -24,6 +24,22 @@ struct GateListView: View {
             .navigationDestination(for: DroverGate.self) { gate in
                 GateDetailView(gate: gate)
             }
+            .navigationDestination(for: DroverSession.self) { session in
+                SessionFlipView(session: session)
+            }
+            .toolbar {
+                // The flip surface hangs off the gate wall rather than being a
+                // second tab: gates are what the wrist is FOR, and a tab bar
+                // costs a row of pixels on every screen to reach something
+                // used far less often.
+                ToolbarItem(placement: .topBarTrailing) {
+                    NavigationLink {
+                        SessionListView()
+                    } label: {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                    }
+                }
+            }
         }
     }
 }

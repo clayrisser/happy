@@ -19,6 +19,8 @@ import WatchConnectivity
 final class DroverWatchDelegate: NSObject, WCSessionDelegate {
     /// Set by the module; called on every answer from the wrist.
     var onAnswer: (([String: Any]) -> Void)?
+    /// Called when the wrist asks for an account flip (BASED-98).
+    var onFlip: (([String: Any]) -> Void)?
 
     func session(
         _ session: WCSession,
@@ -46,6 +48,16 @@ final class DroverWatchDelegate: NSObject, WCSessionDelegate {
     }
 
     private func forward(_ payload: [String: Any]) {
+        // A flip carries `kind`, which an answer never does. Checked first so
+        // the answer guard below cannot silently swallow it — that guard is a
+        // `return` on a missing `allow`, and a flip has no `allow`.
+        if payload["kind"] as? String == "flip" {
+            guard let sessionId = payload["sessionId"] as? String else { return }
+            var event: [String: Any] = ["sessionId": sessionId]
+            if let account = payload["account"] as? String { event["account"] = account }
+            onFlip?(event)
+            return
+        }
         guard let id = payload["id"] as? String,
               let allow = payload["allow"] as? Bool else { return }
         var event: [String: Any] = ["id": id, "allow": allow]
@@ -80,11 +92,14 @@ public final class DroverWatchModule: Module {
     public func definition() -> ModuleDefinition {
         Name("DroverWatch")
 
-        Events("onAnswer")
+        Events("onAnswer", "onFlip")
 
         OnCreate {
             self.watchDelegate.onAnswer = { [weak self] event in
                 self?.sendEvent("onAnswer", event)
+            }
+            self.watchDelegate.onFlip = { [weak self] event in
+                self?.sendEvent("onFlip", event)
             }
             guard WCSession.isSupported() else { return }
             let session = WCSession.default

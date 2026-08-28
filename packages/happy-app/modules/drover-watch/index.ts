@@ -34,10 +34,28 @@ export interface DroverGate {
     account?: string | null;
 }
 
+/** A session the wrist may flip onto another account. */
+export interface DroverSession {
+    id: string;
+    title: string;
+    account?: string | null;
+    active: boolean;
+}
+
 export interface DroverSnapshot {
     gates: DroverGate[];
     updatedAt: string;
     connected: boolean;
+    sessions: DroverSession[];
+    /** Account names in registry order, so the wrist can offer them by name. */
+    accounts: string[];
+}
+
+/** The wrist asking for an account flip (BASED-98). */
+export interface DroverFlipEvent {
+    sessionId: string;
+    /** Omitted for "next account with headroom". */
+    account?: string;
 }
 
 // The emitter members are declared explicitly rather than by extending
@@ -47,10 +65,10 @@ export interface DroverSnapshot {
 type DroverWatchModuleType = {
     status: () => DroverWatchStatus;
     publish: (json: string) => Promise<boolean>;
-    addListener: (
-        eventName: 'onAnswer',
-        listener: (event: DroverAnswerEvent) => void,
-    ) => EventSubscription;
+    addListener: {
+        (eventName: 'onAnswer', listener: (event: DroverAnswerEvent) => void): EventSubscription;
+        (eventName: 'onFlip', listener: (event: DroverFlipEvent) => void): EventSubscription;
+    };
 };
 
 // Optional: Android, web and any build without the module still import this
@@ -82,4 +100,9 @@ export async function publishDroverSnapshot(snapshot: DroverSnapshot): Promise<b
 export function addDroverAnswerListener(listener: (event: DroverAnswerEvent) => void) {
     if (!native) return { remove: () => {} };
     return native.addListener('onAnswer', listener);
+}
+
+export function addDroverFlipListener(listener: (event: DroverFlipEvent) => void) {
+    if (!native) return { remove: () => {} };
+    return native.addListener('onFlip', listener);
 }

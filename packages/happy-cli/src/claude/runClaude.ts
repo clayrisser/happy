@@ -39,7 +39,7 @@ import { getProjectPath } from './utils/path';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { RawJSONLinesSchema, type RawJSONLines } from './types';
-import { FlipController } from '@/drover/flip/controller';
+import { FlipController, parseFlipCommand } from '@/drover/flip/controller';
 import { readAccounts } from '@/drover/flip/accounts';
 
 /** JavaScript runtime to use for spawning Claude Code */
@@ -781,6 +781,25 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
             logger.debug(`[loop] User message received with no effort override, using current: ${currentEffort ?? 'default'}`);
         }
 
+        // Cattle Drover (BASED-98): `/flip` is a command to the WRAPPER, never
+        // a turn for Claude, so it is taken here — before the queue — and not
+        // only in the local launcher.
+        //
+        // The local launcher intercepts it too, and that is not redundant: it
+        // catches a message already sitting in the queue. But local-only was a
+        // real hole, because the phone's and the watch's flip buttons send
+        // exactly this string, and in REMOTE mode it sailed past into the
+        // conversation and Claude answered a slash command at Clay instead of
+        // the session changing account.
+        if (flipController) {
+            const flipRequest = parseFlipCommand(message.content.text);
+            if (flipRequest) {
+                logger.debug('[flip] /flip received from the app');
+                flipController.request(flipRequest);
+                return;
+            }
+        }
+
         // Check for special commands before processing
         const specialCommand = parseSpecialCommand(message.content.text);
 
@@ -957,6 +976,10 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
         : undefined;
     if (flipController) {
         flipController.happySessionId = response.id;
+        // Tell it where we started rather than letting it infer from the
+        // environment twice — the environment is only right until the first
+        // flip, and a stale answer there loses the transcript.
+        flipController.startedOn(process.env.DROVER_ACCOUNT);
         flipController.start();
         logger.debug('[flip] account flip armed');
     }
