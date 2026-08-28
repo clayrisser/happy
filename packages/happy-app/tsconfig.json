@@ -6,7 +6,8 @@
       "@/*": [
         "./sources/*"
       ],
-      "hello-world": [ "../../hello-world" ]
+      "hello-world": [ "../../hello-world" ],
+      "drover-watch": [ "./modules/drover-watch" ]
     },
     "jsx": "react-jsx",
     "esModuleInterop": true,

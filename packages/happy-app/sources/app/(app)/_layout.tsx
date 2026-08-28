@@ -8,12 +8,17 @@ import { isRunningOnMac } from '@/utils/platform';
 import { useUnistyles } from 'react-native-unistyles';
 import { t } from '@/text';
 import { MobileGlassBackdrop } from '@/components/MobileGlass';
+import { startDroverWatchFeed } from '@/sync/droverWatchFeed';
 
 export const unstable_settings = {
     initialRouteName: 'index',
 };
 
 export default function RootLayout() {
+    // Feed the Cattle Drover wrist surface (BASED-98). No-op where the native
+    // module is absent, so no Platform check is needed here.
+    React.useEffect(() => startDroverWatchFeed(), []);
+
     // Keep UIKit in charge of most iPhone/iPad headers. Screens that belong to
     // the floating-glass family opt into createHeader below.
     const shouldUseCustomHeader = Platform.OS === 'android' || isRunningOnMac() || Platform.OS === 'web';
