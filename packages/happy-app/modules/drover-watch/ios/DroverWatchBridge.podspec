@@ -1,5 +1,5 @@
 Pod::Spec.new do |s|
-  s.name           = 'DroverWatch'
+  s.name           = 'DroverWatchBridge'
   s.version        = '1.0.0'
   s.summary        = 'WatchConnectivity bridge for the Cattle Drover wrist surface'
   s.description    = 'Publishes pending permission gates to the paired watch and forwards answers back (BASED-98).'

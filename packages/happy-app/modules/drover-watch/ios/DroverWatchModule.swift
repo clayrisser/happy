@@ -13,8 +13,49 @@ import WatchConnectivity
 /// because it is the one WatchConnectivity channel that keeps only the LATEST
 /// value and delivers it even when the watch app is not running. A queue of
 /// stale gate lists is worse than no list at all.
-public final class DroverWatchModule: Module, WCSessionDelegate {
-    private var activated = false
+
+/// WCSessionDelegate requires NSObjectProtocol, which Expo's `Module` is not,
+/// so the delegate is its own NSObject and the module owns it.
+final class DroverWatchDelegate: NSObject, WCSessionDelegate {
+    /// Set by the module; called on every answer from the wrist.
+    var onAnswer: (([String: Any]) -> Void)?
+
+    func session(
+        _ session: WCSession,
+        activationDidCompleteWith activationState: WCSessionActivationState,
+        error: Error?
+    ) {}
+
+    func sessionDidBecomeInactive(_ session: WCSession) {}
+
+    func sessionDidDeactivate(_ session: WCSession) {
+        // Re-activate so a watch switch does not silently end the feed.
+        WCSession.default.activate()
+    }
+
+    /// Live answer from the watch while the phone app is running.
+    func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
+        forward(message)
+    }
+
+    /// Queued answer: the watch was out of range when it was tapped. Delivered
+    /// whenever the pair reconnects — the bus is first-wins, so a late answer
+    /// to a settled gate is refused there rather than needing a guard here.
+    func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any]) {
+        forward(userInfo)
+    }
+
+    private func forward(_ payload: [String: Any]) {
+        guard let id = payload["id"] as? String,
+              let allow = payload["allow"] as? Bool else { return }
+        var event: [String: Any] = ["id": id, "allow": allow]
+        if let optionId = payload["optionId"] as? String { event["optionId"] = optionId }
+        onAnswer?(event)
+    }
+}
+
+public final class DroverWatchModule: Module {
+    private let watchDelegate = DroverWatchDelegate()
 
     public func definition() -> ModuleDefinition {
         Name("DroverWatch")
@@ -22,9 +63,12 @@ public final class DroverWatchModule: Module, WCSessionDelegate {
         Events("onAnswer")
 
         OnCreate {
+            self.watchDelegate.onAnswer = { [weak self] event in
+                self?.sendEvent("onAnswer", event)
+            }
             guard WCSession.isSupported() else { return }
             let session = WCSession.default
-            session.delegate = self
+            session.delegate = self.watchDelegate
             session.activate()
         }
 
@@ -70,42 +114,5 @@ public final class DroverWatchModule: Module, WCSessionDelegate {
             }
             return true
         }
-    }
-
-    // MARK: - WCSessionDelegate
-
-    public func session(
-        _ session: WCSession,
-        activationDidCompleteWith activationState: WCSessionActivationState,
-        error: Error?
-    ) {
-        activated = activationState == .activated
-    }
-
-    public func sessionDidBecomeInactive(_ session: WCSession) {}
-
-    public func sessionDidDeactivate(_ session: WCSession) {
-        // Re-activate so a watch switch does not silently end the feed.
-        WCSession.default.activate()
-    }
-
-    /// Live answer from the watch while the phone app is running.
-    public func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
-        emitAnswer(message)
-    }
-
-    /// Queued answer: the watch was out of range when it was tapped. Delivered
-    /// whenever the pair reconnects — the bus is first-wins, so a late answer
-    /// to a settled gate is refused there rather than needing a guard here.
-    public func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any]) {
-        emitAnswer(userInfo)
-    }
-
-    private func emitAnswer(_ payload: [String: Any]) {
-        guard let id = payload["id"] as? String,
-              let allow = payload["allow"] as? Bool else { return }
-        var event: [String: Any] = ["id": id, "allow": allow]
-        if let optionId = payload["optionId"] as? String { event["optionId"] = optionId }
-        sendEvent("onAnswer", event)
     }
 }
