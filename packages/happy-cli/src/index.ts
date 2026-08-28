@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * CLI entry point for happy command
+ * CLI entry point for the drover command
  * 
  * Simple argument parsing without any CLI framework dependencies
  */
@@ -42,7 +42,7 @@ import { sanitizeSessionEnvironment } from './daemon/sessionEnvironment'
 
   // If --version is passed - do not log, its likely daemon inquiring about our version
   if (!args.includes('--version')) {
-    logger.debug('Starting happy CLI with args: ', process.argv)
+    logger.debug('Starting drover CLI with args: ', process.argv)
   }
 
   // Check if first argument is a subcommand
@@ -57,10 +57,10 @@ import { sanitizeSessionEnvironment } from './daemon/sessionEnvironment'
     if (args[1] === 'clean') {
       if (args.slice(2).some(a => a === '--help' || a === '-h')) {
         console.log(`
-${chalk.bold('happy doctor clean')} - Kill all happy-related processes (daemon + sessions)
+${chalk.bold('drover doctor clean')} - Kill all drover-related processes (daemon + sessions)
 
 ${chalk.bold('Usage:')}
-  happy doctor clean
+  drover doctor clean
 
 ${chalk.bold('Warning:')} This is destructive — it terminates the daemon and every running session.
 Conversation history is preserved on the server, but in-flight tool calls are interrupted.
@@ -122,6 +122,25 @@ Conversation history is preserved on the server, but in-flight tool calls are in
       process.exit(1)
     }
     return;
+  } else if (subcommand === 'drover-bridge' || subcommand === 'bridge') {
+    // Cattle Drover bridge (BASED-98): makes the app a surface on the local
+    // prompt bus. Long-running; typically supervised by launchd/systemd.
+    //
+    // `bridge` is the name a person types; `drover-bridge` is kept because the
+    // installed launchd units and the wrapper script have used it since the
+    // stack was first bootstrapped, and a service verb that stops resolving is
+    // a stack that silently does not come back after a reboot.
+    try {
+      const { runDroverBridge } = await import('@/drover/droverBridge');
+      await runDroverBridge();
+    } catch (error) {
+      console.error(chalk.red('Error:'), error instanceof Error ? error.message : 'Unknown error')
+      if (process.env.DEBUG) {
+        console.error(error)
+      }
+      process.exit(1)
+    }
+    return;
   } else if (subcommand === 'bye') {
     console.log('Bye!');
     process.exit(0);
@@ -153,7 +172,7 @@ Conversation history is preserved on the server, but in-flight tool calls are in
     // Handle gemini subcommands
     const geminiSubcommand = args[1];
     
-    // Handle "happy gemini model set <model>" command
+    // Handle "drover gemini model set <model>" command
     if (geminiSubcommand === 'model' && args[2] === 'set' && args[3]) {
       const modelName = args[3];
       const validModels = ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'];
@@ -203,7 +222,7 @@ Conversation history is preserved on the server, but in-flight tool calls are in
       }
     }
     
-    // Handle "happy gemini model get" command
+    // Handle "drover gemini model get" command
     if (geminiSubcommand === 'model' && args[2] === 'get') {
       try {
         const { existsSync, readFileSync } = require('fs');
@@ -242,7 +261,7 @@ Conversation history is preserved on the server, but in-flight tool calls are in
       }
     }
     
-    // Handle "happy gemini project set <project-id>" command
+    // Handle "drover gemini project set <project-id>" command
     if (geminiSubcommand === 'project' && args[2] === 'set' && args[3]) {
       const projectId = args[3];
       
@@ -251,7 +270,7 @@ Conversation history is preserved on the server, but in-flight tool calls are in
         const { readCredentials } = await import('@/persistence');
         const { ApiClient } = await import('@/api/api');
         
-        // Try to get current user email from Happy cloud token
+        // Try to get current user email from Cattle Drover cloud token
         let userEmail: string | undefined = undefined;
         try {
           const credentials = await readCredentials();
@@ -283,7 +302,7 @@ Conversation history is preserved on the server, but in-flight tool calls are in
       }
     }
     
-    // Handle "happy gemini project get" command
+    // Handle "drover gemini project get" command
     if (geminiSubcommand === 'project' && args[2] === 'get') {
       try {
         const { readGeminiLocalConfig } = await import('@/gemini/utils/config');
@@ -302,7 +321,7 @@ Conversation history is preserved on the server, but in-flight tool calls are in
           console.log('No Google Cloud Project configured.');
           console.log('');
           console.log('If you see "Authentication required" error, you may need to set a project:');
-          console.log('  happy gemini project set <your-project-id>');
+          console.log('  drover gemini project set <your-project-id>');
           console.log('');
           console.log('This is required for Google Workspace accounts.');
           console.log('Guide: https://goo.gle/gemini-cli-auth-docs#workspace-gca');
@@ -314,9 +333,9 @@ Conversation history is preserved on the server, but in-flight tool calls are in
       }
     }
     
-    // Handle "happy gemini project" (no subcommand) - show help
+    // Handle "drover gemini project" (no subcommand) - show help
     if (geminiSubcommand === 'project' && !args[2]) {
-      console.log('Usage: happy gemini project <command>');
+      console.log('Usage: drover gemini project <command>');
       console.log('');
       console.log('Commands:');
       console.log('  set <project-id>   Set Google Cloud Project ID');
@@ -332,7 +351,7 @@ Conversation history is preserved on the server, but in-flight tool calls are in
     // Handle gemini command (ACP-based agent)
     try {
       // The standalone gemini CLI is EOL; agy (Antigravity CLI) is its successor.
-      console.warn(chalk.yellow('⚠ The gemini backend is deprecated and may be removed in a future release. Use `happy agy` (Antigravity CLI) instead.'));
+      console.warn(chalk.yellow('⚠ The gemini backend is deprecated and may be removed in a future release. Use `drover agy` (Antigravity CLI) instead.'));
 
       const { runGemini } = await import('@/gemini/runGemini');
 
@@ -475,7 +494,7 @@ Conversation history is preserved on the server, but in-flight tool calls are in
     return;
   } else if (subcommand === 'logout') {
     // Keep for backward compatibility - redirect to auth logout
-    console.log(chalk.yellow('Note: "happy logout" is deprecated. Use "happy auth logout" instead.\n'));
+    console.log(chalk.yellow('Note: "drover logout" is deprecated. Use "drover auth logout" instead.\n'));
     try {
       await handleAuthCommand(['logout']);
     } catch (error) {
@@ -592,20 +611,20 @@ Conversation history is preserved on the server, but in-flight tool calls are in
       }
     } else {
       console.log(`
-${chalk.bold('happy daemon')} - Daemon management
+${chalk.bold('drover daemon')} - Daemon management
 
 ${chalk.bold('Usage:')}
-  happy daemon start              Start the daemon (detached)
-  happy daemon stop               Stop the daemon (sessions stay alive)
-  happy daemon status             Show daemon status
-  happy daemon list               List active sessions
+  drover daemon start              Start the daemon (detached)
+  drover daemon stop               Stop the daemon (sessions stay alive)
+  drover daemon status             Show daemon status
+  drover daemon list               List active sessions
 
-  If you want to kill all happy related processes run 
-  ${chalk.cyan('happy doctor clean')}
+  If you want to kill all drover related processes run 
+  ${chalk.cyan('drover doctor clean')}
 
 ${chalk.bold('Note:')} The daemon runs in the background and manages Claude sessions.
 
-${chalk.bold('To clean up runaway processes:')} Use ${chalk.cyan('happy doctor clean')}
+${chalk.bold('To clean up runaway processes:')} Use ${chalk.cyan('drover doctor clean')}
 `)
     }
     return;
@@ -680,7 +699,7 @@ ${chalk.bold('To clean up runaway processes:')} Use ${chalk.cyan('happy doctor c
       } else if (arg === '--settings') {
         // Intercept --settings flag - Happy uses this internally for session hooks
         const settingsValue = args[++i] // consume the value
-        console.warn(chalk.yellow(`⚠️  Warning: --settings is used internally by Happy for session tracking.`))
+        console.warn(chalk.yellow(`⚠️  Warning: --settings is used internally by Cattle Drover for session tracking.`))
         console.warn(chalk.yellow(`   Your settings file "${settingsValue}" will be ignored.`))
         console.warn(chalk.yellow(`   To configure Claude, edit ~/.claude/settings.json instead.`))
         // Don't pass through to claudeArgs
@@ -709,46 +728,55 @@ ${chalk.bold('To clean up runaway processes:')} Use ${chalk.cyan('happy doctor c
     // Show help
     if (showHelp) {
       console.log(`
-${chalk.bold('happy')} - Claude Code On the Go
+${chalk.bold('drover')} - Cattle Drover · Claude Code on the go
 
 ${chalk.bold('Usage:')}
-  happy [options]         Start Claude with mobile control
-  happy auth              Manage authentication
-  happy resume            Resume a previous Happy session by Happy session ID
-  happy codex             Start Codex mode
-  happy gemini            Start Gemini mode (ACP) [deprecated — use agy]
-  happy agy               Start agy (Antigravity CLI) mode
-  happy acp               Start a generic ACP-compatible agent
-  happy connect           Connect AI vendor API keys
-  happy sandbox           Configure and manage OS-level sandboxing
-  happy notify            Send push notification
-  happy daemon            Manage background service that allows
+  drover [options]         Start Claude with mobile control
+  drover auth              Manage authentication
+  drover pair              QR-pair a phone or watch (= drover auth login)
+  drover resume            Resume a previous Drover session by Drover session ID
+  drover codex             Start Codex mode
+  drover gemini            Start Gemini mode (ACP) [deprecated — use agy]
+  drover agy               Start agy (Antigravity CLI) mode
+  drover acp               Start a generic ACP-compatible agent
+  drover connect           Connect AI vendor API keys
+  drover sandbox           Configure and manage OS-level sandboxing
+  drover notify            Send push notification
+  drover daemon            Manage background service that allows
                             to spawn new sessions away from your computer
-  happy doctor            System diagnostics & troubleshooting
+  drover doctor            System diagnostics & troubleshooting
+
+${chalk.bold('Also, from the wrapper (run `drover help` for the full list):')}
+  drover status            Bus health, pending prompts, services
+  drover sessions          What is running, where, on which account
+  drover accounts          Accounts, which are cooling and until when
+  drover account <name>    Run on that Claude subscription (short: -a <name>)
+  drover flip [account]    Move this session to another account, keeping it
+  drover bus|bridge|relay  The services launchd supervises
 
 ${chalk.bold('Examples:')}
-  happy                    Start session
-  happy resume cmmij8      Resume a previous session by Happy session ID
-  happy --yolo             Start with bypassing permissions
-                            happy sugar for --dangerously-skip-permissions
-  happy --chrome           Enable Chrome browser access for this session
-  happy --no-chrome        Disable Chrome even if default is on
-  happy --no-sandbox       Disable Happy sandbox for this session
-  happy --js-runtime bun   Use bun instead of node to spawn Claude Code
-  happy --claude-env ANTHROPIC_BASE_URL=http://127.0.0.1:3456
+  drover                    Start session
+  drover resume cmmij8      Resume a previous session by Drover session ID
+  drover --yolo             Start with bypassing permissions
+                            drover sugar for --dangerously-skip-permissions
+  drover --chrome           Enable Chrome browser access for this session
+  drover --no-chrome        Disable Chrome even if default is on
+  drover --no-sandbox       Disable Drover sandbox for this session
+  drover --js-runtime bun   Use bun instead of node to spawn Claude Code
+  drover --claude-env ANTHROPIC_BASE_URL=http://127.0.0.1:3456
                            Use a custom API endpoint (e.g., claude-code-router)
-  happy acp gemini         Start Gemini via generic ACP runner
-  happy acp -- opencode --acp
+  drover acp gemini         Start Gemini via generic ACP runner
+  drover acp -- opencode --acp
                            Start a custom ACP command
-  happy acp opencode --verbose
+  drover acp opencode --verbose
                            Print raw ACP backend/envelope events
-  happy auth login --force Authenticate
-  happy doctor             Run diagnostics
+  drover auth login --force Authenticate
+  drover doctor             Run diagnostics
 
-${chalk.bold('Happy supports ALL Claude options!')}
-  Use any claude flag with happy as you would with claude. Our favorite:
+${chalk.bold('Cattle Drover supports ALL Claude options!')}
+  Use any claude flag with drover as you would with claude. Our favorite:
 
-  happy --resume
+  drover --resume
 
 ${chalk.gray('─'.repeat(60))}
 ${chalk.bold.cyan('Claude Code Options (from `claude --help`):')}
@@ -768,7 +796,7 @@ ${chalk.bold.cyan('Claude Code Options (from `claude --help`):')}
 
     // Show version
     if (showVersion) {
-      console.log(`happy version: ${packageJson.version}`)
+      console.log(`drover version: ${packageJson.version}`)
       // Don't exit - continue to pass --version to Claude Code
     }
 
@@ -818,34 +846,34 @@ async function handleNotifyCommand(args: string[]): Promise<void> {
 
   if (showHelp) {
     console.log(`
-${chalk.bold('happy notify')} - Send notification
+${chalk.bold('drover notify')} - Send notification
 
 ${chalk.bold('Usage:')}
-  happy notify -p <message> [-t <title>]    Send notification with custom message and optional title
-  happy notify -h, --help                   Show this help
+  drover notify -p <message> [-t <title>]    Send notification with custom message and optional title
+  drover notify -h, --help                   Show this help
 
 ${chalk.bold('Options:')}
   -p <message>    Notification message (required)
-  -t <title>      Notification title (optional, defaults to "Happy")
+  -t <title>      Notification title (optional, defaults to "Cattle Drover")
 
 ${chalk.bold('Examples:')}
-  happy notify -p "Deployment complete!"
-  happy notify -p "System update complete" -t "Server Status"
-  happy notify -t "Alert" -p "Database connection restored"
+  drover notify -p "Deployment complete!"
+  drover notify -p "System update complete" -t "Server Status"
+  drover notify -t "Alert" -p "Database connection restored"
 `)
     return
   }
 
   if (!message) {
     console.error(chalk.red('Error: Message is required. Use -p "your message" to specify the notification text.'))
-    console.log(chalk.gray('Run "happy notify --help" for usage information.'))
+    console.log(chalk.gray('Run "drover notify --help" for usage information.'))
     process.exit(1)
   }
 
   // Load credentials
   let credentials = await readCredentials()
   if (!credentials) {
-    console.error(chalk.red('Error: Not authenticated. Please run "happy auth login" first.'))
+    console.error(chalk.red('Error: Not authenticated. Please run "drover auth login" first.'))
     process.exit(1)
   }
 
@@ -856,7 +884,7 @@ ${chalk.bold('Examples:')}
     const api = await ApiClient.create(credentials);
 
     // Use custom title or default to "Happy"
-    const notificationTitle = title || 'Happy'
+    const notificationTitle = title || 'Cattle Drover'
 
     // Send the push notification
     api.push().sendToAllDevices(

@@ -47,7 +47,7 @@ export function buildOfflineMachineTroubleshooting(
         || choice?.rigMachine?.metadata?.happyHomeDir?.trim()
         || session?.metadata?.happyHomeDir?.trim()
         || '~/.happy';
-    const aiPrompt = `In ${happyHomeDir}, diagnose why Happy cannot reach "${machineName}" for project "${projectName}".`;
+    const aiPrompt = `In ${happyHomeDir}, diagnose why Cattle Drover cannot reach "${machineName}" for project "${projectName}".`;
 
     return {
         machineName,
@@ -57,7 +57,7 @@ export function buildOfflineMachineTroubleshooting(
         message: [
             '1. Wake the machine and check internet.',
             '2. Run `happy` again.',
-            '3. Reopen Happy.',
+            '3. Reopen Cattle Drover.',
             '',
             'AI prompt:',
             aiPrompt,

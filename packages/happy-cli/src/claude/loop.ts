@@ -7,6 +7,7 @@ import { claudeRemoteLauncher } from "./claudeRemoteLauncher"
 import { ApiClient } from "@/lib"
 import type { JsRuntime } from "./runClaude"
 import type { SandboxConfig } from "@/persistence"
+import type { FlipController } from "@/drover/flip/controller"
 
 // Re-export permission mode type from api/types
 // Single unified type with 7 modes - Codex modes mapped at SDK boundary
@@ -48,6 +49,8 @@ interface LoopOptions {
     hookSettingsPath: string
     /** JavaScript runtime to use for spawning Claude Code (default: 'node') */
     jsRuntime?: JsRuntime
+    /** Cattle Drover account flip controller, when more than one account exists. */
+    flip?: FlipController
 }
 
 export async function loop(opts: LoopOptions): Promise<number> {
@@ -69,7 +72,8 @@ export async function loop(opts: LoopOptions): Promise<number> {
         onModeChange: opts.onModeChange,
         onAbort: opts.onAbort,
         hookSettingsPath: opts.hookSettingsPath,
-        jsRuntime: opts.jsRuntime
+        jsRuntime: opts.jsRuntime,
+        flip: opts.flip
     });
 
     opts.onSessionReady?.(session)

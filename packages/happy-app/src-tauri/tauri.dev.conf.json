@@ -1,11 +1,11 @@
 {
   "$schema": "../../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "Happy (dev)",
+  "productName": "Cattle Drover (dev)",
   "identifier": "com.slopus.happy.dev",
   "app": {
     "windows": [
       {
-        "title": "Happy (dev)",
+        "title": "Cattle Drover (dev)",
         "width": 1680,
         "height": 1050,
         "titleBarStyle": "Overlay",

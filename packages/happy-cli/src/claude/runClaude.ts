@@ -20,7 +20,7 @@ import { startHookServer } from '@/claude/utils/startHookServer';
 import { generateHookSettingsFile, cleanupHookSettingsFile } from '@/claude/utils/generateHookSettings';
 import { registerKillSessionHandler } from './registerKillSessionHandler';
 import { projectPath } from '../projectPath';
-import { resolve } from 'node:path';
+import { resolve, basename } from 'node:path';
 import { startOfflineReconnection, connectionState } from '@/utils/serverConnectionErrors';
 import { claudeLocal } from '@/claude/claudeLocal';
 import { createSessionScanner } from '@/claude/utils/sessionScanner';
@@ -39,6 +39,8 @@ import { getProjectPath } from './utils/path';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { RawJSONLinesSchema, type RawJSONLines } from './types';
+import { FlipController, parseFlipCommand } from '@/drover/flip/controller';
+import { readAccounts } from '@/drover/flip/accounts';
 
 /** JavaScript runtime to use for spawning Claude Code */
 export type JsRuntime = 'node' | 'bun'
@@ -148,6 +150,14 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
         flavor: 'claude',
         sandbox: sandboxConfig?.enabled ? sandboxConfig : null,
         dangerouslySkipPermissions,
+        // Multi-account (BASED-98): `drover account` exports DROVER_ACCOUNT next to
+        // CLAUDE_CONFIG_DIR; carrying it in the metadata gives the app a
+        // per-account identity to show and filter on, and the name prefix
+        // makes the account visible today with no app changes.
+        ...(process.env.DROVER_ACCOUNT ? {
+            droverAccount: process.env.DROVER_ACCOUNT,
+            name: `[${process.env.DROVER_ACCOUNT}] ${basename(workingDirectory)}`,
+        } : {}),
         ...(forkedFromSessionId ? { parentSessionId: forkedFromSessionId } : {}),
         ...(forkedFromMessageId ? { forkedFromMessageId } : {}),
         ...(isSideChat ? { isSideChat: true } : {}),
@@ -771,6 +781,25 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
             logger.debug(`[loop] User message received with no effort override, using current: ${currentEffort ?? 'default'}`);
         }
 
+        // Cattle Drover (BASED-98): `/flip` is a command to the WRAPPER, never
+        // a turn for Claude, so it is taken here — before the queue — and not
+        // only in the local launcher.
+        //
+        // The local launcher intercepts it too, and that is not redundant: it
+        // catches a message already sitting in the queue. But local-only was a
+        // real hole, because the phone's and the watch's flip buttons send
+        // exactly this string, and in REMOTE mode it sailed past into the
+        // conversation and Claude answered a slash command at Clay instead of
+        // the session changing account.
+        if (flipController) {
+            const flipRequest = parseFlipCommand(message.content.text);
+            if (flipRequest) {
+                logger.debug('[flip] /flip received from the app');
+                flipController.request(flipRequest);
+                return;
+            }
+        }
+
         // Check for special commands before processing
         const specialCommand = parseSpecialCommand(message.content.text);
 
@@ -936,6 +965,25 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
     registerKillSessionHandler(session.rpcHandlerManager, () => cleanup({ archive: true }));
 
     // Create claude loop
+    // Cattle Drover account flip (BASED-98). Built only when a registry
+    // actually names more than one account: with one account there is nowhere
+    // to flip to, and an idle bus subscription per session would be cost for
+    // nothing. Everything it does is local — the server is never involved.
+    const flipController = readAccounts().length > 1
+        ? new FlipController(workingDirectory, (message) => {
+            session.sendSessionEvent({ type: 'message', message });
+        })
+        : undefined;
+    if (flipController) {
+        flipController.happySessionId = response.id;
+        // Tell it where we started rather than letting it infer from the
+        // environment twice — the environment is only right until the first
+        // flip, and a stale answer there loses the transcript.
+        flipController.startedOn(process.env.DROVER_ACCOUNT);
+        flipController.start();
+        logger.debug('[flip] account flip armed');
+    }
+
     const exitCode = await loop({
         path: workingDirectory,
         model: options.model,
@@ -968,8 +1016,11 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
         claudeArgs: options.claudeArgs,
         sandboxConfig,
         hookSettingsPath,
-        jsRuntime: options.jsRuntime
+        jsRuntime: options.jsRuntime,
+        flip: flipController,
     });
+
+    flipController?.stop();
 
     // Cleanup session resources (intervals, callbacks) - prevents memory leak
     // Note: currentSession is set by onSessionReady callback during loop()

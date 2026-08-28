@@ -411,7 +411,7 @@ export const ca: TranslationStructure = {
         cliVersionOutdated: 'Actualització del CLI requerida',
         cliVersionOutdatedMessage: ({ currentVersion, requiredVersion }: { currentVersion: string; requiredVersion: string }) =>
             `Versió ${currentVersion} instal·lada. Actualitzeu a ${requiredVersion} o posterior`,
-        updateCliInstructions: 'Si us plau executeu npm install -g happy@latest',
+        updateCliInstructions: 'Si us plau executeu npm install -g drover@latest',
         deleteSession: 'Elimina la sessió',
         deleteSessionSubtitle: 'Elimina permanentment aquesta sessió',
         deleteSessionConfirm: 'Eliminar la sessió permanentment?',
@@ -545,7 +545,7 @@ export const ca: TranslationStructure = {
     },
 
     sidebar: {
-        sessionsTitle: 'Happy',
+        sessionsTitle: 'Cattle Drover',
         showArchived: 'Mostra arxivades',
         hideArchived: 'Amaga arxivades',
         newSession: 'Nova sessió',
@@ -873,7 +873,7 @@ export const ca: TranslationStructure = {
 
     machine: {
         offlineUnableToSpawn: 'El llançador està desactivat mentre la màquina està fora de línia',
-        offlineHelp: '• Assegura\'t que l\'ordinador estigui en línia\n• Executa `happy daemon status` per diagnosticar\n• Fas servir l\'última versió del CLI? Actualitza amb `npm install -g happy@latest`',
+        offlineHelp: '• Assegura\'t que l\'ordinador estigui en línia\n• Executa `drover daemon status` per diagnosticar\n• Fas servir l\'última versió del CLI? Actualitza amb `npm install -g drover@latest`',
         launchNewSessionInDirectory: 'Inicia una nova sessió al directori',
         daemon: 'Dimoni',
         status: 'Estat',

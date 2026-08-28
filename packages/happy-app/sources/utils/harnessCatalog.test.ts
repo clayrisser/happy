@@ -4,7 +4,7 @@ import { HARNESS_NAMES, isRetiredHarness, listAvailableHarnesses } from './harne
 
 describe('harness catalog', () => {
     it('names Happy and Antigravity by product, not by CLI id', () => {
-        expect(HARNESS_NAMES.rig).toBe('Happy');
+        expect(HARNESS_NAMES.rig).toBe('Cattle Drover');
         expect(HARNESS_NAMES.agy).toBe('Antigravity');
     });
 
@@ -28,7 +28,7 @@ describe('harness catalog', () => {
             'Claude Code',
             'Codex',
             'Antigravity',
-            'Happy',
+            'Cattle Drover',
         ]);
     });
 

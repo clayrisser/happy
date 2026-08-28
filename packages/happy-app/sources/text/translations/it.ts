@@ -397,7 +397,7 @@ export const it: TranslationStructure = {
         path: 'Percorso',
         operatingSystem: 'Sistema operativo',
         processId: 'ID processo',
-        happyHome: 'Happy Home',
+        happyHome: 'Drover Home',
         copyMetadata: 'Copia metadati',
         agentState: 'Stato agente',
         controlledByUser: 'Controllato dall\'utente',
@@ -409,7 +409,7 @@ export const it: TranslationStructure = {
         cliVersionOutdated: 'Aggiornamento CLI richiesto',
         cliVersionOutdatedMessage: ({ currentVersion, requiredVersion }: { currentVersion: string; requiredVersion: string }) =>
             `Versione ${currentVersion} installata. Aggiorna a ${requiredVersion} o successiva`,
-        updateCliInstructions: 'Esegui npm install -g happy@latest',
+        updateCliInstructions: 'Esegui npm install -g drover@latest',
         deleteSession: 'Elimina sessione',
         deleteSessionSubtitle: 'Rimuovi definitivamente questa sessione',
         deleteSessionConfirm: 'Eliminare definitivamente la sessione?',
@@ -543,7 +543,7 @@ export const it: TranslationStructure = {
     },
 
     sidebar: {
-        sessionsTitle: 'Happy',
+        sessionsTitle: 'Cattle Drover',
         showArchived: 'Mostra archiviate',
         hideArchived: 'Nascondi archiviate',
         newSession: 'Nuova sessione',
@@ -872,7 +872,7 @@ export const it: TranslationStructure = {
     machine: {
         launchNewSessionInDirectory: 'Avvia nuova sessione nella directory',
         offlineUnableToSpawn: 'Avvio disabilitato quando la macchina è offline',
-        offlineHelp: '• Assicurati che il tuo computer sia online\n• Esegui `happy daemon status` per diagnosticare\n• Stai usando l\'ultima versione della CLI? Aggiorna con `npm install -g happy@latest`',
+        offlineHelp: '• Assicurati che il tuo computer sia online\n• Esegui `drover daemon status` per diagnosticare\n• Stai usando l\'ultima versione della CLI? Aggiorna con `npm install -g drover@latest`',
         daemon: 'Daemon',
         status: 'Stato',
         stopDaemon: 'Arresta daemon',

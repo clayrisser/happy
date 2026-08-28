@@ -26,11 +26,22 @@ export class ApiClient {
 
   /**
    * Create a new session or load existing one with the given tag
+   *
+   * `dataKey` pins the session's content key instead of minting a random one
+   * (Cattle Drover, BASED-98). It matters only for a caller that REUSES a tag.
+   * "Get or create" returns the existing record when the tag is already known,
+   * and the server hands back metadata still encrypted under the key that
+   * created it — but a fresh random key was just generated to decrypt it with,
+   * so `metadata` comes back null and every field read off it throws. Callers
+   * with a random per-run tag never see this; the drover bridge, which wants
+   * ONE long-lived session per machine, saw nothing else. Same shape as
+   * getOrCreateMachine, which has always pinned `machineKey` for this reason.
    */
   async getOrCreateSession(opts: {
     tag: string,
     metadata: Metadata,
-    state: AgentState | null
+    state: AgentState | null,
+    dataKey?: Uint8Array
   }): Promise<Session | null> {
 
     // Resolve encryption key
@@ -39,8 +50,8 @@ export class ApiClient {
     let encryptionVariant: 'legacy' | 'dataKey';
     if (this.credential.encryption.type === 'dataKey') {
 
-      // Generate new encryption key
-      encryptionKey = getRandomBytes(32);
+      // Generate new encryption key, unless the caller pinned one.
+      encryptionKey = opts.dataKey ?? getRandomBytes(32);
       encryptionVariant = 'dataKey';
 
       // Derive and encrypt data encryption key

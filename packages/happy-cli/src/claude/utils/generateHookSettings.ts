@@ -10,6 +10,7 @@ import { writeFileSync, mkdirSync, unlinkSync, existsSync } from 'node:fs';
 import { configuration } from '@/configuration';
 import { logger } from '@/ui/logger';
 import { projectPath } from '@/projectPath';
+import { droverHooks, mergeHooks } from '@/drover/hooks';
 
 /**
  * Generate a temporary settings file with SessionStart hook configuration
@@ -29,20 +30,27 @@ export function generateHookSettingsFile(port: number): string {
     const forwarderScript = resolve(projectPath(), 'scripts', 'session_hook_forwarder.cjs');
     const hookCommand = `node "${forwarderScript}" ${port}`;
 
+    // Cattle Drover (BASED-98): the bus producers ride along here, so a
+    // question, an idle notice or a session's lifecycle reaches the phone,
+    // the watch and tmux for sessions DROVER started, and only those. See
+    // drover/hooks.ts for why this is not registered globally.
     const settings = {
-        hooks: {
-            SessionStart: [
-                {
-                    matcher: "*",
-                    hooks: [
-                        {
-                            type: "command",
-                            command: hookCommand
-                        }
-                    ]
-                }
-            ]
-        }
+        hooks: mergeHooks(
+            {
+                SessionStart: [
+                    {
+                        matcher: "*",
+                        hooks: [
+                            {
+                                type: "command" as const,
+                                command: hookCommand
+                            }
+                        ]
+                    }
+                ]
+            },
+            droverHooks()
+        )
     };
 
     writeFileSync(filepath, JSON.stringify(settings, null, 2));

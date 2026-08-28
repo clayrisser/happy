@@ -38,7 +38,10 @@
     "tauri:dev": "tauri dev --config src-tauri/tauri.dev.conf.json",
     "tauri:build:dev": "tauri build --config src-tauri/tauri.dev.conf.json",
     "tauri:build:preview": "tauri build --config src-tauri/tauri.preview.conf.json",
-    "tauri:build:production": "tauri build"
+    "tauri:build:production": "tauri build",
+    "watch:graft": "ruby watch/scripts/add-watch-targets.rb ios watch",
+    "watch:verify": "ruby watch/scripts/verify-watch-targets.rb ios",
+    "prebuild:ios": "expo prebuild --platform ios && pnpm watch:graft && pnpm watch:verify"
   },
   "jest": {
     "preset": "jest-expo"

@@ -1,12 +1,19 @@
 const { execFileSync } = require('node:child_process');
 
 const variant = process.env.APP_ENV || 'development';
-const name = {
-    development: "Happy (dev)",
-    preview: "Happy (preview)",
+// DROVER_APP_NAME overrides the display name the same way DROVER_BUNDLE_ID
+// overrides the ids (BASED-98): an env override, never an edit, so merges
+// from upstream stay clean.
+const name = process.env.DROVER_APP_NAME || {
+    development: "Cattle Drover (dev)",
+    preview: "Cattle Drover (preview)",
     production: "Happy"
 }[variant];
-const bundleId = {
+// Upstream's ids by default. A fork cannot sign them — they belong to the
+// upstream author's Apple account — so DROVER_BUNDLE_ID overrides the whole
+// set for builds under a different team (BASED-98). Kept as an override
+// rather than an edit so merges from upstream stay clean.
+const bundleId = process.env.DROVER_BUNDLE_ID || {
     development: "com.slopus.happy.dev",
     preview: "com.slopus.happy.preview",
     production: "com.ex3ndr.happy"
@@ -68,6 +75,15 @@ export default {
         ios: {
             supportsTablet: true,
             bundleIdentifier: bundleId,
+            // CFBundleVersion. Apple refuses an upload whose build number is
+            // already taken for this marketing version, and build 1 is taken
+            // (BASED-98), so every later build sets DROVER_BUILD_NUMBER. It is
+            // an env override rather than a tracked number so the tree never
+            // carries a value that is only correct for one upload, and so the
+            // watch graft — which reads ios.buildNumber and stamps
+            // CURRENT_PROJECT_VERSION on both watch targets — cannot disagree
+            // with the phone.
+            buildNumber: process.env.DROVER_BUILD_NUMBER || "1",
             config: {
                 usesNonExemptEncryption: false
             },
@@ -112,6 +128,7 @@ export default {
                 "android.permission.READ_MEDIA_VIDEO",
             ],
             package: bundleId,
+            versionCode: Number(process.env.DROVER_BUILD_NUMBER || 1),
             googleServicesFile: "./google-services.json",
             intentFilters: variant === 'production' ? [
                 {
@@ -135,6 +152,10 @@ export default {
         },
         plugins: [
             require("./plugins/withEinkCompatibility.js"),
+            // Cattle Drover watch app (BASED-98). Grafts the tracked watchOS
+            // sources in ./watch onto the generated Xcode project; ios/ is
+            // gitignored, so committed Xcode state is not an option.
+            require("./plugins/withWatchApp.cjs"),
             [
                 "expo-router",
                 {
@@ -207,12 +228,21 @@ export default {
                 }
             ]
         ],
-        updates: {
-            url: "https://u.expo.dev/4558dd3d-cd5a-47cd-bad9-e591a241cc06",
-            requestHeaders: {
-                "expo-channel-name": "production"
-            }
-        },
+        // A drover build must NEVER take OTA updates from upstream's EAS
+        // project: the update server is theirs, the published bundles are
+        // compiled from their tree by their toolchain, and a runtime-version
+        // match would happily replace our JS with theirs (and a Hermes
+        // bytecode mismatch in that path only surfaces as a crash on launch).
+        // With the bundle-id override active, updates are disabled outright
+        // and the app runs the bundle baked into the archive (BASED-98).
+        updates: process.env.DROVER_BUNDLE_ID
+            ? { enabled: false }
+            : {
+                url: "https://u.expo.dev/4558dd3d-cd5a-47cd-bad9-e591a241cc06",
+                requestHeaders: {
+                    "expo-channel-name": "production"
+                }
+            },
         experiments: {
             typedRoutes: true
         },

@@ -12,6 +12,7 @@
     "url": "https://github.com/slopus/happy"
   },
   "bin": {
+    "drover": "./bin/drover.mjs",
     "happy": "./bin/happy.mjs",
     "happy-mcp": "./bin/happy-mcp.mjs"
   },

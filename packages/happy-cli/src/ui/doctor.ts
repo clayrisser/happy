@@ -65,7 +65,7 @@ function getLogFiles(logDir: string): { file: string, path: string, modified: Da
 }
 
 /**
- * Slim daemon status output for `happy daemon status`
+ * Slim daemon status output for `drover daemon status`
  */
 export async function runDoctorDaemon(): Promise<void> {
     console.log(chalk.bold('\n🤖 Daemon Status'));
@@ -94,14 +94,14 @@ export async function runDoctorDaemon(): Promise<void> {
         console.log(chalk.red('❌ Error checking daemon status'));
     }
 
-    console.log(chalk.gray('\nRun `happy doctor` for full diagnostics.\n'));
+    console.log(chalk.gray('\nRun `drover doctor` for full diagnostics.\n'));
 }
 
 /**
  * Full doctor diagnostics — verbose sections first, concise useful info last
  */
 export async function runDoctorCommand(): Promise<void> {
-    console.log(chalk.bold.cyan('\n🩺 Happy CLI Doctor\n'));
+    console.log(chalk.bold.cyan('\n🩺 Cattle Drover Doctor\n'));
 
     // ── Verbose sections first (scroll off the top) ──
 
@@ -109,7 +109,7 @@ export async function runDoctorCommand(): Promise<void> {
     try {
         const allProcesses = await findAllHappyProcesses();
         if (allProcesses.length > 0) {
-            console.log(chalk.bold('🔍 All Happy CLI Processes'));
+            console.log(chalk.bold('🔍 All Drover CLI Processes'));
 
             const grouped = allProcesses.reduce((groups, process) => {
                 if (!groups[process.type]) groups[process.type] = [];
@@ -144,7 +144,7 @@ export async function runDoctorCommand(): Promise<void> {
 
             if (allProcesses.length > 1) {
                 console.log(chalk.bold('\n💡 Process Management'));
-                console.log(chalk.gray('To clean up runaway processes: happy doctor clean'));
+                console.log(chalk.gray('To clean up runaway processes: drover doctor clean'));
             }
         } else {
             console.log(chalk.red('❌ No happy processes found'));
@@ -228,13 +228,13 @@ export async function runDoctorCommand(): Promise<void> {
 
     // Basic info
     console.log(chalk.bold('\n📋 Basic Information'));
-    console.log(`Happy CLI Version: ${chalk.green(packageJson.version)}`);
+    console.log(`Drover CLI Version: ${chalk.green(packageJson.version)}`);
     console.log(`Platform: ${chalk.green(process.platform)} ${process.arch}`);
     console.log(`Node.js Version: ${chalk.green(process.version)}`);
 
     // Configuration
     console.log(chalk.bold('\n⚙️  Configuration'));
-    console.log(`Happy Home: ${chalk.blue(configuration.happyHomeDir)}`);
+    console.log(`Drover Home: ${chalk.blue(configuration.happyHomeDir)}`);
     console.log(`Server URL: ${chalk.blue(configuration.serverUrl)}`);
     console.log(`Logs Dir: ${chalk.blue(configuration.logsDir)}`);
 

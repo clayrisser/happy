@@ -313,6 +313,12 @@ export type Metadata = {
     updatedAt: number
   },
   machineId?: string,
+  /**
+   * Cattle Drover account this session runs under — one CLAUDE_CONFIG_DIR per
+   * account, subscription auth only (`drover account`). Lets the app group and
+   * filter sessions by account (BASED-98).
+   */
+  droverAccount?: string,
   gitBranch?: string,
   claudeSessionId?: string, // Claude Code session ID
   codexThreadId?: string, // Codex app-server thread ID

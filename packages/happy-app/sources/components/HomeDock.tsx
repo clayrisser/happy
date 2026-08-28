@@ -881,7 +881,7 @@ export const HomeDock = React.memo(({
                     ...agent,
                     disabled: true,
                     description: key === 'rig'
-                        ? 'Happy Agent is not running on this computer'
+                        ? 'Drover Agent is not running on this computer'
                         : 'Not installed on this machine',
                 };
         })
