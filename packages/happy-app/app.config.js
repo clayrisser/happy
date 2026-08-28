@@ -135,6 +135,10 @@ export default {
         },
         plugins: [
             require("./plugins/withEinkCompatibility.js"),
+            // Cattle Drover watch app (BASED-98). Grafts the tracked watchOS
+            // sources in ./watch onto the generated Xcode project; ios/ is
+            // gitignored, so committed Xcode state is not an option.
+            require("./plugins/withWatchApp.cjs"),
             [
                 "expo-router",
                 {
