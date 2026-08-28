@@ -4,6 +4,7 @@ import { EnhancedMode } from "./loop";
 import { logger } from "@/ui/logger";
 import type { JsRuntime } from "./runClaude";
 import type { SandboxConfig } from "@/persistence";
+import type { FlipController } from "@/drover/flip/controller";
 
 export class Session {
     readonly path: string;
@@ -11,8 +12,16 @@ export class Session {
     readonly api: ApiClient;
     readonly client: ApiSessionClient;
     readonly queue: MessageQueue2<EnhancedMode>;
-    readonly claudeEnvVars?: Record<string, string>;
+    // Mutable: a Cattle Drover flip (BASED-98) rewrites CLAUDE_CONFIG_DIR here
+    // and the next relaunch of the child picks the new account up. The happy
+    // process itself never restarts, which is what keeps the app's session id
+    // stable across a flip.
+    claudeEnvVars?: Record<string, string>;
     claudeArgs?: string[];  // Made mutable to allow filtering
+    /** One-shot prompt handed to the next child, e.g. "carry on" after a flip. */
+    pendingInitialPrompt?: string;
+    /** Set for a session running under the drover's account controller. */
+    flip?: FlipController;
     readonly mcpServers: Record<string, any>;
     readonly allowedTools?: string[];
     readonly sandboxConfig?: SandboxConfig;
@@ -51,7 +60,9 @@ export class Session {
         hookSettingsPath: string,
         /** JavaScript runtime to use for spawning Claude Code (default: 'node') */
         jsRuntime?: JsRuntime,
+        flip?: FlipController,
     }) {
+        this.flip = opts.flip;
         this.path = opts.path;
         this.api = opts.api;
         this.client = opts.client;
@@ -112,7 +123,11 @@ export class Session {
      */
     onSessionFound = (sessionId: string) => {
         this.sessionId = sessionId;
-        
+        // A flip resumes by claude session id, and bus frames may address the
+        // session by it, so the controller has to learn it the moment Claude
+        // reports it rather than waiting for the next flip to go looking.
+        if (this.flip) this.flip.claudeSessionId = sessionId;
+
         // Update metadata with Claude Code session ID
         this.client.updateMetadata((metadata) => ({
             ...metadata,

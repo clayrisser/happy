@@ -28,10 +28,10 @@ export function parseResumeCommandArgs(args: string[]): { showHelp: boolean; ses
     }
 
     if (args.length === 0) {
-        throw new Error('Happy session ID is required: happy resume <session-id>');
+        throw new Error('Happy session ID is required: drover resume <session-id>');
     }
     if (args.length > 1) {
-        throw new Error(`Unexpected arguments for happy resume: ${args.slice(1).join(' ')}`);
+        throw new Error(`Unexpected arguments for drover resume: ${args.slice(1).join(' ')}`);
     }
 
     return {
@@ -91,14 +91,14 @@ export function buildResumeLaunch(session: ResumableHappySession, options: Resum
 
 export function formatResumeHelp(): string {
     return [
-        'happy resume - Resume a previous Happy session',
+        'drover resume - Resume a previous Happy session',
         '',
         'Usage:',
-        '  happy resume <happy-session-id>',
+        '  drover resume <happy-session-id>',
         '',
         'Examples:',
-        '  happy resume cmmij8olq00dp5jcxr3wtbpau',
-        '  happy resume cmmij8',
+        '  drover resume cmmij8olq00dp5jcxr3wtbpau',
+        '  drover resume cmmij8',
         '',
         'This reuses the saved worktree/path and resumes the underlying agent session',
         'when the backend supports it.',

@@ -47,6 +47,13 @@ export async function claudeLocal(opts: {
     /** Path to temporary settings file with SessionStart hook (optional - for session tracking) */
     hookSettingsPath?: string,
     sandboxConfig?: SandboxConfig,
+    /**
+     * A first message for this spawn only, passed as Claude's positional
+     * prompt. A resumed session is otherwise silent — it restores the
+     * conversation and waits — so a Cattle Drover account flip (BASED-98)
+     * uses this to say "carry on" the moment the new child comes up.
+     */
+    initialPrompt?: string,
 }) {
 
     // Ensure project directory exists
@@ -248,6 +255,14 @@ export async function claudeLocal(opts: {
             if (opts.hookSettingsPath) {
                 args.push('--settings', opts.hookSettingsPath);
                 logger.debug(`[ClaudeLocal] Using hook settings: ${opts.hookSettingsPath}`);
+            }
+
+            // Positional prompt LAST, after every flag: Claude reads the first
+            // non-flag argument as the opening message, so anything appended
+            // after it would be swallowed as part of the prompt.
+            if (opts.initialPrompt) {
+                args.push(opts.initialPrompt);
+                logger.debug('[ClaudeLocal] Spawning with an initial prompt');
             }
 
             if (!claudeCliPath || !existsSync(claudeCliPath)) {

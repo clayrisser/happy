@@ -5,8 +5,8 @@ const variant = process.env.APP_ENV || 'development';
 // overrides the ids (BASED-98): an env override, never an edit, so merges
 // from upstream stay clean.
 const name = process.env.DROVER_APP_NAME || {
-    development: "Happy (dev)",
-    preview: "Happy (preview)",
+    development: "Cattle Drover (dev)",
+    preview: "Cattle Drover (preview)",
     production: "Happy"
 }[variant];
 // Upstream's ids by default. A fork cannot sign them — they belong to the

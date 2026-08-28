@@ -39,6 +39,8 @@ import { getProjectPath } from './utils/path';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { RawJSONLinesSchema, type RawJSONLines } from './types';
+import { FlipController } from '@/drover/flip/controller';
+import { readAccounts } from '@/drover/flip/accounts';
 
 /** JavaScript runtime to use for spawning Claude Code */
 export type JsRuntime = 'node' | 'bun'
@@ -944,6 +946,21 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
     registerKillSessionHandler(session.rpcHandlerManager, () => cleanup({ archive: true }));
 
     // Create claude loop
+    // Cattle Drover account flip (BASED-98). Built only when a registry
+    // actually names more than one account: with one account there is nowhere
+    // to flip to, and an idle bus subscription per session would be cost for
+    // nothing. Everything it does is local — the server is never involved.
+    const flipController = readAccounts().length > 1
+        ? new FlipController(workingDirectory, (message) => {
+            session.sendSessionEvent({ type: 'message', message });
+        })
+        : undefined;
+    if (flipController) {
+        flipController.happySessionId = response.id;
+        flipController.start();
+        logger.debug('[flip] account flip armed');
+    }
+
     const exitCode = await loop({
         path: workingDirectory,
         model: options.model,
@@ -976,8 +993,11 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
         claudeArgs: options.claudeArgs,
         sandboxConfig,
         hookSettingsPath,
-        jsRuntime: options.jsRuntime
+        jsRuntime: options.jsRuntime,
+        flip: flipController,
     });
+
+    flipController?.stop();
 
     // Cleanup session resources (intervals, callbacks) - prevents memory leak
     // Note: currentSession is set by onSessionReady callback during loop()

@@ -8,7 +8,7 @@ import type { NewSessionAgentType } from '@/sync/persistence';
 export const HARNESS_NAMES: Record<NewSessionAgentType, string> = {
     claude: 'Claude Code',
     codex: 'Codex',
-    rig: 'Happy',
+    rig: 'Cattle Drover',
     agy: 'Antigravity',
     gemini: 'Gemini',
     openclaw: 'OpenClaw',

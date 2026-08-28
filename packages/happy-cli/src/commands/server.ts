@@ -92,7 +92,7 @@ export async function handleServerCommand(args: string[]): Promise<void> {
 
     const staticDir = artifacts.webappDir ?? findWebappDir();
 
-    console.log(chalk.cyan(`\n  happy server`));
+    console.log(chalk.cyan(`\n  drover server`));
     console.log(chalk.gray(`  data dir:   ${dataDir}`));
     console.log(chalk.gray(`  server url: ${serverUrl}`));
     console.log(chalk.gray(`  mode:       ${serverArtifactMode(artifacts)}`));
@@ -127,10 +127,10 @@ export async function handleServerCommand(args: string[]): Promise<void> {
             console.error(chalk.red('Could not locate the Prisma query engine for this platform.'));
             if (artifacts.source === 'package') {
                 console.error(chalk.gray(`  Expected ${SERVER_PACKAGE_NAME} to install @prisma/engines.`));
-                console.error(chalk.gray(`  Try reinstalling ${SERVER_PACKAGE_NAME}, then run \`happy server\` again.`));
+                console.error(chalk.gray(`  Try reinstalling ${SERVER_PACKAGE_NAME}, then run \`drover server\` again.`));
             } else {
                 console.error(chalk.gray('  Expected @prisma/engines to be available near the happy package.'));
-                console.error(chalk.gray('  Try reinstalling happy, then run `happy server` again.'));
+                console.error(chalk.gray('  Try reinstalling happy, then run `drover server` again.'));
             }
             process.exit(1);
         }
@@ -217,10 +217,10 @@ function parseArgs(args: string[]): ServerOptions | null {
 
 function showHelp() {
     console.log(`
-${chalk.bold('happy server')} - Run Happy sync server + web app locally (self-host)
+${chalk.bold('drover server')} - Run Happy sync server + web app locally (self-host)
 
 ${chalk.bold('Usage:')}
-  happy server [--port 3005] [--host 127.0.0.1] [--reset] [--no-persist]
+  drover server [--port 3005] [--host 127.0.0.1] [--reset] [--no-persist]
 
 ${chalk.bold('Options:')}
   --port, -p <n>        Port to listen on (default: 3005)
@@ -235,7 +235,7 @@ ${chalk.bold('Notes:')}
   - Stores data in ${chalk.cyan('$HAPPY_HOME_DIR/server-data/')}
   - Packaged installs require ${chalk.cyan(SERVER_PACKAGE_NAME)} for the local server binary
   - By default, asks before writing ${chalk.cyan('settings.serverUrl')} and ${chalk.cyan('settings.webappUrl')}
-  - Use ${chalk.cyan('--no-persist')} to run without modifying default Happy settings
+  - Use ${chalk.cyan('--no-persist')} to run without modifying default Drover settings
   - Open ${chalk.cyan('http://127.0.0.1:<port>')} for the web app (if bundled)
 `);
 }
@@ -246,11 +246,11 @@ async function ensureSettingsWriteAllowed(opts: ServerOptions, serverUrl: string
     }
 
     const message =
-        `happy server will write settings.serverUrl and settings.webappUrl to ${serverUrl} ` +
+        `drover server will write settings.serverUrl and settings.webappUrl to ${serverUrl} ` +
         `in ${configuration.settingsFile}.`;
 
     if (!process.stdin.isTTY || !process.stderr.isTTY) {
-        console.error(chalk.red('Refusing to modify default Happy settings from a non-interactive run.'));
+        console.error(chalk.red('Refusing to modify default Drover settings from a non-interactive run.'));
         console.error(chalk.gray(message));
         console.error(chalk.gray(`Re-run with --no-persist, or pass ${SETTINGS_WRITE_CONFIRM_FLAG}.`));
         process.exit(1);

@@ -13,9 +13,9 @@ import { decodeJwtPayload } from './connect/utils';
  * Handle connect subcommand
  * 
  * Implements connect subcommands for storing AI vendor API keys:
- * - connect codex: Store OpenAI API key in Happy cloud
- * - connect claude: Store Anthropic API key in Happy cloud
- * - connect gemini: Store Gemini API key in Happy cloud
+ * - connect codex: Store OpenAI API key in Cattle Drover cloud
+ * - connect claude: Store Anthropic API key in Cattle Drover cloud
+ * - connect gemini: Store Gemini API key in Cattle Drover cloud
  * - connect help: Show help for connect command
  */
 export async function handleConnectCommand(args: string[]): Promise<void> {
@@ -48,41 +48,41 @@ export async function handleConnectCommand(args: string[]): Promise<void> {
 
 function showConnectHelp(): void {
     console.log(`
-${chalk.bold('happy connect')} - Connect AI vendor API keys to Happy cloud
+${chalk.bold('drover connect')} - Connect AI vendor API keys to Cattle Drover cloud
 
 ${chalk.bold('Usage:')}
-  happy connect codex        Store your Codex API key in Happy cloud
-  happy connect claude       Store your Anthropic API key in Happy cloud
-  happy connect gemini       Store your Gemini API key in Happy cloud
-  happy connect status       Show connection status for all vendors
-  happy connect help         Show this help message
+  drover connect codex        Store your Codex API key in Cattle Drover cloud
+  drover connect claude       Store your Anthropic API key in Cattle Drover cloud
+  drover connect gemini       Store your Gemini API key in Cattle Drover cloud
+  drover connect status       Show connection status for all vendors
+  drover connect help         Show this help message
 
 ${chalk.bold('Description:')}
   The connect command allows you to securely store your AI vendor API keys
-  in Happy cloud. This enables you to use these services through Happy
+  in Cattle Drover cloud. This enables you to use these services through Happy
   without exposing your API keys locally.
 
 ${chalk.bold('Examples:')}
-  happy connect codex
-  happy connect claude
-  happy connect gemini
-  happy connect status
+  drover connect codex
+  drover connect claude
+  drover connect gemini
+  drover connect status
 
 ${chalk.bold('Notes:')} 
-  • You must be authenticated with Happy first (run 'happy auth login')
-  • API keys are encrypted and stored securely in Happy cloud
+  • You must be authenticated with Happy first (run 'drover auth login')
+  • API keys are encrypted and stored securely in Cattle Drover cloud
   • You can manage your stored keys at app.happy.engineering
 `);
 }
 
 async function handleConnectVendor(vendor: 'codex' | 'claude' | 'gemini', displayName: string): Promise<void> {
-    console.log(chalk.bold(`\n🔌 Connecting ${displayName} to Happy cloud\n`));
+    console.log(chalk.bold(`\n🔌 Connecting ${displayName} to Cattle Drover cloud\n`));
 
     // Check if authenticated
     const credentials = await readCredentials();
     if (!credentials) {
         console.log(chalk.yellow('⚠️  Not authenticated with Happy'));
-        console.log(chalk.gray('  Please run "happy auth login" first'));
+        console.log(chalk.gray('  Please run "drover auth login" first'));
         process.exit(1);
     }
 
@@ -127,7 +127,7 @@ async function handleConnectStatus(): Promise<void> {
     const credentials = await readCredentials();
     if (!credentials) {
         console.log(chalk.yellow('⚠️  Not authenticated with Happy'));
-        console.log(chalk.gray('  Please run "happy auth login" first'));
+        console.log(chalk.gray('  Please run "drover auth login" first'));
         process.exit(1);
     }
 
@@ -174,13 +174,13 @@ async function handleConnectStatus(): Promise<void> {
     }
 
     console.log('');
-    console.log(chalk.gray('To connect a vendor, run: happy connect <vendor>'));
-    console.log(chalk.gray('Example: happy connect gemini'));
+    console.log(chalk.gray('To connect a vendor, run: drover connect <vendor>'));
+    console.log(chalk.gray('Example: drover connect gemini'));
     console.log('');
 }
 
 /**
- * Update local Gemini credentials file to keep in sync with Happy cloud
+ * Update local Gemini credentials file to keep in sync with Cattle Drover cloud
  * This ensures the Gemini SDK uses the same account as Happy
  */
 function updateLocalGeminiCredentials(tokens: {

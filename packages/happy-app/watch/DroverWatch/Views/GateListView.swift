@@ -42,7 +42,7 @@ private struct EmptyStateView: View {
             Text(connected ? "Nothing waiting" : "Not connected")
                 .font(.headline)
             if !connected {
-                Text("Open Happy on your phone")
+                Text("Open Cattle Drover on your phone")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)

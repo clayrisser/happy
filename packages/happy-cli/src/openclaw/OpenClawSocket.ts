@@ -79,7 +79,7 @@ export class OpenClawSocket {
       homeDir: options.homeDir,
       clientId: options.clientId ?? 'node-host',
       clientMode: options.clientMode ?? 'backend',
-      displayName: options.displayName ?? 'Happy CLI',
+      displayName: options.displayName ?? 'Drover CLI',
       log: options.log ?? (() => {}),
     };
   }

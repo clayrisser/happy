@@ -116,7 +116,7 @@ const ALL_AGENTS: { key: AgentKey; label: string }[] = [
     { key: 'claude', label: 'claude code' },
     { key: 'codex', label: 'codex' },
     { key: 'agy', label: 'antigravity' },
-    { key: 'rig', label: 'happy' },
+    { key: 'rig', label: 'drover' },
 ];
 
 type PickerItem = { key: string; label: string; subtitle?: string; dimmed?: boolean };
@@ -1394,8 +1394,8 @@ function NewSessionScreen() {
             Modal.alert(
                 t('common.error'),
                 agentType === 'rig'
-                    ? 'Happy Agent is not running on this computer'
-                    : 'This computer has no Happy CLI daemon to start that agent',
+                    ? 'Drover Agent is not running on this computer'
+                    : 'This computer has no Drover CLI daemon to start that agent',
             );
             return;
         }
@@ -1407,7 +1407,7 @@ function NewSessionScreen() {
             ? getRigMachineSessionCreation(machine.metadata)
             : null;
         if (agentType === 'rig' && !spawnRigCreation) {
-            Modal.alert(t('common.error'), 'This machine cannot start Happy agent sessions');
+            Modal.alert(t('common.error'), 'This machine cannot start Drover agent sessions');
             return;
         }
         const agentSupportsWorktree = spawnRigCreation?.supportsWorktrees
@@ -1557,7 +1557,7 @@ function NewSessionScreen() {
                 case 'pending':
                     Modal.alert(
                         t('common.error'),
-                        'Rig created the session, but it is still syncing with Happy. It should appear shortly.',
+                        'Rig created the session, but it is still syncing with Cattle Drover. It should appear shortly.',
                     );
                     break;
             }

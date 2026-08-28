@@ -11,16 +11,24 @@ const BASE_SYSTEM_PROMPT = (() => trimIdent(`
 /**
  * Co-authored-by credits to append when enabled
  */
+// Upstream appended a second trailer here advertising the tool itself:
+// `via [Happy](https://happy.engineering)` and
+// `Co-Authored-By: Happy <yesreply@happy.engineering>`, on by default.
+//
+// That is dropped rather than rebranded (BASED-98). A Co-Authored-By trailer
+// records who WROTE the change, and the wrapper that relayed the keystrokes
+// did not. Leaving it in would stamp a foreign identity into every commit made
+// from a phone — exactly the drift Clay's one-author rule exists to prevent,
+// and it would need a .mailmap line in six repos to undo. Claude's own trailer
+// stays, because Claude did write the code.
 const CO_AUTHORED_CREDITS = (() => trimIdent(`
-    When making commit messages, instead of just giving co-credit to Claude, also give credit to Happy like so:
+    When making commit messages, give co-credit to Claude like so:
 
     <main commit message>
 
     Generated with [Claude Code](https://claude.ai/code)
-    via [Happy](https://happy.engineering)
 
     Co-Authored-By: Claude <noreply@anthropic.com>
-    Co-Authored-By: Happy <yesreply@happy.engineering>
 `))();
 
 /**
