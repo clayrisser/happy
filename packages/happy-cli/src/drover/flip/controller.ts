@@ -15,7 +15,7 @@
  * relays end-to-end encrypted envelopes and has no idea a flip happened.
  *
  * Three ways in, one path out:
- *   - the bus (`drover-flip`, a tmux key binding, the watch or phone through
+ *   - the bus (`drover flip`, a tmux key binding, the watch or phone through
  *     the bridge) broadcasts a `flip` frame on /v1/stream;
  *   - a `/flip` message typed at the session from the app;
  *   - a usage limit detected in the local transcript, which flips by itself.
@@ -107,7 +107,7 @@ export class FlipController {
 
     // --- triggers -----------------------------------------------------------
 
-    /** Subscribe to the bus so `drover-flip`, tmux, the watch and the phone land here. */
+    /** Subscribe to the bus so `drover flip`, tmux, the watch and the phone land here. */
     start(): void {
         if (this.stream) return
         void this.listen()

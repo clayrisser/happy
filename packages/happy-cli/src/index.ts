@@ -122,9 +122,14 @@ Conversation history is preserved on the server, but in-flight tool calls are in
       process.exit(1)
     }
     return;
-  } else if (subcommand === 'drover-bridge') {
-    // Cattle Drover bridge (BASED-98): makes Happy a surface on the local
+  } else if (subcommand === 'drover-bridge' || subcommand === 'bridge') {
+    // Cattle Drover bridge (BASED-98): makes the app a surface on the local
     // prompt bus. Long-running; typically supervised by launchd/systemd.
+    //
+    // `bridge` is the name a person types; `drover-bridge` is kept because the
+    // installed launchd units and the wrapper script have used it since the
+    // stack was first bootstrapped, and a service verb that stops resolving is
+    // a stack that silently does not come back after a reboot.
     try {
       const { runDroverBridge } = await import('@/drover/droverBridge');
       await runDroverBridge();
@@ -728,6 +733,7 @@ ${chalk.bold('drover')} - Cattle Drover · Claude Code on the go
 ${chalk.bold('Usage:')}
   drover [options]         Start Claude with mobile control
   drover auth              Manage authentication
+  drover pair              QR-pair a phone or watch (= drover auth login)
   drover resume            Resume a previous Drover session by Drover session ID
   drover codex             Start Codex mode
   drover gemini            Start Gemini mode (ACP) [deprecated — use agy]
@@ -739,6 +745,14 @@ ${chalk.bold('Usage:')}
   drover daemon            Manage background service that allows
                             to spawn new sessions away from your computer
   drover doctor            System diagnostics & troubleshooting
+
+${chalk.bold('Also, from the wrapper (run `drover help` for the full list):')}
+  drover status            Bus health, pending prompts, services
+  drover sessions          What is running, where, on which account
+  drover accounts          Accounts, which are cooling and until when
+  drover account <name>    Run on that Claude subscription (short: -a <name>)
+  drover flip [account]    Move this session to another account, keeping it
+  drover bus|bridge|relay  The services launchd supervises
 
 ${chalk.bold('Examples:')}
   drover                    Start session

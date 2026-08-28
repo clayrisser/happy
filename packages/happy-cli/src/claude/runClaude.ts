@@ -150,7 +150,7 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
         flavor: 'claude',
         sandbox: sandboxConfig?.enabled ? sandboxConfig : null,
         dangerouslySkipPermissions,
-        // Multi-account (BASED-98): claude-acct exports DROVER_ACCOUNT next to
+        // Multi-account (BASED-98): `drover account` exports DROVER_ACCOUNT next to
         // CLAUDE_CONFIG_DIR; carrying it in the metadata gives the app a
         // per-account identity to show and filter on, and the name prefix
         // makes the account visible today with no app changes.

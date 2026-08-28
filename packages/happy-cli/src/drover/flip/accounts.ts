@@ -1,7 +1,7 @@
 /**
  * The account registry and the cooldown ledger (BASED-98).
  *
- * The registry is the same accounts.json `claude-acct` reads — one
+ * The registry is the same accounts.json `drover account` reads — one
  * CLAUDE_CONFIG_DIR per Claude subscription. The ledger records which of them
  * are currently out of headroom and until when, so the flip has something
  * better than round-robin to pick with, and so an account that just said
@@ -81,7 +81,7 @@ export function accountByName(name: string): DroverAccount | undefined {
 /**
  * Which account this process is running as.
  *
- * DROVER_ACCOUNT is the stamp `claude-acct` exports and is authoritative.
+ * DROVER_ACCOUNT is the stamp `drover account` exports and is authoritative.
  * Without it, CLAUDE_CONFIG_DIR still identifies the account if it happens to
  * match a registry entry — that covers a session started before the wrapper
  * existed, or one started by hand.

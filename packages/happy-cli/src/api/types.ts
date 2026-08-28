@@ -315,7 +315,7 @@ export type Metadata = {
   machineId?: string,
   /**
    * Cattle Drover account this session runs under — one CLAUDE_CONFIG_DIR per
-   * account, subscription auth only (claude-acct). Lets the app group and
+   * account, subscription auth only (`drover account`). Lets the app group and
    * filter sessions by account (BASED-98).
    */
   droverAccount?: string,
