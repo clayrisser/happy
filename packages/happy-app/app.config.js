@@ -6,7 +6,11 @@ const name = {
     preview: "Happy (preview)",
     production: "Happy"
 }[variant];
-const bundleId = {
+// Upstream's ids by default. A fork cannot sign them — they belong to the
+// upstream author's Apple account — so DROVER_BUNDLE_ID overrides the whole
+// set for builds under a different team (BASED-98). Kept as an override
+// rather than an edit so merges from upstream stay clean.
+const bundleId = process.env.DROVER_BUNDLE_ID || {
     development: "com.slopus.happy.dev",
     preview: "com.slopus.happy.preview",
     production: "com.ex3ndr.happy"

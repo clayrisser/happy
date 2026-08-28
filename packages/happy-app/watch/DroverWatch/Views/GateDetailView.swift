@@ -22,7 +22,6 @@ struct GateDetailView: View {
                     .padding(6)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
-                    .textSelection(.enabled)
 
                 // Deny sits first and Allow is the tinted one: a mis-tap on a
                 // destructive command should land on the safe answer.

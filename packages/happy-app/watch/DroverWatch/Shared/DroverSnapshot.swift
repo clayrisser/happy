@@ -8,7 +8,8 @@ import Foundation
 /// directly: the phone already holds the decrypted session and the RPC
 /// channel, and reimplementing Happy's encryption in Swift to say "yes" to a
 /// prompt would be a second copy of the thing most worth getting right.
-struct DroverGate: Codable, Identifiable, Equatable {
+/// Hashable because navigationDestination(for:) routes on the value itself.
+struct DroverGate: Codable, Identifiable, Equatable, Hashable {
     /// The bus event id. Answers quote it back, so it must survive the trip.
     let id: String
     let title: String
