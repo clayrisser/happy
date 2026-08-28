@@ -122,6 +122,20 @@ Conversation history is preserved on the server, but in-flight tool calls are in
       process.exit(1)
     }
     return;
+  } else if (subcommand === 'drover-bridge') {
+    // Cattle Drover bridge (BASED-98): makes Happy a surface on the local
+    // prompt bus. Long-running; typically supervised by launchd/systemd.
+    try {
+      const { runDroverBridge } = await import('@/drover/droverBridge');
+      await runDroverBridge();
+    } catch (error) {
+      console.error(chalk.red('Error:'), error instanceof Error ? error.message : 'Unknown error')
+      if (process.env.DEBUG) {
+        console.error(error)
+      }
+      process.exit(1)
+    }
+    return;
   } else if (subcommand === 'bye') {
     console.log('Bye!');
     process.exit(0);

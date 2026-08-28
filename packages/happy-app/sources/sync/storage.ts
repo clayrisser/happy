@@ -137,6 +137,8 @@ export interface SessionRowData {
     active: boolean;
     archived: boolean;
     machineId: string | null;
+    /** Cattle Drover account identity (BASED-98); absent when unaccounted. */
+    droverAccount?: string | null;
     // True only when the machine this session runs on is known to be offline.
     // A session that merely dropped its own socket is still live work on a live
     // machine, so the row greys out for this and never for that. Unknown
@@ -206,6 +208,7 @@ function buildSessionRowData(
         active: session.active,
         archived: isSessionArchived(session),
         machineId,
+        droverAccount: session.metadata?.droverAccount ?? null,
         machineOffline: machine ? !isMachineOnline(machine) : false,
         path: session.metadata?.path ?? null,
         homeDir: session.metadata?.homeDir ?? null,

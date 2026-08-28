@@ -136,6 +136,9 @@ export const MetadataSchema = z.object({
         insertions: z.number().int().nonnegative(),
     }).passthrough().optional(),
     machineId: z.string().optional(),
+    // Cattle Drover account this session runs under (one CLAUDE_CONFIG_DIR per
+    // account; claude-acct exports it, the CLI stamps it — BASED-98).
+    droverAccount: z.string().optional(),
     claudeSessionId: z.string().optional(), // Claude Code session ID
     codexThreadId: z.string().optional(), // Codex app-server thread ID
     tools: z.array(z.string()).optional(),
