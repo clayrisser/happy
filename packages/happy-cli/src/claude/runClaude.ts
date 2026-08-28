@@ -20,7 +20,7 @@ import { startHookServer } from '@/claude/utils/startHookServer';
 import { generateHookSettingsFile, cleanupHookSettingsFile } from '@/claude/utils/generateHookSettings';
 import { registerKillSessionHandler } from './registerKillSessionHandler';
 import { projectPath } from '../projectPath';
-import { resolve } from 'node:path';
+import { resolve, basename } from 'node:path';
 import { startOfflineReconnection, connectionState } from '@/utils/serverConnectionErrors';
 import { claudeLocal } from '@/claude/claudeLocal';
 import { createSessionScanner } from '@/claude/utils/sessionScanner';
@@ -148,6 +148,14 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
         flavor: 'claude',
         sandbox: sandboxConfig?.enabled ? sandboxConfig : null,
         dangerouslySkipPermissions,
+        // Multi-account (BASED-98): claude-acct exports DROVER_ACCOUNT next to
+        // CLAUDE_CONFIG_DIR; carrying it in the metadata gives the app a
+        // per-account identity to show and filter on, and the name prefix
+        // makes the account visible today with no app changes.
+        ...(process.env.DROVER_ACCOUNT ? {
+            droverAccount: process.env.DROVER_ACCOUNT,
+            name: `[${process.env.DROVER_ACCOUNT}] ${basename(workingDirectory)}`,
+        } : {}),
         ...(forkedFromSessionId ? { parentSessionId: forkedFromSessionId } : {}),
         ...(forkedFromMessageId ? { forkedFromMessageId } : {}),
         ...(isSideChat ? { isSideChat: true } : {}),
