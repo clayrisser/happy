@@ -32,7 +32,11 @@ project_path = projects.first
 
 app_name = 'DroverWatch'
 widget_name = 'DroverWatchWidget'
-host_bundle_id = ENV['IOS_BUNDLE_ID'] || 'com.ex3ndr.happy'
+# DROVER_BUNDLE_ID is the fork's whole-set override (see app.config.js); the
+# config plugin and Podfile hook pass IOS_BUNDLE_ID explicitly, but a bare
+# `pnpm watch:graft` must not silently fall back to upstream's id when the
+# drover override is exported (BASED-98).
+host_bundle_id = ENV['IOS_BUNDLE_ID'] || ENV['DROVER_BUNDLE_ID'] || 'com.ex3ndr.happy'
 # Apple requires the companion watch app's id to be the phone app's id plus
 # `.watchkitapp`, and the widget's to extend the watch app's. Not free-form.
 watch_bundle_id = "#{host_bundle_id}.watchkitapp"

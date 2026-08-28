@@ -1,7 +1,10 @@
 const { execFileSync } = require('node:child_process');
 
 const variant = process.env.APP_ENV || 'development';
-const name = {
+// DROVER_APP_NAME overrides the display name the same way DROVER_BUNDLE_ID
+// overrides the ids (BASED-98): an env override, never an edit, so merges
+// from upstream stay clean.
+const name = process.env.DROVER_APP_NAME || {
     development: "Happy (dev)",
     preview: "Happy (preview)",
     production: "Happy"
@@ -215,12 +218,21 @@ export default {
                 }
             ]
         ],
-        updates: {
-            url: "https://u.expo.dev/4558dd3d-cd5a-47cd-bad9-e591a241cc06",
-            requestHeaders: {
-                "expo-channel-name": "production"
-            }
-        },
+        // A drover build must NEVER take OTA updates from upstream's EAS
+        // project: the update server is theirs, the published bundles are
+        // compiled from their tree by their toolchain, and a runtime-version
+        // match would happily replace our JS with theirs (and a Hermes
+        // bytecode mismatch in that path only surfaces as a crash on launch).
+        // With the bundle-id override active, updates are disabled outright
+        // and the app runs the bundle baked into the archive (BASED-98).
+        updates: process.env.DROVER_BUNDLE_ID
+            ? { enabled: false }
+            : {
+                url: "https://u.expo.dev/4558dd3d-cd5a-47cd-bad9-e591a241cc06",
+                requestHeaders: {
+                    "expo-channel-name": "production"
+                }
+            },
         experiments: {
             typedRoutes: true
         },

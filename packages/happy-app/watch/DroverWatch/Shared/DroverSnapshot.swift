@@ -35,7 +35,7 @@ struct DroverSnapshot: Codable, Equatable {
 
     /// Shared with the widget through the app group; the widget cannot ask
     /// the phone anything itself.
-    static let appGroupSuiteName = "group.com.ex3ndr.happy.drover"
+    static let appGroupSuiteName = "group.com.bitspur.drover"
     static let storageKey = "drover.snapshot.v1"
 
     /// The phone sends dates as ISO-8601 strings (JS `toISOString`), which is
