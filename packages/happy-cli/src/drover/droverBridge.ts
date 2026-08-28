@@ -21,6 +21,7 @@ import type { AgentState, Metadata } from '@/api/types'
 import { configuration } from '@/configuration'
 import { projectPath } from '@/projectPath'
 import { logger } from '@/ui/logger'
+import { getOrCreateBridgeSession } from './bridgeSession'
 import packageJson from '../../package.json'
 
 const DROVER_URL = process.env.DROVER_URL || 'http://127.0.0.1:7970'
@@ -108,12 +109,16 @@ export async function runDroverBridge(): Promise<void> {
         summary: { text: 'Cattle Drover — pending gates from every local agent', updatedAt: Date.now() },
     } as Metadata
 
-    const session = await api.getOrCreateSession({
-        tag: `cattle-drover:${machineId}`,
+    // One long-lived session per machine, re-attached on every restart. The
+    // stable tag is the whole point (the phone shows one Cattle Drover thread,
+    // not a graveyard) and is also what made this crash for months — see
+    // bridgeSession.ts for the key-pinning that fixes it.
+    const session = await getOrCreateBridgeSession({
+        api,
+        machineId,
         metadata,
         state: { requests: {}, completedRequests: {} } as unknown as AgentState,
     })
-    if (!session) throw new Error('Could not create the drover session on the Happy server.')
     const client = api.sessionSyncClient(session)
     const mirrored = new Set<string>()
 
