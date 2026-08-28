@@ -76,17 +76,25 @@ const withWatchApp = (config) =>
       const podfile = path.join(iosRoot, "Podfile");
       if (fs.existsSync(podfile)) {
         const current = fs.readFileSync(podfile, "utf8");
-        if (!current.includes(HOOK_MARKER)) {
-          fs.appendFileSync(
-            podfile,
+        // REWRITE the hook, never skip it when present. The values are baked
+        // into the Podfile text, so a hook written for build 1 keeps
+        // re-stamping the watch targets with build 1 on every later
+        // `pod install` — and because post_integrate runs AFTER prebuild's
+        // graft, the stale value WINS. That shipped as a watch app one build
+        // number behind the phone, which Apple rejects (BASED-98). The block
+        // is always last, so cutting from the marker is the whole removal.
+        const at = current.indexOf(`# ${HOOK_MARKER}`);
+        const base = at === -1 ? current : current.slice(0, at).replace(/\s+$/, "\n");
+        fs.writeFileSync(
+          podfile,
+          base +
             podfileHook(
               path.relative(iosRoot, watchRoot),
               cfg.version ?? "1.0.0",
               cfg.ios?.buildNumber ?? "1",
               cfg.ios?.bundleIdentifier ?? "com.ex3ndr.happy",
             ),
-          );
-        }
+        );
       }
       return cfg;
     },

@@ -72,6 +72,33 @@ watch_dir = File.expand_path(File.join(__dir__, '..'))
   failures << "#{name}: WKBackgroundModes contains \"app-refresh\", which App Store validation rejects" if modes.include?('app-refresh')
 end
 
+# Defect 5: the watch targets' CURRENT_PROJECT_VERSION must equal the phone's
+# CFBundleVersion. The plists above keep it a build variable, so the number
+# comes from the target settings — and the Podfile's post_integrate hook bakes
+# that number into its own text and re-stamps the targets AFTER prebuild. A
+# hook written for an earlier build silently wins over the graft, and the
+# mismatch only surfaces at Apple's validation, after a 20-minute archive.
+host_plist = Dir.glob(File.join(ios_dir, '*', 'Info.plist'))
+               .reject { |p| p.include?('/Pods/') }
+               .first
+if host_plist
+  want = Xcodeproj::Plist.read_from_path(host_plist)['CFBundleVersion'].to_s
+  if want.empty? || want.start_with?('$(')
+    warn "note: phone CFBundleVersion in #{host_plist} is #{want.inspect}; skipping the version-match check"
+  else
+    targets.each do |target|
+      target.build_configurations.each do |config|
+        got = config.build_settings['CURRENT_PROJECT_VERSION'].to_s
+        next if got == want
+
+        failures << "#{target.name}/#{config.name}: CURRENT_PROJECT_VERSION=#{got.inspect}, " \
+                    "phone app is #{want.inspect} — Apple rejects an embedded bundle whose build " \
+                    'number disagrees (check the baked IOS_BUILD_NUMBER in ios/Podfile)'
+      end
+    end
+  end
+end
+
 if failures.empty?
   puts "watch targets verified: #{app_name}, #{widget_name}"
   exit 0

@@ -75,6 +75,15 @@ export default {
         ios: {
             supportsTablet: true,
             bundleIdentifier: bundleId,
+            // CFBundleVersion. Apple refuses an upload whose build number is
+            // already taken for this marketing version, and build 1 is taken
+            // (BASED-98), so every later build sets DROVER_BUILD_NUMBER. It is
+            // an env override rather than a tracked number so the tree never
+            // carries a value that is only correct for one upload, and so the
+            // watch graft — which reads ios.buildNumber and stamps
+            // CURRENT_PROJECT_VERSION on both watch targets — cannot disagree
+            // with the phone.
+            buildNumber: process.env.DROVER_BUILD_NUMBER || "1",
             config: {
                 usesNonExemptEncryption: false
             },
@@ -119,6 +128,7 @@ export default {
                 "android.permission.READ_MEDIA_VIDEO",
             ],
             package: bundleId,
+            versionCode: Number(process.env.DROVER_BUILD_NUMBER || 1),
             googleServicesFile: "./google-services.json",
             intentFilters: variant === 'production' ? [
                 {
