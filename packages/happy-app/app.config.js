@@ -39,6 +39,11 @@ if (!!process.env.DROVER_EAS_PROJECT_ID !== !!process.env.DROVER_EAS_OWNER) {
         "One without the other registers push under the wrong Expo account."
     );
 }
+// Which EAS Update channel this build subscribes to. A Route A build is
+// archived from Xcode, so eas.json's per-profile `channel` never reaches it and
+// this is the only place the channel gets set. Defaults to production because
+// that is what a TestFlight build is (BASED-98).
+const updateChannel = process.env.DROVER_UPDATE_CHANNEL || "production";
 // A fork build on upstream's Expo project cannot push, and that failure is
 // silent everywhere it lands: the token registers, the server accepts it, the
 // CLI logs InvalidCredentials at debug and drops it (BASED-98). The archive
@@ -271,14 +276,24 @@ export default {
         // compiled from their tree by their toolchain, and a runtime-version
         // match would happily replace our JS with theirs (and a Hermes
         // bytecode mismatch in that path only surfaces as a crash on launch).
-        // With the bundle-id override active, updates are disabled outright
-        // and the app runs the bundle baked into the archive (BASED-98).
-        updates: process.env.DROVER_BUNDLE_ID
+        //
+        // What makes the update server safe is DROVER_EAS_PROJECT_ID, not the
+        // bundle id: `url` is built from easProjectId, so with the pair set the
+        // app polls OUR project and can only ever be served bundles we publish.
+        // Disabling on DROVER_BUNDLE_ID alone therefore turned OTA off for
+        // exactly the builds that had already been made safe, and left the
+        // wrist on a TestFlight round-trip for a one-line JS fix (BASED-98).
+        // A fork build with no project of its own still gets nothing: it would
+        // poll upstream, which is the original hazard.
+        updates: process.env.DROVER_BUNDLE_ID && !process.env.DROVER_EAS_PROJECT_ID
             ? { enabled: false }
             : {
                 url: `https://u.expo.dev/${easProjectId}`,
                 requestHeaders: {
-                    "expo-channel-name": "production"
+                    // A locally archived build never runs through EAS Build, so
+                    // nothing else ever writes the channel: this header is the
+                    // only thing that puts a Route A archive on a channel.
+                    "expo-channel-name": updateChannel
                 }
             },
         experiments: {
