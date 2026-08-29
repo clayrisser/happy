@@ -18,6 +18,44 @@ const bundleId = process.env.DROVER_BUNDLE_ID || {
     preview: "com.slopus.happy.preview",
     production: "com.ex3ndr.happy"
 }[variant];
+// The Expo project the app belongs to, and the account that owns it. Expo
+// looks push credentials up per (experience, bundle id), so a drover build
+// signed as com.bitspur.drover but still registering under @bulkacorp/happy
+// asks Expo for a key nobody can upload: the project is upstream's account.
+// Every push then dies at Expo with InvalidCredentials, which the CLI only
+// logs at debug — so the app showed the card and the phone stayed silent
+// (BASED-98). Same env-override shape as DROVER_BUNDLE_ID, so a merge from
+// upstream stays clean and the default stays upstream's.
+const easProjectId =
+    process.env.DROVER_EAS_PROJECT_ID || "4558dd3d-cd5a-47cd-bad9-e591a241cc06";
+const easOwner = process.env.DROVER_EAS_OWNER || "bulkacorp";
+// The pair is the credential key, so half an override is never a build worth
+// making: Expo resolves the experience as `@owner/slug` and mints the token
+// from projectId, and a mismatched pair fails exactly like no override at all.
+// A throw rather than a warning because there is no correct outcome to reach.
+if (!!process.env.DROVER_EAS_PROJECT_ID !== !!process.env.DROVER_EAS_OWNER) {
+    throw new Error(
+        "DROVER_EAS_PROJECT_ID and DROVER_EAS_OWNER must be set together. " +
+        "One without the other registers push under the wrong Expo account."
+    );
+}
+// A fork build on upstream's Expo project cannot push, and that failure is
+// silent everywhere it lands: the token registers, the server accepts it, the
+// CLI logs InvalidCredentials at debug and drops it (BASED-98). The archive
+// script says this too, but Route A installs straight from Xcode and never
+// runs it, so the warning belongs where every build path reads it.
+//
+// process.stderr, not console.warn: @expo/config patches the console while it
+// evaluates this file, and `expo config --type public --json` swallowed the
+// line entirely (measured 2026-08-29). stderr also keeps it out of the JSON on
+// stdout, which a log line there would corrupt.
+if (process.env.DROVER_BUNDLE_ID && !process.env.DROVER_EAS_PROJECT_ID) {
+    process.stderr.write(
+        `app.config: building ${process.env.DROVER_BUNDLE_ID} against upstream's Expo ` +
+        "project, so every push will fail with InvalidCredentials. Set " +
+        "DROVER_EAS_PROJECT_ID and DROVER_EAS_OWNER to your own project and rebuild.\n"
+    );
+}
 // const stagingElevenLabsAgentId = 'agent_7801k2c0r5hjfraa1kdbytpvs6yt';
 const productionElevenLabsAgentId = 'agent_6701k211syvvegba4kt7m68nxjmw';
 const elevenLabsAgentId = {
@@ -238,7 +276,7 @@ export default {
         updates: process.env.DROVER_BUNDLE_ID
             ? { enabled: false }
             : {
-                url: "https://u.expo.dev/4558dd3d-cd5a-47cd-bad9-e591a241cc06",
+                url: `https://u.expo.dev/${easProjectId}`,
                 requestHeaders: {
                     "expo-channel-name": "production"
                 }
@@ -251,7 +289,10 @@ export default {
                 root: "./sources/app"
             },
             eas: {
-                projectId: "4558dd3d-cd5a-47cd-bad9-e591a241cc06"
+                // Read back by sources/sync/pushRegistration.ts to mint the
+                // Expo push token, so this value decides which account's push
+                // credentials Expo looks for.
+                projectId: easProjectId
             },
             app: {
                 postHogKey: process.env.EXPO_PUBLIC_POSTHOG_API_KEY,
@@ -264,6 +305,6 @@ export default {
                 buildCommitTimestamp: buildMetadata.commitTimestamp,
             }
         },
-        owner: "bulkacorp"
+        owner: easOwner
     }
 };

@@ -78,11 +78,30 @@ fi
 # Last gate before the one irreversible step: a build number is spent the
 # moment Apple accepts it, so read it out of the actual .ipa.
 tmp=$(mktemp -d)
-unzip -o -q -j "$IPA" 'Payload/*.app/Info.plist' -d "$tmp" ||
-	die "could not read Payload/*.app/Info.plist out of $IPA"
-got=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$tmp/Info.plist" 2>/dev/null || true)
+unzip -o -q "$IPA" 'Payload/*' -d "$tmp" || die "could not unpack $IPA"
+ipa_app=$(find "$tmp/Payload" -maxdepth 1 -name '*.app' 2>/dev/null | head -n 1)
+[ -n "$ipa_app" ] || die "no Payload/*.app inside $IPA"
+got=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$ipa_app/Info.plist" 2>/dev/null || true)
+
+# The push entitlement, read off the artifact Apple actually receives. This is
+# the only place it can be read: automatic signing picks a DEVELOPMENT identity
+# at archive time and the export is what re-signs Apple Distribution, so the
+# archive reads development on a build whose ipa reads production (measured on
+# build 4, 2026-08-29). `expo prebuild` writes development into the
+# entitlements every single run and ios/ is generated, so the value cannot be
+# committed — testflight-archive.sh sets it, and this proves it survived. A
+# build carrying development registers its tokens against the APNs SANDBOX
+# while Expo pushes to production: the phone stays silent and every other
+# signal — token registered, server says sent — still reads healthy.
+aps=$(codesign -d --entitlements :- "$ipa_app" 2>/dev/null |
+	plutil -extract aps-environment raw -o - - 2>/dev/null || true)
 rm -rf "$tmp"
 [ "$got" = "$expect" ] || die "ipa carries CFBundleVersion '$got', expected '$expect'"
+case "$aps" in
+production) log "aps-environment is production — push will reach the phone" ;;
+development) die "the ipa carries aps-environment=development — its push tokens would land on the APNs sandbox and no notification would ever arrive" ;;
+*) log "warning: could not read aps-environment off the ipa" ;;
+esac
 
 log "uploading $IPA (build $expect) to TestFlight"
 out_file=$(mktemp)
