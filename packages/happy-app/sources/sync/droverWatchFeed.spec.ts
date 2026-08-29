@@ -7,7 +7,8 @@ const mocks = vi.hoisted(() => ({
     deny: vi.fn(),
     sendMessage: vi.fn(),
     published: [] as DroverSnapshot[],
-    onAnswer: null as ((event: { id: string; allow: boolean; optionId?: string }) => void) | null,
+    onAnswer: null as
+        ((event: { id: string; allow: boolean; optionId?: string; text?: string }) => void) | null,
     onFlip: null as ((event: { sessionId: string; account?: string }) => void) | null,
     onStorage: null as (() => void) | null,
 }));
@@ -398,6 +399,39 @@ describe('startDroverWatchFeed', () => {
     it('leaves updatedInput off a plain permission allow', () => {
         start();
         mocks.onAnswer!({ id: 'sess1:req1', allow: true });
+        expect(mocks.allow).toHaveBeenCalledWith(
+            'sess1', 'req1', undefined, undefined, undefined, undefined,
+        );
+    });
+
+    // The wrist can type now (GateDetailView's TextFieldLink), and a typed
+    // answer has to travel the same road a picked one does. It rides the one
+    // `optionId` key on purpose: happy-cli's answerCandidates reads that and
+    // the question card's own `answers`, nothing else, and busResolutionFor
+    // resolves action=text when the string matches no option. A `text` key of
+    // its own here would arrive where nothing is looking.
+    it('forwards a typed answer, which the CLI then resolves as action=text', () => {
+        start();
+        mocks.onAnswer!({ id: 'sess1:req1', allow: true, text: 'rebase onto main first' });
+        expect(mocks.allow).toHaveBeenCalledWith(
+            'sess1', 'req1', undefined, undefined, undefined, { optionId: 'rebase onto main first' },
+        );
+    });
+
+    it('prefers the picked option when a wrist somehow sends both', () => {
+        start();
+        mocks.onAnswer!({ id: 'sess1:req1', allow: true, optionId: 'Step 1 first', text: 'typed' });
+        expect(mocks.allow).toHaveBeenCalledWith(
+            'sess1', 'req1', undefined, undefined, undefined, { optionId: 'Step 1 first' },
+        );
+    });
+
+    // A blank is refused on the watch (GateStore.answer) and again here: the
+    // bus 400s a blank resolve, and an older bus takes it, records no answer,
+    // and dismisses every surface with nothing to inject.
+    it('sends no answer at all rather than a blank one', () => {
+        start();
+        mocks.onAnswer!({ id: 'sess1:req1', allow: true, text: '' });
         expect(mocks.allow).toHaveBeenCalledWith(
             'sess1', 'req1', undefined, undefined, undefined, undefined,
         );

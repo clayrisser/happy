@@ -43,6 +43,16 @@ struct GateDetailView: View {
 
                 actions
 
+                // Shown HERE and not only on the wall: a refused answer — a
+                // dictation that heard nothing, a send with the phone app gone
+                // — leaves you standing on this screen, and a banner one level
+                // up is a banner you never see.
+                if let message = store.lastError {
+                    Label(message, systemImage: "exclamationmark.triangle")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.red)
+                }
+
                 if let account = gate.account {
                     Text("account: \(account)")
                         .font(.system(size: 9))
@@ -85,43 +95,55 @@ struct GateDetailView: View {
     /// A question is ANSWERED, never approved, so there is no allow button here
     /// and no deny either — denying one would settle it for every other surface
     /// with nothing to hand back to the harness.
+    ///
+    /// Every question gets the typing path, not only the ones with no options:
+    /// a list of options is the harness's guess at what you might say, and the
+    /// answer that is not on it is exactly the one worth reaching a wrist for.
     @ViewBuilder
     private var questionActions: some View {
         let options = gate.answerableOptions
-        if options.isEmpty {
-            // The honest empty state, not a button that loses the answer.
-            //
-            // This was once what EVERY question showed: collectGates in
-            // sources/sync/droverWatchFeed.ts built a gate with no `options`
-            // key at all, so this screen — already written to render them —
-            // had nothing to offer and a question could not be answered from
-            // the wrist however it looked. The phone forwards them now, so
-            // this is left for the case it was always the right answer to: a
-            // question that genuinely carries none, answerable only with free
-            // text, which a watch has no way to enter.
-            Label("Answer this one on the phone", systemImage: "iphone")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-        } else {
-            ForEach(options) { option in
-                Button {
-                    store.answer(gate, allow: true, optionId: option.id)
-                    dismiss()
-                } label: {
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(option.label)
-                            .font(.caption)
+        ForEach(options) { option in
+            Button {
+                if store.answer(gate, allow: true, optionId: option.id) { dismiss() }
+            } label: {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(option.label)
+                        .font(.caption)
+                        .multilineTextAlignment(.leading)
+                    if let detail = option.detail, !detail.isEmpty {
+                        Text(detail)
+                            .font(.system(size: 9))
+                            .foregroundStyle(.secondary)
                             .multilineTextAlignment(.leading)
-                        if let detail = option.detail, !detail.isEmpty {
-                            Text(detail)
-                                .font(.system(size: 9))
-                                .foregroundStyle(.secondary)
-                                .multilineTextAlignment(.leading)
-                        }
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
+        }
+        typedAnswerAction(hasOptions: !options.isEmpty)
+    }
+
+    /// Type, scribble or dictate an answer.
+    ///
+    /// `TextFieldLink` is watchOS's own input sheet, so the keyboard, Scribble
+    /// and dictation all arrive together and none of them has to be built here.
+    ///
+    /// A question with no options used to say "Answer this one on the phone",
+    /// which was true of the wrist and useless in the moment it mattered: the
+    /// session is blocked, the watch is what is on you, and the phone is
+    /// wherever it was left. `action: "text"` has been on the bus the whole
+    /// time (schema/event.json, server.js's resolve, the pretooluse adapter's
+    /// `.resolution.optionId // .resolution.text`) — the wrist was the only
+    /// piece missing.
+    private func typedAnswerAction(hasOptions: Bool) -> some View {
+        TextFieldLink(prompt: Text(gate.title)) {
+            Label(hasOptions ? "Something else" : "Answer", systemImage: "keyboard")
+                .font(.caption)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } onSubmit: { typed in
+            // No dismiss on a refusal: the store rejects a blank answer, and
+            // leaving the screen up is what puts its message in front of you.
+            if store.answer(gate, allow: true, text: typed) { dismiss() }
         }
     }
 
@@ -130,15 +152,13 @@ struct GateDetailView: View {
         // destructive command should land on the safe answer.
         Group {
             Button(role: .destructive) {
-                store.answer(gate, allow: false)
-                dismiss()
+                if store.answer(gate, allow: false) { dismiss() }
             } label: {
                 Label("Deny", systemImage: "xmark")
                     .frame(maxWidth: .infinity)
             }
             Button {
-                store.answer(gate, allow: true)
-                dismiss()
+                if store.answer(gate, allow: true) { dismiss() }
             } label: {
                 Label("Allow", systemImage: "checkmark")
                     .frame(maxWidth: .infinity)
@@ -152,8 +172,7 @@ struct GateDetailView: View {
     /// wrist without pretending a choice was made.
     private var acknowledgeAction: some View {
         Button {
-            store.answer(gate, allow: true)
-            dismiss()
+            if store.answer(gate, allow: true) { dismiss() }
         } label: {
             Label("Got it", systemImage: "checkmark")
                 .frame(maxWidth: .infinity)

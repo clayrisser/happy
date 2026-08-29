@@ -43,8 +43,9 @@ struct DroverGate: Codable, Identifiable, Equatable, Hashable {
 
     var isQuestion: Bool { classification == .question }
 
-    /// A question the wrist can actually answer. A question with no options can
-    /// only be answered with free text, which a watch has no way to enter.
+    /// The options a question offers, if any. A question with none is still
+    /// answerable here — it takes free text, which watchOS enters through its
+    /// own input sheet (keyboard, Scribble or dictation) rather than not at all.
     var answerableOptions: [DroverGateOption] {
         isQuestion ? (options ?? []) : []
     }
@@ -211,13 +212,20 @@ struct DroverAnswer: Codable {
     let id: String
     let allow: Bool
     /// For question gates: the chosen `options[].id`, which is the label when
-    /// the option never carried an id. Never nil on a question — a question
-    /// answered with a bare allow is refused by the bus (server.js: "a question
-    /// needs an option or text", 409) or, on an older bus, taken with no answer
-    /// at all, which dismisses every surface and leaves the waiting hook
-    /// nothing to inject. Bus event "Step 1 order" (2026-08-29) was that second
-    /// one: a watch tap that travelled the whole way and still lost the answer.
+    /// the option never carried an id. A question needs this or `text` — a
+    /// question answered with a bare allow is refused by the bus (server.js: "a
+    /// question needs an option or text", 409) or, on an older bus, taken with
+    /// no answer at all, which dismisses every surface and leaves the waiting
+    /// hook nothing to inject. Bus event "Step 1 order" (2026-08-29) was that
+    /// second one: a watch tap that travelled the whole way and still lost the
+    /// answer.
     let optionId: String?
+    /// A typed or dictated answer, for a question whose card offered no options
+    /// or offered none that fit. Trimmed and non-empty or absent entirely: the
+    /// bus refuses a blank resolve with a 400, and a nil Optional is simply
+    /// left out of the JSON, which is also what keeps NSNull off a
+    /// WatchConnectivity payload.
+    let text: String?
 }
 
 /// Flip a session onto another account, from the wrist (BASED-98).

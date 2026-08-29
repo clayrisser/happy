@@ -20,6 +20,15 @@ export interface DroverAnswerEvent {
     id: string;
     allow: boolean;
     optionId?: string;
+    /**
+     * A typed or dictated answer, from watchOS's own input sheet.
+     *
+     * Kept apart from `optionId` so the phone can tell a pick from a typed
+     * answer; both leave the phone on the same `updatedInput.optionId` key,
+     * because happy-cli decides action=option vs action=text by matching the
+     * string against the question's options (see droverWatchFeed's onAnswer).
+     */
+    text?: string;
 }
 
 /**
@@ -52,8 +61,9 @@ export interface DroverGate {
     account?: string | null;
     /**
      * What a question can be answered WITH. Absent on a permission, and absent
-     * on a question whose card carried none — the wrist can pick but never
-     * type, so that one has to be punted to the phone.
+     * on a question whose card carried none — those are answered by typing or
+     * dictating instead (GateDetailView's TextFieldLink), not punted to the
+     * phone.
      *
      * A question that reaches the watch WITHOUT these is a black hole: the
      * wrist can only send a bare allow, the bus refuses it ("a question needs

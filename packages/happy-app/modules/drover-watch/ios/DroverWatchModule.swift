@@ -62,6 +62,11 @@ final class DroverWatchDelegate: NSObject, WCSessionDelegate {
               let allow = payload["allow"] as? Bool else { return }
         var event: [String: Any] = ["id": id, "allow": allow]
         if let optionId = payload["optionId"] as? String { event["optionId"] = optionId }
+        // A typed or dictated answer, from the watch's own input sheet. Carried
+        // separately from optionId so JS can tell which it was; dropping it
+        // here would have made every free-text question on the wrist a black
+        // hole again, since the tap travels and the answer does not.
+        if let text = payload["text"] as? String { event["text"] = text }
         onAnswer?(event)
     }
 }

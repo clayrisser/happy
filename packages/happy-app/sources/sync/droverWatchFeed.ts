@@ -178,10 +178,19 @@ export function startDroverWatchFeed(): () => void {
         if (split <= 0) return;
         const sessionId = event.id.slice(0, split);
         const requestId = event.id.slice(split + 1);
-        // The chosen option rides along when the wrist answered a question.
-        // The bus refuses a bare allow on a question — it dismisses every
-        // surface and hands the waiting hook nothing to inject — so the answer
-        // has to name which option it was, all the way through.
+        // What the wrist answered WITH, whether it was picked or typed. The bus
+        // refuses a bare allow on a question — it dismisses every surface and
+        // hands the waiting hook nothing to inject — so the answer has to carry
+        // the choice all the way through.
+        //
+        // Both go out on the one `updatedInput.optionId` key on purpose. It is
+        // the only string happy-cli's answerCandidates reads (beside the
+        // question card's own `answers`), and busResolutionFor is what decides
+        // which kind of answer it was: it matches the string against the
+        // question's options and resolves action=option on a hit, action=text
+        // on a miss. So a typed answer needs no second channel, and inventing
+        // one would land it where nothing is looking.
+        const answered = event.optionId || event.text;
         const call = event.allow
             ? sessionAllow(
                 sessionId,
@@ -189,7 +198,7 @@ export function startDroverWatchFeed(): () => void {
                 undefined,
                 undefined,
                 undefined,
-                event.optionId ? { optionId: event.optionId } : undefined,
+                answered ? { optionId: answered } : undefined,
             )
             : sessionDeny(sessionId, requestId);
         // Fire and forget with an explicit catch: an answer that fails to send

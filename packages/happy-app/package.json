@@ -41,6 +41,7 @@
     "tauri:build:production": "tauri build",
     "watch:graft": "ruby watch/scripts/add-watch-targets.rb ios watch",
     "watch:verify": "ruby watch/scripts/verify-watch-targets.rb ios",
+    "watch:test": "sh watch/scripts/test-shared.sh",
     "prebuild:ios": "expo prebuild --platform ios && pnpm watch:graft && pnpm watch:verify"
   },
   "jest": {

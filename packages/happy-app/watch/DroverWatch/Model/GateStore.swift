@@ -63,12 +63,35 @@ final class GateStore: NSObject, ObservableObject {
 
     var accounts: [String] { snapshot.accounts }
 
-    func answer(_ gate: DroverGate, allow: Bool, optionId: String? = nil) {
+    /// Answer a gate. `optionId` is a pick, `text` is typed or dictated; a
+    /// question takes exactly one of them and a permission takes neither.
+    ///
+    /// Returns whether the answer actually left this watch, so the caller can
+    /// stay put and show `lastError` instead of dismissing on a refusal.
+    @discardableResult
+    func answer(_ gate: DroverGate, allow: Bool, optionId: String? = nil, text: String? = nil) -> Bool {
+        // Whitespace is not an answer. The bus refuses a blank one outright
+        // (server.js rejects it 400) and an older bus takes it and records
+        // nothing, which dismisses every surface and leaves the waiting hook
+        // nothing to inject. Caught here rather than at the button, so the
+        // dictation that heard silence cannot be sent as a settled answer.
+        let typed = text?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let picked = optionId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if gate.isQuestion && (picked ?? "").isEmpty && (typed ?? "").isEmpty {
+            lastError = "A question needs an answer"
+            return false
+        }
         answering.insert(gate.id)
-        let answer = DroverAnswer(id: gate.id, allow: allow, optionId: optionId)
+        let answer = DroverAnswer(
+            id: gate.id,
+            allow: allow,
+            optionId: optionId,
+            // Absent, never empty: see DroverAnswer.text.
+            text: (typed ?? "").isEmpty ? nil : typed
+        )
         if !send(answer, describing: "answer") {
             answering.remove(gate.id)
-            return
+            return false
         }
         // The hold has to be able to LAPSE. It is cleared otherwise only when
         // the phone stops listing the gate, so an answer that travels but never
@@ -81,6 +104,7 @@ final class GateStore: NSObject, ObservableObject {
             try? await Task.sleep(nanoseconds: 15_000_000_000)
             self?.answering.remove(gate.id)
         }
+        return true
     }
 
     /// Move a session onto another account. `account` nil means "next one with
