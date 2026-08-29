@@ -61,7 +61,14 @@ const withWatchApp = (config) =>
       const watchRoot = path.join(cfg.modRequest.projectRoot, "watch");
       const script = path.join(watchRoot, "scripts", "add-watch-targets.rb");
 
-      const result = spawnSync("ruby", [script, iosRoot, watchRoot], {
+      // Through the resolver, never a bare `ruby`: PATH's first ruby on a
+      // stock Mac is system 2.6, which has no xcodeproj gem, and the graft
+      // then dies with "cannot load such file -- xcodeproj" — prebuild fails
+      // and the watch app is absent from the project. One resolver for every
+      // caller, so fixing it in the Podfile hook alone cannot leave this one
+      // behind again (BASED-98, build 7).
+      const withRuby = path.join(watchRoot, "scripts", "with-ruby.sh");
+      const result = spawnSync("sh", [withRuby, script, iosRoot, watchRoot], {
         stdio: "inherit",
         env: {
           ...process.env,

@@ -39,8 +39,8 @@
     "tauri:build:dev": "tauri build --config src-tauri/tauri.dev.conf.json",
     "tauri:build:preview": "tauri build --config src-tauri/tauri.preview.conf.json",
     "tauri:build:production": "tauri build",
-    "watch:graft": "ruby watch/scripts/add-watch-targets.rb ios watch",
-    "watch:verify": "ruby watch/scripts/verify-watch-targets.rb ios",
+    "watch:graft": "sh watch/scripts/with-ruby.sh watch/scripts/add-watch-targets.rb ios watch",
+    "watch:verify": "sh watch/scripts/with-ruby.sh watch/scripts/verify-watch-targets.rb ios",
     "watch:test": "sh watch/scripts/test-shared.sh",
     "prebuild:ios": "expo prebuild --platform ios && pnpm watch:graft && pnpm watch:verify"
   },
