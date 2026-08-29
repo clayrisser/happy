@@ -26,6 +26,7 @@ import { disconnectService } from '@/sync/apiServices';
 import { useProfile } from '@/sync/storage';
 import { getDisplayName, getAvatarUrl, getBio } from '@/sync/profile';
 import { Avatar } from '@/components/Avatar';
+import { Wordmark } from '@/components/Wordmark';
 import { t } from '@/text';
 
 type BuildConfig = {
@@ -218,11 +219,9 @@ export const SettingsView = React.memo(function SettingsView({
                     ) : (
                         // Logo view: Original logo + version
                         <>
-                            <Image
-                                source={theme.dark ? require('@/assets/images/logotype-light.png') : require('@/assets/images/logotype-dark.png')}
-                                contentFit="contain"
-                                style={{ width: 300, height: 90, marginBottom: 12 }}
-                            />
+                            <View style={{ marginBottom: 12 }}>
+                                <Wordmark width={170} />
+                            </View>
                         </>
                     )}
                 </View>

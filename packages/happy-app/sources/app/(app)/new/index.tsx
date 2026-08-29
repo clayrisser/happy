@@ -101,7 +101,7 @@ import {
 
 // Agent icon assets
 const agentIcons = {
-    rig: require('@/assets/images/logo-black.png'),
+    rig: require('@/assets/images/logo-drover.png'),
     claude: require('@/assets/images/icon-claude.png'),
     codex: require('@/assets/images/icon-gpt.png'),
     openclaw: require('@/assets/images/icon-openclaw.png'),

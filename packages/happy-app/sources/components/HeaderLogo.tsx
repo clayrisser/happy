@@ -3,7 +3,11 @@ import { View } from 'react-native';
 import { Image } from 'expo-image';
 import { useUnistyles } from 'react-native-unistyles';
 
-const HEADER_LOGO_SIZE = 19;
+// The longhorn is 1.56:1, so it gets a wide box rather than the square one a
+// letterform wanted: 26 across keeps the horns the same optical weight the old
+// mark had at 19, and `contain` derives the 17 of height it actually uses.
+const HEADER_LOGO_WIDTH = 26;
+const HEADER_LOGO_HEIGHT = 19;
 
 /**
  * Shared header logo component used across all main tabs.
@@ -20,9 +24,9 @@ export const HeaderLogo = React.memo(() => {
             justifyContent: 'center',
         }}>
             <Image
-                source={require('@/assets/images/logo-black.png')}
+                source={require('@/assets/images/logo-drover.png')}
                 contentFit="contain"
-                style={{ width: HEADER_LOGO_SIZE, height: HEADER_LOGO_SIZE }}
+                style={{ width: HEADER_LOGO_WIDTH, height: HEADER_LOGO_HEIGHT }}
                 tintColor={theme.colors.header.tint}
             />
         </View>
