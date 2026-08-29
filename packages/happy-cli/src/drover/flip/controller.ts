@@ -25,18 +25,59 @@ import { basename } from 'node:path'
 
 import { logger } from '@/ui/logger'
 import {
+    type CoolingAccount,
     type DroverAccount,
     accountByName,
     currentAccount,
     defaultCooldownMs,
     pickTarget,
+    readSettingsModel,
+    recallWhereabouts,
+    rememberWhereabouts,
     setCooldown,
 } from './accounts'
-import { detectLimit, textOfTranscriptMessage } from './limits'
+import { detectLimit, familyLabel, familyOf, modelOfTranscriptMessage, textOfTranscriptMessage } from './limits'
 import { resolveFlipPrompt } from './prompt'
 import { carryTranscript } from './transcript'
 
 const DROVER_URL = process.env.DROVER_URL || 'http://127.0.0.1:7970'
+
+/**
+ * How often a long park says it is still there.
+ *
+ * A park runs with NO claude child, so the terminal is a dead pane for as long
+ * as it lasts. Measured 2026-08-28: every account was cooling, the session
+ * parked for 17,630 seconds — four hours fifty — and said so exactly once, to
+ * the phone. From the keyboard that is indistinguishable from a hang, which is
+ * what Clay concluded, and he escaped by re-logging main into another account.
+ */
+const parkAnnounceMs = 15 * 60 * 1000
+
+/** Where a note goes so somebody at the KEYBOARD sees it. */
+function writeToTerminal(message: string): void {
+    try {
+        // stderr, never stdout: stdout is the child's, and it is written only
+        // between children — the claude TUI owns the terminal while it runs
+        // and a stray write into it corrupts the screen.
+        process.stderr.write(message + '\n')
+    } catch (err) {
+        logger.debug('[flip] could not write to the terminal', err)
+    }
+}
+
+/** "2h 14m", "43m", "under a minute" — a wait a human can size up. */
+function humanGap(ms: number): string {
+    const minutes = Math.round(ms / 60_000)
+    if (minutes < 1) return 'under a minute'
+    if (minutes < 60) return `${minutes}m`
+    return `${Math.floor(minutes / 60)}h ${minutes % 60}m`
+}
+
+/** The two ways out of a park, said the same way everywhere they appear. */
+const overrideHint =
+    'Override now: `drover flip <account>` moves this session, or ' +
+    '`drover --account <name> --resume` starts over on one. An explicit ' +
+    'account ignores the cooldowns entirely — that is the escape hatch.'
 
 export interface FlipRequest {
     /** Explicit account, or null for "next one with headroom". */
@@ -56,7 +97,13 @@ export type ApplyResult =
           /** False when there was no conversation to carry, so the new child starts clean. */
           resume: boolean
       }
-    | { kind: 'parked'; until: number; note: string }
+    | {
+          kind: 'parked'
+          until: number
+          note: string
+          /** Who we wake up for, so the park heartbeat can name it. */
+          account: DroverAccount
+      }
     | { kind: 'refused'; note: string }
 
 interface BusFlipFrame {
@@ -92,6 +139,7 @@ export class FlipController {
     private abortChild: (() => void) | null = null
     private stream: AbortController | null = null
     private parkTimer: NodeJS.Timeout | null = null
+    private parkHeartbeat: NodeJS.Timeout | null = null
     private parkWaiters: (() => void)[] = []
     private stopped = false
 
@@ -123,18 +171,88 @@ export class FlipController {
      */
     private current: DroverAccount | undefined
     private currentKnown = false
+    /** Set once this process has flipped, after which nothing on disk knows better. */
+    private flippedHere = false
+
+    /** The last REAL model this session ran, as a family. See modelFamily(). */
+    private seenFamily: string | undefined
+    /** What a limit notice said had run out, when it named a model. */
+    private noticedFamily: string | undefined
+
+    private readonly toTerminal: (message: string) => void
+    private readonly parkAnnounceMs: number
 
     constructor(
         private readonly cwd: string,
-        /** Say something the phone and the terminal can both see. */
+        /**
+         * Reaches the PHONE, and only the phone: this is
+         * session.sendSessionEvent, an encrypted envelope to the Happy server.
+         * Nothing about it touches the terminal — see `toTerminal` in opts,
+         * which is the other half and the one Clay was staring at.
+         */
         private readonly announce: (message: string) => void,
-    ) {}
+        opts?: {
+            /** Overridden in tests; defaults to stderr. */
+            toTerminal?: (message: string) => void
+            /** Overridden in tests; defaults to fifteen minutes. */
+            parkAnnounceMs?: number
+        },
+    ) {
+        this.toTerminal = opts?.toTerminal ?? writeToTerminal
+        this.parkAnnounceMs = opts?.parkAnnounceMs ?? parkAnnounceMs
+    }
+
+    /**
+     * Which model family this session is running, or undefined.
+     *
+     * Undefined is a first-class answer: everything downstream falls back to
+     * the strict, model-blind behaviour, so a wrong guess is the only thing
+     * that can hurt and never guessing is always safe.
+     *
+     * In preference order, and each is measured rather than assumed:
+     *   1. the last real assistant entry in the transcript. It is the only
+     *      source that tracks a mid-session /model — one of Clay's transcripts
+     *      holds 4621 fable turns and 3913 opus turns — and it already arrives
+     *      here typed, so nothing had to be plumbed for it.
+     *   2. the model a limit notice named. Only ever set on an auto-flip, but
+     *      that is the exact moment the answer is needed.
+     *   3. the account's settings.json. A startup default that lags a /model
+     *      switch, so it is the seed for turn one and nothing more.
+     *
+     * Deliberately NOT here: an env var (none exists — no ANTHROPIC_MODEL or
+     * CLAUDE_MODEL is set anywhere, and runClaude.ts:64 says a default there
+     * was removed on purpose in #1721), and `lastModelUsage` in .claude.json,
+     * which is written at SHUTDOWN, is cumulative across models with no
+     * ordering, and after a flip lives in the wrong account's file entirely.
+     */
+    private modelFamily(): string | undefined {
+        if (this.seenFamily) return this.seenFamily
+        if (this.noticedFamily) return this.noticedFamily
+        const here = this.here()
+        return here ? familyOf(readSettingsModel(here)) : undefined
+    }
 
     /** The account this session is on, environment first, then whatever we flipped to. */
     private here(): DroverAccount | undefined {
         if (!this.currentKnown) {
             this.current = currentAccount()
             this.currentKnown = true
+        }
+        // The environment is only right until the first flip, and a WRAPPER
+        // restart resets us to it. So a recorded whereabouts for this very
+        // Claude session in this very directory beats the stamp: it was
+        // written by the flip that actually moved the transcript, whereas the
+        // stamp is where the session was born. Skipped once this process has
+        // flipped, because then nothing on disk knows better than we do.
+        if (!this.flippedHere && this.claudeSessionId) {
+            const remembered = recallWhereabouts(this.claudeSessionId, this.cwd)
+            if (remembered && remembered !== this.current?.name) {
+                logger.debug(
+                    `[flip] whereabouts: ${this.claudeSessionId} was left on ${remembered}, ` +
+                        `not ${this.current?.name ?? '(unknown)'} as the environment says`,
+                )
+                this.current = accountByName(remembered) ?? this.current
+            }
         }
         return this.current
     }
@@ -234,6 +352,15 @@ export class FlipController {
 
     /** Offer transcript text for limit detection. Cheap enough to call per message. */
     noteTranscriptMessage(message: unknown): void {
+        // The model is read FIRST, ahead of every early-out below, because the
+        // message that TRIGGERS an auto-flip can never carry it: the limit
+        // notice is an assistant entry with model "<synthetic>". So the family
+        // has to already be held from the last real turn by the time the
+        // synthetic one arrives, and skipping this line while a flip is
+        // pending would throw away the freshest one we ever get.
+        const family = familyOf(modelOfTranscriptMessage(message))
+        if (family) this.seenFamily = family
+
         if (this.pending) return
         const read = textOfTranscriptMessage(message)
         if (!read) return
@@ -243,13 +370,20 @@ export class FlipController {
         if (!read.synthetic) return
         const hit = detectLimit(read.text)
         if (!hit) return
+        // The harness naming the model that ran out, at the instant it ran
+        // out. Only a seed — a real turn we watched beats it every time.
+        if (hit.family && !this.seenFamily) this.noticedFamily = hit.family
 
         const current = this.here()
         const until = hit.resetsAt ?? Date.now() + defaultCooldownMs
-        if (current) setCooldown(current.name, until, hit.quote)
-        logger.debug(`[flip] usage limit detected: ${hit.quote}`)
+        // The family goes ON the ledger entry so a Fable limit cools Fable
+        // rather than blacking the account out for Opus too. No family named
+        // means the whole account is out, which is what this always recorded.
+        if (current) setCooldown(current.name, until, hit.quote, hit.family ?? undefined)
+        logger.debug(`[flip] usage limit detected${hit.family ? ` (${hit.family})` : ''}: ${hit.quote}`)
         this.announce(
-            `Cattle Drover: ${current?.name ?? 'this account'} hit its usage limit` +
+            `Cattle Drover: ${current?.name ?? 'this account'} hit its ` +
+                `${hit.family ? `${familyLabel(hit.family)} ` : 'usage '}limit` +
                 (hit.resetsAt ? `, resets ${new Date(until).toLocaleTimeString()}` : '') +
                 '. Flipping.',
         )
@@ -291,19 +425,33 @@ export class FlipController {
      */
     apply(req: FlipRequest, claudeSessionId: string | null): ApplyResult {
         const from = this.here()
-        const choice = pickTarget(from?.name, req.account)
+        const family = this.modelFamily()
+        const choice = pickTarget(from?.name, req.account, Date.now(), family)
         logger.debug(
-            `[flip] applying: from=${from?.name ?? '(unknown)'} choice=${choice.kind}` +
+            `[flip] applying: from=${from?.name ?? '(unknown)'} model=${family ?? '(unknown)'} ` +
+                `choice=${choice.kind}` +
                 (choice.kind === 'account' ? ` -> ${choice.account.name}` : '') +
                 ` claudeSessionId=${claudeSessionId ?? '(none)'}`,
         )
+
+        if (choice.kind === 'nologin') {
+            return {
+                kind: 'refused',
+                note:
+                    `Cattle Drover: "${choice.account.name}" has never been logged in, so there is ` +
+                    'nothing to flip onto — a session there opens Claude Code\'s first-run wizard, ' +
+                    `which a wrapped session cannot answer. Log it in once: drover account add ${choice.account.name}`,
+            }
+        }
 
         if (choice.kind === 'none') {
             return {
                 kind: 'refused',
                 note: req.account
                     ? `Cattle Drover: no account named "${req.account}" in the registry.`
-                    : 'Cattle Drover: no other account to flip to — add one to accounts.json.',
+                    : 'Cattle Drover: no other LOGGED-IN account to flip to. Add one with ' +
+                      '`drover account add <name>`, which logs it in as it creates it, or check ' +
+                      '`drover account list` for rows marked "no login".',
             }
         }
 
@@ -311,21 +459,28 @@ export class FlipController {
             return {
                 kind: 'parked',
                 until: choice.until,
-                note:
-                    'Cattle Drover: every account is out of headroom. Parked until ' +
-                    `${new Date(choice.until).toLocaleTimeString()}, then resuming on ${choice.account.name}.`,
+                account: choice.account,
+                note: parkNote(choice, req),
             }
         }
 
         const target = choice.account
+        const switchHint = choice.withoutModel
+            ? ` Nothing has ${familyLabel(choice.withoutModel)} headroom, so switch models with ` +
+              '`/model` or the next turn hits the same wall.'
+            : ''
+
         if (from && target.name === from.name) {
             // Waking from a park onto our own account is the NORMAL end of a
             // park, not a mistake, so it says so rather than reading like a
             // refusal to do what was asked.
             const note =
                 req.reason === 'cooldown expired'
-                    ? `Cattle Drover: ${target.name} has headroom again — carrying on here.`
-                    : `Cattle Drover: already on ${target.name}.`
+                    ? `Cattle Drover: ${target.name} has headroom again — carrying on here.${switchHint}`
+                    : choice.onlyOption
+                        ? `Cattle Drover: every other account is out of headroom, so staying on ` +
+                          `${target.name}.${switchHint} See \`drover accounts\` for when the next one is back.`
+                        : `Cattle Drover: already on ${target.name}.`
             return { kind: 'refused', note }
         }
 
@@ -353,9 +508,14 @@ export class FlipController {
         })
 
         // We are on the target from here on. Recorded BEFORE the caller acts,
-        // because the caller may never come back to tell us it worked.
+        // because the caller may never come back to tell us it worked. Written
+        // to disk as well as held in memory: the memory dies with the wrapper
+        // process and the next one would otherwise believe the spawn-time
+        // stamp and carry a stale transcript back out of the old account.
         this.current = target
         this.currentKnown = true
+        this.flippedHere = true
+        if (claudeSessionId) rememberWhereabouts(claudeSessionId, this.cwd, target.name)
 
         return {
             kind: 'flipped',
@@ -366,7 +526,8 @@ export class FlipController {
                 `Cattle Drover: ${from?.name ?? 'this session'} → ${target.name} (${req.reason}, by ${req.by}), ` +
                 (resume
                     ? `resuming ${basename(this.cwd)}${carried.subagents ? ' with subagents' : ''}.`
-                    : `starting fresh in ${basename(this.cwd)} — nothing had been said yet.`),
+                    : `starting fresh in ${basename(this.cwd)} — nothing had been said yet.`) +
+                switchHint,
         }
     }
 
@@ -374,13 +535,29 @@ export class FlipController {
      * Hold the session alive while every account cools off, then let it go.
      * Resolves early if someone flips by hand in the meantime — a park is a
      * decision about headroom, never a lock on the session.
+     *
+     * It also SAYS SO on the way through. A park runs with no claude child, so
+     * for its whole length the terminal shows nothing at all, and the one note
+     * at the start scrolls away in seconds. Four hours fifty of that is what
+     * Clay read as a hung session.
      */
-    async park(until: number): Promise<void> {
+    async park(until: number, resumeOn?: string): Promise<void> {
         const ms = Math.max(0, until - Date.now())
         logger.debug(`[flip] parked for ${Math.round(ms / 1000)}s`)
         await new Promise<void>((resolve) => {
             this.parkWaiters.push(resolve)
             this.parkTimer = setTimeout(() => this.releasePark(), ms)
+            if (ms > this.parkAnnounceMs) {
+                this.parkHeartbeat = setInterval(() => {
+                    const left = until - Date.now()
+                    if (left <= 0) return
+                    this.say(
+                        `Cattle Drover: still parked — ${humanGap(left)} to go` +
+                            `${resumeOn ? `, then ${resumeOn}` : ''} at ` +
+                            `${new Date(until).toLocaleTimeString()}. ${overrideHint}`,
+                    )
+                }, this.parkAnnounceMs)
+            }
         })
     }
 
@@ -389,12 +566,72 @@ export class FlipController {
             clearTimeout(this.parkTimer)
             this.parkTimer = null
         }
+        if (this.parkHeartbeat) {
+            clearInterval(this.parkHeartbeat)
+            this.parkHeartbeat = null
+        }
         const waiters = this.parkWaiters
         this.parkWaiters = []
         for (const w of waiters) w()
     }
 
+    /**
+     * Say it on BOTH surfaces — the phone AND the terminal.
+     *
+     * `announce` alone reaches only the phone, which is how the park went
+     * invisible: every note was sent and Clay, at the keyboard, saw a dead
+     * pane. Callers must only use this BETWEEN children; while claude owns the
+     * terminal a write into it corrupts the TUI, which is why the mid-turn
+     * limit notice in noteTranscriptMessage still uses `announce` directly.
+     */
     say(message: string): void {
         this.announce(message)
+        this.toTerminal(message)
     }
+}
+
+/**
+ * Why we are parked, at enough length to act on.
+ *
+ * Every line here answers something Clay could not find out from the terminal
+ * on 2026-08-28: which accounts are cooling, until when in HIS clock, whether
+ * it is one model or the whole account, and what command overrides it. The
+ * request is named too, because pressing prefix+F and getting the identical
+ * sentence you were already looking at reads as the key doing nothing — that
+ * silence is the actual bug, not the parking.
+ */
+function parkNote(
+    choice: { until: number; account: DroverAccount; cooling: CoolingAccount[]; family?: string },
+    req: FlipRequest,
+): string {
+    const out: string[] = []
+    const shortOf = choice.family ? `${familyLabel(choice.family)} headroom` : 'headroom'
+
+    if (req.reason === 'cooldown expired') {
+        out.push(`Cattle Drover: still parked — nothing has ${shortOf} yet.`)
+    } else if (req.by !== 'auto') {
+        // A manual flip that lands in a park has to answer the person who
+        // pressed the key, or it looks exactly like a flip that never arrived.
+        out.push(
+            `Cattle Drover: flip requested by ${req.by}, but no account has ${shortOf}. ` +
+                'Staying parked.',
+        )
+    } else {
+        out.push(`Cattle Drover: parked — no account has ${shortOf}.`)
+    }
+
+    // Every row here is blocked: pickTarget only parks once the soonest
+    // candidate is still in the future, so there is no "has headroom" case.
+    const width = Math.max(...choice.cooling.map((c) => c.name.length), 1)
+    for (const c of choice.cooling) {
+        const back = `back ${new Date(c.until).toLocaleTimeString()}`
+        out.push(`  ${c.name.padEnd(width)}  ${back}${c.reason ? ` · ${c.reason}` : ''}`)
+    }
+
+    out.push(
+        `Resuming on ${choice.account.name} by itself at ` +
+            `${new Date(choice.until).toLocaleTimeString()} (${humanGap(choice.until - Date.now())}).`,
+    )
+    out.push(overrideHint)
+    return out.join('\n')
 }

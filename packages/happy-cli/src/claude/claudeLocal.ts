@@ -272,9 +272,23 @@ export async function claudeLocal(opts: {
             // Prepare environment variables
             // Note: Local mode uses global Claude installation with --session-id flag
             // Launcher only intercepts fetch for thinking state tracking
-            const env = {
+            const env: Record<string, string | undefined> = {
                 ...process.env,
                 ...opts.claudeEnvVars
+            }
+
+            // An EMPTY value in claudeEnvVars means "unset this", which is
+            // not the same as setting it to the empty string: cross-spawn
+            // still hands the child a defined variable, and readers that test
+            // presence rather than truth then behave as if it were set.
+            // Cattle Drover uses it to flip a session onto the AMBIENT Claude
+            // account, which is the one reached with CLAUDE_CONFIG_DIR absent.
+            //
+            // Scoped to the keys the caller passed. Sweeping every empty var
+            // out of the inherited environment would be a different and much
+            // larger change, and an empty inherited var is somebody's setting.
+            for (const k of Object.keys(opts.claudeEnvVars ?? {})) {
+                if (env[k] === '' || env[k] === undefined) delete env[k]
             }
 
             if (opts.mcpServers && Object.keys(opts.mcpServers).length > 0) {

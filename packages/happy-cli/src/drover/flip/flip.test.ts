@@ -11,7 +11,14 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { detectLimit, textOfTranscriptMessage } from './limits'
+import {
+    detectLimit,
+    familyOf,
+    familyOfDisplayName,
+    familyOfLimitText,
+    modelOfTranscriptMessage,
+    textOfTranscriptMessage,
+} from './limits'
 import { renderFlipPrompt, resolveFlipPrompt, defaultFlipPrompt } from './prompt'
 import { carryTranscript, projectDirFor } from './transcript'
 import { parseFlipCommand } from './controller'
@@ -31,14 +38,97 @@ afterEach(() => {
     rmSync(root, { recursive: true, force: true })
 })
 
-function writeAccounts(accounts: unknown[]): void {
+/**
+ * Write the registry AND log every account in.
+ *
+ * An account with no credential is not a flip candidate at all, so a fixture
+ * that only writes accounts.json describes a machine where nothing can be
+ * flipped to and every choosing test answers `none`.
+ */
+function writeAccounts(accounts: { name: string; configDir?: string }[]): void {
     writeFileSync(process.env.DROVER_ACCOUNTS!, JSON.stringify(accounts))
+    for (const a of accounts) {
+        if (!a.configDir) continue
+        mkdirSync(a.configDir, { recursive: true })
+        writeFileSync(join(a.configDir, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: `${a.name}@example.com` } }))
+    }
+}
+
+/**
+ * Plant Claude Code's own usage cache in an account's config, as it writes it.
+ *
+ * `scope` is the shape measured on disk: `{model: {id: null, display_name:
+ * "Fable"}}`. The id really is null on every scoped row that has ever appeared
+ * on this machine, which is why nothing can join on it.
+ */
+interface UsageRow {
+    kind: string
+    percent: number
+    resets_at: string | null
+    scope?: { model?: { id: null; display_name: string } | null; surface?: unknown } | null
+}
+
+function writeUsage(configDir: string, limits: UsageRow[]): void {
+    const cfg = join(configDir, '.claude.json')
+    const raw = JSON.parse(readFileSync(cfg, 'utf8'))
+    raw.cachedUsageUtilization = { fetchedAtMs: Date.now(), utilization: { limits } }
+    writeFileSync(cfg, JSON.stringify(raw))
+}
+
+/** A limit row scoped to one model family, the only scoped shape observed. */
+function scopedTo(displayName: string) {
+    return { model: { id: null as null, display_name: displayName } }
 }
 
 /** Fresh import per test: the modules read env at call time, but pickTarget's
  *  ledger is a file, so the state dir must be re-read each time. */
 async function accountsModule() {
     return await import('./accounts')
+}
+
+/**
+ * The production loop in miniature: choose, move, choose again.
+ *
+ * Each hop here is a real relaunch of Claude with the flip prompt
+ * auto-submitted, so the length of this trail is the number of times a session
+ * gets torn down and rebuilt. Three things end it, and they are the three ways
+ * production stops asking:
+ *
+ *   - a choice naming the account we are ALREADY on, which the controller
+ *     turns into a refusal: the session stays put and nothing relaunches;
+ *   - a park;
+ *   - a landing that CAN run the model. The session gets its turn, nothing
+ *     hits a wall, and no further flip is requested. Only a landing carrying
+ *     `withoutModel` comes straight back here, because that session's next
+ *     turn runs the same exhausted model into the same limit.
+ *
+ * The state is held still on purpose. A hop that does consume real headroom
+ * writes a cooldown and changes the registry's answer, and there are finitely
+ * many accounts to empty; the loop that matters is the one where nothing
+ * changes and the choice cycles anyway.
+ */
+async function walkFlips(start: string, family?: string, steps = 12): Promise<string[]> {
+    const { pickTarget } = await accountsModule()
+    const trail: string[] = []
+    let current = start
+    for (let i = 0; i < steps; i++) {
+        const choice = pickTarget(current, null, Date.now(), family)
+        if (choice.kind !== 'account') {
+            trail.push(`(${choice.kind})`)
+            break
+        }
+        if (choice.account.name === current) {
+            trail.push(`(stay on ${current})`)
+            break
+        }
+        current = choice.account.name
+        trail.push(current)
+        if (!choice.withoutModel) {
+            trail.push(`(running on ${current})`)
+            break
+        }
+    }
+    return trail
 }
 
 describe('limit detection', () => {
@@ -119,6 +209,92 @@ describe('limit detection', () => {
     })
 })
 
+describe('reducing a model to its family', () => {
+    it('reads every id shape that has appeared on disk', () => {
+        expect(familyOf('claude-opus-5')).toBe('opus')
+        expect(familyOf('claude-fable-5[1m]')).toBe('fable')
+        expect(familyOf('opus[1m]')).toBe('opus')
+        expect(familyOf('fable')).toBe('fable')
+        // A trailing date, and a family that is NOT the second segment.
+        expect(familyOf('claude-haiku-4-5-20251001')).toBe('haiku')
+        expect(familyOf('claude-3-5-sonnet')).toBe('sonnet')
+        // A Bedrock/Vertex prefix is not part of the name.
+        expect(familyOf('us.anthropic.claude-fable-5')).toBe('fable')
+    })
+
+    it('refuses the aliases that only resolve at runtime', () => {
+        // opusplan is Opus in plan mode and Sonnet outside it; `best` is
+        // whatever the server picks; the bare `haiku` alias falls back to
+        // sonnet — Claude Code's own qde("haiku") returns "sonnet". Guessing
+        // any of them makes an account look more available than it is.
+        expect(familyOf('opusplan')).toBeUndefined()
+        expect(familyOf('best')).toBeUndefined()
+        expect(familyOf('haiku')).toBeUndefined()
+        // The harness's own notices are not a model this session ran.
+        expect(familyOf('<synthetic>')).toBeUndefined()
+        expect(familyOf(undefined)).toBeUndefined()
+    })
+
+    it('makes a scope display name and a model id agree', () => {
+        // The crux: the cache writes the FAMILY capitalized, the catalog
+        // writes "Fable 5". Matching those two strings directly always fails.
+        expect(familyOfDisplayName('Fable')).toBe('fable')
+        expect(familyOfDisplayName('Fable 5')).toBe('fable')
+        expect(familyOfDisplayName('Fable')).toBe(familyOf('claude-fable-5'))
+        // A shape nobody has seen stays unknown, so callers keep blocking.
+        expect(familyOfDisplayName('Claude Fable')).toBeUndefined()
+    })
+
+    it('takes the model off a real assistant entry, and off nothing else', () => {
+        expect(
+            modelOfTranscriptMessage({ type: 'assistant', message: { model: 'claude-opus-5' } }),
+        ).toBe('claude-opus-5')
+        // A tool-use-only turn has no text block; its model must still count,
+        // which is why this reads the entry rather than going through
+        // textOfTranscriptMessage.
+        expect(
+            modelOfTranscriptMessage({
+                type: 'assistant',
+                message: { model: 'claude-fable-5', content: [{ type: 'tool_use', name: 'Bash' }] },
+            }),
+        ).toBe('claude-fable-5')
+        // A subagent's model is not the session's. Two of main's 53
+        // transcripts carry haiku and opus-4-5 entries exactly this way.
+        expect(
+            modelOfTranscriptMessage({ type: 'assistant', isSidechain: true, message: { model: 'claude-haiku-4-5' } }),
+        ).toBeUndefined()
+        expect(modelOfTranscriptMessage({ type: 'assistant', message: { model: '<synthetic>' } })).toBeUndefined()
+        expect(modelOfTranscriptMessage({ type: 'user', message: { model: 'claude-opus-5' } })).toBeUndefined()
+    })
+
+    it('reads the family back out of a notice, which is where an old ledger keeps it', () => {
+        // A cooldown's `reason` IS the verbatim notice — controller.ts passes
+        // hit.quote straight to setCooldown — so an entry written before the
+        // family field existed still says which model ran out, in English.
+        expect(familyOfLimitText("You've reached your Fable 5 limit.")).toBe('fable')
+        expect(familyOfLimitText("You've reached your Opus limit. Run /usage-credits.")).toBe('opus')
+        // A generic notice names nothing, and nothing is what keeps a real
+        // account-wide cooldown blocking every model.
+        expect(familyOfLimitText('Claude usage limit reached.')).toBeUndefined()
+        expect(familyOfLimitText("You've reached your usage limit")).toBeUndefined()
+        expect(familyOfLimitText('out entirely')).toBeUndefined()
+        expect(familyOfLimitText(undefined)).toBeUndefined()
+        // The usage cache's own sentence is not a notice and must not be read
+        // as one: it is written by describeLimit, not by the harness.
+        expect(familyOfLimitText("Fable weekly limit at 100% (Claude Code's own usage cache)")).toBeUndefined()
+    })
+
+    it('captures the model out of the limit notice that names one', () => {
+        // Verbatim, 2026-08-22T16:13:43.233Z, model "<synthetic>". The harness
+        // saying which model ran out, at the instant the cooldown is recorded.
+        const real = "You've reached your Fable 5 limit. Run /usage-credits to continue or switch models with /model."
+        expect(detectLimit(real)?.family).toBe('fable')
+        // A generic notice names nothing, and null means "the whole account".
+        expect(detectLimit('Claude usage limit reached.')?.family).toBeNull()
+        expect(detectLimit("You've reached your usage limit")?.family).toBeNull()
+    })
+})
+
 describe('cooldown ledger', () => {
     it('records a cooldown and reports it as active until it expires', async () => {
         const { setCooldown, isCooling } = await accountsModule()
@@ -193,6 +369,501 @@ describe('choosing where to flip', () => {
         writeAccounts([{ name: 'main', configDir: join(root, 'main') }])
         const { pickTarget } = await accountsModule()
         expect(pickTarget('main', 'nope').kind).toBe('none')
+    })
+
+    // The reported bug: the ledger had never seen `alt` run out, because it
+    // was emptied outside any drover session. Registry order then sent three
+    // flips in a row onto it.
+    it('skips an account Claude Code itself has recorded at 100%, with no ledger entry', async () => {
+        writeAccounts([
+            { name: 'main', configDir: join(root, 'main') },
+            { name: 'alt', configDir: join(root, 'alt') },
+            { name: 'third', configDir: join(root, 'third') },
+        ])
+        writeUsage(join(root, 'alt'), [
+            { kind: 'weekly_all', percent: 100, resets_at: new Date(Date.now() + 3_600_000).toISOString() },
+        ])
+        const { pickTarget, readLedger } = await accountsModule()
+        expect(readLedger()).toEqual({})
+        const choice = pickTarget('main')
+        expect(choice.kind === 'account' && choice.account.name).toBe('third')
+    })
+
+    it('ignores a usage limit that has already reset, and one below 100%', async () => {
+        writeAccounts([
+            { name: 'main', configDir: join(root, 'main') },
+            { name: 'alt', configDir: join(root, 'alt') },
+        ])
+        writeUsage(join(root, 'alt'), [
+            { kind: 'weekly_all', percent: 100, resets_at: new Date(Date.now() - 1_000).toISOString() },
+            { kind: 'session', percent: 99, resets_at: new Date(Date.now() + 3_600_000).toISOString() },
+        ])
+        const { pickTarget } = await accountsModule()
+        const choice = pickTarget('main')
+        expect(choice.kind === 'account' && choice.account.name).toBe('alt')
+    })
+
+    it('parks until the LAST maxed-out limit clears, not the first', async () => {
+        writeAccounts([
+            { name: 'main', configDir: join(root, 'main') },
+            { name: 'alt', configDir: join(root, 'alt') },
+        ])
+        const soon = Date.now() + 30_000
+        const late = Date.now() + 90_000
+        writeUsage(join(root, 'alt'), [
+            { kind: 'session', percent: 100, resets_at: new Date(soon).toISOString() },
+            { kind: 'weekly_all', percent: 100, resets_at: new Date(late).toISOString() },
+        ])
+        const { pickTarget, setCooldown } = await accountsModule()
+        setCooldown('main', Date.now() + 600_000, 'limit')
+        const choice = pickTarget('main')
+        expect(choice.kind).toBe('parked')
+        expect(choice.kind === 'parked' && choice.until).toBe(late)
+    })
+
+    it('says WHY it stayed put when nothing else has headroom', async () => {
+        writeAccounts([
+            { name: 'main', configDir: join(root, 'main') },
+            { name: 'alt', configDir: join(root, 'alt') },
+        ])
+        writeUsage(join(root, 'alt'), [
+            { kind: 'weekly_all', percent: 100, resets_at: new Date(Date.now() + 3_600_000).toISOString() },
+        ])
+        const { pickTarget } = await accountsModule()
+        const choice = pickTarget('main')
+        expect(choice.kind === 'account' && choice.account.name).toBe('main')
+        expect(choice.kind === 'account' && choice.onlyOption).toBe(true)
+    })
+
+    it('lists every cooling account and why, so a park can be read', async () => {
+        writeAccounts([
+            { name: 'main', configDir: join(root, 'main') },
+            { name: 'alt', configDir: join(root, 'alt') },
+        ])
+        const { pickTarget, setCooldown } = await accountsModule()
+        setCooldown('main', Date.now() + 90_000, 'limit with a reset time')
+        setCooldown('alt', Date.now() + 30_000, 'the other limit')
+        const choice = pickTarget('main')
+        expect(choice.kind).toBe('parked')
+        if (choice.kind !== 'parked') return
+        // Wake-up order, with a reason each — the whole park note is built
+        // from this and there was no way to see any of it from the terminal.
+        expect(choice.cooling.map((c) => c.name)).toEqual(['alt', 'main'])
+        expect(choice.cooling[0].reason).toBe('the other limit')
+    })
+})
+
+// Clay's ask, verbatim: "when auto flipping if using fable you first try to
+// flip to something that has fable". The reason it matters is measured — on
+// 2026-08-29 all five accounts read as unusable and every single reason was
+// Fable, while main sat at five_hour 2% and would have run Opus that minute.
+describe('choosing where to flip when the MODEL is what ran out', () => {
+    const soon = () => new Date(Date.now() + 3_600_000).toISOString()
+
+    function threeAccounts() {
+        writeAccounts([
+            { name: 'main', configDir: join(root, 'main') },
+            { name: 'alt', configDir: join(root, 'alt') },
+            { name: 'third', configDir: join(root, 'third') },
+        ])
+    }
+
+    it('skips an account whose FABLE weekly is maxed when the session is on Fable', async () => {
+        threeAccounts()
+        writeUsage(join(root, 'alt'), [
+            { kind: 'weekly_scoped', percent: 100, resets_at: soon(), scope: scopedTo('Fable') },
+        ])
+        const { pickTarget } = await accountsModule()
+        expect(pickTarget('main', null, Date.now(), 'fable')).toMatchObject({
+            kind: 'account',
+            account: { name: 'third' },
+        })
+    })
+
+    it('takes that same account for an Opus session — a Fable row is not evidence about Opus', async () => {
+        threeAccounts()
+        writeUsage(join(root, 'alt'), [
+            { kind: 'weekly_scoped', percent: 100, resets_at: soon(), scope: scopedTo('Fable') },
+        ])
+        const { pickTarget } = await accountsModule()
+        expect(pickTarget('main', null, Date.now(), 'opus')).toMatchObject({
+            kind: 'account',
+            account: { name: 'alt' },
+        })
+    })
+
+    it('still lets an UNSCOPED limit rule the account out for every model', async () => {
+        threeAccounts()
+        writeUsage(join(root, 'alt'), [
+            { kind: 'weekly_all', percent: 100, resets_at: soon() },
+        ])
+        const { pickTarget } = await accountsModule()
+        expect(pickTarget('main', null, Date.now(), 'opus')).toMatchObject({
+            kind: 'account',
+            account: { name: 'third' },
+        })
+    })
+
+    // The single most important constraint: a wrong model guess that parks a
+    // healthy session is far worse than no model awareness at all.
+    it('behaves EXACTLY as it did before when the model is unknown', async () => {
+        threeAccounts()
+        writeUsage(join(root, 'alt'), [
+            { kind: 'weekly_scoped', percent: 100, resets_at: soon(), scope: scopedTo('Fable') },
+        ])
+        const { pickTarget } = await accountsModule()
+        // No family: the scoped row blocks, same as it always has.
+        expect(pickTarget('main')).toMatchObject({ kind: 'account', account: { name: 'third' } })
+        // And a display name that reduces to no family blocks too, so a shape
+        // Anthropic has not shipped yet cannot unpark an exhausted account.
+        writeUsage(join(root, 'alt'), [
+            { kind: 'weekly_scoped', percent: 100, resets_at: soon(), scope: scopedTo('Claude Fable') },
+        ])
+        expect(pickTarget('main', null, Date.now(), 'opus')).toMatchObject({
+            kind: 'account',
+            account: { name: 'third' },
+        })
+    })
+
+    it('falls back to an account with headroom for SOME model, and names the one that is out', async () => {
+        writeAccounts([
+            { name: 'main', configDir: join(root, 'main') },
+            { name: 'alt', configDir: join(root, 'alt') },
+        ])
+        writeUsage(join(root, 'alt'), [
+            { kind: 'weekly_scoped', percent: 100, resets_at: soon(), scope: scopedTo('Fable') },
+        ])
+        const { pickTarget, setCooldown } = await accountsModule()
+        setCooldown('main', Date.now() + 3_600_000, 'out entirely')
+        const choice = pickTarget('main', null, Date.now(), 'fable')
+        // A live session on another model beats five hours of nothing, as
+        // long as the answer says which model has to change.
+        expect(choice).toMatchObject({ kind: 'account', account: { name: 'alt' }, withoutModel: 'fable' })
+    })
+
+    // PING-PONG. The first cut of that fallback took the first OTHER account
+    // with headroom for some model, which has no fixed point: measured by an
+    // adversarial pass on 2026-08-29, three accounts each carrying a
+    // Fable-scoped cooldown answered {kind:'account', withoutModel:'fable'}
+    // twelve calls running, main -> alt -> main -> alt, and never parked. In
+    // production every one of those hops relaunches Claude with the flip
+    // prompt auto-submitted, so the session burns a turn per hop for as long
+    // as it is left alone. An unbounded relaunch loop is strictly worse than
+    // the wedge the model-aware flip was built to fix.
+    it('does not ping-pong between accounts that are all out of the SAME model', async () => {
+        threeAccounts()
+        const { setCooldown } = await accountsModule()
+        const hour = Date.now() + 3_600_000
+        for (const name of ['main', 'alt', 'third']) {
+            setCooldown(name, hour, "You've reached your Fable 5 limit.", 'fable')
+        }
+        // Nowhere to run Fable, but every account still runs Opus. The answer
+        // is to stay put and switch models, not to tour the registry.
+        expect(await walkFlips('main', 'fable')).toEqual(['(stay on main)'])
+        expect(await walkFlips('alt', 'fable')).toEqual(['(stay on alt)'])
+    })
+
+    it('does not ping-pong on the usage cache either, with no ledger at all', async () => {
+        writeAccounts([
+            { name: 'main', configDir: join(root, 'main') },
+            { name: 'alt', configDir: join(root, 'alt') },
+        ])
+        for (const dir of ['main', 'alt']) {
+            writeUsage(join(root, dir), [
+                { kind: 'weekly_scoped', percent: 100, resets_at: soon(), scope: scopedTo('Fable') },
+            ])
+        }
+        const { readLedger } = await accountsModule()
+        expect(readLedger()).toEqual({})
+        expect(await walkFlips('main', 'fable')).toEqual(['(stay on main)'])
+        expect(await walkFlips('alt', 'fable')).toEqual(['(stay on alt)'])
+    })
+
+    it('parks on that identical registry when the model is unknown', async () => {
+        threeAccounts()
+        const { setCooldown } = await accountsModule()
+        const hour = Date.now() + 3_600_000
+        for (const name of ['main', 'alt', 'third']) {
+            setCooldown(name, hour, "You've reached your Fable 5 limit.", 'fable')
+        }
+        // The control the ping-pong was found by: the same accounts, the same
+        // cooldowns, no family — a park, because an unscoped read blocks
+        // everything. Model awareness must change WHERE a session goes, never
+        // whether the choice terminates.
+        expect(await walkFlips('main')).toEqual(['(parked)'])
+    })
+
+    // Termination by exhaustion rather than by example. Every registry of
+    // three accounts, each independently free / out of Fable / out of Fable
+    // with the family only in the reason / out entirely, from every starting
+    // account, read through BOTH sources — the usage cache for the scoped
+    // ones, the ledger for the rest. 64 registries, 384 walks, and not one of
+    // them may loop.
+    //
+    // The bound is two entries: at most one move, then a stay or a park. That
+    // is the fixed-point argument stated as a test, so a later fallback that
+    // reintroduces a cycle fails here even if nobody thinks to write the
+    // fixture that shows it.
+    it('terminates from every account of every three-account registry', async () => {
+        const states = ['free', 'fable', 'legacy', 'dead'] as const
+        const names = ['main', 'alt', 'third']
+        const { setCooldown, clearCooldown } = await accountsModule()
+        for (const a of states) {
+            for (const b of states) {
+                for (const c of states) {
+                    threeAccounts()
+                    for (const name of names) clearCooldown(name)
+                    ;[a, b, c].forEach((state, i) => {
+                        if (state === 'fable') {
+                            writeUsage(join(root, names[i]), [
+                                { kind: 'weekly_scoped', percent: 100, resets_at: soon(), scope: scopedTo('Fable') },
+                            ])
+                        } else if (state === 'legacy') {
+                            // The live-ledger shape: scoped in the reason only.
+                            setCooldown(names[i], Date.now() + 3_600_000, "You've reached your Fable 5 limit.")
+                        } else if (state === 'dead') {
+                            setCooldown(names[i], Date.now() + 3_600_000, 'out entirely')
+                        }
+                    })
+                    for (const start of names) {
+                        for (const family of ['fable', undefined]) {
+                            const trail = await walkFlips(start, family)
+                            const where = `${a}/${b}/${c} from ${start} as ${family ?? 'unknown'}`
+                            expect(trail.length, `${where}: ${trail.join(' -> ')}`).toBeLessThanOrEqual(2)
+                            expect(trail[trail.length - 1], where).toMatch(/^\(/)
+                        }
+                    }
+                }
+            }
+        }
+        // 30s because the sweep writes a real registry, four .claude.json
+        // files and a ledger per registry, and 64 of them do not fit vitest's
+        // 5s default. Narrowing the sweep to fit would be the wrong trade:
+        // the whole value of this test is that it is exhaustive.
+    }, 30_000)
+
+    // The fallback still moves when moving is the only thing that helps: this
+    // account can run nothing at all, and one that can run Opus is next door.
+    // Bounded at a single hop, because the account it lands on answers itself.
+    it('moves ONCE to an account that can still run something, then settles', async () => {
+        threeAccounts()
+        const { setCooldown } = await accountsModule()
+        const hour = Date.now() + 3_600_000
+        setCooldown('main', hour, 'out entirely')
+        setCooldown('alt', hour, "You've reached your Fable 5 limit.", 'fable')
+        setCooldown('third', hour, "You've reached your Fable 5 limit.", 'fable')
+        expect(await walkFlips('main', 'fable')).toEqual(['alt', '(stay on alt)'])
+    })
+
+    it('parks when nothing can run ANY model, and says the park is about the model', async () => {
+        writeAccounts([
+            { name: 'main', configDir: join(root, 'main') },
+            { name: 'alt', configDir: join(root, 'alt') },
+        ])
+        const { pickTarget, setCooldown } = await accountsModule()
+        const soonest = Date.now() + 30_000
+        setCooldown('main', Date.now() + 90_000, 'out entirely')
+        setCooldown('alt', soonest, 'out entirely')
+        const choice = pickTarget('main', null, Date.now(), 'fable')
+        expect(choice.kind).toBe('parked')
+        expect(choice.kind === 'parked' && choice.until).toBe(soonest)
+        expect(choice.kind === 'parked' && choice.family).toBe('fable')
+    })
+
+    // The livelock guard, re-proved through the model-aware path: a park whose
+    // deadline has already passed spins the launcher as fast as the event loop
+    // allows. coolingState never returns a past deadline, so the only way to
+    // reach `soonest.until <= now` is a candidate that is genuinely free.
+    it('never returns a zero-length park, even with a family in play', async () => {
+        writeAccounts([
+            { name: 'main', configDir: join(root, 'main') },
+            { name: 'alt', configDir: join(root, 'alt') },
+        ])
+        // alt is out for everything, so both passes fail and the park deadline
+        // is measured against the loosest demand. main is out of Fable only,
+        // so under that demand it is free RIGHT NOW — and a park until a time
+        // already past is the livelock: the launcher parks for zero ms, wakes,
+        // asks again, gets the same answer, and spins.
+        writeUsage(join(root, 'main'), [
+            { kind: 'weekly_scoped', percent: 100, resets_at: soon(), scope: scopedTo('Fable') },
+        ])
+        writeUsage(join(root, 'alt'), [{ kind: 'weekly_all', percent: 100, resets_at: soon() }])
+        const { pickTarget } = await accountsModule()
+        expect(pickTarget('main', null, Date.now(), 'fable')).toMatchObject({
+            kind: 'account',
+            account: { name: 'main' },
+            onlyOption: true,
+            withoutModel: 'fable',
+        })
+    })
+
+    it('cools only the family the notice named, and keeps a blanket cooldown a blanket', async () => {
+        writeAccounts([
+            { name: 'main', configDir: join(root, 'main') },
+            { name: 'alt', configDir: join(root, 'alt') },
+        ])
+        const { pickTarget, setCooldown, readLedger, clearCooldown } = await accountsModule()
+        setCooldown('alt', Date.now() + 60_000, "You've reached your Fable 5 limit.", 'fable')
+        expect(readLedger().alt.family).toBe('fable')
+        // A Fable session stays on main, and that is the scoped entry being
+        // read: alt is the only other account and its Fable is gone, while
+        // main's is not. Flipping there anyway is what ping-ponged — it trades
+        // a model that works for one that does not, and the account it left
+        // then looks like the place to go next. So no withoutModel either:
+        // Fable runs fine right here.
+        const fable = pickTarget('main', null, Date.now(), 'fable')
+        expect(fable).toMatchObject({ kind: 'account', account: { name: 'main' }, onlyOption: true })
+        expect(fable.kind === 'account' && fable.withoutModel).toBeUndefined()
+        // An Opus session is not held up by it at all.
+        const opus = pickTarget('main', null, Date.now(), 'opus')
+        expect(opus).toMatchObject({ kind: 'account', account: { name: 'alt' } })
+        expect(opus.kind === 'account' && opus.withoutModel).toBeUndefined()
+
+        // "Fable is out" must never be written over "everything is out": that
+        // would make a dead account read as available for Opus.
+        clearCooldown('alt')
+        setCooldown('alt', Date.now() + 60_000, 'out entirely')
+        setCooldown('alt', Date.now() + 90_000, "You've reached your Fable 5 limit.", 'fable')
+        expect(readLedger().alt.family).toBeUndefined()
+        expect(pickTarget('main', null, Date.now(), 'opus')).toMatchObject({
+            kind: 'account',
+            account: { name: 'main' },
+            onlyOption: true,
+        })
+    })
+
+    // THE RATCHET, measured against Clay's live ledger on 2026-08-29.
+    //
+    // Three entries, none carrying a family, each with the reason "You've
+    // reached your Fable 5 limit." His session was on Opus; main's usage cache
+    // read session 2%, weekly_all 60%, and its only 100% was the Fable weekly.
+    // He was parked for five hours under a note whose four lines each named a
+    // FABLE limit. That self-contradiction is the tell: an entry whose reason
+    // names Fable was never account-wide, and treating it as one is the error.
+    //
+    // It could not heal itself either. `widened` asked the bare field, so
+    // every later Fable notice re-recorded the entry, pushed the window out
+    // and dropped the family again — the entry could never become scoped and
+    // the account stayed dead for every model until the window ran out.
+    describe('a cooldown whose family is only in its reason', () => {
+        it('does not park a session on another model behind it', async () => {
+            writeAccounts([
+                { name: 'main', configDir: join(root, 'main') },
+                { name: 'alt', configDir: join(root, 'alt') },
+            ])
+            const { pickTarget, setCooldown, readLedger } = await accountsModule()
+            // Exactly the shape on disk: no family argument, and the notice
+            // in the reason naming the model that actually ran out.
+            setCooldown('alt', Date.now() + 3_600_000, "You've reached your Fable 5 limit.")
+            expect(readLedger().alt.family).toBeUndefined()
+
+            // Opus has headroom there and must be handed it.
+            expect(pickTarget('main', null, Date.now(), 'opus')).toMatchObject({
+                kind: 'account',
+                account: { name: 'alt' },
+            })
+            // A Fable session still reads the entry as out, so it stays put
+            // and switches models rather than touring the registry.
+            expect(pickTarget('main', null, Date.now(), 'fable')).toMatchObject({
+                kind: 'account',
+                account: { name: 'main' },
+                onlyOption: true,
+            })
+        })
+
+        it('becomes scoped when the same limit is recorded again', async () => {
+            const { setCooldown, readLedger } = await accountsModule()
+            const first = Date.now() + 3_600_000
+            setCooldown('main', first, "You've reached your Fable 5 limit.")
+            expect(readLedger().main.family).toBeUndefined()
+            setCooldown('main', first + 60_000, "You've reached your Fable 5 limit.", 'fable')
+            // The ratchet was here: the window extended and the family was
+            // dropped, every time, for as long as the account kept hitting it.
+            expect(readLedger().main.family).toBe('fable')
+            expect(readLedger().main.until).toBe(first + 60_000)
+        })
+
+        it('still lets a genuinely account-wide entry block everything', async () => {
+            writeAccounts([
+                { name: 'main', configDir: join(root, 'main') },
+                { name: 'alt', configDir: join(root, 'alt') },
+            ])
+            const { pickTarget, setCooldown, readLedger } = await accountsModule()
+            // Names no model, so it means the account — and widening it with a
+            // Fable notice must not narrow it by the back door.
+            setCooldown('alt', Date.now() + 60_000, 'Claude usage limit reached.')
+            setCooldown('alt', Date.now() + 90_000, "You've reached your Fable 5 limit.", 'fable')
+            const entry = readLedger().alt
+            expect(entry.family).toBeUndefined()
+            // The REASON is held back too, and that is load-bearing now: an
+            // account-wide entry carrying a notice that names Fable is the
+            // very shape read as scoped, so writing one here would put the
+            // ratchet back the other way round.
+            expect(entry.reason).toBe('Claude usage limit reached.')
+            expect(entry.until).toBe(readLedger().alt.until)
+            expect(pickTarget('main', null, Date.now(), 'opus')).toMatchObject({
+                kind: 'account',
+                account: { name: 'main' },
+                onlyOption: true,
+            })
+        })
+
+        it('does not ping-pong, and still parks when the model is unknown', async () => {
+            threeAccounts()
+            const { setCooldown } = await accountsModule()
+            const hour = Date.now() + 3_600_000
+            for (const name of ['main', 'alt', 'third']) {
+                setCooldown(name, hour, "You've reached your Fable 5 limit.")
+            }
+            // Nowhere runs Fable, everywhere runs Opus: stay put and switch.
+            expect(await walkFlips('main', 'fable')).toEqual(['(stay on main)'])
+            expect(await walkFlips('alt', 'fable')).toEqual(['(stay on alt)'])
+            // With no family known, an unscoped read blocks everything and the
+            // strict park stands — the fixed point is unchanged by any of this.
+            expect(await walkFlips('main')).toEqual(['(parked)'])
+        })
+    })
+
+    it('blames the account-wide limit, not the scoped one that reset 252 microseconds later', async () => {
+        writeAccounts([{ name: 'main', configDir: join(root, 'main') }])
+        // jamrizzi, measured: weekly_all at 18:59:59.859969Z and the Fable
+        // weekly at 18:59:59.860221Z. Taking "the latest" named the scoped row
+        // and the table said "Fable weekly limit" when the blocker was the
+        // whole week. Right verdict, wrong explanation — and the explanation
+        // is what decides whether Clay switches model or waits.
+        writeUsage(join(root, 'main'), [
+            { kind: 'weekly_all', percent: 100, resets_at: '2099-01-01T18:59:59.859969Z' },
+            {
+                kind: 'weekly_scoped',
+                percent: 100,
+                resets_at: '2099-01-01T18:59:59.860221Z',
+                scope: scopedTo('Fable'),
+            },
+        ])
+        const { readUsageExhaustion, accountByName } = await accountsModule()
+        const measured = readUsageExhaustion(accountByName('main')!)
+        // Blocked until the LAST of them clears, which is still the scoped one.
+        expect(measured?.until).toBe(Date.parse('2099-01-01T18:59:59.860221Z'))
+        expect(measured?.reason).toContain('weekly limit at 100%')
+        expect(measured?.reason).not.toContain('Fable')
+    })
+})
+
+describe('where a session was left', () => {
+    it('remembers across a wrapper restart, keyed by session id and cwd', async () => {
+        const { rememberWhereabouts, recallWhereabouts } = await accountsModule()
+        rememberWhereabouts('9ae61ba4', '/work/thing', 'jamrizzi')
+        expect(recallWhereabouts('9ae61ba4', '/work/thing')).toBe('jamrizzi')
+        // A different project is a different session however the id reads.
+        expect(recallWhereabouts('9ae61ba4', '/work/other')).toBeUndefined()
+        expect(recallWhereabouts('unknown', '/work/thing')).toBeUndefined()
+    })
+
+    it('records the newest flip, not the first', async () => {
+        const { rememberWhereabouts, recallWhereabouts } = await accountsModule()
+        rememberWhereabouts('s1', '/w', 'alt')
+        rememberWhereabouts('s1', '/w', 'third')
+        expect(recallWhereabouts('s1', '/w')).toBe('third')
     })
 })
 
