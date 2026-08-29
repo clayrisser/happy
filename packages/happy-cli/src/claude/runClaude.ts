@@ -7,7 +7,7 @@ import { loop } from '@/claude/loop';
 import { AgentGoalStatus, AgentState, Metadata } from '@/api/types';
 import packageJson from '../../package.json';
 import { Credentials, readSettings } from '@/persistence';
-import { EnhancedMode, PermissionMode } from './loop';
+import { ClaudeEffort, EnhancedMode, PermissionMode } from './loop';
 import { MessageQueue2 } from '@/utils/MessageQueue2';
 import { hashObject } from '@/utils/deterministicJson';
 import { parseSpecialCommand } from '@/parsers/specialCommands';
@@ -20,7 +20,7 @@ import { startHookServer } from '@/claude/utils/startHookServer';
 import { generateHookSettingsFile, cleanupHookSettingsFile } from '@/claude/utils/generateHookSettings';
 import { registerKillSessionHandler } from './registerKillSessionHandler';
 import { projectPath } from '../projectPath';
-import { resolve, basename } from 'node:path';
+import { resolve } from 'node:path';
 import { startOfflineReconnection, connectionState } from '@/utils/serverConnectionErrors';
 import { claudeLocal } from '@/claude/claudeLocal';
 import { createSessionScanner } from '@/claude/utils/sessionScanner';
@@ -31,7 +31,7 @@ import {
     parseClaudeGoalActionParams,
     type ClaudeGoalStatusTranscriptEvent,
 } from '@/claude/claudeGoalStatus';
-import { Session } from './session';
+import { defaultSessionName, isDefaultSessionName, Session } from './session';
 import { applySandboxPermissionPolicy, normalizeRemotePermissionMode, resolveInitialClaudePermissionMode, resolveRemoteClaudePermissionMode } from './utils/permissionMode';
 import { decodeBase64, encodeBase64 } from '@/api/encryption';
 import type { Session as ApiSession } from '@/api/types';
@@ -41,6 +41,8 @@ import { join } from 'node:path';
 import { RawJSONLinesSchema, type RawJSONLines } from './types';
 import { FlipController, parseFlipCommand } from '@/drover/flip/controller';
 import { readAccounts } from '@/drover/flip/accounts';
+import { findHappySessionForClaudeSession, resumedClaudeSessionId } from '@/resume/reattachClaudeSession';
+import type { ReconnectableHappySession } from '@/resume/resolveHappySession';
 
 /** JavaScript runtime to use for spawning Claude Code */
 export type JsRuntime = 'node' | 'bun'
@@ -48,7 +50,7 @@ export type JsRuntime = 'node' | 'bun'
 export interface StartOptions {
     model?: string
     permissionMode?: PermissionMode
-    effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+    effort?: ClaudeEffort
     startingMode?: 'local' | 'remote'
     shouldStartDaemon?: boolean
     claudeEnvVars?: Record<string, string>
@@ -66,7 +68,7 @@ export interface StartOptions {
 // The model works the same way: no default. This used to be 'opus', which
 // pinned every remote turn to the 200K model even when the user's own Claude
 // config (settings.json, ANTHROPIC_MODEL) said e.g. claude-opus-5[1m] (#1721).
-const DEFAULT_CLAUDE_EFFORT: 'low' | 'medium' | 'high' | 'xhigh' | 'max' = 'medium';
+const DEFAULT_CLAUDE_EFFORT: ClaudeEffort = 'medium';
 type ClaudeGoalCommand = NonNullable<ReturnType<typeof parseClaudeGoalActionParams>>;
 type PendingClaudeGoalAction = {
     command: ClaudeGoalCommand;
@@ -131,6 +133,18 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
     const forkedFromMessageId = process.env.HAPPY_FORKED_FROM_MESSAGE_ID;
     const isSideChat = process.env.HAPPY_SIDE_CHAT === '1';
 
+    // Name the session NOW, rather than leaving it "New chat" until something
+    // happens to name it. Nothing ever did on the Claude path: the phone's
+    // title is metadata.summary.text (getSessionName, happy-app
+    // sources/utils/sessionUtils.ts) and the only writers of that are Claude's
+    // own transcript summaries — which claudeLocalLauncher deliberately drops —
+    // and the change_title MCP tool, which is only wired up for Gemini. So a
+    // local session showed "New chat" over the project path for its whole life
+    // unless a flip renamed it. `name` and `summary` are both stamped because
+    // they feed different screens: `summary` is the title and the push body,
+    // `name` is the command palette and the projects sidebar.
+    const startingSessionName = defaultSessionName(workingDirectory, process.env.DROVER_ACCOUNT);
+
     let metadata: Metadata = {
         path: workingDirectory,
         host: os.hostname(),
@@ -150,14 +164,14 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
         flavor: 'claude',
         sandbox: sandboxConfig?.enabled ? sandboxConfig : null,
         dangerouslySkipPermissions,
+        name: startingSessionName,
+        summary: { text: startingSessionName, updatedAt: Date.now() },
         // Multi-account (BASED-98): `drover account` exports DROVER_ACCOUNT next to
         // CLAUDE_CONFIG_DIR; carrying it in the metadata gives the app a
-        // per-account identity to show and filter on, and the name prefix
-        // makes the account visible today with no app changes.
-        ...(process.env.DROVER_ACCOUNT ? {
-            droverAccount: process.env.DROVER_ACCOUNT,
-            name: `[${process.env.DROVER_ACCOUNT}] ${basename(workingDirectory)}`,
-        } : {}),
+        // per-account identity to show and filter on, and the account prefix
+        // defaultSessionName puts on the two names above makes the account
+        // visible today with no app changes.
+        ...(process.env.DROVER_ACCOUNT ? { droverAccount: process.env.DROVER_ACCOUNT } : {}),
         ...(forkedFromSessionId ? { parentSessionId: forkedFromSessionId } : {}),
         ...(forkedFromMessageId ? { forkedFromMessageId } : {}),
         ...(isSideChat ? { isSideChat: true } : {}),
@@ -171,6 +185,53 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
     const reconnectMetadataVersion = process.env.HAPPY_RECONNECT_METADATA_VERSION;
     const reconnectAgentStateVersion = process.env.HAPPY_RECONNECT_AGENT_STATE_VERSION;
 
+    // Cattle Drover (BASED-98): `drover --resume <id>` used to mint a NEW Happy
+    // session and the local scanner then replayed the whole transcript into it,
+    // so the phone got a second copy of the conversation with old messages
+    // streaming in as if new. The Claude id is known before the Happy session
+    // exists, so reattach to the Happy session already holding that transcript
+    // on the same path the daemon's resume takes through HAPPY_RECONNECT_*.
+    // Nothing found (never tracked here, server down, another wrapper live on
+    // it) falls back to a fresh session as before. A fork or side chat is a
+    // new Happy session by definition, and an explicit reconnect already knows
+    // where it is going.
+    const forkClaudeSessionId = process.env.HAPPY_FORK_CLAUDE_SESSION_ID;
+    let reattached: ReconnectableHappySession | null = null;
+    if (!reconnectSessionId && !forkClaudeSessionId && !isSideChat) {
+        const claudeSessionId = resumedClaudeSessionId(options.claudeArgs, workingDirectory);
+        if (claudeSessionId) {
+            reattached = await findHappySessionForClaudeSession(claudeSessionId);
+            if (reattached) {
+                logger.debug(`[START] Reattaching to Happy session ${reattached.id} for Claude session ${claudeSessionId}`);
+                // Keep what the app wrote (title, summary) under the runtime
+                // fields this process owns, and bind the Claude id now so the
+                // remote scanner pre-marks the transcript instead of replaying it.
+                //
+                // name/summary are pulled back out of that spread by hand,
+                // because they are the one pair where the fresh value is a SEED
+                // rather than a fact: startingSessionName exists only so a
+                // brand-new session is not called "New chat", and letting it
+                // win here would rename a session the user had already named,
+                // on every resume. A default-shaped name is still ours though —
+                // it may carry the wrong account's prefix now — so that one is
+                // restamped rather than kept.
+                metadata = {
+                    ...reattached.metadata,
+                    ...metadata,
+                    name: isDefaultSessionName(reattached.metadata.name, workingDirectory)
+                        ? startingSessionName
+                        : reattached.metadata.name,
+                    summary: isDefaultSessionName(reattached.metadata.summary?.text, workingDirectory)
+                        ? { text: startingSessionName, updatedAt: Date.now() }
+                        : reattached.metadata.summary,
+                    claudeSessionId,
+                };
+            } else {
+                logger.debug(`[START] No Happy session holds Claude session ${claudeSessionId}, starting a fresh one`);
+            }
+        }
+    }
+
     let response: ApiSession | null;
     if (reconnectSessionId && reconnectKeyBase64 && reconnectVariant) {
         logger.debug(`[START] Reconnecting to existing session ${reconnectSessionId}`);
@@ -183,6 +244,17 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
             metadataVersion: parseInt(reconnectMetadataVersion || '0', 10),
             agentState: state,
             agentStateVersion: parseInt(reconnectAgentStateVersion || '0', 10),
+        };
+    } else if (reattached) {
+        response = {
+            id: reattached.id,
+            seq: reattached.seq,
+            encryptionKey: reattached.encryptionKey,
+            encryptionVariant: reattached.encryptionVariant,
+            metadata,
+            metadataVersion: reattached.metadataVersion,
+            agentState: state,
+            agentStateVersion: reattached.agentStateVersion,
         };
     } else {
         response = await api.getOrCreateSession({ tag: sessionTag, metadata, state });
@@ -294,7 +366,8 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
     const session = api.sessionSyncClient(response);
 
     // On reconnect, un-archive the session and skip replaying old messages.
-    if (reconnectSessionId) {
+    // A reattached resume is a reconnect the wrapper worked out for itself.
+    if (reconnectSessionId || reattached) {
         session.suppressNextArchiveSignal();
         session.skipExistingMessages();
         session.updateMetadata((meta) => ({
@@ -320,7 +393,6 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
     // Skipped on reconnect (HAPPY_RECONNECT_*) — that path reattaches
     // to the existing Happy session, where the server already has every
     // message it needs.
-    const forkClaudeSessionId = process.env.HAPPY_FORK_CLAUDE_SESSION_ID;
     if (!reconnectSessionId && forkClaudeSessionId) {
         // Side chats resume the forked JSONL for full model context via the
         // SDK (`resume:`), but we deliberately do NOT replay the pre-fork
@@ -551,7 +623,7 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
     let currentAppendSystemPrompt: string | undefined = undefined; // Track current append system prompt
     let currentAllowedTools: string[] | undefined = undefined; // Track current allowed tools
     let currentDisallowedTools: string[] | undefined = undefined; // Track current disallowed tools
-    let currentEffort: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | undefined = options.effort ?? DEFAULT_CLAUDE_EFFORT; // Track current Claude effort (thinking depth)
+    let currentEffort: ClaudeEffort | undefined = options.effort ?? DEFAULT_CLAUDE_EFFORT; // Track current Claude effort (thinking depth)
 
     const resetCurrentModeDefaults = () => {
         // Model and effort are deliberately NOT reset here. The app sends them
@@ -763,7 +835,7 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
         // Validate against the SDK's accepted set so a stale/garbage value
         // from the wire doesn't poison the session.
         let messageEffort = currentEffort;
-        const VALID_EFFORTS: ReadonlySet<string> = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
+        const VALID_EFFORTS: ReadonlySet<string> = new Set(['low', 'medium', 'high', 'xhigh', 'max', 'ultracode']);
         if (message.meta?.hasOwnProperty('effort')) {
             const incoming = (message.meta as Record<string, unknown>).effort;
             if (incoming === null || incoming === undefined) {
@@ -771,7 +843,7 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
                 currentEffort = undefined;
                 logger.debug(`[loop] Effort reset to default`);
             } else if (typeof incoming === 'string' && VALID_EFFORTS.has(incoming)) {
-                messageEffort = incoming as 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+                messageEffort = incoming as ClaudeEffort;
                 currentEffort = messageEffort;
                 logger.debug(`[loop] Effort updated from user message: ${messageEffort}`);
             } else {
@@ -1012,12 +1084,20 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
             }
         },
         session,
-        claudeEnvVars: options.claudeEnvVars,
+        // DROVER_WRAPPER_PID (BASED-98): the child — and every Bash it runs,
+        // which includes the injected /flip slash command — can tell it is
+        // inside a drover wrapper by checking this pid is alive. Without the
+        // stamp, /flip typed into a PLAIN `claude` posts a request nothing is
+        // listening for, which reads as the flip silently not working; with
+        // it, the command says "not drover-managed" in as many words. Stamped
+        // even with one account, so /flip can explain THAT case too.
+        claudeEnvVars: { ...(options.claudeEnvVars ?? {}), DROVER_WRAPPER_PID: String(process.pid) },
         claudeArgs: options.claudeArgs,
         sandboxConfig,
         hookSettingsPath,
         jsRuntime: options.jsRuntime,
         flip: flipController,
+        reattachedClaudeSessionId: reattached ? metadata.claudeSessionId : undefined,
     });
 
     flipController?.stop();

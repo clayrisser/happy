@@ -27,6 +27,12 @@ type SessionLogEntry =
 export async function createSessionScanner(opts: {
     sessionId: string | null,
     workingDirectory: string
+    /**
+     * Which account's config dir the transcripts live in. Omitted means the
+     * one this process was started on. A Cattle Drover flip changes it mid
+     * session via setClaudeConfigDir below.
+     */
+    claudeConfigDir?: string | null
     onMessage: (message: RawJSONLines) => void
     onTranscriptEvent?: (event: ScannerTranscriptEvent) => void
     /**
@@ -37,8 +43,12 @@ export async function createSessionScanner(opts: {
     missingFileTimeoutMs?: number
 }) {
 
-    // Resolve project directory
-    const projectDir = getProjectPath(opts.workingDirectory);
+    // Resolve project directory. `let`, not `const`: a Cattle Drover flip
+    // (BASED-98) carries the transcript into another account's config dir and
+    // relaunches the child there, so the directory we poll has to move with
+    // it. Snapshotting it here is what left the scanner reading the old
+    // account's file forever after a flip, which muted the session in the app.
+    let projectDir = getProjectPath(opts.workingDirectory, opts.claudeConfigDir);
 
     // Finished, pending finishing and current session
     let finishedSessions = new Set<string>();
@@ -164,6 +174,51 @@ export async function createSessionScanner(opts: {
             await sync.invalidateAndAwait();
             sync.stop();
         },
+        /**
+         * Follow the session into another account's config dir after a Cattle
+         * Drover flip carried its transcript there.
+         *
+         * We re-read the carried file from the top and keep processedEntryKeys
+         * instead of resuming at an offset or pre-marking the new file as
+         * processed. Three reasons, in order of how much they cost when you
+         * get them wrong:
+         *
+         *   - Nothing is duplicated to the phone. Dedupe is by message uuid,
+         *     not by byte offset, and carryTranscript copies the file verbatim,
+         *     so every entry we already sent keeps the key we already hold.
+         *   - Nothing is lost. Anything Claude appended between our last poll
+         *     and the kill is in the carried copy and still unsent, so it goes
+         *     out now. Pre-marking the file as processed (what
+         *     treatExistingAsProcessed does on the first hook of a run) would
+         *     silently eat exactly those last messages. This is why the two
+         *     have to stay distinguishable however far that guard is widened:
+         *     a flip carries OUR unsent tail, a resume carries only history.
+         *     The launcher keeps them apart by firing the guard on the first
+         *     SessionStart hook of a run only, and a flip always relaunches
+         *     past that point.
+         *   - Byte offsets do not survive the move anyway. The resumed child
+         *     rewrites the tail of the transcript, so the same logical entry
+         *     can sit at a different offset in the new file.
+         */
+        setClaudeConfigDir: (claudeConfigDir: string | null | undefined) => {
+            const next = getProjectPath(opts.workingDirectory, claudeConfigDir);
+            if (next === projectDir) {
+                return;
+            }
+            logger.debug(`[SESSION_SCANNER] Re-pointing scanner: ${projectDir} -> ${next}`);
+            projectDir = next;
+            // Watchers hold absolute paths under the old dir, so they are dead
+            // to us now. Drop them and let the sync loop below rebuild one per
+            // session against the new dir.
+            for (const w of watchers.values()) {
+                w();
+            }
+            watchers.clear();
+            // "The transcript never appeared" was a verdict about the OLD
+            // account. The carried copy exists here, so it no longer holds.
+            deadSessions.clear();
+            sync.invalidate();
+        },
         onNewSession: async (sessionId: string, options?: { treatExistingAsProcessed?: boolean }) => {
             if (currentSessionId === sessionId) {
                 logger.debug(`[SESSION_SCANNER] New session: ${sessionId} is the same as the current session, skipping`);
@@ -182,13 +237,18 @@ export async function createSessionScanner(opts: {
                 logger.debug(`[SESSION_SCANNER] New session: ${sessionId} is already pending, skipping`);
                 return;
             }
-            // When the caller already has these messages (typical for
-            // happy-reconnect — the server holds the history from prior
-            // turns and metadata.claudeSessionId simply hadn't propagated
-            // by the time we built the scanner), pre-mark whatever is on
-            // disk so the first invalidate() does not replay the entire
-            // file as fresh user prompts. Without this, every previous
-            // user message re-appears in the chat after reconnect.
+            // When what is on disk is history rather than activity, pre-mark
+            // it so the first invalidate() does not replay the entire file as
+            // fresh user prompts. Without this, every previous user message
+            // re-appears in the chat after a reconnect, and on a resume of a
+            // long transcript the app streams days of old messages — Clay's
+            // 190 MB session, restreamed on every `drover --resume`.
+            //
+            // Callers: the remote path always sets it (every prompt there
+            // reaches the server before it hits disk), and the local launcher
+            // sets it on the FIRST SessionStart hook of a run pointed at an
+            // existing transcript. See the entry-path table in
+            // claudeLocalLauncher.ts for which of those are which.
             if (options?.treatExistingAsProcessed) {
                 const existing = await readSessionEntries(projectDir, sessionId);
                 logger.debug(`[SESSION_SCANNER] Pre-marking ${existing.length} existing entries as processed for new session ${sessionId}`);

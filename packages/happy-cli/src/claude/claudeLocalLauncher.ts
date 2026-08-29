@@ -1,11 +1,10 @@
-import { basename } from "node:path";
-
 import { logger } from "@/ui/logger";
 import { claudeLocal, ExitCodeError } from "./claudeLocal";
-import { Session } from "./session";
+import { defaultSessionName, isDefaultSessionName, resumesExistingTranscript, Session } from "./session";
 import { Future } from "@/utils/future";
-import { createSessionScanner } from "./utils/sessionScanner";
+import { createSessionScanner, type SessionScanner } from "./utils/sessionScanner";
 import { launchFailureMessage } from "./utils/launchFailureMessage";
+import { ambientDataDir } from "@/drover/flip/accounts";
 import { parseFlipCommand } from "@/drover/flip/controller";
 
 export type LauncherResult = { type: 'switch' } | { type: 'exit', code: number };
@@ -18,7 +17,11 @@ export type LauncherResult = { type: 'switch' } | { type: 'exit', code: number }
  * spawn, the transcript on disk, the session's own metadata — so the Happy
  * server sees nothing but the same session continuing to send messages.
  */
-async function applyPendingFlip(session: Session, resetAbort: () => void): Promise<boolean> {
+async function applyPendingFlip(
+    session: Session,
+    scanner: Awaited<SessionScanner>,
+    resetAbort: () => void,
+): Promise<boolean> {
     const flip = session.flip;
     let request = flip?.take();
     if (!flip || !request) return false;
@@ -31,8 +34,15 @@ async function applyPendingFlip(session: Session, resetAbort: () => void): Promi
     let result = flip.apply(request, session.sessionId);
     while (result.kind === 'parked') {
         session.client.sendSessionEvent({ type: 'message', message: result.note });
+        // say(), not announce(): a park runs with NO claude child, so this
+        // terminal is the one surface that can show anything for the next few
+        // hours, and it was the one surface a park never wrote to. Every trip
+        // round this loop says it again, and apply() words the repeat as an
+        // answer to whoever asked — pressing prefix+F into a park used to
+        // reprint the identical sentence, which reads as the key doing
+        // nothing. That silence, not the parking, is what wedged Clay.
         flip.say(result.note);
-        await flip.park(result.until);
+        await flip.park(result.until, result.account.name);
         // The ledger has moved on, so ask again. `take()` first, in case a
         // human flipped by hand while we were parked — their choice wins.
         request = flip.take() ?? { account: null, reason: 'cooldown expired', by: 'auto' };
@@ -51,11 +61,33 @@ async function applyPendingFlip(session: Session, resetAbort: () => void): Promi
     // Point the next spawn at the new account. claudeLocal merges these over
     // process.env, so this is all it takes — and DROVER_ACCOUNT travels with
     // it so anything downstream reading the stamp agrees.
-    session.claudeEnvVars = {
+    //
+    // The AMBIENT account is reached by unsetting CLAUDE_CONFIG_DIR, not by
+    // setting it to ~/.claude: Claude Code reads its global config from
+    // `join(CLAUDE_CONFIG_DIR || homedir(), '.claude.json')`, so pointing the
+    // variable at ~/.claude silently swaps the file holding the OAuth account
+    // for an empty one and the flip lands in the first-run wizard. An empty
+    // string is what claudeLocal's env merge understands as "not set" — see
+    // the delete there — because `undefined` in a spread survives as a key.
+    const next: Record<string, string> = {
         ...session.claudeEnvVars,
-        CLAUDE_CONFIG_DIR: result.account.configDir,
         DROVER_ACCOUNT: result.account.name,
     };
+    next.CLAUDE_CONFIG_DIR = result.account.ambient ? '' : result.account.configDir;
+    session.claudeEnvVars = next;
+
+    // The child is not the only thing that reads the transcript: the session
+    // scanner polls it and is what the app actually sees. carryTranscript has
+    // already copied the conversation into the new account, so point the
+    // scanner at the copy or it keeps reading a file nothing writes to any
+    // more, and the session goes mute in the app until it is dropped.
+    //
+    // account.configDir, NOT next.CLAUDE_CONFIG_DIR: the ambient account is
+    // spelled as an empty string for the child (unsetting the variable is how
+    // Claude Code finds its global config), but it still keeps transcripts in
+    // ~/.claude, and account.configDir is always that real path.
+    scanner.setClaudeConfigDir(result.account.configDir);
+
     session.pendingInitialPrompt = result.prompt;
     if (!result.resume) {
         // Nothing was ever said, so there is no transcript in the new account
@@ -65,10 +97,22 @@ async function applyPendingFlip(session: Session, resetAbort: () => void): Promi
     }
 
     // Keep the app honest about which account is doing the work now.
+    //
+    // `summary`, not just `name`: the phone's session title reads
+    // metadata.summary.text and falls back to the literal "New chat" —
+    // getSessionName in happy-app/sources/utils/sessionUtils.ts — so stamping
+    // only `name` renamed the session everywhere EXCEPT the screen Clay was
+    // looking at. Both are restamped, and both only while they are still
+    // default-shaped, so a title Claude Code or the app wrote outlives a flip
+    // instead of collapsing back into a path.
+    const flippedName = defaultSessionName(session.path, result.account.name);
     session.client.updateMetadata((metadata) => ({
         ...metadata,
         droverAccount: result.account.name,
-        name: `[${result.account.name}] ${basename(session.path)}`,
+        name: isDefaultSessionName(metadata.name, session.path) ? flippedName : metadata.name,
+        summary: isDefaultSessionName(metadata.summary?.text, session.path)
+            ? { text: flippedName, updatedAt: Date.now() }
+            : metadata.summary,
     }));
     session.client.sendSessionEvent({ type: 'message', message: result.note });
     flip.say(result.note);
@@ -82,10 +126,19 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
 
     let scannerMessageChain = Promise.resolve();
 
-    // Create scanner
+    // Create scanner. It reads the account the session is on NOW, which after
+    // an earlier flip is not the one this process was started on: the launcher
+    // is re-entered on every local/remote switch, and only session.claudeEnvVars
+    // remembers the move. Empty means the ambient account, whose transcripts
+    // still live in ~/.claude, so it maps to that rather than falling back to
+    // the wrapper's stale CLAUDE_CONFIG_DIR.
+    const startingConfigDir = session.claudeEnvVars?.CLAUDE_CONFIG_DIR;
     const scanner = await createSessionScanner({
         sessionId: session.sessionId,
         workingDirectory: session.path,
+        claudeConfigDir: startingConfigDir === undefined
+            ? undefined
+            : (startingConfigDir || ambientDataDir()),
         onMessage: (message) => {
             // Cattle Drover (BASED-98): local mode has no typed rate-limit
             // channel — the SDK's rate_limit_event only exists on the remote
@@ -106,8 +159,48 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
     
     // Register callback to notify scanner when session ID is found via hook
     // This is important for --continue/--resume where session ID is not known upfront
+    //
+    // BASED-98: whatever is on disk when the FIRST SessionStart hook of this
+    // run fires is HISTORY, not activity — this process's child has written
+    // nothing yet. Pre-mark it, or the scanner streams the whole transcript to
+    // the phone as fresh user prompts. Only what is on disk at that instant is
+    // marked, so everything Claude appends afterwards still flows, and later
+    // hooks (/compact, a fork) are new content and are left alone. Judged by
+    // "first hook", never by id, so a Claude that forks on resume is covered.
+    //
+    // The entry paths, and where the history is at that first hook:
+    //
+    //   fresh start                   nothing on disk — this is a no-op
+    //   --resume <id>, reattach hit   on disk AND on the server already
+    //   --resume <id>, reattach miss  on disk; fresh Happy session, so replaying
+    //                                 it just refills a chat nobody asked for
+    //   --resume  (bare picker)       on disk; the id does not exist until this
+    //                                 very hook, so reattach cannot run at all
+    //   --continue                    on disk, same as an explicit --resume
+    //   local -> remote -> local      n/a: session.sessionId is set by then, so
+    //                                 createSessionScanner's own constructor
+    //                                 marks the file and the hook is a no-op
+    //   fork / side chat              n/a: runClaude seeds the scanner with the
+    //                                 forked id and owns the backfill itself
+    //   flip                          MUST NOT pre-mark — see setClaudeConfigDir
+    //                                 in sessionScanner.ts. The carried file is
+    //                                 re-read from the top on purpose, because
+    //                                 what Claude appended between the last poll
+    //                                 and the kill is still unsent, and marking
+    //                                 it eats exactly those messages. A flip
+    //                                 relaunches INSIDE the loop below, always
+    //                                 past the first hook, so it cannot get here.
+    //
+    // This was gated on the reattach path alone, which covered row 2 and
+    // nothing else. Clay ran bare `drover --resume` (row 4) repeatedly against
+    // a 190 MB transcript and got days of old messages restreamed every time.
+    let firstHookIsHistory = session.sessionId === null
+        && (session.reattachedClaudeSessionId !== undefined
+            || resumesExistingTranscript(session.claudeArgs));
     const scannerSessionCallback = (sessionId: string) => {
-        scanner.onNewSession(sessionId);
+        const treatExistingAsProcessed = firstHookIsHistory;
+        firstHookIsHistory = false;
+        scanner.onNewSession(sessionId, treatExistingAsProcessed ? { treatExistingAsProcessed } : undefined);
     };
     session.addSessionFoundCallback(scannerSessionCallback);
 
@@ -229,7 +322,7 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
                 // exiting is how a flip announces itself: the controller
                 // aborted it deliberately, so this looks exactly like a normal
                 // exit until you ask whether a flip is pending.
-                if (await applyPendingFlip(session, () => {
+                if (await applyPendingFlip(session, scanner, () => {
                     processAbortController = new AbortController();
                 })) {
                     continue;
@@ -246,6 +339,28 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
             } catch (e) {
                 logger.debug('[local]: launch error', e);
 
+                // The child ran and exited, so its one-time flags are spent.
+                // The success path above says the same thing; this path never
+                // did, and a flip ALWAYS lands here, so the flags Clay typed
+                // once were passed to every relaunch.
+                //
+                // That is what sent a flipped session to Claude's session
+                // PICKER instead of the conversation. A session started with
+                // `drover --resume` kept that bare `--resume` in claudeArgs,
+                // and claudeLocal only strips it when it has no session id of
+                // its own — after a flip it does — so the relaunch spawned
+                // `--resume <id> … --resume`, and the second, valueless one
+                // wins. Measured: 22:57 in 2026-08-28-22-56-09-pid-11422.log
+                // relaunched with exactly those args and no SessionStart hook
+                // ever arrived, because Claude was sitting on the list.
+                //
+                // ExitCodeError only: it means the process started and
+                // exited. A failure to spawn at all must keep the flags for
+                // the retry.
+                if (e instanceof ExitCodeError) {
+                    session.consumeOneTimeFlags();
+                }
+
                 // A flip is checked here TOO, and this is the path that
                 // actually matters. Killing an interactive TUI does not
                 // produce the tidy signal-exit the success path assumes —
@@ -254,7 +369,7 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
                 // ends rather than moving accounts. Measured, not theorised:
                 // the first live flip died exactly here, logging "request
                 // accepted" and then nothing at all.
-                if (await applyPendingFlip(session, () => {
+                if (await applyPendingFlip(session, scanner, () => {
                     processAbortController = new AbortController();
                 })) {
                     continue;

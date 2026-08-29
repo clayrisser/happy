@@ -51,8 +51,10 @@ export interface QueryOptions {
      * applies on each turn ('low' | 'medium' | 'high' | 'xhigh' | 'max').
      * 'xhigh' is supported on the newest Opus generation (e.g. Opus 4.8);
      * the SDK silently downgrades it to 'high' on models without it.
+     * 'ultracode' is outside the SDK's declared union but Claude Code accepts
+     * it on `--effort`: xhigh plus dynamic workflows, this process only.
      */
-    effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+    effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultracode'
 }
 
 /**

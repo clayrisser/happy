@@ -381,4 +381,55 @@ describe('sessionScanner', () => {
       apiErrorStatus: 429,
     })
   })
+  it('follows the transcript into another account after a Cattle Drover flip', async () => {
+    // The flip kills only the child, copies the transcript into the target
+    // account's config dir and relaunches --resume there. The scanner used to
+    // snapshot the old dir, so it kept reading a file nothing wrote to and the
+    // session went mute in the app.
+    scanner = await createSessionScanner({
+      sessionId: null,
+      workingDirectory: testDir,
+      onMessage: (msg) => collectedMessages.push(msg),
+    })
+
+    const fixture = await readFile(join(__dirname, '__fixtures__', '0-say-lol-session.jsonl'), 'utf-8')
+    const lines = fixture.split('\n').filter((l) => l.trim())
+    const sessionId = '93a9705e-bc6a-406d-8dce-8acc014dedbd'
+
+    await writeFile(join(projectDir, `${sessionId}.jsonl`), lines[0] + '\n')
+    scanner.onNewSession(sessionId)
+    await new Promise((r) => setTimeout(r, 200))
+    expect(collectedMessages.map((m) => m.type)).toEqual(['user'])
+
+    // What carryTranscript does: the same file, verbatim, in the new account.
+    const targetConfigDir = join(testDir, 'account-b')
+    const targetProjectDir = getProjectPath(testDir, targetConfigDir)
+    await mkdir(targetProjectDir, { recursive: true })
+    await writeFile(join(targetProjectDir, `${sessionId}.jsonl`), lines[0] + '\n')
+
+    scanner.setClaudeConfigDir(targetConfigDir)
+    // Let the re-pointed watcher attach before the relaunched child writes.
+    await new Promise((r) => setTimeout(r, 300))
+
+    // The resumed child writes here now, not in the old account.
+    await appendFile(join(targetProjectDir, `${sessionId}.jsonl`), lines[1] + '\n')
+    await new Promise((r) => setTimeout(r, 500))
+
+    // The carried copy repeats the user message. It must not reach the phone
+    // twice — dedupe is by uuid, which survives the copy.
+    expect(collectedMessages.map((m) => m.type)).toEqual(['user', 'assistant'])
+
+    // The abandoned account is no longer read. A fresh uuid, so dedupe is not
+    // what is being measured here.
+    const strayInOldAccount = JSON.stringify({
+      ...JSON.parse(lines[0]),
+      uuid: 'e2f0f3b6-0f2f-4a1c-9a1f-5f0b3a2c1d4e',
+      message: { role: 'user', content: 'written to the account we left' },
+    })
+    await appendFile(join(projectDir, `${sessionId}.jsonl`), strayInOldAccount + '\n')
+    // Long enough to cross a periodic sync, so this is not just a watcher that
+    // has not fired yet.
+    await new Promise((r) => setTimeout(r, 3500))
+    expect(collectedMessages.map((m) => m.type)).toEqual(['user', 'assistant'])
+  })
 })

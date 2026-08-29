@@ -43,7 +43,10 @@ export function query(params: { prompt: QueryPrompt; options?: QueryOptions }): 
         settings: opts?.settingsPath,
         strictMcpConfig: opts?.strictMcpConfig,
         sessionId: undefined,
-        effort: opts?.effort,
+        // The SDK types effort as its EffortLevel union but only ever does
+        // `V.push("--effort", this.options.effort)`, and the CLI resolves
+        // `ultracode` there. The cast is the whole ultracode mechanism.
+        effort: opts?.effort as Options['effort'],
     }
 
     // Map abort signal -> AbortController

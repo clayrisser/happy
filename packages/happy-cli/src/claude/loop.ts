@@ -14,7 +14,12 @@ import type { FlipController } from "@/drover/flip/controller"
 export type { PermissionMode } from "@/api/types"
 import type { PermissionMode } from "@/api/types"
 
-export type ClaudeEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+// `ultracode` is not one more notch: Claude Code 2.1.251 parses
+// `--effort ultracode` as xhigh plus dynamic workflow orchestration for that
+// process (alias table T={ultracode:"xhigh"} in the binary; `--help` lists
+// only low..max). Session-only by design, which suits us: remote mode spawns
+// a fresh child on every effort change anyway.
+export type ClaudeEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultracode';
 
 export interface EnhancedMode {
     /** Unset means "no override" — Claude uses its own configured mode. */
@@ -51,6 +56,8 @@ interface LoopOptions {
     jsRuntime?: JsRuntime
     /** Cattle Drover account flip controller, when more than one account exists. */
     flip?: FlipController
+    /** Set when runClaude reattached to the Happy session holding this transcript (BASED-98). */
+    reattachedClaudeSessionId?: string
 }
 
 export async function loop(opts: LoopOptions): Promise<number> {
@@ -73,7 +80,8 @@ export async function loop(opts: LoopOptions): Promise<number> {
         onAbort: opts.onAbort,
         hookSettingsPath: opts.hookSettingsPath,
         jsRuntime: opts.jsRuntime,
-        flip: opts.flip
+        flip: opts.flip,
+        reattachedClaudeSessionId: opts.reattachedClaudeSessionId,
     });
 
     opts.onSessionReady?.(session)

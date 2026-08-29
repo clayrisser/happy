@@ -1,3 +1,5 @@
+import { basename } from "node:path";
+
 import { ApiClient, ApiSessionClient } from "@/lib";
 import { MessageQueue2 } from "@/utils/MessageQueue2";
 import { EnhancedMode } from "./loop";
@@ -5,6 +7,63 @@ import { logger } from "@/ui/logger";
 import type { JsRuntime } from "./runClaude";
 import type { SandboxConfig } from "@/persistence";
 import type { FlipController } from "@/drover/flip/controller";
+
+/**
+ * The flags that point Claude Code at a transcript that ALREADY EXISTS, rather
+ * than at a new one. One list, used by both readers below, because they went
+ * out of step once already: consumeOneTimeFlags learned `-r`/`-c` after a flip
+ * sent a `drover -r` session to Claude's picker, and anything else sniffing
+ * for a resume has to learn the same lesson or it silently misjudges the run.
+ */
+const resumeFlags = new Set(['--resume', '-r', '--continue', '-c']);
+
+/**
+ * Is this run pointed at a transcript that already exists on disk?
+ *
+ * True for EVERY shape of resume, bare `--resume` included. Bare `--resume` is
+ * the one that matters: it opens Claude's picker, so the transcript id does not
+ * exist until the SessionStart hook fires — far too late for the reattach path
+ * in @/resume/reattachClaudeSession to choose a Happy session for it. That is
+ * the hole Clay fell down. `drover --resume` against a 190 MB transcript minted
+ * a fresh Happy session every run and the scanner streamed days of old messages
+ * into it as brand-new user prompts.
+ *
+ * Only meaningful BEFORE the first spawn: consumeOneTimeFlags() strips these
+ * afterwards, which is what makes a second launcher run (a local -> remote ->
+ * local switch) correctly answer no.
+ */
+export function resumesExistingTranscript(claudeArgs: string[] | undefined): boolean {
+    return claudeArgs?.some((arg) => resumeFlags.has(arg)) ?? false;
+}
+
+/**
+ * What a session is called before anything better exists.
+ *
+ * The working directory basename, prefixed with the drover account when there
+ * is one, because `[account] basename` is the shape a flip already stamps. Both
+ * ends share this function so the two cannot drift: a start name of a different
+ * shape would make every flip read as a rename rather than an account change.
+ *
+ * Deliberately deterministic. A summarizer would be prettier and would also be
+ * wrong for the first few turns, and this string only has to beat "New chat".
+ */
+export function defaultSessionName(workingDirectory: string, droverAccount?: string): string {
+    const name = basename(workingDirectory) || workingDirectory;
+    return droverAccount ? `[${droverAccount}] ${name}` : name;
+}
+
+/**
+ * Is this title still one of ours, and therefore ours to restamp?
+ *
+ * True for `basename` and for `[anything] basename`, and for nothing else. A
+ * title Claude Code or the app wrote is not default-shaped, so it survives both
+ * a flip and a reattach: restamping one of those is how a session the user had
+ * named turns back into a path.
+ */
+export function isDefaultSessionName(text: string | undefined | null, workingDirectory: string): boolean {
+    if (!text) return true;
+    return text.replace(/^\[[^\]]*\] /, '') === (basename(workingDirectory) || workingDirectory);
+}
 
 export class Session {
     readonly path: string;
@@ -22,6 +81,12 @@ export class Session {
     pendingInitialPrompt?: string;
     /** Set for a session running under the drover's account controller. */
     flip?: FlipController;
+    /**
+     * The Claude transcript this Happy session was reattached to at start-up
+     * (BASED-98). The server already holds every message in it, so the local
+     * scanner must pre-mark it rather than stream it to the phone as new.
+     */
+    reattachedClaudeSessionId?: string;
     readonly mcpServers: Record<string, any>;
     readonly allowedTools?: string[];
     readonly sandboxConfig?: SandboxConfig;
@@ -61,8 +126,10 @@ export class Session {
         /** JavaScript runtime to use for spawning Claude Code (default: 'node') */
         jsRuntime?: JsRuntime,
         flip?: FlipController,
+        reattachedClaudeSessionId?: string,
     }) {
         this.flip = opts.flip;
+        this.reattachedClaudeSessionId = opts.reattachedClaudeSessionId;
         this.path = opts.path;
         this.api = opts.api;
         this.client = opts.client;
@@ -168,7 +235,7 @@ export class Session {
 
     /**
      * Consume one-time Claude flags from claudeArgs after Claude spawn
-     * Handles: --resume (with or without session ID), --continue
+     * Handles: --resume/-r (with or without session ID), --continue/-c
      */
     consumeOneTimeFlags = (): void => {
         if (!this.claudeArgs) return;
@@ -177,12 +244,17 @@ export class Session {
         for (let i = 0; i < this.claudeArgs.length; i++) {
             const arg = this.claudeArgs[i];
             
-            if (arg === '--continue') {
-                logger.debug('[Session] Consumed --continue flag');
+            // The short forms are the same one-time flags. A session started
+            // with `drover -r` kept the bare -r after a flip and Claude opened
+            // its resume picker, same as the long form did before :262/:304.
+            // resumeFlags above is the same list, so the launcher's "is this a
+            // resume?" question and this stripping can never disagree.
+            if (arg === '--continue' || arg === '-c') {
+                logger.debug(`[Session] Consumed ${arg} flag`);
                 continue;
             }
             
-            if (arg === '--resume') {
+            if (arg === '--resume' || arg === '-r') {
                 // Check if next arg looks like a UUID (contains dashes and alphanumeric)
                 if (i + 1 < this.claudeArgs.length) {
                     const nextArg = this.claudeArgs[i + 1];

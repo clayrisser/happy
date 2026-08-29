@@ -71,12 +71,28 @@ vi.mock('@/claude/claudeLocal', () => {
 vi.mock('@/claude/utils/sessionScanner', () => ({
     createSessionScanner: vi.fn(async () => ({
         onNewSession: vi.fn(),
+        setClaudeConfigDir: vi.fn(),
         cleanup: vi.fn(async () => {}),
     })),
 }))
 
-function writeAccounts(accounts: unknown[]): void {
+/**
+ * Write the registry AND log every account in.
+ *
+ * An account with no credential is not a flip candidate at all — flipping
+ * there lands in Claude Code's first-run wizard — so a fixture that writes
+ * only accounts.json describes a machine with nowhere to flip to, and every
+ * test here answers "no other LOGGED-IN account".
+ */
+function writeAccounts(accounts: { name: string; configDir: string }[]): void {
     writeFileSync(process.env.DROVER_ACCOUNTS!, JSON.stringify(accounts))
+    for (const a of accounts) {
+        mkdirSync(a.configDir, { recursive: true })
+        writeFileSync(
+            join(a.configDir, '.claude.json'),
+            JSON.stringify({ oauthAccount: { emailAddress: `${a.name}@example.com` } }),
+        )
+    }
 }
 
 /** A transcript in `from`'s config dir, so the flip has something to carry. */
@@ -143,7 +159,15 @@ afterEach(() => {
     rmSync(root, { recursive: true, force: true })
 })
 
-async function build(opts: { cooldowns?: Record<string, number> } = {}) {
+async function build(
+    opts: {
+        cooldowns?: Record<string, number>
+        /** Cooldowns scoped to one model family, as a real limit notice records them. */
+        familyCooldowns?: Record<string, { until: number; family: string }>
+        /** Milliseconds between "still parked" notes; tiny so a test can watch one. */
+        parkAnnounceMs?: number
+    } = {},
+) {
     const mainDir = join(root, 'main')
     const altDir = join(root, 'alt')
     const cwd = join(root, 'project')
@@ -160,9 +184,21 @@ async function build(opts: { cooldowns?: Record<string, number> } = {}) {
             accounts.setCooldown(name, until, 'test')
         }
     }
+    if (opts.familyCooldowns) {
+        for (const [name, c] of Object.entries(opts.familyCooldowns)) {
+            accounts.setCooldown(name, c.until, `${c.family} limit`, c.family)
+        }
+    }
 
     const said: string[] = []
-    const flip = new FlipController(cwd, (m: string) => said.push(m))
+    // The TERMINAL half, captured rather than written to the real stderr. In
+    // production this is a stderr write, and it is the surface a park was
+    // never reaching — `announce` above is the phone and only the phone.
+    const terminal: string[] = []
+    const flip = new FlipController(cwd, (m: string) => said.push(m), {
+        toTerminal: (m: string) => terminal.push(m),
+        ...(opts.parkAnnounceMs === undefined ? {} : { parkAnnounceMs: opts.parkAnnounceMs }),
+    })
     // Same seeding runClaude does: say where the session started rather than
     // letting the controller read an environment that goes stale on flip 1.
     flip.startedOn('main')
@@ -170,7 +206,15 @@ async function build(opts: { cooldowns?: Record<string, number> } = {}) {
     writeTranscript(mainDir, cwd, 'sess-1')
 
     const { claudeLocalLauncher } = await import('@/claude/claudeLocalLauncher')
-    return { ...harness, flip, said, cwd, mainDir, altDir, claudeLocalLauncher, accounts }
+    return { ...harness, flip, said, terminal, cwd, mainDir, altDir, claudeLocalLauncher, accounts }
+}
+
+/** Tell the controller which model this session is running, the way it learns. */
+function ranModel(flip: any, model: string): void {
+    flip.noteTranscriptMessage({
+        type: 'assistant',
+        message: { role: 'assistant', model, content: [{ type: 'text', text: 'ok' }] },
+    })
 }
 
 describe('a flip through the launcher loop', () => {
@@ -324,8 +368,8 @@ describe('park and self-resume', () => {
         const result = await run
 
         const said = h.events.join('\n')
-        expect(said).toContain('every account is out of headroom')
-        expect(said).toContain('Parked until')
+        expect(said).toContain('no account has headroom')
+        expect(said).toContain('Resuming on main by itself at')
         // It woke by ITSELF — nothing else requested a flip — and carried on
         // once main's window reopened. Before the livelock fix this never
         // returned: the park deadline was already past on wake, pickTarget
@@ -356,8 +400,170 @@ describe('park and self-resume', () => {
         await new Promise((r) => setTimeout(r, 20))
         h.flip.request({ account: null, reason: 'usage limit', by: 'auto' })
         await run
-        expect(h.events.join('\n')).not.toContain('Parked until')
+        expect(h.events.join('\n')).not.toContain('parked')
         expect(spawns[1].account).toBe('alt')
+    })
+
+    // The wedge, in one test. Clay parked for 17,630 seconds with no claude
+    // child running and saw NOTHING: every note went to session.sendSessionEvent,
+    // which is an encrypted envelope to the Happy server. He was at a keyboard.
+    it('says it is parked on the TERMINAL, not only the phone', async () => {
+        const now = Date.now()
+        const h = await build({ cooldowns: { main: now + 600, alt: now + 60_000 } })
+        childScript = ['abort', 'exit']
+        const run = h.claudeLocalLauncher(h.session)
+        await new Promise((r) => setTimeout(r, 20))
+        h.flip.request({ account: null, reason: 'usage limit', by: 'auto' })
+        await run
+
+        const printed = h.terminal.join('\n')
+        expect(printed).toContain('parked')
+        // Which accounts, until when, and the two commands that override it.
+        expect(printed).toContain('main')
+        expect(printed).toContain('alt')
+        expect(printed).toContain('Resuming on main by itself at')
+        expect(printed).toContain('drover flip <account>')
+        expect(printed).toContain('drover --account <name> --resume')
+    })
+
+    // prefix+F during a park posted a flip frame, released the park, found
+    // nothing with headroom, and re-parked — reprinting the identical sentence
+    // Clay was already looking at. That silence is what read as "the key does
+    // nothing", and it is the bug, not the parking.
+    it('answers a MANUAL flip that lands in a park instead of silently re-parking', async () => {
+        const now = Date.now()
+        const h = await build({ cooldowns: { main: now + 900, alt: now + 60_000 } })
+        childScript = ['abort', 'exit']
+
+        const run = h.claudeLocalLauncher(h.session)
+        await new Promise((r) => setTimeout(r, 20))
+        h.flip.request({ account: null, reason: 'usage limit', by: 'auto' })
+        await new Promise((r) => setTimeout(r, 40))
+        // What prefix+F posts: a flip frame naming no account.
+        h.flip.request({ account: null, reason: 'requested', by: 'tmux' })
+        await run
+
+        const printed = h.terminal.join('\n')
+        expect(printed).toContain('flip requested by tmux, but no account has headroom')
+        // And it says when the soonest one is back rather than going quiet.
+        expect(printed).toContain('Resuming on main by itself at')
+    })
+
+    it('re-announces during a long park, so it cannot be mistaken for a hang', async () => {
+        const now = Date.now()
+        const h = await build({
+            cooldowns: { main: now + 400, alt: now + 60_000 },
+            parkAnnounceMs: 30,
+        })
+        childScript = ['abort', 'exit']
+        const run = h.claudeLocalLauncher(h.session)
+        await new Promise((r) => setTimeout(r, 20))
+        h.flip.request({ account: null, reason: 'usage limit', by: 'auto' })
+        await run
+
+        const beats = h.terminal.filter((m) => m.includes('still parked —'))
+        expect(beats.length).toBeGreaterThan(0)
+        expect(beats[0]).toContain('drover flip <account>')
+    })
+})
+
+describe('flipping to an account that has the MODEL', () => {
+    it('prefers an account with headroom for the model in use', async () => {
+        const now = Date.now()
+        // alt is out of Fable and nothing else; main is out entirely. A
+        // Fable session must not be sent to alt just because alt has Opus.
+        const h = await build({
+            cooldowns: { third: now + 60_000 },
+            familyCooldowns: { alt: { until: now + 60_000, family: 'fable' } },
+        })
+        // A third account with room, added after build so the registry order
+        // still puts alt first — position must lose to model headroom.
+        writeFileSync(
+            process.env.DROVER_ACCOUNTS!,
+            JSON.stringify([
+                { name: 'main', configDir: h.mainDir },
+                { name: 'alt', configDir: h.altDir },
+                { name: 'third', configDir: join(root, 'third') },
+            ]),
+        )
+        mkdirSync(join(root, 'third'), { recursive: true })
+        writeFileSync(
+            join(root, 'third', '.claude.json'),
+            JSON.stringify({ oauthAccount: { emailAddress: 'third@example.com' } }),
+        )
+        h.accounts.clearCooldown('third')
+
+        childScript = ['abort', 'exit']
+        const run = h.claudeLocalLauncher(h.session)
+        await new Promise((r) => setTimeout(r, 20))
+        ranModel(h.flip, 'claude-fable-5[1m]')
+        h.flip.request({ account: null, reason: 'usage limit', by: 'auto' })
+        await run
+
+        expect(spawns[1].account).toBe('third')
+    })
+
+    it('an Opus session is not blocked by a Fable-only limit', async () => {
+        const now = Date.now()
+        const h = await build({ familyCooldowns: { alt: { until: now + 60_000, family: 'fable' } } })
+        childScript = ['abort', 'exit']
+        const run = h.claudeLocalLauncher(h.session)
+        await new Promise((r) => setTimeout(r, 20))
+        ranModel(h.flip, 'claude-opus-5')
+        h.flip.request({ account: null, reason: 'usage limit', by: 'auto' })
+        await run
+
+        // Before this, "alt is cooling" meant cooling for everything and the
+        // session parked for five hours next to an account that ran Opus fine.
+        expect(spawns[1].account).toBe('alt')
+        expect(h.events.join('\n')).not.toContain('parked')
+    })
+
+    it('takes an account with headroom for SOME model, and says which one to switch to', async () => {
+        const now = Date.now()
+        // main out ENTIRELY, alt out of Fable only. The move has to be worth
+        // making: this fixture used to leave main with Fable headroom, so the
+        // session was sent to the one account that had none — and from there
+        // the same rule sent it straight back, which is the ping-pong.
+        const h = await build({
+            cooldowns: { main: now + 60_000 },
+            familyCooldowns: { alt: { until: now + 60_000, family: 'fable' } },
+        })
+        childScript = ['abort', 'exit']
+        const run = h.claudeLocalLauncher(h.session)
+        await new Promise((r) => setTimeout(r, 20))
+        ranModel(h.flip, 'claude-fable-5')
+        h.flip.request({ account: null, reason: 'usage limit', by: 'auto' })
+        await run
+
+        // alt has no Fable left, but it is a live session rather than a
+        // five-hour park — as long as the note says so.
+        expect(spawns[1].account).toBe('alt')
+        const said = h.events.join('\n')
+        expect(said).toContain('Nothing has Fable headroom')
+        expect(said).toContain('/model')
+    })
+
+    it('records an auto-flip cooldown against the MODEL the notice named', async () => {
+        process.env.DROVER_ACCOUNT = 'main'
+        const h = await build()
+        childScript = ['abort', 'exit']
+        const run = h.claudeLocalLauncher(h.session)
+        await new Promise((r) => setTimeout(r, 20))
+        ranModel(h.flip, 'claude-fable-5')
+        h.flip.noteTranscriptMessage({
+            type: 'assistant',
+            message: {
+                role: 'assistant',
+                model: '<synthetic>',
+                content: "You've reached your Fable 5 limit. Run /usage-credits to continue or switch models with /model.",
+            },
+        })
+        await run
+
+        // The wrong record is the one measured on 2026-08-29: three accounts
+        // blacked out for the full five hours over a Fable-only limit.
+        expect(h.accounts.readLedger()['main'].family).toBe('fable')
     })
 })
 
