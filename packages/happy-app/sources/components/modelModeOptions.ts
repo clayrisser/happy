@@ -488,9 +488,13 @@ function effortLevels(keys: readonly string[]): EffortLevel[] {
 }
 
 // The Claude Agent SDK's own EffortLevel union, in order
-// (node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts:546). There is no
-// `off`: Claude's floor is `low`.
-const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+// (node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts:546), plus
+// `ultracode`, which the SDK does not declare but Claude Code's `/effort`
+// and `--effort` both take: xhigh with dynamic workflow orchestration, for
+// that session only. It needs workflows enabled and an xhigh-capable model;
+// Claude Code downgrades rather than errors when either is missing, same as
+// `max` on a model without it. There is no `off`: Claude's floor is `low`.
+const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max', 'ultracode'] as const;
 
 // Exactly what each model publishes in Codex's own registry, in its order
 // (codex-rs/models-manager/models.json, min client 0.144). This really is

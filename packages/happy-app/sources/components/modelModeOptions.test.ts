@@ -167,7 +167,7 @@ describe('modelModeOptions', () => {
         // is silently downgraded, so all three models get the same list.
         for (const model of ['claude-fable-5', 'claude-opus-5', 'claude-sonnet-5']) {
             const keys = getEffortLevelsForModel('claude', model).map((level) => level.key);
-            expect(keys).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
+            expect(keys).toEqual(['low', 'medium', 'high', 'xhigh', 'max', 'ultracode']);
             // Claude's floor is `low`; there is no off.
             expect(keys).not.toContain('off');
         }
