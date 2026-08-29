@@ -21,6 +21,36 @@ export interface PushMessage {
     sound?: 'default' | null;
     badge?: number;
     channelId?: string;
+    /** 'high' maps to APNs priority 10 and an FCM high-priority message. */
+    priority?: 'default' | 'normal' | 'high';
+    /**
+     * iOS content-available, in both spellings, because they are not
+     * interchangeable in the way Expo's docs imply.
+     *
+     * Measured against exp.host on 2026-08-29: `contentAvailable: "yes"` is
+     * rejected with `Expected boolean, received string`, so that name is in the
+     * live request schema. `_contentAvailable: "yes"` is accepted with HTTP
+     * 200, and so is a field called `_contentAvailableTypo` — the API ignores
+     * keys it does not know, so a 200 proves nothing about the underscore form
+     * reaching APNs. The docs still list `_contentAvailable` as accepted for
+     * backwards compatibility, and an older self-hosted push service may know
+     * only that one, so both go out. Docs say `contentAvailable` wins when both
+     * are set, which is the behaviour we want.
+     *
+     * Setting either next to a title and body is deliberate: iOS shows the
+     * alert AND, best effort, wakes the app. See the caller for what that best
+     * effort is worth.
+     */
+    contentAvailable?: boolean;
+    _contentAvailable?: boolean;
+    /**
+     * iOS interruption level. 'time-sensitive' is what breaks a notification
+     * through a Focus mode, which is the whole point for a prompt that is
+     * blocking an agent. It needs the com.apple.developer.usernotifications
+     * .time-sensitive entitlement on the app; without it iOS silently treats
+     * the push as 'active' rather than rejecting it.
+     */
+    interruptionLevel?: 'active' | 'critical' | 'passive' | 'time-sensitive';
 }
 
 export interface PushTicket {

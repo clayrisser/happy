@@ -103,7 +103,7 @@ export function pushRoutes(app: Fastify) {
                 // older clients that only check it.
                 200: z.object({
                     success: z.literal(true),
-                    result: z.enum(['sent', 'partial', 'suppressed', 'no_tokens', 'failed']),
+                    result: z.enum(['sent', 'partial', 'suppressed', 'duplicate', 'no_tokens', 'failed']),
                     tokens: z.number().optional(),
                     delivered: z.number().optional(),
                     reason: z.string().optional()
@@ -141,6 +141,7 @@ export function pushRoutes(app: Fastify) {
         const outcome = await dispatchSessionEventPush({
             userId,
             sessionId,
+            kind,
             title,
             body,
             data: { ...(data ?? {}), kind }
