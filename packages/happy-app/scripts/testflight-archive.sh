@@ -53,6 +53,31 @@ hbc_version() {
 	xxd -s 8 -l 4 -p "$1" 2>/dev/null || true
 }
 
+# Every pod expo's autolinking resolves must be in the CocoaPods lockfile. A
+# module that lands in node_modules while `pod install` has not run since is
+# absent from the generated ExpoModulesProvider, and nothing in the build path
+# says so: the app compiles, signs, uploads and passes App Store processing,
+# then JS dies before React mounts with "Cannot find native module
+# 'ExpoTaskManager'" — a black screen, no card, nothing on the wrist. Build 4
+# reached TestFlight exactly that way (2026-08-29), because expo-task-manager
+# arrived with the background-wake commit and ios/ predated it.
+LOCKFILE="$IOS_DIR/Podfile.lock"
+[ -f "$LOCKFILE" ] || die "no Podfile.lock at $LOCKFILE — has pod install run?"
+autolinked=$(cd "$APP_DIR" && node --no-warnings -e "require('expo/bin/autolinking')" \
+	expo-modules-autolinking resolve --platform apple --json 2>/dev/null |
+	node -e 'let s = "";
+	process.stdin.on("data", function (d) { s += d; }).on("end", function () {
+		(JSON.parse(s).modules || []).forEach(function (m) {
+			(m.pods || []).forEach(function (p) { console.log(p.podName); });
+		});
+	});')
+[ -n "$autolinked" ] || die "expo-modules-autolinking resolved no pods — cannot tell whether the integrated native module set is stale"
+for pod in $autolinked; do
+	grep -qE "^  - $pod( |\(|:)" "$LOCKFILE" ||
+		die "$pod is autolinked but absent from $LOCKFILE — run 'cd ios && pod install'; without it this build launches to a black screen with \"Cannot find native module '$pod'\""
+done
+log "all $(printf '%s\n' "$autolinked" | wc -l | tr -d ' ') autolinked pods are integrated"
+
 # `expo prebuild` writes aps-environment=development into the entitlements
 # every single time, and ios/ is generated so the value cannot be committed.
 # A TestFlight build carrying it registers its device tokens against the APNs
