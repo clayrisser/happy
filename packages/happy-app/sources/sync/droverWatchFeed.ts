@@ -16,6 +16,7 @@
 import { storage } from './storage';
 import { sync } from './sync';
 import { sessionAllow, sessionDeny } from './ops';
+import { collectGates } from './droverGates';
 import {
     addDroverAnswerListener,
     addDroverFlipListener,
@@ -26,48 +27,29 @@ import {
     type DroverSession,
 } from 'drover-watch';
 
-const PREVIEW_LIMIT = 240;
+/**
+ * Gate collection lives in droverGates, not here. A SCREEN needs the same list,
+ * and importing this file to get it would load the WatchConnectivity native
+ * module and start the feed as a side effect of rendering. Re-exported because
+ * this feed and the background republish are the two publishers of the wrist
+ * snapshot and both read the collector from here.
+ */
+export { collectGates };
 
-function previewFor(tool: string, args: unknown): string {
-    const input = (args ?? {}) as Record<string, unknown>;
-    const raw =
-        typeof input.command === 'string' ? input.command
-        : typeof input.file_path === 'string' ? input.file_path
-        : typeof input.description === 'string' ? input.description
-        : JSON.stringify(input);
-    const text = raw ?? '';
-    return text.length > PREVIEW_LIMIT ? `${text.slice(0, PREVIEW_LIMIT)}…` : text;
-}
-
-/** Every pending request in storage, flattened into wrist-sized gates. */
-export function collectGates(): DroverGate[] {
-    const sessions = storage.getState().sessions ?? {};
-    const gates: DroverGate[] = [];
-    for (const [sessionId, session] of Object.entries(sessions)) {
-        const requests = session?.agentState?.requests;
-        if (!requests) continue;
-        for (const [requestId, request] of Object.entries(requests)) {
-            const tool = (request as { tool?: string }).tool ?? 'Tool';
-            const args = (request as { arguments?: unknown }).arguments;
-            const createdAt = (request as { createdAt?: number }).createdAt ?? Date.now();
-            const account = session?.metadata?.droverAccount;
-            gates.push({
-                id: `${sessionId}:${requestId}`,
-                title: tool === 'AskUserQuestion' ? 'Question' : `Run ${tool}`,
-                reason: session?.metadata?.summary?.text ?? session?.metadata?.path ?? '',
-                preview: previewFor(tool, args),
-                kind: tool === 'AskUserQuestion' ? 'question' : 'permission',
-                createdAt: new Date(createdAt).toISOString(),
-                // Omitted, never null: WatchConnectivity payloads take
-                // property-list types only and JSON null becomes NSNull,
-                // which fails the whole publish. Swift sanitizes too, but
-                // not emitting it is the honest fix.
-                ...(account ? { account } : {}),
-            });
-        }
-    }
-    return gates;
-}
+/**
+ * How often the feed republishes an unchanged snapshot.
+ *
+ * `updatedAt` is the wrist's only liveness signal, and a feed that publishes
+ * only on change cannot produce one: a two-hour-old snapshot means "nothing
+ * happened" and "the phone died" equally, so the watch had to trust every list
+ * it was holding. The heartbeat is what makes the timestamp mean something.
+ *
+ * It stops when iOS suspends the app, and that is the point rather than a
+ * flaw — a suspended app IS the phone no longer feeding the wrist, and the
+ * watch now says so instead of rendering a stale wall of gates as confidently
+ * as a live one.
+ */
+const HEARTBEAT_MS = 60_000;
 
 /**
  * Live sessions the wrist may flip.
@@ -86,12 +68,17 @@ export function collectSessions(): DroverSession[] {
         const path = metadata.path ?? '';
         const title = path.split('/').filter(Boolean).pop() || 'session';
         const account = metadata.droverAccount;
+        // Running, not total: total counts the ones already finished, and the
+        // wrist question is "how much is out right now".
+        const subagents = metadata.activity?.subagents?.running;
         out.push({
             id: sessionId,
             title,
             active: metadata.lifecycleState === 'running',
             // Omitted, never null: WatchConnectivity rejects NSNull.
+            ...(path ? { path } : {}),
             ...(account ? { account } : {}),
+            ...(typeof subagents === 'number' ? { subagents } : {}),
         });
     }
     return out;
@@ -112,10 +99,16 @@ function sameGateSet(a: DroverGate[], b: DroverGate[]): boolean {
     return b.every((g) => ids.has(g.id));
 }
 
-/** Sessions change identity, account and running state — compare all three. */
+/**
+ * Sessions change identity, account, running state and subagent count.
+ * The count is in the key because the wrist now SHOWS it, and a number that
+ * only refreshes when something else about the set changed is a stale number
+ * dressed as a live one. It does mean more publishes; the application context
+ * keeps only the latest value, so the cost is throttling, never a lost gate.
+ */
 function sameSessionSet(a: DroverSession[], b: DroverSession[]): boolean {
     if (a.length !== b.length) return false;
-    const key = (s: DroverSession) => `${s.id}|${s.account ?? ''}|${s.active}`;
+    const key = (s: DroverSession) => `${s.id}|${s.account ?? ''}|${s.active}|${s.subagents ?? ''}`;
     const keys = new Set(a.map(key));
     return b.every((s) => keys.has(key(s)));
 }
@@ -149,9 +142,13 @@ export function startDroverWatchFeed(): () => void {
             sessions,
             accounts: collectAccounts(sessions),
             updatedAt: new Date().toISOString(),
-            // "connected" is about whether the WRIST is being fed, which is
-            // what the watch's empty state needs to distinguish all-clear
-            // from not-watching.
+            // "connected" is WatchConnectivity pairing state and nothing more:
+            // this phone is activated, a watch is paired, and it has the app.
+            // The watch's own doc used to call it "the bridge is not connected
+            // to the bus", which it cannot be — this is only ever written BY a
+            // publish, so the failure it was written for (the phone stops
+            // feeding the wrist) is the one it can never report. `updatedAt`
+            // and the heartbeat carry that instead.
             connected: !!status.activated && status.paired && status.installed,
         });
     };
@@ -161,8 +158,19 @@ export function startDroverWatchFeed(): () => void {
         if (split <= 0) return;
         const sessionId = event.id.slice(0, split);
         const requestId = event.id.slice(split + 1);
+        // The chosen option rides along when the wrist answered a question.
+        // The bus refuses a bare allow on a question — it dismisses every
+        // surface and hands the waiting hook nothing to inject — so the answer
+        // has to name which option it was, all the way through.
         const call = event.allow
-            ? sessionAllow(sessionId, requestId)
+            ? sessionAllow(
+                sessionId,
+                requestId,
+                undefined,
+                undefined,
+                undefined,
+                event.optionId ? { optionId: event.optionId } : undefined,
+            )
             : sessionDeny(sessionId, requestId);
         // Fire and forget with an explicit catch: an answer that fails to send
         // must not reject unhandled, and the gate simply stays pending, which
@@ -182,12 +190,16 @@ export function startDroverWatchFeed(): () => void {
     });
 
     const unsubscribe = storage.subscribe(() => push());
+    // Forced, so an unchanged snapshot still restamps updatedAt. That restamp
+    // is the whole signal: see HEARTBEAT_MS.
+    const heartbeat = setInterval(() => push(true), HEARTBEAT_MS);
     push(true);
 
     return () => {
         started = false;
         answers.remove();
         flips.remove();
+        clearInterval(heartbeat);
         unsubscribe();
     };
 }

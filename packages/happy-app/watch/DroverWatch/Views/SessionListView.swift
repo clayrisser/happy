@@ -28,6 +28,12 @@ struct SessionListView: View {
                 .padding()
             } else {
                 List {
+                    // A flip that could not be sent clears its own "flipping…"
+                    // mark and otherwise leaves no trace, so without this the
+                    // tap simply looked ignored.
+                    if let message = store.lastError {
+                        BannerRow(text: message, symbol: "exclamationmark.triangle", tint: .red)
+                    }
                     ForEach(store.sessions) { session in
                         NavigationLink(value: session) {
                             SessionRow(session: session, flipping: store.flipping.contains(session.id))
@@ -72,13 +78,22 @@ private struct SessionRow: View {
     }
 }
 
-/// Pick where the session goes. "Next with headroom" is first because it is
-/// the answer that does not need Clay to remember which account is cooling —
-/// the CLI holds the ledger and decides.
-struct SessionFlipView: View {
+/// One session: what it is, and where it can go next (BASED-98).
+///
+/// The facts come first because the wrist is what you look at when you cannot
+/// see the terminal — which project, where it is checked out, is it moving,
+/// whose account, how many subagents are out. Then the flip, and "next with
+/// headroom" leads it because that is the answer that does not need Clay to
+/// remember which account is cooling: the CLI holds the ledger and decides.
+///
+/// Flipping goes through `GateStore.flip`, the same call the row list and the
+/// phone reach, so there is one flip path and not a second one to keep in step.
+struct SessionDetailView: View {
     let session: DroverSession
     @EnvironmentObject private var store: GateStore
     @Environment(\.dismiss) private var dismiss
+
+    private var flipping: Bool { store.flipping.contains(session.id) }
 
     var body: some View {
         ScrollView {
@@ -86,11 +101,18 @@ struct SessionFlipView: View {
                 Text(session.title)
                     .font(.headline)
                     .lineLimit(2)
-                if let account = session.account {
-                    Text("on \(account)")
-                        .font(.caption2)
+                if let path = session.path {
+                    // Truncated at the HEAD: the tail of a working directory is
+                    // the half that says which checkout, and it is the half a
+                    // 40mm screen would otherwise drop.
+                    Text(path)
+                        .font(.system(size: 10, design: .monospaced))
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.head)
                 }
+
+                facts
 
                 Button {
                     store.flip(session)
@@ -100,6 +122,7 @@ struct SessionFlipView: View {
                         .font(.caption)
                 }
                 .tint(.orange)
+                .disabled(flipping)
 
                 ForEach(store.accounts.filter { $0 != session.account }, id: \.self) { account in
                     Button {
@@ -109,10 +132,41 @@ struct SessionFlipView: View {
                         Label(account, systemImage: "person.crop.circle")
                             .font(.caption)
                     }
+                    .disabled(flipping)
                 }
             }
             .padding(.horizontal, 4)
         }
-        .navigationTitle("Flip")
+        .navigationTitle("Session")
+    }
+
+    private var facts: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(session.active ? .green : .secondary)
+                    .frame(width: 6, height: 6)
+                Text(session.active ? "running" : "idle")
+                    .font(.caption2)
+            }
+            if let account = session.account {
+                Text("on \(account)")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+            }
+            // Shown only when there ARE some: "0 subagents" is a line of noise
+            // on a wrist, and a phone that predates the field sends no count
+            // rather than a zero, which would read as a fact it never checked.
+            if let subagents = session.subagents, subagents > 0 {
+                Text(subagents == 1 ? "1 subagent" : "\(subagents) subagents")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            if flipping {
+                Text("flipping…")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
     }
 }

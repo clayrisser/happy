@@ -22,6 +22,24 @@ export interface DroverAnswerEvent {
     optionId?: string;
 }
 
+/**
+ * One pickable answer on a question gate.
+ *
+ * `id` is optional because the two producers disagree and both are real. The
+ * bus enforces `{id, label}` (schema/event.json), but happy-cli's
+ * requestForEvent flattens a mirrored question to `{label, description}` so it
+ * can render through the phone's own AskUserQuestion card, and Claude's native
+ * cards never carried an id at all. Nothing is lost by sending the label
+ * instead: happy-cli matches an answer with `o.id === candidate || o.label ===
+ * candidate` (src/drover/droverBridge.ts), so a label comes back to the right
+ * option.
+ */
+export interface DroverGateOption {
+    id?: string;
+    label: string;
+    description?: string;
+}
+
 /** One gate waiting on a human, as the watch renders it. */
 export interface DroverGate {
     id: string;
@@ -32,6 +50,18 @@ export interface DroverGate {
     /** ISO-8601; Swift's JSONDecoder reads these with .iso8601. */
     createdAt: string;
     account?: string | null;
+    /**
+     * What a question can be answered WITH. Absent on a permission, and absent
+     * on a question whose card carried none — the wrist can pick but never
+     * type, so that one has to be punted to the phone.
+     *
+     * A question that reaches the watch WITHOUT these is a black hole: the
+     * wrist can only send a bare allow, the bus refuses it ("a question needs
+     * an option or text", 409) or an older one takes it with no answer at all,
+     * and the event stays pending while every surface dismisses. The watch drew
+     * these before this field existed, which is why it is here.
+     */
+    options?: DroverGateOption[];
 }
 
 /** A session the wrist may flip onto another account. */
@@ -40,14 +70,38 @@ export interface DroverSession {
     title: string;
     account?: string | null;
     active: boolean;
+    /** Working directory, shown under the title on the wrist. */
+    path?: string;
+    /** Subagents running right now; omitted when the session never said. */
+    subagents?: number;
 }
 
 export interface DroverSnapshot {
     gates: DroverGate[];
+    /**
+     * ISO-8601, stamped at publish. The wrist's ONLY liveness signal, which is
+     * why the feed heartbeats rather than publishing on change alone.
+     */
     updatedAt: string;
+    /**
+     * The wrist is being FED: this phone has an activated WatchConnectivity
+     * session, a paired watch, and the drover app installed on it.
+     *
+     * It is NOT "the bridge is connected to the bus", which is what this used
+     * to claim on the watch side. The flag is only ever written BY a publish,
+     * so the one failure it was written for — the phone stops feeding the
+     * wrist — is precisely the one it can never report: no publish, no false.
+     * That failure is caught by comparing `updatedAt` against the watch's own
+     * clock (DroverSnapshot.isStale on the watch), not by this.
+     */
     connected: boolean;
     sessions: DroverSession[];
-    /** Account names in registry order, so the wrist can offer them by name. */
+    /**
+     * Account names the wrist can offer by name. Gathered from the sessions
+     * themselves, not from the drover registry: the phone only ever sees an
+     * account because the CLI stamped `metadata.droverAccount` on a session,
+     * so an account with nothing running on it cannot appear here.
+     */
     accounts: string[];
 }
 
