@@ -2,7 +2,7 @@ import { InvalidateSync } from "@/utils/sync";
 import { RawJSONLines, RawJSONLinesSchema } from "../types";
 import { parseClaudeGoalStatusTranscriptEvent, type ClaudeGoalStatusTranscriptEvent } from "../claudeGoalStatus";
 import { join } from "node:path";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { logger } from "@/ui/logger";
 import { startFileWatcher } from "@/modules/watcher/startFileWatcher";
 import { getProjectPath } from "./path";
@@ -62,6 +62,11 @@ export async function createSessionScanner(opts: {
     // never written) keeps itself alive forever via the watchers map below
     // and spins the CPU / floods the log (the "dead Happy instance" bug).
     let deadSessions = new Set<string>();
+    // Size and mtime of each transcript as of the last pass that actually read
+    // it. Per scanner instance, never module-global: a stale entry left by an
+    // earlier scanner would make the next one skip a file whose entries it has
+    // not marked, and those messages would never reach the app.
+    let lastRead = new Map<string, { size: number, mtimeMs: number }>();
 
     // Mark existing entries as processed and start watching the initial session
     if (opts.sessionId) {
@@ -99,7 +104,35 @@ export async function createSessionScanner(opts: {
 
         // Process sessions
         for (let session of sessions) {
+            // A transcript that has not changed a byte cannot hold anything
+            // new, and re-reading one is not cheap. readSessionEntries pulls
+            // the WHOLE file into a string, splits it and JSON.parses every
+            // line; on Clay's live session — 182MB, 63k lines — that is 701ms
+            // measured, and InvalidateSync fires it every ~1.4s for as long as
+            // the session is open. The result was `found=19266, skipped=19266`
+            // over and over and one core pinned at 99% for five and a half
+            // hours on a session doing NOTHING. stat() is 0ms.
+            //
+            // The stat is taken BEFORE the read and stored after, so a write
+            // that lands mid-read records the pre-read size and is picked up
+            // next pass. Erring toward one redundant read, never toward a lost
+            // message.
+            const transcript = join(projectDir, `${session}.jsonl`);
+            let seen: { size: number, mtimeMs: number } | null = null;
+            try {
+                const st = await stat(transcript);
+                seen = { size: st.size, mtimeMs: st.mtimeMs };
+            } catch {
+                seen = null;
+            }
+            const prev = lastRead.get(transcript);
+            if (seen && prev && prev.size === seen.size && prev.mtimeMs === seen.mtimeMs) {
+                continue;
+            }
             const sessionEntries = await readSessionEntries(projectDir, session);
+            if (seen) {
+                lastRead.set(transcript, seen);
+            }
             let skipped = 0;
             let sentMessages = 0;
             let sentTranscriptEvents = 0;
