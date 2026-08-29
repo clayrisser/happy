@@ -207,7 +207,20 @@ export class PushNotificationClient {
         let failed = messages.length - validMessages.length
 
         if (validMessages.length === 0) {
-            logger.debug('No valid Expo push tokens found')
+            // Two very different states, and saying "no valid tokens" for both
+            // cost a day (BASED-98). An EMPTY messages array means nobody was
+            // registered, or the caller had nothing to send — routine, and what
+            // the unit tests produce. A NON-EMPTY array filtered down to zero
+            // means every token we hold is malformed, which is a real fault.
+            // Reading the first as the second made a healthy push path look
+            // dead: the test suite's fake tokens logged the alarming line, and
+            // a grep over ~/.happy/logs/*.log sorts by FILENAME, not time, so
+            // those lines surfaced above the real deliveries that followed.
+            if (messages.length === 0) {
+                logger.debug('No push notifications to send')
+            } else {
+                logger.debug(`All ${messages.length} push token(s) are malformed — none is a valid Expo push token`)
+            }
             return { sent, failed }
         }
 
