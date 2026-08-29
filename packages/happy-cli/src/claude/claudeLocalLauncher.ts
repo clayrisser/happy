@@ -1,13 +1,32 @@
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { logger } from "@/ui/logger";
 import { claudeLocal, ExitCodeError } from "./claudeLocal";
-import { defaultSessionName, isDefaultSessionName, resumesExistingTranscript, Session } from "./session";
+import { applyCustomTitle, defaultSessionName, isDefaultSessionName, resumesExistingTranscript, Session } from "./session";
 import { Future } from "@/utils/future";
 import { createSessionScanner, type SessionScanner } from "./utils/sessionScanner";
 import { launchFailureMessage } from "./utils/launchFailureMessage";
 import { ambientDataDir } from "@/drover/flip/accounts";
+import { projectDirFor } from '@/drover/flip/transcript';
 import { parseFlipCommand } from "@/drover/flip/controller";
 
 export type LauncherResult = { type: 'switch' } | { type: 'exit', code: number };
+
+/**
+ * Does the transcript this session would resume actually exist on disk?
+ *
+ * Answered against the account the NEXT spawn will use, which is the account
+ * we are on right now: CLAUDE_CONFIG_DIR as the child will see it, with the
+ * empty string meaning ambient (~/.claude), exactly as claudeLocal's env merge
+ * reads it. Getting that wrong in either direction is worse than not checking
+ * — a false negative throws away a real conversation.
+ */
+function transcriptExists(session: Session): boolean {
+    if (!session.sessionId) return false;
+    const configured = session.claudeEnvVars?.CLAUDE_CONFIG_DIR;
+    const configDir = configured && configured.length > 0 ? configured : ambientDataDir();
+    return existsSync(join(projectDirFor(configDir, session.path), `${session.sessionId}.jsonl`));
+}
 
 /**
  * Carry out a pending Cattle Drover flip (BASED-98), if there is one.
@@ -54,6 +73,32 @@ async function applyPendingFlip(
         // must never take the session down with it.
         session.client.sendSessionEvent({ type: 'message', message: result.note });
         flip.say(result.note);
+
+        // ...and it must not take the session down on the way back UP either.
+        // The child has already been aborted by the time we get here — that is
+        // how a flip announces itself — so a refusal still costs a relaunch,
+        // and a relaunch carries --resume <id>. On a session where nothing was
+        // ever said there is no transcript for that id, and Claude Code exits
+        // immediately with `No conversation found with session ID: <id>`.
+        //
+        // Measured, not theorised: 22:29:05 in 2026-08-29-22-27-43-pid-16999
+        // refused a flip to main (already on main) and relaunched with
+        // --resume e6bb612b, which died on the spot. Opening a fresh drover
+        // and pressing flip before typing anything killed the session every
+        // time. The success path below has guarded this since it was written;
+        // the refusal path never did, because a refusal was assumed to change
+        // nothing — but the abort already happened, so it changes everything.
+        //
+        // Same guard, same reason: no transcript on disk means the next spawn
+        // has to be a clean start rather than a --resume against a file that
+        // is not there.
+        if (session.sessionId && !transcriptExists(session)) {
+            logger.debug(
+                `[local]: refused flip, and ${session.sessionId} has no transcript — starting clean instead of --resume`,
+            );
+            session.clearSessionId();
+        }
+
         resetAbort();
         return true;
     }
@@ -139,6 +184,7 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
         claudeConfigDir: startingConfigDir === undefined
             ? undefined
             : (startingConfigDir || ambientDataDir()),
+        onCustomTitle: (title) => applyCustomTitle(session, title),
         onMessage: (message) => {
             // Cattle Drover (BASED-98): local mode has no typed rate-limit
             // channel — the SDK's rate_limit_event only exists on the remote

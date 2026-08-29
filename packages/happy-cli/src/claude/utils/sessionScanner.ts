@@ -22,7 +22,8 @@ export type ScannerTranscriptEvent = ClaudeGoalStatusTranscriptEvent;
 
 type SessionLogEntry =
     | { kind: 'message'; key: string; message: RawJSONLines }
-    | { kind: 'transcript-event'; key: string; event: ScannerTranscriptEvent };
+    | { kind: 'transcript-event'; key: string; event: ScannerTranscriptEvent }
+    | { kind: 'custom-title'; key: string; title: string };
 
 export async function createSessionScanner(opts: {
     sessionId: string | null,
@@ -35,6 +36,21 @@ export async function createSessionScanner(opts: {
     claudeConfigDir?: string | null
     onMessage: (message: RawJSONLines) => void
     onTranscriptEvent?: (event: ScannerTranscriptEvent) => void
+    /**
+     * Claude Code's own `/rename`, mirrored into the Happy session title.
+     *
+     * These are two different names for one session and nothing used to
+     * connect them: `/rename zap` writes a `custom-title` record into the
+     * transcript and relabels the TUI, while the phone reads
+     * metadata.summary.text, which only the happy__change_title MCP tool ever
+     * wrote. So Clay renamed a session to "zap", looked at the app, and saw
+     * "Greeting / no task yet" — the rename appeared to do nothing, and the
+     * session he was staring at looked like a different one.
+     *
+     * The record is right there in the file the scanner already reads, and it
+     * failed RawJSONLinesSchema, so it was dropped as an unknown type.
+     */
+    onCustomTitle?: (title: string) => void
     /**
      * How long a session transcript may stay absent before its watcher gives
      * up and the session is dropped. Defaults to the startFileWatcher default
@@ -74,6 +90,18 @@ export async function createSessionScanner(opts: {
         logger.debug(`[SESSION_SCANNER] Marking ${entries.length} existing entries as processed from session ${opts.sessionId}`);
         for (let entry of entries) {
             processedEntryKeys.add(entry.key);
+        }
+        // Messages are marked processed so a reattach does not replay the
+        // whole conversation at the app. A TITLE is not a replay — it is the
+        // current name of this session, and the reason to read it here is a
+        // session renamed in an EARLIER run: its custom-title record is
+        // already in the file, so it would be marked processed and never
+        // applied, and the app would keep whatever stale title it had. Last
+        // one wins, because that is what /rename means.
+        const seededTitle = entries.filter((e) => e.kind === 'custom-title').pop();
+        if (seededTitle?.kind === 'custom-title') {
+            logger.debug(`[SESSION_SCANNER] Seeding title from transcript: ${seededTitle.title}`);
+            opts.onCustomTitle?.(seededTitle.title);
         }
         // IMPORTANT: Also start watching the initial session file because Claude Code
         // may continue writing to it even after creating a new session with --resume
@@ -146,6 +174,9 @@ export async function createSessionScanner(opts: {
                     logger.debug(`[SESSION_SCANNER] Sending new message: type=${entry.message.type}, uuid=${entry.message.type === 'summary' ? entry.message.leafUuid : entry.message.uuid}`);
                     opts.onMessage(entry.message);
                     sentMessages++;
+                } else if (entry.kind === 'custom-title') {
+                    logger.debug(`[SESSION_SCANNER] Session renamed in Claude Code: ${entry.title}`);
+                    opts.onCustomTitle?.(entry.title);
                 } else {
                     logger.debug(`[SESSION_SCANNER] Sending new transcript event: type=${entry.event.type}, uuid=${entry.event.uuid}`);
                     opts.onTranscriptEvent?.(entry.event);
@@ -364,6 +395,17 @@ async function readSessionEntries(projectDir: string, sessionId: string): Promis
                 continue;
             }
             
+            // Claude Code's /rename. No uuid, so it is keyed by its value:
+            // renaming to the same string twice is genuinely nothing to do.
+            if (message.type === 'custom-title' && typeof message.customTitle === 'string') {
+                entries.push({
+                    kind: 'custom-title',
+                    key: `custom-title:${message.customTitle}`,
+                    title: message.customTitle,
+                });
+                continue;
+            }
+
             let parsed = RawJSONLinesSchema.safeParse(message);
             if (!parsed.success) {
                 // Unknown message types are silently skipped

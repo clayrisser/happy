@@ -281,3 +281,28 @@ export class Session {
         logger.debug(`[Session] Consumed one-time flags, remaining args:`, this.claudeArgs);
     }
 }
+
+/**
+ * Mirror Claude Code's own `/rename` into the Happy session title.
+ *
+ * Both `name` and `summary` are stamped, and this is the whole point: the
+ * phone's list reads metadata.summary.text (getSessionName in
+ * happy-app/sources/utils/sessionUtils.ts) and nothing else, so writing only
+ * `name` renames the session everywhere EXCEPT the screen you are looking at.
+ * That is exactly what /rename appeared to do — Clay renamed a session to
+ * "zap" and the app went on calling it "Greeting / no task yet".
+ *
+ * Unconditional, unlike the flip's restamp, which only overwrites
+ * default-shaped titles. A flip is the machine relabelling a session you did
+ * not ask it to touch; /rename is you naming it by hand, so it outranks
+ * whatever change_title guessed earlier.
+ */
+export function applyCustomTitle(session: Session, title: string): void {
+    const text = title.trim();
+    if (!text) return;
+    session.client.updateMetadata((metadata) => ({
+        ...metadata,
+        name: text,
+        summary: { text, updatedAt: Date.now() },
+    }));
+}

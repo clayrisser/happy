@@ -42,6 +42,39 @@ describe('sessionScanner', () => {
     }
   })
   
+  it('reports Claude Code\'s /rename so the app title can follow it', async () => {
+    // BASED-98, reported live. `/rename zap` writes a custom-title record into
+    // the transcript and relabels the TUI. It failed RawJSONLinesSchema, so
+    // the scanner dropped it as an unknown type, and the phone — which reads
+    // metadata.summary.text and nothing else — went on showing the title
+    // change_title had guessed. Clay renamed a session and the app looked like
+    // it was showing a different one.
+    const titles: string[] = []
+    scanner = await createSessionScanner({
+      sessionId: null,
+      workingDirectory: testDir,
+      onMessage: (msg) => collectedMessages.push(msg),
+      onCustomTitle: (t) => titles.push(t),
+    })
+
+    const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+    const file = join(projectDir, `${sessionId}.jsonl`)
+    await writeFile(file, JSON.stringify({ type: 'custom-title', customTitle: 'zap', sessionId }) + '\n')
+    scanner.onNewSession(sessionId)
+    await new Promise(resolve => setTimeout(resolve, 150))
+
+    expect(titles).toEqual(['zap'])
+    // And it is not mistaken for a conversation message.
+    expect(collectedMessages).toHaveLength(0)
+
+    // Renaming again reports again; renaming to the SAME thing does not.
+    await writeFile(file,
+      JSON.stringify({ type: 'custom-title', customTitle: 'zap', sessionId }) + '\n' +
+      JSON.stringify({ type: 'custom-title', customTitle: 'zing', sessionId }) + '\n')
+    await new Promise(resolve => setTimeout(resolve, 150))
+    expect(titles).toEqual(['zap', 'zing'])
+  })
+
   it('should process initial session and resumed session correctly', async () => {
     // TEST SCENARIO:
     // Phase 1: User says "lol" → Assistant responds "lol" → Session closes

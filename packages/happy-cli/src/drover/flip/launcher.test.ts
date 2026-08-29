@@ -292,6 +292,53 @@ describe('a flip through the launcher loop', () => {
         expect(result).toEqual({ type: 'exit', code: 0 })
     })
 
+    it('refuses a flip on a session that never spoke WITHOUT resuming a transcript that is not there', async () => {
+        // BASED-98, reported live. Open a fresh drover, type nothing, press
+        // flip. The refusal is correct — Clay picked the account he was
+        // already on — but the child has already been aborted to make room for
+        // a flip that then does not happen, so the refusal still costs a
+        // relaunch, and the relaunch carried --resume <id> for an id that
+        // never got a transcript. Claude Code exits on the spot with
+        //   No conversation found with session ID: e6bb612b-…
+        // and the brand-new session is dead.
+        //
+        // Measured at 22:29:05 in 2026-08-29-22-27-43-pid-16999.log: refused
+        // "already on main", relaunched --resume e6bb612b, gone.
+        const h = await build()
+        // The difference from every other test here: NO transcript on disk.
+        rmSync(join(h.mainDir, 'projects'), { recursive: true, force: true })
+        childScript = ['abort', 'exit']
+
+        const run = h.claudeLocalLauncher(h.session)
+        await new Promise((r) => setTimeout(r, 20))
+        // Already on main, so this is refused.
+        h.flip.request({ account: 'main', reason: 'manual', by: 'tmux' })
+        const result = await run
+
+        expect(h.events.join('\n')).toContain('already on main')
+        // Still relaunched — a refusal must not end the session...
+        expect(spawns).toHaveLength(2)
+        expect(spawns[1].account).toBe('main')
+        // ...but as a CLEAN start, because there is nothing to resume.
+        expect(spawns[1].sessionId).toBeNull()
+        expect(result).toEqual({ type: 'exit', code: 0 })
+    })
+
+    it('refuses a flip on a session that HAS spoken and still resumes it', async () => {
+        // The other half of the guard: the fix must not throw away a real
+        // conversation. Same refusal, transcript present, id kept.
+        const h = await build()
+        childScript = ['abort', 'exit']
+
+        const run = h.claudeLocalLauncher(h.session)
+        await new Promise((r) => setTimeout(r, 20))
+        h.flip.request({ account: 'main', reason: 'manual', by: 'tmux' })
+        await run
+
+        expect(spawns).toHaveLength(2)
+        expect(spawns[1].sessionId).toBe('sess-1')
+    })
+
     it('flips TWICE in one session — the second knows it is no longer on main', async () => {
         // The regression this pins: the controller used to re-read
         // DROVER_ACCOUNT from the process env, which the wrapper stamps once
