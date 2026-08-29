@@ -74,6 +74,19 @@ export default function RootLayout() {
                 }}
             />
             <Stack.Screen
+                name="gates"
+                options={{
+                    headerShown: true,
+                    header: createPlainHeader,
+                    headerTitle: 'Waiting on you',
+                    headerBackTitle: t('common.home'),
+                    headerTransparent: Platform.OS === 'ios',
+                    headerStyle: {
+                        backgroundColor: theme.colors.groupped.background,
+                    },
+                }}
+            />
+            <Stack.Screen
                 name="settings/index"
                 options={{
                     headerShown: true,
