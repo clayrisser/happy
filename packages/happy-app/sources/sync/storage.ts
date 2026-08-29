@@ -35,6 +35,7 @@ import { DecryptedArtifact } from "./artifactTypes";
 import { FeedItem } from "./feedTypes";
 import { getRigActivityIndicators, getRigGitSummary, getRigIdentity, isRigMetadata } from './rig';
 import { indexSessionsById } from './sessionIdentity';
+import { isSessionArchived } from './sessionArchive';
 import { t } from '@/text';
 import type { Project } from './projectTypes';
 import { getSessionProjectId, isHappyAgentSession } from './projectTypes';
@@ -61,17 +62,19 @@ function isSessionActive(session: { active: boolean; activeAt: number }): boolea
 }
 
 /**
- * A session the agent retired, or a Happy CLI session that has ended. Rig
- * sessions that merely lost their connection are still live work.
+ * A session the agent retired, or a Happy CLI session that has ended.
  *
- * Archived sessions never sit inside a project card: they trail the list as
- * flat, date-grouped rows, so revealing the archive appends to the bottom
+ * The rule itself moved to sessionArchive so the WRIST can reuse it: importing
+ * this file to get it would drag React Native and the socket into a watch feed
+ * and into vitest, so the watch had its own filter instead and archived
+ * sessions were on the wrist. Re-exported because it reads as a storage concept
+ * from every call site that already had it.
+ *
+ * Archived sessions never sit inside a project card here: they trail the list
+ * as flat, date-grouped rows, so revealing the archive appends to the bottom
  * instead of reshaping the groups above it.
  */
-function isSessionArchived(session: Session): boolean {
-    return session.metadata?.lifecycleState === 'archived'
-        || (!isRigMetadata(session.metadata) && !session.active);
-}
+export { isSessionArchived };
 
 /** "Today", "Yesterday", or "N days ago" for a flat row's date heading. */
 function relativeDayTitle(timestamp: number): string {

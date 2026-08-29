@@ -17,6 +17,7 @@ import { storage } from './storage';
 import { sync } from './sync';
 import { sessionAllow, sessionDeny } from './ops';
 import { collectGates } from './droverGates';
+import { isSessionArchived } from './sessionArchive';
 import {
     addDroverAnswerListener,
     addDroverFlipListener,
@@ -57,6 +58,13 @@ const HEARTBEAT_MS = 60_000;
  * The drover bridge's own session is excluded: it holds no Claude
  * conversation, so flipping it means nothing, and it would sit at the top of
  * the wrist list being the most tempting thing to tap.
+ *
+ * A session's id is what the wrist holds onto, and it survives a flip: the CLI
+ * keeps the Happy session when it moves onto another account, the title comes
+ * off the working directory rather than the account, and the watch's list is
+ * keyed on the id. So a flip moves the account line on a row that stays put,
+ * which is what makes flipping from the wrist and then watching the same row
+ * possible at all.
  */
 export function collectSessions(): DroverSession[] {
     const sessions = storage.getState().sessions ?? {};
@@ -65,6 +73,12 @@ export function collectSessions(): DroverSession[] {
         const metadata = session?.metadata;
         if (!metadata) continue;
         if (metadata.summary?.text?.startsWith('Cattle Drover —')) continue;
+        // Dead work is not wrist work. The same rule the phone's own list
+        // uses, called rather than restated, because a second copy is how the
+        // wrist ended up carrying every retired and test session `drover
+        // sessions` still lists — they arrived as merely `active: false` and
+        // sat among the live ones.
+        if (isSessionArchived(session)) continue;
         const path = metadata.path ?? '';
         const title = path.split('/').filter(Boolean).pop() || 'session';
         const account = metadata.droverAccount;
@@ -84,7 +98,13 @@ export function collectSessions(): DroverSession[] {
     return out;
 }
 
-/** Account names the sessions report, in first-seen order. */
+/**
+ * Account names the sessions report, in first-seen order.
+ *
+ * Live sessions only, since that is what collectSessions now hands over. An
+ * account shows up by name because work is on it; "next with headroom" is the
+ * answer for the rest, and the CLI holds the real registry either way.
+ */
 export function collectAccounts(sessions: DroverSession[]): string[] {
     const seen: string[] = [];
     for (const s of sessions) {

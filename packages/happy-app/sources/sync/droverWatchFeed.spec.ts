@@ -62,14 +62,25 @@ function session(options: {
     running?: boolean;
     subagents?: number;
     requests?: Record<string, unknown>;
+    /** `Session.active` — the socket, not the lifecycle. */
+    active?: boolean;
+    /** Overrides `running`, for the one value that means retired. */
+    lifecycleState?: string;
+    /** A rig session, which stays live work even with its socket down. */
+    rig?: boolean;
 }) {
     return {
+        // Connected unless a test says otherwise: a non-rig session with no
+        // socket reads as ARCHIVED, so a default of false would have quietly
+        // emptied the wrist in every case below and called it a pass.
+        active: options.active ?? true,
         agentState: options.requests ? { requests: options.requests } : undefined,
         metadata: {
             path: options.path,
             summary: options.summary ? { text: options.summary, updatedAt: 0 } : undefined,
             droverAccount: options.account,
-            lifecycleState: options.running ? 'running' : 'idle',
+            lifecycleState: options.lifecycleState ?? (options.running ? 'running' : 'idle'),
+            ...(options.rig ? { client: { id: 'rig' } } : {}),
             activity: typeof options.subagents === 'number'
                 ? { subagents: { running: options.subagents, queued: 0, total: options.subagents } }
                 : undefined,
@@ -275,6 +286,85 @@ describe('collectSessions', () => {
             s1: session({ path: '/a/work' }),
         };
         expect(collectSessions().map((s) => s.id)).toEqual(['s1']);
+    });
+});
+
+/**
+ * The wrist should only ever show sessions the phone would still show.
+ *
+ * It did not. collectSessions filtered exactly two things — a session with no
+ * metadata, and the bridge's own — so every retired and test session `drover
+ * sessions` still lists arrived on the watch as merely `active: false`, sitting
+ * among live work on a screen with room for about three rows. The rule is
+ * storage's own `isSessionArchived`, called rather than restated, so the two
+ * surfaces cannot answer this differently.
+ */
+describe('collectSessions and the archive', () => {
+    it('drops a session the agent retired', () => {
+        mocks.sessions = {
+            live: session({ path: '/a/live', running: true }),
+            retired: session({ path: '/a/retired', lifecycleState: 'archived' }),
+        };
+        expect(collectSessions().map((s) => s.id)).toEqual(['live']);
+    });
+
+    it('drops a Happy CLI session whose socket is gone, which is how it ends', () => {
+        mocks.sessions = {
+            live: session({ path: '/a/live' }),
+            ended: session({ path: '/a/ended', active: false }),
+        };
+        expect(collectSessions().map((s) => s.id)).toEqual(['live']);
+    });
+
+    // The clause that makes this worth calling instead of writing again: a rig
+    // session off the network is work in progress, not work that ended.
+    it('keeps a rig session that only lost its connection', () => {
+        mocks.sessions = { r1: session({ path: '/a/rig', active: false, rig: true }) };
+        expect(collectSessions().map((s) => s.id)).toEqual(['r1']);
+    });
+
+    it('publishes the live ones only, so the wrist never sees the archive', () => {
+        mocks.sessions = {
+            live: session({ path: '/a/live', running: true }),
+            retired: session({ path: '/a/retired', lifecycleState: 'archived' }),
+        };
+        start();
+        expect(mocks.published[0].sessions.map((s) => s.id)).toEqual(['live']);
+    });
+});
+
+/**
+ * A session that flips accounts is the SAME session, and the wrist has to agree.
+ *
+ * Nothing here has to be built for that to hold — the CLI keeps the Happy
+ * session id across a flip, the title comes off the working directory, and the
+ * watch list is keyed on the id — but nothing pinned it either, so a refactor
+ * that derived either from the account would move the row out from under a
+ * thumb mid-flip and read as a new session appearing.
+ */
+describe('a session flipped to another account', () => {
+    it('keeps its id and its title, and moves only the account', () => {
+        const on = (account: string) =>
+            ({ s1: session({ path: '/Users/clay/Projects/drover', running: true, account }) });
+        mocks.sessions = on('work');
+        const before = collectSessions()[0];
+        mocks.sessions = on('work-2');
+        const after = collectSessions()[0];
+        expect(after.id).toBe(before.id);
+        expect(after.title).toBe(before.title);
+        expect(before.account).toBe('work');
+        expect(after.account).toBe('work-2');
+    });
+
+    it('reaches the wrist as the same row rather than a second one', () => {
+        mocks.sessions = { s1: session({ path: '/a/work', running: true, account: 'work' }) };
+        start();
+        mocks.sessions = { s1: session({ path: '/a/work', running: true, account: 'work-2' }) };
+        mocks.onStorage!();
+        expect(mocks.published).toHaveLength(2);
+        expect(mocks.published[1].sessions.map((s) => s.id)).toEqual(['s1']);
+        expect(mocks.published[1].sessions[0].account).toBe('work-2');
+        expect(mocks.published[1].sessions[0].title).toBe(mocks.published[0].sessions[0].title);
     });
 });
 
