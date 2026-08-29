@@ -6,6 +6,7 @@ import { getToolViewComponent } from './views/_all';
 import { Message, ToolCall } from '@/sync/typesMessage';
 import { CodeView } from '../CodeView';
 import { ToolSectionView } from './ToolSectionView';
+import { ToolCollapsibleSection } from './ToolCollapsibleSection';
 import { useElapsedTime } from '@/hooks/useElapsedTime';
 import { ToolError } from './ToolError';
 import { knownTools } from '@/components/tools/knownTools';
@@ -282,21 +283,31 @@ export const ToolView = React.memo<ToolViewProps>((props) => {
                 }
 
                 // Fall back to default view
+                // A big payload (a Workflow script, say) collapses behind a disclosure row
+                // instead of dumping screens of code into the transcript.
+                const renderSerialized = (title: string, code: string) => {
+                    const lineCount = code.split('\n').length;
+                    if (lineCount > 20 || code.length > 1200) {
+                        return (
+                            <ToolCollapsibleSection title={title} lineCount={lineCount}>
+                                <CodeView code={code} />
+                            </ToolCollapsibleSection>
+                        );
+                    }
+                    return (
+                        <ToolSectionView title={title}>
+                            <CodeView code={code} />
+                        </ToolSectionView>
+                    );
+                };
                 return (
                     <View style={styles.content}>
                         {/* Default content when no custom view available */}
-                        {tool.input && (
-                            <ToolSectionView title={t('toolView.input')}>
-                                <CodeView code={JSON.stringify(tool.input, null, 2)} />
-                            </ToolSectionView>
-                        )}
+                        {tool.input && renderSerialized(t('toolView.input'), JSON.stringify(tool.input, null, 2))}
 
-                        {tool.state === 'completed' && tool.result && (
-                            <ToolSectionView title={t('toolView.output')}>
-                                <CodeView
-                                    code={typeof tool.result === 'string' ? tool.result : JSON.stringify(tool.result, null, 2)}
-                                />
-                            </ToolSectionView>
+                        {tool.state === 'completed' && tool.result && renderSerialized(
+                            t('toolView.output'),
+                            typeof tool.result === 'string' ? tool.result : JSON.stringify(tool.result, null, 2),
                         )}
                     </View>
                 );
