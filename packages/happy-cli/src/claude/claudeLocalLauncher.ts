@@ -7,10 +7,10 @@ import { launchFailureMessage } from "./utils/launchFailureMessage";
 import { ambientDataDir } from "@/drover/flip/accounts";
 import { parseFlipCommand } from "@/drover/flip/controller";
 import { injectIntoPane, interruptPane, paneIsIdle } from "./utils/paneInject";
-import { createPaneCommandQueue, paneCommandsForSelection, parseRemoteControlRequest, remoteControlCommand, type PaneModelSelection } from "./utils/paneModelSync";
+import { createPaneCommandQueue, paneCommandsForSelection, paneSlashCommand, parseRemoteControlRequest, remoteControlCommand, type PaneModelSelection } from "./utils/paneModelSync";
 import { cyclePaneMode, pressCycleKey, readPaneMode, type PaneMode } from "./utils/panePermissionSync";
 import { isPermissionMode, mapToClaudeMode } from "./utils/permissionMode";
-import { findInbox, sendToInbox } from "./utils/inboxSocket";
+import { findInbox, sendToInbox, wrapForPane } from "./utils/inboxSocket";
 import {
     noteMessageDelivered,
     noteMessageUndelivered,
@@ -278,6 +278,10 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
             configDir: session.claudeEnvVars?.CLAUDE_CONFIG_DIR,
             claudeSessionId: session.sessionId,
         }),
+        // Only the phone's own slash commands ask for this (DROVE-49). The
+        // model/effort picker does not, because Clay runs 4–12 agents at a
+        // time and a picker held for the length of that run reads as broken.
+        agentsQuiet: () => inflight.count() === 0,
         send: async (command) => {
             if (!childAlive) return false;
             // DROVE-36 rides this queue but not this carrier. 2.1.251 has no
@@ -757,6 +761,53 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
         }
 
         /**
+         * A slash command typed on the phone goes to the KEYBOARD, never to
+         * the socket (DROVE-49).
+         *
+         * Claude Code's uds handler hardcodes `skipSlashCommands:true` on every
+         * message it takes off the inbox socket (2.1.251, `Ye`), so `/model
+         * opus` sent from the app used to arrive as five words of prose. The
+         * pane executes it, and the pane command queue is the only thing here
+         * that types on a gate rather than on hope: it waits for Claude's own
+         * registry to say idle, for the drover bus to hold no pending
+         * question, for the pane to still be running Claude, and — for a
+         * phone command specifically — for every async agent to have reported
+         * in, because one of those can be what the terminal is looking at.
+         *
+         * Held, never drafted. A half-typed `/clear` sitting in Clay's input
+         * box waiting to merge with his next line is worse than a late one.
+         */
+        async function deliverSlashCommand(command: string): Promise<boolean> {
+            noteDeliveredFromApp(command);
+            const agents = inflight.count();
+            const idle = agents === 0 && await paneIsIdle({
+                pane: tmuxPane!,
+                configDir: session.claudeEnvVars?.CLAUDE_CONFIG_DIR,
+                claudeSessionId: session.sessionId,
+            });
+            if (idle && await injectIntoPane(tmuxPane!, command, { submit: true })) {
+                notePaneCommandApplied(command);
+                logger.debug(`[local]: typed ${command} into the pane`);
+                return true;
+            }
+            paneCommands.request([command], { collapse: false, requireQuietAgents: true });
+            pumpPaneCommands();
+            // infoDeveloper, not info: `info` writes to the console, and this
+            // process shares a pane with a Claude Code TUI that owns the screen.
+            logger.infoDeveloper(
+                `[local]: holding ${command} for the pane's prompt`
+                + ` (${agents > 0 ? `${agents} agent(s) running` : 'terminal busy'})`,
+            );
+            session.client.sendSessionEvent({
+                type: 'message',
+                message: agents > 0
+                    ? `Cattle Drover: ${command} is waiting — ${agents} agent(s) are still running in the terminal.`
+                    : `Cattle Drover: ${command} is waiting for the terminal's prompt.`,
+            });
+            return true;
+        }
+
+        /**
          * Hand `message` to the Claude running in our pane, or say it did not
          * arrive. There is no third answer any more (DROVE-48).
          *
@@ -777,6 +828,8 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
          * So a socket miss is a failed delivery, reported to the phone with
          * the reason and counted in `drover status`, rather than a silent
          * downgrade onto a carrier that can hit the wrong conversation.
+         *
+         * A slash command takes neither: see deliverSlashCommand.
          */
         async function deliverToChild(message: string): Promise<UndeliveredReason | null> {
             if (!tmuxPane) return 'no-inbox-socket';
@@ -792,9 +845,23 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
             // change that cannot land right now stays queued for the retry and
             // the message still goes.
             await paneCommands.flush();
+            // DROVE-49: a slash command from the phone cannot go down the
+            // socket at all — Claude Code sets skipSlashCommands:true on
+            // everything it takes off it — so it takes the keyboard, on its
+            // own gate, and never the socket below.
+            const command = paneSlashCommand(message);
+            if (command) {
+                await deliverSlashCommand(command);
+                return null;
+            }
             // Recorded before the write, because Claude Code writes the
-            // enqueue record the instant the text lands (DROVE-41).
+            // enqueue record the instant the text lands (DROVE-41). Both
+            // spellings: sendToInbox wraps the body in a
+            // <cross-session-message> element, so that is what comes back as a
+            // queued-prompt record, and the plain one is kept for a transcript
+            // that recorded it unwrapped.
             noteDeliveredFromApp(message);
+            noteDeliveredFromApp(wrapForPane(message));
             try {
                 const configDir = session.claudeEnvVars?.CLAUDE_CONFIG_DIR;
                 const inbox = await findInbox(configDir || undefined, session.sessionId, tmuxPane);

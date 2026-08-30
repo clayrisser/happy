@@ -35,6 +35,13 @@
  * shift+tab cycle instead of the keyboard. The `#` is deliberate: a pseudo
  * command that fell through to the paste path would type a visible `#` line
  * rather than something that reads like a command Claude Code refused.
+ *
+ * DROVE-49 hangs a second rider off it: a slash command TYPED ON THE PHONE.
+ * That one cannot go down the inbox socket at all — Claude Code's uds handler
+ * sets `skipSlashCommands:true` on every message it takes off the socket
+ * (2.1.251, `Ye`), so `/model opus` from the app arrived as literal text. The
+ * pane is the only carrier that executes it, and this queue is the only place
+ * that types into the pane on a gate rather than on hope.
  */
 
 import { logger } from '@/ui/logger'
@@ -181,11 +188,40 @@ export interface PaneCommandQueueOptions {
     isIdle: () => Promise<boolean>
     /** Type one command and press Enter. True when it actually went in. */
     send: (command: string) => Promise<boolean>
+    /**
+     * Are all of this session's agents accounted for (DROVE-48/DROVE-49)?
+     *
+     * An async subagent runs INSIDE the child while the main thread sits at an
+     * idle prompt, and the terminal can be looking at that agent rather than at
+     * the conversation. A keystroke aimed at the prompt would land on whatever
+     * is on screen. So a command that came from the PHONE waits for the agents
+     * to report in as well as for the prompt.
+     *
+     * Only asked for commands queued with `requireQuietAgents`. The app's model
+     * and effort pickers do NOT set it: Clay runs 4–12 agents at a time and a
+     * picker that goes dead for the length of that run is the DROVE-45
+     * complaint back again.
+     *
+     * Defaults to "yes, quiet" so existing callers are unchanged.
+     */
+    agentsQuiet?: () => boolean
+}
+
+/** Per-request behaviour. Defaults match the model/effort picker. */
+export interface PaneCommandRequestOptions {
+    /**
+     * Replace an earlier command of the same kind. Right for a picker — three
+     * taps of the model menu should reach the prompt once, as the third pick.
+     * Wrong for a command a person typed, where two `/clear`s mean two.
+     */
+    collapse?: boolean
+    /** Also wait for `agentsQuiet()`. See PaneCommandQueueOptions. */
+    requireQuietAgents?: boolean
 }
 
 export interface PaneCommandQueue {
     /** Queue commands for the next idle prompt. Later picks replace earlier ones. */
-    request: (commands: string[]) => void
+    request: (commands: string[], opts?: PaneCommandRequestOptions) => void
     /**
      * Drop anything of this kind that has not been typed yet (DROVE-63).
      *
@@ -200,6 +236,21 @@ export interface PaneCommandQueue {
     flush: () => Promise<void>
     /** What is still waiting, in order. For tests and logging. */
     pending: () => string[]
+}
+
+/**
+ * The phone message that is really a TUI command, or null.
+ *
+ * Deliberately narrow, because getting this wrong sends ordinary prose to the
+ * keyboard: one line only, and the token after the slash has to look like a
+ * command name. `/Users/clayrisser/notes.md` fails on the second slash, which
+ * is the case worth being careful about — Clay pastes paths from the phone.
+ */
+export function paneSlashCommand(message: string): string | null {
+    const text = message.trim()
+    if (text.includes('\n')) return null
+    if (!/^\/[A-Za-z0-9][A-Za-z0-9_:-]*(\s|$)/.test(text)) return null
+    return text
 }
 
 /**
@@ -223,18 +274,38 @@ function commandKind(command: string): string {
  * it already has (a metadata change, and the poll that watches for idle), which
  * keeps this file testable without fake timers.
  */
+interface QueuedCommand {
+    command: string
+    /** May a later command of the same kind replace this one? */
+    collapse: boolean
+    /** Also wait for `agentsQuiet()` before typing it. */
+    requireQuietAgents: boolean
+}
+
 export function createPaneCommandQueue(opts: PaneCommandQueueOptions): PaneCommandQueue {
-    let queued: string[] = []
+    let queued: QueuedCommand[] = []
     let draining: Promise<void> | null = null
+    const agentsQuiet = opts.agentsQuiet ?? (() => true)
 
     async function drain(): Promise<void> {
         if (queued.length === 0) return
+        if (queued[0].requireQuietAgents && !agentsQuiet()) {
+            logger.debug(`[paneModelSync] agents are still running — holding ${queued.length} command(s)`)
+            return
+        }
         if (!(await opts.isIdle())) {
             logger.debug(`[paneModelSync] pane is busy — holding ${queued.length} command(s)`)
             return
         }
         while (queued.length > 0) {
-            const command = queued[0]
+            const { command, requireQuietAgents } = queued[0]
+            // Re-checked per command rather than once per drain: an agent can
+            // launch between two commands of the same batch, and the point of
+            // the flag is that THIS command never goes in while one is running.
+            if (requireQuietAgents && !agentsQuiet()) {
+                logger.debug(`[paneModelSync] agents started — holding ${command}`)
+                return
+            }
             let ok = false
             try {
                 ok = await opts.send(command)
@@ -254,15 +325,19 @@ export function createPaneCommandQueue(opts: PaneCommandQueueOptions): PaneComma
     }
 
     return {
-        request: (commands: string[]) => {
+        request: (commands: string[], reqOpts: PaneCommandRequestOptions = {}) => {
+            const collapse = reqOpts.collapse ?? true
+            const requireQuietAgents = reqOpts.requireQuietAgents ?? false
             for (const command of commands) {
                 const kind = commandKind(command)
-                queued = queued.filter((q) => commandKind(q) !== kind)
-                queued.push(command)
+                // Only ever drops a COLLAPSIBLE entry. A picker tap must not
+                // swallow a `/model` Clay typed on the phone a second earlier.
+                queued = queued.filter((q) => !(q.collapse && commandKind(q.command) === kind))
+                queued.push({ command, collapse, requireQuietAgents })
             }
         },
         cancel: (kind: string) => {
-            queued = queued.filter((q) => commandKind(q) !== kind)
+            queued = queued.filter((q) => commandKind(q.command) !== kind)
         },
         flush: async () => {
             // One drain at a time. Two overlapping drains would both read
@@ -271,6 +346,6 @@ export function createPaneCommandQueue(opts: PaneCommandQueueOptions): PaneComma
             draining = drain().finally(() => { draining = null })
             return draining
         },
-        pending: () => [...queued],
+        pending: () => queued.map((q) => q.command),
     }
 }

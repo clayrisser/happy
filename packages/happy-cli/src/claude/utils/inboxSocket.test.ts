@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { findInbox, sendToInbox } from './inboxSocket'
+import { appSenderName, findInbox, sendToInbox, wrapForPane } from './inboxSocket'
 
 const sessionId = 'e495e6e8-43f6-4699-a984-ff19f5ab4551'
 const token = 'peer-token-not-to-be-logged'
@@ -128,8 +128,42 @@ describe('findInbox', () => {
     })
 })
 
+/**
+ * DROVE-49. These are the bytes Claude Code's own peer sender writes, copied
+ * out of 2.1.251 (`VMe` composing `r9`'s attribute list). The receiver
+ * re-serialises what it parsed and compares (`SM`), and its TUI only strips the
+ * "permission laundering" paragraph off a body it recognises as wrapped — so
+ * this shape is a contract, not a preference, and the test spells it out
+ * literally rather than rebuilding it from the same code under test.
+ */
+describe('wrapForPane', () => {
+    it('emits from-name and nothing else, body on its own lines', () => {
+        expect(wrapForPane('ship it', 'phone')).toBe(
+            '<cross-session-message from-name="phone">\nship it\n</cross-session-message>',
+        )
+    })
+
+    it('leaves an already-wrapped body alone, so a relayed peer note is not double-wrapped', () => {
+        const already = '<cross-session-message from="uds:/tmp/cc-socks/1.sock" from-name="shc">\nhi\n</cross-session-message>'
+
+        expect(wrapForPane(already)).toBe(already)
+    })
+
+    it('scrubs the name the way Claude Code does before it will accept the attribute', () => {
+        // Quotes and angle brackets would break out of the attribute; control
+        // characters are stripped by its `QS`; 64 code points is its cap.
+        expect(wrapForPane('x', 'a"b<c>d')).toContain('from-name="abcd"')
+        expect(wrapForPane('x', 'a\u0007b')).toContain('from-name="ab"')
+        expect(wrapForPane('x', 'n'.repeat(80))).toContain(`from-name="${'n'.repeat(64)}"`)
+    })
+
+    it('sends the body unwrapped rather than with an empty name', () => {
+        expect(wrapForPane('ship it', '   ')).toBe('ship it')
+    })
+})
+
 describe('sendToInbox', () => {
-    it('writes the auth line first, then the user frame carrying the session id', async () => {
+    it('writes the auth line first, then the wrapped user frame carrying the session id', async () => {
         const path = socketPath()
         const server = await listen(path)
 
@@ -144,7 +178,10 @@ describe('sendToInbox', () => {
             { type: 'auth', token },
             {
                 type: 'user',
-                message: { role: 'user', content: 'from the phone' },
+                message: {
+                    role: 'user',
+                    content: `<cross-session-message from-name="${appSenderName}">\nfrom the phone\n</cross-session-message>`,
+                },
                 session_id: sessionId,
             },
         ])

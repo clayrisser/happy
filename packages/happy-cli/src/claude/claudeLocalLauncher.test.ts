@@ -66,7 +66,11 @@ vi.mock('./utils/paneInject', () => ({
     interruptPane: mockInterruptPane,
 }));
 
-vi.mock('./utils/inboxSocket', () => ({
+// The real `wrapForPane` rides along on purpose (DROVE-49): the echo the
+// launcher has to swallow is the WRAPPED text coming back off the transcript,
+// so a stub here would test the stub.
+vi.mock('./utils/inboxSocket', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('./utils/inboxSocket')>()),
     findInbox: mockFindInbox,
     sendToInbox: mockSendToInbox,
 }));
@@ -83,12 +87,14 @@ vi.mock('./utils/panePermissionSync', async (importOriginal) => ({
 vi.mock('@/ui/logger', () => ({
     logger: {
         debug: vi.fn(),
+        infoDeveloper: vi.fn(),
     },
 }));
 
 import { claudeLocalLauncher } from './claudeLocalLauncher';
 import { loop } from './loop';
 import type { Session } from './session';
+import { appSenderName } from './utils/inboxSocket';
 import { MessageQueue2 } from '@/utils/MessageQueue2';
 
 type QueueHandler = (message: string, mode: { permissionMode: 'default' }) => void;
@@ -1106,6 +1112,16 @@ describe('claudeLocalLauncher in a tmux pane', () => {
         scannerOpts.onQueuedPrompt({ text: 'from the phone', at: 1788113421656, carrier: 'absorbed' });
         expect(session.client.sendQueuedPromptFromLocalTranscript).not.toHaveBeenCalled();
 
+        // DROVE-49: the socket carries the WRAPPED body, so that is the
+        // spelling Claude Code writes back into the transcript. It is our own
+        // delivery either way and must not be re-sent to the app.
+        scannerOpts.onQueuedPrompt({
+            text: `<cross-session-message from-name="${appSenderName}">\nfrom the phone\n</cross-session-message>`,
+            at: 1788113421999,
+            carrier: 'enqueue',
+        });
+        expect(session.client.sendQueuedPromptFromLocalTranscript).not.toHaveBeenCalled();
+
         scannerOpts.onQueuedPrompt({ text: 'typed at the keyboard', at: 1788113356600, carrier: 'enqueue' });
         expect(session.client.sendQueuedPromptFromLocalTranscript).toHaveBeenCalledWith({
             text: 'typed at the keyboard',
@@ -1116,6 +1132,91 @@ describe('claudeLocalLauncher in a tmux pane', () => {
 
         runs[0].run.resolve();
         await expect(launcher).resolves.toEqual({ type: 'exit', code: 0 });
+    });
+
+    /**
+     * DROVE-49. Clay: "can you stop this bullshit extra messaging about this
+     * came from Claude". Two separate findings sit behind these tests, both
+     * measured against the 2.1.251 binary rather than assumed:
+     *
+     *   the uds handler (`Ye`) sets `skipSlashCommands:true` on every message
+     *   it takes off the inbox socket, so `/model opus` from the app used to
+     *   arrive as five words of prose. Nothing on the wire changes that, so a
+     *   slash command has to go to the keyboard.
+     *
+     *   and the keyboard is only safe when nothing else owns the screen — an
+     *   async agent can be running while the prompt reads idle, and the
+     *   terminal can be looking at it (DROVE-48).
+     */
+    describe('a slash command sent from the app', () => {
+        it('is typed into the pane, and never written to the socket as text', async () => {
+            mockFindInbox.mockResolvedValue(inbox);
+            mockSendToInbox.mockResolvedValue('ok');
+            mockPaneIsIdle.mockResolvedValue(true);
+            mockInjectIntoPane.mockResolvedValue(true);
+            const runs = trackRuns();
+            const { session, queue } = paneSession();
+
+            const launcher = claudeLocalLauncher(session as any);
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+
+            queue.push('/model claude-opus-5', mode);
+            await vi.waitFor(() =>
+                expect(mockInjectIntoPane).toHaveBeenCalledWith(pane, '/model claude-opus-5', { submit: true }));
+            expect(mockSendToInbox).not.toHaveBeenCalled();
+            expect(queue.size()).toBe(0);
+
+            runs[0].run.resolve();
+            await expect(launcher).resolves.toEqual({ type: 'exit', code: 0 });
+        });
+
+        it('waits, rather than typing, while an agent is still running', async () => {
+            mockFindInbox.mockResolvedValue(inbox);
+            mockSendToInbox.mockResolvedValue('ok');
+            mockPaneIsIdle.mockResolvedValue(true);
+            mockInjectIntoPane.mockResolvedValue(true);
+            const runs = trackRuns();
+            let scannerOnMessage: ((message: any) => void) | undefined;
+            mockCreateSessionScanner.mockImplementation(async (opts: any) => {
+                scannerOnMessage = opts.onMessage;
+                return { onNewSession: vi.fn(), cleanup: vi.fn(async () => {}) };
+            });
+            const { session, queue } = paneSession();
+
+            const launcher = claudeLocalLauncher(session as any);
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+            scannerOnMessage!(asyncAgentLaunched('agent-7'));
+
+            queue.push('/clear', mode);
+            await vi.waitFor(() => expect(session.client.sendSessionEvent).toHaveBeenCalledWith(
+                expect.objectContaining({ message: expect.stringContaining('/clear is waiting') })));
+
+            // The whole point: with an agent live, no keystroke reached tmux,
+            // and the command did not quietly become prose on the socket.
+            expect(mockInjectIntoPane).not.toHaveBeenCalled();
+            expect(mockSendToInbox).not.toHaveBeenCalled();
+
+            runs[0].run.resolve();
+            await expect(launcher).resolves.toEqual({ type: 'exit', code: 0 });
+        });
+
+        it('leaves an ordinary message on the socket, wrapped so the pane stops printing the peer note', async () => {
+            mockFindInbox.mockResolvedValue(inbox);
+            mockSendToInbox.mockResolvedValue('ok');
+            mockInjectIntoPane.mockResolvedValue(true);
+            const runs = trackRuns();
+            const { session, queue } = paneSession();
+
+            const launcher = claudeLocalLauncher(session as any);
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+
+            queue.push('/Users/clayrisser/Projects/notes.md has the plan', mode);
+            await vi.waitFor(() => expect(mockSendToInbox).toHaveBeenCalled());
+            expect(mockInjectIntoPane).not.toHaveBeenCalled();
+
+            runs[0].run.resolve();
+            await expect(launcher).resolves.toEqual({ type: 'exit', code: 0 });
+        });
     });
 
     it('stages a phone image to uploads/ and hands Claude the path (DROVE-38)', async () => {
