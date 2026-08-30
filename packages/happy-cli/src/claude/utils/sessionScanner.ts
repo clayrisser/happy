@@ -84,6 +84,36 @@ export async function createSessionScanner(opts: {
     // not marked, and those messages would never reach the app.
     let lastRead = new Map<string, { size: number, mtimeMs: number }>();
 
+    // The title last handed to the caller. Claude Code re-appends the same
+    // custom-title record on every start — 69 copies of "DROVER" in one of
+    // Clay's transcripts — and each report is a metadata write that reaches
+    // the phone, so the repetition is filtered HERE rather than by keying the
+    // entry on its text. Keying on the text is what made renaming back to a
+    // title used earlier in the run a permanent no-op (DROVE-15).
+    let lastReportedTitle: string | null = null;
+    const reportTitle = (title: string, why: string) => {
+        if (title === lastReportedTitle) return;
+        lastReportedTitle = title;
+        logger.debug(`[SESSION_SCANNER] ${why}: ${title}`);
+        opts.onCustomTitle?.(title);
+    };
+
+    /**
+     * Apply the newest title in a transcript we are about to mark as history.
+     *
+     * Messages are marked processed so a reattach does not replay the whole
+     * conversation at the app. A TITLE is not a replay — it is the current
+     * NAME of this session — so it has to survive the mark, or a session
+     * renamed in an EARLIER run comes back under whatever stale title the app
+     * had. Last one wins, because that is what /rename means.
+     */
+    const seedTitleFrom = (entries: SessionLogEntry[]) => {
+        const seeded = entries.filter((e) => e.kind === 'custom-title').pop();
+        if (seeded?.kind === 'custom-title') {
+            reportTitle(seeded.title, 'Seeding title from transcript');
+        }
+    };
+
     // Mark existing entries as processed and start watching the initial session
     if (opts.sessionId) {
         let entries = await readSessionEntries(projectDir, opts.sessionId);
@@ -91,18 +121,7 @@ export async function createSessionScanner(opts: {
         for (let entry of entries) {
             processedEntryKeys.add(entry.key);
         }
-        // Messages are marked processed so a reattach does not replay the
-        // whole conversation at the app. A TITLE is not a replay — it is the
-        // current name of this session, and the reason to read it here is a
-        // session renamed in an EARLIER run: its custom-title record is
-        // already in the file, so it would be marked processed and never
-        // applied, and the app would keep whatever stale title it had. Last
-        // one wins, because that is what /rename means.
-        const seededTitle = entries.filter((e) => e.kind === 'custom-title').pop();
-        if (seededTitle?.kind === 'custom-title') {
-            logger.debug(`[SESSION_SCANNER] Seeding title from transcript: ${seededTitle.title}`);
-            opts.onCustomTitle?.(seededTitle.title);
-        }
+        seedTitleFrom(entries);
         // IMPORTANT: Also start watching the initial session file because Claude Code
         // may continue writing to it even after creating a new session with --resume
         // (agent tasks and other updates can still write to the original session file)
@@ -175,8 +194,7 @@ export async function createSessionScanner(opts: {
                     opts.onMessage(entry.message);
                     sentMessages++;
                 } else if (entry.kind === 'custom-title') {
-                    logger.debug(`[SESSION_SCANNER] Session renamed in Claude Code: ${entry.title}`);
-                    opts.onCustomTitle?.(entry.title);
+                    reportTitle(entry.title, 'Session renamed in Claude Code');
                 } else {
                     logger.debug(`[SESSION_SCANNER] Sending new transcript event: type=${entry.event.type}, uuid=${entry.event.uuid}`);
                     opts.onTranscriptEvent?.(entry.event);
@@ -319,6 +337,12 @@ export async function createSessionScanner(opts: {
                 for (const entry of existing) {
                     processedEntryKeys.add(entry.key);
                 }
+                // DROVE-15: and seed the name, exactly as the constructor
+                // does. This is the resume / continue / picker path, and it
+                // used to swallow the rename with the history: Clay renamed a
+                // session DROVER, ran `drover --resume`, and the app called it
+                // cattle-drover for the rest of the run.
+                seedTitleFrom(existing);
             }
             if (currentSessionId) {
                 pendingSessions.add(currentSessionId);
@@ -372,7 +396,8 @@ async function readSessionEntries(projectDir: string, sessionId: string): Promis
     }
     let lines = file.split('\n');
     let entries: SessionLogEntry[] = [];
-    for (let l of lines) {
+    for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+        const l = lines[lineIndex];
         try {
             if (l.trim() === '') {
                 continue;
@@ -395,12 +420,19 @@ async function readSessionEntries(projectDir: string, sessionId: string): Promis
                 continue;
             }
             
-            // Claude Code's /rename. No uuid, so it is keyed by its value:
-            // renaming to the same string twice is genuinely nothing to do.
+            // Claude Code's /rename. No uuid, so it is keyed by WHERE it is
+            // in the file. It used to be keyed by its value, which made a
+            // rename back to a title already used this run a silent no-op —
+            // and worse, once `custom-title:hi` had been pre-marked as
+            // history, every one of Claude Code's re-appends of that same
+            // record was skipped too, so the seed never healed itself
+            // (DROVE-15). The transcript is append-only, so a line index is
+            // stable, and reporting the same title twice in a row is filtered
+            // where the report is made rather than here.
             if (message.type === 'custom-title' && typeof message.customTitle === 'string') {
                 entries.push({
                     kind: 'custom-title',
-                    key: `custom-title:${message.customTitle}`,
+                    key: `custom-title:${lineIndex}:${message.customTitle}`,
                     title: message.customTitle,
                 });
                 continue;

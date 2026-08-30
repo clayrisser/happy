@@ -31,6 +31,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { defaultSessionName, isDefaultSessionName, type Session } from '@/claude/session'
+import { findCustomTitle } from '@/claude/utils/customTitle'
 import { logger } from '@/ui/logger'
 import { remoteControlWarning, type BusSession } from './remoteControl'
 
@@ -61,6 +62,42 @@ export function transcriptPathFor(session: Session): string | null {
 export function transcriptExists(session: Session): boolean {
     const path = transcriptPathFor(session)
     return path !== null && existsSync(path)
+}
+
+/**
+ * What the app should call this session once it lands on the new account.
+ *
+ * `summary`, not just `name`: the phone's session title reads
+ * metadata.summary.text and falls back to the literal "New chat" —
+ * getSessionName in happy-app/sources/utils/sessionUtils.ts — so stamping only
+ * `name` renamed the session everywhere EXCEPT the screen Clay was looking at.
+ *
+ * The account prefix is a DEFAULT, and it loses to any name that is not one of
+ * ours: a title Claude Code or the app wrote outlives a flip instead of
+ * collapsing back into a path. It also loses to the name Claude Code is
+ * showing right now, which is the DROVE-15 half — Clay renamed this session
+ * DROVER, flipped it, and the app called it "[jamrizzi] cattle-drover",
+ * because the rename had never reached the metadata for the prefix to lose to.
+ * carryTranscript brings the whole <sessionId>/ sidecar along, custom-title.json
+ * included, so the name is on the new account's disk by the time we ask.
+ */
+export function nameAfterFlip(opts: {
+    metadata: { name?: string; summary?: { text: string; updatedAt: number } }
+    workingDirectory: string
+    accountName: string
+    customTitle: string | null
+}): { name: string; summary: { text: string; updatedAt: number } | undefined } {
+    const { metadata, workingDirectory, accountName, customTitle } = opts
+    if (customTitle) {
+        return { name: customTitle, summary: { text: customTitle, updatedAt: Date.now() } }
+    }
+    const flippedName = defaultSessionName(workingDirectory, accountName)
+    return {
+        name: isDefaultSessionName(metadata.name, workingDirectory) ? flippedName : metadata.name!,
+        summary: isDefaultSessionName(metadata.summary?.text, workingDirectory)
+            ? { text: flippedName, updatedAt: Date.now() }
+            : metadata.summary,
+    }
 }
 
 /** The one thing applyPendingFlip needs from a launcher's session scanner. */
@@ -209,22 +246,22 @@ export async function applyPendingFlip(opts: ApplyPendingFlipOptions): Promise<b
     }
 
     // Keep the app honest about which account is doing the work now.
-    //
-    // `summary`, not just `name`: the phone's session title reads
-    // metadata.summary.text and falls back to the literal "New chat" —
-    // getSessionName in happy-app/sources/utils/sessionUtils.ts — so stamping
-    // only `name` renamed the session everywhere EXCEPT the screen Clay was
-    // looking at. Both are restamped, and both only while they are still
-    // default-shaped, so a title Claude Code or the app wrote outlives a flip
-    // instead of collapsing back into a path.
-    const flippedName = defaultSessionName(session.path, result.account.name)
+    const customTitle = session.sessionId
+        ? findCustomTitle({
+            sessionId: session.sessionId,
+            workingDirectory: session.path,
+            claudeConfigDir: result.account.configDir,
+        })
+        : null
     session.client.updateMetadata((metadata) => ({
         ...metadata,
         droverAccount: result.account.name,
-        name: isDefaultSessionName(metadata.name, session.path) ? flippedName : metadata.name,
-        summary: isDefaultSessionName(metadata.summary?.text, session.path)
-            ? { text: flippedName, updatedAt: Date.now() }
-            : metadata.summary,
+        ...nameAfterFlip({
+            metadata,
+            workingDirectory: session.path,
+            accountName: result.account.name,
+            customTitle,
+        }),
     }))
     session.client.sendSessionEvent({ type: 'message', message: result.note })
     flip.say(result.note)

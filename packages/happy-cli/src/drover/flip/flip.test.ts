@@ -1022,3 +1022,49 @@ describe('/flip from the app', () => {
         expect(parseFlipCommand('')).toBeNull()
     })
 })
+
+describe('what a flip calls the session (DROVE-15)', () => {
+    const cwd = '/Users/clay/Projects/bitspur/cattle-drover'
+
+    it('keeps the name Claude Code is showing', async () => {
+        // Clay renamed this session DROVER, flipped it, and the app called it
+        // "[jamrizzi] cattle-drover". The account prefix is a default we stamp
+        // when nothing better exists; a title the person typed is better.
+        const { nameAfterFlip } = await import('./apply')
+        expect(nameAfterFlip({
+            metadata: { name: 'cattle-drover', summary: { text: 'cattle-drover', updatedAt: 1 } },
+            workingDirectory: cwd,
+            accountName: 'jamrizzi',
+            customTitle: 'DROVER',
+        })).toMatchObject({
+            name: 'DROVER',
+            summary: expect.objectContaining({ text: 'DROVER' }),
+        })
+    })
+
+    it('stamps the account when the session has no name of its own', async () => {
+        const { nameAfterFlip } = await import('./apply')
+        expect(nameAfterFlip({
+            metadata: { name: 'cattle-drover', summary: { text: 'cattle-drover', updatedAt: 1 } },
+            workingDirectory: cwd,
+            accountName: 'jamrizzi',
+            customTitle: null,
+        })).toMatchObject({
+            name: '[jamrizzi] cattle-drover',
+            summary: expect.objectContaining({ text: '[jamrizzi] cattle-drover' }),
+        })
+    })
+
+    it('leaves a title the app wrote alone', async () => {
+        const { nameAfterFlip } = await import('./apply')
+        expect(nameAfterFlip({
+            metadata: { name: 'titled by the app', summary: { text: 'titled by the app', updatedAt: 1 } },
+            workingDirectory: cwd,
+            accountName: 'jamrizzi',
+            customTitle: null,
+        })).toMatchObject({
+            name: 'titled by the app',
+            summary: { text: 'titled by the app', updatedAt: 1 },
+        })
+    })
+})

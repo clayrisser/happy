@@ -31,7 +31,8 @@ import {
     parseClaudeGoalActionParams,
     type ClaudeGoalStatusTranscriptEvent,
 } from '@/claude/claudeGoalStatus';
-import { defaultSessionName, isDefaultSessionName, Session } from './session';
+import { applyCustomTitle, defaultSessionName, isDefaultSessionName, Session } from './session';
+import { findCustomTitle } from './utils/customTitle';
 import { applySandboxPermissionPolicy, normalizeRemotePermissionMode, resolveInitialClaudePermissionMode, resolveRemoteClaudePermissionMode } from './utils/permissionMode';
 import { decodeBase64, encodeBase64 } from '@/api/encryption';
 import type { Session as ApiSession } from '@/api/types';
@@ -197,8 +198,13 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
     // where it is going.
     const forkClaudeSessionId = process.env.HAPPY_FORK_CLAUDE_SESSION_ID;
     let reattached: ReconnectableHappySession | null = null;
+    // Which Claude transcript this run is resuming, when that is knowable
+    // before the child starts. Kept beyond the reattach block because it is
+    // also how the session's NAME is found below.
+    let resumingClaudeSessionId: string | null = null;
     if (!reconnectSessionId && !forkClaudeSessionId && !isSideChat) {
         const claudeSessionId = resumedClaudeSessionId(options.claudeArgs, workingDirectory);
+        resumingClaudeSessionId = claudeSessionId;
         if (claudeSessionId) {
             reattached = await findHappySessionForClaudeSession(claudeSessionId);
             if (reattached) {
@@ -230,6 +236,33 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
                 logger.debug(`[START] No Happy session holds Claude session ${claudeSessionId}, starting a fresh one`);
             }
         }
+    }
+
+    // The name Claude Code is showing beats both of ours (DROVE-15).
+    //
+    // startingSessionName is a seed for a session nobody has named, and the
+    // reattached title is whatever the app last knew — but `/rename` in an
+    // earlier run wrote the real name to disk and neither of those reads it.
+    // Clay renamed a session DROVER, quit, ran `drover --resume`, and the app
+    // header said "cattle-drover" while the terminal said DROVER. Only a title
+    // that actually exists overrides anything: no file means no opinion.
+    //
+    // Bare `--resume` (the picker) has no id to look up yet, so it is the
+    // SessionStart hook below that names those.
+    const resumingCustomTitle = resumingClaudeSessionId
+        ? findCustomTitle({
+            sessionId: resumingClaudeSessionId,
+            workingDirectory,
+            claudeConfigDir: process.env.CLAUDE_CONFIG_DIR,
+        })
+        : null;
+    if (resumingCustomTitle) {
+        logger.debug(`[START] Claude Code calls this session "${resumingCustomTitle}"`);
+        metadata = {
+            ...metadata,
+            name: resumingCustomTitle,
+            summary: { text: resumingCustomTitle, updatedAt: Date.now() },
+        };
     }
 
     let response: ApiSession | null;
@@ -580,6 +613,18 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
                     logger.debug(`[START] Claude session ID changed: ${previousSessionId} -> ${sessionId}`);
                     currentSession.onSessionFound(sessionId);
                 }
+            }
+
+            // And take the name it came with (DROVE-15). Every SessionStart
+            // payload carries session_title — what Claude Code is calling this
+            // session RIGHT NOW — and it was read by nothing, so a rename made
+            // in an earlier run never reached the app. This is the only source
+            // that covers a bare `drover --resume`, where the picker means the
+            // session id does not exist until this hook fires, and a session
+            // renamed before its transcript carried a custom-title record.
+            const hookTitle = typeof data.session_title === 'string' ? data.session_title.trim() : '';
+            if (hookTitle && currentSession) {
+                applyCustomTitle(currentSession, hookTitle);
             }
         }
     });
