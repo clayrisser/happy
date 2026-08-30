@@ -6,7 +6,7 @@ import { createSessionScanner } from "./utils/sessionScanner";
 import { launchFailureMessage } from "./utils/launchFailureMessage";
 import { ambientDataDir } from "@/drover/flip/accounts";
 import { parseFlipCommand } from "@/drover/flip/controller";
-import { injectIntoPaneGated } from "./utils/paneInject";
+import { injectIntoPaneGated, interruptPane } from "./utils/paneInject";
 import { findInbox, sendToInbox } from "./utils/inboxSocket";
 import { stageAttachments, withAttachmentNote } from "./utils/stageAttachments";
 import type { QueueItem } from "@/utils/MessageQueue2";
@@ -157,7 +157,58 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
             logger.debug('[local]: doAbort');
             session.onAbort();
 
-            // Switching to remote mode
+            // Cattle Drover (DROVE-13): for a session living in a tmux pane,
+            // Stop on the phone means cancel THIS TURN and nothing else. The
+            // app's own handler says so in as many words — "Stop cancels only
+            // the active turn" — and upstream answered it with a SIGTERM plus
+            // `{type:'switch'}`, which takes down the terminal Clay is watching:
+            // scrollback, whatever he had half-typed, and any open plan or
+            // permission prompt go with it, and he gets a headless run back in
+            // exchange for a turn he only wanted stopped.
+            //
+            // So the pane gets the keystroke a person at the keyboard would
+            // use and the child is never touched. Same rule the message path
+            // already follows (deliverToPaneSession): the pane IS the session,
+            // so there is nothing to switch to.
+            //
+            // This does NOT soften the abort a flip needs — a flip has to kill
+            // the child to relaunch it on another account, and it goes through
+            // setAbortHandler below rather than through here.
+            if (tmuxPane) {
+                const outcome = childAlive
+                    ? await interruptPane({
+                        pane: tmuxPane,
+                        configDir: session.claudeEnvVars?.CLAUDE_CONFIG_DIR,
+                        claudeSessionId: session.sessionId,
+                    })
+                    : 'unavailable';
+                if (outcome === 'unavailable') {
+                    // Between spawns, parked at a shell, or the pane is gone.
+                    // There is no turn in there to cancel, and killing the
+                    // child would be a strictly worse answer to a button that
+                    // simply had nothing to do.
+                    logger.debug('[local]: nothing in the pane took the interrupt');
+                    session.client.sendSessionEvent({
+                        type: 'message',
+                        message:
+                            'Cattle Drover: nothing is running in the terminal right now, '
+                            + 'so there was no turn to stop.',
+                    });
+                }
+                // Closed either way, or the app keeps showing a turn that the
+                // person watching has already stopped.
+                session.client.closeClaudeSessionTurn('cancelled');
+                // The queue is deliberately NOT reset here. A pane session
+                // takes each message OFF the queue as it delivers it, so
+                // anything still on it is waiting for the next child and never
+                // ran — Stop is about the turn in flight, not about un-sending
+                // a message.
+                return;
+            }
+
+            // No pane: the child is the only thing there is to stop, and remote
+            // mode is the only place the phone can still reach the session.
+            // Upstream behaviour, unchanged.
             if (!exitReason) {
                 exitReason = { type: 'switch' };
             }
@@ -275,7 +326,10 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
         };
 
         // When to abort
-        session.client.rpcHandlerManager.registerHandler('abort', doAbort); // Abort current process, clean queue and switch to remote mode
+        // Stop on the phone. For a pane session that is an Escape into the pane
+        // and nothing else; for a paneless one it still stops the child and
+        // switches to remote mode. See doAbort (DROVE-13).
+        session.client.rpcHandlerManager.registerHandler('abort', doAbort);
         // The user pressing "switch to remote": explicit, so a second press
         // inside 30s overrides the subagent hold above.
         session.client.rpcHandlerManager.registerHandler('switch', () => doSwitch(true));

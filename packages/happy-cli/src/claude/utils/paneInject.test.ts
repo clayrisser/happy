@@ -92,7 +92,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, beforeEach } from 'vitest'
 
-import { injectIntoPaneGated, paneIsIdle } from './paneInject'
+import { injectIntoPaneGated, interruptPane, paneIsIdle } from './paneInject'
 
 const claudeSessionId = '9b1daf73-eae8-46d9-85a1-cef9d54d622f'
 const gatePane = '%42'
@@ -254,5 +254,46 @@ describe('the idle gate decides whether Enter is pressed', () => {
         const argv = await tmuxArgv()
         expect(argv.some((line) => line.startsWith('paste-buffer'))).toBe(true)
         expect(argv.some((line) => line.startsWith('send-keys'))).toBe(false)
+    })
+
+    /**
+     * DROVE-13: Stop on the phone must cancel the turn the way a person at the
+     * keyboard does — one Escape — and leave the TUI standing. These assert on
+     * the exact keystroke, because the failure mode this replaces (SIGTERM the
+     * child) also "looks like" a stopped turn from the outside.
+     */
+    describe('interruptPane cancels the turn without killing the TUI', () => {
+        it('sends exactly one Escape while a turn is running', async () => {
+            await setRegistryStatus('busy')
+
+            expect(await interruptPane(gate())).toBe('cancelled')
+
+            const argv = await tmuxArgv()
+            const keys = argv.filter((line) => line.startsWith('send-keys'))
+            expect(keys).toEqual([`send-keys -t ${gatePane} Escape`])
+            // Nothing is typed INTO the conversation: this is a cancel, not a message.
+            expect(argv.some((line) => line.startsWith('paste-buffer'))).toBe(false)
+        })
+
+        it('sends NOTHING when Claude is idle, because Escape there eats a half-typed line', async () => {
+            await setRegistryStatus('idle')
+
+            expect(await interruptPane(gate())).toBe('idle')
+            expect((await tmuxArgv()).some((line) => line.startsWith('send-keys'))).toBe(false)
+        })
+
+        it('still cancels when the registry has no record for the session', async () => {
+            // An older Claude, or a record that aged out. Stop is only offered
+            // while a turn is running, so unknown is treated as mid-turn.
+            expect(await interruptPane({ ...gate(), claudeSessionId: 'never-registered' })).toBe('cancelled')
+            expect((await tmuxArgv()).some((line) => line.endsWith('Escape'))).toBe(true)
+        })
+
+        it('reports unavailable, and sends nothing, when the pane is back at a shell', async () => {
+            process.env.FAKE_PANE_CMD = 'zsh'
+
+            expect(await interruptPane(gate())).toBe('unavailable')
+            expect((await tmuxArgv()).some((line) => line.startsWith('send-keys'))).toBe(false)
+        })
     })
 })
