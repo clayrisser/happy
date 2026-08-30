@@ -587,6 +587,8 @@ export const es: TranslationStructure = {
         taskView: {
             initializing: 'Inicializando agente...',
             moreTools: ({ count }: { count: number }) => `+${count} más ${plural({ count, singular: 'herramienta', plural: 'herramientas' })}`,
+            showAll: ({ count }: { count: number }) => `Ver los ${count} pasos`,
+            showLess: 'Ver menos',
         },
         multiEdit: {
             editNumber: ({ index, total }: { index: number; total: number }) => `Edición ${index} de ${total}`,
@@ -914,6 +916,10 @@ export const es: TranslationStructure = {
         usageLimitUntil: ({ time }: { time: string }) => `Límite de uso alcanzado hasta ${time}`,
         sentAsGoal: 'Sent as goal',
         unknownTime: 'tiempo desconocido',
+        thoughtProcess: 'Proceso de pensamiento',
+        thinkingNow: 'Pensando…',
+        agentRunning: ({ duration }: { duration: string }) => `Agente en curso · ${duration}`,
+        agentFinished: ({ duration }: { duration: string }) => `Agente finalizado · ${duration}`,
     },
 
     codex: {

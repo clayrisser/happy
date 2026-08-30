@@ -53,6 +53,57 @@ hbc_version() {
 	xxd -s 8 -l 4 -p "$1" 2>/dev/null || true
 }
 
+# Every pod expo's autolinking resolves must be in the CocoaPods lockfile. A
+# module that lands in node_modules while `pod install` has not run since is
+# absent from the generated ExpoModulesProvider, and nothing in the build path
+# says so: the app compiles, signs, uploads and passes App Store processing,
+# then JS dies before React mounts with "Cannot find native module
+# 'ExpoTaskManager'" — a black screen, no card, nothing on the wrist. Build 4
+# reached TestFlight exactly that way (2026-08-29), because expo-task-manager
+# arrived with the background-wake commit and ios/ predated it.
+LOCKFILE="$IOS_DIR/Podfile.lock"
+[ -f "$LOCKFILE" ] || die "no Podfile.lock at $LOCKFILE — has pod install run?"
+autolinked=$(cd "$APP_DIR" && node --no-warnings -e "require('expo/bin/autolinking')" \
+	expo-modules-autolinking resolve --platform apple --json 2>/dev/null |
+	node -e 'let s = "";
+	process.stdin.on("data", function (d) { s += d; }).on("end", function () {
+		(JSON.parse(s).modules || []).forEach(function (m) {
+			(m.pods || []).forEach(function (p) { console.log(p.podName); });
+		});
+	});')
+[ -n "$autolinked" ] || die "expo-modules-autolinking resolved no pods — cannot tell whether the integrated native module set is stale"
+for pod in $autolinked; do
+	grep -qE "^  - $pod( |\(|:)" "$LOCKFILE" ||
+		die "$pod is autolinked but absent from $LOCKFILE — run 'cd ios && pod install'; without it this build launches to a black screen with \"Cannot find native module '$pod'\""
+done
+log "all $(printf '%s\n' "$autolinked" | wc -l | tr -d ' ') autolinked pods are integrated"
+
+# `expo prebuild` writes aps-environment=development into the entitlements
+# every single time, and ios/ is generated so the value cannot be committed.
+# A TestFlight build carrying it registers its device tokens against the APNs
+# SANDBOX while Expo pushes to production, so the phone stays silent and every
+# other signal — token registered, server says sent — still reads healthy.
+# EAS Build rewrites this for a release profile; a hand-rolled xcodebuild does
+# not, so set it here.
+#
+# Do NOT try to prove it by reading the entitlement back off the signed
+# ARCHIVE. Automatic signing picks a DEVELOPMENT identity at archive time on
+# this Mac, and a development profile clamps aps-environment to development —
+# measured on build 4 (2026-08-29): the archive was signed "Apple Development:
+# Benjamin RISSER" and read development, while the ipa exported from that same
+# archive was re-signed "Apple Distribution" and read production. So the
+# assertion could never pass, and it failed a build that was perfectly good.
+# The signed read-back that means anything is on the ipa Apple receives, and it
+# lives in testflight-upload.sh.
+ENTITLEMENTS="$IOS_DIR/$SCHEME/$SCHEME.entitlements"
+[ -f "$ENTITLEMENTS" ] || die "no entitlements at $ENTITLEMENTS — run pnpm prebuild:ios first"
+/usr/libexec/PlistBuddy -c 'Set :aps-environment production' "$ENTITLEMENTS" 2>/dev/null ||
+	/usr/libexec/PlistBuddy -c 'Add :aps-environment string production' "$ENTITLEMENTS" ||
+	die "could not set aps-environment in $ENTITLEMENTS"
+# Set can report success on a plist it did not actually change, so read it back.
+[ "$(/usr/libexec/PlistBuddy -c 'Print :aps-environment' "$ENTITLEMENTS" 2>/dev/null || true)" = production ] ||
+	die "aps-environment is still not production in $ENTITLEMENTS"
+
 log "archiving $SCHEME $marketing ($build_number) for the App Store"
 rm -rf "$ARCHIVE"
 xcodebuild archive \
@@ -96,6 +147,32 @@ rm -rf "$probe_dir"
 [ "$got_hbc" = "$want_hbc" ] ||
 	die "main.jsbundle bytecode version $got_hbc != hermesc's $want_hbc — this build would abort on first launch (Lookout build 202608280323)"
 log "hermes bytecode version $got_hbc matches the embedded VM"
+
+# The JS half of the app reads its identity from a SECOND copy of the config,
+# which expo-constants generates from app.config.js during the build — so it
+# takes the DROVER_* environment of whatever shell ran xcodebuild, not the
+# values prebuild stamped into Info.plist. Archive without the overrides
+# exported and you get a build that is named, signed and versioned correctly
+# and still tells everything reading Constants that it is upstream's app.
+# Nothing else in the build disagrees, which is what makes it worth asserting.
+CONFIG="$APP/EXConstants.bundle/app.config"
+[ -f "$CONFIG" ] || die "archive has no $CONFIG"
+config_id=$(plutil -extract ios.bundleIdentifier raw -o - "$CONFIG" 2>/dev/null || true)
+plist_id=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist" 2>/dev/null || true)
+[ "$config_id" = "$plist_id" ] ||
+	die "the embedded app.config says bundle id '$config_id' but the signed app is '$plist_id' — export DROVER_BUNDLE_ID before archiving"
+
+# Expo looks push credentials up per (experience, bundle id), so upstream's
+# project id with our bundle id is a pair nobody can hold an APNs key for:
+# every send dies at Expo with InvalidCredentials while the app, the server and
+# the bridge all still read healthy (BASED-98). The literal below is the
+# fallback in app.config.js. A warning, not a die — the build ships fine, it
+# just cannot push.
+case "$(plutil -extract extra.eas.projectId raw -o - "$CONFIG" 2>/dev/null || true)" in
+4558dd3d-cd5a-47cd-bad9-e591a241cc06)
+	log "warning: this build registers under upstream's Expo project, so every push fails with InvalidCredentials — set DROVER_EAS_PROJECT_ID and DROVER_EAS_OWNER to fix it"
+	;;
+esac
 
 mkdir -p "$BUILD_DIR"
 printf '%s\n' "$build_number" >"$BUILD_DIR/build-number.txt"

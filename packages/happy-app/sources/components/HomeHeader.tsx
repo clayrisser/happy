@@ -13,7 +13,11 @@ import { t } from '@/text';
 import { ShortcutHintBadge, useShortcutHints } from './ShortcutHints';
 import { shouldShowHomeConnectionStatus } from './homeConnectionStatus';
 
-const HEADER_LOGO_SIZE = 19;
+// The longhorn is 1.56:1, so it gets a wide box rather than the square one a
+// letterform wanted. Matches HeaderLogo so the mark is the same size on every
+// header.
+const HEADER_LOGO_WIDTH = 26;
+const HEADER_LOGO_HEIGHT = 19;
 
 const stylesheet = StyleSheet.create((theme, runtime) => ({
     headerButton: {
@@ -178,9 +182,9 @@ function HeaderLeft() {
     return (
         <View style={styles.logoContainer}>
             <Image
-                source={require('@/assets/images/logo-black.png')}
+                source={require('@/assets/images/logo-drover.png')}
                 contentFit="contain"
-                style={{ width: HEADER_LOGO_SIZE, height: HEADER_LOGO_SIZE }}
+                style={{ width: HEADER_LOGO_WIDTH, height: HEADER_LOGO_HEIGHT }}
                 tintColor={theme.colors.header.tint}
             />
         </View>

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { generateGroupSummary, groupMessagesForDisplay, groupToolCallsForDisplay } from './useGroupedMessages';
 import { Message, ToolCallMessage } from '@/sync/typesMessage';
+import { extractThinkingText } from '@/utils/thinkingText';
 
 vi.mock('@/components/tools/knownTools', () => ({
     knownTools: {
@@ -252,17 +253,12 @@ describe('useGroupedMessages', () => {
         ]);
     });
 
-    it('keeps adjacent current-turn tools separate while the agent is working', () => {
+    it('folds the finished current-turn tools and leaves the running one on screen', () => {
         const messages: Message[] = [
-            {
-                kind: 'agent-text',
-                id: 'agent-streaming',
-                localId: null,
-                createdAt: 5,
-                text: 'still working',
-            },
-            toolMessage('tool-latest', 4),
-            toolMessage('tool-earliest', 3),
+            toolMessage('tool-running', 5, { state: 'running' }),
+            toolMessage('tool-third', 4),
+            toolMessage('tool-second', 3),
+            toolMessage('tool-first', 2),
             {
                 kind: 'user-text',
                 id: 'user',
@@ -274,13 +270,34 @@ describe('useGroupedMessages', () => {
 
         const items = groupMessagesForDisplay(messages, true, { collapseCurrentTurn: false });
 
-        expect(items.map((item) => item.type)).toEqual(['message', 'message', 'message', 'message']);
-        expect(items.map((item) => item.id)).toEqual([
-            'agent-streaming',
-            'tool-latest',
-            'tool-earliest',
-            'user',
-        ]);
+        expect(items.map((item) => item.type)).toEqual(['message', 'tool-group', 'message']);
+        expect(items[0].id).toBe('tool-running');
+        const group = items[1];
+        if (group.type !== 'tool-group') throw new Error('expected a tool group');
+        expect(group.messages.map((msg) => msg.id)).toEqual(['tool-first', 'tool-second', 'tool-third']);
+        expect(group.hasRunning).toBe(false);
+        expect(generateGroupSummary(group.messages)).toBe('toolGroup.ranCommands:3');
+        expect(items[2].id).toBe('user');
+    });
+
+    it('keeps a pending-permission tool out of the live turn group', () => {
+        const messages: Message[] = [
+            toolMessage('tool-asking', 4, { state: 'running', pendingPermission: true }),
+            toolMessage('tool-second', 3),
+            toolMessage('tool-first', 2),
+            {
+                kind: 'user-text',
+                id: 'user',
+                localId: null,
+                createdAt: 1,
+                text: 'run tools',
+            },
+        ];
+
+        const items = groupMessagesForDisplay(messages, true, { collapseCurrentTurn: false });
+
+        expect(items.map((item) => item.type)).toEqual(['message', 'tool-group', 'message']);
+        expect(items[0].id).toBe('tool-asking');
     });
 
     it('marks a tool group when it contains a pending permission', () => {
@@ -398,6 +415,187 @@ describe('useGroupedMessages', () => {
         const items = groupMessagesForDisplay(messages, true);
 
         expect(items.map((item) => item.id)).toEqual(['agent-final', 'user']);
+    });
+
+    it('keeps a thinking block in the stream as its own row', () => {
+        const messages: Message[] = [
+            {
+                kind: 'agent-text',
+                id: 'agent-final',
+                localId: null,
+                createdAt: 4,
+                text: 'Here is the answer',
+            },
+            {
+                kind: 'agent-text',
+                id: 'agent-thinking',
+                localId: null,
+                createdAt: 3,
+                text: '*Let me weigh the two options carefully.*',
+                isThinking: true,
+            },
+            {
+                kind: 'user-text',
+                id: 'user',
+                localId: null,
+                createdAt: 1,
+                text: 'which one?',
+            },
+        ];
+
+        const items = groupMessagesForDisplay(messages, true, { collapseCurrentTurn: false });
+
+        expect(items.map((item) => item.id)).toEqual(['agent-final', 'agent-thinking', 'user']);
+        const thinkingItem = items[1];
+        if (thinkingItem.type !== 'message') throw new Error('expected a message item');
+        expect(thinkingItem.message.kind === 'agent-text' && thinkingItem.message.isThinking).toBe(true);
+        expect(
+            extractThinkingText(thinkingItem.message.kind === 'agent-text' ? thinkingItem.message.text : ''),
+        ).toBe('Let me weigh the two options carefully.');
+    });
+
+    it('drops an empty thinking block but never a thinking block with text', () => {
+        const messages: Message[] = [
+            {
+                kind: 'agent-text',
+                id: 'agent-empty-thinking',
+                localId: null,
+                createdAt: 3,
+                text: '**',
+                isThinking: true,
+            },
+            {
+                kind: 'user-text',
+                id: 'user',
+                localId: null,
+                createdAt: 1,
+                text: 'go',
+            },
+        ];
+
+        const items = groupMessagesForDisplay(messages, true, { collapseCurrentTurn: false });
+
+        expect(items.map((item) => item.id)).toEqual(['user']);
+    });
+
+    // DROVE-46: grouping is off by default (settings `groupToolCalls: false`),
+    // and that path used to hand every message straight to the list — so the
+    // empty blocks Claude Code writes drew a row each.
+    it('drops empty thinking blocks with grouping off and keeps the one with text', () => {
+        const messages: Message[] = [
+            {
+                kind: 'agent-text',
+                id: 'agent-final',
+                localId: null,
+                createdAt: 6,
+                text: 'Here is the answer',
+            },
+            {
+                kind: 'agent-text',
+                id: 'agent-empty-two',
+                localId: null,
+                createdAt: 5,
+                text: '**',
+                isThinking: true,
+            },
+            {
+                kind: 'agent-text',
+                id: 'agent-empty-one',
+                localId: null,
+                createdAt: 4,
+                text: '**',
+                isThinking: true,
+            },
+            {
+                kind: 'agent-text',
+                id: 'agent-thinking',
+                localId: null,
+                createdAt: 3,
+                text: '*Weighing the two options.*',
+                isThinking: true,
+            },
+            {
+                kind: 'user-text',
+                id: 'user',
+                localId: null,
+                createdAt: 1,
+                text: 'which one?',
+            },
+        ];
+
+        const items = groupMessagesForDisplay(messages, false);
+
+        expect(items.map((item) => item.id)).toEqual(['agent-final', 'agent-thinking', 'user']);
+    });
+
+    // DROVE-46: two blocks in a row must not leave two rows behind, grouped or not.
+    it('leaves no row for consecutive empty thinking blocks when grouping is on', () => {
+        const messages: Message[] = [
+            {
+                kind: 'agent-text',
+                id: 'agent-empty-two',
+                localId: null,
+                createdAt: 4,
+                text: '**',
+                isThinking: true,
+            },
+            {
+                kind: 'agent-text',
+                id: 'agent-empty-one',
+                localId: null,
+                createdAt: 3,
+                text: '*   *',
+                isThinking: true,
+            },
+            {
+                kind: 'user-text',
+                id: 'user',
+                localId: null,
+                createdAt: 1,
+                text: 'go',
+            },
+        ];
+
+        const items = groupMessagesForDisplay(messages, true, { collapseCurrentTurn: false });
+
+        expect(items.map((item) => item.id)).toEqual(['user']);
+    });
+
+    it('folds a completed turn around its answer, not around its thinking', () => {
+        const messages: Message[] = [
+            {
+                kind: 'agent-text',
+                id: 'agent-final',
+                localId: null,
+                createdAt: 5,
+                text: 'Done',
+            },
+            toolMessage('tool-two', 4),
+            toolMessage('tool-one', 3),
+            {
+                kind: 'agent-text',
+                id: 'agent-thinking',
+                localId: null,
+                createdAt: 2,
+                text: '*planning*',
+                isThinking: true,
+            },
+            {
+                kind: 'user-text',
+                id: 'user',
+                localId: null,
+                createdAt: 1,
+                text: 'go',
+            },
+        ];
+
+        const items = groupMessagesForDisplay(messages, true, { collapseCurrentTurn: true });
+
+        expect(items.map((item) => item.type)).toEqual(['message', 'agent-work-group', 'message']);
+        expect(items[0].id).toBe('agent-final');
+        const work = items[1];
+        if (work.type !== 'agent-work-group') throw new Error('expected an agent work group');
+        expect(work.messages.map((msg) => msg.id)).toEqual(['tool-two', 'tool-one', 'agent-thinking']);
     });
 
     it('can collapse single standalone tool calls for nested work details', () => {

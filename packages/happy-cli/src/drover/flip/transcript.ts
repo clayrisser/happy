@@ -19,7 +19,7 @@
  * so a flip is reversible and a mistake costs disk, not history.
  */
 
-import { copyFileSync, cpSync, existsSync, mkdirSync, statSync } from 'node:fs'
+import { copyFileSync, cpSync, existsSync, mkdirSync, realpathSync, statSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 
 import { logger } from '@/ui/logger'
@@ -38,6 +38,11 @@ export interface CarryResult {
     bytes?: number
     /** True when subagent transcripts came along. */
     subagents?: boolean
+    /**
+     * Both accounts already reach the same directory on disk, so there was
+     * nothing to carry and carrying would have been wrong (DROVE-40).
+     */
+    shared?: boolean
     /**
      * The session has not written a transcript yet, so there is nothing to
      * carry and nothing to lose. Distinct from a failure: Claude allocates a
@@ -69,6 +74,17 @@ export function carryTranscript(opts: {
 
     const srcDir = projectDirFor(fromConfigDir, workingDirectory)
     const dstDir = projectDirFor(toConfigDir, workingDirectory)
+
+    // Different config dirs can still be one directory on disk, once the
+    // accounts share a session store (DROVE-40). Compare where the paths
+    // actually LAND, not what they are spelled as: a symlinked projects/ makes
+    // the string comparison above miss it entirely, and the copy that follows
+    // is copyFileSync onto its own source — which truncates the destination
+    // before it reads, so the conversation is destroyed rather than carried.
+    if (samePlaceOnDisk(srcDir, dstDir)) {
+        return { ok: true, shared: true, reason: 'both accounts share one session store' }
+    }
+
     const srcFile = join(srcDir, `${sessionId}.jsonl`)
 
     if (!existsSync(srcFile)) {
@@ -93,5 +109,18 @@ export function carryTranscript(opts: {
         return { ok: true, bytes, subagents }
     } catch (err) {
         return { ok: false, reason: `could not carry the transcript: ${String(err)}` }
+    }
+}
+
+/**
+ * Whether two paths are the same directory on disk. False when either does not
+ * exist yet — an absent destination is a real destination to copy into, not a
+ * share.
+ */
+function samePlaceOnDisk(a: string, b: string): boolean {
+    try {
+        return realpathSync(a) === realpathSync(b)
+    } catch {
+        return false
     }
 }

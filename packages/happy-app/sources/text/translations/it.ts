@@ -585,6 +585,8 @@ export const it: TranslationStructure = {
         taskView: {
             initializing: 'Inizializzazione agente...',
             moreTools: ({ count }: { count: number }) => `+${count} altri ${plural({ count, singular: 'strumento', plural: 'strumenti' })}`,
+            showAll: ({ count }: { count: number }) => `Mostra tutti i ${count} passaggi`,
+            showLess: 'Mostra meno',
         },
         askUserQuestion: {
             submit: 'Invia risposta',
@@ -912,6 +914,10 @@ export const it: TranslationStructure = {
         usageLimitUntil: ({ time }: { time: string }) => `Limite di utilizzo raggiunto fino a ${time}`,
         sentAsGoal: 'Sent as goal',
         unknownTime: 'ora sconosciuta',
+        thoughtProcess: 'Processo di pensiero',
+        thinkingNow: 'Sta pensando…',
+        agentRunning: ({ duration }: { duration: string }) => `Agente in esecuzione · ${duration}`,
+        agentFinished: ({ duration }: { duration: string }) => `Agente terminato · ${duration}`,
     },
 
     codex: {

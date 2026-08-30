@@ -603,6 +603,8 @@ export const ru: TranslationStructure = {
         taskView: {
             initializing: 'Инициализация агента...',
             moreTools: ({ count }: { count: number }) => `+${count} ещё ${plural({ count, one: 'инструмент', few: 'инструмента', many: 'инструментов' })}`,
+            showAll: ({ count }: { count: number }) => `Показать все шаги (${count})`,
+            showLess: 'Свернуть',
         },
         multiEdit: {
             editNumber: ({ index, total }: { index: number; total: number }) => `Правка ${index} из ${total}`,
@@ -918,6 +920,10 @@ export const ru: TranslationStructure = {
         usageLimitUntil: ({ time }: { time: string }) => `Лимит использования достигнут до ${time}`,
         sentAsGoal: 'Отправлено в качестве цели',
         unknownTime: 'неизвестное время',
+        thoughtProcess: 'Ход рассуждений',
+        thinkingNow: 'Думает…',
+        agentRunning: ({ duration }: { duration: string }) => `Агент работает · ${duration}`,
+        agentFinished: ({ duration }: { duration: string }) => `Агент завершён · ${duration}`,
     },
 
     codex: {

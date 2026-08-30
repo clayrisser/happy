@@ -2,6 +2,7 @@ import { Metadata, TodoItemsSchema } from '@/sync/storageTypes';
 import { ToolCall, Message } from '@/sync/typesMessage';
 import { resolvePath } from '@/utils/pathUtils';
 import { stringifyToolCommand } from '@/utils/toolCommand';
+import { parseWorkflowMeta } from '@/utils/workflowMeta';
 import * as z from 'zod';
 import { Ionicons, Octicons } from '@expo/vector-icons';
 import React from 'react';
@@ -18,6 +19,19 @@ const ICON_EXIT = (size: number = 24, color: string = '#000') => <Ionicons name=
 const ICON_TODO = (size: number = 24, color: string = '#000') => <Ionicons name="bulb-outline" size={size} color={color} />;
 const ICON_REASONING = (size: number = 24, color: string = '#000') => <Octicons name="light-bulb" size={size} color={color} />;
 const ICON_QUESTION = (size: number = 24, color: string = '#000') => <Ionicons name="help-circle-outline" size={size} color={color} />;
+
+/** The Workflow tool carries its script under one of a few field names depending on flavor. */
+function getWorkflowScript(input: any): string | undefined {
+    if (!input || typeof input !== 'object') {
+        return undefined;
+    }
+    for (const key of ['script', 'code', 'source', 'workflow', 'content']) {
+        if (typeof input[key] === 'string') {
+            return input[key];
+        }
+    }
+    return undefined;
+}
 
 function getPatchFiles(input: any): string[] {
     if (input?.changes && typeof input.changes === 'object' && !Array.isArray(input.changes)) {
@@ -939,6 +953,18 @@ export const knownTools = {
             const input = opts.tool.input?.input ?? opts.tool.input;
             const firstQuestion = Array.isArray(input?.questions) ? input.questions[0] : input;
             return typeof firstQuestion?.question === 'string' ? firstQuestion.question : null;
+        }
+    },
+    // A workflow script is many screens of code; the card shows its meta name and keeps the
+    // script itself collapsed in the default input section.
+    'Workflow': {
+        icon: ICON_TASK,
+        isMutable: true,
+        input: z.object({
+            script: z.string().optional().describe('The workflow script to run')
+        }).partial().passthrough(),
+        extractSubtitle: (opts: { metadata: Metadata | null, tool: ToolCall }) => {
+            return parseWorkflowMeta(getWorkflowScript(opts.tool.input)).name ?? null;
         }
     },
     // Internal Claude Code tool for loading deferred tools - no user-visible output

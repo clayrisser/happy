@@ -19,6 +19,7 @@ import { useIsTablet } from '@/utils/responsive';
 import { getHarnessName } from '@/utils/harnessCatalog';
 import { requestReview } from '@/utils/requestReview';
 import { UpdateBanner } from './UpdateBanner';
+import { PendingGatesBanner } from './PendingGatesBanner';
 import { layout } from './layout';
 import { useNavigateToSession } from '@/hooks/useNavigateToSession';
 import { SessionActionsAnchor, SessionActionsPopover } from './SessionActionsPopover';
@@ -636,6 +637,14 @@ export function SessionsList({
         const isPhoneLayout = topContentInset > 0;
         return (
             <>
+                {/*
+                  * Above the update banner on purpose: a question is holding up
+                  * work, an app update is not.
+                  */}
+                <PendingGatesBanner
+                    style={isPhoneLayout ? styles.phoneUpdateBanner : undefined}
+                    headerStyle={isPhoneLayout ? styles.phoneUpdateBannerHeader : undefined}
+                />
                 <UpdateBanner
                     style={isPhoneLayout ? styles.phoneUpdateBanner : undefined}
                     headerStyle={isPhoneLayout ? styles.phoneUpdateBannerHeader : undefined}

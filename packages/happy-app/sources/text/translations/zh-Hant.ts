@@ -587,6 +587,8 @@ export const zhHant: TranslationStructure = {
         taskView: {
             initializing: '正在初始化 agent...',
             moreTools: ({ count }: { count: number }) => `+${count} 個更多${plural({ count, singular: '工具', plural: '工具' })}`,
+            showAll: ({ count }: { count: number }) => `顯示全部 ${count} 個步驟`,
+            showLess: '收合',
         },
         multiEdit: {
             editNumber: ({ index, total }: { index: number; total: number }) => `編輯 ${index}/${total}`,
@@ -914,6 +916,10 @@ export const zhHant: TranslationStructure = {
         usageLimitUntil: ({ time }: { time: string }) => `使用限制到 ${time}`,
         sentAsGoal: 'Sent as goal',
         unknownTime: '未知時間',
+        thoughtProcess: '思考過程',
+        thinkingNow: '正在思考…',
+        agentRunning: ({ duration }: { duration: string }) => `代理執行中 · ${duration}`,
+        agentFinished: ({ duration }: { duration: string }) => `代理已完成 · ${duration}`,
     },
 
     codex: {

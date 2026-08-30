@@ -6,6 +6,14 @@ import { useUnistyles } from 'react-native-unistyles';
 
 interface ChatFooterProps {
     controlledByUser?: boolean;
+    /**
+     * The session is a live Claude in a tmux pane (metadata.hasPane). Under
+     * one mode that is the ONLY shape a session has, so it earns no banner:
+     * announcing the normal case in the app's warning colours reads as a
+     * problem (DROVE-39). Only its absence is worth saying, because a session
+     * with no pane is the state DROVE-1 is removing.
+     */
+    hasPane?: boolean;
 }
 
 export const ChatFooter = React.memo((props: ChatFooterProps) => {
@@ -33,7 +41,7 @@ export const ChatFooter = React.memo((props: ChatFooterProps) => {
     };
     return (
         <View style={containerStyle}>
-            {props.controlledByUser && (
+            {props.controlledByUser && !props.hasPane && (
                 <View style={warningContainerStyle}>
                     <Ionicons 
                         name="information-circle" 

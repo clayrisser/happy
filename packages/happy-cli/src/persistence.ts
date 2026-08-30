@@ -317,18 +317,65 @@ export function writeDaemonState(state: DaemonLocallyPersistedState): void {
 }
 
 /**
- * Clean up daemon state file and lock file
+ * The pid recorded inside the daemon lock file, or null when there is no lock
+ * or its payload is not a plausible pid.
+ */
+export function readDaemonLockPid(): number | null {
+  try {
+    const raw = readFileSync(configuration.daemonLockFile, 'utf-8').trim();
+    const pid = Number(raw);
+    if (!raw || !Number.isSafeInteger(pid) || pid <= 0) {
+      return null;
+    }
+    return pid;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Is the daemon lock held by a live process that is not this one?
+ *
+ * DROVE-42: `process.kill(pid, 0)` throwing is not proof the process is gone.
+ * EPERM means it is alive and simply owned by another user, so treating that
+ * as "dead" is how a live daemon's lock gets reclaimed underneath it.
+ */
+export function isDaemonLockHeldByAnotherProcess(): boolean {
+  const pid = readDaemonLockPid();
+  if (pid === null || pid === process.pid) {
+    return false;
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error: any) {
+    return error?.code === 'EPERM';
+  }
+}
+
+/**
+ * Clean up daemon state file, and the lock file when nobody is holding it.
  */
 export async function clearDaemonState(): Promise<void> {
   if (existsSync(configuration.daemonStateFile)) {
     await unlink(configuration.daemonStateFile);
   }
-  // Also clean up lock file if it exists (for stale cleanup)
+  // DROVE-42: only reclaim a lock whose owner is gone. This used to unlink
+  // unconditionally, and every caller of checkIfDaemonRunningAndCleanupStaleState()
+  // reaches here — including the branch that fires when the health ping merely
+  // TIMES OUT against a busy daemon. So a 2s hiccup freed the lock a live
+  // daemon was holding, the next `daemon start-sync` acquired it, and the two
+  // coexisted writing the same daemon.state.json. Five were found alive at once,
+  // and `drover status` reported whichever wrote last.
+  if (isDaemonLockHeldByAnotherProcess()) {
+    logger.debug('[PERSISTENCE] Daemon lock is held by a live process, leaving it alone');
+    return;
+  }
   if (existsSync(configuration.daemonLockFile)) {
     try {
       await unlink(configuration.daemonLockFile);
     } catch {
-      // Lock file might be held by running daemon, ignore error
+      // Raced with the owner releasing it, ignore error
     }
   }
 }

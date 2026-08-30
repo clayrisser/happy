@@ -13,6 +13,57 @@ export interface PushToken {
 
 export type SessionNotificationKind = 'done' | 'permission' | 'question'
 
+/**
+ * Seconds a wake is still worth delivering for.
+ *
+ * Past this the phone has nothing to add: it resyncs on its own the next time
+ * it comes forward, and a late wake spends an APNs background budget the next
+ * real gate needs.
+ */
+const WAKE_TTL_SECONDS = 120
+
+/**
+ * Floor between two wakes.
+ *
+ * iOS budgets background pushes per app and drops the surplus silently, so a
+ * burst of bus events must not become a burst of wakes.
+ */
+const WAKE_THROTTLE_MS = 3000
+
+/**
+ * The one push shape that runs the phone app's JS while iOS has it suspended.
+ *
+ * This matters because the Apple Watch is fed entirely through the phone:
+ * happy-app's `startDroverWatchFeed` reads pending gates out of Zustand and
+ * calls `WCSession.updateApplicationContext`. Suspend the app and its JS stops,
+ * so nothing ever calls the transport again. That is both of Clay's wrist bugs
+ * in one line. "I have to have the drover mobile app in the FOREGROUND to get
+ * the questions on my watch", and its twin "when I answer from tmux the
+ * questions are still queued on my watch". The transport was never broken.
+ * Nothing was calling it.
+ *
+ * No title, no body, no sound. Any one of those turns this into a visible
+ * banner, and the alert push for the same gate has already buzzed. Two buzzes
+ * for one question is worse than none.
+ *
+ * Apple requires a background push to go out at apns-priority 5 and answers
+ * BadPriority at 10, so 'normal' is not a politeness setting here: 'high' would
+ * cost the wake outright rather than making it faster.
+ */
+export function buildWakeMessages(
+    tokens: PushToken[],
+    reason: string,
+    at: number = Date.now()
+): ExpoPushMessage[] {
+    return tokens.map((token) => ({
+        to: token.token,
+        data: { type: 'drover_wake', reason, at },
+        _contentAvailable: true,
+        priority: 'normal',
+        ttl: WAKE_TTL_SECONDS,
+    }))
+}
+
 function getSessionTitle(metadata: Metadata | null | undefined): string {
     const summaryText = metadata?.summary?.text?.trim()
     if (summaryText) {
@@ -75,6 +126,9 @@ export class PushNotificationClient {
     private readonly token: string
     private readonly baseUrl: string
     private readonly expo: Expo
+    private lastWakeAt = 0
+    private wakeTimer: NodeJS.Timeout | null = null
+    private pendingWakeReason: string | null = null
 
     constructor(token: string, baseUrl: string = 'https://api.cluster-fluster.com') {
         this.token = token
@@ -124,8 +178,21 @@ export class PushNotificationClient {
     /**
      * Send push notification via Expo Push API with retry
      * @param messages - Array of push messages to send
+     * @param opts.retryWindowMs - How long to keep retrying a failed chunk.
+     *   Defaults to 5 minutes, which is right for an alert the user still wants
+     *   late. A wake passes 0: it carries no content of its own, it expires in
+     *   two minutes anyway, and retrying one holds a socket open for five
+     *   minutes to deliver something already stale.
+     * @returns How many messages Expo accepted and how many it did not. The
+     *   caller needs this: a push rejected at Expo (InvalidCredentials, from a
+     *   fork signed under a bundle id the upstream Expo project has no key for;
+     *   see happy-app's DROVER_EAS_PROJECT_ID note) looks exactly like a push
+     *   nobody sent, and that is how a total outage stayed invisible.
      */
-    async sendPushNotifications(messages: ExpoPushMessage[]): Promise<void> {
+    async sendPushNotifications(
+        messages: ExpoPushMessage[],
+        opts?: { retryWindowMs?: number }
+    ): Promise<{ sent: number; failed: number }> {
         logger.debug(`Sending ${messages.length} push notifications`)
 
         // Filter out invalid push tokens
@@ -136,18 +203,34 @@ export class PushNotificationClient {
             return Expo.isExpoPushToken(message.to)
         })
 
+        let sent = 0
+        let failed = messages.length - validMessages.length
+
         if (validMessages.length === 0) {
-            logger.debug('No valid Expo push tokens found')
-            return
+            // Two very different states, and saying "no valid tokens" for both
+            // cost a day (BASED-98). An EMPTY messages array means nobody was
+            // registered, or the caller had nothing to send — routine, and what
+            // the unit tests produce. A NON-EMPTY array filtered down to zero
+            // means every token we hold is malformed, which is a real fault.
+            // Reading the first as the second made a healthy push path look
+            // dead: the test suite's fake tokens logged the alarming line, and
+            // a grep over ~/.happy/logs/*.log sorts by FILENAME, not time, so
+            // those lines surfaced above the real deliveries that followed.
+            if (messages.length === 0) {
+                logger.debug('No push notifications to send')
+            } else {
+                logger.debug(`All ${messages.length} push token(s) are malformed — none is a valid Expo push token`)
+            }
+            return { sent, failed }
         }
 
         // Create chunks to respect Expo's rate limits
         const chunks = this.expo.chunkPushNotifications(validMessages)
 
         for (const chunk of chunks) {
-            // Retry with exponential backoff for 5 minutes
+            // Retry with exponential backoff until the window closes
             const startTime = Date.now()
-            const timeout = 300000 // 5 minutes
+            const timeout = opts?.retryWindowMs ?? 300000 // 5 minutes
             let attempt = 0
             
             while (true) {
@@ -165,13 +248,16 @@ export class PushNotificationClient {
                     if (errors.length === ticketChunk.length) {
                         throw new Error('All push notifications in chunk failed')
                     }
-                    
+
+                    sent += ticketChunk.length - errors.length
+                    failed += errors.length
                     // Success - break out of retry loop
                     break
                 } catch (error) {
                     const elapsed = Date.now() - startTime
                     if (elapsed >= timeout) {
-                        logger.debug('[PUSH] Timeout reached after 5 minutes, giving up on chunk')
+                        logger.debug(`[PUSH] Retry window of ${timeout}ms exhausted, giving up on chunk`)
+                        failed += chunk.length
                         break
                     }
                     
@@ -189,7 +275,8 @@ export class PushNotificationClient {
             }
         }
 
-        logger.debug(`Push notifications sent successfully`)
+        logger.debug(`Push notifications: ${sent} accepted by Expo, ${failed} rejected`)
+        return { sent, failed }
     }
 
     /**
@@ -312,6 +399,81 @@ export class PushNotificationClient {
                 )
             } catch (error) {
                 logger.debug('[PUSH] sendSessionNotification failed:', error)
+            }
+        })()
+    }
+
+    /**
+     * Nudge every registered device to run its JS, without showing the user
+     * anything.
+     *
+     * Call this whenever the set of things waiting on a human CHANGED: raised,
+     * answered, canceled, expired. A dismiss gets a wake and no alert. You do
+     * not buzz somebody to tell them a question went away, but the wrist still
+     * has to hear about it, and a silent push is the only carrier that reaches
+     * a suspended app. See buildWakeMessages for why this is the only shape
+     * that works.
+     *
+     * It goes DIRECT to Expo instead of through
+     * `/v1/sessions/:id/push-event`, which cannot express it two ways over:
+     * that route's body schema demands a non-empty title AND body, and the
+     * server's own PushMessage type has no `_contentAvailable` field, so a
+     * silent push is unrepresentable on that path. It would also be
+     * presence-suppressed, and an open web tab on the desktop is not the phone.
+     * Measured on 2026-08-29 against packages/happy-server: pushRoutes.ts
+     * `title: z.string().min(1)`, pushSend.ts `interface PushMessage`,
+     * pushDispatch.ts `isUserActive` → `{ result: 'suppressed' }`.
+     *
+     * Degrades to nothing on purpose. No credentials, no network, no registered
+     * device: this logs and returns, and the session that raised the gate never
+     * learns it happened. Adding a surface must never add a dependency.
+     */
+    sendBackgroundWake(reason: string): void {
+        this.pendingWakeReason = reason
+        const waited = Date.now() - this.lastWakeAt
+        if (waited >= WAKE_THROTTLE_MS) {
+            this.flushWake()
+            return
+        }
+        // Throttle with a TRAILING edge, never a plain debounce. The last
+        // change is the one that has to reach the wrist, and a debounce that
+        // keeps getting reset by a busy bus never delivers it at all.
+        if (this.wakeTimer) return
+        this.wakeTimer = setTimeout(() => {
+            this.wakeTimer = null
+            this.flushWake()
+        }, WAKE_THROTTLE_MS - waited)
+        // A pending wake must never be the reason a short-lived `happy`
+        // invocation refuses to exit.
+        this.wakeTimer.unref()
+    }
+
+    private flushWake(): void {
+        const reason = this.pendingWakeReason ?? 'drover'
+        this.pendingWakeReason = null
+        this.lastWakeAt = Date.now()
+
+        void (async () => {
+            try {
+                const tokens = await this.fetchPushTokens()
+                if (tokens.length === 0) {
+                    logger.debug('[PUSH] wake skipped: no registered devices')
+                    return
+                }
+                const outcome = await this.sendPushNotifications(
+                    buildWakeMessages(tokens, reason),
+                    { retryWindowMs: 0 }
+                )
+                // A wake that dies at Expo is indistinguishable from no wake at
+                // all once you are looking at the watch, so the two cases have
+                // to read differently in the log.
+                logger.debug(
+                    outcome.sent > 0
+                        ? `[PUSH] wake sent to ${outcome.sent} device(s) (${reason})`
+                        : `[PUSH] wake reached NO device (${reason}), ${outcome.failed} rejected by Expo`
+                )
+            } catch (error) {
+                logger.debug('[PUSH] wake failed:', error)
             }
         })()
     }

@@ -2,6 +2,7 @@ import * as React from 'react';
 import { Message } from '@/sync/typesMessage';
 import { knownTools } from '@/components/tools/knownTools';
 import { getToolSummaryCategory, isInteractiveQuestionToolName } from '@/utils/toolDisplay';
+import { isEmptyThinking } from '@/utils/thinkingText';
 import { t } from '@/text';
 
 // Display item types for the grouped message list
@@ -57,7 +58,13 @@ export function groupMessagesForDisplay(
     options: { collapseCurrentTurn?: boolean } = {},
 ): DisplayItem[] {
     if (!enabled) {
-        return messages.map((msg) => ({ type: 'message', id: msg.id, message: msg } as TextItem));
+        // Grouping off is the default (`groupToolCalls: false`), and this path
+        // used to hand every message to the list untouched — which is how the
+        // empty thinking blocks Claude Code stores each drew their own
+        // "Thought process" row opening onto nothing (DROVE-46).
+        return messages
+            .filter((msg) => !isInvisibleMessage(msg))
+            .map((msg) => ({ type: 'message', id: msg.id, message: msg } as TextItem));
     }
 
     const collapseCurrentTurn = options.collapseCurrentTurn ?? true;
@@ -74,13 +81,19 @@ export function groupMessagesForDisplay(
     }
 
     const visibleForToolGrouping = (msg: Message, index: number): boolean => {
-        // Keep every current-turn tool call visible while the agent is still
-        // working. Once the turn completes, its intermediate work is folded
-        // into one AgentWorkGroupItem above the final response.
-        if (!collapseCurrentTurn && turnOf[index] === 0) return false;
         if (hiddenWorkIndexes.has(index)) return false;
         if (isInvisibleMessage(msg) || isUserAttachment(msg)) return false;
-        return msg.kind === 'tool-call' && !isInteractiveQuestionToolName(msg.tool.name);
+        if (msg.kind !== 'tool-call' || isInteractiveQuestionToolName(msg.tool.name)) return false;
+        // While the agent is still working, its finished calls fold into one
+        // "Ran N commands" row and whatever is in flight stays a full card, so
+        // the command running right now is the one on screen. Once the turn
+        // completes the whole of it folds into an AgentWorkGroupItem above the
+        // final response.
+        if (!collapseCurrentTurn && turnOf[index] === 0) {
+            if (msg.tool.state === 'running') return false;
+            if (msg.tool.permission?.status === 'pending') return false;
+        }
+        return true;
     };
 
     const toolRuns = collectToolRuns(messages, visibleForToolGrouping);
@@ -143,7 +156,11 @@ export function groupToolCallsForDisplay(
     options: { groupSingleToolCalls?: boolean } = {},
 ): ToolDisplayItem[] {
     if (!enabled) {
-        return messages.map((msg) => ({ type: 'message', id: msg.id, message: msg } as TextItem));
+        // Same reason as groupMessagesForDisplay: a message that renders as
+        // nothing must not reach the list (DROVE-46).
+        return messages
+            .filter((msg) => !isInvisibleMessage(msg))
+            .map((msg) => ({ type: 'message', id: msg.id, message: msg } as TextItem));
     }
 
     const groupSingleToolCalls = options.groupSingleToolCalls ?? false;
@@ -278,7 +295,12 @@ function collectAgentWorkGroups(messages: Message[], turnOf: number[], collapseC
             return true;
         });
 
-        const finalTextIndex = visibleAgentIndexes.find((index) => messages[index].kind === 'agent-text');
+        // A thinking block is agent-text too, but it is never the turn's answer —
+        // folding the turn at one would hide the reply underneath it.
+        const finalTextIndex = visibleAgentIndexes.find((index) => {
+            const msg = messages[index];
+            return msg.kind === 'agent-text' && !msg.isThinking;
+        });
         if (finalTextIndex === undefined) continue;
 
         const hiddenIndexes = visibleAgentIndexes.filter((index) => index > finalTextIndex);
@@ -314,9 +336,10 @@ function isInvisibleMessage(msg: Message): boolean {
         const known = knownTools[msg.tool.name as keyof typeof knownTools] as any;
         return known?.hidden === true;
     }
-    // Thinking messages render as null in MessageView
+    // Thinking is kept — it draws as a collapsed "Thought process" row. Only an
+    // empty block has nothing to show.
     if (msg.kind === 'agent-text') {
-        if (msg.isThinking) return true;
+        if (msg.isThinking) return isEmptyThinking(msg.text);
         if (msg.text.trim().length === 0) return true;
     }
     return false;

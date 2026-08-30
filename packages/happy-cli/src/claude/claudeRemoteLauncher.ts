@@ -19,6 +19,9 @@ import { getAskUserQuestionToolCallIds } from "./utils/questionNotification";
 import { launchFailureMessage } from "./utils/launchFailureMessage";
 import { cleanupStdinAfterInk } from "@/utils/terminalStdinCleanup";
 import type { MessageParam, ContentBlockParam } from '@anthropic-ai/sdk/resources';
+import { applyPendingFlip, transcriptPathFor } from "@/drover/flip/apply";
+import { detectClaudeImageMime } from "./utils/imageMime";
+import { InFlightTracker } from "@/drover/flip/inflight";
 
 interface PermissionsField {
     date: number;
@@ -101,6 +104,36 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
     session.client.rpcHandlerManager.registerHandler('switch', doSwitch); // When switch clicked
     // Removed catch-all stdin handler - now handled by RemoteModeDisplay keyboard handlers
 
+    // Who is still running inside the SDK's claude process (BASED-135).
+    // `query()` is not a spawned TUI, but it IS a child process, aborting it
+    // is still a SIGTERM, and async subagents still live inside it — so the
+    // same count has to be available to the same gate. Fed from onMessage
+    // below, which sees the launch banner's tool_result as an SDK user
+    // message, and topped up by the tracker's own tail of the transcript.
+    const inflight = new InFlightTracker({
+        transcript: () => transcriptPathFor(session),
+    });
+
+    // Cattle Drover (BASED-127): a flip stops the engine the same way a switch
+    // does, and this is the half remote mode never had. `request()` calls this
+    // handler; with nothing registered it logged "no abort handler registered"
+    // and the flip queued until the session came back to local mode and its
+    // next child exited — which reads exactly like a button that does nothing.
+    //
+    // Registered once, out here, and reads the MUTABLE `abortController`: the
+    // loop mints a fresh one every turn and nulls it between turns, so a
+    // closure over any single controller would go stale within one message.
+    session.flip?.setAbortHandler(() => {
+        if (abortController && !abortController.signal.aborted) {
+            abortController.abort();
+        }
+    });
+    // ...and the controller decides whether to stop it at all, which it cannot
+    // do without knowing who is still running in there. Same probe, same gate,
+    // same answers as local mode: a flip with subagents in flight announces
+    // and waits for a repeat rather than killing them.
+    session.flip?.setInFlightProbe(() => inflight.snapshot());
+
     // Create permission handler
     const permissionHandler = new PermissionHandler(session);
 
@@ -137,6 +170,23 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
     let notifiedQuestionToolCalls = new Set<string>();
 
     function onMessage(message: SDKMessage) {
+
+        // BASED-135: this stream carries "Async agent launched successfully"
+        // and, sometimes, the notification that ends it. Offered first, and
+        // before anything that can throw, because the gate that reads it
+        // decides whether Clay loses eight agents.
+        inflight.note(message);
+
+        // DROVE-12: and it carries the harness's own synthetic limit notice.
+        // The flip itself works in remote mode, but until now nothing FED the
+        // detector here — noteTranscriptMessage was called from the local
+        // launcher and nowhere else — so a remote session that ran out of headroom
+        // neither flipped nor parked and simply kept talking to an exhausted
+        // account. Same detector as local on purpose: the SDK's typed
+        // rate_limit_event is a usage-reporting channel, and a second route
+        // into the same decision is a second thing to keep in agreement.
+        // After inflight.note, which documents above why it goes first.
+        session.flip?.noteTranscriptMessage(message);
 
         // Write to message log
         formatClaudeMessageForInk(message, messageBuffer);
@@ -281,6 +331,31 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
             mode: EnhancedMode;
         } | null = null;
 
+        /**
+         * The mode the last message ran under, kept across turns.
+         *
+         * A flip's arrival prompt has to be sent as a message, because a
+         * `query()` loop has no equivalent of the local launcher's
+         * `pendingInitialPrompt`. That message needs a mode, and the only
+         * honest one is whatever the session was already running: sending it
+         * under a fresh default would silently drop the model, effort and
+         * permission mode the user picked. Null only before the first message
+         * of the session, where there is nothing to preserve.
+         */
+        let lastMode: EnhancedMode | null = null;
+
+        /**
+         * Say the arrival prompt to the Claude that comes back after a flip.
+         *
+         * `unshift`, not `push`: anything the phone queued while the flip was
+         * happening is served AFTER "carry on where we left off", which is the
+         * same order the local launcher gets for free by handing the prompt to
+         * the spawn itself.
+         */
+        const queueArrivalPrompt = (prompt: string): void => {
+            session.queue.unshift(prompt, lastMode ?? {});
+        };
+
         // Track session ID to detect when it actually changes
         // This prevents context loss when mode changes (permission mode, model, etc.)
         // without starting a new session. Only reset parent chain when session ID
@@ -304,6 +379,11 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
             }
 
             previousSessionId = session.sessionId;
+            // Fresh engine, fresh count. Cleared HERE rather than when the last
+            // one stopped, so the flip below can still name the agents it
+            // stranded, and so an entry we never managed to resolve cannot jam
+            // the gate for the rest of the session.
+            inflight.reset();
             const controller = new AbortController();
             abortController = controller;
             abortFuture = new Future<void>();
@@ -325,6 +405,7 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                         if (pending) {
                             let p = pending;
                             pending = null;
+                            lastMode = p.mode;
                             permissionHandler.handleModeChange(p.mode.permissionMode);
                             return p;
                         }
@@ -340,6 +421,7 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                             }
                             modeHash = msg.hash;
                             mode = msg.mode;
+                            lastMode = msg.mode;
                             permissionHandler.handleModeChange(mode.permissionMode);
 
                             // Per-message attachments are already claimed by the message
@@ -447,7 +529,13 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                 // Consume one-time Claude flags after spawn
                 session.consumeOneTimeFlags();
                 
-                if (!exitReason && abortController.signal.aborted) {
+                // A pending flip means this abort was the flip's own doing,
+                // not the user pressing stop (BASED-127). Saying "Aborted by
+                // user" there is a lie, and closing the turn as cancelled
+                // contradicts the flip note that is about to say the session
+                // is carrying on somewhere else. The local launcher makes the
+                // same choice by checking for a flip before either exit path.
+                if (!exitReason && controller.signal.aborted && !session.flip?.hasPending()) {
                     session.client.closeClaudeSessionTurn('cancelled');
                     session.client.sendSessionEvent({ type: 'message', message: 'Aborted by user' });
                 }
@@ -486,12 +574,44 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
                 permissionHandler.reset();
                 modeHash = null;
                 mode = null;
+
+                // Cattle Drover (BASED-127): the engine has stopped, and a
+                // flip is one of the things that stops it — so this is remote
+                // mode's equivalent of the two applyPendingFlip calls the
+                // local launcher makes after its child exits.
+                //
+                // In the FINALLY rather than after it, because the catch
+                // branch above `continue`s on a launch error and would jump
+                // straight past a flip that is sitting right there. That is
+                // the same shape of hole as the one this ticket is fixing: a
+                // request accepted, logged, and then silently never carried
+                // out. The finally runs on every path out of the turn.
+                //
+                // No resetAbort: this loop mints a fresh AbortController at
+                // the top of every iteration, so there is no aborted signal to
+                // re-arm — that is a local-launcher problem, where one
+                // controller has to survive a relaunch.
+                await applyPendingFlip({
+                    session,
+                    mode: 'remote',
+                    deliverPrompt: queueArrivalPrompt,
+                });
             }
         }
     } finally {
 
         // Clean up permission handler
         permissionHandler.reset();
+
+        // Hand the flip controller back its null state (BASED-127). The
+        // controller outlives every launcher, and both of these close over
+        // things that die with THIS call: an AbortController that is already
+        // aborted, and a tracker whose transcript tail belongs to an engine
+        // that has stopped. Left registered, the stale abort handler is what
+        // the next mode's flip would call — it would return quietly, having
+        // stopped nothing, and the flip would queue forever.
+        session.flip?.setAbortHandler(null);
+        session.flip?.setInFlightProbe(null);
 
         // Reset Terminal
         const t0 = Date.now();
@@ -525,33 +645,4 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
     }
 
     return exitReason || 'exit';
-}
-
-/**
- * Detect the image media type Claude accepts from the decrypted blob's
- * magic-byte header. The wire-supplied mimeType is unreliable (iOS picker
- * reports things like "image/heic" or no value at all), and the Anthropic
- * API enforces a strict enum on `image.source.base64.media_type`. Returning
- * null when the bytes don't match a supported format causes the caller to
- * drop the attachment instead of shipping an invalid request that the API
- * rejects with HTTP 400.
- */
-function detectClaudeImageMime(bytes: Uint8Array): 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' | null {
-    if (bytes.length >= 4 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47) {
-        return 'image/png';
-    }
-    if (bytes.length >= 3 && bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF) {
-        return 'image/jpeg';
-    }
-    if (bytes.length >= 4 && bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x38) {
-        return 'image/gif';
-    }
-    if (
-        bytes.length >= 12 &&
-        bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
-        bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50
-    ) {
-        return 'image/webp';
-    }
-    return null;
 }

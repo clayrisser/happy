@@ -5,6 +5,7 @@ import { Modal } from '@/modal';
 import { machineResumeSession, sessionArchive, sessionKill, sessionSetAgentModes, forkAndSpawn, type ForkSource } from '@/sync/ops';
 import { maybeCleanupWorktree } from '@/hooks/useWorktreeCleanup';
 import { storage, useLocalSetting, useMachine, useSetting } from '@/sync/storage';
+import { useShallow } from 'zustand/react/shallow';
 import { Machine, Session } from '@/sync/storageTypes';
 import { sync } from '@/sync/sync';
 import { resolveMessageModeMeta, UnsupportedPermissionModeError } from '@/sync/messageMeta';
@@ -19,9 +20,17 @@ import { useSession } from '@/sync/storage';
 import { DuplicateSheet } from '@/components/DuplicateSheet';
 import type { SessionActionShortcutId } from '@/keyboard/shortcuts';
 import { isRigMetadata } from '@/sync/rig';
+import { collectDroverAccountsFromSessions, droverFlipMessage } from '@/utils/droverAccounts';
+
+/**
+ * Menu rows are keyed by their keyboard shortcut where one exists. `flip-account`
+ * has none — it is a Cattle Drover action, not part of the stock shortcut set —
+ * so surfaces that render a chord must treat the lookup as optional.
+ */
+export type SessionActionId = SessionActionShortcutId | 'flip-account';
 
 export interface SessionActionItem {
-    id: SessionActionShortcutId;
+    id: SessionActionId;
     label: string;
     icon: string;
     onPress: () => void;
@@ -120,6 +129,19 @@ function getResumeAvailability(session: Session, machine: Machine | null | undef
     };
 }
 
+/**
+ * Drover accounts across every known session.
+ *
+ * Read straight off the session map rather than the built list view: this hook
+ * runs once per row in the session lists, and recomputing the view per row
+ * would be far more work than a shallow-compared array of names.
+ */
+function useDroverAccounts(): string[] {
+    return storage(useShallow((state) => (
+        state.isDataReady ? collectDroverAccountsFromSessions(Object.values(state.sessions)) : []
+    )));
+}
+
 export function useSessionQuickActions(
     session: Session,
     options: UseSessionQuickActionsOptions = {},
@@ -159,6 +181,46 @@ export function useSessionQuickActions(
         && machine
         && isMachineOnline(machine)
     );
+
+    // Cattle Drover flip (BASED-133). There is no flip RPC and there must not
+    // be one: happy-cli intercepts `/flip` in the message stream before the
+    // queue, so moving a session to another account is an ordinary chat
+    // message. The watch sends the identical string (sync/droverWatchFeed.ts).
+    const droverAccounts = useDroverAccounts();
+    const currentDroverAccount = session.metadata?.droverAccount ?? null;
+    // Flip shows on ANY Cattle Drover session, not only once the app has itself
+    // seen two accounts (BASED-133 gated on that, which hid the button from
+    // anyone who had only ever run on one — the common case). The account
+    // roster lives in the CLI, not here: a bare `/flip` asks it to pick the
+    // next account with headroom, so the action is useful with a single KNOWN
+    // account too, and specific-account rows fill in as more are seen. A flip
+    // with nowhere to go is refused gracefully now (BASED-113), so offering it
+    // can never strand the session. The signal that this IS a drover session is
+    // metadata.droverAccount, stamped at start from DROVER_ACCOUNT.
+    const canFlipAccount = currentDroverAccount != null;
+
+    const sendFlip = React.useCallback((account?: string | null) => {
+        void Promise.resolve(sync.sendMessage(session.id, droverFlipMessage(account))).catch(() => {});
+    }, [session.id]);
+
+    const flipAccount = React.useCallback(() => {
+        if (!canFlipAccount) return;
+        // Always confirm through the sheet, even when this app only knows the
+        // one account it is on: "Next available" is a real choice the CLI
+        // resolves, and a silent immediate flip reads as the button doing
+        // nothing. Any OTHER accounts the app has seen become named rows.
+        const targets = droverAccounts.filter((account) => account !== currentDroverAccount);
+        const buttons: Array<{ text: string; onPress?: () => void; style?: 'cancel' | 'destructive' | 'default' }> = [
+            { text: 'Next available', onPress: () => sendFlip() },
+            ...targets.map((account) => ({ text: account, onPress: () => sendFlip(account) })),
+        ];
+        buttons.push({ text: t('common.cancel'), style: 'cancel' });
+        Modal.alert(
+            'Move to another account',
+            currentDroverAccount ? `Now on ${currentDroverAccount}` : undefined,
+            buttons,
+        );
+    }, [canFlipAccount, currentDroverAccount, droverAccounts, sendFlip]);
 
     const openDetails = React.useCallback(() => {
         router.push(`/session/${session.id}/info`);
@@ -295,6 +357,10 @@ export function useSessionQuickActions(
             items.push({ id: 'duplicate', icon: 'time-outline', label: t('session.duplicateAction'), onPress: openDuplicateSheet });
         }
 
+        if (canFlipAccount) {
+            items.push({ id: 'flip-account', icon: 'swap-horizontal-outline', label: 'Move to another account', onPress: flipAccount });
+        }
+
         if (canCopySessionMetadata) {
             items.push({ id: 'copy-metadata', icon: 'bug-outline', label: t('sessionInfo.copyMetadata'), onPress: copySessionMetadata });
             items.push({ id: 'copy-metadata-and-logs', icon: 'document-text-outline', label: t('sessionInfo.copyMetadata') + ' & Client Logs', onPress: copySessionMetadataAndLogs });
@@ -306,9 +372,11 @@ export function useSessionQuickActions(
     }, [
         archiveSession,
         canCopySessionMetadata,
+        canFlipAccount,
         canFork,
         copySessionMetadata,
         copySessionMetadataAndLogs,
+        flipAccount,
         forkSource,
         forkSession,
         openDetails,
@@ -336,9 +404,12 @@ export function useSessionQuickActions(
         canCopySessionMetadata,
         canResume: resumeAvailability.canResume,
         canShowResume: resumeAvailability.canShowResume,
+        canFlipAccount,
         canFork,
         copySessionMetadata,
         copySessionMetadataAndLogs,
+        droverAccounts,
+        flipAccount,
         forkSession,
         forking,
         openDetails,

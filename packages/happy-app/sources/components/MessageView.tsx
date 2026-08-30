@@ -1,7 +1,8 @@
 import * as React from "react";
 import { Platform, Pressable, Text, View } from "react-native";
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons, Octicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
 import { MarkdownView } from "./markdown/MarkdownView";
 import { t } from '@/text';
@@ -16,6 +17,9 @@ import { layout } from "./layout";
 import { parseLocalCommandMessage, isUserSlashCommandEcho } from './parseLocalCommandMessage';
 import { resolveUserMessageBubbleColor } from '@/utils/userMessageBubbleColor';
 import { LongPressCopyable } from './LongPressCopyable';
+import { extractThinkingText, isEmptyThinking } from '@/utils/thinkingText';
+import { useElapsedTime } from '@/hooks/useElapsedTime';
+import { formatWorkDuration } from '@/hooks/useGroupedMessages';
 
 
 export const MessageView = React.memo((props: {
@@ -24,7 +28,20 @@ export const MessageView = React.memo((props: {
   sessionId: string;
   getMessageById?: (id: string) => Message | null;
   copyText?: string;
+  /** This is the newest message and the agent is still working on it. */
+  live?: boolean;
+  /** subagent id -> the Task/Agent tool-call message that owns its transcript. */
+  subagentTaskMessageIds?: ReadonlyMap<string, string>;
 }) => {
+  // Claude Code stores most thinking as a signature with no words, so this row
+  // would open onto nothing. Fold what exists, draw nothing for what does not,
+  // and two such blocks in a row leave no trace instead of two blank rows
+  // (DROVE-46). The grouping layer filters these too; this is the backstop for
+  // every other path that renders a message directly.
+  if (props.message.kind === 'agent-text' && props.message.isThinking && isEmptyThinking(props.message.text)) {
+    return null;
+  }
+
   return (
     <View
       style={styles.messageContainer}
@@ -37,6 +54,8 @@ export const MessageView = React.memo((props: {
           sessionId={props.sessionId}
           getMessageById={props.getMessageById}
           copyText={props.copyText}
+          live={props.live}
+          subagentTaskMessageIds={props.subagentTaskMessageIds}
         />
       </View>
     </View>
@@ -50,6 +69,8 @@ function RenderBlock(props: {
   sessionId: string;
   getMessageById?: (id: string) => Message | null;
   copyText?: string;
+  live?: boolean;
+  subagentTaskMessageIds?: ReadonlyMap<string, string>;
 }): React.ReactElement {
   switch (props.message.kind) {
     case 'user-text':
@@ -62,7 +83,7 @@ function RenderBlock(props: {
       );
 
     case 'agent-text':
-      return <AgentTextBlock message={props.message} sessionId={props.sessionId} copyText={props.copyText} />;
+      return <AgentTextBlock message={props.message} sessionId={props.sessionId} copyText={props.copyText} live={props.live} />;
 
     case 'tool-call':
       return <ToolCallBlock
@@ -73,7 +94,14 @@ function RenderBlock(props: {
       />;
 
     case 'agent-event':
-      return <AgentEventBlock event={props.message.event} metadata={props.metadata} />;
+      return (
+        <AgentEventBlock
+          event={props.message.event}
+          metadata={props.metadata}
+          sessionId={props.sessionId}
+          subagentTaskMessageIds={props.subagentTaskMessageIds}
+        />
+      );
 
 
     default:
@@ -173,20 +201,67 @@ function AgentTextBlock(props: {
   message: AgentTextMessage;
   sessionId: string;
   copyText?: string;
+  live?: boolean;
 }) {
   const handleOptionPress = React.useCallback((option: Option) => {
     sync.sendMessage(props.sessionId, option.title, { source: 'option' });
   }, [props.sessionId]);
 
-  // Hide thinking messages
+  // The model's reasoning is folded, never dropped — one muted row that opens
+  // to the whole of what the CLI sent.
   if (props.message.isThinking) {
-    return null;
+    return (
+      <ThinkingBlock
+        text={props.message.text}
+        startedAt={props.message.createdAt}
+        live={props.live === true}
+        sessionId={props.sessionId}
+      />
+    );
   }
 
   return (
     <View style={styles.agentMessageContainer}>
       <MarkdownView markdown={props.message.text} onOptionPress={handleOptionPress} sessionId={props.sessionId} />
       {props.copyText ? <MessageCopyButton text={props.copyText} /> : null}
+    </View>
+  );
+}
+
+function ThinkingBlock(props: {
+  text: string;
+  startedAt: number;
+  live: boolean;
+  sessionId: string;
+}) {
+  const { theme } = useUnistyles();
+  const [expanded, setExpanded] = React.useState(false);
+  const thinking = React.useMemo(() => extractThinkingText(props.text), [props.text]);
+  const elapsedSeconds = useElapsedTime(props.live ? props.startedAt : null);
+  const label = props.live
+    ? `${t('message.thinkingNow')} ${formatWorkDuration(elapsedSeconds * 1000)}`
+    : t('message.thoughtProcess');
+
+  return (
+    <View style={styles.disclosureContainer}>
+      <Pressable
+        accessibilityRole="button"
+        onPress={() => setExpanded((value) => !value)}
+        style={({ pressed }) => [styles.disclosureHeader, pressed && styles.disclosurePressed]}
+      >
+        <Ionicons name="sparkles-outline" size={13} color={theme.colors.textSecondary} />
+        <Text style={styles.disclosureLabel} numberOfLines={1}>{label}</Text>
+        <Ionicons
+          name={expanded ? 'chevron-down' : 'chevron-forward'}
+          size={13}
+          color={theme.colors.textSecondary}
+        />
+      </Pressable>
+      {expanded ? (
+        <View style={styles.disclosureBody}>
+          <MarkdownView markdown={thinking} sessionId={props.sessionId} />
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -241,7 +316,23 @@ function MessageCopyButton(props: { text: string }) {
 function AgentEventBlock(props: {
   event: AgentEvent;
   metadata: Metadata | null;
+  sessionId?: string;
+  subagentTaskMessageIds?: ReadonlyMap<string, string>;
 }) {
+  if (props.event.type === 'subagent') {
+    return (
+      <SubagentRow
+        event={props.event}
+        sessionId={props.sessionId}
+        taskMessageId={props.subagentTaskMessageIds?.get(props.event.subagent) ?? null}
+      />
+    );
+  }
+  if (props.event.type === 'subagent-stop') {
+    // The reducer folds every stop into the row its start opened, so one
+    // reaching the renderer means the row is already showing that state.
+    return null;
+  }
   if (props.event.type === 'switch') {
     return (
       <View style={styles.agentEventContainer}>
@@ -277,6 +368,66 @@ function AgentEventBlock(props: {
   return (
     <View style={styles.agentEventContainer}>
       <Text style={styles.agentEventText}>{t('message.unknownEvent')}</Text>
+    </View>
+  );
+}
+
+function SubagentRow(props: {
+  event: Extract<AgentEvent, { type: 'subagent' }>;
+  sessionId?: string;
+  taskMessageId: string | null;
+}) {
+  const { theme } = useUnistyles();
+  const router = useRouter();
+  const { event } = props;
+  const running = event.state === 'running';
+  const runningSeconds = useElapsedTime(running ? event.startedAt : null);
+  const durationMs = running
+    ? runningSeconds * 1000
+    : Math.max(0, (event.completedAt ?? event.startedAt) - event.startedAt);
+  const status = running
+    ? t('message.agentRunning', { duration: formatWorkDuration(durationMs) })
+    : t('message.agentFinished', { duration: formatWorkDuration(durationMs) });
+  const label = event.title ? `${event.title} · ${status}` : status;
+  const sessionId = props.sessionId;
+  const taskMessageId = props.taskMessageId;
+  const canOpenTranscript = Boolean(sessionId && taskMessageId);
+  const handlePress = React.useCallback(() => {
+    if (!sessionId || !taskMessageId) {
+      return;
+    }
+    router.push(`/session/${sessionId}/message/${taskMessageId}`);
+  }, [router, sessionId, taskMessageId]);
+
+  const content = (
+    <>
+      <Octicons name="rocket" size={13} color={theme.colors.textSecondary} />
+      <Text style={styles.disclosureLabel} numberOfLines={1}>{label}</Text>
+      {canOpenTranscript ? (
+        <Ionicons name="chevron-forward" size={13} color={theme.colors.textSecondary} />
+      ) : null}
+    </>
+  );
+
+  if (!canOpenTranscript) {
+    // No Task card to open — Claude's own Task tool is suppressed before it
+    // reaches the app, so the row stands on its own as information.
+    return (
+      <View style={styles.disclosureContainer}>
+        <View style={styles.disclosureHeader}>{content}</View>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.disclosureContainer}>
+      <Pressable
+        accessibilityRole="button"
+        onPress={handlePress}
+        style={({ pressed }) => [styles.disclosureHeader, pressed && styles.disclosurePressed]}
+      >
+        {content}
+      </Pressable>
     </View>
   );
 }
@@ -393,6 +544,37 @@ const styles = StyleSheet.create((theme) => ({
   userCopyTarget: {
     alignItems: 'flex-end',
     maxWidth: '100%',
+  },
+  // One muted disclosure row, sized like ToolGroupView's CollapseHeader so a
+  // thought process, an agent and a "Ran N commands" row all read as one family.
+  disclosureContainer: {
+    marginHorizontal: 16,
+    marginVertical: 4,
+    maxWidth: '100%',
+    overflow: 'hidden',
+  },
+  disclosureHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    alignSelf: 'stretch',
+    minHeight: 28,
+    paddingVertical: 4,
+    borderRadius: 4,
+  },
+  disclosurePressed: {
+    opacity: 0.6,
+  },
+  disclosureLabel: {
+    flexShrink: 1,
+    minWidth: 0,
+    fontSize: 13,
+    lineHeight: 20,
+    color: theme.colors.textSecondary,
+  },
+  disclosureBody: {
+    marginTop: 2,
+    opacity: 0.85,
   },
   agentEventContainer: {
     marginHorizontal: 8,

@@ -31,7 +31,32 @@ const agentEventSchema = z.discriminatedUnion('type', [z.object({
 }), z.object({
     type: z.literal('ready'),
 })]);
-export type AgentEvent = z.infer<typeof agentEventSchema>;
+/**
+ * A subagent's inline row. The CLI emits a `start` when a subagent's first
+ * message arrives and a `stop` when its parent tool returns; both used to be
+ * dropped at normalization. One row carries the whole life: it opens as
+ * `running` and the stop turns it `finished` instead of removing it.
+ */
+export type SubagentLifecycleEvent = {
+    type: 'subagent';
+    subagent: string;
+    title?: string;
+    state: 'running' | 'finished';
+    startedAt: number;
+    completedAt?: number;
+};
+
+/** The stop half. The reducer folds it into the row the start opened. */
+export type SubagentStopEvent = {
+    type: 'subagent-stop';
+    subagent: string;
+    completedAt: number;
+};
+
+export type AgentEvent =
+    | z.infer<typeof agentEventSchema>
+    | SubagentLifecycleEvent
+    | SubagentStopEvent;
 
 const sessionTextEventSchema = z.object({
     t: z.literal('text'),
@@ -570,9 +595,41 @@ function normalizeSessionEnvelope(
         return null;
     }
 
-    if (envelope.ev.t === 'start' || envelope.ev.t === 'stop') {
-        // Lifecycle marker for subagent boundaries; currently not rendered as chat content.
-        return null;
+    if (envelope.ev.t === 'start') {
+        // Subagent lifecycle, rendered as an inline row rather than discarded.
+        // Not a sidechain message even though it carries the subagent id — the
+        // row belongs in the main stream, next to the work that spawned it.
+        return {
+            id: messageId,
+            localId,
+            createdAt: messageCreatedAt,
+            role: 'event',
+            isSidechain: false,
+            content: {
+                type: 'subagent',
+                subagent: envelope.subagent ?? envelope.id,
+                ...(envelope.ev.title ? { title: envelope.ev.title } : {}),
+                state: 'running',
+                startedAt: messageCreatedAt,
+            },
+            meta
+        } satisfies NormalizedMessage;
+    }
+
+    if (envelope.ev.t === 'stop') {
+        return {
+            id: messageId,
+            localId,
+            createdAt: messageCreatedAt,
+            role: 'event',
+            isSidechain: false,
+            content: {
+                type: 'subagent-stop',
+                subagent: envelope.subagent ?? envelope.id,
+                completedAt: messageCreatedAt,
+            },
+            meta
+        } satisfies NormalizedMessage;
     }
 
     if (envelope.ev.t === 'turn-end') {

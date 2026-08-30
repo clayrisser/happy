@@ -15,8 +15,10 @@ import { calculateCost } from '@/utils/pricing';
 import { shouldReconnect } from '@/utils/lidState';
 import { createEnvelope, type CreateEnvelopeOptions, type SessionEnvelope, type SessionTurnEndStatus } from '@slopus/happy-wire';
 import {
+    ClaudeActivityPublisher,
     closeClaudeTurnWithStatus,
     mapClaudeLogMessageToSessionEnvelopes,
+    mapQueuedPromptToSessionEnvelopes,
     type ClaudeSessionProtocolState,
 } from '@/claude/utils/sessionProtocolMapper';
 import { InvalidateSync } from '@/utils/sync';
@@ -213,6 +215,8 @@ export class ApiSessionClient extends EventEmitter {
     private reconnectInterval: NodeJS.Timeout | null = null;
     private ignoreArchiveSignal = false;
     private skipInitialMessages = false;
+    /** The title a person gave this session, once one is known (DROVE-15). */
+    private manualTitle: string | null = null;
     private claudeSessionProtocolState: ClaudeSessionProtocolState = {
         currentTurnId: null,
         uuidToProviderSubagent: new Map<string, string>(),
@@ -224,6 +228,14 @@ export class ApiSessionClient extends EventEmitter {
         startedSubagents: new Set<string>(),
         activeSubagents: new Set<string>(),
     };
+    /**
+     * Mirrors the state above into `metadata.activity` (BASED-134). Debounced
+     * and de-duped inside the publisher, so this can be poked after every
+     * mapper call without turning a subagent fan-out into a metadata storm.
+     */
+    private claudeActivity = new ClaudeActivityPublisher((activity) => {
+        this.updateMetadata((metadata) => ({ ...metadata, activity }));
+    });
     /**
      * How far this client has consumed the session's message log.
      *
@@ -342,6 +354,14 @@ export class ApiSessionClient extends EventEmitter {
                     if (data.body.metadata && data.body.metadata.version > this.metadataVersion) {
                         this.metadata = decrypt(this.encryptionKey, this.encryptionVariant, decodeBase64(data.body.metadata.value));
                         this.metadataVersion = data.body.metadata.version;
+                        // Somebody else changed this session's metadata — in
+                        // practice the phone, since the CLI's own writes go
+                        // through updateMetadata below and never come back
+                        // through here. That is what makes this the right
+                        // place to notice a model or effort pick made in the
+                        // app: it fires for app writes and not for our own, so
+                        // a listener cannot echo itself into a loop (DROVE-45).
+                        this.emit('metadata', this.metadata);
                         // Check if session was archived from web/mobile
                         const meta = this.metadata as any;
                         if (meta?.lifecycleState === 'archiveRequested' || meta?.lifecycleState === 'archived') {
@@ -696,6 +716,9 @@ export class ApiSessionClient extends EventEmitter {
     }
 
     private enqueueSessionProtocolEnvelopes(envelopes: SessionEnvelope[], invalidate: boolean = true) {
+        // The one funnel every Claude mapper call already goes through, which
+        // is why the activity sync hangs here rather than on each caller.
+        this.claudeActivity.sync(this.claudeSessionProtocolState);
         for (let i = 0; i < envelopes.length; i += 1) {
             this.enqueueSessionProtocolEnvelope(envelopes[i], invalidate && i === envelopes.length - 1);
         }
@@ -713,6 +736,17 @@ export class ApiSessionClient extends EventEmitter {
 
         // Update metadata with summary if this is a summary message
         if (body.type === 'summary' && 'summary' in body && 'leafUuid' in body) {
+            // Unless a person has already named this session (DROVE-15). The
+            // change_title MCP tool sends exactly this message and it writes
+            // only `summary` — the one field the app's session list reads — so
+            // the model's guess replaced Clay's /rename on screen while
+            // metadata.name went on holding the manual one. Measured: the tool
+            // renamed a session 35 seconds after custom-title.json was stamped
+            // by hand. A manual title outranks a guess.
+            if (this.manualTitle) {
+                logger.debug(`[SOCKET] Keeping the manual title "${this.manualTitle}" over a summary`);
+                return;
+            }
             this.updateMetadata((metadata) => ({
                 ...metadata,
                 summary: {
@@ -768,6 +802,20 @@ export class ApiSessionClient extends EventEmitter {
             this.sendSync.invalidate();
         }
         this.applyClaudeSessionMessageSideEffects(body);
+    }
+
+    /**
+     * A prompt typed at the terminal while Claude was busy (DROVE-41).
+     *
+     * Not a transcript message — Claude Code queues it and may never write it
+     * as one — so it does not go through the local-transcript path above. It
+     * is a message all the same, and the app has no other way to learn it was
+     * typed.
+     */
+    sendQueuedPromptFromLocalTranscript(prompt: { text: string; at?: number; carrier: 'enqueue' | 'absorbed'; claudeUuid?: string }): void {
+        const mapped = mapQueuedPromptToSessionEnvelopes(prompt, this.claudeSessionProtocolState);
+        this.claudeSessionProtocolState.currentTurnId = mapped.currentTurnId;
+        this.enqueueSessionProtocolEnvelopes(mapped.envelopes);
     }
 
     closeClaudeSessionTurn(status: SessionTurnEndStatus = 'completed') {
@@ -928,6 +976,15 @@ export class ApiSessionClient extends EventEmitter {
         this.ignoreArchiveSignal = true;
     }
 
+    /**
+     * Remember that a person named this session, so a later guess cannot
+     * quietly replace it (DROVE-15). Set from applyCustomTitle, which is the
+     * one path Claude Code's own `/rename` reaches.
+     */
+    markManualTitle(text: string) {
+        this.manualTitle = text;
+    }
+
     skipExistingMessages() {
         this.skipInitialMessages = true;
     }
@@ -1004,6 +1061,7 @@ export class ApiSessionClient extends EventEmitter {
 
     async close() {
         logger.debug('[API] socket.close() called');
+        this.claudeActivity.dispose();
         this.sendSync.stop();
         this.receiveSync.stop();
         if (this.reconnectInterval) {

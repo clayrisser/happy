@@ -667,7 +667,7 @@ ${chalk.bold('To clean up runaway processes:')} Use ${chalk.cyan('drover doctor 
       } else if (arg === '--permission-mode') {
         options.permissionMode = args[++i] as StartOptions['permissionMode']
       } else if (arg === '--effort') {
-        options.effort = z.enum(['low', 'medium', 'high', 'xhigh', 'max']).parse(args[++i])
+        options.effort = z.enum(['low', 'medium', 'high', 'xhigh', 'max', 'ultracode']).parse(args[++i])
       } else if (arg === '--started-by') {
         options.startedBy = args[++i] as 'daemon' | 'terminal'
       } else if (arg === '--js-runtime') {

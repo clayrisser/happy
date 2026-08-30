@@ -2,7 +2,7 @@ import { logger } from "@/ui/logger";
 
 export type PendingAttachment = { data: Uint8Array; mimeType: string; name: string };
 
-interface QueueItem<T> {
+export interface QueueItem<T> {
     message: string;
     mode: T;
     modeHash: string;
@@ -12,6 +12,19 @@ interface QueueItem<T> {
 }
 
 /**
+ * Called the moment a message is enqueued, with the item that was enqueued.
+ *
+ * The item is handed over so a handler that delivers the message ITSELF can
+ * take it back off the queue again (BASED-141). It used to get the text alone,
+ * and the local launcher — which types a phone message straight into the tmux
+ * pane — had no way to say "this one is served". The item stayed on the queue,
+ * and a non-empty queue is how the launcher decides that a dead child means
+ * "hand the session to remote mode", so every delivered message turned the
+ * next exit into a takeover and replayed itself as a fresh headless turn.
+ */
+export type OnMessageHandler<T> = (message: string, mode: T, item: QueueItem<T>) => void;
+
+/**
  * A mode-aware message queue that stores messages with their modes.
  * Returns consistent batches of messages with the same mode.
  */
@@ -19,12 +32,12 @@ export class MessageQueue2<T> {
     public queue: QueueItem<T>[] = []; // Made public for testing
     private waiter: ((hasMessages: boolean) => void) | null = null;
     private closed = false;
-    private onMessageHandler: ((message: string, mode: T) => void) | null = null;
+    private onMessageHandler: OnMessageHandler<T> | null = null;
     modeHasher: (mode: T) => string;
 
     constructor(
         modeHasher: (mode: T) => string,
-        onMessageHandler: ((message: string, mode: T) => void) | null = null
+        onMessageHandler: OnMessageHandler<T> | null = null
     ) {
         this.modeHasher = modeHasher;
         this.onMessageHandler = onMessageHandler;
@@ -34,7 +47,7 @@ export class MessageQueue2<T> {
     /**
      * Set a handler that will be called when a message arrives
      */
-    setOnMessage(handler: ((message: string, mode: T) => void) | null): void {
+    setOnMessage(handler: OnMessageHandler<T> | null): void {
         this.onMessageHandler = handler;
     }
 
@@ -50,17 +63,18 @@ export class MessageQueue2<T> {
         const modeHash = this.modeHasher(mode);
         logger.debug(`[MessageQueue2] push() called with mode hash: ${modeHash}`);
 
-        this.queue.push({
+        const item: QueueItem<T> = {
             message,
             mode,
             modeHash,
             isolate: false,
             attachments,
-        });
+        };
+        this.queue.push(item);
 
         // Trigger message handler if set
         if (this.onMessageHandler) {
-            this.onMessageHandler(message, mode);
+            this.onMessageHandler(message, mode, item);
         }
 
         // Notify waiter if any
@@ -86,16 +100,17 @@ export class MessageQueue2<T> {
         const modeHash = this.modeHasher(mode);
         logger.debug(`[MessageQueue2] pushImmediate() called with mode hash: ${modeHash}`);
 
-        this.queue.push({
+        const item: QueueItem<T> = {
             message,
             mode,
             modeHash,
             isolate: false
-        });
+        };
+        this.queue.push(item);
 
         // Trigger message handler if set
         if (this.onMessageHandler) {
-            this.onMessageHandler(message, mode);
+            this.onMessageHandler(message, mode, item);
         }
 
         // Notify waiter if any
@@ -125,17 +140,18 @@ export class MessageQueue2<T> {
         // Clear any pending messages to ensure this message is processed in complete isolation
         this.queue = [];
 
-        this.queue.push({
+        const item: QueueItem<T> = {
             message,
             mode,
             modeHash,
             isolate: true,
             attachments,
-        });
+        };
+        this.queue.push(item);
 
         // Trigger message handler if set
         if (this.onMessageHandler) {
-            this.onMessageHandler(message, mode);
+            this.onMessageHandler(message, mode, item);
         }
 
         // Notify waiter if any
@@ -161,17 +177,18 @@ export class MessageQueue2<T> {
         const modeHash = this.modeHasher(mode);
         logger.debug(`[MessageQueue2] pushIsolated() called with mode hash: ${modeHash}`);
 
-        this.queue.push({
+        const item: QueueItem<T> = {
             message,
             mode,
             modeHash,
             isolate: true,
             attachments,
-        });
+        };
+        this.queue.push(item);
 
         // Trigger message handler if set
         if (this.onMessageHandler) {
-            this.onMessageHandler(message, mode);
+            this.onMessageHandler(message, mode, item);
         }
 
         // Notify waiter if any
@@ -196,16 +213,17 @@ export class MessageQueue2<T> {
         const modeHash = this.modeHasher(mode);
         logger.debug(`[MessageQueue2] unshift() called with mode hash: ${modeHash}`);
 
-        this.queue.unshift({
+        const item: QueueItem<T> = {
             message,
             mode,
             modeHash,
             isolate: false
-        });
+        };
+        this.queue.unshift(item);
 
         // Trigger message handler if set
         if (this.onMessageHandler) {
-            this.onMessageHandler(message, mode);
+            this.onMessageHandler(message, mode, item);
         }
 
         // Notify waiter if any
@@ -229,6 +247,22 @@ export class MessageQueue2<T> {
 
         // Clear waiter without calling it since we're not closing
         this.waiter = null;
+    }
+
+    /**
+     * Take one specific item back off the queue, by identity.
+     *
+     * For a handler that delivered the message on its own and must not let it
+     * be served a second time. By reference rather than by text, because two
+     * identical messages are two turns and only the delivered one goes.
+     * Returns whether it was still there.
+     */
+    remove(item: QueueItem<T>): boolean {
+        const at = this.queue.indexOf(item);
+        if (at < 0) return false;
+        this.queue.splice(at, 1);
+        logger.debug(`[MessageQueue2] remove() took one delivered message. Queue size: ${this.queue.length}`);
+        return true;
     }
 
     /**

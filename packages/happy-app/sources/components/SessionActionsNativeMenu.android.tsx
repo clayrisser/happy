@@ -21,8 +21,10 @@ export function SessionActionsNativeMenu({
         archiveSession,
         canArchive,
         canCopySessionMetadata,
+        canFlipAccount,
         canShowResume,
         copySessionMetadata,
+        flipAccount,
         openDetails,
         resumeSession,
     } = useSessionQuickActions(session, {
@@ -44,6 +46,16 @@ export function SessionActionsNativeMenu({
                 {canShowResume && (
                     <DropdownMenuItem onClick={resumeSession}>
                         <DropdownMenuItem.Text>Resume</DropdownMenuItem.Text>
+                    </DropdownMenuItem>
+                )}
+                {/*
+                    One row, not a nested submenu of accounts: DropdownMenu has
+                    no nested-menu primitive, and `flipAccount` already raises
+                    the account picker — the same alert the popover uses.
+                */}
+                {canFlipAccount && (
+                    <DropdownMenuItem onClick={flipAccount}>
+                        <DropdownMenuItem.Text>Move to another account</DropdownMenuItem.Text>
                     </DropdownMenuItem>
                 )}
                 {canCopySessionMetadata && (

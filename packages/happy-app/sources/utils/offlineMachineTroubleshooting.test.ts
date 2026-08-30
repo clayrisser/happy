@@ -52,7 +52,7 @@ describe('offline machine troubleshooting', () => {
             session({ machineId: 'mac', path: '/Users/kirill/Developer/happy', projectName: 'Happy', updatedAt: 20 }),
         ]);
 
-        expect(guide.aiPrompt).toBe('In /Users/kirill/.happy, diagnose why Happy cannot reach "Kirill’s Mac" for project "Happy".');
+        expect(guide.aiPrompt).toBe('In /Users/kirill/.happy, diagnose why Cattle Drover cannot reach "Kirill’s Mac" for project "Happy".');
         expect(guide.message).toContain('1. Wake the machine and check internet.');
         expect(guide.message.endsWith(guide.aiPrompt)).toBe(true);
     });

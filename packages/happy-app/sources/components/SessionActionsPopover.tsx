@@ -11,6 +11,7 @@ import {
     getPreferredShortcutModifier,
     matchesShortcutChord,
     SESSION_ACTION_SHORTCUTS,
+    type ShortcutChord,
 } from '@/keyboard/shortcuts';
 import { MobileGlassSurface } from './MobileGlass';
 import { AnimatedPopup, LocalBlurHalo } from './AnimatedOverlay';
@@ -38,6 +39,15 @@ interface SessionActionsPopoverProps {
     visible: boolean;
 }
 
+
+/**
+ * Not every menu row has a keyboard chord — `flip-account` deliberately has
+ * none — so the lookup is optional and the shortcut column stays blank rather
+ * than reading an undefined chord.
+ */
+function shortcutFor(id: SessionActionItem['id']): ShortcutChord | undefined {
+    return (SESSION_ACTION_SHORTCUTS as Partial<Record<string, ShortcutChord>>)[id];
+}
 
 const WEB_MENU_WIDTH = 288;
 const WEB_MENU_ITEM_HEIGHT = 48;
@@ -188,11 +198,10 @@ export function SessionActionsPopover({
         }
 
         const handleKeyDown = (event: KeyboardEvent) => {
-            const action = actions.find((candidate) => matchesShortcutChord(
-                event,
-                preferredModifier,
-                SESSION_ACTION_SHORTCUTS[candidate.id],
-            ));
+            const action = actions.find((candidate) => {
+                const chord = shortcutFor(candidate.id);
+                return chord ? matchesShortcutChord(event, preferredModifier, chord) : false;
+            });
             if (!action) {
                 return;
             }
@@ -213,10 +222,8 @@ export function SessionActionsPopover({
     const actionItems = actions.map((action, index) => {
         const isLast = index === actions.length - 1;
         const color = action.destructive ? theme.colors.status.error : theme.colors.text;
-        const shortcutLabel = formatShortcutChord(
-            preferredModifier,
-            SESSION_ACTION_SHORTCUTS[action.id],
-        );
+        const chord = shortcutFor(action.id);
+        const shortcutLabel = chord ? formatShortcutChord(preferredModifier, chord) : '';
 
         return (
             <Pressable

@@ -1,17 +1,18 @@
 import { RoundButton } from "@/components/RoundButton";
 import { useAuth } from "@/auth/AuthContext";
-import { Text, View, Image, Platform } from "react-native";
+import { Text, View, Platform } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as React from 'react';
 import { encodeBase64 } from "@/encryption/base64";
 import { authGetToken } from "@/auth/authGetToken";
 import { router, useRouter } from "expo-router";
-import { StyleSheet, useUnistyles } from "react-native-unistyles";
+import { StyleSheet } from "react-native-unistyles";
 import { getRandomBytesAsync } from "expo-crypto";
 import { useIsLandscape } from "@/utils/responsive";
 import { Typography } from "@/constants/Typography";
 import { trackAccountCreated, trackAccountRestored } from '@/track';
 import { HomeHeaderNotAuth } from "@/components/HomeHeader";
+import { Wordmark } from "@/components/Wordmark";
 import { MainView } from "@/components/MainView";
 import { t } from '@/text';
 
@@ -30,7 +31,6 @@ function Authenticated() {
 }
 
 function NotAuthenticated() {
-    const { theme } = useUnistyles();
     const auth = useAuth();
     const router = useRouter();
     const isLandscape = useIsLandscape();
@@ -51,11 +51,7 @@ function NotAuthenticated() {
 
     const portraitLayout = (
         <View style={styles.portraitContainer}>
-            <Image
-                source={theme.dark ? require('@/assets/images/logotype-light.png') : require('@/assets/images/logotype-dark.png')}
-                resizeMode="contain"
-                style={styles.logo}
-            />
+            <Wordmark width={190} />
             <Text style={styles.title}>
                 {t('welcome.title')}
             </Text>
@@ -110,11 +106,7 @@ function NotAuthenticated() {
         <View style={[styles.landscapeContainer, { paddingBottom: insets.bottom + 24 }]}>
             <View style={styles.landscapeInner}>
                 <View style={styles.landscapeLogoSection}>
-                    <Image
-                        source={theme.dark ? require('@/assets/images/logotype-light.png') : require('@/assets/images/logotype-dark.png')}
-                        resizeMode="contain"
-                        style={styles.logo}
-                    />
+                    <Wordmark width={190} />
                 </View>
                 <View style={styles.landscapeContentSection}>
                     <Text style={styles.landscapeTitle}>
@@ -182,10 +174,6 @@ const styles = StyleSheet.create((theme) => ({
         flex: 1,
         alignItems: 'center',
         justifyContent: 'center',
-    },
-    logo: {
-        width: 300,
-        height: 90,
     },
     title: {
         marginTop: 16,

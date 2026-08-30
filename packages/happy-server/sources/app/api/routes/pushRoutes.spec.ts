@@ -14,7 +14,14 @@ const {
         tokens: [] as Array<{ id: string; token: string }>,
         // Sockets the presence check sees, as socket.data shapes.
         sockets: [] as Array<{ data: Record<string, unknown> }>,
-        sent: [] as Array<{ to: string; title?: string }>,
+        sent: [] as Array<{
+            to: string;
+            title?: string;
+            priority?: string;
+            contentAvailable?: boolean;
+            _contentAvailable?: boolean;
+            interruptionLevel?: string;
+        }>,
         ticketOverride: null as null | Array<{ status: 'ok' | 'error'; message?: string; details?: { error?: string } }>,
         presenceError: null as string | null,
     };
@@ -39,7 +46,7 @@ const {
         }
     };
 
-    const pushSendMock = vi.fn(async (messages: Array<{ to: string; title?: string }>) => {
+    const pushSendMock = vi.fn(async (messages: typeof state.sent) => {
         state.sent.push(...messages);
         return state.ticketOverride ?? messages.map(() => ({ status: 'ok' as const }));
     });
@@ -55,6 +62,7 @@ vi.mock("@/app/push/pushSend", () => ({ sendPushNotifications: pushSendMock }));
 // socket.io server is stubbed: `state.sockets` is what fetchSockets returns,
 // and emit paths are swallowed.
 import { eventRouter } from "@/app/events/eventRouter";
+import { pushThrottleReset } from "@/app/push/pushThrottle";
 import { pushRoutes } from "./pushRoutes";
 
 function stubIo() {
@@ -92,11 +100,27 @@ async function postPushEvent(app: Fastify, sessionId = SESSION) {
     });
 }
 
+/** What the drover bridge posts when it mirrors a gate onto the phone. */
+async function postGate(app: Fastify, requestId: string, kind: 'permission' | 'question' = 'question') {
+    return app.inject({
+        method: 'POST',
+        url: `/v1/sessions/${SESSION}/push-event`,
+        headers: { authorization: 'Bearer t' },
+        payload: {
+            kind,
+            title: 'Clarification needed',
+            body: 'cattle-drover · which account?',
+            data: { sessionId: SESSION, requestId, tool: 'AskUserQuestion' }
+        }
+    });
+}
+
 describe('POST /v1/sessions/:sessionId/push-event', () => {
     let app: Fastify;
 
     beforeEach(async () => {
         resetState();
+        pushThrottleReset();
         state.sessions.push({ id: SESSION, accountId: USER });
         state.tokens.push({ id: 'tok-1', token: 'ExponentPushToken[aaa]' });
         eventRouter.init(stubIo());
@@ -172,5 +196,70 @@ describe('POST /v1/sessions/:sessionId/push-event', () => {
         const res = await postPushEvent(app, 'someone-elses-session');
         expect(res.statusCode).toBe(404);
         expect(state.sent).toHaveLength(0);
+    });
+
+    it('asks iOS to wake the app for a question, so the watch feed can republish', async () => {
+        // Clay had to hold the phone app in the foreground for drover questions
+        // to reach his watch: the feed only runs while the app's JS runtime is
+        // alive, and iOS stops it on background. This flag is what asks iOS to
+        // start it again.
+        await postGate(app, 'req-1');
+        expect(state.sent[0]).toMatchObject({
+            // Both spellings: only `contentAvailable` is in Expo's live request
+            // schema, `_contentAvailable` is the legacy alias. See pushSend.ts.
+            contentAvailable: true,
+            _contentAvailable: true,
+            interruptionLevel: 'time-sensitive',
+            priority: 'high'
+        });
+    });
+
+    it('does not wake the app for a done event', async () => {
+        await postPushEvent(app);
+        expect(state.sent[0].contentAvailable).toBeUndefined();
+        expect(state.sent[0]._contentAvailable).toBeUndefined();
+        expect(state.sent[0].interruptionLevel).toBeUndefined();
+    });
+
+    it('pushes a request once, however often the bridge re-mirrors it', async () => {
+        await postGate(app, 'req-1');
+        const res = await postGate(app, 'req-1');
+        expect(res.json()).toMatchObject({ result: 'duplicate' });
+        expect(state.sent).toHaveLength(1);
+    });
+
+    it('still pushes a different request from the same session', async () => {
+        await postGate(app, 'req-1');
+        await postGate(app, 'req-2');
+        expect(state.sent).toHaveLength(2);
+    });
+
+    it('keeps alerting past the hourly wake budget, without the wake flag', async () => {
+        // Apple's ceiling for background pushes is two or three an hour. Past
+        // it the alert must still go out — that is the half a locked phone
+        // forwards to the watch.
+        for (let i = 1; i <= 4; i++) {
+            await postGate(app, `req-${i}`);
+        }
+        expect(state.sent).toHaveLength(4);
+        expect(state.sent[2].contentAvailable).toBe(true);
+        expect(state.sent[3].contentAvailable).toBeUndefined();
+        expect(state.sent[3].interruptionLevel).toBe('time-sensitive');
+    });
+
+    it('lets a failed push retry instead of eating the request for an hour', async () => {
+        state.ticketOverride = [{ status: 'error', message: 'Network error' }];
+        expect((await postGate(app, 'req-1')).json()).toMatchObject({ result: 'failed' });
+        state.ticketOverride = null;
+        expect((await postGate(app, 'req-1')).json()).toMatchObject({ result: 'sent' });
+        expect(state.sent).toHaveLength(2);
+    });
+
+    it('does not burn the request claim while a UI client is watching', async () => {
+        state.sockets.push({ data: { clientType: 'user-scoped', appState: 'active' } });
+        expect((await postGate(app, 'req-1')).json()).toMatchObject({ result: 'suppressed' });
+        state.sockets.length = 0;
+        expect((await postGate(app, 'req-1')).json()).toMatchObject({ result: 'sent' });
+        expect(state.sent).toHaveLength(1);
     });
 });

@@ -18,6 +18,46 @@ export type ClaudeSessionProtocolState = {
     hiddenParentToolCalls?: Set<string>;
     startedSubagents?: Set<string>;
     activeSubagents?: Set<string>;
+    /**
+     * Every subagent this session has ever started, counted once each.
+     *
+     * Deliberately NOT the size of `startedSubagents`: that set is wiped at
+     * every turn end by clearSubagentTracking, because it exists to de-dupe
+     * start envelopes inside one turn. The watch's `total` means "including the
+     * ones already finished" (happy-app/sources/sync/droverWatchFeed.ts), so it
+     * has to outlive the turn.
+     */
+    subagentsStartedTotal?: number;
+    /**
+     * Envelope ids already spent on prompts the terminal queued (DROVE-41),
+     * FIFO per exact text. See mapQueuedPromptToSessionEnvelopes.
+     */
+    queuedPromptEnvelopeIds?: Map<string, string[]>;
+};
+
+/**
+ * The activity block the phone and the watch already render.
+ *
+ * The shape is dictated by the consumers, not chosen here. happy-app's
+ * MetadataSchema (sources/sync/storageTypes.ts) marks `activity` optional but
+ * every sub-object inside it REQUIRED, and the info screen reads
+ * `metadata.activity.workflows.running` with no optional chaining on
+ * `workflows`. A partial block therefore fails safeParse in decryptMetadata(),
+ * which returns null and drops the WHOLE metadata record — path, host, name,
+ * summary and all — off the phone.
+ *
+ * So we publish the full shape and zero the counters Claude Code gives us no
+ * honest source for. The zeros are invisible rather than misleading: every row
+ * on the info screen is guarded on `> 0`, so workflows, processes and tasks
+ * render nothing at all until something actually tracks them. `queued` is the
+ * one zero a user can see, and Claude Code's transcript exposes no subagent
+ * queue — a Task tool call starts running immediately.
+ */
+export type ClaudeActivity = {
+    subagents: { running: number; queued: number; total: number };
+    workflows: { running: number; total: number };
+    processes: { running: number };
+    tasks: { pending: number; inProgress: number; completed: number; total: number };
 };
 
 type ClaudeMapperResult = {
@@ -356,6 +396,7 @@ function maybeEmitSubagentStart(
     }, { turn, subagent }));
     started.add(subagent);
     getActiveSubagents(state).add(subagent);
+    state.subagentsStartedTotal = (state.subagentsStartedTotal ?? 0) + 1;
 }
 
 function maybeEmitSubagentStop(
@@ -394,6 +435,112 @@ function clearSubagentTracking(state: ClaudeSessionProtocolState): void {
     getHiddenParentToolCalls(state).clear();
     getStartedSubagents(state).clear();
     getActiveSubagents(state).clear();
+}
+
+/**
+ * What the session's activity looks like RIGHT NOW, straight off the live sets.
+ *
+ * `running` is the active-subagent set the mapper already maintained and never
+ * published, which is the whole of BASED-134: the phone's Subagents row and the
+ * watch's "N subagents" have been shipped and dead because nothing wrote here.
+ */
+export function readClaudeActivity(state: ClaudeSessionProtocolState): ClaudeActivity {
+    return {
+        subagents: {
+            running: getActiveSubagents(state).size,
+            queued: 0,
+            total: state.subagentsStartedTotal ?? 0,
+        },
+        workflows: { running: 0, total: 0 },
+        processes: { running: 0 },
+        tasks: { pending: 0, inProgress: 0, completed: 0, total: 0 },
+    };
+}
+
+const emptyClaudeActivity = JSON.stringify(readClaudeActivity({ currentTurnId: null }));
+
+/** How long a burst of starts and stops is allowed to settle before we write. */
+const claudeActivityCoalesceMs = 300;
+
+/**
+ * Writes `metadata.activity` when it moves, and only then.
+ *
+ * Subagents arrive in bursts — one assistant message can fan out six Tasks, and
+ * they finish in a clump too — so a write per event would be six metadata
+ * round-trips to say one thing. Two filters, both needed:
+ *
+ *  - coalesce: a rising count waits ~300ms for the burst to settle.
+ *  - dedupe: an unchanged snapshot never goes out, so the message-per-token
+ *    firehose that calls sync() constantly costs nothing.
+ *
+ * A drop to zero skips the timer and goes out immediately. That is deliberate:
+ * the failure this guards is a stale "3 subagents" still sitting on the phone
+ * after everything finished, and a turn end is exactly when the process is
+ * most likely to stop existing before a pending timer could fire.
+ */
+export class ClaudeActivityPublisher {
+    private readonly publish: (activity: ClaudeActivity) => void;
+    private readonly coalesceMs: number;
+    private timer: ReturnType<typeof setTimeout> | null = null;
+    private pending: ClaudeActivity | null = null;
+    /** Serialized last write. Starts at all-zero so an idle session writes nothing. */
+    private lastPublished: string = emptyClaudeActivity;
+
+    constructor(publish: (activity: ClaudeActivity) => void, opts?: { coalesceMs?: number }) {
+        this.publish = publish;
+        this.coalesceMs = opts?.coalesceMs ?? claudeActivityCoalesceMs;
+    }
+
+    sync(state: ClaudeSessionProtocolState): void {
+        const next = readClaudeActivity(state);
+        if (JSON.stringify(next) === this.lastPublished) {
+            // Nothing moved. Drop any queued write for the value we already sent.
+            this.pending = null;
+            this.clearTimer();
+            return;
+        }
+
+        this.pending = next;
+        if (next.subagents.running === 0) {
+            this.flush();
+            return;
+        }
+        if (this.timer) {
+            return;
+        }
+        this.timer = setTimeout(() => {
+            this.timer = null;
+            this.flush();
+        }, this.coalesceMs);
+        this.timer.unref?.();
+    }
+
+    flush(): void {
+        this.clearTimer();
+        const next = this.pending;
+        this.pending = null;
+        if (!next) {
+            return;
+        }
+        const serialized = JSON.stringify(next);
+        if (serialized === this.lastPublished) {
+            return;
+        }
+        this.lastPublished = serialized;
+        this.publish(next);
+    }
+
+    dispose(): void {
+        this.clearTimer();
+        this.pending = null;
+    }
+
+    private clearTimer(): void {
+        if (this.timer) {
+            clearTimeout(this.timer);
+            this.timer = null;
+        }
+    }
 }
 
 function ensureTurn(state: ClaudeSessionProtocolState, envelopes: SessionEnvelope[]): string {
@@ -492,6 +639,94 @@ export function closeClaudeTurnWithStatus(
         currentTurnId: state.currentTurnId,
         envelopes,
     };
+}
+
+/**
+ * A prompt typed at the terminal while Claude was mid-turn (DROVE-41).
+ *
+ * It is not a turn yet and may never be one: 20 of the 26 prompts queued in
+ * Clay's live session were absorbed into the running turn and never written
+ * as a `user` record at all. So the queue records are the message, and this
+ * turns the first sighting of one into the bubble the app shows.
+ *
+ * Three things it deliberately does NOT do:
+ *
+ *   - It does not close the running turn. Claude being mid-turn is WHY the
+ *     prompt was queued; ending the turn here would cut its reply in two.
+ *   - It does not open one either. A user envelope needs no turn, and opening
+ *     one would put an empty agent turn in front of the human's own words.
+ *   - It does not stamp `now`. The prompt is stamped when it was typed, so it
+ *     sits between the phone's messages where the human put it rather than
+ *     where Claude got round to it.
+ *
+ * The id it hands out is remembered against the text, because the same prompt
+ * can arrive twice more: as the absorb record, and — when it leaves the queue
+ * the other way — as a real `user` turn. The app keys messages by envelope id,
+ * so replaying that id is what keeps one message to one bubble.
+ */
+export function mapQueuedPromptToSessionEnvelopes(
+    prompt: { text: string; at?: number; carrier: 'enqueue' | 'absorbed'; claudeUuid?: string },
+    state: ClaudeSessionProtocolState,
+): ClaudeMapperResult {
+    const text = prompt.text;
+    if (text.trim().length === 0) {
+        return { currentTurnId: state.currentTurnId, envelopes: [] };
+    }
+
+    if (prompt.carrier === 'absorbed' && takeQueuedPromptEnvelopeId(state, text)) {
+        // The enqueue record already showed this one. Falling through when
+        // there is nothing to take matters just as much: a scanner that
+        // started mid-turn, or one whose first hook pre-marked the transcript
+        // as history, never saw the enqueue and this record is the only
+        // sighting it will get.
+        return { currentTurnId: state.currentTurnId, envelopes: [] };
+    }
+
+    const id = createId();
+    if (prompt.carrier === 'enqueue') {
+        // Only the enqueue carrier is remembered. An absorbed prompt never
+        // becomes a `user` record, so an id left here for one would be spent
+        // silencing some later message that happened to repeat the words.
+        rememberQueuedPromptEnvelopeId(state, text, id);
+    }
+
+    return {
+        currentTurnId: state.currentTurnId,
+        envelopes: [createEnvelope('user', { t: 'text', text }, {
+            id,
+            ...(prompt.at ? { time: prompt.at } : {}),
+            ...(prompt.claudeUuid ? { claudeUuid: prompt.claudeUuid } : {}),
+        })],
+    };
+}
+
+function rememberQueuedPromptEnvelopeId(state: ClaudeSessionProtocolState, text: string, id: string): void {
+    if (!state.queuedPromptEnvelopeIds) {
+        state.queuedPromptEnvelopeIds = new Map<string, string[]>();
+    }
+    const existing = state.queuedPromptEnvelopeIds.get(text);
+    if (existing) {
+        existing.push(id);
+        return;
+    }
+    state.queuedPromptEnvelopeIds.set(text, [id]);
+}
+
+/**
+ * The envelope id already spent on this exact prompt, if it was queued in the
+ * terminal first. FIFO, and taken rather than read: the same words typed twice
+ * are two messages and get one id each.
+ */
+function takeQueuedPromptEnvelopeId(state: ClaudeSessionProtocolState, text: string): string | undefined {
+    const ids = state.queuedPromptEnvelopeIds?.get(text);
+    if (!ids || ids.length === 0) {
+        return undefined;
+    }
+    const id = ids.shift();
+    if (ids.length === 0) {
+        state.queuedPromptEnvelopeIds?.delete(text);
+    }
+    return id;
 }
 
 export function mapClaudeLogMessageToSessionEnvelopes(
@@ -631,7 +866,14 @@ function mapClaudeLogMessageToSessionEnvelopesInternal(
                 envelopes.push(createEnvelope('agent', { t: 'text', text: message.message.content }, { turn: turnId, subagent, claudeUuid }));
             } else {
                 closeTurn(state, 'completed', envelopes);
-                envelopes.push(createEnvelope('user', { t: 'text', text: message.message.content }, { claudeUuid }));
+                // DROVE-41: if the terminal queued this prompt, the app has
+                // already been shown it under that id. Reusing it leaves the
+                // one bubble where the human typed it.
+                const queuedId = takeQueuedPromptEnvelopeId(state, message.message.content);
+                envelopes.push(createEnvelope('user', { t: 'text', text: message.message.content }, {
+                    ...(queuedId ? { id: queuedId } : {}),
+                    claudeUuid,
+                }));
             }
 
             return {
@@ -655,7 +897,11 @@ function mapClaudeLogMessageToSessionEnvelopesInternal(
             closeTurn(state, 'completed', envelopes);
             for (const block of blocks) {
                 if (block.type === 'text' && typeof block.text === 'string' && block.text.trim().length > 0) {
-                    envelopes.push(createEnvelope('user', { t: 'text', text: block.text }, { claudeUuid }));
+                    const queuedId = takeQueuedPromptEnvelopeId(state, block.text);
+                    envelopes.push(createEnvelope('user', { t: 'text', text: block.text }, {
+                        ...(queuedId ? { id: queuedId } : {}),
+                        claudeUuid,
+                    }));
                 }
             }
 

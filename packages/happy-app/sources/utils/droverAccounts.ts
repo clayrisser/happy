@@ -74,3 +74,36 @@ export function filterByDroverAccount(
         return !!next && next.type !== 'header' && next.type !== 'projects-header';
     });
 }
+
+/**
+ * Every drover account stamped on any known session, sorted.
+ *
+ * The chip row (SessionsList) works off the built list view; the flip action
+ * runs per session row, where rebuilding that view would be wasteful, so it
+ * reads the raw session map instead. Same rule either way: only a stamped
+ * account counts, unaccounted sessions contribute nothing.
+ */
+export function collectDroverAccountsFromSessions(
+    sessions: Iterable<{ metadata?: { droverAccount?: string | null } | null }>,
+): string[] {
+    const found = new Set<string>();
+    for (const session of sessions) {
+        const account = session.metadata?.droverAccount;
+        if (account) found.add(account);
+    }
+    return [...found].sort();
+}
+
+/**
+ * The chat message that moves a session to another account.
+ *
+ * There is no flip RPC and there must not be one: happy-cli parses `/flip` out
+ * of the message stream before the queue (drover/flip/controller.ts), so a
+ * plain message is the whole mechanism. Bare `/flip` lets the CLI pick the next
+ * account with headroom; naming one asks for that account. The watch builds the
+ * exact same string (sync/droverWatchFeed.ts).
+ */
+export function droverFlipMessage(account?: string | null): string {
+    const name = account?.trim();
+    return name ? `/flip ${name}` : '/flip';
+}

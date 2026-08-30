@@ -156,6 +156,7 @@ export type ReducerState = {
     messageIds: Map<string, string>; // originalId -> internalId
     messages: Map<string, ReducerMessage>;
     sidechains: Map<string, ReducerMessage[]>;
+    subagentEventMessageIds?: Map<string, string>; // subagent id -> the lifecycle row's message id
     tracerState: TracerState; // Tracer state for sidechain processing
     latestTodos?: {
         todos: TodoItem[];
@@ -181,9 +182,17 @@ export function createReducer(): ReducerState {
         localIds: new Map(),
         messageIds: new Map(),
         sidechains: new Map(),
+        subagentEventMessageIds: new Map(),
         tracerState: createTracer()
     }
 };
+
+function getSubagentEventMessageIds(state: ReducerState): Map<string, string> {
+    if (!state.subagentEventMessageIds) {
+        state.subagentEventMessageIds = new Map();
+    }
+    return state.subagentEventMessageIds;
+}
 
 const ENABLE_LOGGING = false;
 
@@ -313,6 +322,69 @@ export function reducer(state: ReducerState, messages: NormalizedMessage[], agen
             // Mark as processed to prevent duplication but don't add to messages
             state.messageIds.set(msg.id, msg.id);
             hasReadyEvent = true;
+            continue;
+        }
+
+        // A subagent opens exactly one row and keeps it. The start creates it as
+        // running; the stop below marks that same row finished rather than
+        // adding a second row or letting the first one disappear.
+        if (msg.role === 'event' && msg.content.type === 'subagent') {
+            state.messageIds.set(msg.id, msg.id);
+            const subagentRows = getSubagentEventMessageIds(state);
+            if (subagentRows.has(msg.content.subagent)) {
+                continue;
+            }
+            const mid = allocateId();
+            state.messages.set(mid, {
+                id: mid,
+                realID: msg.id,
+                role: 'agent',
+                createdAt: msg.createdAt,
+                event: { ...msg.content },
+                tool: null,
+                text: null,
+                meta: msg.meta,
+            });
+            subagentRows.set(msg.content.subagent, mid);
+            changed.add(mid);
+            continue;
+        }
+
+        if (msg.role === 'event' && msg.content.type === 'subagent-stop') {
+            state.messageIds.set(msg.id, msg.id);
+            const subagentRows = getSubagentEventMessageIds(state);
+            const rowId = subagentRows.get(msg.content.subagent);
+            const row = rowId ? state.messages.get(rowId) : undefined;
+            if (rowId && row && row.event?.type === 'subagent') {
+                row.event = {
+                    ...row.event,
+                    state: 'finished',
+                    completedAt: msg.content.completedAt,
+                };
+                changed.add(rowId);
+                continue;
+            }
+            // A stop whose start never arrived (a partially loaded history, say)
+            // still gets a row — finished, so nothing the CLI sent is lost.
+            const mid = allocateId();
+            state.messages.set(mid, {
+                id: mid,
+                realID: msg.id,
+                role: 'agent',
+                createdAt: msg.createdAt,
+                event: {
+                    type: 'subagent',
+                    subagent: msg.content.subagent,
+                    state: 'finished',
+                    startedAt: msg.createdAt,
+                    completedAt: msg.content.completedAt,
+                },
+                tool: null,
+                text: null,
+                meta: msg.meta,
+            });
+            subagentRows.set(msg.content.subagent, mid);
+            changed.add(mid);
             continue;
         }
 

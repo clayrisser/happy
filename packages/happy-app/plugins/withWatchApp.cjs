@@ -38,7 +38,16 @@ post_integrate do |installer|
     'IOS_BUILD_NUMBER' => '${buildNumber}'
   }
   script = File.join(watch, 'scripts', 'add-watch-targets.rb')
-  unless system(env, 'ruby', script, __dir__, watch)
+  # Gem.ruby, not 'ruby'. A bare command resolves through PATH, and the first
+  # ruby on a stock Mac is /usr/bin/ruby — system 2.6, which has no xcodeproj
+  # gem. The hook then dies with "cannot load such file -- xcodeproj", takes
+  # \`pod install\` down with it, and leaves the project HALF integrated:
+  # measured 2026-08-29, ExpoModulesProvider.swift was regenerated importing a
+  # pod whose directory was never written and Podfile.lock still held the
+  # previous run's contents, so the next build could not compile. Gem.ruby is
+  # the interpreter running CocoaPods, which by definition already has the
+  # xcodeproj this script needs — the same one the comment above counts on.
+  unless system(env, Gem.ruby, script, __dir__, watch)
     raise 'BASED-98: re-attaching the drover watch targets after pod install failed'
   end
 end
@@ -52,7 +61,14 @@ const withWatchApp = (config) =>
       const watchRoot = path.join(cfg.modRequest.projectRoot, "watch");
       const script = path.join(watchRoot, "scripts", "add-watch-targets.rb");
 
-      const result = spawnSync("ruby", [script, iosRoot, watchRoot], {
+      // Through the resolver, never a bare `ruby`: PATH's first ruby on a
+      // stock Mac is system 2.6, which has no xcodeproj gem, and the graft
+      // then dies with "cannot load such file -- xcodeproj" — prebuild fails
+      // and the watch app is absent from the project. One resolver for every
+      // caller, so fixing it in the Podfile hook alone cannot leave this one
+      // behind again (BASED-98, build 7).
+      const withRuby = path.join(watchRoot, "scripts", "with-ruby.sh");
+      const result = spawnSync("sh", [withRuby, script, iosRoot, watchRoot], {
         stdio: "inherit",
         env: {
           ...process.env,

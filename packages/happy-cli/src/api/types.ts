@@ -322,6 +322,18 @@ export type Metadata = {
   gitBranch?: string,
   claudeSessionId?: string, // Claude Code session ID
   codexThreadId?: string, // Codex app-server thread ID
+  /**
+   * Live counters the phone's info screen and the watch already render
+   * (BASED-134). Mirrors happy-app's MetadataSchema, where every sub-object is
+   * required once `activity` is present — publish the whole block or none of
+   * it, or the app's metadata safeParse fails and drops the record.
+   */
+  activity?: {
+    subagents: { running: number, queued: number, total: number },
+    workflows: { running: number, total: number },
+    processes: { running: number },
+    tasks: { pending: number, inProgress: number, completed: number, total: number },
+  },
   tools?: string[],
   slashCommands?: string[],
   mcpServers?: Array<{ name: string; status: string }>,
@@ -333,6 +345,32 @@ export type Metadata = {
   startedFromDaemon?: boolean,
   hostPid?: number,
   startedBy?: 'daemon' | 'terminal',
+  /**
+   * This session is a live Claude in a tmux pane ($TMUX_PANE was set at start).
+   * The terminal IS the session, so the phone is a window on it rather than a
+   * takeover: messages go straight into the pane and there is nothing to hand
+   * control back and forth (BASED-113).
+   */
+  hasPane?: boolean,
+  /**
+   * What the tmux pane is ACTUALLY running, read off the transcript by the
+   * session scanner (DROVE-45). Report-only: the app's `modelMode` /
+   * `effortLevel` stay the PICK, and these two are the truth the picker
+   * displays for a pane session, so it can no longer claim Fable while Opus
+   * answers. Absent for a session with no pane.
+   */
+  paneModel?: string | null,
+  paneEffort?: string | null,
+  /**
+   * The per-session picks any client made (#1492). Written by the app's
+   * composer, and until DROVE-45 read only by the SDK path, which hands them to
+   * query(). They were missing from this type entirely because nothing in the
+   * CLI had ever needed to READ them — the pane launcher does, to turn a pick
+   * into the `/model` / `/effort` the TUI understands. Explicit null means
+   * "reset to default"; absent means "never picked".
+   */
+  modelMode?: string | null,
+  effortLevel?: string | null,
   // Lifecycle state management
   lifecycleState?: 'running' | 'archiveRequested' | 'archived' | string,
   lifecycleStateSince?: number,

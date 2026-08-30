@@ -701,6 +701,9 @@ importers:
       expo-system-ui:
         specifier: ~55.0.0
         version: 55.0.10(expo@55.0.8)(react-native-web@0.21.2(encoding@0.1.13)(react-dom@19.2.0(react@19.2.0))(react@19.2.0))(react-native@0.83.1(@babel/core@7.28.6)(@types/react@19.1.17)(react@19.2.0))
+      expo-task-manager:
+        specifier: ~55.0.0
+        version: 55.0.20(expo@55.0.8)(react-native@0.83.1(@babel/core@7.28.6)(@types/react@19.1.17)(react@19.2.0))
       expo-updates:
         specifier: ~55.0.0
         version: 55.0.15(expo@55.0.8)(react-native@0.83.1(@babel/core@7.28.6)(@types/react@19.1.17)(react@19.2.0))(react@19.2.0)(typescript@5.9.3)
@@ -8881,6 +8884,12 @@ packages:
       react-native-web:
         optional: true
 
+  expo-task-manager@55.0.20:
+    resolution: {integrity: sha512-yxiERbkqibZYDArQ1QKbezKn7YkCxLyaDeiIO8DcyOqopBvUmXDkF3b7FtesW+YnAlg3g223geV8YiW1I4Suew==}
+    peerDependencies:
+      expo: '*'
+      react-native: '*'
+
   expo-updates-interface@55.1.3:
     resolution: {integrity: sha512-UVVIiZqymQZJL+o/jh65kXOI97xdkbqBJJM0LMabaPMNLFnc6/WvOMOzmQs7SPyKb8+0PeBaFd7tj5DzF6JeQg==}
     peerDependencies:
@@ -13159,6 +13168,9 @@ packages:
 
   unified@11.0.5:
     resolution: {integrity: sha512-xKvGhPWw3k84Qjh8bI3ZeJjqnyadK+GEFtazSfZv/rKeTkTjOJho6mFqh2SM96iIcZokxiOpg78GazTSg8+KHA==}
+
+  unimodules-app-loader@55.0.5:
+    resolution: {integrity: sha512-2eLjtaAVQTK3EeiUAgRbfEnX78f6cMtw5Js8Ri4OcEdkrozsmvG3Wu8YVfr6kfhea17FHZkKZmO1m4dL/Ky2Bg==}
 
   unique-filename@4.0.0:
     resolution: {integrity: sha512-XSnEewXmQ+veP7xX2dS5Q4yZAvO40cBN2MWkJ7D/6sW4Dg6wYBNwM1Vrnz1FhH5AdeLIlUXRI9e28z1YZi71NQ==}
@@ -22438,6 +22450,12 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
+  expo-task-manager@55.0.20(expo@55.0.8)(react-native@0.83.1(@babel/core@7.28.6)(@types/react@19.1.17)(react@19.2.0)):
+    dependencies:
+      expo: 55.0.8(@babel/core@7.28.6)(@expo/dom-webview@55.0.3)(@expo/metro-runtime@55.0.6)(expo-router@55.0.7)(react-dom@19.2.0(react@19.2.0))(react-native-webview@13.15.0(react-native@0.83.1(@babel/core@7.28.6)(@types/react@19.1.17)(react@19.2.0))(react@19.2.0))(react-native@0.83.1(@babel/core@7.28.6)(@types/react@19.1.17)(react@19.2.0))(react@19.2.0)(typescript@5.9.3)
+      react-native: 0.83.1(@babel/core@7.28.6)(@types/react@19.1.17)(react@19.2.0)
+      unimodules-app-loader: 55.0.5
+
   expo-updates-interface@55.1.3(expo@55.0.8):
     dependencies:
       expo: 55.0.8(@babel/core@7.28.6)(@expo/dom-webview@55.0.3)(@expo/metro-runtime@55.0.6)(expo-router@55.0.7)(react-dom@19.2.0(react@19.2.0))(react-native-webview@13.15.0(react-native@0.83.1(@babel/core@7.28.6)(@types/react@19.1.17)(react@19.2.0))(react@19.2.0))(react-native@0.83.1(@babel/core@7.28.6)(@types/react@19.1.17)(react@19.2.0))(react@19.2.0)(typescript@5.9.3)
@@ -27791,6 +27809,8 @@ snapshots:
       is-plain-obj: 4.1.0
       trough: 2.2.0
       vfile: 6.0.3
+
+  unimodules-app-loader@55.0.5: {}
 
   unique-filename@4.0.0:
     dependencies:

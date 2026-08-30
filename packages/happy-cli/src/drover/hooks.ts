@@ -19,6 +19,15 @@
  *     A hook that only exists while a drover session is running is removed by
  *     not running one.
  *
+ * Where to look when a hook does not fire: the file is written per PID by
+ * `generateHookSettingsFile` to `$HAPPY_HOME_DIR/tmp/hooks/session-hook-<pid>.json`
+ * (`~/.happy/tmp/hooks/...` by default) and handed to Claude as `--settings`,
+ * so nothing about this registration is visible in `~/.claude/settings.json` or
+ * in `/hooks`. Match the file to the SESSION'S pid: cleanup misses a session
+ * that did not exit cleanly, so the directory keeps files for dead pids. 9 of
+ * the 10 present on 2026-08-29 were orphans, and reading the newest one is how
+ * you end up debugging a config no running session is using.
+ *
  * The generic PreToolUse permission gate is deliberately NOT here. It blocks
  * every tool call on a bus answer, which is right for a headless session with
  * no local surface and wrong for Clay's terminal, where the gum popup is

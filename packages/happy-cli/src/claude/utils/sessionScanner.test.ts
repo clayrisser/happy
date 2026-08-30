@@ -42,6 +42,197 @@ describe('sessionScanner', () => {
     }
   })
   
+  it('reports Claude Code\'s /rename so the app title can follow it', async () => {
+    // BASED-98, reported live. `/rename zap` writes a custom-title record into
+    // the transcript and relabels the TUI. It failed RawJSONLinesSchema, so
+    // the scanner dropped it as an unknown type, and the phone — which reads
+    // metadata.summary.text and nothing else — went on showing the title
+    // change_title had guessed. Clay renamed a session and the app looked like
+    // it was showing a different one.
+    const titles: string[] = []
+    scanner = await createSessionScanner({
+      sessionId: null,
+      workingDirectory: testDir,
+      onMessage: (msg) => collectedMessages.push(msg),
+      onCustomTitle: (t) => titles.push(t),
+    })
+
+    const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+    const file = join(projectDir, `${sessionId}.jsonl`)
+    await writeFile(file, JSON.stringify({ type: 'custom-title', customTitle: 'zap', sessionId }) + '\n')
+    scanner.onNewSession(sessionId)
+    await new Promise(resolve => setTimeout(resolve, 150))
+
+    expect(titles).toEqual(['zap'])
+    // And it is not mistaken for a conversation message.
+    expect(collectedMessages).toHaveLength(0)
+
+    // Renaming again reports again; renaming to the SAME thing does not.
+    await writeFile(file,
+      JSON.stringify({ type: 'custom-title', customTitle: 'zap', sessionId }) + '\n' +
+      JSON.stringify({ type: 'custom-title', customTitle: 'zing', sessionId }) + '\n')
+    await new Promise(resolve => setTimeout(resolve, 150))
+    expect(titles).toEqual(['zap', 'zing'])
+  })
+
+  it('seeds the title from a transcript it pre-marks, because a title is a name and not a replay', async () => {
+    // DROVE-44, from the phone. `drover --resume` opens Claude Code's picker,
+    // so the transcript id only exists once the SessionStart hook fires — and
+    // that hook takes the treatExistingAsProcessed path, which marked the
+    // custom-title record along with every message and never applied it. The
+    // session Clay had called DROVER came back as "cattle-drover", and the
+    // next flip was then entitled to restamp that default-shaped name as
+    // "[jamrizzi] cattle-drover".
+    //
+    // It never recovers on its own: entries are keyed by their own text, so
+    // every later re-append of the same title is skipped as already seen.
+    const titles: string[] = []
+    scanner = await createSessionScanner({
+      sessionId: null,
+      workingDirectory: testDir,
+      onMessage: (msg) => collectedMessages.push(msg),
+      onCustomTitle: (t) => titles.push(t),
+    })
+
+    const sessionId = 'bbbbbbbb-cccc-dddd-eeee-ffffffffffff'
+    const file = join(projectDir, `${sessionId}.jsonl`)
+    await writeFile(file,
+      JSON.stringify({ type: 'custom-title', customTitle: 'old name', sessionId }) + '\n' +
+      JSON.stringify({ type: 'custom-title', customTitle: 'DROVER', sessionId }) + '\n')
+    scanner.onNewSession(sessionId, { treatExistingAsProcessed: true })
+    await new Promise(resolve => setTimeout(resolve, 200))
+
+    // Last one wins — that is what /rename means — and the messages beside it
+    // stay pre-marked, so nothing is replayed at the app.
+    expect(titles).toEqual(['DROVER'])
+    expect(collectedMessages).toHaveLength(0)
+
+    // And re-appending the SAME title, which Claude Code does on every turn,
+    // still says nothing.
+    await appendFile(file, JSON.stringify({ type: 'custom-title', customTitle: 'DROVER', sessionId }) + '\n')
+    await new Promise(resolve => setTimeout(resolve, 200))
+    expect(titles).toEqual(['DROVER'])
+  })
+
+  it('carries a message typed while Claude was busy, which never becomes a user record (DROVE-41)', async () => {
+    // Measured on Clay's live transcript. Type while Claude is mid-turn and
+    // Claude Code queues the text instead of starting a turn with it: a
+    // `queue-operation` enqueue record on the way in, then, when the running
+    // turn absorbs it, an `attachment` holding a `queued_command`. 20 of the
+    // 26 prompts queued in that session NEVER became a `user` record at all.
+    // Both carriers died here — queue-operation in INTERNAL_CLAUDE_EVENT_TYPES,
+    // attachment in RawJSONLinesSchema — so the app saw nothing, which is
+    // exactly "when I enter a new message in the terminal it doesn't show up".
+    const queued: Array<{ text: string, carrier: string }> = []
+    scanner = await createSessionScanner({
+      sessionId: null,
+      workingDirectory: testDir,
+      onMessage: (msg) => collectedMessages.push(msg),
+      onQueuedPrompt: (p) => queued.push({ text: p.text, carrier: p.carrier }),
+    })
+
+    const sessionId = 'bbbbbbbb-cccc-dddd-eeee-ffffffffffff'
+    const file = join(projectDir, `${sessionId}.jsonl`)
+    await writeFile(file, JSON.stringify({
+      type: 'queue-operation',
+      operation: 'enqueue',
+      timestamp: '2026-08-30T18:09:16.575Z',
+      sessionId,
+      content: 'why is it taking so long',
+    }) + '\n')
+    scanner.onNewSession(sessionId)
+    await new Promise(resolve => setTimeout(resolve, 200))
+
+    // The moment it is queued, not a minute later when the turn takes it.
+    expect(queued).toEqual([{ text: 'why is it taking so long', carrier: 'enqueue' }])
+    expect(collectedMessages).toHaveLength(0)
+
+    // The absorb record follows. Its timestamp is the enqueue's, but only to
+    // the millisecond ONE of Clay's 23 pairs actually agreed on, so the two
+    // carriers are reported separately and paired downstream by text.
+    await appendFile(file, JSON.stringify({
+      type: 'attachment',
+      uuid: 'd34bdba5-4a3c-4caa-a490-4e6c592a360e',
+      timestamp: '2026-08-30T18:10:21.656Z',
+      sessionId,
+      isSidechain: false,
+      attachment: {
+        type: 'queued_command',
+        prompt: 'why is it taking so long',
+        commandMode: 'prompt',
+        origin: { kind: 'human' },
+        timestamp: '2026-08-30T18:09:16.574Z',
+      },
+    }) + '\n')
+    await new Promise(resolve => setTimeout(resolve, 200))
+
+    expect(queued).toEqual([
+      { text: 'why is it taking so long', carrier: 'enqueue' },
+      { text: 'why is it taking so long', carrier: 'absorbed' },
+    ])
+    expect(collectedMessages).toHaveLength(0)
+  })
+
+  it('ignores the queue records that carry no prompt (DROVE-41)', async () => {
+    // dequeue says a prompt left the queue and remove says it was taken into
+    // the running turn. Neither is a new thing to show, and `remove` repeats
+    // the content, so reporting them would double every queued message.
+    const queued: string[] = []
+    scanner = await createSessionScanner({
+      sessionId: null,
+      workingDirectory: testDir,
+      onMessage: (msg) => collectedMessages.push(msg),
+      onQueuedPrompt: (p) => queued.push(p.text),
+    })
+
+    const sessionId = 'cccccccc-dddd-eeee-ffff-000000000000'
+    await writeFile(join(projectDir, `${sessionId}.jsonl`),
+      JSON.stringify({ type: 'queue-operation', operation: 'dequeue', timestamp: '2026-08-30T18:09:16.575Z', sessionId }) + '\n' +
+      JSON.stringify({ type: 'queue-operation', operation: 'remove', timestamp: '2026-08-30T18:10:21.656Z', sessionId, content: 'why is it taking so long', reason: 'absorbed_mid_turn' }) + '\n')
+    scanner.onNewSession(sessionId)
+    await new Promise(resolve => setTimeout(resolve, 200))
+
+    expect(queued).toEqual([])
+    expect(collectedMessages).toHaveLength(0)
+  })
+
+  it('follows a rename back to a title already used earlier in the run', async () => {
+    // DROVE-15. Entries were keyed by the title TEXT, so once
+    // `custom-title:zap` had been seen, renaming away and back was a silent
+    // no-op. Claude Code re-appends the same record on every start (69 copies
+    // in one of Clay's transcripts), so the key has to be positional and the
+    // repetition has to be filtered on the way out instead.
+    const titles: string[] = []
+    scanner = await createSessionScanner({
+      sessionId: null,
+      workingDirectory: testDir,
+      onMessage: (msg) => collectedMessages.push(msg),
+      onCustomTitle: (t) => titles.push(t),
+    })
+
+    const sessionId = '9ae61ba4-8a3b-452f-a294-da49d0019c79'
+    const file = join(projectDir, `${sessionId}.jsonl`)
+    const rename = (title: string) =>
+      JSON.stringify({ type: 'custom-title', customTitle: title, sessionId }) + '\n'
+    await writeFile(file, rename('zap'))
+    scanner.onNewSession(sessionId)
+    await new Promise(resolve => setTimeout(resolve, 150))
+    expect(titles).toEqual(['zap'])
+
+    await appendFile(file, rename('zing'))
+    await new Promise(resolve => setTimeout(resolve, 150))
+    await appendFile(file, rename('zap'))
+    await new Promise(resolve => setTimeout(resolve, 150))
+
+    expect(titles).toEqual(['zap', 'zing', 'zap'])
+
+    // Claude Code re-stamping the SAME title it already shows is still nothing
+    // to report: it happens on every start, and each one is a metadata write.
+    await appendFile(file, rename('zap'))
+    await new Promise(resolve => setTimeout(resolve, 150))
+    expect(titles).toEqual(['zap', 'zing', 'zap'])
+  })
+
   it('should process initial session and resumed session correctly', async () => {
     // TEST SCENARIO:
     // Phase 1: User says "lol" → Assistant responds "lol" → Session closes
@@ -380,5 +571,56 @@ describe('sessionScanner', () => {
       isApiErrorMessage: true,
       apiErrorStatus: 429,
     })
+  })
+  it('follows the transcript into another account after a Cattle Drover flip', async () => {
+    // The flip kills only the child, copies the transcript into the target
+    // account's config dir and relaunches --resume there. The scanner used to
+    // snapshot the old dir, so it kept reading a file nothing wrote to and the
+    // session went mute in the app.
+    scanner = await createSessionScanner({
+      sessionId: null,
+      workingDirectory: testDir,
+      onMessage: (msg) => collectedMessages.push(msg),
+    })
+
+    const fixture = await readFile(join(__dirname, '__fixtures__', '0-say-lol-session.jsonl'), 'utf-8')
+    const lines = fixture.split('\n').filter((l) => l.trim())
+    const sessionId = '93a9705e-bc6a-406d-8dce-8acc014dedbd'
+
+    await writeFile(join(projectDir, `${sessionId}.jsonl`), lines[0] + '\n')
+    scanner.onNewSession(sessionId)
+    await new Promise((r) => setTimeout(r, 200))
+    expect(collectedMessages.map((m) => m.type)).toEqual(['user'])
+
+    // What carryTranscript does: the same file, verbatim, in the new account.
+    const targetConfigDir = join(testDir, 'account-b')
+    const targetProjectDir = getProjectPath(testDir, targetConfigDir)
+    await mkdir(targetProjectDir, { recursive: true })
+    await writeFile(join(targetProjectDir, `${sessionId}.jsonl`), lines[0] + '\n')
+
+    scanner.setClaudeConfigDir(targetConfigDir)
+    // Let the re-pointed watcher attach before the relaunched child writes.
+    await new Promise((r) => setTimeout(r, 300))
+
+    // The resumed child writes here now, not in the old account.
+    await appendFile(join(targetProjectDir, `${sessionId}.jsonl`), lines[1] + '\n')
+    await new Promise((r) => setTimeout(r, 500))
+
+    // The carried copy repeats the user message. It must not reach the phone
+    // twice — dedupe is by uuid, which survives the copy.
+    expect(collectedMessages.map((m) => m.type)).toEqual(['user', 'assistant'])
+
+    // The abandoned account is no longer read. A fresh uuid, so dedupe is not
+    // what is being measured here.
+    const strayInOldAccount = JSON.stringify({
+      ...JSON.parse(lines[0]),
+      uuid: 'e2f0f3b6-0f2f-4a1c-9a1f-5f0b3a2c1d4e',
+      message: { role: 'user', content: 'written to the account we left' },
+    })
+    await appendFile(join(projectDir, `${sessionId}.jsonl`), strayInOldAccount + '\n')
+    // Long enough to cross a periodic sync, so this is not just a watcher that
+    // has not fired yet.
+    await new Promise((r) => setTimeout(r, 3500))
+    expect(collectedMessages.map((m) => m.type)).toEqual(['user', 'assistant'])
   })
 })

@@ -24,8 +24,10 @@ export function SessionActionsNativeMenu({
         archiveSession,
         canArchive,
         canCopySessionMetadata,
+        canFlipAccount,
         canShowResume,
         copySessionMetadata,
+        flipAccount,
         openDetails,
         resumeSession,
     } = useSessionQuickActions(session, {
@@ -43,6 +45,17 @@ export function SessionActionsNativeMenu({
                     )}
                     {canShowResume && (
                         <Button onPress={resumeSession} systemImage={iosSymbol('play.circle')} label="Resume" />
+                    )}
+                    {/*
+                        One row, not a nested submenu of accounts. `flipAccount`
+                        already owns the target list, the "Next available" entry
+                        and the current-account subtitle, and it is the same
+                        alert the popover raises — a submenu here would fork that
+                        logic and could not be matched on Android, whose
+                        DropdownMenu has no nested-menu primitive.
+                    */}
+                    {canFlipAccount && (
+                        <Button onPress={flipAccount} systemImage={iosSymbol('arrow.left.arrow.right')} label="Move to another account" />
                     )}
                     {canCopySessionMetadata && (
                         <Button onPress={copySessionMetadata} systemImage={iosSymbol('ladybug')} label={t('sessionInfo.copyMetadata')} />

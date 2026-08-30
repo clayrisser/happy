@@ -3,6 +3,7 @@ import { NormalizedMessage } from '../typesRaw';
 import { createReducer } from './reducer';
 import { reducer } from './reducer';
 import { AgentState } from '../storageTypes';
+import { extractThinkingText, isEmptyThinking } from '@/utils/thinkingText';
 
 describe('reducer', () => {
     // it('should process golden cases', () => {
@@ -191,6 +192,55 @@ describe('reducer', () => {
             if (result.messages[0].kind === 'agent-text') {
                 expect(result.messages[0].text).toBe('Hello from Claude!');
             }
+        });
+
+        // DROVE-46: Claude Code persists `{"type":"thinking","thinking":"",
+        // "signature":"CAIS…"}` for almost every thought — the signature without
+        // the words. The reducer still carries the block, so the display layer is
+        // the one that has to know there is nothing behind it.
+        it('carries an empty thinking block through as thinking with no text', () => {
+            const state = createReducer();
+            const messages: NormalizedMessage[] = [
+                {
+                    id: 'agent-thinking-empty',
+                    localId: null,
+                    createdAt: 1000,
+                    role: 'agent',
+                    isSidechain: false,
+                    content: [{
+                        type: 'thinking',
+                        thinking: '',
+                        uuid: 'thinking-uuid-empty',
+                        parentUUID: null
+                    }]
+                },
+                {
+                    id: 'agent-thinking-text',
+                    localId: null,
+                    createdAt: 1001,
+                    role: 'agent',
+                    isSidechain: false,
+                    content: [{
+                        type: 'thinking',
+                        thinking: 'Weighing the two options.',
+                        uuid: 'thinking-uuid-text',
+                        parentUUID: null
+                    }]
+                }
+            ];
+
+            const result = reducer(state, messages);
+
+            expect(result.messages).toHaveLength(2);
+            const [empty, withText] = result.messages;
+            if (empty.kind !== 'agent-text' || withText.kind !== 'agent-text') {
+                throw new Error('expected two agent-text messages');
+            }
+            expect(empty.isThinking).toBe(true);
+            expect(isEmptyThinking(empty.text)).toBe(true);
+            expect(withText.isThinking).toBe(true);
+            expect(isEmptyThinking(withText.text)).toBe(false);
+            expect(extractThinkingText(withText.text)).toBe('Weighing the two options.');
         });
 
         it('should update latest usage from agent messages', () => {
@@ -3314,6 +3364,91 @@ describe('reducer', () => {
             ]);
 
             expect(result.todos).toBeUndefined();
+        });
+    });
+    describe('subagent lifecycle rows', () => {
+        function startMessage(id: string, subagent: string, createdAt: number, title?: string): NormalizedMessage {
+            return {
+                id,
+                localId: null,
+                createdAt,
+                role: 'event',
+                isSidechain: false,
+                content: {
+                    type: 'subagent',
+                    subagent,
+                    ...(title ? { title } : {}),
+                    state: 'running',
+                    startedAt: createdAt,
+                },
+            };
+        }
+
+        function stopMessage(id: string, subagent: string, createdAt: number): NormalizedMessage {
+            return {
+                id,
+                localId: null,
+                createdAt,
+                role: 'event',
+                isSidechain: false,
+                content: {
+                    type: 'subagent-stop',
+                    subagent,
+                    completedAt: createdAt,
+                },
+            };
+        }
+
+        it('opens one row on start and marks that same row finished on stop', () => {
+            const state = createReducer();
+
+            const started = reducer(state, [startMessage('start-1', 'subagent-1', 1000, 'Research agent')]);
+            expect(started.messages).toHaveLength(1);
+            const row = started.messages[0];
+            expect(row.kind).toBe('agent-event');
+            if (row.kind !== 'agent-event') throw new Error('expected an agent-event message');
+            expect(row.event).toEqual({
+                type: 'subagent',
+                subagent: 'subagent-1',
+                title: 'Research agent',
+                state: 'running',
+                startedAt: 1000,
+            });
+
+            const stopped = reducer(state, [stopMessage('stop-1', 'subagent-1', 3140)]);
+            expect(stopped.messages).toHaveLength(1);
+            const finished = stopped.messages[0];
+            expect(finished.id).toBe(row.id);
+            expect(finished.kind).toBe('agent-event');
+            if (finished.kind !== 'agent-event') throw new Error('expected an agent-event message');
+            expect(finished.event).toEqual({
+                type: 'subagent',
+                subagent: 'subagent-1',
+                title: 'Research agent',
+                state: 'finished',
+                startedAt: 1000,
+                completedAt: 3140,
+            });
+        });
+
+        it('does not open a second row when a start repeats', () => {
+            const state = createReducer();
+
+            reducer(state, [startMessage('start-1', 'subagent-1', 1000)]);
+            const again = reducer(state, [startMessage('start-2', 'subagent-1', 1200)]);
+
+            expect(again.messages).toHaveLength(0);
+        });
+
+        it('still shows a row for a stop whose start never arrived', () => {
+            const state = createReducer();
+
+            const result = reducer(state, [stopMessage('stop-orphan', 'subagent-9', 2000)]);
+
+            expect(result.messages).toHaveLength(1);
+            const row = result.messages[0];
+            if (row.kind !== 'agent-event') throw new Error('expected an agent-event message');
+            expect(row.event).toMatchObject({ type: 'subagent', subagent: 'subagent-9', state: 'finished' });
         });
     });
 });

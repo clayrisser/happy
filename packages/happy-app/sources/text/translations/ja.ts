@@ -588,6 +588,8 @@ export const ja: TranslationStructure = {
         taskView: {
             initializing: 'エージェントを初期化中...',
             moreTools: ({ count }: { count: number }) => `+${count} 個のツール`,
+            showAll: ({ count }: { count: number }) => `${count}件のステップをすべて表示`,
+            showLess: '折りたたむ',
         },
         askUserQuestion: {
             submit: '回答を送信',
@@ -915,6 +917,10 @@ export const ja: TranslationStructure = {
         usageLimitUntil: ({ time }: { time: string }) => `${time}まで使用制限中`,
         sentAsGoal: 'Sent as goal',
         unknownTime: '不明な時間',
+        thoughtProcess: '思考プロセス',
+        thinkingNow: '思考中…',
+        agentRunning: ({ duration }: { duration: string }) => `エージェント実行中 · ${duration}`,
+        agentFinished: ({ duration }: { duration: string }) => `エージェント完了 · ${duration}`,
     },
 
     codex: {

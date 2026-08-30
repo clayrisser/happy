@@ -488,9 +488,13 @@ function effortLevels(keys: readonly string[]): EffortLevel[] {
 }
 
 // The Claude Agent SDK's own EffortLevel union, in order
-// (node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts:546). There is no
-// `off`: Claude's floor is `low`.
-const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+// (node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts:546), plus
+// `ultracode`, which the SDK does not declare but Claude Code's `/effort`
+// and `--effort` both take: xhigh with dynamic workflow orchestration, for
+// that session only. It needs workflows enabled and an xhigh-capable model;
+// Claude Code downgrades rather than errors when either is missing, same as
+// `max` on a model without it. There is no `off`: Claude's floor is `low`.
+const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max', 'ultracode'] as const;
 
 // Exactly what each model publishes in Codex's own registry, in its order
 // (codex-rs/models-manager/models.json, min client 0.144). This really is
@@ -554,6 +558,54 @@ export function getEffortLevelsForModel(
         return getCodexEffortLevels(modelKey);
     }
     return [];
+}
+
+/**
+ * The model key to SHOW for a session, given what the pane reports and what
+ * was picked in this app (DROVE-45).
+ *
+ * For a pane session the pane wins: Clay's words are "if I /model from the
+ * terminal it should always update the mobile app", and the pick is only ever a
+ * request the terminal may not have taken yet.
+ *
+ * The one exception is the bracket variant. `claude-opus-5[1m]` is a model id
+ * Claude Code accepts and the app offers as its own row, but the transcript
+ * reports the plain `claude-opus-5` for it — the bracket selects the 1M-context
+ * variant rather than a different model. Reading the pane literally there would
+ * collapse "Opus 5 [1M]" into "Opus 5" the moment it was picked and never let
+ * it back, which looks exactly like the pick failing. So a pick that is the
+ * pane's own model plus a bracket suffix is kept: it does not contradict the
+ * pane, it says more than the pane said.
+ */
+export function resolvePaneModelKey(
+    paneModel: string | null | undefined,
+    selectedKey: string | null | undefined,
+): string | null {
+    if (!paneModel) {
+        return null;
+    }
+    if (selectedKey && selectedKey.startsWith(`${paneModel}[`) && selectedKey.endsWith(']')) {
+        return selectedKey;
+    }
+    return paneModel;
+}
+
+/**
+ * Make sure the model the pane is running has a row to be selected against
+ * (DROVE-45).
+ *
+ * getClaudeModelModes offers the current generation only, on purpose — picking
+ * a model is the point of that menu. But `/model opus-4-8` in the terminal is a
+ * thing Clay can do, and without a row for it resolveCurrentOption finds
+ * nothing and the chip falls back to the bare word "MODEL", which reads as the
+ * session having no model at all. The row is disabled: it says what is running,
+ * it is not an invitation to switch back to a generation the menu retired.
+ */
+export function includePaneModel(models: ModelMode[], paneModelKey: string | null | undefined): ModelMode[] {
+    if (!paneModelKey || models.some((model) => model.key === paneModelKey)) {
+        return models;
+    }
+    return [...models, { key: paneModelKey, name: paneModelKey, description: 'running in the terminal', disabled: true }];
 }
 
 export function getRigCurrentModelOptionKey(metadata: Metadata | null | undefined): string | null {

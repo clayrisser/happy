@@ -3,6 +3,7 @@ import { View, ActivityIndicator, NativeScrollEvent, NativeSyntheticEvent } from
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { SessionsList } from './SessionsList';
 import { EmptyMainScreen } from './EmptyMainScreen';
+import { PendingGatesBanner } from './PendingGatesBanner';
 import { useHasArchivedSessions, useVisibleSessionListViewData } from '@/hooks/useVisibleSessionListViewData';
 import { useAllMachines, useSettingMutable } from '@/sync/storage';
 import { collectMachineChoices } from '@/sync/machineChoices';
@@ -77,6 +78,14 @@ export const SessionsListWrapper = React.memo(({
             <View style={styles.container}>
                 <View style={styles.emptyStateContainer}>
                     <View style={[styles.emptyStateContentContainer, { paddingTop: topContentInset }]}>
+                        {/*
+                          * The empty state is reachable WITH gates pending: a
+                          * session whose request is live can still be archived,
+                          * and the archive is hidden by default. Without this
+                          * the one screen that says "nothing here" would be
+                          * hiding the thing that needs answering.
+                          */}
+                        <PendingGatesBanner />
                         <EmptyMainScreen
                             hasArchivedSessions={hasArchivedSessions}
                             onShowArchived={() => setHideArchivedSessions(false)}

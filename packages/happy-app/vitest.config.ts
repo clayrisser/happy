@@ -21,6 +21,11 @@ export default defineConfig({
     resolve: {
         alias: {
             '@': resolve('./sources'),
+            // Metro reaches the local expo modules through autolinking and tsc
+            // through tsconfig `paths`; vitest has neither, so a bare
+            // `drover-watch` import is unresolvable here and `vi.mock` on it
+            // throws before the factory ever runs. Mirrors the tsconfig entry.
+            'drover-watch': resolve('./modules/drover-watch'),
         },
     },
 })
