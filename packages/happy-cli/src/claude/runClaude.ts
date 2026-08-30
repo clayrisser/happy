@@ -43,6 +43,8 @@ import { RawJSONLinesSchema, type RawJSONLines } from './types';
 import { FlipController, parseFlipCommand } from '@/drover/flip/controller';
 import { currentAccount, readAccounts } from '@/drover/flip/accounts';
 import { UsageReporter } from '@/drover/flip/usage';
+import { PolicyReporter } from '@/drover/flip/policy';
+import { registerDroverPolicyHandler } from '@/drover/flip/policyRpc';
 import { findHappySessionForClaudeSession, resumedClaudeSessionId } from '@/resume/reattachClaudeSession';
 import type { ReconnectableHappySession } from '@/resume/resolveHappySession';
 
@@ -608,6 +610,11 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
     // Variable to track current session instance (updated via onSessionReady callback)
     // Used by hook server to notify Session when Claude changes session ID
     let currentSession: Session | null = null;
+    // Declared up here because the SessionStart hook below has to tell it when
+    // Claude mints a new session id, and the hook is installed long before the
+    // reporter is built (DROVE-3). A new id is a new key in the settings store,
+    // so the overrides have to move with it or a flip drops its own policy.
+    let policyReporter: PolicyReporter | undefined;
 
     // Start Hook server for receiving Claude session notifications
     const hookServer = await startHookServer({
@@ -635,6 +642,10 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
                 if (previousSessionId !== sessionId) {
                     logger.debug(`[START] Claude session ID changed: ${previousSessionId} -> ${sessionId}`);
                     currentSession.onSessionFound(sessionId);
+                    // The settings store is keyed by this id (DROVE-3), so the
+                    // policy follows the session across a flip, a resume or a
+                    // /clear instead of silently reverting to the defaults.
+                    void policyReporter?.sessionFound(sessionId);
                 }
             }
 
@@ -1142,6 +1153,32 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
         logger.debug('[flip] usage reporter started');
     }
 
+    // The flip and model-fallback policy on the phone (DROVE-3). Built
+    // whenever a registry exists, on the same reasoning as the usage strip:
+    // one account still has an onFamilyExhausted worth setting, and with none
+    // there is no drover install to have settings for.
+    //
+    // The key is the CLAUDE session id, so the phone and `drover settings`
+    // write the same row. It is null until Claude names the session, and the
+    // reporter reports the defaults meanwhile rather than nothing.
+    if (readAccounts().length > 0) {
+        const claudeSessionId = () =>
+            (currentSession as Session | null)?.sessionId ?? metadata.claudeSessionId ?? null;
+        policyReporter = new PolicyReporter({
+            sessionId: claudeSessionId,
+            publish: (droverPolicy) => {
+                session.updateMetadata((meta) => ({ ...meta, droverPolicy }));
+            },
+        });
+        policyReporter.start();
+        // The app's writes come back through here and re-stamp at once, so a
+        // toggle does not sit unconfirmed until the next 30s poll.
+        registerDroverPolicyHandler(session.rpcHandlerManager, claudeSessionId, (policy) => {
+            policyReporter?.publishNow(policy);
+        });
+        logger.debug('[flip] policy reporter started');
+    }
+
     const exitCode = await loop({
         path: workingDirectory,
         model: options.model,
@@ -1197,6 +1234,7 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
 
     flipController?.stop();
     usageReporter?.stop();
+    policyReporter?.stop();
 
     // Cleanup session resources (intervals, callbacks) - prevents memory leak
     // Note: currentSession is set by onSessionReady callback during loop()

@@ -2,6 +2,7 @@ import { z } from 'zod'
 import type { Update, UpdateMachineBody } from '@slopus/happy-wire';
 import { UsageSchema } from '@/claude/types'
 import type { DroverUsage } from '@/drover/flip/usage';
+import type { DroverPolicy } from '@/drover/flip/policy';
 import type { SandboxConfig } from '@/persistence'
 
 export {
@@ -328,6 +329,15 @@ export type Metadata = {
    * malformed block never drops the record.
    */
   droverUsage?: DroverUsage,
+  /**
+   * What this session does when it runs out, and where each value came from
+   * (DROVE-3). Read from the bus's settings store — the same one
+   * `drover settings` writes — so the app can show and change the policy from
+   * the phone, which is where Clay is when a limit actually lands. Additive
+   * beside droverUsage and parsed with a `.catch`, so a malformed block never
+   * drops the record.
+   */
+  droverPolicy?: DroverPolicy,
   gitBranch?: string,
   claudeSessionId?: string, // Claude Code session ID
   codexThreadId?: string, // Codex app-server thread ID

@@ -25,6 +25,7 @@ import { copySessionMetadataToClipboard, copySessionMetadataAndLogsToClipboard }
 import { HappyError } from '@/utils/errors';
 import { MobileGlassSurface } from '@/components/MobileGlass';
 import { getRigIdentity, isRigMetadata } from '@/sync/rig';
+import { droverPolicySummary } from '@/utils/droverPolicySummary';
 import { MOBILE_GLASS_HEADER_HEIGHT } from '@/components/navigation/headerMetrics';
 
 // Animated status dot component
@@ -132,6 +133,7 @@ function SessionInfoContent({ session }: { session: Session }) {
     const projectAvatar = useSessionProjectAvatar(session.id);
     const devModeEnabled = __DEV__;
     const sessionName = getSessionName(session);
+    const droverPolicySubtitle = droverPolicySummary(session.metadata?.droverPolicy);
     const sessionStatus = useSessionStatus(session);
     const {
         canShowResume,
@@ -376,6 +378,22 @@ function SessionInfoContent({ session }: { session: Session }) {
                         showChevron={false}
                     />
                 </ItemGroup>
+
+                {/* Cattle Drover's per-session flip policy (DROVE-3). Shown
+                    only when the CLI has reported one, which it does whenever
+                    the machine has a drover account registry — a session on a
+                    machine without one has no policy to set. */}
+                {session.metadata?.droverPolicy && (
+                    <ItemGroup title="Cattle Drover">
+                        <Item
+                            title="Flip policy"
+                            subtitle={droverPolicySubtitle}
+                            subtitleLines={0}
+                            icon={<Ionicons name="swap-horizontal-outline" size={29} color="#FF9500" />}
+                            onPress={() => router.push(`/session/${session.id}/policy` as any)}
+                        />
+                    </ItemGroup>
+                )}
 
                 {/* Quick Actions */}
                 <ItemGroup title={t('sessionInfo.quickActions')}>

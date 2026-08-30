@@ -35,6 +35,47 @@ const DroverUsageSchema = z.object({
     }).passthrough()),
 }).passthrough().optional().catch(undefined);
 
+/**
+ * What a session does when it runs out, and where each value came from
+ * (DROVE-3). The store is the bus's per-session settings file on the Mac — the
+ * one `drover settings` writes — so this is a READ of live machine state, not
+ * app state: closing the app and reopening it re-reads it, and a change typed
+ * in the terminal arrives on the CLI's next poll.
+ *
+ * The three layers are kept apart on purpose. `effective` is what the policy
+ * engine will actually do; `overrides` is what this session chose, which is the
+ * only thing that tells "you set prompt" from "prompt is simply the default".
+ * `unavailable` is set instead of the layers when the bus is not answering, so
+ * the screen says so rather than rendering built-ins as though they were live.
+ *
+ * Every field nullish and the whole block `.catch(undefined)`: a malformed
+ * stamp degrades to absent rather than failing the metadata parse and dropping
+ * the session.
+ */
+const PolicyValuesSchema = z.object({
+    onLimit: z.enum(['auto', 'prompt']).nullish(),
+    onLimitTimeout: z.enum(['auto', 'stop']).nullish(),
+    onLimitPromptTtlMs: z.number().nullish(),
+    onFamilyExhausted: z.enum(['stop', 'fallback']).nullish(),
+    familyFallback: z.record(z.string(), z.array(z.string())).nullish(),
+}).passthrough();
+
+const DroverPolicySchema = z.object({
+    capturedAt: z.number(),
+    sessionId: z.string().nullish(),
+    effective: PolicyValuesSchema,
+    overrides: PolicyValuesSchema,
+    defaults: PolicyValuesSchema,
+    machine: PolicyValuesSchema,
+    builtIn: PolicyValuesSchema,
+    updatedAt: z.number().nullish(),
+    updatedBy: z.string().nullish(),
+    unavailable: z.string().nullish(),
+}).passthrough().optional().catch(undefined);
+
+export type DroverPolicy = NonNullable<z.infer<typeof DroverPolicySchema>>;
+export type DroverPolicyValues = z.infer<typeof PolicyValuesSchema>;
+
 export const MetadataSchema = z.object({
     models: z.array(z.object({
         code: z.string(),
@@ -171,6 +212,7 @@ export const MetadataSchema = z.object({
     // account; claude-acct exports it, the CLI stamps it — BASED-98).
     droverAccount: z.string().optional(),
     droverUsage: DroverUsageSchema,
+    droverPolicy: DroverPolicySchema,
     claudeSessionId: z.string().optional(), // Claude Code session ID
     codexThreadId: z.string().optional(), // Codex app-server thread ID
     tools: z.array(z.string()).optional(),
