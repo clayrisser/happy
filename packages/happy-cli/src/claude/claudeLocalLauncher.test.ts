@@ -35,19 +35,17 @@ vi.mock('./utils/sessionScanner', () => ({
     createSessionScanner: mockCreateSessionScanner,
 }));
 
+// DROVE-48 removed injectIntoPaneGated with the message fallback it existed
+// for, so what is left here is the KEYSTROKE surface: the slash commands the
+// phone's pickers send (DROVE-45) and the Escape that Stop sends (DROVE-13).
+// mockInjectIntoPane standing in for the only paste path is what lets the
+// tests below assert that a phone MESSAGE never reaches tmux at all.
 vi.mock('./utils/paneInject', () => ({
     injectIntoPane: mockInjectIntoPane,
     // DROVE-45 types slash commands through the raw inject plus its own idle
     // check. Idle by default here so a queued /model is not held forever; the
     // model-routing tests below override it.
     paneIsIdle: mockPaneIsIdle,
-    // The launcher goes through the gated entry point. Adapt it onto the same
-    // boolean mock so the tests keep asserting on (pane, text): a truthy
-    // answer is "delivered and submitted", a falsy one is "refused".
-    injectIntoPaneGated: async (gate: { pane: string }, text: string) => {
-        const delivered = Boolean(await mockInjectIntoPane(gate.pane, text));
-        return { delivered, submitted: delivered };
-    },
     interruptPane: mockInterruptPane,
 }));
 
@@ -796,22 +794,137 @@ describe('claudeLocalLauncher in a tmux pane', () => {
         }
     });
 
-    it('falls through to the pane when the socket is gone', async () => {
-        mockFindInbox.mockResolvedValue(inbox);
-        mockSendToInbox.mockResolvedValue('gone');
-        mockInjectIntoPane.mockResolvedValue(true);
-        const runs = trackRuns();
-        const { session, queue } = paneSession();
+    /**
+     * DROVE-48. The socket is the only carrier for message text now.
+     *
+     * There used to be a pane paste behind it, and a paste lands on whatever
+     * has focus: with Clay inside a background task's view in the terminal,
+     * a phone message went to THAT SUBAGENT and was answered by the wrong
+     * Claude, with nothing anywhere recording it. Clay's ruling was to delete
+     * the fallback rather than guard it — "if you have to fall back then
+     * things aren't set up correctly in the first place" — so a socket miss
+     * is now a reported failure, not a silent downgrade.
+     */
+    describe('a phone message goes through the inbox socket or not at all (DROVE-48)', () => {
+        let stateDir: string;
 
-        const launcher = claudeLocalLauncher(session as any);
-        await vi.waitFor(() => expect(runs).toHaveLength(1));
+        beforeEach(async () => {
+            const { mkdtempSync } = await import('node:fs');
+            const { tmpdir } = await import('node:os');
+            const { join } = await import('node:path');
+            stateDir = mkdtempSync(join(tmpdir(), 'drover-state-'));
+            vi.stubEnv('STATE_DIR', stateDir);
+        });
 
-        queue.push('from the phone', mode);
-        await vi.waitFor(() => expect(mockInjectIntoPane).toHaveBeenCalledWith(pane, 'from the phone'));
-        await vi.waitFor(() => expect(queue.size()).toBe(0));
+        afterEach(async () => {
+            const { rmSync } = await import('node:fs');
+            rmSync(stateDir, { recursive: true, force: true });
+        });
 
-        runs[0].run.resolve();
-        await expect(launcher).resolves.toEqual({ type: 'exit', code: 0 });
+        /** The ledger `drover status` counts, or '' when nothing wrote one. */
+        async function ledger(): Promise<string> {
+            const { readFileSync, existsSync } = await import('node:fs');
+            const { join } = await import('node:path');
+            const path = join(stateDir, 'messages.log');
+            return existsSync(path) ? readFileSync(path, 'utf8') : '';
+        }
+
+        /** Every refusal the socket can hand back, and what it is called. */
+        const refusals: Array<[string, () => void, string]> = [
+            ['the registry has no socket for this session', () => {
+                mockFindInbox.mockResolvedValue(null);
+            }, 'no-inbox-socket'],
+            ['the socket path is there with nobody behind it', () => {
+                mockFindInbox.mockResolvedValue(inbox);
+                mockSendToInbox.mockResolvedValue('gone');
+            }, 'inbox-socket-gone'],
+            ['the socket refuses the write', () => {
+                mockFindInbox.mockResolvedValue(inbox);
+                mockSendToInbox.mockResolvedValue('failed');
+            }, 'inbox-socket-refused'],
+            ['the registry cannot be read at all', () => {
+                mockFindInbox.mockRejectedValue(new Error('EACCES'));
+            }, 'inbox-lookup-failed'],
+        ];
+
+        for (const [when, arrange, reason] of refusals) {
+            it(`types NOTHING into the pane when ${when}`, async () => {
+                arrange();
+                // A truthy paste mock, so a surviving fallback would succeed
+                // loudly rather than fail for its own reasons.
+                mockInjectIntoPane.mockResolvedValue(true);
+                const runs = trackRuns();
+                const { session, queue } = paneSession();
+
+                const launcher = claudeLocalLauncher(session as any);
+                await vi.waitFor(() => expect(runs).toHaveLength(1));
+
+                queue.push('from the phone', mode);
+                await vi.waitFor(() => expect(session.client.sendSessionEvent).toHaveBeenCalledWith(
+                    expect.objectContaining({ message: expect.stringContaining('did NOT reach the terminal') }),
+                ));
+
+                // The whole ticket, in one assertion.
+                expect(mockInjectIntoPane).not.toHaveBeenCalled();
+                // Counted where `drover status` can find it, with the cause.
+                expect(await ledger()).toContain(`undelivered ${reason}`);
+                // FOLD, NEVER DROP: still held for the next child.
+                expect(session.pendingInitialPrompt).toBe('from the phone');
+
+                runs[0].run.resolve();
+                await expect(launcher).resolves.toEqual({ type: 'exit', code: 0 });
+            });
+        }
+
+        it('types NOTHING into the pane with subagents running either', async () => {
+            // The case Clay actually asked about: the terminal is showing a
+            // background task, so a paste would be answered by that subagent.
+            mockFindInbox.mockResolvedValue(null);
+            mockInjectIntoPane.mockResolvedValue(true);
+            const runs = trackRuns();
+            let scannerOnMessage: ((message: any) => void) | undefined;
+            mockCreateSessionScanner.mockImplementation(async (opts: any) => {
+                scannerOnMessage = opts.onMessage;
+                return { onNewSession: vi.fn(), cleanup: vi.fn(async () => {}) };
+            });
+            const { session, queue } = paneSession();
+
+            const launcher = claudeLocalLauncher(session as any);
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+            scannerOnMessage!(asyncAgentLaunched('agent-7'));
+
+            queue.push('from the phone', mode);
+            await vi.waitFor(() => expect(session.pendingInitialPrompt).toBe('from the phone'));
+
+            expect(mockInjectIntoPane).not.toHaveBeenCalled();
+            expect(await ledger()).toContain('undelivered no-inbox-socket');
+            // And the subagents were left alone: no SIGTERM, no switch.
+            expect(runs[0].opts.abort.aborted).toBe(false);
+
+            runs[0].run.resolve();
+            await expect(launcher).resolves.toEqual({ type: 'exit', code: 0 });
+        });
+
+        it('counts a delivery too, so an undelivered count has a denominator', async () => {
+            mockFindInbox.mockResolvedValue(inbox);
+            mockSendToInbox.mockResolvedValue('ok');
+            const runs = trackRuns();
+            const { session, queue } = paneSession();
+
+            const launcher = claudeLocalLauncher(session as any);
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+
+            queue.push('from the phone', mode);
+            await vi.waitFor(() => expect(queue.size()).toBe(0));
+
+            expect(await ledger()).toMatch(/\tmessage\tinbox\tdelivered\n$/);
+            expect(session.client.sendSessionEvent).not.toHaveBeenCalledWith(
+                expect.objectContaining({ message: expect.stringContaining('did NOT reach') }),
+            );
+
+            runs[0].run.resolve();
+            await expect(launcher).resolves.toEqual({ type: 'exit', code: 0 });
+        });
     });
 
     it('exits when the child exits, even with a message still on the queue', async () => {
@@ -819,7 +932,6 @@ describe('claudeLocalLauncher in a tmux pane', () => {
         // so quitting claude handed the session to remote mode instead of
         // ending it, and the message was replayed there as a fresh turn.
         mockFindInbox.mockResolvedValue(null);
-        mockInjectIntoPane.mockResolvedValue(false);
         const runs = trackRuns();
         const { session, queue } = paneSession();
 
@@ -837,7 +949,6 @@ describe('claudeLocalLauncher in a tmux pane', () => {
 
     it('propagates a non-zero exit code instead of switching', async () => {
         mockFindInbox.mockResolvedValue(null);
-        mockInjectIntoPane.mockResolvedValue(false);
         const runs = trackRuns();
         const { session, queue } = paneSession();
 
@@ -857,7 +968,6 @@ describe('claudeLocalLauncher in a tmux pane', () => {
         // with agents in flight armed a deferred switch — so the moment the
         // last agent reported in, the child Clay was watching was SIGTERMed.
         mockFindInbox.mockResolvedValue(null);
-        mockInjectIntoPane.mockResolvedValue(false);
         const runs = trackRuns();
         let scannerOnMessage: ((message: any) => void) | undefined;
         mockCreateSessionScanner.mockImplementation(async (opts: any) => {
@@ -953,7 +1063,6 @@ describe('claudeLocalLauncher in a tmux pane', () => {
             // child never ran, so cancelling does not un-send it.
             mockInterruptPane.mockResolvedValue('cancelled');
             mockFindInbox.mockResolvedValue(null);
-            mockInjectIntoPane.mockResolvedValue(false);
             const runs = trackRuns();
             const { session, queue } = paneSession();
 

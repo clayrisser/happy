@@ -1,27 +1,27 @@
 /**
- * Type a phone message straight into the local tmux pane (BASED-113).
+ * KEYSTROKES for the Claude running in the local tmux pane (BASED-113).
  *
- * Happy's default is that the phone MIRRORS a local session and can only send
- * input by TAKING OVER — the message goes on the queue, local Claude is stopped,
- * and remote mode is spawned to serve it. For a session you are watching run in
- * tmux that is the wrong trade: it kills the terminal you were looking at and
- * hides whatever it was doing (subagents included) behind a fresh headless run.
+ * `$TMUX_PANE` identifies that pane exactly — the same handle the flip keys
+ * pass as `#{pane_id}` — so this module can act on the pane as if someone were
+ * at the keyboard: the Escape that cancels a turn from the phone (DROVE-13),
+ * and the `/model` and `/effort` commands the phone's pickers send (DROVE-45).
  *
- * When the session IS a live Claude in a tmux pane, there is a better carrier:
- * the pane itself. `$TMUX_PANE` identifies it exactly — the same handle the flip
- * keys pass as `#{pane_id}` — so the message can be typed in as if you were at
- * the keyboard, no mode switch, no new session, and the work in flight stays on
- * screen. Remote mode remains the fallback for sessions with no pane
- * (daemon-spawned) and for a pane that is NOT currently running Claude.
+ * NOT phone message text. That used to come through here too, with a gated
+ * Enter and a draft when the gate did not pass, and DROVE-48 deleted it: a
+ * bracketed paste lands on WHATEVER HAS FOCUS, and the terminal drives
+ * subagents now, so a message sent while Clay was inside a background task's
+ * view was answered by that subagent instead of the main thread. Message text
+ * goes through Claude's own inbox socket (utils/inboxSocket.ts), which queues
+ * it inside Claude and serves it to the main conversation, or it is reported
+ * to the phone as undelivered. There is no paste behind it — "if you have to
+ * fall back then things aren't set up correctly in the first place".
  *
- * The Enter that submits it is the dangerous half. A pane is a keyboard, not a
- * queue: a paste that lands while Clay is half-way through typing merges with
- * his draft and the Enter fires the mixture, and a paste that lands on an open
- * permission dialog picks whatever option is highlighted. So Enter is gated —
- * `paneIsIdle` below — and when the gate does not pass the text is still
- * delivered, as a DRAFT sitting in the input box for whoever is at the
- * keyboard to read and send. Same rule the drover bus already follows
- * (engine/sender.js returns `submitted:false` for its tmux channel).
+ * The Enter is still the dangerous half for what remains. A pane is a
+ * keyboard, not a queue: a `/model` that lands while Clay is half-way through
+ * typing merges with his draft and the Enter fires the mixture, and a
+ * keystroke that lands on an open permission dialog picks whatever option is
+ * highlighted. So `paneIsIdle` below gates it, and the caller HOLDS the
+ * command until the prompt opens rather than sending it anyway.
  */
 
 import { execFile } from 'node:child_process'
@@ -268,17 +268,8 @@ export interface PaneInjectOptions {
     submit?: boolean
 }
 
-export interface PaneInjectResult {
-    /** The text reached the pane. False means fall back to remote mode. */
-    delivered: boolean
-    /** Enter was pressed, so Claude is answering it. False = it sits as a draft. */
-    submitted: boolean
-}
-
 /**
- * Type `text` into `pane`, and submit it unless told not to. Returns false —
- * caller should fall back to a remote switch — when the pane is gone or is not
- * currently running Claude.
+ * Type `text` into `pane`, and submit it unless told not to.
  *
  * A paste BUFFER rather than `send-keys -l`: send-keys turns a newline into a
  * carriage return, which a TUI reads as submit, so a two-line message would
@@ -287,9 +278,10 @@ export interface PaneInjectResult {
  * paste, ignored otherwise), which Claude Code drops into the input box intact;
  * the single Enter that follows is what submits it.
  *
- * Still returns a plain boolean, so the existing callers keep compiling and
- * keep their `if (!delivered)` fallback. `injectIntoPaneGated` is the richer
- * entry point that also reports whether Enter was pressed.
+ * Returns false when the pane is gone or is not currently running Claude.
+ * There is no second carrier behind it any more (DROVE-48): the one caller
+ * left is the slash-command queue, which holds the command and retries when
+ * the prompt opens.
  */
 export async function injectIntoPane(pane: string, text: string, opts: PaneInjectOptions = {}): Promise<boolean> {
     const submit = opts.submit ?? true
@@ -313,16 +305,4 @@ export async function injectIntoPane(pane: string, text: string, opts: PaneInjec
         logger.debug('[paneInject] failed:', e)
         return false
     }
-}
-
-/**
- * Deliver `text` to the pane, pressing Enter only when the gate says the pane
- * is idle. Anything less confident is a draft: the text is in the input box,
- * `submitted` is false, and the caller should tell the phone so — "drafted in
- * the terminal, press Enter there" — rather than pretend it was sent.
- */
-export async function injectIntoPaneGated(gate: PaneGate, text: string): Promise<PaneInjectResult> {
-    const submit = await paneIsIdle(gate)
-    const delivered = await injectIntoPane(gate.pane, text, { submit })
-    return { delivered, submitted: delivered && submit }
 }

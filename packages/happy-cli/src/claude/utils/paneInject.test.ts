@@ -92,7 +92,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, beforeEach } from 'vitest'
 
-import { injectIntoPaneGated, interruptPane, paneIsIdle } from './paneInject'
+import { interruptPane, paneIsIdle } from './paneInject'
 
 const claudeSessionId = '9b1daf73-eae8-46d9-85a1-cef9d54d622f'
 const gatePane = '%42'
@@ -181,57 +181,47 @@ describe('the idle gate decides whether Enter is pressed', () => {
 
     const gate = () => ({ pane: gatePane, configDir, claudeSessionId, busUrl })
 
-    it('presses Enter when the registry says idle and the bus holds nothing', async () => {
+    it('opens the gate when the registry says idle and the bus holds nothing', async () => {
         expect(await paneIsIdle(gate())).toBe(true)
 
-        const result = await injectIntoPaneGated(gate(), 'hello from the phone')
-
-        expect(result).toEqual({ delivered: true, submitted: true })
+        // What the caller does once the gate passes: type it and press Enter.
+        expect(await injectIntoPane(gatePane, '/model opus')).toBe(true)
         const argv = await tmuxArgv()
         expect(argv.some((line) => line.startsWith('paste-buffer'))).toBe(true)
         expect(argv.some((line) => line.startsWith('send-keys'))).toBe(true)
     })
 
-    it('drafts WITHOUT Enter when Claude is mid-turn', async () => {
+    it('closes the gate when Claude is mid-turn', async () => {
         await setRegistryStatus('busy')
 
         expect(await paneIsIdle(gate())).toBe(false)
-        const result = await injectIntoPaneGated(gate(), 'hello mid-turn')
-
-        expect(result).toEqual({ delivered: true, submitted: false })
-        const argv = await tmuxArgv()
-        expect(argv.some((line) => line.startsWith('paste-buffer'))).toBe(true)
-        expect(argv.some((line) => line.startsWith('send-keys'))).toBe(false)
     })
 
-    it('drafts WITHOUT Enter when a bus event for this session is pending', async () => {
+    it('closes the gate when a bus event for this session is pending', async () => {
+        // A permission card or a question is on screen and would eat the
+        // keystroke, answering it with whatever is highlighted.
         pendingEvents = [{ origin: { sessionId: claudeSessionId } }]
 
         expect(await paneIsIdle(gate())).toBe(false)
-        const result = await injectIntoPaneGated(gate(), 'hello with a dialog up')
-
-        expect(result).toEqual({ delivered: true, submitted: false })
-        expect((await tmuxArgv()).some((line) => line.startsWith('send-keys'))).toBe(false)
     })
 
     it('ignores a pending event that belongs to another session', async () => {
         pendingEvents = [{ origin: { sessionId: 'someone-else' } }]
 
         expect(await paneIsIdle(gate())).toBe(true)
-        expect((await injectIntoPaneGated(gate(), 'hi')).submitted).toBe(true)
     })
 
-    it('drafts WITHOUT Enter when the registry has no record for the session', async () => {
+    it('closes the gate when the registry has no record for the session', async () => {
         expect(await paneIsIdle({ ...gate(), claudeSessionId: 'never-registered' })).toBe(false)
     })
 
-    it('drafts WITHOUT Enter when the bus cannot be reached', async () => {
+    it('closes the gate when the bus cannot be reached', async () => {
         // Nothing is listening on this port, so the fetch rejects. Unknown is
         // not idle.
         expect(await paneIsIdle({ ...gate(), busUrl: 'http://127.0.0.1:1' })).toBe(false)
     })
 
-    it('drafts WITHOUT Enter when the bus answers with an error', async () => {
+    it('closes the gate when the bus answers with an error', async () => {
         busStatus = 500
         expect(await paneIsIdle(gate())).toBe(false)
     })
@@ -240,11 +230,11 @@ describe('the idle gate decides whether Enter is pressed', () => {
         process.env.FAKE_PANE_CMD = 'zsh'
 
         expect(await paneIsIdle(gate())).toBe(false)
-        expect(await injectIntoPaneGated(gate(), 'nope')).toEqual({ delivered: false, submitted: false })
+        expect(await injectIntoPane(gatePane, 'nope')).toBe(false)
         expect((await tmuxArgv()).some((line) => line.startsWith('paste-buffer'))).toBe(false)
     })
 
-    it('keeps the old two-argument call submitting, so existing callers are unchanged', async () => {
+    it('submits by default on the two-argument call', async () => {
         expect(await injectIntoPane(gatePane, 'legacy call')).toBe(true)
         expect((await tmuxArgv()).some((line) => line.startsWith('send-keys'))).toBe(true)
     })
