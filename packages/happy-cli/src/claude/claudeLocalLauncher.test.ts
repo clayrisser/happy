@@ -32,6 +32,13 @@ vi.mock('./utils/sessionScanner', () => ({
 
 vi.mock('./utils/paneInject', () => ({
     injectIntoPane: mockInjectIntoPane,
+    // The launcher goes through the gated entry point. Adapt it onto the same
+    // boolean mock so the tests keep asserting on (pane, text): a truthy
+    // answer is "delivered and submitted", a falsy one is "refused".
+    injectIntoPaneGated: async (gate: { pane: string }, text: string) => {
+        const delivered = Boolean(await mockInjectIntoPane(gate.pane, text));
+        return { delivered, submitted: delivered };
+    },
 }));
 
 vi.mock('./utils/inboxSocket', () => ({

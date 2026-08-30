@@ -6,7 +6,7 @@ import { createSessionScanner } from "./utils/sessionScanner";
 import { launchFailureMessage } from "./utils/launchFailureMessage";
 import { ambientDataDir } from "@/drover/flip/accounts";
 import { parseFlipCommand } from "@/drover/flip/controller";
-import { injectIntoPane } from "./utils/paneInject";
+import { injectIntoPaneGated } from "./utils/paneInject";
 import { findInbox, sendToInbox } from "./utils/inboxSocket";
 import type { QueueItem } from "@/utils/MessageQueue2";
 import type { EnhancedMode } from "./loop";
@@ -345,7 +345,27 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
                 // Reading the registry must never cost us the message.
                 logger.debug('[local]: inbox lookup failed', err);
             }
-            return injectIntoPane(tmuxPane, message);
+            // The keystroke path. Enter is pressed only when the gate says
+            // Claude is idle at its prompt with nothing pending on the bus;
+            // otherwise the text lands as a draft for the human to submit,
+            // because a stray Enter merges with a half-typed line or answers
+            // an open dialog with whatever is highlighted.
+            const result = await injectIntoPaneGated(
+                {
+                    pane: tmuxPane,
+                    configDir: session.claudeEnvVars?.CLAUDE_CONFIG_DIR,
+                    claudeSessionId: session.sessionId,
+                },
+                message,
+            );
+            if (result.delivered && !result.submitted) {
+                logger.debug('[local]: pasted as a draft — Claude was busy or a prompt is pending');
+                session.client.sendSessionEvent({
+                    type: 'message',
+                    message: 'Drafted in the terminal; press Enter there to send it.',
+                });
+            }
+            return result.delivered;
         }
 
         async function deliverToPaneSession(message: string, item?: QueueItem<EnhancedMode>) {
