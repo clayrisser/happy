@@ -24,8 +24,38 @@ final class GateStore: NSObject, ObservableObject {
     /// cannot queue two.
     @Published private(set) var flipping: Set<String> = []
     @Published private(set) var lastError: String?
+    /// What the last "ask the phone for a snapshot" attempt did (DROVE-22).
+    @Published private(set) var refreshState: RefreshState = .idle
 
     private var session: WCSession?
+    /// When the last refresh was asked for, so a wall that ticks every 30s and
+    /// a scene that activates twice cannot hammer the phone.
+    private var lastRefreshAt: Date?
+
+    /// The state of asking the phone for a fresh snapshot.
+    ///
+    /// This is what "Out of date" is allowed to mean now. It used to mean only
+    /// that 180 seconds had passed, which on a phone in a pocket is the normal
+    /// case and not a fault — so the message Clay always saw was the failure
+    /// one and the working one was the one he had never seen.
+    enum RefreshState: Equatable {
+        /// Nothing in flight: either the ask landed, or none was made.
+        case idle
+        /// Asked; the phone has not sent a snapshot back yet.
+        case asking
+        /// Asked, and nothing came back. The ONLY thing that lets a merely old
+        /// snapshot be called out of date.
+        case failed(String)
+    }
+
+    /// How long the phone gets to answer before the wrist calls it out of date.
+    /// iOS has to launch the counterpart app from suspended and boot its JS
+    /// before the feed can publish, which is seconds rather than milliseconds.
+    private static let refreshDeadline: TimeInterval = 10
+    /// Never ask more often than this. The wall ticks every 30s and the scene
+    /// can activate repeatedly; a refresh per tick would wake the phone app
+    /// over and over for a wrist somebody is just looking at.
+    private static let refreshInterval: TimeInterval = 15
 
     override init() {
         super.init()
@@ -62,6 +92,63 @@ final class GateStore: NSObject, ObservableObject {
     }
 
     var accounts: [String] { snapshot.accounts }
+
+    /// Accounts with their headroom, most first. Falls back to the bare names a
+    /// phone that predates DROVE-28's picker sends, so the flip list is never
+    /// empty just because the figures are missing.
+    var accountRows: [DroverAccount] {
+        if !snapshot.accountRows.isEmpty { return snapshot.accountRows }
+        return snapshot.accounts.map { DroverAccount(name: $0, headroom: nil, loggedIn: nil, backAt: nil) }
+    }
+
+    /// Ask the phone for a fresh snapshot (DROVE-22).
+    ///
+    /// `sendMessage` is the point: watch-to-phone it launches the iOS app in
+    /// the background when it is not running, so the answer arrives with the
+    /// phone locked in a pocket. `transferUserInfo` is not used as a fallback
+    /// here the way it is for an answer — a refresh delivered in twenty minutes
+    /// is not a refresh, and queuing one would hide the failure the wrist has
+    /// to report.
+    ///
+    /// `force` is for a deliberate open; the periodic caller passes false and
+    /// is rate limited.
+    func refresh(force: Bool = false, now: Date = Date()) {
+        guard let session, session.activationState == .activated else {
+            refreshState = .failed("Watch is not paired with the phone app")
+            return
+        }
+        if !force, let last = lastRefreshAt, now.timeIntervalSince(last) < Self.refreshInterval { return }
+        lastRefreshAt = now
+        refreshState = .asking
+        guard let payload = try? JSONEncoder().encode(DroverRefresh()),
+              let dict = try? JSONSerialization.jsonObject(with: payload) as? [String: Any] else {
+            refreshState = .failed("Could not encode the refresh")
+            return
+        }
+        session.sendMessage(dict, replyHandler: { _ in }) { [weak self] error in
+            Task { @MainActor in
+                // A reply is NOT what clears this — a snapshot arriving is (see
+                // apply). The phone's native side answers the moment iOS hands
+                // it the message, which can be before its JS is even running,
+                // so treating the reply as success would report a refresh that
+                // never produced one.
+                self?.refreshState = .failed(error.localizedDescription)
+            }
+        }
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(Self.refreshDeadline * 1_000_000_000))
+            guard let self, self.refreshState == .asking else { return }
+            self.refreshState = .failed("The phone did not answer")
+        }
+    }
+
+    /// Ask only when the held snapshot has actually gone stale. Called from the
+    /// wall's own 30s tick, so a wrist left open re-asks rather than sitting on
+    /// a snapshot that aged out while it was being looked at.
+    func refreshIfStale(now: Date = Date()) {
+        guard snapshot.isStale(at: now) else { return }
+        refresh(now: now)
+    }
 
     /// Answer a gate. `optionId` is a pick, `text` is typed or dictated; a
     /// question takes exactly one of them and a permission takes neither.
@@ -160,6 +247,10 @@ final class GateStore: NSObject, ObservableObject {
               let decoded = try? DroverSnapshot.decoder.decode(DroverSnapshot.self, from: data) else { return }
         snapshot = decoded
         decoded.save()
+        // A snapshot IS the refresh landing. Nothing else clears `asking`,
+        // deliberately: the phone's reply comes off its native side and can
+        // beat its own JS to the punch.
+        refreshState = .idle
         // A snapshot arriving IS the link working, so whatever the last send
         // complained about is over. Nothing else clears the banner: it is set
         // in five places and, until GateListView, was read in none.
@@ -184,6 +275,11 @@ extension GateStore: WCSessionDelegate {
             // turn, which is how a real error becomes an invisible one.
             if !context.isEmpty { self.apply(context) }
             if let error { self.lastError = error.localizedDescription }
+            // `receivedApplicationContext` is the LAST context iOS delivered,
+            // so opening the app re-applied an old snapshot and never asked for
+            // a new one (DROVE-22). Forced, because this IS the deliberate
+            // open: the rate limit is for the wall's periodic tick.
+            if state == .activated { self.refresh(force: true) }
         }
     }
 

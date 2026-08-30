@@ -73,8 +73,37 @@ private struct SessionRow: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            // What it is DOING, not just that it is on (DROVE-54). The terminal
+            // shows a whole task tree; this is its top line.
+            StatusLine(session: session)
         }
         .padding(.vertical, 2)
+    }
+}
+
+/// "thinking · 4m", "3 subagents · 12m". One line, and it counts up on its own.
+///
+/// The elapsed time is rendered from `statusSince` rather than baked into the
+/// string by the phone: `Text(_:style: .relative)` ticks between snapshots, and
+/// a string with a timer in it would have the feed republishing every second to
+/// keep it honest.
+private struct StatusLine: View {
+    let session: DroverSession
+
+    @ViewBuilder
+    var body: some View {
+        if let status = session.status, !status.isEmpty {
+            HStack(spacing: 3) {
+                Text(status)
+                if let since = session.statusSince {
+                    Text("·")
+                    Text(since, style: .relative)
+                }
+            }
+            .font(.system(size: 9))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+        }
     }
 }
 
@@ -129,15 +158,22 @@ struct SessionDetailView: View {
                 .tint(.orange)
                 .disabled(flipping)
 
-                ForEach(store.accounts.filter { $0 != session.account }, id: \.self) { account in
+                // Most headroom first, with the figure on the button (DROVE-28's
+                // watch half). A bare list of names could only ever offer an
+                // account something is already running on, which is the
+                // opposite of what a flip wants — the one worth moving to is
+                // the one with room, and a name does not carry that.
+                ForEach(store.accountRows.filter { $0.name != session.account }) { account in
                     Button {
-                        store.flip(session, to: account)
+                        store.flip(session, to: account.name)
                         dismiss()
                     } label: {
-                        Label(account, systemImage: "person.crop.circle")
-                            .font(.caption)
+                        AccountLabel(account: account)
                     }
-                    .disabled(flipping)
+                    // An account that is not logged in cannot take the session,
+                    // so the tap is refused here rather than by a flip that
+                    // bounces a minute later on the Mac.
+                    .disabled(flipping || account.loggedIn == false)
                 }
             }
             .padding(.horizontal, 4)
@@ -167,11 +203,62 @@ struct SessionDetailView: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
+            // The live line, same as the row (DROVE-54).
+            if let status = session.status, !status.isEmpty {
+                HStack(spacing: 3) {
+                    Text(status)
+                    if let since = session.statusSince {
+                        Text("·")
+                        Text(since, style: .relative)
+                    }
+                }
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            }
             if flipping {
                 Text("flipping…")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
         }
+    }
+}
+
+
+/// An account on the flip list: its name, and the number that decides whether
+/// it is worth flipping to.
+///
+/// Headroom stays optional all the way here. An account the CLI never measured
+/// shows no figure rather than a 0, which would read as "out" and hide the one
+/// account with room.
+private struct AccountLabel: View {
+    let account: DroverAccount
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: account.loggedIn == false ? "person.crop.circle.badge.xmark" : "person.crop.circle")
+                .font(.caption)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(account.name)
+                    .font(.caption)
+                    .lineLimit(1)
+                if let detail {
+                    Text(detail)
+                        .font(.system(size: 9))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var detail: String? {
+        if account.loggedIn == false { return "not logged in" }
+        if let backAt = account.backAt, backAt > Date() {
+            return "back \(backAt.formatted(date: .omitted, time: .shortened))"
+        }
+        if let headroom = account.headroom { return "\(headroom)% left" }
+        return nil
     }
 }

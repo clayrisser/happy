@@ -32,6 +32,7 @@ struct GateListView: View {
                         EmptyStateView(
                             connected: store.snapshot.connected,
                             stale: stale,
+                            refreshState: store.refreshState,
                             updatedAt: store.snapshot.updatedAt,
                             lastError: store.lastError
                         )
@@ -44,7 +45,10 @@ struct GateListView: View {
                             // it may already have been answered in tmux or on
                             // the phone, and the wrist has no way to know.
                             if stale {
-                                StaleRow(updatedAt: store.snapshot.updatedAt)
+                                StaleRow(
+                                    updatedAt: store.snapshot.updatedAt,
+                                    refreshState: store.refreshState
+                                )
                             }
                             ForEach(store.gates) { gate in
                                 NavigationLink(value: gate) {
@@ -59,6 +63,11 @@ struct GateListView: View {
                         .listStyle(.carousel)
                     }
                 }
+                // The tick is also when the wrist notices it has gone stale
+                // while being looked at. Rate limited in the store, so a wall
+                // left open asks the phone every 30s at most once per 15s
+                // rather than once per tick (DROVE-22).
+                .onChange(of: context.date) { _, now in store.refreshIfStale(now: now) }
             }
             .navigationTitle("Drover")
             .navigationDestination(for: DroverGate.self) { gate in
@@ -101,10 +110,13 @@ struct GateListView: View {
 private struct EmptyStateView: View {
     let connected: Bool
     let stale: Bool
+    let refreshState: GateStore.RefreshState
     let updatedAt: Date
     let lastError: String?
 
     private var clear: Bool { connected && !stale }
+    /// A refresh is out. The list is old, but nothing is yet WRONG.
+    private var asking: Bool { refreshState == .asking }
 
     var body: some View {
         VStack(spacing: 6) {
@@ -119,6 +131,15 @@ private struct EmptyStateView: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
+            } else if stale, case let .failed(why) = refreshState {
+                // Why it is out of date, not just that it is. "The phone did
+                // not answer" and "Watch is not paired" send you to two
+                // different places.
+                Text(why)
+                    .font(.system(size: 9))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                UpdatedAgo(updatedAt: updatedAt)
             } else if stale {
                 // The age, not a vague "maybe out of date": how long the phone
                 // has been quiet is the whole of what the wrist knows, and 40
@@ -137,12 +158,22 @@ private struct EmptyStateView: View {
 
     private var symbol: String {
         if !connected { return "wifi.slash" }
-        return stale ? "clock.badge.exclamationmark" : "checkmark.circle"
+        if !stale { return "checkmark.circle" }
+        return asking ? "arrow.clockwise" : "clock.badge.exclamationmark"
     }
 
+    /// "Out of date" is now a verdict, not a stopwatch reading.
+    ///
+    /// It used to be `connected && 180s elapsed`, and the phone is suspended
+    /// within seconds of going in a pocket, so that was the steady state rather
+    /// than a fault — Clay looks at the wrist precisely when he is not holding
+    /// the phone, so the failure message was the only one he ever saw. The
+    /// wrist now ASKS (GateStore.refresh) and says out of date when the ask
+    /// came back empty.
     private var headline: String {
         if !connected { return "Not connected" }
-        return stale ? "Out of date" : "Nothing waiting"
+        if !stale { return "Nothing waiting" }
+        return asking ? "Checking phone" : "Out of date"
     }
 }
 
@@ -150,12 +181,18 @@ private struct EmptyStateView: View {
 /// them: the list is probably still right, it just cannot be relied on.
 private struct StaleRow: View {
     let updatedAt: Date
+    let refreshState: GateStore.RefreshState
+
+    private var asking: Bool { refreshState == .asking }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
-            Label("May be out of date", systemImage: "clock.badge.exclamationmark")
-                .font(.caption2)
-                .foregroundStyle(.yellow)
+            Label(
+                asking ? "Checking phone" : "May be out of date",
+                systemImage: asking ? "arrow.clockwise" : "clock.badge.exclamationmark"
+            )
+            .font(.caption2)
+            .foregroundStyle(asking ? Color.secondary : Color.yellow)
             UpdatedAgo(updatedAt: updatedAt)
         }
         .padding(.vertical, 2)
@@ -209,6 +246,8 @@ private struct GateRow: View {
     private var symbol: (name: String, tint: Color) {
         switch gate.classification {
         case .question: return ("questionmark.bubble", .blue)
+        // A thing to DO, not a thing to answer (DROVE-53 Part B).
+        case .needsYou: return ("checklist", .purple)
         case .permission, .unknown: return ("exclamationmark.shield", .orange)
         case .idle: return ("hourglass", .secondary)
         case .expiry: return ("clock.badge.exclamationmark", .yellow)

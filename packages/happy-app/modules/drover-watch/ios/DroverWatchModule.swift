@@ -21,6 +21,8 @@ final class DroverWatchDelegate: NSObject, WCSessionDelegate {
     var onAnswer: (([String: Any]) -> Void)?
     /// Called when the wrist asks for an account flip (BASED-98).
     var onFlip: (([String: Any]) -> Void)?
+    /// Called when the wrist asks for a fresh snapshot (DROVE-22).
+    var onRefresh: (() -> Void)?
 
     func session(
         _ session: WCSession,
@@ -40,6 +42,23 @@ final class DroverWatchDelegate: NSObject, WCSessionDelegate {
         forward(message)
     }
 
+    /// The same, for a watch that wants an acknowledgement.
+    ///
+    /// The refresh (DROVE-22) is sent with a reply handler, and a watch that
+    /// sends one to a counterpart implementing ONLY the no-reply variant gets
+    /// its error handler called instead of its message delivered — so this
+    /// overload is not optional politeness, it is what makes the refresh land
+    /// at all. The reply says the message arrived and nothing more: the
+    /// snapshot itself comes back the ordinary way, through JS calling publish.
+    func session(
+        _ session: WCSession,
+        didReceiveMessage message: [String: Any],
+        replyHandler: @escaping ([String: Any]) -> Void
+    ) {
+        forward(message)
+        replyHandler(["received": true])
+    }
+
     /// Queued answer: the watch was out of range when it was tapped. Delivered
     /// whenever the pair reconnects — the bus is first-wins, so a late answer
     /// to a settled gate is refused there rather than needing a guard here.
@@ -51,6 +70,13 @@ final class DroverWatchDelegate: NSObject, WCSessionDelegate {
         // A flip carries `kind`, which an answer never does. Checked first so
         // the answer guard below cannot silently swallow it — that guard is a
         // `return` on a missing `allow`, and a flip has no `allow`.
+        // A refresh carries only `kind`. Checked with the flip, above the
+        // answer guard, for the same reason: that guard returns on a missing
+        // `allow`, and neither of these has one (DROVE-22).
+        if payload["kind"] as? String == "refresh" {
+            onRefresh?()
+            return
+        }
         if payload["kind"] as? String == "flip" {
             guard let sessionId = payload["sessionId"] as? String else { return }
             var event: [String: Any] = ["sessionId": sessionId]
@@ -97,7 +123,7 @@ public final class DroverWatchModule: Module {
     public func definition() -> ModuleDefinition {
         Name("DroverWatch")
 
-        Events("onAnswer", "onFlip")
+        Events("onAnswer", "onFlip", "onRefresh")
 
         OnCreate {
             self.watchDelegate.onAnswer = { [weak self] event in
@@ -105,6 +131,9 @@ public final class DroverWatchModule: Module {
             }
             self.watchDelegate.onFlip = { [weak self] event in
                 self?.sendEvent("onFlip", event)
+            }
+            self.watchDelegate.onRefresh = { [weak self] in
+                self?.sendEvent("onRefresh", [:])
             }
             guard WCSession.isSupported() else { return }
             let session = WCSession.default

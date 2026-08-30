@@ -10,8 +10,10 @@ import {
     collectGateEntries,
     collectGates,
     gatesForSession,
+    multiSelectFor,
     previewFor,
     optionsFor,
+    questionTextFor,
     sortGateEntries,
     titleFor,
     type GateSession,
@@ -287,5 +289,94 @@ describe('gatesForSession', () => {
 
     it('puts the longest-waiting gate first, so the screen presents what is holding the session up', () => {
         expect(gatesForSession(sessions, 'watched')[0].gate.id).toBe('watched:req-0');
+    });
+});
+
+
+/**
+ * A question that wants SEVERAL of its options (DROVE-53 Part A).
+ *
+ * Nothing on the wire said so, so a multi-select reaching the watch was
+ * answerable with exactly one tick and no sign the rest of the answer was
+ * missing — the harness got one label back for a question that asked for a set.
+ */
+describe('multiSelectFor', () => {
+    const card = (extra: Record<string, unknown>) => ({
+        questions: [{ question: 'Which lanes?', options: [{ label: 'a' }], ...extra }],
+    });
+
+    it('reads the card\'s own flag', () => {
+        expect(multiSelectFor(card({ multiSelect: true }))).toBe(true);
+    });
+
+    // Absent means single-select, which is what every question was before this.
+    it('is false when the card never said, or said something else', () => {
+        expect(multiSelectFor(card({}))).toBe(false);
+        expect(multiSelectFor(card({ multiSelect: 'yes' }))).toBe(false);
+        expect(multiSelectFor(undefined)).toBe(false);
+    });
+
+    it('reaches the gate as a key that is omitted rather than sent false', () => {
+        const gates = collectGates({
+            multi: session({
+                requests: {
+                    r1: { tool: 'AskUserQuestion', createdAt: 0, arguments: card({ multiSelect: true }) },
+                },
+            }),
+            single: session({
+                requests: { r1: { tool: 'AskUserQuestion', createdAt: 0, arguments: card({}) } },
+            }),
+        });
+        const multi = gates.find((g) => g.id.startsWith('multi'))!;
+        const single = gates.find((g) => g.id.startsWith('single'))!;
+        expect(multi.multiSelect).toBe(true);
+        // Never `multiSelect: false`: WatchConnectivity takes property-list
+        // types only, and the watch reads a missing key as single-select.
+        expect('multiSelect' in single).toBe(false);
+    });
+});
+
+/**
+ * The key Claude reads the answer back under.
+ *
+ * AskUserQuestion is resolved through the permission callback, which merges
+ * updatedInput into the tool input — and the harness looks for the answer under
+ * the QUESTION'S OWN TEXT, which is why the phone's card builds
+ * `{ answers: { [question]: label } }`. The wrist sent `optionId` and nothing
+ * else, so a native question answered on the watch merged a key nothing reads.
+ */
+describe('questionTextFor', () => {
+    const asking = {
+        s1: session({
+            requests: {
+                q: {
+                    tool: 'AskUserQuestion',
+                    createdAt: 0,
+                    arguments: { questions: [{ question: 'Ship it?', options: [{ label: 'Yes' }] }] },
+                },
+                b: { tool: 'Bash', createdAt: 0, arguments: { command: 'ls' } },
+            },
+        }),
+    };
+
+    it('is the first question\'s own text', () => {
+        expect(questionTextFor(asking, 's1', 'q')).toBe('Ship it?');
+    });
+
+    it('is null for a permission, which asks no question', () => {
+        expect(questionTextFor(asking, 's1', 'b')).toBeNull();
+    });
+
+    it('is null for a request or a session that is not there', () => {
+        expect(questionTextFor(asking, 's1', 'gone')).toBeNull();
+        expect(questionTextFor(asking, 'nope', 'q')).toBeNull();
+    });
+
+    it('is null for a card that carries no question body to key on', () => {
+        expect(questionTextFor({
+            s1: session({
+                requests: { q: { tool: 'AskUserQuestion', createdAt: 0, arguments: { questions: [{}] } } },
+            }),
+        }, 's1', 'q')).toBeNull();
     });
 });

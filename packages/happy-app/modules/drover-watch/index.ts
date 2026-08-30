@@ -72,6 +72,12 @@ export interface DroverGate {
      * these before this field existed, which is why it is here.
      */
     options?: DroverGateOption[];
+    /**
+     * The question takes more than one of its options (DROVE-53 Part A).
+     * Omitted rather than sent false: the watch reads a missing key as
+     * single-select, which is what every question was until this.
+     */
+    multiSelect?: boolean;
 }
 
 /** A session the wrist may flip onto another account. */
@@ -84,6 +90,36 @@ export interface DroverSession {
     path?: string;
     /** Subagents running right now; omitted when the session never said. */
     subagents?: number;
+    /**
+     * One line of what the session is doing right now — "thinking", "3
+     * subagents out" (DROVE-54). The app showed a green dot and the word
+     * online while the terminal showed a live task tree.
+     *
+     * No elapsed time in the string, on purpose: the feed republishes on any
+     * session change, so a baked-in timer would mean a publish a second. The
+     * wrist counts up from `statusSince` itself.
+     */
+    status?: string;
+    /** ISO-8601; when `status` began. */
+    statusSince?: string;
+}
+
+/**
+ * An account the wrist may flip a session ONTO, with the figure that decides
+ * which (DROVE-28's watch half).
+ *
+ * `accounts` carries the same names as bare strings and always will: a watch
+ * binary that predates this reads only that key, and the watch cannot be
+ * updated OTA. These are the same list with the numbers attached.
+ */
+export interface DroverAccountRow {
+    name: string;
+    /** Percent LEFT on the fullest limit; omitted when never measured. */
+    headroom?: number;
+    /** False when the account is not logged in and cannot take a session. */
+    loggedIn?: boolean;
+    /** ISO-8601; when a cooling account is back. Omitted when it is not out. */
+    backAt?: string;
 }
 
 export interface DroverSnapshot {
@@ -113,6 +149,12 @@ export interface DroverSnapshot {
      * so an account with nothing running on it cannot appear here.
      */
     accounts: string[];
+    /**
+     * The same accounts with their headroom, most first. Read by a watch that
+     * knows the key; the bare `accounts` list is what an older one falls back
+     * to, which is why both are sent.
+     */
+    accountRows?: DroverAccountRow[];
 }
 
 /** The wrist asking for an account flip (BASED-98). */
@@ -132,6 +174,7 @@ type DroverWatchModuleType = {
     addListener: {
         (eventName: 'onAnswer', listener: (event: DroverAnswerEvent) => void): EventSubscription;
         (eventName: 'onFlip', listener: (event: DroverFlipEvent) => void): EventSubscription;
+        (eventName: 'onRefresh', listener: () => void): EventSubscription;
     };
 };
 
@@ -169,4 +212,25 @@ export function addDroverAnswerListener(listener: (event: DroverAnswerEvent) => 
 export function addDroverFlipListener(listener: (event: DroverFlipEvent) => void) {
     if (!native) return { remove: () => {} };
     return native.addListener('onFlip', listener);
+}
+
+/**
+ * The wrist asking for a fresh snapshot (DROVE-22).
+ *
+ * Wrapped in a try/catch, and that is the reason `runtimeVersion` stays "21".
+ * A watch-to-phone message launches this app in the background, which is what
+ * makes the wrist current with the phone locked in a pocket — but the event is
+ * declared in Swift, so a binary built before this one does not emit it, and
+ * subscribing to an event a native module never declared throws. Caught here,
+ * an older binary running this bundle simply gets a listener that never fires,
+ * which is exactly its behaviour today. Bumping the runtime instead would
+ * orphan builds 6 and 7 from every OTA for a guard rail that buys nothing.
+ */
+export function addDroverRefreshListener(listener: () => void) {
+    if (!native) return { remove: () => {} };
+    try {
+        return native.addListener('onRefresh', listener);
+    } catch {
+        return { remove: () => {} };
+    }
 }

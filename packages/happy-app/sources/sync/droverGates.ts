@@ -24,6 +24,7 @@ interface QuestionCard {
     question?: string;
     header?: string;
     options?: unknown;
+    multiSelect?: unknown;
 }
 
 /** The first question on an AskUserQuestion card, drover-mirrored or Claude's own. */
@@ -87,6 +88,43 @@ export function optionsFor(args: unknown): DroverGateOption[] {
         });
     }
     return out;
+}
+
+/**
+ * Whether the card wants SEVERAL of its options (DROVE-53 Part A).
+ *
+ * The wrist could only ever send one, and nothing on the wire said the question
+ * wanted more, so a multi-select reaching a watch was answerable with exactly
+ * one tick and no sign that the rest of the answer was missing.
+ */
+export function multiSelectFor(args: unknown): boolean {
+    return firstQuestion(args)?.multiSelect === true;
+}
+
+/**
+ * The text of the question a request is asking, or null when it is not asking
+ * one.
+ *
+ * This is a KEY, not a label. Claude resolves AskUserQuestion through its
+ * permission callback and reads the answer out of the tool input under the
+ * question's own text (`{ answers: { [question]: "Yes" } }`, see
+ * askUserQuestionAnswers.ts). The wrist sent `{ optionId }` instead, which the
+ * bus bridge accepts and Claude's own card does not — so a NATIVE question
+ * answered from the watch merged a stray key into the input and the harness
+ * never saw an answer at all. The feed needs the text to build the payload the
+ * phone's own card builds.
+ */
+export function questionTextFor(
+    sessions: Record<string, GateSession | undefined>,
+    sessionId: string,
+    requestId: string,
+): string | null {
+    const request = sessions[sessionId]?.agentState?.requests?.[requestId] as
+        | { tool?: string; arguments?: unknown }
+        | undefined;
+    if (!request || request.tool !== 'AskUserQuestion') return null;
+    const question = firstQuestion(request.arguments)?.question;
+    return typeof question === 'string' && question ? question : null;
 }
 
 /** Wrist-sized title: the question's own header beats a generic "Question". */
@@ -166,6 +204,7 @@ export function collectGateEntries(
             );
             const account = session?.metadata?.droverAccount;
             const options = optionsFor(args);
+            const multiSelect = multiSelectFor(args);
             entries.push({
                 sessionId,
                 requestId,
@@ -188,6 +227,11 @@ export function collectGateEntries(
                     // one is not answerable here" and says so, which is the
                     // truth.
                     ...(options.length ? { options } : {}),
+                    // Omitted rather than sent false, for the same reason
+                    // again, and because the watch reads a missing key as
+                    // single-select — which is what every question was before
+                    // DROVE-53.
+                    ...(multiSelect ? { multiSelect: true } : {}),
                 },
             });
         }

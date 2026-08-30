@@ -11,6 +11,9 @@ struct GateDetailView: View {
     let gate: DroverGate
     @EnvironmentObject private var store: GateStore
     @Environment(\.dismiss) private var dismiss
+    /// Options ticked so far on a multi-select question (DROVE-53 Part A).
+    /// Held by option id, which is the label when the option carried none.
+    @State private var picked: Set<String> = []
 
     /// The phone's snapshot is the authoritative pending set, so a gate missing
     /// from it is settled — answered in tmux, on the phone, or expired.
@@ -72,6 +75,7 @@ struct GateDetailView: View {
         switch gate.classification {
         case .question: return "Question"
         case .permission, .unknown: return "Gate"
+        case .needsYou: return "To do"
         case .idle: return "Waiting"
         case .expiry: return "Account"
         }
@@ -88,6 +92,10 @@ struct GateDetailView: View {
         // already renders anything it does not recognise as, and allow/deny is
         // the pair that carries a real answer either way.
         case .permission, .unknown: permissionActions
+        // "I need you to DO something" (DROVE-53 Part B) is not a yes/no and
+        // not a pick — the only answer is that it is done, so a Deny button
+        // beside it would settle the request having done nothing.
+        case .needsYou: markDoneAction
         case .idle, .expiry: acknowledgeAction
         }
     }
@@ -102,25 +110,63 @@ struct GateDetailView: View {
     @ViewBuilder
     private var questionActions: some View {
         let options = gate.answerableOptions
-        ForEach(options) { option in
-            Button {
-                if store.answer(gate, allow: true, optionId: option.id) { dismiss() }
-            } label: {
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(option.label)
-                        .font(.caption)
-                        .multilineTextAlignment(.leading)
-                    if let detail = option.detail, !detail.isEmpty {
-                        Text(detail)
-                            .font(.system(size: 9))
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.leading)
-                    }
+        if gate.takesManyAnswers {
+            multiSelectActions(options)
+        } else {
+            ForEach(options) { option in
+                Button {
+                    if store.answer(gate, allow: true, optionId: option.id) { dismiss() }
+                } label: {
+                    OptionLabel(option: option)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         typedAnswerAction(hasOptions: !options.isEmpty)
+    }
+
+    /// A question that takes SEVERAL of its options (DROVE-53 Part A).
+    ///
+    /// The wrist could only ever send one, so a multi-select reaching it was
+    /// answerable with exactly one tick and no way to say so — the harness got
+    /// a single label back for a question that asked for a set. Ticking is
+    /// separated from sending on purpose: on a 40mm screen a tap that both
+    /// selects and submits makes the second option unreachable.
+    ///
+    /// The selection travels as one string joined with ", ", which is not a
+    /// choice made here: it is exactly what the phone's own question card sends
+    /// (providerAnswersFor in askUserQuestionAnswers.ts), and happy-cli splits
+    /// on that separator when matching labels back to bus options. A second
+    /// encoding would be a second thing to keep in step.
+    @ViewBuilder
+    private func multiSelectActions(_ options: [DroverGateOption]) -> some View {
+        ForEach(options) { option in
+            Button {
+                if picked.contains(option.id) { picked.remove(option.id) } else { picked.insert(option.id) }
+            } label: {
+                HStack(alignment: .top, spacing: 5) {
+                    Image(systemName: picked.contains(option.id) ? "checkmark.square.fill" : "square")
+                        .font(.caption)
+                        .foregroundStyle(picked.contains(option.id) ? Color.green : .secondary)
+                    OptionLabel(option: option)
+                }
+            }
+        }
+        Button {
+            // Order follows the card, not the order they were tapped: the
+            // harness reads this back as a list and a stable order is what
+            // makes two wrists answering the same question agree.
+            let chosen = options.filter { picked.contains($0.id) }.map(\.label)
+            if store.answer(gate, allow: true, optionId: chosen.joined(separator: ", ")) { dismiss() }
+        } label: {
+            Label(
+                picked.isEmpty ? "Pick at least one" : "Send \(picked.count)",
+                systemImage: "paperplane"
+            )
+            .font(.caption)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .tint(.green)
+        .disabled(picked.isEmpty)
     }
 
     /// Type, scribble or dictate an answer.
@@ -167,6 +213,19 @@ struct GateDetailView: View {
         }
     }
 
+    /// A needs-you request is finished by DOING it, so the only button says so.
+    /// The answer travels as an ordinary allow, which is what tells the waiting
+    /// session it may carry on.
+    private var markDoneAction: some View {
+        Button {
+            if store.answer(gate, allow: true) { dismiss() }
+        } label: {
+            Label("Done", systemImage: "checkmark.circle")
+                .frame(maxWidth: .infinity)
+        }
+        .tint(.purple)
+    }
+
     /// Idle and expiry ask nothing — they say a session is waiting or an
     /// account is running out. One button, so the card can be cleared from the
     /// wrist without pretending a choice was made.
@@ -178,5 +237,27 @@ struct GateDetailView: View {
                 .frame(maxWidth: .infinity)
         }
         .tint(.blue)
+    }
+}
+
+
+/// An option's label and its description, drawn the same whether it is tapped
+/// to answer or tapped to tick.
+private struct OptionLabel: View {
+    let option: DroverGateOption
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(option.label)
+                .font(.caption)
+                .multilineTextAlignment(.leading)
+            if let detail = option.detail, !detail.isEmpty {
+                Text(detail)
+                    .font(.system(size: 9))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.leading)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

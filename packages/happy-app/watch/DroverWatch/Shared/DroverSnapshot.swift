@@ -24,6 +24,10 @@ struct DroverGate: Codable, Identifiable, Equatable, Hashable {
     /// twice: a synthesized decoder forgives a missing key only for an
     /// Optional, and every gate that is not a question has none.
     let options: [DroverGateOption]?
+    /// The question takes MORE than one of its options (DROVE-53 Part A).
+    /// Optional so a phone that predates the key still decodes; absent reads as
+    /// single-select, which is what every question was until now.
+    let multiSelect: Bool?
 
     /// The kinds schema/event.json defines, plus the one it cannot: a kind this
     /// build has never heard of. Decoded through `Kind(rawValue:) ?? .unknown`
@@ -36,6 +40,15 @@ struct DroverGate: Codable, Identifiable, Equatable, Hashable {
         case question
         case idle
         case expiry
+        /// Claude asking Clay to DO something rather than to answer something
+        /// (DROVE-53 Part B): push this by 10, log in to X, plug the phone in.
+        /// It is answered by saying it is done, so it takes neither an
+        /// allow/deny pair nor a list of options.
+        ///
+        /// Rendered here before the bus emits it on purpose. Swift cannot ship
+        /// OTA, so a kind the wrist learns about later needs another archive;
+        /// this build knows it in advance and the producer can land OTA.
+        case needsYou = "needs-you"
         case unknown
     }
 
@@ -49,6 +62,10 @@ struct DroverGate: Codable, Identifiable, Equatable, Hashable {
     var answerableOptions: [DroverGateOption] {
         isQuestion ? (options ?? []) : []
     }
+
+    /// Whether this question wants several answers. Only ever true for a
+    /// question with options: a free-text answer is one string either way.
+    var takesManyAnswers: Bool { multiSelect == true && !answerableOptions.isEmpty }
 }
 
 /// One pickable answer on a question gate (schema/event.json `options[]`).
@@ -102,6 +119,41 @@ struct DroverSession: Codable, Identifiable, Equatable, Hashable {
     let path: String?
     /// Subagents running right now. Optional for the same reason.
     let subagents: Int?
+    /// One line of what the session is doing RIGHT NOW — "thinking", "running
+    /// Bash", "3 subagents out" (DROVE-54). The terminal shows a whole task
+    /// tree; the wrist has room for the top line of it, and "online" was all it
+    /// said before.
+    ///
+    /// Deliberately carries no elapsed time. A string with a timer in it
+    /// changes every second, and the feed republishes whenever the session set
+    /// changes, so the wrist would be fed a new snapshot a second — see
+    /// `statusSince`, which the wrist counts up from itself.
+    let status: String?
+    /// When `status` began. The wrist renders the elapsed time off this with
+    /// `Text(_:style: .relative)`, which counts on its own between snapshots.
+    let statusSince: Date?
+}
+
+/// One account the wrist may flip a session onto, with the number that decides
+/// which (DROVE-28's watch half).
+///
+/// The bare name list could only ever offer "one of the accounts something is
+/// already running on", which is the opposite of what a flip wants: the account
+/// worth moving to is the one with headroom, and headroom is exactly what a
+/// name does not carry. The CLI stamps every registry account on
+/// `metadata.droverUsage` (DROVE-47) and the phone reduces it to these.
+struct DroverAccount: Codable, Identifiable, Equatable, Hashable {
+    var id: String { name }
+    let name: String
+    /// Percent LEFT on the fullest limit. Optional, and it stays optional all
+    /// the way to the label: an account never measured shows no figure rather
+    /// than a 0 that reads as "out".
+    let headroom: Int?
+    /// False when the account is not logged in, so the wrist can grey it rather
+    /// than offering a flip that will bounce.
+    let loggedIn: Bool?
+    /// When a cooling account is back. Absent when it is not out.
+    let backAt: Date?
 }
 
 struct DroverSnapshot: Codable, Equatable {
@@ -124,9 +176,12 @@ struct DroverSnapshot: Codable, Equatable {
     /// flipping existed; see the hand-written decoder below for why the
     /// default alone is not enough.
     var sessions: [DroverSession] = []
-    /// Every account in the registry, in Clay's preference order, so the
-    /// wrist can offer them by name instead of only "the next one".
+    /// Every account the wrist can name, most headroom first. Kept as bare
+    /// strings because a watch that predates `accountRows` reads only this.
     var accounts: [String] = []
+    /// The same accounts with their headroom. Absent from a phone that predates
+    /// DROVE-28's picker, which is why the views fall back to `accounts`.
+    var accountRows: [DroverAccount] = []
 
     static let empty = DroverSnapshot(gates: [], updatedAt: .distantPast, connected: false)
 
@@ -202,6 +257,7 @@ extension DroverSnapshot {
         connected = try container.decode(Bool.self, forKey: .connected)
         sessions = try container.decodeIfPresent([DroverSession].self, forKey: .sessions) ?? []
         accounts = try container.decodeIfPresent([String].self, forKey: .accounts) ?? []
+        accountRows = try container.decodeIfPresent([DroverAccount].self, forKey: .accountRows) ?? []
     }
 }
 
@@ -248,4 +304,29 @@ struct DroverFlip: Codable {
         self.sessionId = sessionId
         self.account = account
     }
+}
+
+
+/// The wrist asking the phone for a snapshot (DROVE-22).
+///
+/// The only thing that restamps `updatedAt` is the phone's JS calling publish,
+/// and iOS suspends a backgrounded app within seconds, so three minutes after
+/// Clay puts the phone down the wrist is stale by definition — which is the
+/// state he is in every single time he looks at the watch. Nothing on the wire
+/// could ask for a fresh one: `GateStore.send` was called for an answer and a
+/// flip and nothing else.
+///
+/// A watch-to-phone `sendMessage` LAUNCHES the iOS counterpart app in the
+/// background when it is not running, which is the whole of what he asked for
+/// ("how to make it work without requiring the drover app to be open on my
+/// phone"). It needs the phone in range; when it is not, the failure is
+/// reported as a failure instead of the wrist quietly showing an hour-old wall.
+///
+/// Sent on the same channel as an answer and a flip and told apart by `kind`,
+/// the way a flip already is.
+struct DroverRefresh: Codable {
+    /// Always "refresh". The phone dispatches on it.
+    let kind: String
+
+    init() { self.kind = "refresh" }
 }
