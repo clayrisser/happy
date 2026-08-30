@@ -421,6 +421,54 @@ describe('a flip through the launcher loop', () => {
         expect(h.metadata().droverAccount).toBe('alt')
         expect(String(h.metadata().name)).toContain('[alt]')
     })
+
+    it('keeps the name Claude Code gave the session instead of stamping the account over it', async () => {
+        // DROVE-44, reported from the phone: Clay flipped a session he had
+        // named DROVER and the app called it "[jamrizzi] cattle-drover".
+        //
+        // The flip is not the half that was wrong. It restamps only a
+        // default-shaped name, and the name WAS default-shaped by the time it
+        // looked, because the run had come up through `drover --resume` and
+        // the scanner pre-marked the transcript's custom-title record along
+        // with the messages instead of applying it. So this drives the seam
+        // rather than either side of it, with the REAL scanner — the rest of
+        // this file mocks it — and the assertion is the title on the screen
+        // Clay was looking at.
+        const h = await build()
+        const sessionId = 'sess-1'
+        const transcript = join(h.mainDir, 'projects', h.cwd.replace(/[^a-zA-Z0-9-]/g, '-'), `${sessionId}.jsonl`)
+        writeFileSync(transcript, JSON.stringify({ type: 'custom-title', customTitle: 'DROVER', sessionId }) + '\n')
+
+        const { createSessionScanner } = await vi.importActual<typeof import('@/claude/utils/sessionScanner')>(
+            '@/claude/utils/sessionScanner',
+        )
+        const { applyCustomTitle } = await import('@/claude/session')
+        const scanner = await createSessionScanner({
+            sessionId: null,
+            workingDirectory: h.cwd,
+            claudeConfigDir: h.mainDir,
+            onMessage: () => {},
+            onCustomTitle: (t: string) => applyCustomTitle(h.session, t),
+        })
+        // The first SessionStart hook of a resumed run: what is on disk is
+        // history, so it is pre-marked. The title is not history.
+        await scanner.onNewSession(sessionId, { treatExistingAsProcessed: true })
+        await new Promise((r) => setTimeout(r, 200))
+        expect(h.metadata().name).toBe('DROVER')
+
+        childScript = ['abort', 'exit']
+        const run = h.claudeLocalLauncher(h.session)
+        await new Promise((r) => setTimeout(r, 20))
+        h.flip.request({ account: 'alt', reason: 'manual', by: 'test' })
+        await run
+        await scanner.cleanup()
+
+        // The account moved. The name did not, on either of the two fields —
+        // `summary` is the one the phone's session list actually renders.
+        expect(h.metadata().droverAccount).toBe('alt')
+        expect(h.metadata().name).toBe('DROVER')
+        expect((h.metadata().summary as { text: string }).text).toBe('DROVER')
+    })
 })
 
 describe('park and self-resume', () => {

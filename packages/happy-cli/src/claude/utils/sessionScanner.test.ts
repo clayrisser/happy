@@ -75,6 +75,45 @@ describe('sessionScanner', () => {
     expect(titles).toEqual(['zap', 'zing'])
   })
 
+  it('seeds the title from a transcript it pre-marks, because a title is a name and not a replay', async () => {
+    // DROVE-44, from the phone. `drover --resume` opens Claude Code's picker,
+    // so the transcript id only exists once the SessionStart hook fires — and
+    // that hook takes the treatExistingAsProcessed path, which marked the
+    // custom-title record along with every message and never applied it. The
+    // session Clay had called DROVER came back as "cattle-drover", and the
+    // next flip was then entitled to restamp that default-shaped name as
+    // "[jamrizzi] cattle-drover".
+    //
+    // It never recovers on its own: entries are keyed by their own text, so
+    // every later re-append of the same title is skipped as already seen.
+    const titles: string[] = []
+    scanner = await createSessionScanner({
+      sessionId: null,
+      workingDirectory: testDir,
+      onMessage: (msg) => collectedMessages.push(msg),
+      onCustomTitle: (t) => titles.push(t),
+    })
+
+    const sessionId = 'bbbbbbbb-cccc-dddd-eeee-ffffffffffff'
+    const file = join(projectDir, `${sessionId}.jsonl`)
+    await writeFile(file,
+      JSON.stringify({ type: 'custom-title', customTitle: 'old name', sessionId }) + '\n' +
+      JSON.stringify({ type: 'custom-title', customTitle: 'DROVER', sessionId }) + '\n')
+    scanner.onNewSession(sessionId, { treatExistingAsProcessed: true })
+    await new Promise(resolve => setTimeout(resolve, 200))
+
+    // Last one wins — that is what /rename means — and the messages beside it
+    // stay pre-marked, so nothing is replayed at the app.
+    expect(titles).toEqual(['DROVER'])
+    expect(collectedMessages).toHaveLength(0)
+
+    // And re-appending the SAME title, which Claude Code does on every turn,
+    // still says nothing.
+    await appendFile(file, JSON.stringify({ type: 'custom-title', customTitle: 'DROVER', sessionId }) + '\n')
+    await new Promise(resolve => setTimeout(resolve, 200))
+    expect(titles).toEqual(['DROVER'])
+  })
+
   it('should process initial session and resumed session correctly', async () => {
     // TEST SCENARIO:
     // Phase 1: User says "lol" → Assistant responds "lol" → Session closes
