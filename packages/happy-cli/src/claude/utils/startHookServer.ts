@@ -70,6 +70,18 @@ export interface SessionHookData {
     cwd?: string;
     hook_event_name?: string;
     source?: string;
+    /**
+     * What Claude Code is CALLING this session right now (DROVE-15).
+     *
+     * It has always been in the payload and was never read: the authoritative
+     * current name, handed to the CLI on every SessionStart and thrown away,
+     * while the app went on showing the cwd basename it was seeded with. It
+     * is the only source that covers a bare `drover --resume`, where the
+     * picker means nothing knows the session id until this very hook, and a
+     * session renamed before its transcript ever carried a custom-title
+     * record.
+     */
+    session_title?: string;
     [key: string]: unknown;
 }
 

@@ -311,6 +311,11 @@ export class Session {
 export function applyCustomTitle(session: Session, title: string): void {
     const text = title.trim();
     if (!text) return;
+    // Tell the client a person has named this session, so the change_title MCP
+    // tool stops overwriting it. change_title writes only `summary`, which is
+    // the field the app's list actually reads, so the model's guess replaced a
+    // manual name on screen while metadata.name still held it (DROVE-15).
+    session.client.markManualTitle?.(text);
     session.client.updateMetadata((metadata) => ({
         ...metadata,
         name: text,

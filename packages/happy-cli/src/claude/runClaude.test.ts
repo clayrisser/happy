@@ -97,7 +97,11 @@ vi.mock('@/resume/reattachClaudeSession', () => ({
     findHappySessionForClaudeSession: mockFindHappySessionForClaudeSession,
 }));
 
-import { basename } from 'node:path';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { basename, join } from 'node:path';
+
+import { getProjectPath } from '@/claude/utils/path';
 
 import { refusesDaemonLocalStart, runClaude } from './runClaude';
 
@@ -245,6 +249,9 @@ function emitClaudeGoalStatus(
 describe('runClaude remote JSONL scanner', () => {
     const processEvents = ['SIGTERM', 'SIGINT', 'uncaughtException', 'unhandledRejection'] as const;
     const originalListeners = new Map<string, Array<(...args: any[]) => void>>();
+    let savedConfigDir: string | undefined;
+    let savedAccounts: string | undefined;
+    let titleRoot: string;
 
     beforeEach(() => {
         vi.clearAllMocks();
@@ -261,6 +268,17 @@ describe('runClaude remote JSONL scanner', () => {
         delete process.env.HAPPY_FORKED_FROM_SESSION_ID;
         delete process.env.HAPPY_FORKED_FROM_MESSAGE_ID;
         delete process.env.HAPPY_FORK_CLAUDE_SESSION_ID;
+
+        // DROVE-15: runClaude now looks up the name Claude Code is showing,
+        // which is a file read. Point it at an empty directory and an absent
+        // account registry so these tests never read the developer's own
+        // ~/.claude and are not renamed by a session that happens to be there.
+        savedConfigDir = process.env.CLAUDE_CONFIG_DIR;
+        savedAccounts = process.env.DROVER_ACCOUNTS;
+        titleRoot = join(tmpdir(), `runclaude-title-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+        mkdirSync(titleRoot, { recursive: true });
+        process.env.CLAUDE_CONFIG_DIR = join(titleRoot, 'config');
+        process.env.DROVER_ACCOUNTS = join(titleRoot, 'accounts.json');
 
         mockReadSettings.mockResolvedValue({
             machineId: 'machine-1',
@@ -285,6 +303,11 @@ describe('runClaude remote JSONL scanner', () => {
     });
 
     afterEach(() => {
+        if (savedConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+        else process.env.CLAUDE_CONFIG_DIR = savedConfigDir;
+        if (savedAccounts === undefined) delete process.env.DROVER_ACCOUNTS;
+        else process.env.DROVER_ACCOUNTS = savedAccounts;
+        rmSync(titleRoot, { recursive: true, force: true });
         for (const [event, listeners] of originalListeners) {
             process.removeAllListeners(event as any);
             for (const listener of listeners) {
@@ -1228,4 +1251,93 @@ describe('runClaude remote JSONL scanner', () => {
         });
     });
 
+    it('resumes under the name Claude Code is showing, not the project default', async () => {
+        // DROVE-15. Clay renamed a session DROVER with /rename, quit drover,
+        // and started it again with --resume. The terminal said DROVER; the
+        // app header said cattle-drover, which is only the cwd basename. The
+        // name is on disk in the account's own projects tree, so read it
+        // rather than seeding a path over it.
+        const droverAccount = process.env.DROVER_ACCOUNT;
+        delete process.env.DROVER_ACCOUNT;
+        const claudeId = '9ae61ba4-8a3b-452f-a294-da49d0019c79';
+        const titleDir = join(getProjectPath(process.cwd(), process.env.CLAUDE_CONFIG_DIR!), claudeId);
+        mkdirSync(titleDir, { recursive: true });
+        writeFileSync(join(titleDir, 'custom-title.json'), JSON.stringify({ customTitle: 'DROVER' }));
+        mockResumedClaudeSessionId.mockReturnValue(claudeId);
+        mockFindHappySessionForClaudeSession.mockResolvedValue(null);
+        const { api, loopDeferred } = createReattachHarness();
+
+        const runPromise = runClaude({
+            token: 'token',
+            encryption: { type: 'legacy', secret: new Uint8Array(32) },
+        } as any, {
+            startingMode: 'local',
+            shouldStartDaemon: false,
+            claudeArgs: ['--resume', claudeId],
+        });
+
+        await vi.waitFor(() => {
+            expect(mockLoop).toHaveBeenCalled();
+        });
+
+        expect(api.getOrCreateSession).toHaveBeenCalledWith(expect.objectContaining({
+            metadata: expect.objectContaining({
+                name: 'DROVER',
+                summary: expect.objectContaining({ text: 'DROVER' }),
+            }),
+        }));
+
+        await finishRun(runPromise, loopDeferred);
+        if (droverAccount !== undefined) process.env.DROVER_ACCOUNT = droverAccount;
+    });
+
+    it('takes the name the SessionStart hook carries', async () => {
+        // DROVE-15. Every SessionStart hook payload already carries
+        // session_title — the authoritative current name, handed to the CLI
+        // and thrown away. It covers the picker (`drover --resume` with no id,
+        // where nothing knows the session id until this very hook) and a
+        // session renamed before it ever wrote a custom-title record.
+        const { sessionClient, loopDeferred } = createReattachHarness();
+
+        const runPromise = runClaude({
+            token: 'token',
+            encryption: { type: 'legacy', secret: new Uint8Array(32) },
+        } as any, {
+            startingMode: 'local',
+            shouldStartDaemon: false,
+        });
+
+        await vi.waitFor(() => {
+            expect(mockLoop).toHaveBeenCalled();
+            expect(mockStartHookServer).toHaveBeenCalled();
+        });
+
+        const onSessionHook = mockStartHookServer.mock.calls.at(-1)?.[0]?.onSessionHook;
+        expect(onSessionHook).toBeTypeOf('function');
+        const runtimeSession = {
+            sessionId: null as string | null,
+            thinking: false,
+            cleanup: vi.fn(),
+            client: sessionClient,
+            onSessionFound: vi.fn(),
+        };
+        mockLoop.mock.calls.at(-1)?.[0].onSessionReady(runtimeSession);
+
+        sessionClient.updateMetadata.mockClear();
+        onSessionHook('9ae61ba4-8a3b-452f-a294-da49d0019c79', {
+            session_id: '9ae61ba4-8a3b-452f-a294-da49d0019c79',
+            hook_event_name: 'SessionStart',
+            source: 'resume',
+            session_title: 'DROVER',
+        });
+
+        expect(sessionClient.updateMetadata).toHaveBeenCalled();
+        const updater = sessionClient.updateMetadata.mock.calls.at(-1)![0] as (m: any) => any;
+        expect(updater({ name: 'cattle-drover' })).toMatchObject({
+            name: 'DROVER',
+            summary: expect.objectContaining({ text: 'DROVER' }),
+        });
+
+        await finishRun(runPromise, loopDeferred);
+    });
 });

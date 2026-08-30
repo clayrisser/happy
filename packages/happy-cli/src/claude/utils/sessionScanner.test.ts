@@ -196,6 +196,43 @@ describe('sessionScanner', () => {
     expect(collectedMessages).toHaveLength(0)
   })
 
+  it('follows a rename back to a title already used earlier in the run', async () => {
+    // DROVE-15. Entries were keyed by the title TEXT, so once
+    // `custom-title:zap` had been seen, renaming away and back was a silent
+    // no-op. Claude Code re-appends the same record on every start (69 copies
+    // in one of Clay's transcripts), so the key has to be positional and the
+    // repetition has to be filtered on the way out instead.
+    const titles: string[] = []
+    scanner = await createSessionScanner({
+      sessionId: null,
+      workingDirectory: testDir,
+      onMessage: (msg) => collectedMessages.push(msg),
+      onCustomTitle: (t) => titles.push(t),
+    })
+
+    const sessionId = '9ae61ba4-8a3b-452f-a294-da49d0019c79'
+    const file = join(projectDir, `${sessionId}.jsonl`)
+    const rename = (title: string) =>
+      JSON.stringify({ type: 'custom-title', customTitle: title, sessionId }) + '\n'
+    await writeFile(file, rename('zap'))
+    scanner.onNewSession(sessionId)
+    await new Promise(resolve => setTimeout(resolve, 150))
+    expect(titles).toEqual(['zap'])
+
+    await appendFile(file, rename('zing'))
+    await new Promise(resolve => setTimeout(resolve, 150))
+    await appendFile(file, rename('zap'))
+    await new Promise(resolve => setTimeout(resolve, 150))
+
+    expect(titles).toEqual(['zap', 'zing', 'zap'])
+
+    // Claude Code re-stamping the SAME title it already shows is still nothing
+    // to report: it happens on every start, and each one is a metadata write.
+    await appendFile(file, rename('zap'))
+    await new Promise(resolve => setTimeout(resolve, 150))
+    expect(titles).toEqual(['zap', 'zing', 'zap'])
+  })
+
   it('should process initial session and resumed session correctly', async () => {
     // TEST SCENARIO:
     // Phase 1: User says "lol" → Assistant responds "lol" → Session closes

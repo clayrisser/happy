@@ -1218,4 +1218,38 @@ describe('ApiSessionClient v3 messages API migration', () => {
         expect(mockAxiosGet).not.toHaveBeenCalled();
         expect(mockAxiosPost).not.toHaveBeenCalled();
     });
+
+    it('lets a Claude summary name a session nobody has named', () => {
+        const client = new ApiSessionClient('fake-token', session);
+        const spy = vi.spyOn(client, 'updateMetadata');
+
+        client.sendClaudeSessionMessage({
+            type: 'summary',
+            summary: 'Fixing the flip',
+            leafUuid: 'leaf-1'
+        } as any);
+
+        expect(spy).toHaveBeenCalledTimes(1);
+        const updated = spy.mock.calls[0][0]({ name: 'cattle-drover' } as any);
+        expect(updated.summary?.text).toBe('Fixing the flip');
+    });
+
+    it('does not let change_title overwrite a name the person typed (DROVE-15)', () => {
+        // change_title writes only `summary`, which is the field the app's
+        // session list reads, so the model's guess replaced Clay's /rename on
+        // screen while metadata.name still held the manual one. Measured:
+        // the MCP tool renamed a session to "Drover self-test: prompt path
+        // end-to-end" 35 seconds after custom-title.json was stamped "hi".
+        const client = new ApiSessionClient('fake-token', session);
+        client.markManualTitle('DROVER');
+        const spy = vi.spyOn(client, 'updateMetadata');
+
+        client.sendClaudeSessionMessage({
+            type: 'summary',
+            summary: 'Fixing the flip',
+            leafUuid: 'leaf-1'
+        } as any);
+
+        expect(spy).not.toHaveBeenCalled();
+    });
 });

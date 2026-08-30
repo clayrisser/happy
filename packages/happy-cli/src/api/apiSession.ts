@@ -215,6 +215,8 @@ export class ApiSessionClient extends EventEmitter {
     private reconnectInterval: NodeJS.Timeout | null = null;
     private ignoreArchiveSignal = false;
     private skipInitialMessages = false;
+    /** The title a person gave this session, once one is known (DROVE-15). */
+    private manualTitle: string | null = null;
     private claudeSessionProtocolState: ClaudeSessionProtocolState = {
         currentTurnId: null,
         uuidToProviderSubagent: new Map<string, string>(),
@@ -734,6 +736,17 @@ export class ApiSessionClient extends EventEmitter {
 
         // Update metadata with summary if this is a summary message
         if (body.type === 'summary' && 'summary' in body && 'leafUuid' in body) {
+            // Unless a person has already named this session (DROVE-15). The
+            // change_title MCP tool sends exactly this message and it writes
+            // only `summary` — the one field the app's session list reads — so
+            // the model's guess replaced Clay's /rename on screen while
+            // metadata.name went on holding the manual one. Measured: the tool
+            // renamed a session 35 seconds after custom-title.json was stamped
+            // by hand. A manual title outranks a guess.
+            if (this.manualTitle) {
+                logger.debug(`[SOCKET] Keeping the manual title "${this.manualTitle}" over a summary`);
+                return;
+            }
             this.updateMetadata((metadata) => ({
                 ...metadata,
                 summary: {
@@ -961,6 +974,15 @@ export class ApiSessionClient extends EventEmitter {
      */
     suppressNextArchiveSignal() {
         this.ignoreArchiveSignal = true;
+    }
+
+    /**
+     * Remember that a person named this session, so a later guess cannot
+     * quietly replace it (DROVE-15). Set from applyCustomTitle, which is the
+     * one path Claude Code's own `/rename` reaches.
+     */
+    markManualTitle(text: string) {
+        this.manualTitle = text;
     }
 
     skipExistingMessages() {
