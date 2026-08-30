@@ -25,6 +25,7 @@ import { copySessionMetadataToClipboard, copySessionMetadataAndLogsToClipboard }
 import { HappyError } from '@/utils/errors';
 import { MobileGlassSurface } from '@/components/MobileGlass';
 import { getRigIdentity, isRigMetadata } from '@/sync/rig';
+import { harnessName } from '@/utils/harnessName';
 import { MOBILE_GLASS_HEADER_HEIGHT } from '@/components/navigation/headerMetrics';
 
 // Animated status dot component
@@ -479,12 +480,7 @@ function SessionInfoContent({ session }: { session: Session }) {
                             subtitle={(() => {
                                 const rigIdentity = getRigIdentity(session.metadata);
                                 if (rigIdentity) return rigIdentity.providerName;
-                                const flavor = session.metadata.flavor || 'claude';
-                                if (flavor === 'claude') return 'Claude';
-                                if (flavor === 'gpt' || flavor === 'openai') return 'Codex';
-                                if (flavor === 'gemini') return 'Gemini';
-                                if (flavor === 'openclaw') return 'OpenClaw';
-                                return flavor;
+                                return harnessName(session.metadata.flavor);
                             })()}
                             icon={<Ionicons name="sparkles-outline" size={29} color="#5856D6" />}
                             showChevron={false}
