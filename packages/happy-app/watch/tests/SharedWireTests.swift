@@ -45,6 +45,7 @@ struct SharedWireTests {
         aSnapshotWithoutTheNewKeysStillDecodes()
         sessionCarriesWhatItIsDoing()
         sessionWithoutAStatusStillDecodes()
+        accountHeadroomSurvivesTheWire()
 
         if failures.isEmpty {
             print("\nall wire checks passed")
@@ -319,4 +320,30 @@ struct SharedWireTests {
         check(session.status == nil, "a session with no status key decodes")
         check(session.statusSince == nil, "a session with no statusSince key decodes")
     }
+
+    /// The flip picker orders by headroom (DROVE-28's watch half), so the row
+    /// has to carry the figure and not just the name.
+    static func accountHeadroomSurvivesTheWire() {
+        let payload = """
+        {"gates":[],"updatedAt":"2026-08-29T12:00:00Z","connected":true,
+        "accounts":["jamrizzi","main","spare"],
+        "accountRows":[{"name":"jamrizzi","headroom":65,"loggedIn":true},
+        {"name":"main","headroom":0,"loggedIn":true,"backAt":"2026-08-29T17:00:00Z"},
+        {"name":"spare","loggedIn":false}]}
+        """
+        guard let snapshot = try? DroverSnapshot.decoder.decode(
+            DroverSnapshot.self, from: Data(payload.utf8)
+        ) else {
+            check(false, "an accountRows snapshot decodes")
+            return
+        }
+        check(snapshot.accountRows.count == 3, "every account row decodes")
+        check(snapshot.accountRows[0].headroom == 65, "an account keeps its headroom")
+        check(snapshot.accountRows[1].backAt != nil, "a cooling account keeps when it is back")
+        // Never measured is not the same as measured at zero: a 0 reads as
+        // "out" and would hide the one account with room.
+        check(snapshot.accountRows[2].headroom == nil, "an unmeasured account carries no figure")
+        check(snapshot.accountRows[2].loggedIn == false, "a logged-out account says so")
+    }
+
 }

@@ -12,7 +12,6 @@ struct GateDetailView: View {
     let gate: DroverGate
     @EnvironmentObject private var store: GateStore
     @Environment(\.dismiss) private var dismiss
-
     /// Which options are ticked on a MULTI-SELECT question (DROVE-53).
     ///
     /// Ordered rather than a Set, because the order they were tapped in is the
@@ -262,3 +261,5 @@ struct GateDetailView: View {
         .tint(.blue)
     }
 }
+
+

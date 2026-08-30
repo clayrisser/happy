@@ -149,6 +149,14 @@ final class GateStore: NSObject, ObservableObject {
 
     var accounts: [String] { snapshot.accounts }
 
+    /// Accounts with their headroom, most first. Falls back to the bare names a
+    /// phone that predates DROVE-28's picker sends, so the flip list is never
+    /// empty just because the figures are missing.
+    var accountRows: [DroverAccount] {
+        if !snapshot.accountRows.isEmpty { return snapshot.accountRows }
+        return snapshot.accounts.map { DroverAccount(name: $0, headroom: nil, loggedIn: nil, backAt: nil) }
+    }
+
     /// Answer a gate. `optionId` is a pick, `text` is typed or dictated; a
     /// question takes exactly one of them and a permission takes neither.
     ///

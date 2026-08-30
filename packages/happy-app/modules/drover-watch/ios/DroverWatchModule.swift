@@ -121,6 +121,13 @@ final class DroverWatchDelegate: NSObject, WCSessionDelegate {
         // A flip carries `kind`, which an answer never does. Checked first so
         // the answer guard below cannot silently swallow it — that guard is a
         // `return` on a missing `allow`, and a flip has no `allow`.
+        // A refresh carries only `kind`. Checked with the flip, above the
+        // answer guard, for the same reason: that guard returns on a missing
+        // `allow`, and neither of these has one (DROVE-22).
+        if payload["kind"] as? String == "refresh" {
+            onRefresh?()
+            return
+        }
         if payload["kind"] as? String == "flip" {
             guard let sessionId = payload["sessionId"] as? String else { return }
             var event: [String: Any] = ["sessionId": sessionId]

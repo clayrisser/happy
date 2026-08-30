@@ -124,6 +124,24 @@ export interface DroverSession {
     statusSince?: string;
 }
 
+/**
+ * An account the wrist may flip a session ONTO, with the figure that decides
+ * which (DROVE-28's watch half).
+ *
+ * `accounts` carries the same names as bare strings and always will: a watch
+ * binary that predates this reads only that key, and the watch cannot be
+ * updated OTA. These are the same list with the numbers attached.
+ */
+export interface DroverAccountRow {
+    name: string;
+    /** Percent LEFT on the fullest limit; omitted when never measured. */
+    headroom?: number;
+    /** False when the account is not logged in and cannot take a session. */
+    loggedIn?: boolean;
+    /** ISO-8601; when a cooling account is back. Omitted when it is not out. */
+    backAt?: string;
+}
+
 export interface DroverSnapshot {
     gates: DroverGate[];
     /**
@@ -151,6 +169,12 @@ export interface DroverSnapshot {
      * so an account with nothing running on it cannot appear here.
      */
     accounts: string[];
+    /**
+     * The same accounts with their headroom, most first. Read by a watch that
+     * knows the key; the bare `accounts` list is what an older one falls back
+     * to, which is why both are sent.
+     */
+    accountRows?: DroverAccountRow[];
 }
 
 /**

@@ -16,7 +16,7 @@
 import { storage } from './storage';
 import { sync } from './sync';
 import { sessionAllow, sessionDeny } from './ops';
-import { collectGates } from './droverGates';
+import { collectGates, questionTextFor } from './droverGates';
 import { isSessionArchived } from './sessionArchive';
 import { liveStatusSince, liveStatusWatchLine } from '@/utils/liveStatus';
 import {
@@ -26,6 +26,7 @@ import {
     getDroverWatchStatus,
     isDroverWatchAvailable,
     publishDroverSnapshot,
+    type DroverAccountRow,
     type DroverGate,
     type DroverSession,
 } from 'drover-watch';
@@ -72,6 +73,68 @@ const HEARTBEAT_MS = 60_000;
  * which is what makes flipping from the wrist and then watching the same row
  * possible at all.
  */
+/**
+ * The accounts the wrist can flip ONTO, most headroom first (DROVE-28's watch
+ * half).
+ *
+ * Read off `metadata.droverUsage`, which the CLI stamps with every registry
+ * account and its headroom (DROVE-47) — not off the sessions' own
+ * `droverAccount` stamps, which can only ever name an account something is
+ * ALREADY running on. That is the opposite of what a flip wants: the account
+ * worth moving to is the one with room, and by definition the emptiest account
+ * has no session to be named by.
+ *
+ * The freshest snapshot wins, because every drover session carries its own copy
+ * of the same registry and an idle session's can be hours old.
+ */
+export function collectAccountRows(
+    sessions: Record<string, { metadata?: { droverUsage?: unknown } | null } | undefined>,
+): DroverAccountRow[] {
+    let freshest: { capturedAt: number; accounts: unknown[] } | null = null;
+    for (const session of Object.values(sessions)) {
+        const usage = session?.metadata?.droverUsage as
+            | { capturedAt?: unknown; accounts?: unknown }
+            | undefined;
+        if (!usage || typeof usage.capturedAt !== 'number' || !Array.isArray(usage.accounts)) continue;
+        if (!freshest || usage.capturedAt > freshest.capturedAt) {
+            freshest = { capturedAt: usage.capturedAt, accounts: usage.accounts };
+        }
+    }
+    if (!freshest) return [];
+    const rows: DroverAccountRow[] = [];
+    for (const entry of freshest.accounts) {
+        const account = entry as {
+            name?: unknown;
+            loggedIn?: unknown;
+            headroom?: unknown;
+            cooling?: { until?: unknown } | null;
+        };
+        if (!account || typeof account.name !== 'string' || !account.name) continue;
+        const headroom = typeof account.headroom === 'number' && Number.isFinite(account.headroom)
+            ? Math.round(Math.min(100, Math.max(0, account.headroom)))
+            : undefined;
+        const until = account.cooling && typeof account.cooling.until === 'number'
+            ? account.cooling.until
+            : undefined;
+        rows.push({
+            name: account.name,
+            // Omitted, never null: WatchConnectivity payloads take
+            // property-list types only and one NSNull fails the whole publish.
+            ...(headroom === undefined ? {} : { headroom }),
+            ...(account.loggedIn === false ? { loggedIn: false } : { loggedIn: true }),
+            ...(until ? { backAt: new Date(until).toISOString() } : {}),
+        });
+    }
+    // Most headroom first, logged-out last: the wrist reads top down and the
+    // first row is the one it is offering. An account never measured sorts
+    // below every measured one rather than above them — no figure is not a
+    // claim of a full tank.
+    return rows.sort((a, b) => {
+        if ((a.loggedIn !== false) !== (b.loggedIn !== false)) return a.loggedIn === false ? 1 : -1;
+        return (b.headroom ?? -1) - (a.headroom ?? -1);
+    });
+}
+
 export function collectSessions(): DroverSession[] {
     const sessions = storage.getState().sessions ?? {};
     const out: DroverSession[] = [];
@@ -119,7 +182,11 @@ export function collectSessions(): DroverSession[] {
  * account shows up by name because work is on it; "next with headroom" is the
  * answer for the rest, and the CLI holds the real registry either way.
  */
-export function collectAccounts(sessions: DroverSession[]): string[] {
+export function collectAccounts(sessions: DroverSession[], rows: DroverAccountRow[] = []): string[] {
+    // The registry, when there is one, in the order the picker offers it — so
+    // an old watch reading only this key still gets the headroom ordering, it
+    // just cannot print the numbers.
+    if (rows.length) return rows.map((r) => r.name);
     const seen: string[] = [];
     for (const s of sessions) {
         if (s.account && !seen.includes(s.account)) seen.push(s.account);
@@ -147,14 +214,26 @@ function sameGateSet(a: DroverGate[], b: DroverGate[]): boolean {
  */
 function sameSessionSet(a: DroverSession[], b: DroverSession[]): boolean {
     if (a.length !== b.length) return false;
-    const key = (s: DroverSession) => `${s.id}|${s.account ?? ''}|${s.active}|${s.subagents ?? ''}|${s.status ?? ''}`;
+    // `status` and `statusSince` are in the key because the wrist SHOWS them
+    // and a line that only refreshes when something else moved is a stale line
+    // dressed as a live one. Neither carries an elapsed time, so
+    // they change on a transition and not on a tick.
+    const key = (s: DroverSession) =>
+        `${s.id}|${s.account ?? ''}|${s.active}|${s.subagents ?? ''}|${s.status ?? ''}|${s.statusSince ?? ''}`;
     const keys = new Set(a.map(key));
     return b.every((s) => keys.has(key(s)));
+}
+
+function sameAccountRows(a: DroverAccountRow[], b: DroverAccountRow[]): boolean {
+    if (a.length !== b.length) return false;
+    const key = (r: DroverAccountRow) => `${r.name}|${r.headroom ?? ''}|${r.loggedIn}|${r.backAt ?? ''}`;
+    return a.every((row, i) => key(row) === key(b[i]));
 }
 
 let started = false;
 let lastGates: DroverGate[] = [];
 let lastSessions: DroverSession[] = [];
+let lastAccountRows: DroverAccountRow[] = [];
 
 /**
  * Start the feed. Idempotent, and a no-op where the native module is absent
@@ -167,19 +246,33 @@ export function startDroverWatchFeed(): () => void {
     const push = (force = false) => {
         const gates = collectGates();
         const sessions = collectSessions();
+        const accountRows = collectAccountRows(storage.getState().sessions ?? {});
         // Only publish on a real change: updateApplicationContext throttles,
         // and a redundant write can displace a fresh one. A flip changes the
         // SESSION set and not the gate set, so both are compared — checking
         // gates alone meant the wrist kept showing the old account after a
         // flip it had asked for itself.
-        if (!force && sameGateSet(gates, lastGates) && sameSessionSet(sessions, lastSessions)) return;
+        if (
+            !force
+            && sameGateSet(gates, lastGates)
+            && sameSessionSet(sessions, lastSessions)
+            // Headroom moves without the session set moving at all, and it is
+            // what the flip picker orders on — so a picker fed only by the
+            // other two comparisons offers yesterday's ranking.
+            && sameAccountRows(accountRows, lastAccountRows)
+        ) return;
         lastGates = gates;
         lastSessions = sessions;
+        lastAccountRows = accountRows;
         const status = getDroverWatchStatus();
         void publishDroverSnapshot({
             gates,
             sessions,
-            accounts: collectAccounts(sessions),
+            accounts: collectAccounts(sessions, accountRows),
+            // Sent beside `accounts` and never instead of it: the watch app is
+            // a TestFlight binary and cannot be updated OTA, so a build that
+            // does not know this key has to keep working off the names alone.
+            ...(accountRows.length ? { accountRows } : {}),
             updatedAt: new Date().toISOString(),
             // "connected" is WatchConnectivity pairing state and nothing more:
             // this phone is activated, a watch is paired, and it has the app.

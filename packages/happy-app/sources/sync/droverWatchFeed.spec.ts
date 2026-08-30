@@ -58,7 +58,13 @@ vi.mock('drover-watch', () => ({
     },
 }));
 
-import { collectAccounts, collectGates, collectSessions, startDroverWatchFeed } from './droverWatchFeed';
+import {
+    collectAccountRows,
+    collectAccounts,
+    collectGates,
+    collectSessions,
+    startDroverWatchFeed,
+} from './droverWatchFeed';
 
 /** Only the fields the feed reads; the real sessions are built in storage.ts. */
 function session(options: {
@@ -76,17 +82,25 @@ function session(options: {
     rig?: boolean;
     /** `metadata.liveStatus` — what the pane is doing right now (DROVE-54). */
     liveStatus?: Record<string, unknown> | null;
+    /** `Session.thinking` — the turn is running. */
+    thinking?: boolean;
+    thinkingAt?: number;
+    /** The CLI's account/headroom snapshot (DROVE-47), read by the picker. */
+    droverUsage?: unknown;
 }) {
     return {
         // Connected unless a test says otherwise: a non-rig session with no
         // socket reads as ARCHIVED, so a default of false would have quietly
         // emptied the wrist in every case below and called it a pass.
         active: options.active ?? true,
+        thinking: options.thinking ?? false,
+        thinkingAt: options.thinkingAt ?? 0,
         agentState: options.requests ? { requests: options.requests } : undefined,
         metadata: {
             path: options.path,
             summary: options.summary ? { text: options.summary, updatedAt: 0 } : undefined,
             droverAccount: options.account,
+            droverUsage: options.droverUsage,
             lifecycleState: options.lifecycleState ?? (options.running ? 'running' : 'idle'),
             ...(options.rig ? { client: { id: 'rig' } } : {}),
             activity: typeof options.subagents === 'number'
@@ -562,6 +576,153 @@ describe('startDroverWatchFeed', () => {
 
     it('stops answering asks once the feed is torn down', () => {
         start();
+        stopFeed!();
+        stopFeed = null;
+        expect(mocks.onRefresh).toBeNull();
+    });
+});
+
+
+
+/**
+ * The flip picker's own list (DROVE-28's watch half).
+ *
+ * The wrist used to offer accounts collected from the SESSIONS, which can only
+ * ever name an account something is already running on — the exact opposite of
+ * what a flip wants. The account worth moving to is the one with headroom, and
+ * the emptiest account has no session to be named by. `metadata.droverUsage`
+ * (DROVE-47) is the CLI's own registry snapshot and carries the figure.
+ */
+describe('collectAccountRows', () => {
+    const usage = (capturedAt: number, accounts: unknown[]) => ({ capturedAt, accounts });
+
+    it('orders by headroom, most first, and carries the figure', () => {
+        expect(collectAccountRows({
+            s1: session({
+                droverUsage: usage(10, [
+                    { name: 'main', headroom: 4, loggedIn: true },
+                    { name: 'jamrizzi', headroom: 65, loggedIn: true },
+                ]),
+            }),
+        })).toEqual([
+            { name: 'jamrizzi', headroom: 65, loggedIn: true },
+            { name: 'main', headroom: 4, loggedIn: true },
+        ]);
+    });
+
+    it('sinks an account that cannot take the session to the bottom', () => {
+        expect(collectAccountRows({
+            s1: session({
+                droverUsage: usage(10, [
+                    { name: 'spare', loggedIn: false },
+                    { name: 'main', headroom: 0, loggedIn: true },
+                ]),
+            }),
+        }).map((r) => r.name)).toEqual(['main', 'spare']);
+    });
+
+    // No figure is not a claim of a full tank. An account the CLI never
+    // measured sorting to the top would be the wrist recommending the one it
+    // knows least about.
+    it('sorts an unmeasured account below every measured one', () => {
+        expect(collectAccountRows({
+            s1: session({
+                droverUsage: usage(10, [
+                    { name: 'unknown', loggedIn: true },
+                    { name: 'measured', headroom: 1, loggedIn: true },
+                ]),
+            }),
+        }).map((r) => r.name)).toEqual(['measured', 'unknown']);
+    });
+
+    it('takes the freshest snapshot, since every session carries its own copy', () => {
+        expect(collectAccountRows({
+            stale: session({ droverUsage: usage(1, [{ name: 'old', headroom: 90, loggedIn: true }]) }),
+            fresh: session({ droverUsage: usage(2, [{ name: 'new', headroom: 10, loggedIn: true }]) }),
+        }).map((r) => r.name)).toEqual(['new']);
+    });
+
+    it('carries when a cooling account is back, and omits the key when it is not out', () => {
+        const [cooling, fine] = collectAccountRows({
+            s1: session({
+                droverUsage: usage(10, [
+                    { name: 'fine', headroom: 50, loggedIn: true },
+                    { name: 'cooling', headroom: 0, loggedIn: true, cooling: { until: 1_700 } },
+                ]),
+            }),
+        }).reverse();
+        expect(cooling.backAt).toBe(new Date(1_700).toISOString());
+        expect('backAt' in fine).toBe(false);
+    });
+
+    it('is empty when no session has ever carried the registry', () => {
+        expect(collectAccountRows({ s1: session({ path: '/a' }) })).toEqual([]);
+    });
+
+    it('publishes the rows AND the bare names, because the watch cannot update OTA', () => {
+        mocks.sessions = {
+            s1: session({
+                path: '/a',
+                account: 'main',
+                droverUsage: usage(10, [
+                    { name: 'main', headroom: 4, loggedIn: true },
+                    { name: 'jamrizzi', headroom: 65, loggedIn: true },
+                ]),
+            }),
+        };
+        start();
+        // A binary that predates accountRows reads only `accounts` — and it
+        // still gets the headroom ORDER, it just cannot print the numbers.
+        expect(mocks.published[0].accounts).toEqual(['jamrizzi', 'main']);
+        expect(mocks.published[0].accountRows?.map((r) => r.name)).toEqual(['jamrizzi', 'main']);
+    });
+
+    it('republishes when only the headroom moved', () => {
+        const rows = (headroom: number) => ({
+            s1: session({
+                path: '/a',
+                droverUsage: usage(10, [{ name: 'main', headroom, loggedIn: true }]),
+            }),
+        });
+        mocks.sessions = rows(50);
+        start();
+        expect(mocks.published).toHaveLength(1);
+        // The session set and the gate set are untouched: without the rows in
+        // the change key the picker offers yesterday's ranking forever.
+        mocks.sessions = rows(5);
+        mocks.onStorage!();
+        expect(mocks.published).toHaveLength(2);
+        expect(mocks.published[1].accountRows?.[0].headroom).toBe(5);
+    });
+});
+
+
+/**
+ * The wrist asking the phone for a snapshot (DROVE-22).
+ *
+ * Clay: "When I open the drover watch app, it always just says out of date. How
+ * to make it work without requiring the drover app to be open on my phone." A
+ * watch-to-phone sendMessage launches this app in the background, so the push
+ * below runs with the phone locked in a pocket.
+ */
+describe('a refresh asked for from the wrist', () => {
+    it('republishes even though nothing changed, because the stamp IS the answer', () => {
+        mocks.sessions = { s1: session({ path: '/a' }) };
+        start();
+        expect(mocks.published).toHaveLength(1);
+
+        mocks.onRefresh!();
+        expect(mocks.published).toHaveLength(2);
+        expect(mocks.published[1].gates).toEqual(mocks.published[0].gates);
+        expect(mocks.published[1].updatedAt >= mocks.published[0].updatedAt).toBe(true);
+    });
+
+    // Unsubscribed with the answer and flip listeners. A refresh subscription
+    // that outlived its feed would wake the phone app for a surface that is no
+    // longer publishing to it.
+    it('stops listening with the feed rather than outliving it', () => {
+        start();
+        expect(mocks.onRefresh).not.toBeNull();
         stopFeed!();
         stopFeed = null;
         expect(mocks.onRefresh).toBeNull();

@@ -164,15 +164,22 @@ struct SessionDetailView: View {
                 .tint(.orange)
                 .disabled(flipping)
 
-                ForEach(store.accounts.filter { $0 != session.account }, id: \.self) { account in
+                // Most headroom first, with the figure on the button (DROVE-28's
+                // watch half). A bare list of names could only ever offer an
+                // account something is already running on, which is the
+                // opposite of what a flip wants — the one worth moving to is
+                // the one with room, and a name does not carry that.
+                ForEach(store.accountRows.filter { $0.name != session.account }) { account in
                     Button {
-                        store.flip(session, to: account)
+                        store.flip(session, to: account.name)
                         dismiss()
                     } label: {
-                        Label(account, systemImage: "person.crop.circle")
-                            .font(.caption)
+                        AccountLabel(account: account)
                     }
-                    .disabled(flipping)
+                    // An account that is not logged in cannot take the session,
+                    // so the tap is refused here rather than by a flip that
+                    // bounces a minute later on the Mac.
+                    .disabled(flipping || account.loggedIn == false)
                 }
             }
             .padding(.horizontal, 4)
@@ -212,5 +219,44 @@ struct SessionDetailView: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+}
+
+
+/// An account on the flip list: its name, and the number that decides whether
+/// it is worth flipping to.
+///
+/// Headroom stays optional all the way here. An account the CLI never measured
+/// shows no figure rather than a 0, which would read as "out" and hide the one
+/// account with room.
+private struct AccountLabel: View {
+    let account: DroverAccount
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: account.loggedIn == false ? "person.crop.circle.badge.xmark" : "person.crop.circle")
+                .font(.caption)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(account.name)
+                    .font(.caption)
+                    .lineLimit(1)
+                if let detail {
+                    Text(detail)
+                        .font(.system(size: 9))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var detail: String? {
+        if account.loggedIn == false { return "not logged in" }
+        if let backAt = account.backAt, backAt > Date() {
+            return "back \(backAt.formatted(date: .omitted, time: .shortened))"
+        }
+        if let headroom = account.headroom { return "\(headroom)% left" }
+        return nil
     }
 }

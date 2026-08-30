@@ -174,6 +174,14 @@ private struct EmptyStateView: View {
         }
     }
 
+    /// "Out of date" is now a verdict, not a stopwatch reading.
+    ///
+    /// It used to be `connected && 180s elapsed`, and the phone is suspended
+    /// within seconds of going in a pocket, so that was the steady state rather
+    /// than a fault — Clay looks at the wrist precisely when he is not holding
+    /// the phone, so the failure message was the only one he ever saw. The
+    /// wrist now ASKS (GateStore.refresh) and says out of date when the ask
+    /// came back empty.
     private var headline: String {
         if !connected { return "Not connected" }
         switch freshness {

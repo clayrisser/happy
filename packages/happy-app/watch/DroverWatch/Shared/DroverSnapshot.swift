@@ -168,6 +168,28 @@ enum DroverFreshness: Equatable {
     case stale(reason: String?)
 }
 
+/// One account the wrist may flip a session onto, with the number that decides
+/// which (DROVE-28's watch half).
+///
+/// The bare name list could only ever offer "one of the accounts something is
+/// already running on", which is the opposite of what a flip wants: the account
+/// worth moving to is the one with headroom, and headroom is exactly what a
+/// name does not carry. The CLI stamps every registry account on
+/// `metadata.droverUsage` (DROVE-47) and the phone reduces it to these.
+struct DroverAccount: Codable, Identifiable, Equatable, Hashable {
+    var id: String { name }
+    let name: String
+    /// Percent LEFT on the fullest limit. Optional, and it stays optional all
+    /// the way to the label: an account never measured shows no figure rather
+    /// than a 0 that reads as "out".
+    let headroom: Int?
+    /// False when the account is not logged in, so the wrist can grey it rather
+    /// than offering a flip that will bounce.
+    let loggedIn: Bool?
+    /// When a cooling account is back. Absent when it is not out.
+    let backAt: Date?
+}
+
 struct DroverSnapshot: Codable, Equatable {
     var gates: [DroverGate]
     /// Stamped by the phone at publish. The wrist's only liveness signal — see
@@ -188,9 +210,12 @@ struct DroverSnapshot: Codable, Equatable {
     /// flipping existed; see the hand-written decoder below for why the
     /// default alone is not enough.
     var sessions: [DroverSession] = []
-    /// Every account in the registry, in Clay's preference order, so the
-    /// wrist can offer them by name instead of only "the next one".
+    /// Every account the wrist can name, most headroom first. Kept as bare
+    /// strings because a watch that predates `accountRows` reads only this.
     var accounts: [String] = []
+    /// The same accounts with their headroom. Absent from a phone that predates
+    /// DROVE-28's picker, which is why the views fall back to `accounts`.
+    var accountRows: [DroverAccount] = []
 
     static let empty = DroverSnapshot(gates: [], updatedAt: .distantPast, connected: false)
 
@@ -301,6 +326,7 @@ extension DroverSnapshot {
         connected = try container.decode(Bool.self, forKey: .connected)
         sessions = try container.decodeIfPresent([DroverSession].self, forKey: .sessions) ?? []
         accounts = try container.decodeIfPresent([String].self, forKey: .accounts) ?? []
+        accountRows = try container.decodeIfPresent([DroverAccount].self, forKey: .accountRows) ?? []
     }
 }
 

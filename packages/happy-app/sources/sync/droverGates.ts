@@ -103,6 +103,32 @@ export function multiSelectFor(args: unknown): boolean {
     return firstQuestion(args)?.multiSelect === true;
 }
 
+/**
+ * The text of the question a request is asking, or null when it is not asking
+ * one.
+ *
+ * This is a KEY, not a label. Claude resolves AskUserQuestion through its
+ * permission callback and reads the answer out of the tool input under the
+ * question's own text (`{ answers: { [question]: "Yes" } }`, see
+ * askUserQuestionAnswers.ts). The wrist sent `{ optionId }` instead, which the
+ * bus bridge accepts and Claude's own card does not — so a NATIVE question
+ * answered from the watch merged a stray key into the input and the harness
+ * never saw an answer at all. The feed needs the text to build the payload the
+ * phone's own card builds.
+ */
+export function questionTextFor(
+    sessions: Record<string, GateSession | undefined>,
+    sessionId: string,
+    requestId: string,
+): string | null {
+    const request = sessions[sessionId]?.agentState?.requests?.[requestId] as
+        | { tool?: string; arguments?: unknown }
+        | undefined;
+    if (!request || request.tool !== 'AskUserQuestion') return null;
+    const question = firstQuestion(request.arguments)?.question;
+    return typeof question === 'string' && question ? question : null;
+}
+
 /** Wrist-sized title: the question's own header beats a generic "Question". */
 export function titleFor(tool: string, args: unknown): string {
     if (tool !== 'AskUserQuestion') return `Run ${tool}`;
