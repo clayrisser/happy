@@ -121,7 +121,14 @@ export async function fetchBusSessions(
         const res = await fetch(`${url}/v1/sessions`, { signal: abort.signal })
         if (!res.ok) return []
         const body: unknown = await res.json()
-        return Array.isArray(body) ? (body as BusSession[]) : []
+        // The bus answers `{scannedAt, scanning, stale, sessions: [...]}`, not
+        // a bare array. The first cut checked Array.isArray(body) and so
+        // returned [] against the real bus every time — the warning was dead
+        // in production while 11 tests passed against a stubbed array. Accept
+        // both, and let the test feed the real envelope.
+        if (Array.isArray(body)) return body as BusSession[]
+        const rows = (body as { sessions?: unknown })?.sessions
+        return Array.isArray(rows) ? (rows as BusSession[]) : []
     } catch {
         return []
     } finally {

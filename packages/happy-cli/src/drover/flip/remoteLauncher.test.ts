@@ -431,7 +431,9 @@ describe('warning about the Remote Control it will sever', () => {
     const busReturns = (rows: unknown[]) => {
         const spy = vi.fn(async (url: any) => {
             if (String(url).includes('/v1/sessions')) {
-                return { ok: true, json: async () => rows } as any
+                // The REAL envelope. A bare array here is what let a dead
+                // production path pass every test.
+                return { ok: true, json: async () => ({ scannedAt: 1, scanning: false, stale: false, sessions: rows }) } as any
             }
             throw new Error('no bus in tests')
         })
