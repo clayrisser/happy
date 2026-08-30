@@ -1,8 +1,10 @@
+import axios from 'axios';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Metadata } from './types';
 import {
     PushNotificationClient,
     buildWakeMessages,
+    describePushError,
     getSessionNotificationBody,
     getSessionNotificationCopy,
     getSessionNotificationTitle,
@@ -190,5 +192,79 @@ describe('sendPushNotifications', () => {
         const client = new PushNotificationClient('bearer', 'https://example.test');
         const outcome = await client.sendPushNotifications([{ to: 'not-a-push-token' }]);
         expect(outcome).toEqual({ sent: 0, failed: 1 });
+    });
+});
+
+describe('sendSessionNotification', () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    function makeClient() {
+        const client = new PushNotificationClient('bearer', 'https://example.test');
+        const sendToAllDevices = vi.spyOn(client, 'sendToAllDevices').mockReturnValue(undefined);
+        const post = vi.spyOn(axios, 'post').mockResolvedValue({ data: { success: true, result: 'sent' } });
+        return { client, sendToAllDevices, post };
+    }
+
+    it('never posts a todo to the route that refuses the kind', async () => {
+        // DROVE-70. happy-server's pushRoutes.ts validates
+        // `kind: z.enum(['done','permission','question'])`, so a todo is a 400
+        // and the push simply does not happen. Measured on the live server on
+        // 2026-08-31 with the first `drover needs`.
+        const { client, sendToAllDevices, post } = makeClient();
+        client.sendSessionNotification({
+            kind: 'todo',
+            metadata: makeMetadata(),
+            data: { sessionId: 'sess-1' },
+        });
+        await Promise.resolve();
+        expect(post).not.toHaveBeenCalled();
+        expect(sendToAllDevices).toHaveBeenCalledTimes(1);
+        expect(sendToAllDevices.mock.calls[0][0]).toBe('Needs you');
+        expect((sendToAllDevices.mock.calls[0][2] as { kind: string }).kind).toBe('todo');
+    });
+
+    it('still routes a permission through the server so presence can suppress it', async () => {
+        const { client, sendToAllDevices, post } = makeClient();
+        client.sendSessionNotification({
+            kind: 'permission',
+            metadata: makeMetadata(),
+            data: { sessionId: 'sess-1' },
+        });
+        await Promise.resolve();
+        expect(sendToAllDevices).not.toHaveBeenCalled();
+        expect(post).toHaveBeenCalledTimes(1);
+        expect(post.mock.calls[0][0]).toContain('/v1/sessions/sess-1/push-event');
+        expect((post.mock.calls[0][1] as { kind: string }).kind).toBe('permission');
+    });
+});
+
+describe('describePushError', () => {
+    it('reports the status and the body the server sent back', () => {
+        // The 400 that killed the first live to-do push logged a bare
+        // AxiosError stack, so the field the server objected to was never
+        // written down (DROVE-70).
+        const error = new axios.AxiosError('Request failed with status code 400');
+        error.response = {
+            status: 400,
+            statusText: 'Bad Request',
+            headers: {},
+            config: {} as never,
+            data: { message: 'body/kind must be equal to one of the allowed values' },
+        };
+        expect(describePushError(error)).toBe(
+            'HTTP 400 {"message":"body/kind must be equal to one of the allowed values"}',
+        );
+    });
+
+    it('says so when the response carried no body at all', () => {
+        const error = new axios.AxiosError('boom');
+        error.response = { status: 502, statusText: 'Bad Gateway', headers: {}, config: {} as never, data: undefined };
+        expect(describePushError(error)).toBe('HTTP 502 (empty body)');
+    });
+
+    it('falls back to the message for an error that never reached the server', () => {
+        expect(describePushError(new Error('offline'))).toBe('Error: offline');
     });
 });
