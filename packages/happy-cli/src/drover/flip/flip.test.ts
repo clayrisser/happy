@@ -1133,6 +1133,96 @@ describe('carrying the transcript', () => {
         expect(result.ok).toBe(true)
         expect(result.nothingToCarry).toBe(true)
     })
+
+    /**
+     * DROVE-18 asked for a backup before the copy. The measurement below is
+     * why there is none: on this machine the copy never runs.
+     *
+     * The shape here is the one that is actually deployed, and it is NOT the
+     * shape the DROVE-40 test above uses. There the symlink is the munged
+     * project dir; here it is `projects/` itself, which is what
+     * `drover-share-sessions --apply` made and what `drover account add`
+     * keeps making (join_shared_store in libexec/drover-account-edit). All
+     * five accounts plus the ambient ~/.claude point one `projects/` at
+     * ~/.claude-shared/projects, so projectDirFor lands every account on the
+     * same directory and carryTranscript answers `shared` before it can
+     * overwrite anything.
+     *
+     * The invariant that makes the destructive branch unreachable, rather
+     * than merely unlikely: srcDir and dstDir ARE the same directory, so the
+     * source transcript existing means the destination exists too, which
+     * means samePlaceOnDisk has already returned. There is no ordering where
+     * one is there and the other is not.
+     */
+    it('does not touch a transcript the target account already holds (DROVE-18)', () => {
+        const store = join(root, 'claude-shared', 'projects')
+        mkdirSync(store, { recursive: true })
+
+        const cwd = join(root, 'work-18')
+        const id = '11111111-2222-3333-4444-555555555555'
+
+        // Every account's projects/ is one symlink into the store, exactly as
+        // ~/.claude and the four under ~/.claude-accounts are today.
+        const configs = ['cfg-main', 'cfg-jamrizzi', 'cfg-bitspur'].map((n) => join(root, n))
+        for (const cfg of configs) {
+            mkdirSync(cfg, { recursive: true })
+            symlinkSync(store, join(cfg, 'projects'))
+        }
+
+        // A long conversation, already sitting where the flip would write.
+        const lines = Array.from({ length: 400 }, (_, i) => `{"type":"user","n":${i}}`).join('\n') + '\n'
+        mkdirSync(projectDirFor(configs[0], cwd), { recursive: true })
+        writeFileSync(join(projectDirFor(configs[0], cwd), `${id}.jsonl`), lines)
+
+        // The ticket's premise: the destination is NOT empty. Assert that
+        // before flipping, or this test would pass for the wrong reason.
+        const dstFile = join(projectDirFor(configs[1], cwd), `${id}.jsonl`)
+        expect(readFileSync(dstFile, 'utf8')).toBe(lines)
+
+        for (const to of configs.slice(1)) {
+            const result = carryTranscript({
+                sessionId: id,
+                workingDirectory: cwd,
+                fromConfigDir: configs[0],
+                toConfigDir: to,
+            })
+            expect(result.ok).toBe(true)
+            expect(result.shared).toBe(true)
+            // No bytes reported means no copyFileSync ran at all.
+            expect(result.bytes).toBeUndefined()
+        }
+
+        expect(readFileSync(dstFile, 'utf8')).toBe(lines)
+        expect(readFileSync(dstFile, 'utf8').trimEnd().split('\n')).toHaveLength(400)
+    })
+
+    it('has nothing to carry when the shared store has never seen this cwd (DROVE-18)', () => {
+        // The other half of the invariant. samePlaceOnDisk answers false when
+        // the munged dir does not exist yet — realpathSync throws — so it
+        // would be easy to assume the copy then runs. It cannot: the source
+        // transcript is missing for the same reason, and the guard above
+        // copyFileSync catches that first. Measured on the real machine for a
+        // cwd with no project dir in ~/.claude-shared/projects.
+        const store = join(root, 'claude-shared-empty', 'projects')
+        mkdirSync(store, { recursive: true })
+
+        const from = join(root, 'cfg-a-18')
+        const to = join(root, 'cfg-b-18')
+        for (const cfg of [from, to]) {
+            mkdirSync(cfg, { recursive: true })
+            symlinkSync(store, join(cfg, 'projects'))
+        }
+
+        const result = carryTranscript({
+            sessionId: '99999999-8888-7777-6666-555555555555',
+            workingDirectory: join(root, 'work-never-used'),
+            fromConfigDir: from,
+            toConfigDir: to,
+        })
+        expect(result.ok).toBe(true)
+        expect(result.nothingToCarry).toBe(true)
+        expect(result.shared).toBeUndefined()
+    })
 })
 
 describe('/flip from the app', () => {

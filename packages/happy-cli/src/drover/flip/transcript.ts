@@ -59,6 +59,16 @@ export interface CarryResult {
  * Overwrites a same-named transcript in the target: the id is a uuid, so a
  * collision means this session flipped here before and the source is the
  * newer, longer copy of the same conversation.
+ *
+ * DROVE-18 asked for a backup before that overwrite. There is none, because
+ * on a machine that ran `drover-share-sessions --apply` the overwrite cannot
+ * happen: every account's projects/ is one symlink into ~/.claude-shared, so
+ * srcDir and dstDir are the SAME directory and the shared branch below
+ * returns first. The source existing means the destination exists, since they
+ * are one file — there is no ordering where the copy reaches a stranger's
+ * transcript. A machine that never ran the migration still has private
+ * projects/ dirs and still overwrites; that is the only shape DROVE-18
+ * describes, and nothing on Clay's five accounts is in it.
  */
 export function carryTranscript(opts: {
     sessionId: string
@@ -79,8 +89,16 @@ export function carryTranscript(opts: {
     // accounts share a session store (DROVE-40). Compare where the paths
     // actually LAND, not what they are spelled as: a symlinked projects/ makes
     // the string comparison above miss it entirely, and the copy that follows
-    // is copyFileSync onto its own source — which truncates the destination
-    // before it reads, so the conversation is destroyed rather than carried.
+    // is copyFileSync onto its own source.
+    //
+    // What that copy actually did, measured against db471e7c on macOS/node 22
+    // (DROVE-18): copyFileSync short-circuits a same-file copy in libuv and
+    // left the 400-line transcript byte for byte, then cpSync of the sibling
+    // subagent dir threw "src and dest cannot be the same". So the flip was
+    // REFUSED, not destructive — controller.ts reads `!carried.ok` and stops.
+    // Correcting the earlier note here, which said the conversation was
+    // destroyed. The guard is still the fix: a flip that cannot move an inch
+    // because both accounts already hold the file is the bug either way.
     if (samePlaceOnDisk(srcDir, dstDir)) {
         return { ok: true, shared: true, reason: 'both accounts share one session store' }
     }
