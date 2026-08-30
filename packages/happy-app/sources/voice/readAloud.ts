@@ -85,6 +85,19 @@ export class ReadAloudReader {
         this.interrupt(reason);
     }
 
+    /**
+     * Give focus up, but only if this session still holds it.
+     *
+     * More than one chat can be mounted — the tablet side panel, an embedded
+     * view, the screen being replaced — and they unmount on their own
+     * schedule. A bare focus(null) from any of them took the voice away from
+     * whichever session the user was actually looking at.
+     */
+    blur(sessionId: string, reason: ReadAloudInterruption = 'left-session'): void {
+        if (this.focused !== sessionId) return;
+        this.focus(null, reason);
+    }
+
     onMessages(sessionId: string, messages: Message[]): void {
         if (!this.enabled) return;
         if (this.focused === null || sessionId !== this.focused) return;

@@ -63,11 +63,11 @@ export function useVoiceComposer(options: VoiceComposerOptions): VoiceComposerSt
     // cuts whatever was mid-sentence.
     React.useEffect(() => {
         if (!active) {
-            readAloud.focus(null, 'left-session');
+            readAloud.blur(sessionId, 'left-session');
             return;
         }
         readAloud.focus(sessionId);
-        return () => { readAloud.focus(null, 'left-session'); };
+        return () => { readAloud.blur(sessionId, 'left-session'); };
     }, [sessionId, active]);
 
     // A live meta voice call wins: two audio consumers arguing over the

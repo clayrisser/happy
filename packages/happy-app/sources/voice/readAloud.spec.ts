@@ -149,6 +149,21 @@ describe('ReadAloudReader', () => {
         expect(engine.stops).toBe(1);
     });
 
+    it('lets a second chat unmount without taking the voice away', async () => {
+        reader.onMessages('s1', [agentText('m1', 'One. Two.')]);
+        await settle();
+        // The embedded side chat, on some other session, going away.
+        reader.blur('s2');
+        await settle();
+        expect(reader.focusedSessionId).toBe('s1');
+        expect(engine.stops).toBe(0);
+
+        reader.blur('s1');
+        await settle();
+        expect(reader.focusedSessionId).toBeNull();
+        expect(engine.stops).toBe(1);
+    });
+
     it('does not re-read a message that is redelivered unchanged', async () => {
         const message = agentText('m1', 'Only once.');
         reader.onMessages('s1', [message]);
