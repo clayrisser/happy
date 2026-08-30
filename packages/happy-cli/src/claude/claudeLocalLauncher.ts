@@ -8,6 +8,7 @@ import { ambientDataDir } from "@/drover/flip/accounts";
 import { parseFlipCommand } from "@/drover/flip/controller";
 import { injectIntoPaneGated } from "./utils/paneInject";
 import { findInbox, sendToInbox } from "./utils/inboxSocket";
+import { stageAttachments, withAttachmentNote } from "./utils/stageAttachments";
 import type { QueueItem } from "@/utils/MessageQueue2";
 import type { EnhancedMode } from "./loop";
 import { InFlightTracker, describeInFlight } from "@/drover/flip/inflight";
@@ -420,7 +421,18 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
             // Undeliverable right now means "wait for the next child", not
             // "switch": see holdForNextSpawn.
             if (tmuxPane) {
-                void deliverToPaneSession(message, item);
+                // DROVE-38: the bytes of a phone image ride the queue item, and
+                // both carriers a pane has are text. So they go to disk at the
+                // path Claude Code uses for its own pasted images, and the path
+                // goes into the text for Claude to Read this turn. Before the
+                // hold-for-next-spawn branch too, so a photo sent between
+                // children is not lost with the child that was not there.
+                const staged = stageAttachments({
+                    attachments: item?.attachments,
+                    configDir: session.claudeEnvVars?.CLAUDE_CONFIG_DIR || ambientDataDir(),
+                    sessionId: session.sessionId ?? 'unknown',
+                });
+                void deliverToPaneSession(withAttachmentNote(message, staged), item);
                 return;
             }
             // No pane: remote mode is the only carrier the app has. Stop local

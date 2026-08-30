@@ -529,6 +529,46 @@ describe('claudeLocalLauncher in a tmux pane', () => {
         await expect(launcher).resolves.toEqual({ type: 'exit', code: 0 });
     });
 
+    it('stages a phone image to uploads/ and hands Claude the path (DROVE-38)', async () => {
+        // Remote mode turned attachments into SDK image blocks; the pane path
+        // dropped them after decrypting. Both pane carriers are text, so the
+        // bytes go to <config dir>/uploads/<session>/ and the path rides the
+        // message.
+        const { mkdtempSync, existsSync, readFileSync, rmSync } = await import('node:fs');
+        const { tmpdir } = await import('node:os');
+        const { join } = await import('node:path');
+        const configDir = mkdtempSync(join(tmpdir(), 'drover-cfg-'));
+        try {
+            mockFindInbox.mockResolvedValue(inbox);
+            mockSendToInbox.mockResolvedValue('ok');
+            const runs = trackRuns();
+            const { session, queue } = paneSession();
+            (session as any).claudeEnvVars = { CLAUDE_CONFIG_DIR: configDir };
+
+            const launcher = claudeLocalLauncher(session as any);
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+
+            const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 7, 7, 7]);
+            queue.push('can you see my screenshot', mode, [{ data: png, mimeType: 'image/heic', name: 'IMG_1.HEIC' }]);
+            await vi.waitFor(() => expect(queue.size()).toBe(0));
+
+            const [, text] = mockSendToInbox.mock.calls[0];
+            const match = /\[Image 1: (.+\.png)\]/.exec(text);
+            expect(match, text).not.toBeNull();
+            const path = match![1];
+            expect(path.startsWith(join(configDir, 'uploads', claudeSessionId))).toBe(true);
+            expect(existsSync(path)).toBe(true);
+            expect(readFileSync(path)).toEqual(Buffer.from(png));
+            expect(text).toContain('can you see my screenshot');
+            expect(text).toContain('Read it with the Read tool');
+
+            runs[0].run.resolve();
+            await expect(launcher).resolves.toEqual({ type: 'exit', code: 0 });
+        } finally {
+            rmSync(configDir, { recursive: true, force: true });
+        }
+    });
+
     it('falls through to the pane when the socket is gone', async () => {
         mockFindInbox.mockResolvedValue(inbox);
         mockSendToInbox.mockResolvedValue('gone');
