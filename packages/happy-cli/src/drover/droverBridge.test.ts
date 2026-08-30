@@ -134,3 +134,68 @@ describe('the card a resolved event leaves behind', () => {
         expect(completedStatusFor({ ...permission, state: 'canceled' })).toBe('canceled')
     })
 })
+
+// --- adding a Claude account from the phone (DROVE-61) -----------------------
+
+const login: DroverEvent = {
+    id: 'ev-3',
+    kind: 'question',
+    state: 'pending',
+    title: 'Log in to Claude for account-2',
+    reason: 'Open this in a browser, sign in, then send back the code it shows.',
+    preview: 'https://claude.com/cai/oauth/authorize?code=true&client_id=9d1c250a&state=abc',
+    options: [{ id: 'cancel', label: 'Cancel the login' }],
+    origin: { harness: 'drover', gate: 'account-login', cwd: '/Users/clay' },
+}
+
+describe('the account-login card', () => {
+    it('gets its own tool, because it is a link and a code, not a choice', () => {
+        // Mirrored through the generic question card this could only ever be
+        // cancelled: that card renders options as buttons and has nowhere to
+        // type, and the code is not one of the options.
+        const card = requestForEvent(login)
+        expect(card.tool).toBe('DroverAccountLogin')
+        expect(card.arguments).toMatchObject({
+            url: login.preview,
+            header: login.title,
+            cancelLabel: 'Cancel the login',
+        })
+    })
+
+    it('leaves the FAILED card of the same gate as an ordinary question', () => {
+        // `drover account login` posts its failure under the same gate with a
+        // sentence and no link. That one has nothing to share and nothing to
+        // type into, so it stays a plain one-option question.
+        const failed: DroverEvent = {
+            ...login,
+            title: 'Claude login for account-2 failed',
+            preview: 'cancelled from the phone',
+            options: [{ id: 'ok', label: 'OK' }],
+        }
+        expect(requestForEvent(failed).tool).toBe('AskUserQuestion')
+    })
+
+    it('is not claimed by a question that merely has a URL in it', () => {
+        expect(requestForEvent({ ...question, preview: 'https://example.com' }).tool)
+            .toBe('AskUserQuestion')
+    })
+
+    it('sends the pasted code back as a text resolution, whole', () => {
+        // An OAuth code is one opaque string. The multi-select path splits an
+        // answer on commas to recover the labels it joined, and doing that to
+        // a code would send the bus the part before the first comma.
+        expect(busResolutionFor(login, {
+            id: 'ev-3',
+            approved: true,
+            updatedInput: { code: 'AbC,123#state' },
+        })).toEqual({ action: 'text', text: 'AbC,123#state', by: 'happy' })
+    })
+
+    it('sends Cancel back as the option it is, so the login ends now', () => {
+        expect(busResolutionFor(login, {
+            id: 'ev-3',
+            approved: true,
+            updatedInput: { optionId: 'cancel' },
+        })).toEqual({ action: 'option', optionId: 'cancel', by: 'happy' })
+    })
+})

@@ -534,6 +534,28 @@ export async function machineStopSession(
 /**
  * Stop the daemon on a specific machine
  */
+/**
+ * Add a Claude account on that machine, from here (DROVE-61).
+ *
+ * It only STARTS the login. What comes back is a card: the URL Claude Code
+ * printed arrives over the drover bridge as a DroverAccountLogin request, the
+ * share sheet opens it, and the code typed into that card finishes the login.
+ * Nothing about a credential travels through this call.
+ *
+ * `name` is optional on purpose — left out, the account is named after the
+ * address it logs in as, so there is nothing to invent.
+ */
+export async function machineDroverAccountLogin(
+    machineId: string,
+    name?: string,
+): Promise<{ started: boolean; name: string | null }> {
+    return await apiSocket.machineRPC<{ started: boolean; name: string | null }, { name?: string }>(
+        machineId,
+        'drover-account-login',
+        name ? { name } : {},
+    );
+}
+
 export async function machineStopDaemon(machineId: string): Promise<{ message: string }> {
     const result = await apiSocket.machineRPC<{ message: string }, {}>(
         machineId,

@@ -8,7 +8,7 @@ import { Typography } from '@/constants/Typography';
 import { useSessions, useAllMachines, useMachine } from '@/sync/storage';
 import { Ionicons, Octicons } from '@expo/vector-icons';
 import type { Session } from '@/sync/storageTypes';
-import { machineStopDaemon, machineUpdateMetadata, machineDelete } from '@/sync/ops';
+import { machineDroverAccountLogin, machineStopDaemon, machineUpdateMetadata, machineDelete } from '@/sync/ops';
 import { Modal } from '@/modal';
 import { getSessionName, getSessionSubtitle } from '@/utils/sessionUtils';
 import { isMachineOnline } from '@/utils/machineUtils';
@@ -29,6 +29,7 @@ export default function MachineDetailScreen() {
     const [isStoppingDaemon, setIsStoppingDaemon] = useState(false);
     const [isRenamingMachine, setIsRenamingMachine] = useState(false);
     const [isDeletingMachine, setIsDeletingMachine] = useState(false);
+    const [isAddingAccount, setIsAddingAccount] = useState(false);
 
     const machineSessions = useMemo(() => {
         if (!sessions || !machineId) return [];
@@ -107,6 +108,56 @@ export default function MachineDetailScreen() {
             );
         } finally {
             setIsDeletingMachine(false);
+        }
+    };
+
+    /**
+     * Add a Claude subscription to this machine, from here (DROVE-61).
+     *
+     * Clay's ask: "I push a button to add an account or to log in, it gives me
+     * the link I need to click on." This is that button. It only STARTS the
+     * login — the link arrives as a card in the Cattle Drover thread, and the
+     * code typed into that card finishes it. Nothing about a credential passes
+     * through this screen.
+     *
+     * The name is optional because the shorter path is to leave it out: the
+     * account is then called after the address it logs in as, so there is
+     * nothing to invent and nothing to remember it by but the address.
+     */
+    const handleAddAccount = async () => {
+        if (!machineId) return;
+
+        const name = await Modal.prompt(
+            'Add Claude Account',
+            'Leave this empty to name the account after the address you log in as. '
+            + 'The sign-in link will arrive as a card in the Cattle Drover thread.',
+            {
+                defaultValue: '',
+                placeholder: 'Optional name',
+                cancelText: t('common.cancel'),
+                confirmText: 'Start login',
+            }
+        );
+        if (name === null) return;
+
+        setIsAddingAccount(true);
+        try {
+            await machineDroverAccountLogin(machineId, name.trim() || undefined);
+            Modal.alert(
+                'Login started',
+                'Open the Cattle Drover thread — the sign-in link is waiting there as a card. '
+                + 'Tap it to share or open it, then paste the code back into the same card.'
+            );
+        } catch (error) {
+            // Named outright rather than swallowed: the login runs on a Mac
+            // nobody is looking at, so a failure that only logs there is a
+            // button that did nothing.
+            Modal.alert(
+                t('common.error'),
+                error instanceof Error ? error.message : 'Could not start the login on that machine.'
+            );
+        } finally {
+            setIsAddingAccount(false);
         }
     };
 
@@ -276,6 +327,24 @@ export default function MachineDetailScreen() {
                             title={t('machine.daemonStateVersion')}
                             subtitle={String(machine.daemonStateVersion)}
                         />
+                </ItemGroup>
+
+                {/* Cattle Drover accounts (DROVE-61) */}
+                <ItemGroup
+                    title="Claude accounts"
+                    footer="Adding one needs no keyboard on that machine: the sign-in link comes to the Cattle Drover thread and the code goes back the same way."
+                >
+                    <Item
+                        title="Add account"
+                        subtitle={machineOnline ? 'Log in to another Claude subscription' : t('status.offline')}
+                        icon={<Ionicons name="person-add-outline" size={29} color={machineOnline ? '#34C759' : theme.colors.textSecondary} />}
+                        onPress={machineOnline ? handleAddAccount : undefined}
+                        disabled={isAddingAccount || !machineOnline}
+                        showChevron={false}
+                        rightElement={isAddingAccount ? (
+                            <ActivityIndicator size="small" color={theme.colors.textSecondary} />
+                        ) : undefined}
+                    />
                 </ItemGroup>
 
                 {/* CLI Availability */}

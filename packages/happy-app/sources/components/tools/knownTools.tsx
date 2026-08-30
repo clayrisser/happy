@@ -932,6 +932,25 @@ export const knownTools = {
             return null;
         }
     },
+    // The drover account-login card (DROVE-61). Its own entry so the row reads
+    // as a login rather than as a generic question, and so the card is never
+    // collapsed away — the link and the code field are the whole point of it.
+    'DroverAccountLogin': {
+        title: () => 'Log in to Claude',
+        icon: ICON_QUESTION,
+        minimal: false,
+        noStatus: true,
+        input: z.object({
+            url: z.string().describe('The OAuth link Claude Code printed on the Mac'),
+            header: z.string().describe('Which account is being logged in'),
+            reason: z.string().describe('What to do, or why the last code was refused'),
+            cancelLabel: z.string().describe('Label for ending the login'),
+        }).partial().passthrough(),
+        extractSubtitle: (opts: { metadata: Metadata | null, tool: ToolCall }) => {
+            const header = opts.tool.input?.header;
+            return typeof header === 'string' && header ? header : null;
+        },
+    },
     'request_user_input': {
         title: (opts: { metadata: Metadata | null, tool: ToolCall }) => {
             const input = opts.tool.input?.input ?? opts.tool.input;
