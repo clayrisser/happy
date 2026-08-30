@@ -41,6 +41,12 @@ struct GateListView: View {
                             if let message = store.lastError {
                                 BannerRow(text: message, symbol: "exclamationmark.triangle", tint: .red)
                             }
+                            // A wrist that cannot buzz looks exactly like a
+                            // wrist with nothing to buzz about, which is the
+                            // failure push already has (DROVE-62). So say it.
+                            if let muted = store.buzzRefusal {
+                                BannerRow(text: muted, symbol: "bell.slash", tint: .orange)
+                            }
                             // A stale list is the dangerous one: every gate on
                             // it may already have been answered in tmux or on
                             // the phone, and the wrist has no way to know.
@@ -72,6 +78,11 @@ struct GateListView: View {
                 }
             }
             .navigationTitle("Drover")
+            // Authorization for the watch-local alert has to be asked from the
+            // foreground — watchOS will not prompt from a background launch,
+            // and without it the background buzz is accepted and dropped
+            // (DROVE-62). The wall is the first thing a wrist sees.
+            .onAppear { store.prepareBuzzer() }
             .navigationDestination(for: DroverGate.self) { gate in
                 GateDetailView(gate: gate)
             }

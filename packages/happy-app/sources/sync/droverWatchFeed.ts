@@ -27,6 +27,7 @@ import {
     isDroverWatchAvailable,
     publishDroverSnapshot,
     type DroverAccountRow,
+    wakeDroverWatch,
     type DroverGate,
     type DroverSession,
 } from 'drover-watch';
@@ -230,10 +231,42 @@ function sameAccountRows(a: DroverAccountRow[], b: DroverAccountRow[]): boolean 
     return a.every((row, i) => key(row) === key(b[i]));
 }
 
+/**
+ * Whether the wrist should be WOKEN for this publish, not merely fed (DROVE-62).
+ *
+ * A publish reaches a sleeping watch app "on next launch", which for a watch
+ * means whenever Clay next opens it — so an ordinary publish cannot buzz
+ * anything. `wakeDroverWatch` spends one of a small daily budget to launch the
+ * watch app in the background instead, and that budget is why this is a
+ * question rather than something done on every publish: the 60s heartbeat
+ * would drain it before lunch.
+ *
+ * True for a gate that was not there before, and for a session that was
+ * running and has stopped. Both are things Clay would want to feel; a
+ * subagent count moving is not.
+ */
+export function deservesAWake(
+    before: { gates: DroverGate[]; sessions: DroverSession[] },
+    after: { gates: DroverGate[]; sessions: DroverSession[] },
+): boolean {
+    const known = new Set(before.gates.map((g) => g.id));
+    if (after.gates.some((g) => !known.has(g.id))) return true;
+    const wasRunning = new Set(before.sessions.filter((s) => s.active).map((s) => s.id));
+    return after.sessions.some((s) => !s.active && wasRunning.has(s.id));
+}
+
 let started = false;
 let lastGates: DroverGate[] = [];
 let lastSessions: DroverSession[] = [];
 let lastAccountRows: DroverAccountRow[] = [];
+/**
+ * The first publish of a run has nothing to compare against, so every gate in
+ * it reads as new. Waking for that would spend the budget on a wall of work
+ * that was already there when the app launched — and the wrist filters it out
+ * anyway (WristCueDiff.freshWindow), so the wake would buy a background launch
+ * and no buzz.
+ */
+let publishedOnce = false;
 
 /**
  * Start the feed. Idempotent, and a no-op where the native module is absent
@@ -261,11 +294,17 @@ export function startDroverWatchFeed(): () => void {
             // other two comparisons offers yesterday's ranking.
             && sameAccountRows(accountRows, lastAccountRows)
         ) return;
+        // Computed against the PREVIOUS sets, so it has to happen before they
+        // are replaced below (DROVE-62).
+        const wake =
+            publishedOnce &&
+            deservesAWake({ gates: lastGates, sessions: lastSessions }, { gates, sessions });
         lastGates = gates;
         lastSessions = sessions;
         lastAccountRows = accountRows;
+        publishedOnce = true;
         const status = getDroverWatchStatus();
-        void publishDroverSnapshot({
+        const snapshot = {
             gates,
             sessions,
             accounts: collectAccounts(sessions, accountRows),
@@ -282,7 +321,19 @@ export function startDroverWatchFeed(): () => void {
             // feeding the wrist) is the one it can never report. `updatedAt`
             // and the heartbeat carry that instead.
             connected: !!status.activated && status.paired && status.installed,
-        });
+        };
+        void publishDroverSnapshot(snapshot);
+        // The wake is a SECOND delivery of the SAME snapshot, and deliberately
+        // so: the watch runs both through one apply and works out the buzz from
+        // the snapshot diff, so there is no cue format on the wire to keep in
+        // step with anything (DROVE-62).
+        //
+        // Skipped when the watch is reachable, because reachable means the
+        // watch app is already frontmost — publish's own sendMessage has
+        // reached it and the wrist is being looked at. Spending a background
+        // launch on a screen someone is holding up is the one case where the
+        // budget buys nothing.
+        if (wake && !status.reachable) void wakeDroverWatch(snapshot);
     };
 
     const answers = addDroverAnswerListener((event) => {
@@ -362,6 +413,9 @@ export function startDroverWatchFeed(): () => void {
 
     return () => {
         started = false;
+        // So a restarted feed does not wake the wrist for gates that were
+        // already on the wall when it restarted (DROVE-62).
+        publishedOnce = false;
         answers.remove();
         flips.remove();
         refreshes.remove();

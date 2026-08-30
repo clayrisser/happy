@@ -215,7 +215,14 @@ public final class DroverWatchModule: Module {
                 "activated": session.activationState == .activated,
                 "paired": session.isPaired,
                 "installed": session.isWatchAppInstalled,
-                "reachable": session.isReachable
+                "reachable": session.isReachable,
+                // How many more times today the phone may LAUNCH the watch app
+                // in the background (DROVE-62). Zero means either the budget is
+                // spent or — far more likely — the Drover complication is not
+                // on any watch face, which is the documented condition for this
+                // count being zero. A wrist that cannot be woken is worth
+                // saying out loud rather than discovering as silence.
+                "wakes": session.remainingComplicationUserInfoTransfers
             ]
         }
 
@@ -250,6 +257,44 @@ public final class DroverWatchModule: Module {
             // has a real snapshot to fall back to.
             self.watchDelegate.settle(with: dict)
             return true
+        }
+
+        /// Wake the watch app in the background and hand it this snapshot
+        /// (DROVE-62).
+        ///
+        /// `transferCurrentComplicationUserInfo` is the ONLY phone-to-watch
+        /// call the WatchConnectivity headers document as launching the watch
+        /// extension in the background: `sendMessage` says it launches the
+        /// counterpart "iOS counterpart app only", and the application context
+        /// and a plain `transferUserInfo` are both delivered "on next launch",
+        /// which for a watch app means whenever the wrist next opens it. So
+        /// without this the wrist learns about a question when Clay looks, and
+        /// looking is the thing the buzz exists to replace.
+        ///
+        /// It carries the whole snapshot rather than a cue of its own so the
+        /// watch runs it through exactly the apply the application context
+        /// goes through, and the buzz falls out of the snapshot diff there.
+        /// One cue derivation, not two that drift.
+        ///
+        /// BUDGETED. `remainingComplicationUserInfoTransfers` is what is left,
+        /// and it is 0 whenever the complication is not enabled — in which
+        /// case the system silently downgrades this to a regular userInfo and
+        /// the watch is not woken at all. Returning that verdict rather than a
+        /// bare true is the difference between a wrist that is quiet and a
+        /// wrist nobody can tell is quiet. Spend it only on an arrival worth a
+        /// buzz; the 60s heartbeat must never come through here.
+        AsyncFunction("wake") { (json: String) -> Bool in
+            guard WCSession.isSupported() else { return false }
+            let session = WCSession.default
+            guard session.activationState == .activated else { return false }
+            guard let data = json.data(using: .utf8),
+                  let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let dict = plistSanitized(raw) as? [String: Any] else {
+                throw Exception(name: "DroverWatch", description: "snapshot was not a JSON object")
+            }
+            let budget = session.remainingComplicationUserInfoTransfers
+            session.transferCurrentComplicationUserInfo(dict)
+            return budget > 0
         }
     }
 }
