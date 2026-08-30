@@ -35,6 +35,8 @@ struct SharedWireTests {
         answerCarriesTypedText()
         freeTextQuestionSurvivesTheWire()
         optionWithoutAnIdFallsBackToItsLabel()
+        sessionCarriesWhatItIsDoing()
+        sessionWithoutAStatusStillDecodes()
 
         if failures.isEmpty {
             print("\nall wire checks passed")
@@ -111,5 +113,49 @@ struct SharedWireTests {
         }
         check(option.id == "Step 1 first", "an id-less option answers by its label")
         check(option.detail == "the safe one", "an option's description lands on detail")
+    }
+
+    /// The wrist's half of DROVE-54: one line saying what the session is
+    /// doing, and the start of the turn it is doing it in.
+    ///
+    /// `statusSince` is a date, so it goes through the same ISO-8601 strategy
+    /// as a gate's createdAt. Getting that wrong does not degrade — a default
+    /// decoder expects seconds since 2001 and fails the WHOLE snapshot, so the
+    /// wrist would stop updating entirely rather than lose one line.
+    static func sessionCarriesWhatItIsDoing() {
+        let payload = """
+        {"gates":[],"updatedAt":"2026-08-30T19:50:00Z","connected":true,
+        "sessions":[{"id":"s1","title":"cattle-drover","account":"bitspur","active":true,
+        "path":"/Users/x/Projects/cattle-drover","subagents":6,
+        "status":"Bash · drover-relaunch 3/5 · 6 agents",
+        "statusSince":"2026-08-30T19:32:47Z"}]}
+        """
+        guard let snapshot = try? DroverSnapshot.decoder.decode(
+            DroverSnapshot.self, from: Data(payload.utf8)
+        ), let session = snapshot.sessions.first else {
+            check(false, "a session carrying a live status decodes")
+            return
+        }
+        check(session.status == "Bash · drover-relaunch 3/5 · 6 agents", "the wrist gets the one-line status")
+        check(session.statusSince == ISO8601DateFormatter().date(from: "2026-08-30T19:32:47Z"), "the turn start decodes as a date")
+    }
+
+    /// A phone that predates the field sends neither key. Both are Optional,
+    /// which is the only way a missing key is forgiven — a property with a
+    /// default still throws, which is the trap the snapshot decoder below was
+    /// hand-written for.
+    static func sessionWithoutAStatusStillDecodes() {
+        let payload = """
+        {"gates":[],"updatedAt":"2026-08-30T19:50:00Z","connected":true,
+        "sessions":[{"id":"s1","title":"cattle-drover","account":null,"active":true}]}
+        """
+        guard let snapshot = try? DroverSnapshot.decoder.decode(
+            DroverSnapshot.self, from: Data(payload.utf8)
+        ), let session = snapshot.sessions.first else {
+            check(false, "a session with no status key decodes")
+            return
+        }
+        check(session.status == nil, "a session with no status key decodes")
+        check(session.statusSince == nil, "a session with no statusSince key decodes")
     }
 }

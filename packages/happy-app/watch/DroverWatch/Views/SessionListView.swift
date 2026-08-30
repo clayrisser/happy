@@ -73,8 +73,43 @@ private struct SessionRow: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            // What it is DOING, not just that it is on (DROVE-54). One line,
+            // and only while there IS something — an idle session looks
+            // exactly as it did before this row existed.
+            if let status = session.status {
+                LiveStatusLine(status: status, since: session.statusSince, size: 9)
+            }
         }
         .padding(.vertical, 2)
+    }
+}
+
+/// The one live line, with a clock the wrist runs itself.
+///
+/// `Text(_:style:.timer)` counts up on-device from the date the phone sent, so
+/// the number is right between deliveries. The alternative — the phone baking
+/// in "17m 13s" — is wrong by however long the application context took to
+/// arrive, and that is delivered opportunistically with a once-a-minute
+/// heartbeat behind it.
+private struct LiveStatusLine: View {
+    let status: String
+    let since: Date?
+    let size: CGFloat
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Text(status)
+                .font(.system(size: size))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            if let since {
+                Text(since, style: .timer)
+                    .font(.system(size: size, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
     }
 }
 
@@ -166,6 +201,10 @@ struct SessionDetailView: View {
                 Text(subagents == 1 ? "1 subagent" : "\(subagents) subagents")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
+            }
+            // The same line the row shows, at detail size (DROVE-54).
+            if let status = session.status {
+                LiveStatusLine(status: status, since: session.statusSince, size: 11)
             }
             if flipping {
                 Text("flipping…")

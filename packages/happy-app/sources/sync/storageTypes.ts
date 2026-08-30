@@ -247,6 +247,57 @@ export const MetadataSchema = z.object({
      */
     paneModel: z.string().nullish(),
     paneEffort: z.string().nullish(),
+    /**
+     * What the pane is doing RIGHT NOW (DROVE-54).
+     *
+     * The terminal showed a live task tree — background agents with elapsed
+     * times and token counts, a workflow's phase and how many of its agents
+     * were done, the running command and its own timer — and this app showed a
+     * green dot and the word "online" for the same session. The CLI derives
+     * this from the files Claude Code writes as it works (see happy-cli's
+     * claude/utils/liveStatus.ts) and publishes it here, throttled to at most
+     * one write a second and cleared to `null` the moment the turn ends.
+     *
+     * Every time is absolute epoch ms, never a duration: the strip ticks its
+     * own clocks off `startedAt`, so a snapshot that is a few seconds old
+     * still draws a correct timer and the CLI does not have to publish at
+     * 1Hz to make the numbers move.
+     *
+     * `.passthrough()` on every object, and every field but the required ones
+     * optional, so a newer CLI can add a fact without the whole metadata
+     * record failing safeParse and vanishing off the phone.
+     */
+    liveStatus: z.object({
+        at: z.number(),
+        turnStartedAt: z.number().optional(),
+        tool: z.object({
+            id: z.string(),
+            name: z.string(),
+            arg: z.string().optional(),
+            startedAt: z.number(),
+        }).passthrough().optional(),
+        agents: z.array(z.object({
+            id: z.string(),
+            label: z.string(),
+            startedAt: z.number(),
+            tokens: z.number().optional(),
+            toolId: z.string().optional(),
+        }).passthrough()).optional(),
+        workflows: z.array(z.object({
+            id: z.string(),
+            name: z.string(),
+            phase: z.string().optional(),
+            done: z.number(),
+            total: z.number(),
+            startedAt: z.number(),
+            tokens: z.number().optional(),
+        }).passthrough()).optional(),
+        // `.catch` for the same reason droverUsage has one: a malformed block
+        // must degrade to "no live status", never fail the whole metadata
+        // safeParse. That failure drops the entire record — path, host, name,
+        // summary and all — off the phone, which is a far worse outcome than
+        // a missing strip.
+    }).passthrough().nullish().catch(undefined),
     // Passthrough so read-modify-write metadata updates from this app never
     // drop fields written by newer CLI or app versions.
 }).passthrough();

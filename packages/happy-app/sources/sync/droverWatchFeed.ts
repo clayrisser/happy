@@ -18,6 +18,7 @@ import { sync } from './sync';
 import { sessionAllow, sessionDeny } from './ops';
 import { collectGates } from './droverGates';
 import { isSessionArchived } from './sessionArchive';
+import { liveStatusSince, liveStatusWatchLine } from '@/utils/liveStatus';
 import {
     addDroverAnswerListener,
     addDroverFlipListener,
@@ -69,6 +70,7 @@ const HEARTBEAT_MS = 60_000;
 export function collectSessions(): DroverSession[] {
     const sessions = storage.getState().sessions ?? {};
     const out: DroverSession[] = [];
+    const now = Date.now();
     for (const [sessionId, session] of Object.entries(sessions)) {
         const metadata = session?.metadata;
         if (!metadata) continue;
@@ -85,6 +87,11 @@ export function collectSessions(): DroverSession[] {
         // Running, not total: total counts the ones already finished, and the
         // wrist question is "how much is out right now".
         const subagents = metadata.activity?.subagents?.running;
+        // What it is DOING, not just that it is on (DROVE-54). Absent while
+        // the session is idle, and absent again once the snapshot goes stale,
+        // so the wrist never shows a timer for a turn that ended.
+        const status = liveStatusWatchLine(metadata.liveStatus, now);
+        const statusSince = status ? liveStatusSince(metadata.liveStatus, now) : undefined;
         out.push({
             id: sessionId,
             title,
@@ -93,6 +100,8 @@ export function collectSessions(): DroverSession[] {
             ...(path ? { path } : {}),
             ...(account ? { account } : {}),
             ...(typeof subagents === 'number' ? { subagents } : {}),
+            ...(status ? { status } : {}),
+            ...(statusSince ? { statusSince } : {}),
         });
     }
     return out;
@@ -120,15 +129,20 @@ function sameGateSet(a: DroverGate[], b: DroverGate[]): boolean {
 }
 
 /**
- * Sessions change identity, account, running state and subagent count.
+ * Sessions change identity, account, running state, subagent count and what
+ * they are doing.
+ *
  * The count is in the key because the wrist now SHOWS it, and a number that
  * only refreshes when something else about the set changed is a stale number
- * dressed as a live one. It does mean more publishes; the application context
- * keeps only the latest value, so the cost is throttling, never a lost gate.
+ * dressed as a live one. `status` is in the key for the same reason and
+ * `statusSince` is NOT: the line changes when the work changes, and the start
+ * time only moves with it, so keying on both would republish nothing extra.
+ * It does mean more publishes; the application context keeps only the latest
+ * value, so the cost is throttling, never a lost gate.
  */
 function sameSessionSet(a: DroverSession[], b: DroverSession[]): boolean {
     if (a.length !== b.length) return false;
-    const key = (s: DroverSession) => `${s.id}|${s.account ?? ''}|${s.active}|${s.subagents ?? ''}`;
+    const key = (s: DroverSession) => `${s.id}|${s.account ?? ''}|${s.active}|${s.subagents ?? ''}|${s.status ?? ''}`;
     const keys = new Set(a.map(key));
     return b.every((s) => keys.has(key(s)));
 }

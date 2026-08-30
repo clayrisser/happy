@@ -79,6 +79,19 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
     // still live in ~/.claude, so it maps to that rather than falling back to
     // the wrapper's stale CLAUDE_CONFIG_DIR.
     const startingConfigDir = session.claudeEnvVars?.CLAUDE_CONFIG_DIR;
+
+    // Is an API call in flight right now? claudeLocal reports it off fd 3
+    // (fetch-start / fetch-end), and it is the one fact the transcript cannot
+    // supply: while the model composes a reply nothing is written to disk at
+    // all, which is exactly the "Sketching… 17m 13s" the app used to render as
+    // the word "online" (DROVE-54). Wrapped rather than replaced, because the
+    // session's own keep-alive is the other consumer.
+    let thinking = false;
+    const onThinkingChange = (next: boolean) => {
+        thinking = next;
+        session.onThinkingChange(next);
+    };
+
     const scanner = await createSessionScanner({
         sessionId: session.sessionId,
         workingDirectory: session.path,
@@ -106,6 +119,16 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
                 paneEffort: run.effort,
             }))
             : undefined,
+        // DROVE-54: the running tool, the background agents and the workflows,
+        // so the app shows the same task tree the terminal does instead of a
+        // green dot. Not gated on TMUX_PANE — a paneless local run is still a
+        // real Claude writing the same files, and the app is still the only
+        // place Clay can watch it from.
+        isThinking: () => thinking,
+        onLiveStatus: (liveStatus) => session.client.updateMetadata((metadata) => ({
+            ...metadata,
+            liveStatus,
+        })),
         onMessage: (message) => {
             // Cattle Drover (BASED-98): local mode has no typed rate-limit
             // channel — the SDK's rate_limit_event only exists on the remote
@@ -733,7 +756,7 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
                     path: session.path,
                     sessionId: session.sessionId,
                     onSessionFound: handleSessionStart,
-                    onThinkingChange: session.onThinkingChange,
+                    onThinkingChange,
                     abort: processAbortController.signal,
                     claudeEnvVars: session.claudeEnvVars,
                     claudeArgs: session.claudeArgs,

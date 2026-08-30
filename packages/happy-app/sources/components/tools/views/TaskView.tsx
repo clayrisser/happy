@@ -6,11 +6,50 @@ import { Ionicons } from '@expo/vector-icons';
 import { ToolCall } from '@/sync/typesMessage';
 import { useUnistyles } from 'react-native-unistyles';
 import { t } from '@/text';
+import { Metadata } from '@/sync/storageTypes';
+import { useTickingNow } from '../../useTickingNow';
+import { formatElapsed, formatTokens, isLiveStatusFresh } from '@/utils/liveStatus';
 
 interface FilteredTool {
     tool: ToolCall;
     title: string;
     state: 'running' | 'completed' | 'error';
+}
+
+/**
+ * A running agent's own clock and token count, on its card (DROVE-54).
+ *
+ * DROVE-32 made a finished agent's run visible as a card. This is the half
+ * that was still missing: while it is RUNNING the card said only what it was
+ * asked to do, and the terminal beside it was showing "3/5 agents done · 28m
+ * 15s · 851.9k tokens". The CLI publishes the agent's start time and its
+ * cumulative tokens on session metadata, joined to this card by the tool_use
+ * id that launched it.
+ *
+ * Renders nothing for an agent that has finished — the metadata only carries
+ * agents that are still writing — so a scrolled-back transcript does not fill
+ * up with dead timers.
+ */
+function RunningAgentStats(props: { tool: ToolCall, metadata: Metadata | null }) {
+    const { theme } = useUnistyles();
+    const live = props.metadata?.liveStatus ?? null;
+    const callId = props.tool.callId;
+    const now = useTickingNow(!!live && !!callId);
+    if (!callId || !isLiveStatusFresh(live, now)) return null;
+    const agent = live!.agents?.find((candidate) => candidate.toolId === callId);
+    if (!agent) return null;
+    const parts = [formatElapsed(now - agent.startedAt)];
+    if (typeof agent.tokens === 'number' && agent.tokens > 0) {
+        parts.push(`${formatTokens(agent.tokens)} tokens`);
+    }
+    return (
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 4, paddingLeft: 4 }}>
+            <ActivityIndicator size={Platform.OS === 'ios' ? 'small' : 14 as any} color={theme.colors.warning} />
+            <Text style={{ fontSize: 12, color: theme.colors.textSecondary, fontFamily: 'monospace' }}>
+                {parts.join(' · ')}
+            </Text>
+        </View>
+    );
 }
 
 export const TaskView = React.memo<ToolViewProps>(({ tool, metadata, messages }) => {
@@ -103,8 +142,13 @@ export const TaskView = React.memo<ToolViewProps>(({ tool, metadata, messages })
         },
     });
 
+    // An agent that has just launched has forwarded no steps yet, and used to
+    // render nothing at all. Its clock is still worth showing — that is the
+    // whole of the "it just says online" complaint, one card down.
+    const runningStats = <RunningAgentStats tool={tool} metadata={metadata} />;
+
     if (filtered.length === 0) {
-        return null;
+        return <View style={styles.container}>{runningStats}</View>;
     }
 
     // Collapsed shows the tail (what it is doing NOW); expanded shows the whole
@@ -117,6 +161,7 @@ export const TaskView = React.memo<ToolViewProps>(({ tool, metadata, messages })
 
     return (
         <View style={styles.container}>
+            {runningStats}
             {visibleTools.map((item, index) => (
                 <View key={`${item.tool.name}-${index}`} style={styles.toolItem}>
                     <Text style={styles.toolTitle} numberOfLines={expanded ? 2 : 1}>{item.title}</Text>

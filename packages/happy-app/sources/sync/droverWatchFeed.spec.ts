@@ -69,6 +69,8 @@ function session(options: {
     lifecycleState?: string;
     /** A rig session, which stays live work even with its socket down. */
     rig?: boolean;
+    /** `metadata.liveStatus` — what the pane is doing right now (DROVE-54). */
+    liveStatus?: Record<string, unknown> | null;
 }) {
     return {
         // Connected unless a test says otherwise: a non-rig session with no
@@ -85,6 +87,7 @@ function session(options: {
             activity: typeof options.subagents === 'number'
                 ? { subagents: { running: options.subagents, queued: 0, total: options.subagents } }
                 : undefined,
+            liveStatus: options.liveStatus,
         },
     };
 }
@@ -287,6 +290,46 @@ describe('collectSessions', () => {
             s1: session({ path: '/a/work' }),
         };
         expect(collectSessions().map((s) => s.id)).toEqual(['s1']);
+    });
+
+    /**
+     * DROVE-54: the wrist gets one line saying what the session is DOING, and
+     * the start of the turn, so it can run the clock itself.
+     */
+    it('carries a one-line live status and the turn start', () => {
+        const now = Date.now();
+        mocks.sessions = {
+            s1: session({
+                path: '/a/work',
+                running: true,
+                liveStatus: {
+                    at: now,
+                    turnStartedAt: now - 1_033_000,
+                    tool: { id: 't1', name: 'Bash', arg: 'Run the unit suite', startedAt: now - 65_000 },
+                    agents: [
+                        { id: 'a1', label: 'one', startedAt: now - 10_000 },
+                        { id: 'a2', label: 'two', startedAt: now - 9_000 },
+                    ],
+                },
+            }),
+        };
+        const [s] = collectSessions();
+        expect(s.status).toBe('Bash · 2 agents');
+        expect(s.statusSince).toBe(new Date(now - 1_033_000).toISOString());
+    });
+
+    it('says nothing about a session that is idle, and nothing about a stale snapshot', () => {
+        mocks.sessions = {
+            idle: session({ path: '/a/idle' }),
+            stale: session({
+                path: '/a/stale',
+                liveStatus: { at: Date.now() - 600_000, tool: { id: 't', name: 'Bash', startedAt: 0 } },
+            }),
+        };
+        for (const s of collectSessions()) {
+            expect('status' in s).toBe(false);
+            expect('statusSince' in s).toBe(false);
+        }
     });
 });
 

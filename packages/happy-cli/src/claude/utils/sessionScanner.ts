@@ -6,6 +6,7 @@ import { readFile, stat } from "node:fs/promises";
 import { logger } from "@/ui/logger";
 import { startFileWatcher } from "@/modules/watcher/startFileWatcher";
 import { getProjectPath } from "./path";
+import { createLiveStatusReader, LiveStatusPublisher, type LiveStatus } from "./liveStatus";
 
 /**
  * Known internal Claude Code event types that should be silently skipped.
@@ -114,6 +115,30 @@ export async function createSessionScanner(opts: {
      * `onCustomTitle` follows, and for the same reason.
      */
     onRunObserved?: (run: ObservedRun) => void
+    /**
+     * What the pane is doing RIGHT NOW, throttled (DROVE-54).
+     *
+     * Lives here rather than in the launcher because the scanner is already
+     * the thing that knows WHICH transcript to read: it owns the project dir,
+     * it follows a flip into another account's config dir, and it is told the
+     * session id by the SessionStart hook. A second copy of that plumbing is
+     * how the flip left the old scanner reading a dead file for a whole
+     * session.
+     *
+     * Fires with `null` exactly once when the session goes idle, and not at
+     * all while it stays idle. See liveStatus.ts.
+     */
+    onLiveStatus?: (status: LiveStatus | null) => void
+    /** How often the live status is re-read off disk. Defaults to 1s. */
+    liveStatusIntervalMs?: number
+    /**
+     * The process's own "an API call is in flight" flag, when the caller has
+     * one (claudeLocal watches fd 3 for it). Disk cannot see the model
+     * thinking — nothing is written while it composes — so without this the
+     * turn timer stops during exactly the "Sketching… 17m 13s" state Clay
+     * photographed.
+     */
+    isThinking?: () => boolean
     /**
      * How long a session transcript may stay absent before its watcher gives
      * up and the session is dropped. Defaults to the startFileWatcher default
@@ -339,10 +364,53 @@ export async function createSessionScanner(opts: {
     // Periodic sync
     const intervalId = setInterval(() => { sync.invalidate(); }, 3000);
 
+    // DROVE-54: the live task tree. Only wired when a caller asked for it, so
+    // the remote launcher and runClaude's own scanners cost nothing.
+    let liveStatusTimer: ReturnType<typeof setInterval> | null = null;
+    let liveStatusPublisher: LiveStatusPublisher | null = null;
+    if (opts.onLiveStatus) {
+        const onLiveStatus = opts.onLiveStatus;
+        const reader = createLiveStatusReader({
+            projectDir,
+            sessionId: currentSessionId,
+            isThinking: opts.isThinking,
+        });
+        liveStatusPublisher = new LiveStatusPublisher((status) => {
+            try {
+                onLiveStatus(status);
+            } catch (error) {
+                logger.debug('[SESSION_SCANNER] live status consumer threw', error);
+            }
+        });
+        liveStatusTimer = setInterval(() => {
+            try {
+                // Re-stated every tick rather than pushed on change: both move
+                // for reasons this block does not observe (the hook names the
+                // session, a flip re-points the dir), and both are cheap
+                // no-ops when nothing moved.
+                reader.setProjectDir(projectDir);
+                reader.setSessionId(currentSessionId);
+                liveStatusPublisher?.sync(reader.read());
+            } catch (error) {
+                logger.debug('[SESSION_SCANNER] live status read failed', error);
+            }
+        }, opts.liveStatusIntervalMs ?? 1000);
+        liveStatusTimer.unref?.();
+    }
+
     // Public interface
     return {
         cleanup: async () => {
             clearInterval(intervalId);
+            if (liveStatusTimer) {
+                clearInterval(liveStatusTimer);
+                liveStatusTimer = null;
+            }
+            // One last write so a session that ends mid-turn does not leave a
+            // running timer on the phone forever.
+            liveStatusPublisher?.sync(null);
+            liveStatusPublisher?.dispose();
+            liveStatusPublisher = null;
             for (let w of watchers.values()) {
                 w();
             }
