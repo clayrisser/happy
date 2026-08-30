@@ -1,15 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { EventEmitter } from 'node:events';
 
 const {
     mockClaudeLocal,
     mockCreateSessionScanner,
     mockInjectIntoPane,
+    mockPaneIsIdle,
     mockFindInbox,
     mockSendToInbox,
 } = vi.hoisted(() => ({
     mockClaudeLocal: vi.fn(),
     mockCreateSessionScanner: vi.fn(),
     mockInjectIntoPane: vi.fn(),
+    mockPaneIsIdle: vi.fn(async () => true),
     mockFindInbox: vi.fn(),
     mockSendToInbox: vi.fn(),
 }));
@@ -32,6 +35,10 @@ vi.mock('./utils/sessionScanner', () => ({
 
 vi.mock('./utils/paneInject', () => ({
     injectIntoPane: mockInjectIntoPane,
+    // DROVE-45 types slash commands through the raw inject plus its own idle
+    // check. Idle by default here so a queued /model is not held forever; the
+    // model-routing tests below override it.
+    paneIsIdle: mockPaneIsIdle,
     // The launcher goes through the gated entry point. Adapt it onto the same
     // boolean mock so the tests keep asserting on (pane, text): a truthy
     // answer is "delivered and submitted", a falsy one is "refused".
@@ -105,6 +112,14 @@ async function startLauncher(overrides: {
             sendClaudeSessionMessageFromLocalTranscript: vi.fn(async () => {}),
             closeClaudeSessionTurn: vi.fn(),
             rpcHandlerManager: { registerHandler: vi.fn() },
+            // A real client is an EventEmitter carrying session metadata; the
+            // launcher reads both to route a phone-side model pick (DROVE-45).
+            // These tests run wherever they run, and $TMUX_PANE is set inside a
+            // terminal, so the stub has to answer whether they care or not.
+            getMetadata: () => ({}),
+            updateMetadata: vi.fn(),
+            on: vi.fn(),
+            off: vi.fn(),
         },
         queue: {
             reset: vi.fn(),
@@ -466,8 +481,13 @@ describe('claudeLocalLauncher in a tmux pane', () => {
     });
 
     /** A stub session with a REAL queue, because the queue is what is on trial. */
-    function paneSession() {
+    function paneSession(initialMetadata: Record<string, any> = {}) {
         const queue = new MessageQueue2<any>(() => 'mode-hash');
+        // DROVE-45: the client is an EventEmitter in real life, and 'metadata'
+        // is how a model or effort pick made on the phone reaches this
+        // launcher. `emitMetadata` below is the app doing the picking.
+        const bus = new EventEmitter();
+        let metadata: Record<string, any> = { ...initialMetadata };
         const session = {
             sessionId: claudeSessionId,
             path: '/tmp/project',
@@ -477,6 +497,10 @@ describe('claudeLocalLauncher in a tmux pane', () => {
                 closeClaudeSessionTurn: vi.fn(),
                 sendSessionEvent: vi.fn(),
                 rpcHandlerManager: { registerHandler: vi.fn() },
+                getMetadata: () => metadata,
+                updateMetadata: (fn: (m: any) => any) => { metadata = fn(metadata); },
+                on: (event: string, handler: (...args: any[]) => void) => bus.on(event, handler),
+                off: (event: string, handler: (...args: any[]) => void) => bus.off(event, handler),
             },
             queue,
             addSessionFoundCallback: vi.fn(),
@@ -493,7 +517,11 @@ describe('claudeLocalLauncher in a tmux pane', () => {
             sandboxConfig: undefined,
             pendingInitialPrompt: undefined as string | undefined,
         };
-        return { session, queue };
+        const emitMetadata = (patch: Record<string, any>) => {
+            metadata = { ...metadata, ...patch };
+            bus.emit('metadata', metadata);
+        };
+        return { session, queue, emitMetadata, readMetadata: () => metadata };
     }
 
     /** Every claudeLocal call, with the lever that ends it. */
@@ -506,6 +534,113 @@ describe('claudeLocalLauncher in a tmux pane', () => {
         });
         return runs;
     }
+
+    /**
+     * DROVE-45. Clay's composer read "Fable 5 - Ultracode" while /status in the
+     * pane read claude-opus-5[1m], because the pickers write session metadata
+     * and only the SDK path ever read it. A pane has no query() to hand it to,
+     * so the pick was ignored in silence. `/model` and `/effort` are the pane's
+     * own way in — both real commands in Claude Code 2.1.251.
+     */
+    describe('a model picked in the app', () => {
+        it('is typed into the pane as /model at the next idle prompt', async () => {
+            const runs = trackRuns();
+            const { session, emitMetadata } = paneSession({ modelMode: 'claude-opus-5' });
+            mockInjectIntoPane.mockResolvedValue(true);
+
+            const launcher = claudeLocalLauncher(session as any);
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+
+            emitMetadata({ modelMode: 'claude-sonnet-5' });
+
+            await vi.waitFor(() => expect(mockInjectIntoPane).toHaveBeenCalledWith(
+                pane, '/model claude-sonnet-5', { submit: true },
+            ));
+
+            runs[0].run.resolve();
+            await launcher;
+        });
+
+        it('carries effort too, and sends the model first because effort is capped by it', async () => {
+            const runs = trackRuns();
+            const { session, emitMetadata } = paneSession({ modelMode: 'claude-opus-5', effortLevel: 'high' });
+            mockInjectIntoPane.mockResolvedValue(true);
+
+            const launcher = claudeLocalLauncher(session as any);
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+
+            emitMetadata({ modelMode: 'claude-fable-5', effortLevel: 'xhigh' });
+
+            await vi.waitFor(() => expect(mockInjectIntoPane.mock.calls.length).toBe(2));
+            expect(mockInjectIntoPane.mock.calls.map((c) => c[1])).toEqual([
+                '/model claude-fable-5',
+                '/effort xhigh',
+            ]);
+
+            runs[0].run.resolve();
+            await launcher;
+        });
+
+        it('waits for the prompt instead of pasting a half-typed command into it', async () => {
+            // The one thing that must never happen: `/model x` landing in the
+            // middle of Clay's own line. A message is drafted when the pane is
+            // busy; a command is HELD.
+            const runs = trackRuns();
+            const { session, emitMetadata } = paneSession({});
+            mockInjectIntoPane.mockResolvedValue(true);
+            mockPaneIsIdle.mockResolvedValue(false);
+
+            const launcher = claudeLocalLauncher(session as any);
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+
+            emitMetadata({ modelMode: 'claude-sonnet-5' });
+            await new Promise((r) => setTimeout(r, 50));
+            expect(mockInjectIntoPane).not.toHaveBeenCalled();
+
+            // ...and it goes in the moment the prompt opens up.
+            mockPaneIsIdle.mockResolvedValue(true);
+            await vi.waitFor(() => expect(mockInjectIntoPane).toHaveBeenCalledWith(
+                pane, '/model claude-sonnet-5', { submit: true },
+            ), { timeout: 5000 });
+
+            runs[0].run.resolve();
+            await launcher;
+        });
+
+        it('types nothing when the metadata write did not change the pick', async () => {
+            const runs = trackRuns();
+            const { session, emitMetadata } = paneSession({ modelMode: 'claude-opus-5' });
+            mockInjectIntoPane.mockResolvedValue(true);
+
+            const launcher = claudeLocalLauncher(session as any);
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+
+            // The app renaming the session, say. Same model, so the pane must
+            // not be interrupted with a /model it is already on.
+            emitMetadata({ name: 'renamed', modelMode: 'claude-opus-5' });
+            await new Promise((r) => setTimeout(r, 50));
+
+            expect(mockInjectIntoPane).not.toHaveBeenCalled();
+
+            runs[0].run.resolve();
+            await launcher;
+        });
+
+        it('says the pane is on the new model straight away, so the chip stops lying', async () => {
+            const runs = trackRuns();
+            const { session, emitMetadata, readMetadata } = paneSession({ modelMode: 'claude-opus-5' });
+            mockInjectIntoPane.mockResolvedValue(true);
+
+            const launcher = claudeLocalLauncher(session as any);
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+
+            emitMetadata({ modelMode: 'claude-sonnet-5' });
+            await vi.waitFor(() => expect(readMetadata().paneModel).toBe('claude-sonnet-5'));
+
+            runs[0].run.resolve();
+            await launcher;
+        });
+    });
 
     it('takes a message off the queue once the inbox socket has it', async () => {
         mockFindInbox.mockResolvedValue(inbox);

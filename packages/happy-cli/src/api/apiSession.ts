@@ -351,6 +351,14 @@ export class ApiSessionClient extends EventEmitter {
                     if (data.body.metadata && data.body.metadata.version > this.metadataVersion) {
                         this.metadata = decrypt(this.encryptionKey, this.encryptionVariant, decodeBase64(data.body.metadata.value));
                         this.metadataVersion = data.body.metadata.version;
+                        // Somebody else changed this session's metadata — in
+                        // practice the phone, since the CLI's own writes go
+                        // through updateMetadata below and never come back
+                        // through here. That is what makes this the right
+                        // place to notice a model or effort pick made in the
+                        // app: it fires for app writes and not for our own, so
+                        // a listener cannot echo itself into a loop (DROVE-45).
+                        this.emit('metadata', this.metadata);
                         // Check if session was archived from web/mobile
                         const meta = this.metadata as any;
                         if (meta?.lifecycleState === 'archiveRequested' || meta?.lifecycleState === 'archived') {

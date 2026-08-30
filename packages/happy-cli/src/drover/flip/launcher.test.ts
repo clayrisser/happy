@@ -138,6 +138,12 @@ function makeSession(opts: { cwd: string; sessionId: string; flip: any; account:
                 metadata = fn(metadata)
             }),
             sendClaudeSessionMessageFromLocalTranscript: vi.fn(async () => {}),
+            // A real client is an EventEmitter that also hands out the
+            // session's metadata; the pane launcher reads both to route a
+            // model or effort pick made on the phone (DROVE-45).
+            getMetadata: () => metadata,
+            on: vi.fn(),
+            off: vi.fn(),
         },
     }
     return { session, events, metadata: () => metadata }

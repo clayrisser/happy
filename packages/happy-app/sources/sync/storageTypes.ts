@@ -202,6 +202,19 @@ export const MetadataSchema = z.object({
     permissionMode: z.string().nullish(),
     modelMode: z.string().nullish(),
     effortLevel: z.string().nullish(),
+    /**
+     * What a `hasPane` session is ACTUALLY running, read off the transcript by
+     * the CLI's session scanner and republished here (DROVE-45).
+     *
+     * The three picks above are a REQUEST — what someone chose in some client.
+     * For a session that is a real Claude Code TUI in a tmux pane there was
+     * nothing to hold them to it, so the composer showed "Fable 5 · Ultracode"
+     * while /status in the pane read claude-opus-5[1m]. These two are the
+     * answer, and they are also the only way a `/model` typed in the terminal
+     * reaches the phone. Absent for a session with no pane.
+     */
+    paneModel: z.string().nullish(),
+    paneEffort: z.string().nullish(),
     // Passthrough so read-modify-write metadata updates from this app never
     // drop fields written by newer CLI or app versions.
 }).passthrough();

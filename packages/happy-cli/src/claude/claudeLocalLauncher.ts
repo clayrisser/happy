@@ -6,7 +6,8 @@ import { createSessionScanner } from "./utils/sessionScanner";
 import { launchFailureMessage } from "./utils/launchFailureMessage";
 import { ambientDataDir } from "@/drover/flip/accounts";
 import { parseFlipCommand } from "@/drover/flip/controller";
-import { injectIntoPaneGated } from "./utils/paneInject";
+import { injectIntoPane, injectIntoPaneGated, paneIsIdle } from "./utils/paneInject";
+import { createPaneCommandQueue, slashCommandsForSelection, type PaneModelSelection } from "./utils/paneModelSync";
 import { findInbox, sendToInbox } from "./utils/inboxSocket";
 import { stageAttachments, withAttachmentNote } from "./utils/stageAttachments";
 import type { QueueItem } from "@/utils/MessageQueue2";
@@ -52,6 +53,19 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
             ? undefined
             : (startingConfigDir || ambientDataDir()),
         onCustomTitle: (title) => applyCustomTitle(session, title),
+        // DROVE-45: what the pane is ACTUALLY running, so the phone's picker
+        // stops showing a stored preference instead. This is also the whole
+        // pane -> app direction: `/model` typed in the terminal changes the
+        // model on the next turn's transcript entry, and that is what the app
+        // reads. Only for a pane session — a paneless local run has no
+        // terminal for anyone to type `/model` into.
+        onRunObserved: process.env.TMUX_PANE
+            ? (run) => session.client.updateMetadata((metadata) => ({
+                ...metadata,
+                paneModel: run.model,
+                paneEffort: run.effort,
+            }))
+            : undefined,
         onMessage: (message) => {
             // Cattle Drover (BASED-98): local mode has no typed rate-limit
             // channel — the SDK's rate_limit_event only exists on the remote
@@ -136,6 +150,128 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
     // key binding or a normal shell has it; a daemon-spawned one does not, and
     // that absence is exactly the signal to keep using remote mode for it.
     const tmuxPane = process.env.TMUX_PANE;
+    /**
+     * The app -> pane half of DROVE-45.
+     *
+     * The phone's model and effort pickers write `modelMode` /
+     * `effortLevel` into session metadata, and until now the only thing
+     * that ever read them was the SDK path, which hands them to query().
+     * A pane has no query(), so the pick was silently ignored: Clay's
+     * composer said "Fable 5 - Ultracode" while /status in the pane read
+     * claude-opus-5[1m].
+     *
+     * The pane's own way in is `/model <name>` and `/effort <level>`, both
+     * real commands in 2.1.251, and the app's keys are already exactly what
+     * they take. So this types them — through the SAME idle gate a phone
+     * message goes through, because a slash command landing mid-turn merges
+     * into whatever is in the input box and gets submitted with it.
+     *
+     * Not `injectIntoPaneGated`: that pastes a DRAFT when the pane is busy,
+     * which is right for a message a human can read and send, and wrong for
+     * a half-typed `/model` sitting in Clay's input box waiting to corrupt
+     * his next line. A command waits for the prompt instead.
+     */
+    const paneCommands = createPaneCommandQueue({
+        isIdle: () => paneIsIdle({
+            pane: tmuxPane!,
+            configDir: session.claudeEnvVars?.CLAUDE_CONFIG_DIR,
+            claudeSessionId: session.sessionId,
+        }),
+        send: async (command) => {
+            if (!childAlive) return false;
+            const ok = await injectIntoPane(tmuxPane!, command, { submit: true });
+            if (ok) notePaneCommandApplied(command);
+            return ok;
+        },
+    });
+
+    /**
+     * Say the switch happened as soon as it is typed, rather than waiting
+     * for the next turn to prove it.
+     *
+     * The transcript is the real answer and corrects this within one turn,
+     * including when Claude Code refuses the command (Fable's one-time
+     * consent, an org effort cap). But without the optimistic write the
+     * chip keeps showing the OLD model from the moment Clay taps until the
+     * next assistant turn, which can be minutes, and reads as the pick
+     * having done nothing — the exact complaint this ticket is about.
+     */
+    function notePaneCommandApplied(command: string): void {
+        const gap = command.indexOf(' ');
+        if (gap === -1) return;
+        const value = command.slice(gap + 1);
+        if (command.startsWith('/model ')) {
+            session.client.updateMetadata((metadata) => ({
+                ...metadata,
+                paneModel: value === 'default' ? null : value,
+            }));
+        } else if (command.startsWith('/effort ')) {
+            session.client.updateMetadata((metadata) => ({
+                ...metadata,
+                paneEffort: value === 'auto' ? null : value,
+            }));
+        }
+    }
+
+    /** How often a held command re-checks whether the prompt opened up. */
+    const paneCommandRetryMs = 2000;
+    let paneCommandTimer: NodeJS.Timeout | null = null;
+
+    /**
+     * Drain now, and keep a slow retry running for as long as anything is
+     * still held. A timer only while there is work: an idle pane session
+     * costs nothing, which matters because the scanner's own poll already
+     * had to be taught not to burn a core on this file.
+     */
+    function pumpPaneCommands(): void {
+        void paneCommands.flush().then(() => {
+            if (paneCommands.pending().length === 0) {
+                if (paneCommandTimer) {
+                    clearInterval(paneCommandTimer);
+                    paneCommandTimer = null;
+                }
+                return;
+            }
+            if (!paneCommandTimer) {
+                paneCommandTimer = setInterval(pumpPaneCommands, paneCommandRetryMs);
+                paneCommandTimer.unref?.();
+            }
+        });
+    }
+
+    /**
+     * The picks we believe the pane is already on. Seeded from the metadata
+     * this launcher booted with, so a reconnect — or the CLI's own
+     * metadata writes coming back round — does not retype `/model` at the
+     * prompt for a model that never changed.
+     */
+    let paneSelection: PaneModelSelection = tmuxPane
+        ? {
+            modelMode: session.client.getMetadata()?.modelMode,
+            effortLevel: session.client.getMetadata()?.effortLevel,
+        }
+        : {};
+
+    const onMetadataChanged = (metadata: { modelMode?: string | null, effortLevel?: string | null } | null) => {
+        if (!tmuxPane || !metadata) return;
+        const next: PaneModelSelection = {
+            modelMode: metadata.modelMode,
+            effortLevel: metadata.effortLevel,
+        };
+        const commands = slashCommandsForSelection(paneSelection, next);
+        if (commands.length === 0) return;
+        // Record the intent even if the pane is busy. The queue owns the
+        // retry; re-deriving the same commands on the next metadata write
+        // would just queue duplicates of what is already waiting.
+        paneSelection = { ...paneSelection, ...next };
+        logger.debug(`[local]: app changed the model/effort — queueing ${commands.join(', ')}`);
+        paneCommands.request(commands);
+        pumpPaneCommands();
+    };
+    if (tmuxPane) {
+        session.client.on('metadata', onMetadataChanged);
+    }
+
     // `let`, not `const`: a Cattle Drover flip aborts the child on purpose and
     // then needs a FRESH controller for the replacement, because an aborted
     // signal stays aborted and would kill the new child on spawn.
@@ -636,6 +772,14 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
         // the handler for exactly as long as it owns a child.
         session.flip?.setAbortHandler(null);
         takeDeferredSwitch = null;
+        // DROVE-45: the launcher is re-entered on every local/remote switch, so
+        // a listener left behind would be added again on the next pass and
+        // type the same /model once per stale registration.
+        if (tmuxPane) session.client.off('metadata', onMetadataChanged);
+        if (paneCommandTimer) {
+            clearInterval(paneCommandTimer);
+            paneCommandTimer = null;
+        }
 
         // Remove session found callback
         session.removeSessionFoundCallback(scannerSessionCallback);

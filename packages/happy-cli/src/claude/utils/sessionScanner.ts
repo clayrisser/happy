@@ -20,6 +20,24 @@ const INTERNAL_CLAUDE_EVENT_TYPES = new Set([
 
 export type ScannerTranscriptEvent = ClaudeGoalStatusTranscriptEvent;
 
+/**
+ * What the pane is ACTUALLY running, read off the transcript (DROVE-45).
+ *
+ * Every real assistant turn carries `message.model` (a full id like
+ * `claude-opus-5`) and a top-level `effort` (`xhigh`, `high`, ...). The app's
+ * picker used to show its own stored preference instead, so it read "Fable 5"
+ * while Opus answered. This is the correction, and it is also the only way a
+ * `/model` typed in the terminal ever reaches the phone.
+ *
+ * `<synthetic>` is excluded: that model id marks a harness notice (a limit
+ * warning, an interrupt) rather than a turn the model actually took, and those
+ * records carry no effort at all.
+ */
+export interface ObservedRun {
+    model: string;
+    effort: string | null;
+}
+
 type SessionLogEntry =
     | { kind: 'message'; key: string; message: RawJSONLines }
     | { kind: 'transcript-event'; key: string; event: ScannerTranscriptEvent }
@@ -52,6 +70,14 @@ export async function createSessionScanner(opts: {
      */
     onCustomTitle?: (title: string) => void
     /**
+     * The model and effort the newest real assistant turn ran under, reported
+     * whenever it changes (DROVE-45). Fires once on startup with whatever the
+     * transcript already says, so a session resumed on the phone shows the
+     * right model without waiting for a new turn — the same last-one-wins rule
+     * `onCustomTitle` follows, and for the same reason.
+     */
+    onRunObserved?: (run: ObservedRun) => void
+    /**
      * How long a session transcript may stay absent before its watcher gives
      * up and the session is dropped. Defaults to the startFileWatcher default
      * (60s). Exposed mainly so tests can exercise the drop path quickly.
@@ -78,6 +104,11 @@ export async function createSessionScanner(opts: {
     // never written) keeps itself alive forever via the watchers map below
     // and spins the CPU / floods the log (the "dead Happy instance" bug).
     let deadSessions = new Set<string>();
+    // The last model/effort we told the caller about. NOT keyed through
+    // processedEntryKeys like a message is: a run is a level, not an event, so
+    // switching opus -> sonnet -> opus has to report opus the second time, and
+    // a per-uuid key would swallow it. Last one wins, compared by value.
+    let lastObservedRun: ObservedRun | null = null;
     // Size and mtime of each transcript as of the last pass that actually read
     // it. Per scanner instance, never module-global: a stale entry left by an
     // earlier scanner would make the next one skip a file whose entries it has
@@ -103,10 +134,26 @@ export async function createSessionScanner(opts: {
             logger.debug(`[SESSION_SCANNER] Seeding title from transcript: ${seededTitle.title}`);
             opts.onCustomTitle?.(seededTitle.title);
         }
+        // Same argument as the title, for the same reason: the model this
+        // session is running is its CURRENT state, already on disk, and
+        // marking it processed would leave the app showing a stale pick until
+        // the next turn (DROVE-45).
+        reportRun(latestRunFromEntries(entries));
         // IMPORTANT: Also start watching the initial session file because Claude Code
         // may continue writing to it even after creating a new session with --resume
         // (agent tasks and other updates can still write to the original session file)
         currentSessionId = opts.sessionId;
+    }
+
+    /** Tell the caller about a run only when it is genuinely different. */
+    function reportRun(run: ObservedRun | null): void {
+        if (!run) return;
+        if (lastObservedRun && lastObservedRun.model === run.model && lastObservedRun.effort === run.effort) {
+            return;
+        }
+        lastObservedRun = run;
+        logger.debug(`[SESSION_SCANNER] Pane is running ${run.model} at effort ${run.effort ?? 'unset'}`);
+        opts.onRunObserved?.(run);
     }
 
     // Main sync function
@@ -182,6 +229,13 @@ export async function createSessionScanner(opts: {
                     opts.onTranscriptEvent?.(entry.event);
                     sentTranscriptEvents++;
                 }
+            }
+            // Only the session on screen says what the pane is running. A
+            // still-watched older transcript can gain a late subagent record
+            // long after its Claude is gone, and letting that overwrite the
+            // current model is exactly the stale reading DROVE-45 is about.
+            if (!currentSessionId || session === currentSessionId) {
+                reportRun(latestRunFromEntries(sessionEntries));
             }
             if (sessionEntries.length > 0) {
                 logger.debug(`[SESSION_SCANNER] Session ${session}: found=${sessionEntries.length}, skipped=${skipped}, sentMessages=${sentMessages}, sentTranscriptEvents=${sentTranscriptEvents}`);
@@ -349,6 +403,32 @@ function messageKey(message: RawJSONLines): string {
     } else {
         throw Error() // Impossible
     }
+}
+
+/**
+ * The model and effort of the newest REAL assistant turn in `entries`, or null
+ * when there is none (DROVE-45).
+ *
+ * Walks backwards and stops at the first hit, because the answer is a level and
+ * only the newest one is current. `<synthetic>` is skipped: Claude Code stamps
+ * that model id on harness notices — a usage-limit warning, an interrupt — and
+ * those are not turns any model took. Measured on a live transcript: real
+ * entries read `claude-opus-5` / `claude-fable-5` with `effort: "xhigh"`, the
+ * one synthetic entry reads `<synthetic>` with no effort at all.
+ *
+ * `effort` sits at the TOP level of the record, not inside `message`, and it
+ * survives here only because RawJSONLinesSchema passes unknown keys through.
+ */
+function latestRunFromEntries(entries: SessionLogEntry[]): ObservedRun | null {
+    for (let i = entries.length - 1; i >= 0; i--) {
+        const entry = entries[i];
+        if (entry.kind !== 'message' || entry.message.type !== 'assistant') continue;
+        const raw = entry.message as { message?: { model?: unknown }, effort?: unknown };
+        const model = raw.message?.model;
+        if (typeof model !== 'string' || model.length === 0 || model === '<synthetic>') continue;
+        return { model, effort: typeof raw.effort === 'string' ? raw.effort : null };
+    }
+    return null;
 }
 
 function transcriptEventKey(event: ScannerTranscriptEvent): string {
