@@ -9,6 +9,7 @@ const {
     mockFindInbox,
     mockSendToInbox,
     mockInterruptPane,
+    mockClaudeRemoteLauncher,
 } = vi.hoisted(() => ({
     mockClaudeLocal: vi.fn(),
     mockCreateSessionScanner: vi.fn(),
@@ -17,6 +18,13 @@ const {
     mockFindInbox: vi.fn(),
     mockSendToInbox: vi.fn(),
     mockInterruptPane: vi.fn(),
+    mockClaudeRemoteLauncher: vi.fn(async () => 'exit' as const),
+}));
+
+// Only the loop-level test below reaches this. It is the takeover DROVE-33
+// is about, so it is a spy that must stay uncalled rather than a real run.
+vi.mock('./claudeRemoteLauncher', () => ({
+    claudeRemoteLauncher: mockClaudeRemoteLauncher,
 }));
 
 vi.mock('./claudeLocal', () => ({
@@ -63,6 +71,8 @@ vi.mock('@/ui/logger', () => ({
 }));
 
 import { claudeLocalLauncher } from './claudeLocalLauncher';
+import { loop } from './loop';
+import type { Session } from './session';
 import { MessageQueue2 } from '@/utils/MessageQueue2';
 
 type QueueHandler = (message: string, mode: { permissionMode: 'default' }) => void;
@@ -879,6 +889,17 @@ describe('claudeLocalLauncher in a tmux pane', () => {
             expect.objectContaining({ message: expect.stringContaining('holding the switch to remote') }),
         );
 
+        // DROVE-33: the moment that actually cost Clay the pane. A deferred
+        // switch is armed inside doSwitch and fires on the busy -> idle edge,
+        // so "nothing was stopped yet" proves nothing on its own — the agent
+        // has to report in. Only a switch that was never armed survives this.
+        scannerOnMessage!(asyncAgentFinished('agent-7'));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(runs[0].opts.abort.aborted).toBe(false);
+        expect(session.client.sendSessionEvent).not.toHaveBeenCalledWith(
+            expect.objectContaining({ message: expect.stringContaining('switching to remote') }),
+        );
+
         // The child dies on its own; the held message opens its replacement.
         runs[0].run.reject(new Error('claude fell over'));
         await vi.waitFor(() => expect(runs).toHaveLength(2));
@@ -888,6 +909,75 @@ describe('claudeLocalLauncher in a tmux pane', () => {
 
         runs[1].run.resolve();
         await expect(launcher).resolves.toEqual({ type: 'exit', code: 0 });
+    });
+
+    it('ends at /exit after a delivered message, with no takeover and no replay (DROVE-33)', async () => {
+        // The whole complaint, end to end, through the real loop and a real
+        // Session: one message answered in the pane, then Clay quits. The
+        // launcher's `exit` is only half the proof — what matters is that the
+        // loop RETURNS on it, so the remote launcher never gets the queue and
+        // cannot serve the message a second time as a headless turn.
+        mockFindInbox.mockResolvedValue(inbox);
+        mockSendToInbox.mockResolvedValue('ok');
+        const runs = trackRuns();
+        const queue = new MessageQueue2<any>(() => 'mode-hash');
+        let metadata: Record<string, any> = {};
+        const bus = new EventEmitter();
+        const client = {
+            sendClaudeSessionMessage: vi.fn(),
+            sendClaudeSessionMessageFromLocalTranscript: vi.fn(async () => {}),
+            sendQueuedPromptFromLocalTranscript: vi.fn(),
+            closeClaudeSessionTurn: vi.fn(),
+            sendSessionEvent: vi.fn(),
+            rpcHandlerManager: { registerHandler: vi.fn() },
+            getMetadata: () => metadata,
+            updateMetadata: (fn: (m: any) => any) => { metadata = fn(metadata); },
+            keepAlive: vi.fn(),
+            on: (event: string, handler: (...args: any[]) => void) => bus.on(event, handler),
+            off: (event: string, handler: (...args: any[]) => void) => bus.off(event, handler),
+        };
+        const onModeChange = vi.fn();
+        let session: Session | undefined;
+
+        const exitCode = loop({
+            path: '/tmp/project',
+            onModeChange,
+            mcpServers: {},
+            session: client as any,
+            api: {} as any,
+            messageQueue: queue,
+            hookSettingsPath: '/tmp/hook-settings.json',
+            onSessionReady: (s) => { session = s; },
+        });
+        try {
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+
+            queue.push('from the phone', mode);
+            await vi.waitFor(() =>
+                expect(mockSendToInbox).toHaveBeenCalledWith(inbox, 'from the phone', claudeSessionId));
+            // Waiting on the delivery rather than on an empty queue is
+            // deliberate: with the dequeue put back the way it was, this test
+            // has to reach the assertions BELOW to say what actually went
+            // wrong, instead of timing out on a queue that never drains. One
+            // macrotask is enough — everything after the delivery is a
+            // microtask on the same chain.
+            await new Promise((resolve) => setTimeout(resolve, 0));
+
+            // `/exit` in the terminal: the child ends with 0.
+            runs[0].run.resolve();
+            await expect(exitCode).resolves.toBe(0);
+
+            // The takeover, in the three forms it was visible in: a second,
+            // headless Claude started; the app told the session went remote;
+            // and the pane's own child replaced rather than ended.
+            expect(mockClaudeRemoteLauncher).not.toHaveBeenCalled();
+            expect(onModeChange).not.toHaveBeenCalled();
+            expect(runs).toHaveLength(1);
+            // And nothing is left for anyone to replay.
+            expect(queue.size()).toBe(0);
+        } finally {
+            session?.cleanup();
+        }
     });
 
     /**
@@ -999,6 +1089,26 @@ describe('claudeLocalLauncher in a tmux pane', () => {
         });
     });
 });
+
+/**
+ * The task-notification an async Agent's completion arrives as, trimmed to the
+ * three tags InFlightTracker reads. This is the record that takes the count to
+ * zero, and with it any switch that was deferred behind that agent.
+ */
+function asyncAgentFinished(id: string) {
+    return {
+        type: 'user',
+        isSidechain: false,
+        message: {
+            role: 'user',
+            content: '<task-notification>\n'
+                + `<task-id>${id}</task-id>\n`
+                + '<status>completed</status>\n'
+                + '</task-notification>',
+        },
+        uuid: `uuid-${id}-done`,
+    };
+}
 
 /**
  * The tool_result Claude Code writes when an async Agent starts, trimmed to the
