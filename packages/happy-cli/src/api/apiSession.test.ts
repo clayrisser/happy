@@ -1252,4 +1252,28 @@ describe('ApiSessionClient v3 messages API migration', () => {
 
         expect(spy).not.toHaveBeenCalled();
     });
+
+    it('puts the mode it was handed onto the session-alive frame (DROVE-8)', () => {
+        // The loop now drives Session.onModeChange, which calls keepAlive with
+        // the new mode. This is the last hop before the wire, and it was the
+        // one the DROVE-8 loop tests could not reach: they stop at the
+        // keepAlive call. session-alive is volatile, so the assertion is on
+        // socket.volatile.emit rather than socket.emit.
+        const client = new ApiSessionClient('fake-token', session);
+
+        client.keepAlive(false, 'remote');
+
+        expect(mockSocket.volatile.emit).toHaveBeenLastCalledWith('session-alive', expect.objectContaining({
+            sid: 'test-session-id',
+            thinking: false,
+            mode: 'remote'
+        }));
+
+        client.keepAlive(true, 'local');
+
+        expect(mockSocket.volatile.emit).toHaveBeenLastCalledWith('session-alive', expect.objectContaining({
+            thinking: true,
+            mode: 'local'
+        }));
+    });
 });
