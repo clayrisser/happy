@@ -345,6 +345,13 @@ export type Metadata = {
   startedFromDaemon?: boolean,
   hostPid?: number,
   startedBy?: 'daemon' | 'terminal',
+  /**
+   * This session is a live Claude in a tmux pane ($TMUX_PANE was set at start).
+   * The terminal IS the session, so the phone is a window on it rather than a
+   * takeover: messages go straight into the pane and there is nothing to hand
+   * control back and forth (BASED-113).
+   */
+  hasPane?: boolean,
   // Lifecycle state management
   lifecycleState?: 'running' | 'archiveRequested' | 'archived' | string,
   lifecycleStateSince?: number,

@@ -83,7 +83,10 @@ const ListHeader = React.memo((props: { isLoadingOlder: boolean; topContentInset
 const ListFooter = React.memo((props: { sessionId: string }) => {
     const session = useSession(props.sessionId)!;
     return (
-        <ChatFooter controlledByUser={usesControlledSessionUi(session.metadata) && (session.agentState?.controlledByUser || false)} />
+        <ChatFooter
+            controlledByUser={usesControlledSessionUi(session.metadata) && (session.agentState?.controlledByUser || false)}
+            hasPane={session.metadata?.hasPane === true}
+        />
     )
 });
 
@@ -136,7 +139,10 @@ const ChatListInternal = React.memo((props: {
         });
     }, []);
     const session = useSession(props.sessionId);
-    const controlMode = resolveControlMode(usesControlledSessionUi(session?.metadata) ? session?.agentState?.controlledByUser : false);
+    const controlMode = resolveControlMode(
+        usesControlledSessionUi(session?.metadata) ? session?.agentState?.controlledByUser : false,
+        { hasPane: session?.metadata?.hasPane },
+    );
     const previousControlModeRef = React.useRef(controlMode);
 
     React.useEffect(() => {
