@@ -1,175 +1,37 @@
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
 import { logger } from "@/ui/logger";
 import { claudeLocal, ExitCodeError } from "./claudeLocal";
-import { applyCustomTitle, defaultSessionName, isDefaultSessionName, resumesExistingTranscript, Session } from "./session";
+import { applyCustomTitle, resumesExistingTranscript, Session } from "./session";
 import { Future } from "@/utils/future";
-import { createSessionScanner, type SessionScanner } from "./utils/sessionScanner";
+import { createSessionScanner } from "./utils/sessionScanner";
 import { launchFailureMessage } from "./utils/launchFailureMessage";
 import { ambientDataDir } from "@/drover/flip/accounts";
-import { projectDirFor } from '@/drover/flip/transcript';
 import { parseFlipCommand } from "@/drover/flip/controller";
+import { InFlightTracker, describeInFlight } from "@/drover/flip/inflight";
+// The flip itself lives in @/drover/flip/apply because BOTH launchers carry
+// one out now (BASED-127). It used to be defined here, which is precisely why
+// a flip requested in remote mode queued and never happened.
+import { applyPendingFlip, transcriptPathFor } from "@/drover/flip/apply";
 
 export type LauncherResult = { type: 'switch' } | { type: 'exit', code: number };
-
-/**
- * Does the transcript this session would resume actually exist on disk?
- *
- * Answered against the account the NEXT spawn will use, which is the account
- * we are on right now: CLAUDE_CONFIG_DIR as the child will see it, with the
- * empty string meaning ambient (~/.claude), exactly as claudeLocal's env merge
- * reads it. Getting that wrong in either direction is worse than not checking
- * — a false negative throws away a real conversation.
- */
-function transcriptExists(session: Session): boolean {
-    if (!session.sessionId) return false;
-    const configured = session.claudeEnvVars?.CLAUDE_CONFIG_DIR;
-    const configDir = configured && configured.length > 0 ? configured : ambientDataDir();
-    return existsSync(join(projectDirFor(configDir, session.path), `${session.sessionId}.jsonl`));
-}
-
-/**
- * Carry out a pending Cattle Drover flip (BASED-98), if there is one.
- *
- * Returns true when the caller should relaunch the child rather than exit.
- * Everything it changes is process-local — CLAUDE_CONFIG_DIR for the next
- * spawn, the transcript on disk, the session's own metadata — so the Happy
- * server sees nothing but the same session continuing to send messages.
- */
-async function applyPendingFlip(
-    session: Session,
-    scanner: Awaited<SessionScanner>,
-    resetAbort: () => void,
-): Promise<boolean> {
-    const flip = session.flip;
-    let request = flip?.take();
-    if (!flip || !request) return false;
-
-    // A park is resolved HERE, in a loop, rather than by queueing another
-    // request for the next child to trip over. Queueing it meant the flip sat
-    // pending for the whole of the next conversation, so when Clay eventually
-    // quit claude the launcher found a stale request and relaunched instead of
-    // exiting — a session that would not close.
-    let result = flip.apply(request, session.sessionId);
-    while (result.kind === 'parked') {
-        session.client.sendSessionEvent({ type: 'message', message: result.note });
-        // say(), not announce(): a park runs with NO claude child, so this
-        // terminal is the one surface that can show anything for the next few
-        // hours, and it was the one surface a park never wrote to. Every trip
-        // round this loop says it again, and apply() words the repeat as an
-        // answer to whoever asked — pressing prefix+F into a park used to
-        // reprint the identical sentence, which reads as the key doing
-        // nothing. That silence, not the parking, is what wedged Clay.
-        flip.say(result.note);
-        await flip.park(result.until, result.account.name);
-        // The ledger has moved on, so ask again. `take()` first, in case a
-        // human flipped by hand while we were parked — their choice wins.
-        request = flip.take() ?? { account: null, reason: 'cooldown expired', by: 'auto' };
-        result = flip.apply(request, session.sessionId);
-    }
-
-    if (result.kind === 'refused') {
-        // Say why, in the session, and carry on where we are. A refused flip
-        // must never take the session down with it.
-        session.client.sendSessionEvent({ type: 'message', message: result.note });
-        flip.say(result.note);
-
-        // ...and it must not take the session down on the way back UP either.
-        // The child has already been aborted by the time we get here — that is
-        // how a flip announces itself — so a refusal still costs a relaunch,
-        // and a relaunch carries --resume <id>. On a session where nothing was
-        // ever said there is no transcript for that id, and Claude Code exits
-        // immediately with `No conversation found with session ID: <id>`.
-        //
-        // Measured, not theorised: 22:29:05 in 2026-08-29-22-27-43-pid-16999
-        // refused a flip to main (already on main) and relaunched with
-        // --resume e6bb612b, which died on the spot. Opening a fresh drover
-        // and pressing flip before typing anything killed the session every
-        // time. The success path below has guarded this since it was written;
-        // the refusal path never did, because a refusal was assumed to change
-        // nothing — but the abort already happened, so it changes everything.
-        //
-        // Same guard, same reason: no transcript on disk means the next spawn
-        // has to be a clean start rather than a --resume against a file that
-        // is not there.
-        if (session.sessionId && !transcriptExists(session)) {
-            logger.debug(
-                `[local]: refused flip, and ${session.sessionId} has no transcript — starting clean instead of --resume`,
-            );
-            session.clearSessionId();
-        }
-
-        resetAbort();
-        return true;
-    }
-
-    // Point the next spawn at the new account. claudeLocal merges these over
-    // process.env, so this is all it takes — and DROVER_ACCOUNT travels with
-    // it so anything downstream reading the stamp agrees.
-    //
-    // The AMBIENT account is reached by unsetting CLAUDE_CONFIG_DIR, not by
-    // setting it to ~/.claude: Claude Code reads its global config from
-    // `join(CLAUDE_CONFIG_DIR || homedir(), '.claude.json')`, so pointing the
-    // variable at ~/.claude silently swaps the file holding the OAuth account
-    // for an empty one and the flip lands in the first-run wizard. An empty
-    // string is what claudeLocal's env merge understands as "not set" — see
-    // the delete there — because `undefined` in a spread survives as a key.
-    const next: Record<string, string> = {
-        ...session.claudeEnvVars,
-        DROVER_ACCOUNT: result.account.name,
-    };
-    next.CLAUDE_CONFIG_DIR = result.account.ambient ? '' : result.account.configDir;
-    session.claudeEnvVars = next;
-
-    // The child is not the only thing that reads the transcript: the session
-    // scanner polls it and is what the app actually sees. carryTranscript has
-    // already copied the conversation into the new account, so point the
-    // scanner at the copy or it keeps reading a file nothing writes to any
-    // more, and the session goes mute in the app until it is dropped.
-    //
-    // account.configDir, NOT next.CLAUDE_CONFIG_DIR: the ambient account is
-    // spelled as an empty string for the child (unsetting the variable is how
-    // Claude Code finds its global config), but it still keeps transcripts in
-    // ~/.claude, and account.configDir is always that real path.
-    scanner.setClaudeConfigDir(result.account.configDir);
-
-    session.pendingInitialPrompt = result.prompt;
-    if (!result.resume) {
-        // Nothing was ever said, so there is no transcript in the new account
-        // to resume from. Clearing the id makes the next spawn a clean start
-        // rather than a --resume against a file that does not exist there.
-        session.clearSessionId();
-    }
-
-    // Keep the app honest about which account is doing the work now.
-    //
-    // `summary`, not just `name`: the phone's session title reads
-    // metadata.summary.text and falls back to the literal "New chat" —
-    // getSessionName in happy-app/sources/utils/sessionUtils.ts — so stamping
-    // only `name` renamed the session everywhere EXCEPT the screen Clay was
-    // looking at. Both are restamped, and both only while they are still
-    // default-shaped, so a title Claude Code or the app wrote outlives a flip
-    // instead of collapsing back into a path.
-    const flippedName = defaultSessionName(session.path, result.account.name);
-    session.client.updateMetadata((metadata) => ({
-        ...metadata,
-        droverAccount: result.account.name,
-        name: isDefaultSessionName(metadata.name, session.path) ? flippedName : metadata.name,
-        summary: isDefaultSessionName(metadata.summary?.text, session.path)
-            ? { text: flippedName, updatedAt: Date.now() }
-            : metadata.summary,
-    }));
-    session.client.sendSessionEvent({ type: 'message', message: result.note });
-    flip.say(result.note);
-    logger.debug(`[local]: flipped to ${result.account.name}, relaunching with --resume ${session.sessionId}`);
-
-    resetAbort();
-    return true;
-}
 
 export async function claudeLocalLauncher(session: Session): Promise<LauncherResult> {
 
     let scannerMessageChain = Promise.resolve();
+
+    // A switch that doSwitch held back because subagents were running. Taken
+    // the moment the last one reports in, so the deferral costs the rest of
+    // the agents' run rather than the rest of the session.
+    let deferredSwitch = false;
+    let takeDeferredSwitch: (() => void) | null = null;
+
+    // Who is still running inside the child (BASED-135). Stopping the child is
+    // a SIGTERM, and async subagents live INSIDE it, so every abort below has
+    // to ask this first. See inflight.ts for why it also tails the transcript
+    // itself rather than trusting the scanner alone.
+    const inflight = new InFlightTracker({
+        transcript: () => transcriptPathFor(session),
+        onIdle: () => takeDeferredSwitch?.(),
+    });
 
     // Create scanner. It reads the account the session is on NOW, which after
     // an earlier flip is not the one this process was started on: the launcher
@@ -190,6 +52,9 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
             // channel — the SDK's rate_limit_event only exists on the remote
             // path — so the transcript is where a usage limit becomes visible.
             session.flip?.noteTranscriptMessage(message);
+            // BASED-135: the same stream carries "Async agent launched
+            // successfully" and, sometimes, the notification that ends it.
+            inflight.note(message);
             // Block SDK summary messages - we generate our own
             if (message.type !== 'summary') {
                 scannerMessageChain = scannerMessageChain.then(async () => {
@@ -289,23 +154,118 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
             await abort();
         }
 
-        async function doSwitch() {
+        /**
+         * A second explicit switch inside this window forces the abort even
+         * with subagents running. Long enough to be a deliberate second press,
+         * short enough that it cannot be a press from ten minutes ago.
+         */
+        const switchConfirmMs = 30_000;
+        let switchAskedAt = 0;
+
+        /**
+         * Stop local claude so remote mode can take the session over.
+         *
+         * BASED-135: this used to be an unconditional abort, which is a
+         * SIGTERM to the child, and async subagents live inside that child.
+         * Clay routinely runs 4-12 at once and lost them to a mode switch
+         * repeatedly. Their partial work survives on disk, but the COMPLETION
+         * NOTIFICATION does not: it arrives later as its own transcript
+         * record, so a resumed session reads as though every agent launched
+         * fine and then never reported. Silently.
+         *
+         * So with anything in flight we take the DEFERRED path the launcher
+         * already had and never used: `switchRequested` alone is enough, and
+         * the loop below turns it into `{type:'switch'}` when the child exits
+         * of its own accord (:380-382 and :429-433). The phone's message is
+         * already in the queue by the time we get here — MessageQueue2.push
+         * enqueues before it calls this handler — so nothing is dropped, it is
+         * served the moment the child is gone.
+         *
+         * The cost is honest and worth naming: the switch does not happen
+         * until claude exits. Two ways out, and the announcement says both —
+         * press the same switch again within 30s, or hit stop, which is
+         * `doAbort` and is deliberately NOT gated. Stop means stop.
+         *
+         * @param explicit the user pressing "switch to remote", rather than a
+         *   phone message arriving. Only an explicit press can confirm: two
+         *   messages typed in quick succession are not a demand to kill eight
+         *   agents, and treating them as one is exactly this bug again.
+         */
+        async function doSwitch(explicit = false) {
             logger.debug('[local]: doSwitch');
             switchRequested = true;
+
+            const busy = inflight.snapshot();
+            if (busy.count > 0) {
+                const now = Date.now();
+                const confirming = explicit && now - switchAskedAt < switchConfirmMs;
+                if (!confirming) {
+                    if (explicit) switchAskedAt = now;
+                    deferredSwitch = true;
+                    logger.debug(
+                        `[local]: switch deferred, ${busy.count} subagent(s) in flight: ${busy.ids.join(', ')}`,
+                    );
+                    session.client.sendSessionEvent({
+                        type: 'message',
+                        message:
+                            `Cattle Drover: holding the switch to remote — ${describeInFlight(busy)}. ` +
+                            'Stopping local Claude now would kill them and lose their completion ' +
+                            'notifications silently, so the switch happens when this turn\'s Claude ' +
+                            'exits. Anything you send is queued and served then. To take over NOW ' +
+                            'and accept the loss: press switch again within 30s, or press stop.',
+                    });
+                    return;
+                }
+                logger.debug(`[local]: switch confirmed, abandoning ${busy.count} subagent(s)`);
+                session.client.sendSessionEvent({
+                    type: 'message',
+                    message:
+                        `Cattle Drover: switching to remote anyway — ${describeInFlight(busy)} ` +
+                        'will not report back. Their partial work is under ' +
+                        'tasks/<agentId>.output in this session\'s scratch directory.',
+                });
+                switchAskedAt = 0;
+            }
+
+            deferredSwitch = false;
             if (!processAbortController.signal.aborted) {
                 processAbortController.abort();
             }
         }
 
+        // The last subagent reported in and a switch was waiting on exactly
+        // that. Take it now rather than making Clay quit claude to get his
+        // phone answered.
+        takeDeferredSwitch = () => {
+            if (!deferredSwitch) return;
+            deferredSwitch = false;
+            logger.debug('[local]: subagents finished, taking the deferred switch');
+            session.client.sendSessionEvent({
+                type: 'message',
+                message: 'Cattle Drover: subagents finished — switching to remote now.',
+            });
+            if (!processAbortController.signal.aborted) {
+                processAbortController.abort();
+            }
+        };
+
         // When to abort
         session.client.rpcHandlerManager.registerHandler('abort', doAbort); // Abort current process, clean queue and switch to remote mode
-        session.client.rpcHandlerManager.registerHandler('switch', doSwitch); // When user wants to switch to remote mode
+        // The user pressing "switch to remote": explicit, so a second press
+        // inside 30s overrides the subagent hold above.
+        session.client.rpcHandlerManager.registerHandler('switch', () => doSwitch(true));
 
         // A flip stops the child the same way a switch does — the difference
         // is what happens next, and that is decided below rather than here.
         session.flip?.setAbortHandler(() => {
             if (!processAbortController.signal.aborted) processAbortController.abort();
         });
+
+        // ...and the controller decides whether to stop it at all, which it
+        // cannot do without knowing who is still running in there (BASED-135).
+        // Handed as a probe rather than the tracker itself so the controller
+        // stays a pure decision-maker with no idea a transcript exists.
+        session.flip?.setInFlightProbe(() => inflight.snapshot());
 
         session.queue.setOnMessage((message: string, _mode) => {
             // `/flip` from the app is a command to this launcher, not a turn
@@ -318,7 +278,10 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
                 return;
             }
             // Remote messages request control from the app. Stop local Claude
-            // so queued app messages can be picked up by remote mode now.
+            // so queued app messages can be picked up by remote mode now —
+            // unless subagents are running, in which case doSwitch holds off
+            // and the queued message waits for the child to exit. Not
+            // `explicit`: typing a message is not a decision to kill them.
             void doSwitch();
         });
 
@@ -345,6 +308,14 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
             try {
                 const initialPrompt = session.pendingInitialPrompt;
                 session.pendingInitialPrompt = undefined;
+                // Fresh child, fresh count. Cleared HERE rather than on exit
+                // so the flip below can still name the agents it stranded, and
+                // so an entry we never managed to resolve cannot jam the gate
+                // for the rest of the session.
+                inflight.reset();
+                // ...and a hold that belonged to the child that just died must
+                // not fire against its replacement.
+                deferredSwitch = false;
                 await claudeLocal({
                     path: session.path,
                     sessionId: session.sessionId,
@@ -368,8 +339,15 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
                 // exiting is how a flip announces itself: the controller
                 // aborted it deliberately, so this looks exactly like a normal
                 // exit until you ask whether a flip is pending.
-                if (await applyPendingFlip(session, scanner, () => {
-                    processAbortController = new AbortController();
+                if (await applyPendingFlip({
+                    session,
+                    mode: 'local',
+                    scanner,
+                    // The next spawn carries it as its opening prompt.
+                    deliverPrompt: (prompt) => { session.pendingInitialPrompt = prompt; },
+                    resetAbort: () => {
+                        processAbortController = new AbortController();
+                    },
                 })) {
                     continue;
                 }
@@ -415,8 +393,15 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
                 // ends rather than moving accounts. Measured, not theorised:
                 // the first live flip died exactly here, logging "request
                 // accepted" and then nothing at all.
-                if (await applyPendingFlip(session, scanner, () => {
-                    processAbortController = new AbortController();
+                if (await applyPendingFlip({
+                    session,
+                    mode: 'local',
+                    scanner,
+                    // The next spawn carries it as its opening prompt.
+                    deliverPrompt: (prompt) => { session.pendingInitialPrompt = prompt; },
+                    resetAbort: () => {
+                        processAbortController = new AbortController();
+                    },
                 })) {
                     continue;
                 }
@@ -453,7 +438,18 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
         session.client.rpcHandlerManager.registerHandler('abort', async () => { });
         session.client.rpcHandlerManager.registerHandler('switch', async () => { });
         session.queue.setOnMessage(null);
-        
+        // The tracker dies with this launcher call; the controller outlives it.
+        session.flip?.setInFlightProbe(null);
+        // ...and so does the abort handler, which closes over an
+        // AbortController that is already aborted by the time we get here
+        // (BASED-127). Left registered, that dead closure IS the controller's
+        // idea of how to stop the child for the whole of the next remote turn:
+        // FlipController.request() called it, nothing happened, and the flip
+        // queued until the session came back to local mode. Each launcher owns
+        // the handler for exactly as long as it owns a child.
+        session.flip?.setAbortHandler(null);
+        takeDeferredSwitch = null;
+
         // Remove session found callback
         session.removeSessionFoundCallback(scannerSessionCallback);
 

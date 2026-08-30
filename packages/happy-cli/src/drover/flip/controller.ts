@@ -36,6 +36,7 @@ import {
     rememberWhereabouts,
     setCooldown,
 } from './accounts'
+import { describeInFlight, emptyInFlight, type InFlightSnapshot } from './inflight'
 import { detectLimit, familyLabel, familyOf, modelOfTranscriptMessage, textOfTranscriptMessage } from './limits'
 import { resolveFlipPrompt } from './prompt'
 import { carryTranscript } from './transcript'
@@ -52,6 +53,16 @@ const DROVER_URL = process.env.DROVER_URL || 'http://127.0.0.1:7970'
  * what Clay concluded, and he escaped by re-logging main into another account.
  */
 const parkAnnounceMs = 15 * 60 * 1000
+
+/**
+ * How long a flip held back by running subagents waits to be confirmed
+ * (BASED-135).
+ *
+ * Long enough that Clay can read why nothing happened and press the key
+ * again; short enough that a flip he asked for half an hour ago cannot be
+ * confirmed by an unrelated one now.
+ */
+const flipConfirmMs = 30 * 1000
 
 /** Where a note goes so somebody at the KEYBOARD sees it. */
 function writeToTerminal(message: string): void {
@@ -179,8 +190,19 @@ export class FlipController {
     /** What a limit notice said had run out, when it named a model. */
     private noticedFamily: string | undefined
 
+    /**
+     * Who is still running inside the child, asked at the moment we are about
+     * to kill it (BASED-135). Null until the launcher wires it up, and null is
+     * a real answer: no probe means behave exactly as this did before
+     * subagents were counted at all.
+     */
+    private inFlight: (() => InFlightSnapshot) | null = null
+    /** A manual flip held back by running subagents, waiting to be confirmed. */
+    private heldFlip: { until: number; req: FlipRequest } | null = null
+
     private readonly toTerminal: (message: string) => void
     private readonly parkAnnounceMs: number
+    private readonly flipConfirmMs: number
 
     constructor(
         private readonly cwd: string,
@@ -196,10 +218,13 @@ export class FlipController {
             toTerminal?: (message: string) => void
             /** Overridden in tests; defaults to fifteen minutes. */
             parkAnnounceMs?: number
+            /** Overridden in tests; defaults to thirty seconds. */
+            flipConfirmMs?: number
         },
     ) {
         this.toTerminal = opts?.toTerminal ?? writeToTerminal
         this.parkAnnounceMs = opts?.parkAnnounceMs ?? parkAnnounceMs
+        this.flipConfirmMs = opts?.flipConfirmMs ?? flipConfirmMs
     }
 
     /**
@@ -399,6 +424,15 @@ export class FlipController {
         logger.debug(
             `[flip] request accepted: account=${req.account ?? '(next with headroom)'} reason=${req.reason} by=${req.by}`,
         )
+
+        // BASED-135: stopping the child is a SIGTERM, and async subagents live
+        // inside it. Killing them loses their completion notifications
+        // SILENTLY — the resumed conversation reads as though every agent
+        // launched fine and never reported — so a flip has to say what it is
+        // about to cost before it costs it.
+        const busy = this.busy()
+        if (busy.count > 0 && !this.confirmed(req, busy)) return
+
         this.pending = req
         this.releasePark()
         if (!this.abortChild) {
@@ -407,14 +441,100 @@ export class FlipController {
         this.abortChild?.()
     }
 
+    /**
+     * May this flip stop the child, given what is running inside it?
+     *
+     * Two answers, split on WHO asked, because the alternatives are different:
+     *
+     *   by === 'auto'   a real usage limit. The account is dead, so there is
+     *                   no version of this where the agents finish — staying
+     *                   put just means they fail one API call later. Flip, but
+     *                   announce the loss FIRST so it is on the record instead
+     *                   of being discovered an hour afterwards.
+     *   anything else   a person or the bus asked. There IS an alternative:
+     *                   wait. So the first request only says what it would
+     *                   cost; a second request inside the window means the
+     *                   answer is "do it anyway" and the second one wins.
+     */
+    private confirmed(req: FlipRequest, busy: InFlightSnapshot): boolean {
+        const now = Date.now()
+        if (req.by === 'auto') {
+            this.heldFlip = null
+            logger.debug(`[flip] usage limit flip abandoning ${busy.count} subagent(s): ${busy.ids.join(', ')}`)
+            this.announce(
+                `Cattle Drover: flipping on a usage limit with ${describeInFlight(busy)}. ` +
+                    'They will not report back — this account has no headroom left, so waiting ' +
+                    'for them only fails them one call later. Their partial work is under ' +
+                    'tasks/<agentId>.output, and the arrival prompt points the new session at it.',
+            )
+            return true
+        }
+
+        if (this.heldFlip && this.heldFlip.until > now) {
+            this.heldFlip = null
+            logger.debug(`[flip] confirmed, abandoning ${busy.count} subagent(s): ${busy.ids.join(', ')}`)
+            this.announce(
+                `Cattle Drover: confirmed — flipping with ${describeInFlight(busy)}. ` +
+                    'Their partial work is under tasks/<agentId>.output.',
+            )
+            return true
+        }
+
+        this.heldFlip = { until: now + this.flipConfirmMs, req }
+        logger.debug(`[flip] held: ${busy.count} subagent(s) in flight — waiting for a repeat`)
+        // `announce`, not `say`: the claude child owns the terminal for as long
+        // as it is running, and a stray write into a live TUI corrupts the
+        // screen. Same reason the mid-turn limit notice above uses it.
+        this.announce(
+            `Cattle Drover: not flipping yet — ${describeInFlight(busy)}. Moving accounts stops ` +
+                'this Claude, which kills them and loses their results silently. Ask again ' +
+                `within ${Math.round(this.flipConfirmMs / 1000)}s to flip anyway, or wait for them to finish.`,
+        )
+        return false
+    }
+
+    /** What the launcher's tracker says is running, or nothing if it is not wired up. */
+    private busy(): InFlightSnapshot {
+        try {
+            return this.inFlight?.() ?? emptyInFlight
+        } catch (err) {
+            // A broken probe must never be the reason a flip cannot happen.
+            logger.debug('[flip] in-flight probe failed', err)
+            return emptyInFlight
+        }
+    }
+
     take(): FlipRequest | null {
         const req = this.pending
         this.pending = null
         return req
     }
 
+    /**
+     * Is a flip queued and not yet carried out?
+     *
+     * `take()` consumes, so a launcher that only wants to KNOW — remote mode
+     * asking whether the abort it just saw was a flip or the user pressing
+     * stop — has to ask this instead, or it eats the request it was checking
+     * for and the flip disappears again (BASED-127).
+     */
+    hasPending(): boolean {
+        return this.pending !== null
+    }
+
     setAbortHandler(fn: (() => void) | null): void {
         this.abortChild = fn
+    }
+
+    /**
+     * Say how to find out what is still running inside the child (BASED-135).
+     *
+     * Set by the launcher on the way in and cleared on the way out, because
+     * the tracker belongs to one launcher call and this controller outlives
+     * several of them.
+     */
+    setInFlightProbe(fn: (() => InFlightSnapshot) | null): void {
+        this.inFlight = fn
     }
 
     // --- the flip itself ----------------------------------------------------
@@ -497,6 +617,12 @@ export class FlipController {
         }
         const resume = !carried.nothingToCarry
 
+        // Whatever was still running when the child was stopped. Read HERE,
+        // after the exit, because the launcher clears the tracker as it
+        // launches the next child rather than as the last one dies — precisely
+        // so this call still has the list to hand.
+        const stranded = this.busy().agents
+
         const prompt = resolveFlipPrompt({
             from: from?.name,
             to: target.name,
@@ -505,6 +631,7 @@ export class FlipController {
             session: claudeSessionId,
             override: req.prompt,
             account: target,
+            stranded,
         })
 
         // We are on the target from here on. Recorded BEFORE the caller acts,

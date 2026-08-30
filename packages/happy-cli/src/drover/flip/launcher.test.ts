@@ -387,6 +387,23 @@ describe('a flip through the launcher loop', () => {
         expect(h.accounts.isCooling('main')).toBe(false)
     })
 
+    it('hands the abort handler back when it exits, leaving no dead closure behind', async () => {
+        // BASED-127. The handler closes over THIS launcher's
+        // AbortController, which is aborted by the time the launcher returns.
+        // Left registered, it was what FlipController.request() called for the
+        // whole of the next remote turn: it ran, stopped nothing, reported
+        // nothing, and the flip queued until the session came back to local
+        // mode and its next child exited. From the phone that is a button that
+        // does nothing.
+        const h = await build()
+        childScript = ['exit']
+        await h.claudeLocalLauncher(h.session)
+        expect(h.session.flip['abortChild']).toBeNull()
+        // The in-flight probe was already cleared this way; the pair now
+        // matches, and both belong to the launcher that registered them.
+        expect(h.session.flip['inFlight']).toBeNull()
+    })
+
     it('stamps the new account on the metadata the app renders', async () => {
         const h = await build()
         childScript = ['abort', 'exit']

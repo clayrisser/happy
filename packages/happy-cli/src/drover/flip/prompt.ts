@@ -37,6 +37,49 @@ export interface FlipPromptContext {
     override?: string | null
     /** The target account's entry, for its own override. */
     account?: DroverAccount
+    /**
+     * Subagents that were still running when the child was stopped
+     * (BASED-135). Their completion notifications are gone, but their partial
+     * work is not — see strandedNote below.
+     */
+    stranded?: StrandedAgent[]
+}
+
+export interface StrandedAgent {
+    id: string
+    /** The Task's own description, when the launch record carried one. */
+    name?: string
+    /** `tasks/<id>.output` — a symlink to the subagent's own transcript. */
+    output?: string
+}
+
+/**
+ * Where the work of a killed subagent actually is.
+ *
+ * The default prompt asks the resumed Claude to pick up "including all
+ * subagents", which without this reads as an instruction to launch them all
+ * again from zero — and it did, repeatedly, throwing away however long they
+ * had already run. The transcripts survive the SIGTERM: `tasks/<agentId>.
+ * output` is a symlink to the subagent's own JSONL, written as it went. So the
+ * prompt names the files.
+ *
+ * Only agents whose output path we actually captured are listed, and the whole
+ * block is dropped when none were, because a list of ids with nothing to read
+ * is just noise in an arrival prompt.
+ */
+function strandedNote(stranded: StrandedAgent[]): string | null {
+    const withOutput = stranded.filter((a) => a.output)
+    if (withOutput.length === 0) return null
+    const lines = withOutput.map((a) => `  - ${a.name ? `${a.name}: ` : ''}${a.output}`)
+    const n = withOutput.length
+    return (
+        `\n\n${n} subagent${n === 1 ? '' : 's'} ${n === 1 ? 'was' : 'were'} still running when this ` +
+        `session moved accounts, so ${n === 1 ? 'it' : 'they'} never reported back. ` +
+        `${n === 1 ? 'Its' : 'Their'} partial transcript${n === 1 ? ' is' : 's are'} on disk:\n` +
+        `${lines.join('\n')}\n` +
+        'Read those first and salvage what is finished. Only relaunch an agent whose file is ' +
+        'missing or whose work is genuinely incomplete.'
+    )
 }
 
 function globalPrompt(): string | undefined {
@@ -80,5 +123,10 @@ export function resolveFlipPrompt(ctx: FlipPromptContext): string {
         (ctx.account?.flipPrompt && ctx.account.flipPrompt.trim()) ||
         globalPrompt() ||
         defaultFlipPrompt
-    return renderFlipPrompt(template, ctx)
+    const rendered = renderFlipPrompt(template, ctx)
+    // Appended rather than substituted, so it survives every override: a
+    // per-account or per-session prompt that never heard of subagents still
+    // gets told where the stranded ones left their work.
+    const note = ctx.stranded && ctx.stranded.length > 0 ? strandedNote(ctx.stranded) : null
+    return note ? rendered + note : rendered
 }
