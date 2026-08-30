@@ -59,6 +59,25 @@ function isIndentedCode(line: string): boolean {
     return true;
 }
 
+/**
+ * Whether an inline-code span is worth saying.
+ *
+ * The design said drop every one of them. Measuring 4000 real assistant blocks
+ * said otherwise: most inline code is a short identifier sitting inside a
+ * sentence — "11 in `SessionView`, 2 in `AgentInput`" — and dropping it leaves
+ * "11 in, 2 in", which is worse to listen to than the filename. So a short,
+ * word-shaped span is spoken and everything else — commands, hashes, anything
+ * with shell punctuation in it — still goes.
+ */
+function isSayableCode(code: string): boolean {
+    const trimmed = code.trim();
+    if (trimmed.length === 0 || trimmed.length > 24) return false;
+    // One or two words shaped like an identifier, a path, a flag or a short
+    // command. Anything with a brace, bracket, colon or quote in it is CSS, a
+    // type parameter or a shell line, and those measured badly out loud.
+    return /^[-.@/]{0,2}[A-Za-z0-9][\w./@#+-]*(?: [\w./@#+-]+)?$/.test(trimmed);
+}
+
 function stripInline(text: string): string {
     return text
         // Images carry nothing sayable.
@@ -66,15 +85,24 @@ function stripInline(text: string): string {
         // Links keep the label and lose the href.
         .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
         .replace(/\[([^\]]*)\]\[[^\]]*\]/g, '$1')
-        // Inline code is a path, a symbol or a flag. Saying it aloud is noise.
-        .replace(/``[^`]*``/g, ' ')
-        .replace(/`[^`]*`/g, ' ')
-        // Bare URLs, once the link labels above are already safe.
-        .replace(/\b(?:https?|ftp):\/\/\S+/gi, ' ')
-        .replace(/\bwww\.\S+/gi, ' ')
+        // Inline code: kept when it is a short identifier, dropped when it is a
+        // command or a blob. See isSayableCode.
+        .replace(/``([^`]*)``/g, (_m, code: string) => (isSayableCode(code) ? code : ' '))
+        .replace(/`([^`]*)`/g, (_m, code: string) => (isSayableCode(code) ? code : ' '))
+        // Bare URLs, once the link labels above are already safe. The tail is
+        // \S* rather than \S+ because inline-code removal above can leave a
+        // naked `https://` behind, which read out loud as "h t t p s colon".
+        .replace(/\b(?:https?|ftp):\/\/\S*/gi, ' ')
+        .replace(/\bwww\.\S*/gi, ' ')
         .replace(/<[^>\s]+@[^>\s]+>/g, ' ')
         // Raw HTML the markdown renderer would have swallowed.
         .replace(/<\/?[a-zA-Z][^>]*>/g, ' ')
+        // A pipe in prose is a table cell or an alternation, never a word. It
+        // survives the line-level table check when the row is the tail of a
+        // longer line, so it is flattened to a pause here.
+        .replace(/\s*\|+\s*/g, ', ')
+        // A slash left standing alone is the gap where inline code used to be.
+        .replace(/\s+\/+(?=\s)/g, ' ')
         // Emphasis markers are punctuation to the eye and gibberish to the ear.
         .replace(/~~([^~]+)~~/g, '$1')
         .replace(/\*\*\*([^*]+)\*\*\*/g, '$1')
@@ -86,6 +114,54 @@ function stripInline(text: string): string {
         .replace(/\\([\\`*_{}[\]()#+\-.!>])/g, '$1')
         .replace(/[ \t]+/g, ' ')
         .trim();
+}
+
+/**
+ * Clean up after the removals above.
+ *
+ * Measured on 4000 real assistant blocks from ~/.claude-shared/projects:
+ * dropping inline code leaves holes that read terribly out loud — "laptop
+ * client ( , amber)", "Service ( ): if -> =", "vars.yaml supplies the values,
+ * every {{ }} marker fills in". The words are fine; the punctuation the code
+ * used to sit inside is not.
+ */
+function tidyPunctuation(text: string): string {
+    let out = text;
+    for (let pass = 0; pass < 3; pass++) {
+        const before = out;
+        out = out
+            // Brackets whose whole contents were code.
+            .replace(/\(\s*[,;:·|/=+\-—–]*\s*\)/g, ' ')
+            .replace(/\[\s*[,;:·|/=+\-—–]*\s*\]/g, ' ')
+            .replace(/\{\s*[,;:·|/=+\-—–]*\s*\}/g, ' ')
+            // A dash introducing nothing: "via vars/tags: —." after the code
+            // it pointed at was dropped.
+            .replace(/[:;,]?\s*[—–]\s*(?=[.!?]|$)/g, '')
+            // A bracket that lost its opening half, or kept a stray separator.
+            .replace(/\(\s*,\s*/g, '(')
+            .replace(/\s*,\s*\)/g, ')')
+            // Separators with nothing left between them.
+            .replace(/([,;:])\s*(?=[,;:])/g, '')
+            // A bracket left gaping where its contents were dropped, inside a
+            // group whose other half is still meaningful: "2 in )".
+            .replace(/\(\s+/g, '(')
+            .replace(/\s+\)/g, ')')
+            // Only when the punctuation really is trailing. Without the
+            // lookahead this ate the space in front of a kept identifier that
+            // starts with a dot, turning "the .env file" into "the.env file".
+            .replace(/\s+([,;:.!?])(?=\s|$)/g, '$1')
+            .replace(/\s{2,}/g, ' ');
+        if (out === before) break;
+    }
+    return out.trim();
+}
+
+/**
+ * A line that is only leftover punctuation says nothing. Two letters is the
+ * floor because "ok" and "no" are real answers.
+ */
+function hasWords(text: string): boolean {
+    return /[A-Za-z]{2,}/.test(text);
 }
 
 /**
@@ -115,9 +191,13 @@ export function stripToSpeakableProse(markdown: string): string {
         line = line.replace(/^\s*\d+[.)]\s+/, '');
         line = line.replace(/^\s*\[[ xX]\]\s+/, '');
 
-        const cleaned = stripInline(line);
-        if (cleaned.length === 0) continue;
-        out.push(cleaned);
+        const cleaned = tidyPunctuation(stripInline(line));
+        // The table check above runs on the raw line, but stripping inline code
+        // can UNCOVER a pipe-delimited row — `a` | `b` | delete the div becomes
+        // "| | delete the div". Measured on real transcripts, not imagined.
+        if (isTableLine(cleaned)) continue;
+        if (!hasWords(cleaned)) continue;
+        out.push(cleaned.replace(/^\|+\s*/, ''));
     }
 
     return out.join('\n');

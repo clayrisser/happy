@@ -56,9 +56,28 @@ describe('stripToSpeakableProse', () => {
         expect(out).toBe('Results:\nDone.');
     });
 
-    it('drops inline code and bare URLs', () => {
+    it('keeps short word-shaped inline code and drops bare URLs', () => {
+        // Measured on 4000 real assistant blocks: dropping every inline span
+        // left "11 in, 2 in" where the filenames used to be, which is worse to
+        // listen to than the filenames.
         const out = stripToSpeakableProse('Run `pnpm test` and see https://example.com/x for more');
-        expect(out).toBe('Run and see for more');
+        expect(out).toBe('Run pnpm test and see for more');
+    });
+
+    it('still drops inline code that is a command or a blob', () => {
+        expect(stripToSpeakableProse('Try `git reset --hard && pnpm i` first'))
+            .toBe('Try first');
+        expect(stripToSpeakableProse('The rule `.pflash.on{opacity:1}` went'))
+            .toBe('The rule went');
+    });
+
+    it('keeps the space in front of a dotfile it decided to say', () => {
+        expect(stripToSpeakableProse('Check the `.env` file')).toBe('Check the .env file');
+    });
+
+    it('flattens a stray table pipe left mid-sentence', () => {
+        expect(stripToSpeakableProse('Either keep it | or delete the div'))
+            .toBe('Either keep it, or delete the div');
     });
 
     it('keeps a link label and loses the href', () => {
