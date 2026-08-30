@@ -14,6 +14,7 @@ import {
     getAvailablePermissionModes,
     getEffortLevelsForModel,
     includePaneModel,
+    includePanePermissionMode,
     resolvePaneModelKey,
     getRigCurrentModelOptionKey,
     resolveCurrentOption,
@@ -749,12 +750,24 @@ export function SessionViewLoaded({
             paneModelKey,
         )
     ), [flavor, session.metadata, session.modelMode, effectiveAgentDefaults.modelMode, isRig, paneModelKey]);
+    // DROVE-36: for a pane session the pane outranks the pick, exactly as it
+    // does for the model above. `session.permissionMode` is only ever a
+    // request — Clay had Yolo selected in the composer while every tool call
+    // in the pane still raised a card — and this is the terminal's answer, so
+    // a shift+tab at the keyboard shows up here too.
+    const panePermissionKey = session.metadata?.hasPane
+        ? session.metadata?.panePermissionMode ?? null
+        : null;
     const availableModes = React.useMemo(() => (
-        getAvailablePermissionModes(flavor, session.metadata, t, session.permissionMode)
-    ), [flavor, session.metadata, session.permissionMode]);
+        includePanePermissionMode(
+            getAvailablePermissionModes(flavor, session.metadata, t, session.permissionMode),
+            panePermissionKey,
+        )
+    ), [flavor, session.metadata, session.permissionMode, panePermissionKey]);
 
     const permissionMode = React.useMemo<PermissionMode | null>(() => (
         resolveCurrentOption(availableModes, [
+            panePermissionKey,
             session.permissionMode,
             ...(isRig ? [
                 session.metadata?.currentOperatingModeCode,
@@ -765,7 +778,7 @@ export function SessionViewLoaded({
                 session.metadata?.currentOperatingModeCode,
             ]),
         ])
-    ), [availableModes, session.permissionMode, effectiveAgentDefaults.permissionMode, session.metadata?.currentOperatingModeCode, session.metadata?.permissionMode, session.metadata?.session?.permissionMode, isRig]);
+    ), [availableModes, panePermissionKey, session.permissionMode, effectiveAgentDefaults.permissionMode, session.metadata?.currentOperatingModeCode, session.metadata?.permissionMode, session.metadata?.session?.permissionMode, isRig]);
 
     const modelMode = React.useMemo<ModelMode | null>(() => (
         resolveCurrentOption(availableModels, [

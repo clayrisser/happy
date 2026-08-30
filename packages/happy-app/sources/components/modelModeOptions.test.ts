@@ -4,6 +4,7 @@ import {
     modeSupportedByCli,
     permissionModeSupportedByCli,
     includePaneModel,
+    includePanePermissionMode,
     resolvePaneModelKey,
     getAgyModelModes,
     getAgyPermissionModes,
@@ -415,6 +416,33 @@ describe('includePaneModel', () => {
             key: 'claude-opus-4-8',
             name: 'claude-opus-4-8',
             description: 'running in the terminal',
+            disabled: true,
+        });
+    });
+});
+
+describe('includePanePermissionMode', () => {
+    const claude = getClaudePermissionModes((key: string) => key);
+
+    it('leaves the list alone when the pane is in a mode the menu already offers', () => {
+        expect(includePanePermissionMode(claude, 'bypassPermissions')).toBe(claude);
+    });
+
+    it('leaves the list alone for a session with no pane', () => {
+        expect(includePanePermissionMode(claude, null)).toBe(claude);
+    });
+
+    it('adds a row for a mode reachable from the keyboard but not from the menu', () => {
+        // Claude Code's own cycle also has `dontAsk`. Without a row for it the
+        // chip falls back to the bare word "PERMISSIONS", which reads as the
+        // session having no policy at all — the worst way to be wrong about
+        // this particular setting.
+        const withPane = includePanePermissionMode(claude, 'dontAsk');
+        expect(withPane).toHaveLength(claude.length + 1);
+        expect(withPane.at(-1)).toEqual({
+            key: 'dontAsk',
+            name: 'dontAsk',
+            description: 'set in the terminal',
             disabled: true,
         });
     });

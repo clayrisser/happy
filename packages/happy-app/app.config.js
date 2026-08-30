@@ -110,7 +110,16 @@ export default {
         name,
         slug: "happy",
         version: "1.7.0",
-        runtimeVersion: "22",
+        // Held at 21 deliberately (DROVE-30). The voice lane added the
+        // drover-speech native module and bumped this in the same commit,
+        // which is the documented rule — but build 7 on Clay's phone IS
+        // runtime 21, so bumping cut him off from every OTA: the manifest
+        // correctly answered 204 for 22 and kept serving an hour-old update.
+        // drover-speech is loaded with requireOptionalNativeModule, so its JS
+        // ships fine here and simply finds no native module until build 8.
+        // Bump this to 22 in the SAME change that archives build 8, which is
+        // also what the watch work is waiting on.
+        runtimeVersion: "21",
         orientation: "default",
         icon: "./sources/assets/images/icon.png",
         scheme: "happy",

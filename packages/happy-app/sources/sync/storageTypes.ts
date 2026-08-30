@@ -289,6 +289,13 @@ export const MetadataSchema = z.object({
      */
     paneModel: z.string().nullish(),
     paneEffort: z.string().nullish(),
+    /**
+     * The permission mode the pane is actually in (DROVE-36). Same rule again:
+     * `permissionMode` above is the pick, this is the terminal's answer. It is
+     * how a shift+tab at the keyboard reaches the composer, and how the Yolo
+     * chip stops claiming a mode the pane never took.
+     */
+    panePermissionMode: z.string().nullish(),
     // Passthrough so read-modify-write metadata updates from this app never
     // drop fields written by newer CLI or app versions.
 }).passthrough();
