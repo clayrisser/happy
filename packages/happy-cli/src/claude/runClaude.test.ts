@@ -99,7 +99,7 @@ vi.mock('@/resume/reattachClaudeSession', () => ({
 
 import { basename } from 'node:path';
 
-import { runClaude } from './runClaude';
+import { refusesDaemonLocalStart, runClaude } from './runClaude';
 
 function createDeferred<T>() {
     let resolve!: (value: T | PromiseLike<T>) => void;
@@ -1175,4 +1175,57 @@ describe('runClaude remote JSONL scanner', () => {
 
         await finishRun(runPromise, loopDeferred);
     });
+
+    // DROVE-2: a session started from the phone now lands in a tmux window of
+    // the user's own server, so it has a pane and local mode is right for it.
+    // The blanket refusal assumed a daemon spawn could only ever be paneless.
+    describe('a daemon spawn in local mode', () => {
+        it('refuses local mode only when there is no pane', () => {
+            expect(refusesDaemonLocalStart('daemon', 'local', undefined)).toBe(true);
+            expect(refusesDaemonLocalStart('daemon', 'local', '')).toBe(true);
+            expect(refusesDaemonLocalStart('daemon', 'local', '%43')).toBe(false);
+            expect(refusesDaemonLocalStart('daemon', 'remote', undefined)).toBe(false);
+            expect(refusesDaemonLocalStart('terminal', 'local', undefined)).toBe(false);
+        });
+
+        it('throws for a paneless daemon spawn asking for local mode', async () => {
+            const pane = process.env.TMUX_PANE;
+            delete process.env.TMUX_PANE;
+            try {
+                await expect(runClaude({
+                    token: 'token',
+                    encryption: { type: 'legacy', secret: new Uint8Array(32) },
+                } as any, {
+                    startedBy: 'daemon',
+                    startingMode: 'local',
+                    shouldStartDaemon: false,
+                })).rejects.toThrow(/no tmux pane cannot use local/);
+            } finally {
+                if (pane === undefined) delete process.env.TMUX_PANE;
+                else process.env.TMUX_PANE = pane;
+            }
+        });
+
+        it('lets a daemon spawn that owns a tmux pane start local', async () => {
+            const pane = process.env.TMUX_PANE;
+            process.env.TMUX_PANE = '%77';
+            // Fail at the first step AFTER the guard, so reaching this error is
+            // proof the guard let the launch through.
+            mockApiClientCreate.mockRejectedValueOnce(new Error('past the guard'));
+            try {
+                await expect(runClaude({
+                    token: 'token',
+                    encryption: { type: 'legacy', secret: new Uint8Array(32) },
+                } as any, {
+                    startedBy: 'daemon',
+                    startingMode: 'local',
+                    shouldStartDaemon: false,
+                })).rejects.toThrow('past the guard');
+            } finally {
+                if (pane === undefined) delete process.env.TMUX_PANE;
+                else process.env.TMUX_PANE = pane;
+            }
+        });
+    });
+
 });
