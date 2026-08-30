@@ -124,6 +124,17 @@ struct DroverSession: Codable, Identifiable, Equatable, Hashable {
     let path: String?
     /// Subagents running right now. Optional for the same reason.
     let subagents: Int?
+    /// One line saying what the session is DOING right now (DROVE-54): the
+    /// running tool, the workflow and its progress, how many agents are out.
+    /// Nil while the session is idle, which is what makes it disappear.
+    let status: String?
+    /// When the turn `status` describes began.
+    ///
+    /// Carried instead of a duration because the application context is
+    /// delivered opportunistically and heartbeats only once a minute, so an
+    /// elapsed time baked in by the phone would be up to a minute wrong. The
+    /// wrist counts up from this itself with `Text(_:style:.timer)`.
+    let statusSince: Date?
 }
 
 /// What the wrist's last attempt to get a current snapshot did (DROVE-22).

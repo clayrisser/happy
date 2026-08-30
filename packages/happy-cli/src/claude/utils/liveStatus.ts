@@ -1,0 +1,805 @@
+/**
+ * What the pane is doing RIGHT NOW, read off disk (DROVE-54).
+ *
+ * The terminal shows a live task tree — six background agents each with an
+ * elapsed time and a token count, a workflow's phase and how many of its
+ * agents are done, the running command and its own timer — and the app for the
+ * same session showed a green dot and the word "online". Clay: "I wish I could
+ * see all this rich information on my mobile app as it's working. Right now it
+ * just says online and I can't see what it's doing."
+ *
+ * None of it needs the TUI. Every fact is already on disk, in files Claude Code
+ * writes as it goes:
+ *
+ *   <projectDir>/<session>.jsonl
+ *       the conversation. An assistant `tool_use` block with no `tool_result`
+ *       yet IS the running tool, and the record's own timestamp is when it
+ *       started.
+ *   <projectDir>/<session>/subagents/agent-<id>.jsonl
+ *       one per background agent, appended to as it works. Its first record is
+ *       when it started; its `message.usage` blocks are the tokens.
+ *   <projectDir>/<session>/subagents/agent-<id>.meta.json
+ *       `{agentType, description, toolUseId}` — the label the TUI shows, and
+ *       the tool_use id that ties the agent back to its card in the app.
+ *   <projectDir>/<session>/subagents/workflows/wf_<id>/journal.jsonl
+ *       one `started` per agent the workflow launched and one `result` per
+ *       agent that finished, which is the "3/5 agents done" the TUI draws.
+ *   <projectDir>/<session>/workflows/wf_<id>.json
+ *       the run record: workflowName, phases, workflowProgress. Read when it
+ *       is there, never required — measured across 408 runs on this machine,
+ *       every surviving copy is in a terminal status, so it cannot be relied
+ *       on to exist while the workflow is still going. The live name comes off
+ *       the script filename instead (`workflows/scripts/<name>-wf_<id>.js`),
+ *       which Claude Code writes at launch.
+ *
+ * READING IS INCREMENTAL, because these files are not small. Clay's live
+ * session transcript is 13MB and one agent's is 1.2MB; re-reading them once a
+ * second is what pinned a core for five hours the last time something in here
+ * read a whole transcript on a timer (see sessionScanner's stat guard). So
+ * every file is tailed from a remembered byte offset, and the first read of an
+ * existing transcript starts near its end rather than at byte 0.
+ *
+ * WHAT "BUSY" MEANS. Disk alone cannot see the model thinking: while Claude is
+ * composing a reply nothing is written at all, which is exactly the
+ * "Sketching… 17m 13s" state Clay photographed. So the caller passes the
+ * process's own thinking flag (claudeLocal watches fd 3 for fetch-start /
+ * fetch-end) and this treats the session as busy when EITHER that flag is set,
+ * or a tool is open, or an agent or workflow is running, or the transcript
+ * moved within the grace window. The grace window is not decoration: an
+ * assistant `text` block and the `tool_use` that follows it were measured 4.1s
+ * apart in Clay's session, so a stricter test flickers the strip off and on
+ * mid-turn.
+ */
+
+import { closeSync, fstatSync, openSync, readSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { basename, join } from 'node:path'
+
+/** The tool the assistant is waiting on: one `tool_use` with no `tool_result`. */
+export interface LiveStatusTool {
+    /** The `tool_use` id, so the app can find the card this is about. */
+    id: string
+    name: string
+    /** One short argument — the command, the file, the description. */
+    arg?: string
+    /** Epoch ms, from the record's own timestamp. */
+    startedAt: number
+}
+
+/** One background agent, still writing to its own transcript. */
+export interface LiveStatusAgent {
+    /** Claude Code's agent id, e.g. `a3166e92b4779f27d`. */
+    id: string
+    /** The Task's description where it has one, else the agent type, else the id. */
+    label: string
+    startedAt: number
+    /** input + output + cache-creation tokens so far. See countTokens. */
+    tokens?: number
+    /** The `tool_use` that launched it, from the agent's meta.json. */
+    toolId?: string
+}
+
+/** One workflow run, from its journal. */
+export interface LiveStatusWorkflow {
+    /** The run id, e.g. `wf_f7b09017-045`. */
+    id: string
+    name: string
+    /** The phase it is in, when the run record says; else the running agent's label. */
+    phase?: string
+    /** Agents that have reported a result. */
+    done: number
+    /** Agents it has launched so far. Not the eventual total — nothing on disk knows that. */
+    total: number
+    startedAt: number
+    tokens?: number
+}
+
+/**
+ * One compact snapshot, published over the metadata channel the droverAccount
+ * and paneModel stamps already ride (DROVE-45, DROVE-47).
+ *
+ * Times are absolute epoch ms rather than pre-computed durations on purpose:
+ * the app ticks its own timers from `startedAt`, so a once-a-second publish is
+ * not what makes the elapsed counters move, and a snapshot that is a few
+ * seconds stale still renders a correct clock.
+ */
+export interface LiveStatus {
+    /** When this snapshot was taken, epoch ms. */
+    at: number
+    /** The last real user prompt, epoch ms. Absent when we never saw one. */
+    turnStartedAt?: number
+    tool?: LiveStatusTool
+    agents?: LiveStatusAgent[]
+    workflows?: LiveStatusWorkflow[]
+}
+
+/** How long an agent transcript may go unwritten and still count as running. */
+const defaultAgentStaleMs = 90_000
+
+/** How long after the newest transcript record the turn still counts as busy. */
+const defaultIdleGraceMs = 10_000
+
+/** The same window after an assistant text block, which is what ends a turn. */
+const defaultSettleGraceMs = 6_000
+
+/** How much of an existing transcript the first read looks at. */
+const defaultSeedBytes = 2 * 1024 * 1024
+
+/** Never carry more than this much of a partial line between reads. */
+const maxCarryBytes = 4 * 1024 * 1024
+
+interface Tail {
+    offset: number
+    carry: string
+}
+
+/**
+ * The bytes appended to a file since the last call, split into whole lines.
+ *
+ * Returns `null` when the file is not there — an agent directory that does not
+ * exist yet is the normal case, not an error. A file that SHRANK is treated as
+ * a new file and re-seeded: a flip carries the transcript into another
+ * account's config dir and Claude Code rewrites its tail, so offsets do not
+ * survive the move (the same reason sessionScanner re-reads from the top).
+ */
+function readNewLines(path: string, tail: Tail, seedBytes: number): string[] | null {
+    let fd: number
+    try {
+        fd = openSync(path, 'r')
+    } catch {
+        return null
+    }
+    try {
+        const size = fstatSync(fd).size
+        if (size < tail.offset) {
+            tail.offset = 0
+            tail.carry = ''
+        }
+        let seeded = false
+        if (tail.offset === 0 && seedBytes > 0 && size > seedBytes) {
+            tail.offset = size - seedBytes
+            seeded = true
+        }
+        if (size <= tail.offset) {
+            return []
+        }
+        const buffer = Buffer.allocUnsafe(size - tail.offset)
+        let read = 0
+        while (read < buffer.length) {
+            const n = readSync(fd, buffer, read, buffer.length - read, tail.offset + read)
+            if (n <= 0) break
+            read += n
+        }
+        tail.offset += read
+        let text = tail.carry + buffer.subarray(0, read).toString('utf8')
+        if (seeded) {
+            // The seek landed mid-line. Drop everything up to the first
+            // newline rather than handing a fragment to JSON.parse.
+            const firstBreak = text.indexOf('\n')
+            text = firstBreak >= 0 ? text.slice(firstBreak + 1) : ''
+        }
+        const lines = text.split('\n')
+        tail.carry = lines.pop() ?? ''
+        if (tail.carry.length > maxCarryBytes) {
+            // A line this long is a file we do not understand. Drop it rather
+            // than grow forever.
+            tail.carry = ''
+        }
+        return lines
+    } catch {
+        return []
+    } finally {
+        closeSync(fd)
+    }
+}
+
+function parseTimestamp(value: unknown): number {
+    if (typeof value === 'number' && Number.isFinite(value)) return value
+    if (typeof value !== 'string') return 0
+    const ms = Date.parse(value)
+    return Number.isFinite(ms) ? ms : 0
+}
+
+/**
+ * The tokens a run has spent, as the terminal counts them.
+ *
+ * input + output + cache creation, and deliberately NOT cache reads. Measured
+ * over five of Clay's agent transcripts, including reads gives 1.8M–19.5M for
+ * a single agent, which is the same context billed back on every turn rather
+ * than work done. Excluding creation as well gives 983–12k, which is too small
+ * to be the "851.9k tokens" the TUI showed for a five-agent workflow. The
+ * middle reading is the one that matches what he was looking at.
+ */
+function countTokens(usage: Record<string, unknown> | null | undefined): number {
+    if (!usage) return 0
+    const n = (key: string): number => {
+        const value = usage[key]
+        return typeof value === 'number' && Number.isFinite(value) ? value : 0
+    }
+    return n('input_tokens') + n('output_tokens') + n('cache_creation_input_tokens')
+}
+
+function usageOf(record: Record<string, unknown>): Record<string, unknown> | null {
+    const message = record.message
+    if (!message || typeof message !== 'object') return null
+    const usage = (message as Record<string, unknown>).usage
+    return usage && typeof usage === 'object' ? usage as Record<string, unknown> : null
+}
+
+/** Trim an argument to something a phone header can hold. */
+function shorten(value: string, max = 64): string {
+    const flat = value.replace(/\s+/g, ' ').trim()
+    return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat
+}
+
+/**
+ * The one argument worth showing beside a tool name.
+ *
+ * Ordered by what the terminal itself puts on the line: a Bash call is its
+ * description or its command, a file tool is its path, a Task is its
+ * description. Anything else falls back to the first short string input, which
+ * covers MCP tools nothing here has ever heard of.
+ */
+export function describeToolArg(name: string, input: unknown): string | undefined {
+    if (!input || typeof input !== 'object') return undefined
+    const fields = input as Record<string, unknown>
+    const pick = (key: string): string | undefined => {
+        const value = fields[key]
+        return typeof value === 'string' && value.trim().length > 0 ? shorten(value) : undefined
+    }
+    if (name === 'Bash' || name === 'BashOutput') {
+        return pick('description') ?? pick('command')
+    }
+    if (name === 'Task' || name === 'Agent') {
+        return pick('description') ?? pick('subagent_type')
+    }
+    if (name === 'Workflow') {
+        const script = pick('scriptPath')
+        return script ? workflowNameFromScript(script) : pick('args')
+    }
+    for (const key of ['file_path', 'path', 'pattern', 'query', 'url', 'description', 'command', 'prompt']) {
+        const value = pick(key)
+        if (value) return value
+    }
+    for (const value of Object.values(fields)) {
+        if (typeof value === 'string' && value.trim().length > 0 && value.length <= 200) {
+            return shorten(value)
+        }
+    }
+    return undefined
+}
+
+/**
+ * `…/scripts/drover-close-out-wf_f7b09017-045.js` -> `drover-close-out`.
+ *
+ * The script filename is the only place a RUNNING workflow's name is written:
+ * `workflows/wf_<id>.json` carries `workflowName`, but every copy on this
+ * machine is in a terminal status, so it appears too late to name a run in
+ * progress.
+ */
+export function workflowNameFromScript(scriptPath: string): string {
+    const file = basename(scriptPath).replace(/\.[cm]?js$/, '')
+    const cut = file.lastIndexOf('-wf_')
+    return cut > 0 ? file.slice(0, cut) : file
+}
+
+/** A `user` record that is a real prompt rather than a tool result. */
+function isPrompt(record: Record<string, unknown>): boolean {
+    if (record.type !== 'user') return false
+    if (record.isSidechain === true) return false
+    const message = record.message
+    if (!message || typeof message !== 'object') return false
+    const content = (message as Record<string, unknown>).content
+    if (typeof content === 'string') return true
+    if (!Array.isArray(content)) return false
+    return !content.some((block) => (block as Record<string, unknown> | null)?.type === 'tool_result')
+}
+
+type RecordKind = 'prompt' | 'tool-result' | 'assistant-text' | 'other'
+
+function classify(record: Record<string, unknown>): RecordKind {
+    if (isPrompt(record)) return 'prompt'
+    const message = record.message
+    const content = message && typeof message === 'object'
+        ? (message as Record<string, unknown>).content
+        : undefined
+    if (record.type === 'user' && Array.isArray(content)) {
+        return content.some((b) => (b as Record<string, unknown> | null)?.type === 'tool_result')
+            ? 'tool-result'
+            : 'other'
+    }
+    if (record.type === 'assistant' && Array.isArray(content)) {
+        return content.some((b) => (b as Record<string, unknown> | null)?.type === 'text')
+            ? 'assistant-text'
+            : 'other'
+    }
+    return 'other'
+}
+
+interface AgentState {
+    tail: Tail
+    startedAt: number
+    tokens: number
+    label?: string
+    toolId?: string
+    /** mtime of the last stat, so a file nothing writes drops out. */
+    mtimeMs: number
+}
+
+export interface LiveStatusReader {
+    /** The snapshot as of `now`, or null when the session is idle. */
+    read: (now?: number) => LiveStatus | null
+    /** Follow the session into another account's config dir after a flip. */
+    setProjectDir: (projectDir: string) => void
+    setSessionId: (sessionId: string | null) => void
+}
+
+export function createLiveStatusReader(opts: {
+    projectDir: string
+    sessionId: string | null
+    /** The process's own "an API call is in flight" flag; see the file header. */
+    isThinking?: () => boolean
+    agentStaleMs?: number
+    idleGraceMs?: number
+    settleGraceMs?: number
+    seedBytes?: number
+}): LiveStatusReader {
+    let projectDir = opts.projectDir
+    let sessionId = opts.sessionId
+    const agentStaleMs = opts.agentStaleMs ?? defaultAgentStaleMs
+    const idleGraceMs = opts.idleGraceMs ?? defaultIdleGraceMs
+    const settleGraceMs = opts.settleGraceMs ?? defaultSettleGraceMs
+    const seedBytes = opts.seedBytes ?? defaultSeedBytes
+
+    let transcript: Tail = { offset: 0, carry: '' }
+    let openTools = new Map<string, LiveStatusTool>()
+    let turnStartedAt = 0
+    let lastRecordAt = 0
+    let lastKind: RecordKind = 'other'
+    let agents = new Map<string, AgentState>()
+
+    const resetTranscript = () => {
+        transcript = { offset: 0, carry: '' }
+        openTools = new Map()
+        turnStartedAt = 0
+        lastRecordAt = 0
+        lastKind = 'other'
+        agents = new Map()
+    }
+
+    /** Fold the transcript's new lines into the open-tool set and turn state. */
+    const pumpTranscript = (): void => {
+        if (!sessionId) return
+        const lines = readNewLines(join(projectDir, `${sessionId}.jsonl`), transcript, seedBytes)
+        if (!lines) return
+        for (const line of lines) {
+            if (line.length === 0) continue
+            let record: Record<string, unknown>
+            try {
+                record = JSON.parse(line) as Record<string, unknown>
+            } catch {
+                continue
+            }
+            // A subagent's own records are written into the parent transcript
+            // too. They are the AGENT's tools, not the pane's, and counting
+            // them here is what would make the header claim the main turn is
+            // running six different things at once.
+            if (record.isSidechain === true) continue
+            const at = parseTimestamp(record.timestamp)
+            if (at > 0) lastRecordAt = Math.max(lastRecordAt, at)
+
+            const kind = classify(record)
+            if (kind !== 'other') lastKind = kind
+            if (kind === 'prompt' && at > 0) {
+                turnStartedAt = at
+            }
+
+            const message = record.message
+            const content = message && typeof message === 'object'
+                ? (message as Record<string, unknown>).content
+                : undefined
+            // Only real conversation records get a say in what is open. The
+            // transcript is full of others — attachment, system, cost-state,
+            // queue-operation, bridge-session — and they interleave with a
+            // running tool, so treating them as progress would clear a tool
+            // that is still going.
+            const isConversation = record.type === 'user' || record.type === 'assistant'
+            if (!isConversation || (typeof content !== 'string' && !Array.isArray(content))) continue
+
+            // Does this record BELONG to the batch of tools we think is open?
+            //
+            // While a tool runs, Claude Code writes nothing else to the parent
+            // transcript — it is blocked on the result — so a conversation
+            // record that is neither another tool_use nor a result for one of
+            // ours means the turn moved on and anything still open will never
+            // be answered. That is not a hypothetical: Clay's live transcript
+            // holds a `tool_use` for ToolSearch with no `tool_result` anywhere
+            // in the file, and without this the app would have shown it as the
+            // running tool with a timer counting up for the rest of the day.
+            let belongs = false
+            if (Array.isArray(content)) {
+                for (const raw of content) {
+                    const block = raw as Record<string, unknown> | null
+                    if (!block || typeof block !== 'object') continue
+                    if (block.type === 'tool_use' && typeof block.id === 'string') {
+                        openTools.set(block.id, {
+                            id: block.id,
+                            name: typeof block.name === 'string' ? block.name : 'tool',
+                            arg: describeToolArg(typeof block.name === 'string' ? block.name : '', block.input),
+                            startedAt: at || Date.now(),
+                        })
+                        belongs = true
+                    } else if (block.type === 'tool_result' && typeof block.tool_use_id === 'string') {
+                        if (openTools.delete(block.tool_use_id)) {
+                            // A sibling of the batch reporting in. The rest of
+                            // a parallel fan-out is still running.
+                            belongs = true
+                        }
+                    }
+                }
+            }
+            if (!belongs) {
+                openTools.clear()
+            }
+        }
+    }
+
+    /** Read one agent's meta.json — the label and the tool_use that spawned it. */
+    const readAgentMeta = (path: string): { label?: string, toolId?: string } => {
+        try {
+            const meta = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
+            const description = typeof meta.description === 'string' ? meta.description.trim() : ''
+            const agentType = typeof meta.agentType === 'string' ? meta.agentType.trim() : ''
+            return {
+                label: description || agentType || undefined,
+                toolId: typeof meta.toolUseId === 'string' ? meta.toolUseId : undefined,
+            }
+        } catch {
+            return {}
+        }
+    }
+
+    /**
+     * Tail every agent transcript in a directory and report the live ones.
+     *
+     * `dir` is either the session's own `subagents/` (agents the pane launched
+     * directly) or one workflow's `wf_<id>/`. Keyed by the full path so the two
+     * never collide — a workflow agent and a direct agent can share an id
+     * across sessions.
+     */
+    const pumpAgents = (dir: string, now: number): LiveStatusAgent[] => {
+        let entries: string[]
+        try {
+            entries = readdirSync(dir)
+        } catch {
+            return []
+        }
+        const out: LiveStatusAgent[] = []
+        for (const entry of entries) {
+            if (!entry.startsWith('agent-') || !entry.endsWith('.jsonl')) continue
+            const path = join(dir, entry)
+            const id = entry.slice('agent-'.length, -'.jsonl'.length)
+            let mtimeMs = 0
+            try {
+                mtimeMs = statSync(path).mtimeMs
+            } catch {
+                continue
+            }
+            // Only files that moved recently are worth reading at all. This is
+            // the whole cost control: a session directory can hold hundreds of
+            // finished agent transcripts and none of them will ever change
+            // again.
+            if (now - mtimeMs > agentStaleMs) {
+                agents.delete(path)
+                continue
+            }
+            let state = agents.get(path)
+            if (!state) {
+                const meta = readAgentMeta(join(dir, `agent-${id}.meta.json`))
+                state = { tail: { offset: 0, carry: '' }, startedAt: 0, tokens: 0, mtimeMs, ...meta }
+                agents.set(path, state)
+            }
+            state.mtimeMs = mtimeMs
+            // Whole file, not a seeded tail: tokens are cumulative and the
+            // start time is the first record, so there is nothing to skip.
+            const lines = readNewLines(path, state.tail, 0)
+            if (lines) {
+                for (const line of lines) {
+                    if (line.length === 0) continue
+                    let record: Record<string, unknown>
+                    try {
+                        record = JSON.parse(line) as Record<string, unknown>
+                    } catch {
+                        continue
+                    }
+                    if (state.startedAt === 0) {
+                        state.startedAt = parseTimestamp(record.timestamp)
+                    }
+                    state.tokens += countTokens(usageOf(record))
+                }
+            }
+            out.push({
+                id,
+                label: state.label ?? id,
+                startedAt: state.startedAt || mtimeMs,
+                ...(state.tokens > 0 ? { tokens: state.tokens } : {}),
+                ...(state.toolId ? { toolId: state.toolId } : {}),
+            })
+        }
+        return out
+    }
+
+    /**
+     * Workflows with a journal that has more starts than results.
+     *
+     * `total` is what the workflow has LAUNCHED, not what it will eventually
+     * launch: the journal is append-only and nothing on disk states the plan.
+     * The terminal's "3/5 agents done" is the same reading.
+     */
+    const readWorkflows = (sessionDir: string, now: number): LiveStatusWorkflow[] => {
+        const root = join(sessionDir, 'subagents', 'workflows')
+        let entries: string[]
+        try {
+            entries = readdirSync(root)
+        } catch {
+            return []
+        }
+        const out: LiveStatusWorkflow[] = []
+        for (const id of entries) {
+            if (!id.startsWith('wf_')) continue
+            const dir = join(root, id)
+            const journal = join(dir, 'journal.jsonl')
+            let text: string
+            let startedAt = 0
+            try {
+                const st = statSync(journal)
+                if (now - st.mtimeMs > agentStaleMs) continue
+                startedAt = st.birthtimeMs || st.mtimeMs
+                text = readFileSync(journal, 'utf8')
+            } catch {
+                continue
+            }
+            const started = new Set<string>()
+            const done = new Set<string>()
+            for (const line of text.split('\n')) {
+                if (line.length === 0) continue
+                let record: Record<string, unknown>
+                try {
+                    record = JSON.parse(line) as Record<string, unknown>
+                } catch {
+                    continue
+                }
+                const key = typeof record.key === 'string' ? record.key : null
+                if (!key) continue
+                if (record.type === 'started') started.add(key)
+                else if (record.type === 'result') done.add(key)
+            }
+            if (started.size === 0) continue
+            const running = pumpAgents(dir, now).sort((a, b) => a.startedAt - b.startedAt)
+            // Every launched agent has reported AND none is writing: the run
+            // is between phases or over. Either way there is nothing to show,
+            // and the journal's own freshness is not enough to tell them
+            // apart — a finished workflow's journal was written seconds ago
+            // too.
+            if (done.size >= started.size && running.length === 0) continue
+            const tokens = running.reduce((sum, a) => sum + (a.tokens ?? 0), 0)
+            out.push({
+                id,
+                name: workflowNameOf(sessionDir, id),
+                // The phase Claude Code shows for a running workflow is the
+                // work in front of it, and the only live statement of that is
+                // the label on the agent it is waiting for. The newest one,
+                // because a fan-out leaves several running at once and the one
+                // it started last is the one it has just moved on to.
+                ...(running.length > 0 ? { phase: running[running.length - 1].label } : {}),
+                done: done.size,
+                total: started.size,
+                startedAt: running.reduce((min, a) => (a.startedAt > 0 && a.startedAt < min ? a.startedAt : min), startedAt),
+                ...(tokens > 0 ? { tokens } : {}),
+            })
+        }
+        return out
+    }
+
+    /** The workflow's name, from its run record when it exists and its script otherwise. */
+    const workflowNameOf = (sessionDir: string, id: string): string => {
+        try {
+            const run = JSON.parse(readFileSync(join(sessionDir, 'workflows', `${id}.json`), 'utf8')) as Record<string, unknown>
+            if (typeof run.workflowName === 'string' && run.workflowName.length > 0) {
+                return run.workflowName
+            }
+        } catch {
+            // Expected while the run is still going — see the file header.
+        }
+        try {
+            for (const file of readdirSync(join(sessionDir, 'workflows', 'scripts'))) {
+                if (file.includes(`-${id}.`)) return workflowNameFromScript(file)
+            }
+        } catch {
+            // No scripts directory: an older Claude Code, or a workflow that
+            // never wrote one. The id is still a name.
+        }
+        return id
+    }
+
+    return {
+        read: (now = Date.now()): LiveStatus | null => {
+            if (!sessionId) return null
+            pumpTranscript()
+            const sessionDir = join(projectDir, sessionId)
+            const agentRows = pumpAgents(join(sessionDir, 'subagents'), now)
+            const workflows = readWorkflows(sessionDir, now)
+            const tool = openTools.size > 0 ? Array.from(openTools.values()).pop() : undefined
+
+            const moving = agentRows.length > 0 || workflows.length > 0 || !!tool
+            const thinking = opts.isThinking?.() === true
+            // How long the transcript may stay quiet before the turn is over.
+            //
+            // `assistant-text` is the only record kind that can END a turn — a
+            // tool result means the model is about to be called again, a
+            // prompt means it just was — so it gets the shorter window. It
+            // still gets one: an assistant text block and the tool_use that
+            // followed it were measured 4.1s apart in Clay's session, and
+            // treating text as an immediate end flickers the strip off and
+            // back on in the middle of a turn.
+            const quietMs = lastKind === 'assistant-text' ? settleGraceMs : idleGraceMs
+            const quiet = lastRecordAt === 0 || now - lastRecordAt > quietMs
+            if (!moving && !thinking && quiet) {
+                return null
+            }
+
+            return {
+                at: now,
+                ...(turnStartedAt > 0 ? { turnStartedAt } : {}),
+                ...(tool ? { tool } : {}),
+                ...(agentRows.length > 0
+                    ? { agents: agentRows.sort((a, b) => a.startedAt - b.startedAt) }
+                    : {}),
+                ...(workflows.length > 0
+                    ? { workflows: workflows.sort((a, b) => a.startedAt - b.startedAt) }
+                    : {}),
+            }
+        },
+        setProjectDir: (next: string) => {
+            if (next === projectDir) return
+            projectDir = next
+            resetTranscript()
+        },
+        setSessionId: (next: string | null) => {
+            if (next === sessionId) return
+            sessionId = next
+            resetTranscript()
+        },
+    }
+}
+
+/**
+ * Writes `metadata.liveStatus` while something is running, and nothing at all
+ * while the session is idle.
+ *
+ * A metadata write is not free — `updateMetadata` encrypts the whole record
+ * and waits on a socket ack, serialized behind a lock — so three filters, not
+ * one:
+ *
+ *  - DEDUPE. `at` is excluded from the comparison, so a snapshot where nothing
+ *    actually moved is never published. That is what makes an idle or slow
+ *    session cost nothing at all.
+ *  - THROTTLE. At most one write per `minIntervalMs` (1s) when the WORK
+ *    changed. The app does not need more: every duration on screen is computed
+ *    from a `startedAt` that does not change, so its clocks tick between
+ *    publishes and a long tool call needs no writes at all.
+ *  - A SLOWER LANE FOR TOKEN COUNTS (`slowIntervalMs`, 2s). Token totals move
+ *    on every response of every running agent, so with six agents out they are
+ *    the only thing changing and they would pin the fast lane at one write a
+ *    second for the whole fan-out. Nothing on screen jumps because of it: the
+ *    counters are read at a glance and the elapsed clocks beside them still
+ *    tick once a second locally.
+ *
+ * The busy -> idle edge publishes `null` once, immediately, skipping both
+ * throttles. That single write is what makes the strip disappear; without it
+ * the phone keeps a finished turn's timer running forever, which is the same
+ * stale reading BASED-134's activity block had to solve at its own drop to
+ * zero.
+ */
+export class LiveStatusPublisher {
+    private readonly publish: (status: LiveStatus | null) => void
+    private readonly minIntervalMs: number
+    private readonly slowIntervalMs: number
+    private readonly now: () => number
+    /**
+     * Negative infinity, not 0: the FIRST snapshot has to go out at once, and
+     * a zero here makes the throttle measure it against the epoch, which in a
+     * process whose clock is mocked from 0 means the first real reading is
+     * held for a second.
+     */
+    private lastPublishedAt = Number.NEGATIVE_INFINITY
+    private lastKey: string | null = null
+    private lastShapeKey: string | null = null
+    private timer: ReturnType<typeof setTimeout> | null = null
+    private pending: LiveStatus | null = null
+
+    constructor(
+        publish: (status: LiveStatus | null) => void,
+        opts?: { minIntervalMs?: number, slowIntervalMs?: number, now?: () => number },
+    ) {
+        this.publish = publish
+        this.minIntervalMs = opts?.minIntervalMs ?? 1000
+        this.slowIntervalMs = opts?.slowIntervalMs ?? 2000
+        this.now = opts?.now ?? (() => Date.now())
+    }
+
+    /** Everything but `at`: the whole snapshot, for the dedupe. */
+    private static key(status: LiveStatus): string {
+        return JSON.stringify({ ...status, at: 0 })
+    }
+
+    /** The same thing with the token counts flattened out, for the fast lane. */
+    private static shapeKey(status: LiveStatus): string {
+        return JSON.stringify({
+            ...status,
+            at: 0,
+            agents: status.agents?.map((agent) => ({ ...agent, tokens: 0 })),
+            workflows: status.workflows?.map((workflow) => ({ ...workflow, tokens: 0 })),
+        })
+    }
+
+    sync(status: LiveStatus | null): void {
+        const key = status ? LiveStatusPublisher.key(status) : null
+        if (key === this.lastKey) {
+            this.pending = null
+            this.clearTimer()
+            return
+        }
+        if (key === null || !status) {
+            // Going idle. Immediately, and out of turn.
+            this.clearTimer()
+            this.pending = null
+            this.lastKey = null
+            this.lastShapeKey = null
+            this.lastPublishedAt = this.now()
+            this.publish(null)
+            return
+        }
+        this.pending = status
+        const shapeChanged = LiveStatusPublisher.shapeKey(status) !== this.lastShapeKey
+        const interval = shapeChanged ? this.minIntervalMs : this.slowIntervalMs
+        const wait = interval - (this.now() - this.lastPublishedAt)
+        if (wait <= 0) {
+            this.flush()
+            return
+        }
+        // A pending timer is not rescheduled when the work CHANGES under it.
+        // It was set for the longer wait at worst, and re-arming on every read
+        // is how a snapshot that keeps changing never gets published at all.
+        if (this.timer) return
+        this.timer = setTimeout(() => {
+            this.timer = null
+            this.flush()
+        }, wait)
+        this.timer.unref?.()
+    }
+
+    flush(): void {
+        this.clearTimer()
+        const next = this.pending
+        this.pending = null
+        if (!next) return
+        const key = LiveStatusPublisher.key(next)
+        if (key === this.lastKey) return
+        this.lastKey = key
+        this.lastShapeKey = LiveStatusPublisher.shapeKey(next)
+        this.lastPublishedAt = this.now()
+        this.publish(next)
+    }
+
+    dispose(): void {
+        this.clearTimer()
+        this.pending = null
+    }
+
+    private clearTimer(): void {
+        if (this.timer) {
+            clearTimeout(this.timer)
+            this.timer = null
+        }
+    }
+}

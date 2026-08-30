@@ -294,6 +294,34 @@ describe('AgentGoalStatusSchema', () => {
         expect(state.agentGoalStatus?.status).toBe('active');
     });
 
+    it('keeps the live task tree and degrades a malformed one to absent (DROVE-54)', () => {
+        const base = { path: '/tmp/project', host: 'local-machine' };
+        const good = MetadataSchema.parse({
+            ...base,
+            liveStatus: {
+                at: 1_000,
+                turnStartedAt: 500,
+                tool: { id: 'toolu_1', name: 'Bash', arg: 'Run the unit suite', startedAt: 900 },
+                agents: [{ id: 'a1', label: 'Un-drop thinking', startedAt: 700, tokens: 274_622, toolId: 'toolu_a' }],
+                workflows: [{ id: 'wf_1', name: 'drover-relaunch', phase: 'Impl', done: 3, total: 5, startedAt: 600 }],
+                // A fact a newer CLI added and this build has never heard of.
+                queueDepth: 4,
+            },
+        });
+        expect(good.liveStatus?.tool?.name).toBe('Bash');
+        expect(good.liveStatus?.agents?.[0].tokens).toBe(274_622);
+        expect(good.liveStatus?.workflows?.[0].done).toBe(3);
+        expect((good.liveStatus as any).queueDepth).toBe(4);
+
+        // The explicit "the turn ended" write.
+        expect(MetadataSchema.parse({ ...base, liveStatus: null }).liveStatus).toBeNull();
+
+        // A malformed block must cost the strip, never the whole record.
+        const malformed = MetadataSchema.parse({ ...base, liveStatus: { at: 'soon' } });
+        expect(malformed.path).toBe('/tmp/project');
+        expect(malformed.liveStatus).toBeUndefined();
+    });
+
     it('preserves usage limits in agent state and degrades malformed snapshots', () => {
         const state = AgentStateSchema.parse({
             controlledByUser: true,

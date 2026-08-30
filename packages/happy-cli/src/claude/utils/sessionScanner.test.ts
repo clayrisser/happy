@@ -75,6 +75,65 @@ describe('sessionScanner', () => {
     expect(titles).toEqual(['zap', 'zing'])
   })
 
+  it('publishes the live task tree while a tool runs and clears it when the turn ends (DROVE-54)', async () => {
+    // The wiring, end to end through the scanner: the app said "online" while
+    // the terminal showed a running command with its own timer, and the
+    // scanner is what knows which transcript to read.
+    const published: Array<unknown> = []
+    scanner = await createSessionScanner({
+      sessionId: null,
+      workingDirectory: testDir,
+      onMessage: (msg) => collectedMessages.push(msg),
+      onLiveStatus: (status) => published.push(status),
+      liveStatusIntervalMs: 20,
+    })
+
+    const sessionId = '11111111-2222-3333-4444-555555555555'
+    const file = join(projectDir, `${sessionId}.jsonl`)
+    const now = Date.now()
+    const iso = (ms: number) => new Date(ms).toISOString()
+    await writeFile(file,
+      JSON.stringify({
+        type: 'user', isSidechain: false, uuid: 'u1', timestamp: iso(now - 60_000),
+        message: { role: 'user', content: 'run the suite' },
+      }) + '\n' +
+      JSON.stringify({
+        type: 'assistant', isSidechain: false, uuid: 'a1', timestamp: iso(now - 50_000),
+        message: {
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: 'toolu_1', name: 'Bash', input: { command: 'pnpm test', description: 'Run the unit suite' } }],
+        },
+      }) + '\n')
+    scanner.onNewSession(sessionId)
+    await new Promise(resolve => setTimeout(resolve, 200))
+
+    const running = published.at(-1) as { tool?: { name: string, arg?: string }, turnStartedAt?: number } | null
+    expect(running?.tool?.name).toBe('Bash')
+    expect(running?.tool?.arg).toBe('Run the unit suite')
+    expect(running?.turnStartedAt).toBe(now - 60_000)
+
+    // The result lands and the assistant says its piece: the turn is over and
+    // the strip has to go, or the phone runs that timer forever. The
+    // timestamps run forward from the prompt because the settle window is
+    // measured against the NEWEST record — see liveStatus.ts.
+    await appendFile(file,
+      JSON.stringify({
+        type: 'user', isSidechain: false, uuid: 'u2', timestamp: iso(now - 40_000),
+        message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'ok' }] },
+      }) + '\n' +
+      JSON.stringify({
+        type: 'assistant', isSidechain: false, uuid: 'a2', timestamp: iso(now - 39_000),
+        message: { role: 'assistant', content: [{ type: 'text', text: 'Suite is green.' }] },
+      }) + '\n')
+    await new Promise(resolve => setTimeout(resolve, 200))
+    expect(published.at(-1)).toBeNull()
+
+    // ...and then nothing more, because an idle session publishes nothing.
+    const afterIdle = published.length
+    await new Promise(resolve => setTimeout(resolve, 200))
+    expect(published.length).toBe(afterIdle)
+  })
+
   it('seeds the title from a transcript it pre-marks, because a title is a name and not a replay', async () => {
     // DROVE-44, from the phone. `drover --resume` opens Claude Code's picker,
     // so the transcript id only exists once the SessionStart hook fires — and

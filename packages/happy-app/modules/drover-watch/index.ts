@@ -108,6 +108,20 @@ export interface DroverSession {
     path?: string;
     /** Subagents running right now; omitted when the session never said. */
     subagents?: number;
+    /**
+     * One line saying what the session is DOING right now (DROVE-54) — the
+     * running tool, the workflow and its progress, how many agents are out.
+     * Omitted while the session is idle, which is what makes it disappear.
+     *
+     * Carries no elapsed time on purpose. The snapshot reaches the watch
+     * through WatchConnectivity's application context, delivered
+     * opportunistically and heartbeated only once a minute, so a duration
+     * baked in here would be up to a minute wrong. `statusSince` travels
+     * beside it and the wrist counts up from that itself.
+     */
+    status?: string;
+    /** ISO-8601 start of the turn `status` describes. */
+    statusSince?: string;
 }
 
 export interface DroverSnapshot {

@@ -3,6 +3,7 @@ import type { Update, UpdateMachineBody } from '@slopus/happy-wire';
 import { UsageSchema } from '@/claude/types'
 import type { DroverUsage } from '@/drover/flip/usage';
 import type { DroverPolicy } from '@/drover/flip/policy';
+import type { LiveStatus } from '@/claude/utils/liveStatus';
 import type { SandboxConfig } from '@/persistence'
 
 export {
@@ -396,6 +397,16 @@ export type Metadata = {
    * absent until the transcript has said one way or the other.
    */
   paneRemoteControl?: boolean | null,
+  /**
+   * What the pane is doing RIGHT NOW (DROVE-54): the running tool, the
+   * background agents and workflows, and when the turn started.
+   *
+   * Rides the same metadata channel as the two stamps above, throttled to at
+   * most one write a second and absent entirely while the session is idle.
+   * Times are absolute epoch ms so the app ticks its own clocks — see
+   * claude/utils/liveStatus.ts. `null` is the explicit "the turn ended" write.
+   */
+  liveStatus?: LiveStatus | null,
   /**
    * The per-session picks any client made (#1492). Written by the app's
    * composer, and until DROVE-45 read only by the SDK path, which hands them to
