@@ -7,6 +7,9 @@ import { launchFailureMessage } from "./utils/launchFailureMessage";
 import { ambientDataDir } from "@/drover/flip/accounts";
 import { parseFlipCommand } from "@/drover/flip/controller";
 import { injectIntoPane } from "./utils/paneInject";
+import { findInbox, sendToInbox } from "./utils/inboxSocket";
+import type { QueueItem } from "@/utils/MessageQueue2";
+import type { EnhancedMode } from "./loop";
 import { InFlightTracker, describeInFlight } from "@/drover/flip/inflight";
 // The flip itself lives in @/drover/flip/apply because BOTH launchers carry
 // one out now (BASED-127). It used to be defined here, which is precisely why
@@ -187,12 +190,12 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
          * fine and then never reported. Silently.
          *
          * So with anything in flight we take the DEFERRED path the launcher
-         * already had and never used: `switchRequested` alone is enough, and
-         * the loop below turns it into `{type:'switch'}` when the child exits
-         * of its own accord (:380-382 and :429-433). The phone's message is
-         * already in the queue by the time we get here — MessageQueue2.push
-         * enqueues before it calls this handler — so nothing is dropped, it is
-         * served the moment the child is gone.
+         * already had and never used: the phone's message stays on the queue —
+         * MessageQueue2.push enqueues before it calls the handler — and
+         * exitReasonAfterChild turns that into `{type:'switch'}` when the child
+         * exits of its own accord. Nothing is dropped; it is served the moment
+         * the child is gone. Only reachable for a session with no pane, since a
+         * pane session delivers into the pane instead of switching.
          *
          * The cost is honest and worth naming: the switch does not happen
          * until claude exits. Two ways out, and the announcement says both —
@@ -206,7 +209,15 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
          */
         async function doSwitch(explicit = false) {
             logger.debug('[local]: doSwitch');
-            switchRequested = true;
+            // Only an explicit press marks this session as wanting remote
+            // (BASED-141). This flag is never cleared anywhere, and doSwitch
+            // used to set it before it had even decided whether to abort — so
+            // one undeliverable phone message, or one switch deferred behind
+            // running subagents, turned every later exit of that session into
+            // a takeover. An implicit switch still works: for a session with
+            // no pane the queued message it is switching FOR is what the exit
+            // path reads.
+            if (explicit) switchRequested = true;
 
             const busy = inflight.snapshot();
             if (busy.count > 0) {
@@ -280,7 +291,98 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
         // stays a pure decision-maker with no idea a transcript exists.
         session.flip?.setInFlightProbe(() => inflight.snapshot());
 
-        session.queue.setOnMessage((message: string, _mode) => {
+        // Messages this launcher accepted but could not hand over yet. They
+        // stay ON the queue until the spawn that serves them actually starts,
+        // so nothing is dropped in between; the queue no longer means "switch"
+        // for a pane session, so leaving them there is free.
+        let heldForNextSpawn: QueueItem<EnhancedMode>[] = [];
+
+        /**
+         * Hold a message for the next child and tell the phone it waited.
+         *
+         * The pane IS the session, so there is nowhere to switch to when the
+         * message cannot go in right now — between spawns, during a flip
+         * relaunch, or with the pane parked at a shell. The flip path already
+         * carries a prompt across a relaunch this way.
+         */
+        function holdForNextSpawn(message: string, item?: QueueItem<EnhancedMode>) {
+            session.pendingInitialPrompt = session.pendingInitialPrompt
+                ? `${session.pendingInitialPrompt}\n${message}`
+                : message;
+            if (item) heldForNextSpawn.push(item);
+            logger.debug('[local]: no live child to take the message — held for the next spawn');
+            session.client.sendSessionEvent({
+                type: 'message',
+                message:
+                    'Cattle Drover: nothing is listening in the terminal right now, so your '
+                    + 'message is held and goes in the moment Claude is back.',
+            });
+        }
+
+        /**
+         * Hand `message` to the Claude running in our pane.
+         *
+         * Channel 0 is Claude's own inbox socket: it queues the message inside
+         * Claude and serves it between tool calls, so it is safe mid-turn and
+         * cannot merge with a half-typed line or answer an open dialog. The
+         * pane paste is the fallback for a Claude too old to have a socket, or
+         * one whose registry record has gone stale.
+         */
+        async function deliverToChild(message: string): Promise<boolean> {
+            if (!tmuxPane) return false;
+            try {
+                const configDir = session.claudeEnvVars?.CLAUDE_CONFIG_DIR;
+                const inbox = await findInbox(configDir || undefined, session.sessionId, tmuxPane);
+                if (inbox) {
+                    const outcome = await sendToInbox(inbox, message, inbox.sessionId);
+                    if (outcome === 'ok') {
+                        logger.debug('[local]: delivered to the inbox socket');
+                        return true;
+                    }
+                    logger.debug(`[local]: inbox socket ${outcome} — falling back to the pane`);
+                }
+            } catch (err) {
+                // Reading the registry must never cost us the message.
+                logger.debug('[local]: inbox lookup failed', err);
+            }
+            return injectIntoPane(tmuxPane, message);
+        }
+
+        async function deliverToPaneSession(message: string, item?: QueueItem<EnhancedMode>) {
+            if (childAlive && await deliverToChild(message)) {
+                // Served. Take it back off the queue, or the launcher will
+                // read it later as an unanswered message (BASED-141) and the
+                // remote launcher would replay it as a fresh turn.
+                if (item) session.queue.remove(item);
+                return;
+            }
+            holdForNextSpawn(message, item);
+        }
+
+        /**
+         * What a dead child means for the session.
+         *
+         * A pane session has nowhere to switch TO: the terminal is the session,
+         * and remote mode would spawn a second, headless Claude beside the one
+         * Clay is looking at. So the child exiting means the session is over,
+         * whatever is left on the queue. Only a session with no pane — a
+         * daemon-spawned one — can be handed to remote mode, and there the
+         * queue is exactly the reason to do it.
+         */
+        function exitReasonAfterChild(code: number): LauncherResult {
+            const pending = session.queue.size();
+            if (tmuxPane) {
+                if (pending > 0) {
+                    logger.debug(`[local]: pane session exiting with ${pending} undelivered message(s) queued`);
+                }
+                return { type: 'exit', code };
+            }
+            return (switchRequested || pending > 0)
+                ? { type: 'switch' }
+                : { type: 'exit', code };
+        }
+
+        session.queue.setOnMessage((message: string, _mode, item) => {
             // `/flip` from the app is a command to this launcher, not a turn
             // for Claude — so it is handled here and never forwarded. It is
             // also the only trigger that needs no app changes at all, which
@@ -290,35 +392,33 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
                 session.flip.request(flipCommand);
                 return;
             }
-            // Cattle Drover (BASED-113): if this session is a live Claude in a
-            // tmux pane, type the phone's message straight into that pane
-            // instead of switching to remote mode. The pane you are watching IS
-            // the session — same `$TMUX_PANE` the flip keys use — so the
-            // message lands as if typed at the desk, no takeover, no new
-            // session, and whatever is running (subagents included) stays on
-            // screen. injectIntoPane declines when the pane is gone or parked at
-            // a shell, and the switch below is the fallback for exactly that and
-            // for sessions with no pane at all.
-            if (tmuxPane && childAlive) {
-                void injectIntoPane(tmuxPane, message).then((delivered) => {
-                    if (!delivered) {
-                        logger.debug('[local]: pane injection declined — switching to remote');
-                        void doSwitch();
-                    }
-                });
+            // Cattle Drover (BASED-113, BASED-141): if this session lives in a
+            // tmux pane, the message goes to the Claude in that pane and the
+            // session never changes mode. The pane you are watching IS the
+            // session, so a takeover would kill the terminal you are looking at
+            // and hide whatever it was doing behind a fresh headless run.
+            // Undeliverable right now means "wait for the next child", not
+            // "switch": see holdForNextSpawn.
+            if (tmuxPane) {
+                void deliverToPaneSession(message, item);
                 return;
             }
-            // Remote messages request control from the app. Stop local Claude
-            // so queued app messages can be picked up by remote mode now —
-            // unless subagents are running, in which case doSwitch holds off
-            // and the queued message waits for the child to exit. Not
-            // `explicit`: typing a message is not a decision to kill them.
+            // No pane: remote mode is the only carrier the app has. Stop local
+            // Claude so the queued message can be picked up now — unless
+            // subagents are running, in which case doSwitch holds off and the
+            // message waits for the child to exit. Not `explicit`: typing a
+            // message is not a decision to kill them.
             void doSwitch();
         });
 
-        // Exit if there are messages in the queue
+        // Messages that arrived before this launcher took over. For a session
+        // with no pane that is a demand for remote mode; for a pane session it
+        // is a note in the log, because the exit path no longer reads it.
         if (session.queue.size() > 0) {
-            return { type: 'switch' };
+            const reason = exitReasonAfterChild(0);
+            if (reason.type === 'switch') {
+                return reason;
+            }
         }
 
         // Handle session start
@@ -339,6 +439,13 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
             try {
                 const initialPrompt = session.pendingInitialPrompt;
                 session.pendingInitialPrompt = undefined;
+                // Anything held for this spawn is in that prompt now, so it
+                // comes off the queue here rather than when it arrived — a
+                // message that never reached a child is one we still owe.
+                if (heldForNextSpawn.length > 0) {
+                    for (const held of heldForNextSpawn) session.queue.remove(held);
+                    heldForNextSpawn = [];
+                }
                 // Fresh child, fresh count. Cleared HERE rather than on exit
                 // so the flip below can still name the agents it stranded, and
                 // so an entry we never managed to resolve cannot jam the gate
@@ -386,8 +493,14 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
                     session,
                     mode: 'local',
                     scanner,
-                    // The next spawn carries it as its opening prompt.
-                    deliverPrompt: (prompt) => { session.pendingInitialPrompt = prompt; },
+                    // The next spawn carries it as its opening prompt —
+                    // appended, because a phone message that arrived while the
+                    // child was down is waiting in exactly the same place.
+                    deliverPrompt: (prompt) => {
+                        session.pendingInitialPrompt = session.pendingInitialPrompt
+                            ? `${session.pendingInitialPrompt}\n${prompt}`
+                            : prompt;
+                    },
                     resetAbort: () => {
                         processAbortController = new AbortController();
                     },
@@ -398,9 +511,7 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
                 // Normal exit
                 if (!exitReason) {
                     session.client.closeClaudeSessionTurn('completed');
-                    exitReason = (switchRequested || session.queue.size() > 0)
-                        ? { type: 'switch' }
-                        : { type: 'exit', code: 0 };
+                    exitReason = exitReasonAfterChild(0);
                     break;
                 }
             } catch (e) {
@@ -440,8 +551,14 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
                     session,
                     mode: 'local',
                     scanner,
-                    // The next spawn carries it as its opening prompt.
-                    deliverPrompt: (prompt) => { session.pendingInitialPrompt = prompt; },
+                    // The next spawn carries it as its opening prompt —
+                    // appended, because a phone message that arrived while the
+                    // child was down is waiting in exactly the same place.
+                    deliverPrompt: (prompt) => {
+                        session.pendingInitialPrompt = session.pendingInitialPrompt
+                            ? `${session.pendingInitialPrompt}\n${prompt}`
+                            : prompt;
+                    },
                     resetAbort: () => {
                         processAbortController = new AbortController();
                     },
@@ -454,13 +571,8 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
                     if (exitReason) {
                         break; // preserve existing exit reason (e.g. switch intent) — SIGTERM is expected
                     }
-                    if (switchRequested || session.queue.size() > 0) {
-                        session.client.closeClaudeSessionTurn('failed');
-                        exitReason = { type: 'switch' };
-                        break;
-                    }
                     session.client.closeClaudeSessionTurn('failed');
-                    exitReason = { type: 'exit', code: e.exitCode };
+                    exitReason = exitReasonAfterChild(e.exitCode);
                     break;
                 }
                 if (!exitReason) {
