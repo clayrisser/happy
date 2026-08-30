@@ -13,12 +13,32 @@
  * BY CLAUDE and served between tool calls, so it is safe mid-turn, cannot merge
  * with a draft and cannot answer a dialog. It is deprivileged — it arrives as a
  * peer note rather than as the owner, so a slash command is text — which is why
- * the pane stays as the fallback rather than being deleted.
+ * the pane stays as the carrier for slash commands.
  *
  * Wire format copied from cattle-drover `engine/sender.js` socketSend, which is
  * the proven implementation: newline-delimited JSON, auth line first.
  *
  * The token is read, held for one write and never logged.
+ *
+ * DROVE-49: the body goes on the wire WRAPPED in `<cross-session-message>`,
+ * because that is what Claude Code's own peer sender does and its TUI renders
+ * the wrapped shape completely differently. Measured against 2.1.251:
+ *
+ *   uds handler (`Ye`)     hardcodes `origin:{kind:"peer"}`, `isMeta:true`,
+ *                          `skipSlashCommands:true`. No field on the wire
+ *                          changes any of the three.
+ *   preamble (`jOe`)       every peer-origin message is rewritten to
+ *                          `Another Claude session sent a message:\n<body>\n\n`
+ *                          plus the "permission laundering" paragraph.
+ *   renderer (`z`, exported as UserCrossSessionMessage) strips that header,
+ *                          strips the trailing paragraph when it matches the
+ *                          known set, and draws `@ <from-name>` with the body
+ *                          indented under it — but ONLY when the body is
+ *                          wrapped. Unwrapped, the paragraph is printed.
+ *
+ * So an unwrapped write is why Clay saw the paragraph after every phone
+ * message. The wrapper does not make the message owner input — the model still
+ * reads the peer framing — it takes the paragraph off his screen.
  */
 
 import { readdir, readFile } from 'node:fs/promises'
@@ -137,11 +157,55 @@ async function readPeerToken(dir: string, names: string[], pid: number): Promise
 }
 
 /**
+ * The display name the pane shows for a message from the app.
+ *
+ * Rendered by Claude Code as `@ phone`. Kept short and plain on purpose: the
+ * name goes through Claude Code's own `QS` sanitiser, which strips format and
+ * control characters and truncates at 64 code points, so anything fancier just
+ * comes back mangled.
+ */
+export const appSenderName = 'phone'
+
+/** Claude Code's `de` test: does this text already carry the wrapper? */
+const wrappedRe = /^<cross-session-message(?:[ \t][^>\r\n]*)?>/
+
+/**
+ * The exact bytes Claude Code's own peer sender writes (`VMe`/`r9` in 2.1.251).
+ *
+ * Attribute ORDER matters and so does every space: the receiver re-serialises
+ * what it parsed and compares it to what arrived (`SM`), so a wrapper that is
+ * a byte off is treated as ordinary body text and the name is lost. We emit
+ * `from-name` and nothing else, because the other attributes — `from`,
+ * `from-session`, `hop-chain` — are addresses of a real Claude peer, and
+ * claiming one would point Claude Code's delivery receipts at a socket that
+ * does not exist.
+ *
+ * Already-wrapped text is left alone. A relayed peer note arrives that way and
+ * wrapping it twice would show the inner wrapper as literal text.
+ */
+export function wrapForPane(text: string, fromName: string = appSenderName): string {
+    if (wrappedRe.test(text)) return text
+    // Same scrub Claude Code applies before it will accept the attribute:
+    // no quotes or angle brackets, no control characters, trimmed, <= 64.
+    const name = [...fromName.replace(/["<>]/g, '').replace(/[\p{Cf}\p{Cc}\p{Cs}\p{Zl}\p{Zp}]/gu, '').trim()]
+        .slice(0, 64)
+        .join('')
+    if (name.length === 0) return text
+    return `<cross-session-message from-name="${name}">\n${text}\n</cross-session-message>`
+}
+
+/**
  * Write one message into `inbox`. Resolves a reason rather than throwing,
  * because every failure here is a reason to try the pane and none of them is a
  * reason to fail the message.
  */
-export function sendToInbox(inbox: ClaudeInbox, text: string, sessionId?: string): Promise<InboxSendResult> {
+export function sendToInbox(
+    inbox: ClaudeInbox,
+    text: string,
+    sessionId?: string,
+    fromName: string = appSenderName,
+): Promise<InboxSendResult> {
+    const body = wrapForPane(text, fromName)
     return new Promise((resolve) => {
         let settled = false
         const done = (result: InboxSendResult) => {
@@ -174,7 +238,7 @@ export function sendToInbox(inbox: ClaudeInbox, text: string, sessionId?: string
                 + '\n'
                 + JSON.stringify({
                     type: 'user',
-                    message: { role: 'user', content: text },
+                    message: { role: 'user', content: body },
                     session_id: sessionId ?? inbox.sessionId,
                 })
                 + '\n'

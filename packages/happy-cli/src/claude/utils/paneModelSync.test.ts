@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 
-import { createPaneCommandQueue, slashCommandsForSelection } from './paneModelSync'
+import { createPaneCommandQueue, paneSlashCommand, slashCommandsForSelection } from './paneModelSync'
 
 beforeEach(() => {
     // Never let a unit test reach the real drover bus.
@@ -69,6 +69,24 @@ describe('slashCommandsForSelection', () => {
     it('keeps the bracket variant Claude Code accepts as part of a model id', () => {
         expect(slashCommandsForSelection({}, { modelMode: 'claude-opus-5[1m]' }))
             .toEqual(['/model claude-opus-5[1m]'])
+    })
+})
+
+describe('paneSlashCommand', () => {
+    it('recognises a command the TUI would run', () => {
+        expect(paneSlashCommand('/model opus')).toBe('/model opus')
+        expect(paneSlashCommand('  /clear  ')).toBe('/clear')
+        expect(paneSlashCommand('/align-conventions')).toBe('/align-conventions')
+        expect(paneSlashCommand('/plugin:skill do the thing')).toBe('/plugin:skill do the thing')
+    })
+
+    it('leaves prose, paths and multi-line text to the socket', () => {
+        expect(paneSlashCommand('read the handoff')).toBeNull()
+        // The case worth being careful about: Clay pastes paths from the phone.
+        expect(paneSlashCommand('/Users/clayrisser/Projects/notes.md')).toBeNull()
+        expect(paneSlashCommand('/model opus\nand also do this')).toBeNull()
+        expect(paneSlashCommand('/')).toBeNull()
+        expect(paneSlashCommand('// a comment')).toBeNull()
     })
 })
 
@@ -142,6 +160,70 @@ describe('createPaneCommandQueue', () => {
 
         expect(sent).toEqual(['/model claude-fable-5', '/effort xhigh'])
         expect(queue.pending()).toEqual(['/effort xhigh'])
+    })
+
+    it('holds a phone command while an agent is running, even at an idle prompt', async () => {
+        // DROVE-48/DROVE-49: an async subagent runs inside the child while the
+        // main thread sits at its prompt, and the terminal can be looking at
+        // that agent. A keystroke would land there.
+        const sent: string[] = []
+        let agents = 1
+        const queue = createPaneCommandQueue({
+            isIdle: async () => true,
+            agentsQuiet: () => agents === 0,
+            send: async (command) => { sent.push(command); return true },
+        })
+
+        queue.request(['/clear'], { collapse: false, requireQuietAgents: true })
+        await queue.flush()
+        expect(sent).toEqual([])
+        expect(queue.pending()).toEqual(['/clear'])
+
+        agents = 0
+        await queue.flush()
+        expect(sent).toEqual(['/clear'])
+    })
+
+    it("does not hold the app's picker behind running agents", async () => {
+        const sent: string[] = []
+        const queue = createPaneCommandQueue({
+            isIdle: async () => true,
+            agentsQuiet: () => false,
+            send: async (command) => { sent.push(command); return true },
+        })
+
+        queue.request(['/model claude-opus-5'])
+        await queue.flush()
+
+        expect(sent).toEqual(['/model claude-opus-5'])
+    })
+
+    it('keeps both when a person sent the same command twice', async () => {
+        const sent: string[] = []
+        const queue = createPaneCommandQueue({
+            isIdle: async () => true,
+            send: async (command) => { sent.push(command); return true },
+        })
+
+        queue.request(['/clear'], { collapse: false })
+        queue.request(['/clear'], { collapse: false })
+        await queue.flush()
+
+        expect(sent).toEqual(['/clear', '/clear'])
+    })
+
+    it("a picker tap does not swallow a /model the phone typed", async () => {
+        const sent: string[] = []
+        const queue = createPaneCommandQueue({
+            isIdle: async () => true,
+            send: async (command) => { sent.push(command); return true },
+        })
+
+        queue.request(['/model claude-fable-5'], { collapse: false })
+        queue.request(['/model claude-opus-5'])
+        await queue.flush()
+
+        expect(sent).toEqual(['/model claude-fable-5', '/model claude-opus-5'])
     })
 
     it('never runs two flushes at once', async () => {
