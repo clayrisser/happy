@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import type { Update, UpdateMachineBody } from '@slopus/happy-wire';
 import { UsageSchema } from '@/claude/types'
+import type { DroverUsage } from '@/drover/flip/usage';
 import type { SandboxConfig } from '@/persistence'
 
 export {
@@ -319,6 +320,14 @@ export type Metadata = {
    * filter sessions by account (BASED-98).
    */
   droverAccount?: string,
+  /**
+   * Every registry account's headroom, read from Claude Code's own usage cache
+   * (DROVE-47). A pane session has no SDK rate-limit stream, so this is how the
+   * app's usage strip gets filled; the account marked `current` is this one.
+   * Additive beside droverAccount; the app parses it with a `.catch` so a
+   * malformed block never drops the record.
+   */
+  droverUsage?: DroverUsage,
   gitBranch?: string,
   claudeSessionId?: string, // Claude Code session ID
   codexThreadId?: string, // Codex app-server thread ID

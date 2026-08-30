@@ -1,5 +1,4 @@
 import { Ionicons, Octicons } from '@expo/vector-icons';
-import Svg, { Circle } from 'react-native-svg';
 import * as React from 'react';
 import { Keyboard, View, Platform, useWindowDimensions, Text, ActivityIndicator, Pressable, TouchableWithoutFeedback, LayoutChangeEvent } from 'react-native';
 import { Image } from 'expo-image';
@@ -25,7 +24,8 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useSetting } from '@/sync/storage';
 import { hackMode, hackModes } from '@/sync/modeHacks';
 import { getPermissionModeMenuLabel, getPermissionModeShortLabel } from '@/utils/permissionModeLabels';
-import { getUsageLimitDisplayPercentage, getUsageLimitRows, formatUsageLimitResetTime, type UsageLimitsLike } from '@/utils/sessionStatusBar';
+import type { UsageLimitsLike } from '@/utils/sessionStatusBar';
+import type { DroverUsageLike } from '@/utils/droverUsage';
 import { compactCount } from '@/utils/rigGitLineChanges';
 import { Theme } from '@/theme';
 import { t } from '@/text';
@@ -35,7 +35,9 @@ import { MobileGlassSurface } from './MobileGlass';
 import { AnimatedClickAwayBackdrop, AnimatedFade } from './AnimatedOverlay';
 import { BubblePressable } from './BubblePressable';
 import { resolveAgentInputPrimaryAction } from './agentInputPrimaryAction';
-import { NativeSettingsMenu, type NativeSettingsMenuGroup, type NativeSettingsMenuOption } from './NativeSettingsMenu';
+import { NativeSettingsMenu, type NativeSettingsMenuGroup } from './NativeSettingsMenu';
+import { AgentInputUsageRow } from './AgentInputUsageRow';
+import { resolveUsageStrip } from './agentInputUsage';
 import { ProviderIcon } from './ProviderIcon';
 import { isRigMetadata } from '@/sync/rig';
 import {
@@ -108,6 +110,13 @@ interface AgentInputProps {
     sessionStatusGitChanges?: { insertions: number; deletions: number; approximate: boolean } | null;
     /** Plan quota windows from agent state, for the week stat and its popup. */
     sessionStatusUsageLimits?: UsageLimitsLike | null;
+    /**
+     * Every drover account's headroom from session metadata (DROVE-47). The
+     * fallback for a pane session, which has no agent-state windows, and the
+     * source of the folded "other accounts" group either way.
+     */
+    sessionStatusDroverUsage?: DroverUsageLike;
+    sessionStatusDroverAccount?: string | null;
     onFileViewerPress?: () => void;
     agentType?: 'claude' | 'codex' | 'gemini' | 'openclaw' | 'agy';
     onAgentClick?: () => void;
@@ -622,119 +631,6 @@ const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: StatusRow
     );
 });
 
-// Grayscale ring that fills and darkens with context usage — reads at a
-// glance without color, sized to sit beside the 11pt status text.
-function ContextGaugeIcon(props: { percent: number }) {
-    const { theme } = useUnistyles();
-    const size = 14;
-    const strokeWidth = 2.5;
-    const radius = (size - strokeWidth) / 2;
-    const circumference = 2 * Math.PI * radius;
-    const progress = Math.min(100, Math.max(0, props.percent));
-    const intensity = 0.35 + 0.65 * (progress / 100);
-    const color = theme.dark
-        ? `rgba(255, 255, 255, ${intensity})`
-        : `rgba(0, 0, 0, ${intensity})`;
-    return (
-        <Svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
-            <Circle
-                cx={size / 2}
-                cy={size / 2}
-                r={radius}
-                stroke={theme.colors.divider}
-                strokeWidth={strokeWidth}
-                fill="none"
-            />
-            <Circle
-                cx={size / 2}
-                cy={size / 2}
-                r={radius}
-                stroke={color}
-                strokeWidth={strokeWidth}
-                strokeLinecap="round"
-                fill="none"
-                strokeDasharray={`${circumference} ${circumference}`}
-                strokeDashoffset={circumference * (1 - progress / 100)}
-                rotation="-90"
-                originX={size / 2}
-                originY={size / 2}
-            />
-        </Svg>
-    );
-}
-
-type UsageRowProps = {
-    contextStatus: { percent: number; detailText: string; color: string } | null;
-    weekPercent: number | null;
-    /** Prebuilt "Session — 32% · resets 6 PM" rows for the week popup. */
-    usageMenuOptions: NativeSettingsMenuOption[];
-};
-
-// Sits under the composer card, right-aligned with the effort label: week
-// quota (tap for the session/week detail popup) and the context gauge (tap
-// to swap the percent for exact token counts).
-const AgentInputUsageRow = React.memo(function AgentInputUsageRow(p: UsageRowProps) {
-    const { theme } = useUnistyles();
-    const [showPreciseContext, setShowPreciseContext] = React.useState(false);
-    if (!p.contextStatus && p.weekPercent == null) {
-        return null;
-    }
-    const weekText = p.weekPercent != null ? (
-        <Text style={{ fontSize: 11, color: theme.colors.textSecondary, ...Typography.default() }}>
-            {t('agentInput.context.percentWeek', { percent: Math.round(p.weekPercent) })}
-        </Text>
-    ) : null;
-    return (
-        <View style={{
-            flexDirection: 'row',
-            alignItems: 'center',
-            justifyContent: 'flex-end',
-            gap: 10,
-            // 18 = 10pt shell inset + 8pt action inset: lines the gauge up
-            // with the effort label's right edge.
-            paddingHorizontal: 18,
-            paddingTop: 6,
-            minHeight: 18,
-        }}>
-            {weekText && (
-                p.usageMenuOptions.length > 0 ? (
-                    <NativeSettingsMenu
-                        anchor="bottom"
-                        groups={[{
-                            key: 'usage',
-                            label: '',
-                            title: '',
-                            options: p.usageMenuOptions,
-                            selectedKey: null,
-                            onSelect: () => { },
-                        }]}
-                    >
-                        {/* Native menu triggers hit only their own bounds, so
-                            pad the target out and pull the layout back in. */}
-                        <View style={{ padding: 10, margin: -10 }}>
-                            {weekText}
-                        </View>
-                    </NativeSettingsMenu>
-                ) : weekText
-            )}
-            {p.contextStatus && (
-                <Pressable
-                    onPress={() => setShowPreciseContext((current) => !current)}
-                    hitSlop={{ top: 12, bottom: 14, left: 10, right: 14 }}
-                    style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}
-                >
-                    <Text style={{ fontSize: 11, color: p.contextStatus.color, ...Typography.default() }}>
-                        {showPreciseContext
-                            ? p.contextStatus.detailText
-                            : t('agentInput.context.percentContext', { percent: p.contextStatus.percent })}
-                    </Text>
-                    <ContextGaugeIcon percent={p.contextStatus.percent} />
-                </Pressable>
-            )}
-        </View>
-    );
-});
-
 type ContextChipsProps = {
     machineName?: string | null;
     onMachineClick?: () => void;
@@ -895,32 +791,22 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     const contextStatus = props.usageData?.contextSize
         ? getContextStatus(props.usageData.contextSize, props.alwaysShowContextSize ?? false, theme, props.usageData.contextWindow)
         : null;
-    // Only Session and Week are user-meaningful; provider-internal windows
-    // (nimbus_quill and friends) stay out of the popup.
-    const usageRows = React.useMemo(() => {
-        const rows = getUsageLimitRows(props.sessionStatusUsageLimits ?? null);
-        const session = rows.find((row) => row.id === 'five_hour') ?? null;
-        const week = rows.find((row) => row.id === 'seven_day') ?? null;
-        return { session, week };
-    }, [props.sessionStatusUsageLimits]);
-    const weekPercent = usageRows.week?.utilization != null && (props.alwaysShowContextSize || contextStatus != null)
-        ? getUsageLimitDisplayPercentage(usageRows.week.utilization, usageLimitShowRemaining)
-        : null;
-    const usageMenuOptions = React.useMemo<NativeSettingsMenuOption[]>(() => {
-        const options: NativeSettingsMenuOption[] = [];
-        const push = (key: string, label: string, row: { utilization: number | null; resetsAt: number | null } | null) => {
-            if (!row || row.utilization == null) return;
-            const percent = getUsageLimitDisplayPercentage(row.utilization, usageLimitShowRemaining);
-            // The newline renders as a second line inside the native menu row.
-            const reset = row.resetsAt != null
-                ? `\n${t('agentInput.usagePopup.resets', { time: formatUsageLimitResetTime(row.resetsAt) })}`
-                : '';
-            options.push({ key, label: `${label} · ${Math.round(percent)}%${reset}` });
-        };
-        push('session', t('agentInput.usagePopup.session'), usageRows.session);
-        push('week', t('agentInput.usagePopup.week'), usageRows.week);
-        return options;
-    }, [usageRows, usageLimitShowRemaining]);
+    // The week figure and its popup, from agent state or, on a pane session,
+    // from drover's snapshot (DROVE-47); resolveUsageStrip says which.
+    const { weekPercent, usageMenuGroups } = React.useMemo(() => resolveUsageStrip({
+        usageLimits: props.sessionStatusUsageLimits ?? null,
+        droverUsage: props.sessionStatusDroverUsage,
+        droverAccount: props.sessionStatusDroverAccount,
+        showRemaining: usageLimitShowRemaining,
+        contextShown: !!props.alwaysShowContextSize || contextStatus != null,
+    }), [
+        props.sessionStatusUsageLimits,
+        props.sessionStatusDroverUsage,
+        props.sessionStatusDroverAccount,
+        props.alwaysShowContextSize,
+        usageLimitShowRemaining,
+        contextStatus != null,
+    ]);
 
     const agentInputEnterToSend = useSetting('agentInputEnterToSend');
 
@@ -2365,7 +2251,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     <AgentInputUsageRow
                         contextStatus={contextStatus}
                         weekPercent={weekPercent}
-                        usageMenuOptions={usageMenuOptions}
+                        usageMenuGroups={usageMenuGroups}
                     />
                 </AnimatedFade>
             </View>

@@ -266,6 +266,11 @@ export async function applyPendingFlip(opts: ApplyPendingFlipOptions): Promise<b
     session.client.sendSessionEvent({ type: 'message', message: result.note })
     flip.say(result.note)
 
+    // DROVE-47: the strip has to say the NEW account's headroom, and say it
+    // now rather than after the settle delay, so the metadata update carrying
+    // droverAccount and the one carrying its usage land in the same breath.
+    session.usage?.tick()
+
     // DROVE-37: and say who else just went quiet. Claude Code binds Remote
     // Control to one account per machine, so landing on a new account tears
     // down the binding every OTHER live session was holding — Clay flipped

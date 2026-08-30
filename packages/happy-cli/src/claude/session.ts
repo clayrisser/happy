@@ -7,6 +7,7 @@ import { logger } from "@/ui/logger";
 import type { JsRuntime } from "./runClaude";
 import type { SandboxConfig } from "@/persistence";
 import type { FlipController } from "@/drover/flip/controller";
+import type { UsageReporter } from "@/drover/flip/usage";
 
 /**
  * The flags that point Claude Code at a transcript that ALREADY EXISTS, rather
@@ -81,6 +82,8 @@ export class Session {
     pendingInitialPrompt?: string;
     /** Set for a session running under the drover's account controller. */
     flip?: FlipController;
+    /** Keeps metadata.droverUsage in step with the usage caches (DROVE-47). */
+    usage?: UsageReporter;
     /**
      * The Claude transcript this Happy session was reattached to at start-up
      * (BASED-98). The server already holds every message in it, so the local
@@ -126,9 +129,11 @@ export class Session {
         /** JavaScript runtime to use for spawning Claude Code (default: 'node') */
         jsRuntime?: JsRuntime,
         flip?: FlipController,
+        usage?: UsageReporter,
         reattachedClaudeSessionId?: string,
     }) {
         this.flip = opts.flip;
+        this.usage = opts.usage;
         this.reattachedClaudeSessionId = opts.reattachedClaudeSessionId;
         this.path = opts.path;
         this.api = opts.api;
