@@ -515,7 +515,7 @@ export const storage = create<StorageState>()((set, get) => {
                 // events then still carry the OLD metadata, and applying it
                 // would bounce the fresh local pick back. Metadata without
                 // the field keeps the local value.
-                const resolveModePick = (field: 'permissionMode' | 'modelMode' | 'effortLevel'): string | null => {
+                const resolveModePick = (field: 'permissionMode' | 'modelMode' | 'effortLevel' | 'remoteControl'): string | null => {
                     const existing = state.sessions[session.id]?.[field] ?? null;
                     if (isAgentModePushPending(session.id, field)) {
                         return existing;
@@ -527,6 +527,7 @@ export const storage = create<StorageState>()((set, get) => {
                 const resolvedPermissionMode = resolveModePick('permissionMode');
                 const resolvedModelMode = resolveModePick('modelMode');
                 const resolvedEffortLevel = resolveModePick('effortLevel');
+                const resolvedRemoteControl = resolveModePick('remoteControl');
 
                 // Local activity timestamp — preserve in-memory value, else restore from MMKV.
                 const resolvedLastMessageSentAt = state.sessions[session.id]?.lastMessageSentAt ?? savedLastMessageSentAt[session.id];
@@ -538,6 +539,7 @@ export const storage = create<StorageState>()((set, get) => {
                     permissionMode: resolvedPermissionMode,
                     modelMode: resolvedModelMode,
                     effortLevel: resolvedEffortLevel,
+                    remoteControl: resolvedRemoteControl,
                     lastMessageSentAt: resolvedLastMessageSentAt,
                 };
             });
@@ -1141,6 +1143,7 @@ export const storage = create<StorageState>()((set, get) => {
                         ...(patch.permissionMode !== undefined && { permissionMode: patch.permissionMode }),
                         ...(patch.modelMode !== undefined && { modelMode: patch.modelMode }),
                         ...(patch.effortLevel !== undefined && { effortLevel: patch.effortLevel }),
+                        ...(patch.remoteControl !== undefined && { remoteControl: patch.remoteControl }),
                     }
                 }
             };

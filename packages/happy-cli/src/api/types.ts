@@ -389,6 +389,14 @@ export type Metadata = {
    */
   panePermissionMode?: string | null,
   /**
+   * Whether Claude Code's Remote Control is on for this pane RIGHT NOW, read
+   * off the transcript's `bridge-session` records (DROVE-63). Report-only, and
+   * the answer the app's toggle displays: `remoteControl` below is what someone
+   * asked for, this is what is true. Absent for a session with no pane, and
+   * absent until the transcript has said one way or the other.
+   */
+  paneRemoteControl?: boolean | null,
+  /**
    * The per-session picks any client made (#1492). Written by the app's
    * composer, and until DROVE-45 read only by the SDK path, which hands them to
    * query(). They were missing from this type entirely because nothing in the
@@ -403,6 +411,21 @@ export type Metadata = {
   modelMode?: string | null,
   effortLevel?: string | null,
   permissionMode?: string | null,
+  /**
+   * The app's Remote Control request for this session: `on`, `off`, or absent /
+   * null for "not asking" (DROVE-63). Carried as a string because that is what
+   * the app's existing per-session pick transport takes, which is the whole
+   * point — the toggle rides the carrier DROVE-45 built rather than adding one.
+   */
+  remoteControl?: string | null,
+  /**
+   * Sessions that just lost Remote Control because THIS session flipped account
+   * (DROVE-37, made tappable by DROVE-63). Written by the flip alongside the
+   * warning it says out loud, so the app can offer the remedy the sentence
+   * names.
+   */
+  remoteControlAtRisk?: { id: string, label: string, account: string }[] | null,
+  remoteControlAtRiskAt?: number | null,
   // Lifecycle state management
   lifecycleState?: 'running' | 'archiveRequested' | 'archived' | string,
   lifecycleStateSince?: number,

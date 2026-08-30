@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 
-import { createPaneCommandQueue, paneCommandsForSelection } from './paneModelSync'
+import { createPaneCommandQueue, paneCommandsForSelection, parseRemoteControlRequest, remoteControlCommand } from './paneModelSync'
 
 beforeEach(() => {
     // Never let a unit test reach the real drover bus.
@@ -208,5 +208,83 @@ describe('createPaneCommandQueue', () => {
         queue.request(['/model claude-opus-5'])
         await Promise.all([queue.flush(), queue.flush(), queue.flush()])
         expect(overlapped).toBe(false)
+    })
+})
+
+/**
+ * DROVE-63. `/remote-control` is a toggle, so the decision to send it is a
+ * decision about the pane's CURRENT state, not about the previous request.
+ * Measured on 2.1.251: the command's own description flips to "Disconnect
+ * Remote Control" while it is active, its only argument is an optional name
+ * offered when it is off, and Clay running it twice three seconds apart
+ * produced `Remote Control disconnected.` and then a fresh `cse_` bridge.
+ */
+describe('remoteControlCommand', () => {
+    it('types the toggle when the pane is off and the app asked for on', () => {
+        expect(remoteControlCommand(false, true)).toBe('/remote-control')
+    })
+
+    it('types the same one command to turn it off', () => {
+        expect(remoteControlCommand(true, false)).toBe('/remote-control')
+    })
+
+    it('types nothing when the pane is already where the app asked', () => {
+        expect(remoteControlCommand(true, true)).toBeNull()
+        expect(remoteControlCommand(false, false)).toBeNull()
+    })
+
+    it('types nothing while the pane state is unknown', () => {
+        // The one that would hurt: sending a toggle on a guess can silence the
+        // session the tap was meant to wake.
+        expect(remoteControlCommand(null, true)).toBeNull()
+        expect(remoteControlCommand(null, false)).toBeNull()
+    })
+
+    it('treats no ask, and a withdrawn ask, as nothing to do', () => {
+        expect(remoteControlCommand(false, undefined)).toBeNull()
+        expect(remoteControlCommand(false, null)).toBeNull()
+    })
+})
+
+describe('parseRemoteControlRequest', () => {
+    it('reads the on/off strings the app writes', () => {
+        expect(parseRemoteControlRequest('on')).toBe(true)
+        expect(parseRemoteControlRequest('off')).toBe(false)
+    })
+
+    it('accepts a boolean, in case another client writes one', () => {
+        expect(parseRemoteControlRequest(true)).toBe(true)
+        expect(parseRemoteControlRequest(false)).toBe(false)
+    })
+
+    it('reads anything else as no request at all', () => {
+        expect(parseRemoteControlRequest(null)).toBeNull()
+        expect(parseRemoteControlRequest(undefined)).toBeNull()
+        expect(parseRemoteControlRequest('yes')).toBeNull()
+    })
+})
+
+describe('the queue can drop a command that stopped being right', () => {
+    it('cancels a held toggle without touching a queued /model', async () => {
+        const sent: string[] = []
+        const queue = createPaneCommandQueue({
+            isIdle: async () => true,
+            send: async (command) => { sent.push(command); return true },
+        })
+
+        queue.request(['/model claude-opus-5', '/remote-control'])
+        queue.cancel('/remote-control')
+        await queue.flush()
+
+        expect(sent).toEqual(['/model claude-opus-5'])
+    })
+
+    it('is a no-op when nothing of that kind is waiting', async () => {
+        const queue = createPaneCommandQueue({
+            isIdle: async () => true,
+            send: async () => true,
+        })
+        queue.cancel('/remote-control')
+        expect(queue.pending()).toEqual([])
     })
 })

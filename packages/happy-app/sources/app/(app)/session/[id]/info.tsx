@@ -11,7 +11,7 @@ import { useSession, useIsDataReady, useSessionProjectAvatar } from '@/sync/stor
 import { getSessionName, useSessionStatus, formatOSPlatform, formatPathRelativeToHome, getSessionAvatarId, getResumeCommand } from '@/utils/sessionUtils';
 import * as Clipboard from 'expo-clipboard';
 import { Modal } from '@/modal';
-import { sessionArchive, sessionKill, sessionDelete } from '@/sync/ops';
+import { sessionArchive, sessionKill, sessionDelete, sessionSetAgentModes } from '@/sync/ops';
 import { maybeCleanupWorktree } from '@/hooks/useWorktreeCleanup';
 import { useUnistyles } from 'react-native-unistyles';
 import { layout } from '@/components/layout';
@@ -27,6 +27,9 @@ import { MobileGlassSurface } from '@/components/MobileGlass';
 import { getRigIdentity, isRigMetadata } from '@/sync/rig';
 import { droverPolicySummary } from '@/utils/droverPolicySummary';
 import { MOBILE_GLASS_HEADER_HEIGHT } from '@/components/navigation/headerMetrics';
+import { Switch } from '@/components/Switch';
+import { findSessionForAtRisk, isAtRiskListFresh, resolveRemoteControlState, supportsRemoteControlToggle } from '@/components/remoteControlToggle';
+import { useAllSessions } from '@/sync/storage';
 
 // Animated status dot component
 function StatusDot({ color, isPulsing, size = 8 }: { color: string; isPulsing?: boolean; size?: number }) {
@@ -147,6 +150,30 @@ function SessionInfoContent({ session }: { session: Session }) {
 
     // Check if CLI version is outdated
     const isCliOutdated = session.metadata?.version && !isVersionSupported(session.metadata.version, MINIMUM_CLI_VERSION);
+
+    // DROVE-63: Claude Code's own Remote Control, on or off for THIS pane.
+    // The value shown is what the CLI read off the transcript, never the last
+    // tap — see remoteControlToggle.ts for why that distinction is the whole
+    // point of the control.
+    const canToggleRemoteControl = supportsRemoteControlToggle(session);
+    const remoteControl = resolveRemoteControlState(session);
+    const handleRemoteControlToggle = useCallback(() => {
+        const next = resolveRemoteControlState(session).next;
+        if (!next) return;
+        sessionSetAgentModes(session.id, { remoteControl: next });
+    }, [session]);
+
+    // DROVE-37 + DROVE-63: the sessions this one's last flip knocked off
+    // Remote Control, each with the button that turns it back on. The flip
+    // already said their names out loud; this is the same list somewhere a
+    // thumb can reach.
+    const allSessions = useAllSessions();
+    const atRisk = isAtRiskListFresh(session.metadata?.remoteControlAtRiskAt, Date.now())
+        ? session.metadata?.remoteControlAtRisk ?? []
+        : [];
+    const handleWakeAtRisk = useCallback((sessionId: string) => {
+        sessionSetAgentModes(sessionId, { remoteControl: 'on' });
+    }, []);
 
     const handleCopySessionId = useCallback(async () => {
         if (!session) return;
@@ -392,6 +419,66 @@ function SessionInfoContent({ session }: { session: Session }) {
                             icon={<Ionicons name="swap-horizontal-outline" size={29} color="#FF9500" />}
                             onPress={() => router.push(`/session/${session.id}/policy` as any)}
                         />
+                    </ItemGroup>
+                )}
+
+                {/* DROVE-63: Claude Code's Remote Control for this pane. */}
+                {canToggleRemoteControl && (
+                    <ItemGroup
+                        title={t('sessionInfo.remoteControlTitle')}
+                        footer={remoteControl.value === null
+                            ? t('sessionInfo.remoteControlUnknownFooter')
+                            : t('sessionInfo.remoteControlFooter')}
+                    >
+                        <Item
+                            title={t('sessionInfo.remoteControl')}
+                            subtitle={remoteControl.pending
+                                ? t('sessionInfo.remoteControlPending')
+                                : remoteControl.value === null
+                                    ? t('sessionInfo.remoteControlUnknown')
+                                    : remoteControl.value
+                                        ? t('sessionInfo.remoteControlOn')
+                                        : t('sessionInfo.remoteControlOff')}
+                            icon={<Ionicons name="phone-portrait-outline" size={29} color="#007AFF" />}
+                            showChevron={false}
+                            rightElement={
+                                <Switch
+                                    value={remoteControl.value === true}
+                                    disabled={remoteControl.value === null}
+                                    onValueChange={handleRemoteControlToggle}
+                                />
+                            }
+                        />
+                    </ItemGroup>
+                )}
+
+                {/* DROVE-37 + DROVE-63: who this session's flip silenced, and the
+                    button that wakes them. */}
+                {atRisk.length > 0 && (
+                    <ItemGroup
+                        title={t('sessionInfo.remoteControlAtRiskTitle')}
+                        footer={t('sessionInfo.remoteControlAtRiskFooter')}
+                    >
+                        {atRisk.map((row) => {
+                            const target = findSessionForAtRisk(allSessions, row);
+                            const state = resolveRemoteControlState(target);
+                            return (
+                                <Item
+                                    key={row.id}
+                                    title={row.label}
+                                    subtitle={state.value === true
+                                        ? t('sessionInfo.remoteControlOn')
+                                        : state.pending
+                                            ? t('sessionInfo.remoteControlPending')
+                                            : row.account}
+                                    icon={<Ionicons name="notifications-off-outline" size={29} color="#FF9500" />}
+                                    detail={state.value === true ? undefined : t('sessionInfo.remoteControlTurnOn')}
+                                    showChevron={false}
+                                    disabled={!target || state.value === true}
+                                    onPress={() => target && handleWakeAtRisk(target.id)}
+                                />
+                            );
+                        })}
                     </ItemGroup>
                 )}
 

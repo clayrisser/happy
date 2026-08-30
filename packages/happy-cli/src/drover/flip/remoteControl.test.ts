@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { sessionsAtRisk, warningFor, type BusSession } from './remoteControl'
+import { remoteControlWarning, sessionsAtRisk, warningFor, type BusSession } from './remoteControl'
 
 const s = (over: Partial<BusSession> & { id: string }): BusSession => ({
     state: 'live-interactive',
@@ -107,5 +107,43 @@ describe('which sessions a flip will knock off Remote Control', () => {
         const msg = warningFor(at, 'jamrizzi')!
         expect(msg).toContain('1 other live session on this machine')
         expect(msg).not.toContain('sessions')
+    })
+})
+
+/**
+ * DROVE-63: the warning's remedy used to be "run /remote-control there", which
+ * is the one thing Clay cannot do from the phone. It still says that — the
+ * terminal is right there for whoever is at the keyboard — but it now also
+ * points at the app's toggle, and it carries the ids that toggle needs.
+ */
+describe('the warning hands the app something to put a button on', () => {
+    it('returns the named sessions alongside the sentence', async () => {
+        const result = await remoteControlWarning({
+            target: 'jamrizzi',
+            selfId: 'self',
+            listSessions: async () => [
+                s({ id: 'emp', account: null, title: 'employees' }),
+                s({ id: 'shc', account: 'bitspur.com', title: 'shc' }),
+                s({ id: 'self', account: 'main', title: 'the one flipping' }),
+            ],
+        })
+
+        expect(result!.atRisk).toEqual([
+            { id: 'emp', label: 'employees', account: 'main' },
+            { id: 'shc', label: 'shc', account: 'bitspur.com' },
+        ])
+        // The ids are what the app writes `remoteControl: 'on'` against, so
+        // they have to be the bus's session ids and not the labels.
+        expect(result!.text).toContain('employees (main)')
+        expect(result!.text).toContain('in the app')
+    })
+
+    it('is null when nothing is at risk, so nothing is written and nothing is said', async () => {
+        const result = await remoteControlWarning({
+            target: 'jamrizzi',
+            selfId: 'self',
+            listSessions: async () => [s({ id: 'other', account: 'jamrizzi', title: 'already there' })],
+        })
+        expect(result).toBeNull()
     })
 })

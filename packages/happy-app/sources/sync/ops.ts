@@ -766,6 +766,9 @@ export function sessionSetAgentModes(sessionId: string, patch: SessionAgentModes
     if (patch.effortLevel !== undefined && isChanged(patch.effortLevel, 'effortLevel')) {
         changed.effortLevel = patch.effortLevel;
     }
+    if (patch.remoteControl !== undefined && isChanged(patch.remoteControl, 'remoteControl')) {
+        changed.remoteControl = patch.remoteControl;
+    }
     if (Object.keys(changed).length === 0) {
         return;
     }

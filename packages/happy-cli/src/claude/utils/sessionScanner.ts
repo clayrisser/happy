@@ -68,12 +68,41 @@ export interface ObservedRun {
     effort: string | null;
 }
 
+/**
+ * Whether Remote Control is on for this session RIGHT NOW (DROVE-63).
+ *
+ * Nothing on disk answers this outside the transcript. `~/.claude.json` carries
+ * `hasUsedRemoteControl`, `remoteControlSurfacesSeen` and
+ * `remoteControlReadyPushKey`, and all three are global "ever / how many times"
+ * counters for the upsell — measured on Clay's machine, `hasUsedRemoteControl`
+ * is true for the whole install while three of the five per-account config dirs
+ * do not carry the key at all. A button reading those would say "on" for every
+ * session forever.
+ *
+ * Claude Code does write the real answer, once per transition, as its own
+ * record type:
+ *
+ *     {"type":"bridge-session","sessionId":"…","bridgeSessionId":"cse_01…", …}
+ *     {"type":"bridge-session","sessionId":"…","bridgeSessionId":"","lastSequenceNum":0}
+ *
+ * A non-empty `bridgeSessionId` is a live bridge; the empty one is the teardown.
+ * Counted over 14 days of Clay's transcripts: 6649 non-empty, 101 empty. The
+ * empty one is written for all three ways it goes off — `/remote-control` typed
+ * to disconnect, the process shutting the bridge down, and the DROVE-37 account
+ * teardown, which writes `system/informational` ("Remote Control disconnected —
+ * signed-in claude.ai account or organization changed on this machine") and then
+ * the empty record. So one field covers every case, including the one the button
+ * exists to fix.
+ *
+ * The record fails RawJSONLinesSchema, so the scanner used to drop it.
+ */
 type SessionLogEntry =
     | { kind: 'message'; key: string; message: RawJSONLines }
     | { kind: 'transcript-event'; key: string; event: ScannerTranscriptEvent }
     | { kind: 'custom-title'; key: string; title: string }
     | { kind: 'permission-mode'; key: string; mode: string }
-    | { kind: 'queued-prompt'; key: string; prompt: ScannerQueuedPrompt };
+    | { kind: 'queued-prompt'; key: string; prompt: ScannerQueuedPrompt }
+    | { kind: 'bridge-session'; key: string; active: boolean };
 
 export async function createSessionScanner(opts: {
     sessionId: string | null,
@@ -133,6 +162,14 @@ export async function createSessionScanner(opts: {
      */
     onPermissionModeObserved?: (mode: string) => void
     /**
+     * Whether Remote Control is on for this session, reported whenever it
+     * changes and once at startup with whatever the transcript already says
+     * (DROVE-63). Same last-one-wins rule as `onRunObserved`, and for the same
+     * reason: the answer is a level, not an event, so on -> off -> on has to
+     * report `on` the second time.
+     */
+    onRemoteControlObserved?: (active: boolean) => void
+    /**
      * How long a session transcript may stay absent before its watcher gives
      * up and the session is dropped. Defaults to the startFileWatcher default
      * (60s). Exposed mainly so tests can exercise the drop path quickly.
@@ -168,6 +205,10 @@ export async function createSessionScanner(opts: {
     // Code re-appends the record every turn even when nothing changed, so the
     // repetition is filtered on the way out rather than by keying the entry.
     let lastObservedPermissionMode: string | null = null;
+    // Same shape as lastObservedRun, for the same reason (DROVE-63). null means
+    // nothing has been read yet, which is NOT the same as off — the launcher
+    // refuses to type the toggle while the answer is unknown.
+    let lastObservedRemoteControl: boolean | null = null;
     // Size and mtime of each transcript as of the last pass that actually read
     // it. Per scanner instance, never module-global: a stale entry left by an
     // earlier scanner would make the next one skip a file whose entries it has
@@ -217,6 +258,7 @@ export async function createSessionScanner(opts: {
         // the next turn (DROVE-45).
         reportRun(latestRunFromEntries(entries));
         reportPermissionMode(latestPermissionModeFromEntries(entries));
+        reportRemoteControl(latestRemoteControlFromEntries(entries));
         seedTitleFrom(entries);
         // IMPORTANT: Also start watching the initial session file because Claude Code
         // may continue writing to it even after creating a new session with --resume
@@ -242,6 +284,15 @@ export async function createSessionScanner(opts: {
         lastObservedPermissionMode = mode;
         logger.debug(`[SESSION_SCANNER] Pane is in permission mode ${mode}`);
         opts.onPermissionModeObserved?.(mode);
+    }
+
+    /** Same, for Remote Control (DROVE-63). Unknown stays unknown. */
+    function reportRemoteControl(active: boolean | null): void {
+        if (active === null) return;
+        if (lastObservedRemoteControl === active) return;
+        lastObservedRemoteControl = active;
+        logger.debug(`[SESSION_SCANNER] Remote Control is ${active ? 'on' : 'off'} for this session`);
+        opts.onRemoteControlObserved?.(active);
     }
 
     // Main sync function
@@ -320,6 +371,12 @@ export async function createSessionScanner(opts: {
                 } else if (entry.kind === 'queued-prompt') {
                     logger.debug(`[SESSION_SCANNER] Prompt queued in the terminal (${entry.prompt.carrier})`);
                     opts.onQueuedPrompt?.(entry.prompt);
+                } else if (entry.kind === 'bridge-session') {
+                    // Nothing per-record: Remote Control is a level, and the
+                    // newest record for the whole file is reported below. This
+                    // branch exists so the record does not fall through to the
+                    // transcript-event else and get sent with an undefined
+                    // event (DROVE-63).
                 } else {
                     logger.debug(`[SESSION_SCANNER] Sending new transcript event: type=${entry.event.type}, uuid=${entry.event.uuid}`);
                     opts.onTranscriptEvent?.(entry.event);
@@ -333,6 +390,7 @@ export async function createSessionScanner(opts: {
             if (!currentSessionId || session === currentSessionId) {
                 reportRun(latestRunFromEntries(sessionEntries));
                 reportPermissionMode(latestPermissionModeFromEntries(sessionEntries));
+                reportRemoteControl(latestRemoteControlFromEntries(sessionEntries));
             }
             if (sessionEntries.length > 0) {
                 logger.debug(`[SESSION_SCANNER] Session ${session}: found=${sessionEntries.length}, skipped=${skipped}, sentMessages=${sentMessages}, sentTranscriptEvents=${sentTranscriptEvents}`);
@@ -556,6 +614,29 @@ function latestPermissionModeFromEntries(entries: SessionLogEntry[]): string | n
     return null;
 }
 
+/**
+ * Whether Remote Control is on, per the newest `bridge-session` record, or null
+ * when the transcript has none (DROVE-63).
+ *
+ * Null is deliberately not `false`. A transcript that has never carried a
+ * bridge record is one this scanner has no opinion about — it may simply not
+ * have been read yet — and the launcher must not type a toggle on a guess. The
+ * caller that wants "no record means off" has to say so itself.
+ *
+ * A reconnect writes the empty record and the new one back to back (measured:
+ * lines 1829/1830 of one of Clay's transcripts, same millisecond bracket), so
+ * reading the newest rather than the first is what stops a reconnect looking
+ * like a disconnect. The scanner reads whole files, so both land in one pass
+ * almost always.
+ */
+function latestRemoteControlFromEntries(entries: SessionLogEntry[]): boolean | null {
+    for (let i = entries.length - 1; i >= 0; i--) {
+        const entry = entries[i];
+        if (entry.kind === 'bridge-session') return entry.active;
+    }
+    return null;
+}
+
 function transcriptEventKey(event: ScannerTranscriptEvent): string {
     return `event:${event.uuid}`;
 }
@@ -608,6 +689,20 @@ async function readSessionEntries(projectDir: string, sessionId: string): Promis
                 });
                 continue;
             }
+            // DROVE-63: the only record that says whether Remote Control is on.
+            // Keyed by line index like custom-title, because it has no uuid and
+            // the same state repeats — a bridge that stays up rewrites the same
+            // id, and two identical records must both be seen or the state
+            // machine below stalls on the first one.
+            if (message.type === 'bridge-session') {
+                entries.push({
+                    kind: 'bridge-session',
+                    key: `bridge-session:${lineIndex}`,
+                    active: typeof message.bridgeSessionId === 'string' && message.bridgeSessionId.length > 0,
+                });
+                continue;
+            }
+
             const transcriptEvent = parseClaudeGoalStatusTranscriptEvent(message);
             if (transcriptEvent) {
                 entries.push({

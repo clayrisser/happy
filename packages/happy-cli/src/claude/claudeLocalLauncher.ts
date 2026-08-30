@@ -7,7 +7,7 @@ import { launchFailureMessage } from "./utils/launchFailureMessage";
 import { ambientDataDir } from "@/drover/flip/accounts";
 import { parseFlipCommand } from "@/drover/flip/controller";
 import { injectIntoPane, interruptPane, paneIsIdle } from "./utils/paneInject";
-import { createPaneCommandQueue, paneCommandsForSelection, type PaneModelSelection } from "./utils/paneModelSync";
+import { createPaneCommandQueue, paneCommandsForSelection, parseRemoteControlRequest, remoteControlCommand, type PaneModelSelection } from "./utils/paneModelSync";
 import { cyclePaneMode, pressCycleKey, readPaneMode, type PaneMode } from "./utils/panePermissionSync";
 import { isPermissionMode, mapToClaudeMode } from "./utils/permissionMode";
 import { findInbox, sendToInbox } from "./utils/inboxSocket";
@@ -87,6 +87,22 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
     // still live in ~/.claude, so it maps to that rather than falling back to
     // the wrapper's stale CLAUDE_CONFIG_DIR.
     const startingConfigDir = session.claudeEnvVars?.CLAUDE_CONFIG_DIR;
+
+    /**
+     * Whether Remote Control is on in the pane, per the transcript (DROVE-63).
+     * null until the scanner has read a `bridge-session` record — and the
+     * toggle is never typed on a null, because it is a toggle.
+     */
+    let observedRemoteControl: boolean | null = null;
+    /**
+     * Re-decide whether `/remote-control` still needs typing. Assigned for real
+     * once the pane command queue exists further down; a no-op until then
+     * because the scanner reports the transcript's current state DURING its own
+     * construction, which is before that queue is built. The first observation
+     * only has to be recorded, never acted on.
+     */
+    let reconcileRemoteControl: () => void = () => { };
+
     const scanner = await createSessionScanner({
         sessionId: session.sessionId,
         workingDirectory: session.path,
@@ -124,6 +140,24 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
                 ...metadata,
                 panePermissionMode: mode,
             }))
+            : undefined,
+        // DROVE-63: and whether Remote Control is on, from the same file, for
+        // the same reason — the app's toggle has to show what is TRUE, so that
+        // `/remote-control` typed in the terminal (or a DROVE-37 teardown that
+        // nobody typed at all) reaches the phone. Pane sessions only: a
+        // paneless run has no terminal to type the toggle into.
+        onRemoteControlObserved: process.env.TMUX_PANE
+            ? (active) => {
+                observedRemoteControl = active
+                session.client.updateMetadata((metadata) => ({
+                    ...metadata,
+                    paneRemoteControl: active,
+                }))
+                // An observation can make a queued toggle wrong: the terminal
+                // may have done the very thing the app asked for while the
+                // command was still waiting for an idle prompt.
+                reconcileRemoteControl()
+            }
             : undefined,
         onMessage: (message) => {
             // Cattle Drover (BASED-98): local mode has no typed rate-limit
@@ -329,6 +363,19 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
      * having done nothing — the exact complaint this ticket is about.
      */
     function notePaneCommandApplied(command: string): void {
+        // `/remote-control` carries no value, so it returns before the split
+        // below. It is a toggle and we only ever type it when we know the
+        // current state differs from the request, so the state after it lands
+        // is the opposite of what we observed (DROVE-63).
+        if (command === '/remote-control') {
+            const next = !(observedRemoteControl ?? false);
+            observedRemoteControl = next;
+            session.client.updateMetadata((metadata) => ({
+                ...metadata,
+                paneRemoteControl: next,
+            }));
+            return;
+        }
         const gap = command.indexOf(' ');
         if (gap === -1) return;
         const value = command.slice(gap + 1);
@@ -405,13 +452,46 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
         return mapToClaudeMode(picked);
     }
 
-    const onMetadataChanged = (metadata: { modelMode?: string | null, effortLevel?: string | null, permissionMode?: string | null } | null) => {
+    /**
+     * What the app last asked Remote Control to be (DROVE-63).
+     *
+     * Held separately from the model/effort picks because it is compared
+     * against the OBSERVED state rather than against the previous request. A
+     * toggle has no memory: what matters is where the pane is now, not what was
+     * asked for last time.
+     */
+    let requestedRemoteControl: boolean | null = tmuxPane
+        ? parseRemoteControlRequest(session.client.getMetadata()?.remoteControl)
+        : null;
+
+    reconcileRemoteControl = () => {
+        if (!tmuxPane) return;
+        const command = remoteControlCommand(observedRemoteControl, requestedRemoteControl);
+        if (!command) {
+            // The terminal may have got there first, or the app may have asked
+            // and then changed its mind while the pane was busy. Either way a
+            // waiting toggle would now break what it was meant to fix.
+            paneCommands.cancel('/remote-control');
+            return;
+        }
+        logger.debug(`[local]: app wants Remote Control ${requestedRemoteControl ? 'on' : 'off'} — queueing ${command}`);
+        paneCommands.request([command]);
+        pumpPaneCommands();
+    };
+
+    const onMetadataChanged = (metadata: { modelMode?: string | null, effortLevel?: string | null, permissionMode?: string | null, remoteControl?: unknown } | null) => {
         if (!tmuxPane || !metadata) return;
         const next: PaneModelSelection = {
             modelMode: metadata.modelMode,
             effortLevel: metadata.effortLevel,
             permissionMode: paneModeFor(metadata.permissionMode),
         };
+        // DROVE-63 rides this same signal: one metadata event, one idle gate,
+        // one queue. Deliberately not a second carrier. It runs BEFORE the
+        // early return below, because a metadata write that only moves the
+        // toggle leaves `commands` empty and must still be acted on.
+        requestedRemoteControl = parseRemoteControlRequest(metadata.remoteControl);
+        reconcileRemoteControl();
         const commands = paneCommandsForSelection(paneSelection, next);
         if (commands.length === 0) return;
         // Record the intent even if the pane is busy. The queue owns the
@@ -424,6 +504,11 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
     };
     if (tmuxPane) {
         session.client.on('metadata', onMetadataChanged);
+        // The scanner already reported the transcript's state, but it did so
+        // before the queue existed. Decide once now, so a session relaunched
+        // with the app's request still standing (a flip, a crash, a resume)
+        // honours it instead of waiting for the next metadata write (DROVE-63).
+        reconcileRemoteControl();
     }
 
     // `let`, not `const`: a Cattle Drover flip aborts the child on purpose and

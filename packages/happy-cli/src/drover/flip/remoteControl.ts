@@ -102,7 +102,8 @@ export function warningFor(at: AtRiskSession[], target: string): string | null {
     return (
         `Heads up: moving to ${target} will drop Remote Control for ${at.length} other live ${noun} ` +
         `on this machine — ${names}. Claude Code binds Remote Control to one account per machine, ` +
-        `so ${its} will go quiet on the phone until you run /remote-control there.`
+        `so ${its} will go quiet on the phone until you run /remote-control there — or tap Remote ` +
+        `Control back on for ${its} in the app.`
     )
 }
 
@@ -137,15 +138,24 @@ export async function fetchBusSessions(
 }
 
 /**
- * The whole thing, ready to hand to `flip.say`. Null when there is nothing to
- * report or nothing could be read.
+ * The sentence for `flip.say`, AND the same list in a shape the app can put a
+ * button on (DROVE-63). Null when there is nothing to report or nothing could
+ * be read.
+ *
+ * Both halves come from one bus read on purpose. The warning names the sessions
+ * that just went quiet and the remedy it states is `/remote-control` in each of
+ * them — which is the one thing Clay cannot do from the phone, and the reason
+ * DROVE-63 exists. Carrying the ids alongside the prose lets the app offer that
+ * remedy where he is actually reading the warning.
  */
 export async function remoteControlWarning(opts: {
     target: string
     selfId: string
     listSessions?: () => Promise<BusSession[]>
-}): Promise<string | null> {
+}): Promise<{ text: string; atRisk: AtRiskSession[] } | null> {
     const list = opts.listSessions ?? (() => fetchBusSessions())
     const sessions = await list()
-    return warningFor(sessionsAtRisk({ sessions, target: opts.target, selfId: opts.selfId }), opts.target)
+    const atRisk = sessionsAtRisk({ sessions, target: opts.target, selfId: opts.selfId })
+    const text = warningFor(atRisk, opts.target)
+    return text === null ? null : { text, atRisk }
 }
