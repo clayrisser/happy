@@ -352,6 +352,25 @@ export type Metadata = {
    * control back and forth (BASED-113).
    */
   hasPane?: boolean,
+  /**
+   * What the tmux pane is ACTUALLY running, read off the transcript by the
+   * session scanner (DROVE-45). Report-only: the app's `modelMode` /
+   * `effortLevel` stay the PICK, and these two are the truth the picker
+   * displays for a pane session, so it can no longer claim Fable while Opus
+   * answers. Absent for a session with no pane.
+   */
+  paneModel?: string | null,
+  paneEffort?: string | null,
+  /**
+   * The per-session picks any client made (#1492). Written by the app's
+   * composer, and until DROVE-45 read only by the SDK path, which hands them to
+   * query(). They were missing from this type entirely because nothing in the
+   * CLI had ever needed to READ them — the pane launcher does, to turn a pick
+   * into the `/model` / `/effort` the TUI understands. Explicit null means
+   * "reset to default"; absent means "never picked".
+   */
+  modelMode?: string | null,
+  effortLevel?: string | null,
   // Lifecycle state management
   lifecycleState?: 'running' | 'archiveRequested' | 'archived' | string,
   lifecycleStateSince?: number,

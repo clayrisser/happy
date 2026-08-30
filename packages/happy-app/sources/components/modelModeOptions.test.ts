@@ -3,6 +3,8 @@ import {
     filterPermissionModesForCli,
     modeSupportedByCli,
     permissionModeSupportedByCli,
+    includePaneModel,
+    resolvePaneModelKey,
     getAgyModelModes,
     getAgyPermissionModes,
     getAvailableModels,
@@ -361,5 +363,59 @@ describe('modelModeOptions', () => {
         ]);
         expect(filterPermissionModesForCli(modes, '1.2.1-beta.2')).toEqual(modes);
         expect(filterPermissionModesForCli(modes, undefined)).toEqual(modes);
+    });
+});
+
+// DROVE-45: the picker showed the app's stored preference rather than the model
+// the tmux pane was running, so it read "Fable 5" while Opus answered.
+describe('resolvePaneModelKey', () => {
+    it('believes the pane over a pick that has not landed yet', () => {
+        expect(resolvePaneModelKey('claude-opus-5', 'claude-fable-5')).toBe('claude-opus-5');
+    });
+
+    it('shows the pane model when nothing was ever picked here', () => {
+        expect(resolvePaneModelKey('claude-sonnet-5', null)).toBe('claude-sonnet-5');
+    });
+
+    it('leaves the picker alone for a session with no pane to read', () => {
+        expect(resolvePaneModelKey(null, 'claude-opus-5')).toBeNull();
+        expect(resolvePaneModelKey(undefined, 'claude-opus-5')).toBeNull();
+    });
+
+    it('keeps the 1M bracket, which the transcript cannot report', () => {
+        // `claude-opus-5[1m]` runs as claude-opus-5 with a bigger context, so
+        // the transcript says `claude-opus-5`. Taking that literally would drop
+        // the row Clay picked and never let it come back.
+        expect(resolvePaneModelKey('claude-opus-5', 'claude-opus-5[1m]')).toBe('claude-opus-5[1m]');
+    });
+
+    it('does not keep a bracket pick that belongs to a different model', () => {
+        expect(resolvePaneModelKey('claude-sonnet-5', 'claude-opus-5[1m]')).toBe('claude-sonnet-5');
+    });
+});
+
+describe('includePaneModel', () => {
+    const claude = getClaudeModelModes();
+
+    it('leaves the list alone when the pane is on a model the menu already offers', () => {
+        expect(includePaneModel(claude, 'claude-opus-5')).toBe(claude);
+    });
+
+    it('leaves the list alone for a session with no pane', () => {
+        expect(includePaneModel(claude, null)).toBe(claude);
+    });
+
+    it('adds a row for a model the terminal switched to that the menu retired', () => {
+        // `/model opus-4-8` in the pane. Without a row, resolveCurrentOption
+        // finds nothing and the chip reads "MODEL" — as if the session had no
+        // model at all.
+        const withPane = includePaneModel(claude, 'claude-opus-4-8');
+        expect(withPane).toHaveLength(claude.length + 1);
+        expect(withPane.at(-1)).toEqual({
+            key: 'claude-opus-4-8',
+            name: 'claude-opus-4-8',
+            description: 'running in the terminal',
+            disabled: true,
+        });
     });
 });

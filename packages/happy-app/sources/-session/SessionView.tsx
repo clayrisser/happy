@@ -10,6 +10,8 @@ import {
     getAvailableModels,
     getAvailablePermissionModes,
     getEffortLevelsForModel,
+    includePaneModel,
+    resolvePaneModelKey,
     getRigCurrentModelOptionKey,
     resolveCurrentOption,
     EffortLevel,
@@ -711,14 +713,27 @@ export function SessionViewLoaded({
     const effectiveAgentDefaults = React.useMemo(() => (
         resolveAgentDefaultConfig(agentDefaultOverrides, flavor, cliVersion)
     ), [agentDefaultOverrides, cliVersion, flavor]);
+    // DROVE-45: for a session that IS a Claude Code TUI in a tmux pane, the
+    // pane outranks the pick. `session.modelMode` is only ever a request, and
+    // for a pane it used to be a request nothing carried out — so the chip read
+    // "Fable 5" while /status in the pane read claude-opus-5[1m]. It is also
+    // how a `/model` typed in the terminal reaches the phone at all, which is
+    // the half Clay asked for by name: "if I /model from the terminal it should
+    // always update the mobile app".
+    const paneModelKey = session.metadata?.hasPane
+        ? resolvePaneModelKey(session.metadata?.paneModel, session.modelMode)
+        : null;
     const availableModels = React.useMemo(() => (
-        getAvailableModels(
-            flavor,
-            session.metadata,
-            t,
-            session.modelMode ?? (isRig ? null : effectiveAgentDefaults.modelMode),
+        includePaneModel(
+            getAvailableModels(
+                flavor,
+                session.metadata,
+                t,
+                session.modelMode ?? (isRig ? null : effectiveAgentDefaults.modelMode),
+            ),
+            paneModelKey,
         )
-    ), [flavor, session.metadata, session.modelMode, effectiveAgentDefaults.modelMode, isRig]);
+    ), [flavor, session.metadata, session.modelMode, effectiveAgentDefaults.modelMode, isRig, paneModelKey]);
     const availableModes = React.useMemo(() => (
         getAvailablePermissionModes(flavor, session.metadata, t, session.permissionMode)
     ), [flavor, session.metadata, session.permissionMode]);
@@ -739,23 +754,32 @@ export function SessionViewLoaded({
 
     const modelMode = React.useMemo<ModelMode | null>(() => (
         resolveCurrentOption(availableModels, [
+            paneModelKey,
             session.modelMode,
             isRig ? getRigCurrentModelOptionKey(session.metadata) : effectiveAgentDefaults.modelMode,
             isRig ? undefined : session.metadata?.currentModelCode,
         ])
-    ), [availableModels, session.modelMode, effectiveAgentDefaults.modelMode, session.metadata, isRig]);
+    ), [availableModels, paneModelKey, session.modelMode, effectiveAgentDefaults.modelMode, session.metadata, isRig]);
 
     // Effort level state
     const modelKey = modelMode?.key ?? 'default';
     const availableEffortLevels = React.useMemo<EffortLevel[]>(() => (
         getEffortLevelsForModel(flavor, modelKey, session.metadata)
     ), [flavor, modelKey, session.metadata]);
+    // Same rule for effort, from the same transcript field. `ultracode` is the
+    // one pick the pane can never confirm: Claude Code records it as the xhigh
+    // it runs at, so a session set to Ultracode reports `xhigh` and the chip
+    // settles there. That is honest about the effort and loses the workflow
+    // orchestration half of the name; better than claiming a level the pane is
+    // not on.
+    const paneEffortKey = session.metadata?.hasPane ? session.metadata?.paneEffort ?? null : null;
     const effortLevel = React.useMemo<EffortLevel | null>(() => (
         resolveCurrentOption(availableEffortLevels, [
+            paneEffortKey,
             session.effortLevel,
             isRig ? getRigReasoningSelection(session.metadata, modelKey) : effectiveAgentDefaults.effortLevel,
         ])
-    ), [availableEffortLevels, session.effortLevel, effectiveAgentDefaults.effortLevel, session.metadata, modelKey, isRig]);
+    ), [availableEffortLevels, paneEffortKey, session.effortLevel, effectiveAgentDefaults.effortLevel, session.metadata, modelKey, isRig]);
 
     const sessionStatus = useSessionStatus(session);
     const sessionUsage = useSessionUsage(sessionId);
