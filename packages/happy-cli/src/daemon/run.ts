@@ -14,10 +14,11 @@ import { startCaffeinate, stopCaffeinate } from '@/utils/caffeinate';
 import packageJson from '../../package.json';
 import { getEnvironmentInfo } from '@/ui/doctor';
 import { spawnHappyCLI } from '@/utils/spawnHappyCLI';
-import { writeDaemonState, DaemonLocallyPersistedState, readDaemonState, acquireDaemonLock, releaseDaemonLock, readPersistedSessions, persistSession } from '@/persistence';
+import { writeDaemonState, DaemonLocallyPersistedState, readDaemonState, releaseDaemonLock, readPersistedSessions, persistSession } from '@/persistence';
 import type { PersistedSession } from '@/persistence';
 
-import { cleanupDaemonState, isDaemonRunningCurrentlyInstalledHappyVersion, stopDaemon } from './controlClient';
+import { cleanupDaemonState } from './controlClient';
+import { claimDaemonSlot } from './singleInstance';
 import { startDaemonControlServer } from './controlServer';
 import { statSync } from 'fs';
 import { join } from 'path';
@@ -45,6 +46,18 @@ import {
   tmuxWindowNameForDirectory,
 } from './tmuxSpawn';
 import { resolveTrackedPid } from '@/utils/processTree';
+
+/**
+ * Is this daemon running under a service manager that will restart it?
+ *
+ * DROVE-42: launchd (com.bitspur.cattle-drover.daemon, via libexec/drover-daemon)
+ * sets this. When it is set the daemon must never spawn its own replacement —
+ * see the upgrade handoff in the heartbeat below.
+ */
+function isSupervisedDaemon(): boolean {
+  return process.env.HAPPY_DAEMON_SUPERVISED === '1';
+}
+
 
 // Prepare initial metadata
 // Suffix host with `-dev` for the HAPPY_VARIANT=dev variant so the dev daemon
@@ -133,28 +146,30 @@ export async function startDaemon(): Promise<void> {
   logger.debug('[DAEMON RUN] Starting daemon process...');
   logger.debugLargeJson('[DAEMON RUN] Environment', getEnvironmentInfo());
 
-  // Check if already running
-  // Check if running daemon version matches current CLI version
-  const runningDaemonVersionMatches = await isDaemonRunningCurrentlyInstalledHappyVersion();
-  if (!runningDaemonVersionMatches) {
-    // TODO: This hand-rolled self-restart path is awkward to reason about and awkward to test.
-    // We should probably migrate this daemon to native system service management
-    // (launchd/systemd, similar to OpenClaw's model), so startup/start-at-login and upgrades
-    // are owned by the OS instead of by the daemon trying to replace itself in-process.
-    logger.debug('[DAEMON RUN] Daemon version mismatch detected, restarting daemon with current CLI version');
-    await stopDaemon();
-  } else {
+  // Claim the single daemon slot: take the lock first, and only then decide
+  // whether a daemon that is already running should be kept or replaced.
+  //
+  // DROVE-42: this used to run the other way round — ask "is a daemon running
+  // at my version?", then take the lock. That question CLEANS UP state it
+  // believes is stale, which deleted the lock a live daemon was holding, and
+  // the newcomer then walked straight into it. Five daemons were found alive
+  // at once sharing one daemon.state.json.
+  //
+  // TODO: This hand-rolled self-restart path is awkward to reason about and awkward to test.
+  // We should probably migrate this daemon to native system service management
+  // (launchd/systemd, similar to OpenClaw's model), so startup/start-at-login and upgrades
+  // are owned by the OS instead of by the daemon trying to replace itself in-process.
+  const slot = await claimDaemonSlot();
+  if (slot.outcome === 'already-running') {
     logger.debug('[DAEMON RUN] Daemon version matches, keeping existing daemon');
     console.log('Daemon already running with matching version');
     process.exit(0);
   }
-
-  // Acquire exclusive lock (proves daemon is running)
-  const daemonLockHandle = await acquireDaemonLock(5, 200);
-  if (!daemonLockHandle) {
+  if (slot.outcome === 'unavailable') {
     logger.warn('[DAEMON RUN] Failed to acquire daemon lock; daemon startup did not complete');
     process.exit(1);
   }
+  const daemonLockHandle = slot.lock;
 
   // At this point we should be safe to startup the daemon:
   // 1. Not have a stale daemon state
@@ -939,6 +954,18 @@ export async function startDaemon(): Promise<void> {
         await cleanupDaemonState();
         await releaseDaemonLock(daemonLockHandle);
         await stopCaffeinate();
+
+        // DROVE-42: under a service manager, exiting IS the restart. Spawning
+        // our own successor here produced a SECOND daemon: the child is
+        // detached, so it reparents to pid 1 where launchd cannot see it,
+        // while launchd separately restarts the copy it does supervise. Every
+        // `pnpm build` in the CLI checkout rewrites dist/index.mjs and trips
+        // the check above, so each build in a dev checkout added one orphan.
+        // That is how five accumulated, one of them two days old.
+        if (isSupervisedDaemon()) {
+          logger.debug('[DAEMON RUN] Supervised by a service manager, exiting so it restarts us on the new bundle');
+          process.exit(0);
+        }
 
         try {
           spawnHappyCLI(['daemon', 'start'], {
