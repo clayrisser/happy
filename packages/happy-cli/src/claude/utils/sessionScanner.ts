@@ -49,6 +49,8 @@ export type ScannerQueuedPrompt = {
     /** Set only on the absorb record — the enqueue record has no uuid. */
     claudeUuid?: string
 };
+
+/**
  * What the pane is ACTUALLY running, read off the transcript (DROVE-45).
  *
  * Every real assistant turn carries `message.model` (a full id like
@@ -104,6 +106,7 @@ export async function createSessionScanner(opts: {
      * reported and who pairs them.
      */
     onQueuedPrompt?: (prompt: ScannerQueuedPrompt) => void
+    /**
      * The model and effort the newest real assistant turn ran under, reported
      * whenever it changes (DROVE-45). Fires once on startup with whatever the
      * transcript already says, so a session resumed on the phone shows the
