@@ -39,10 +39,9 @@ import { appendDaemonPermissionArgs, appendDaemonSpawnModeArgs } from './spawnMo
 import {
   droverBinExists,
   droverBinPath,
-  droverMissingMessage,
   formatDroverPaneCommand,
   resolveDaemonAgent,
-  tmuxUnreachableMessage,
+  spawnPreconditionError,
   tmuxWindowNameForDirectory,
 } from './tmuxSpawn';
 import { resolveTrackedPid } from '@/utils/processTree';
@@ -446,15 +445,15 @@ export async function startDaemon(): Promise<void> {
           };
         }
 
-        if (!(await isTmuxAvailable())) {
-          logger.debug('[DAEMON RUN] Refusing to spawn: tmux is not reachable');
-          return { type: 'error', errorMessage: tmuxUnreachableMessage() };
-        }
-
         const droverBin = droverBinPath();
-        if (!droverBinExists(droverBin)) {
-          logger.debug(`[DAEMON RUN] Refusing to spawn: no drover wrapper at ${droverBin}`);
-          return { type: 'error', errorMessage: droverMissingMessage(droverBin) };
+        const precondition = spawnPreconditionError({
+          tmuxAvailable: await isTmuxAvailable(),
+          droverBin,
+          droverExists: droverBinExists(droverBin),
+        });
+        if (precondition) {
+          logger.debug(`[DAEMON RUN] Refusing to spawn: ${precondition}`);
+          return { type: 'error', errorMessage: precondition };
         }
 
         // Unset now means "the user's existing server" rather than "headless":

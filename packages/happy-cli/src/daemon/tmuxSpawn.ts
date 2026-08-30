@@ -140,3 +140,20 @@ export function droverMissingMessage(droverBin: string): string {
     return `Cannot start a session: the drover wrapper was not found at ${droverBin}. `
         + 'Point the daemon at your cattle-drover checkout with DROVER_BIN (or DROVER_DIR) and restart it.';
 }
+
+/**
+ * Everything that has to be true before a window can be opened, in one place
+ * so the no-headless ruling is one testable answer rather than a shape spread
+ * across the spawn function. `null` means go; a string is what the phone shows
+ * and there is no third outcome — in particular, no quiet fall-through to a
+ * headless session.
+ */
+export function spawnPreconditionError(check: {
+    tmuxAvailable: boolean;
+    droverBin: string;
+    droverExists: boolean;
+}): string | null {
+    if (!check.tmuxAvailable) return tmuxUnreachableMessage();
+    if (!check.droverExists) return droverMissingMessage(check.droverBin);
+    return null;
+}

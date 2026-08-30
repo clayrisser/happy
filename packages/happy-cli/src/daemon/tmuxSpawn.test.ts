@@ -6,6 +6,7 @@ import {
     formatDroverPaneCommand,
     resolveDaemonAgent,
     shellescape,
+    spawnPreconditionError,
     tmuxWindowNameForDirectory,
 } from './tmuxSpawn';
 import { appendDaemonSpawnModeArgs } from './spawnModeArgs';
@@ -128,5 +129,35 @@ describe('finding the drover wrapper', () => {
 
     it('otherwise sits next to the adapters the bus hooks already use', () => {
         expect(droverBinPath({}, '/checkout')).toBe('/checkout/bin/drover');
+    });
+});
+
+// Clay's ruling on DROVE-2: no headless session is ever created. A spawn that
+// cannot get a pane FAILS with something the phone can show, rather than
+// quietly producing a second kind of session the terminal can never see.
+describe('what has to be true before a window is opened', () => {
+    const ok = { tmuxAvailable: true, droverBin: '/d/bin/drover', droverExists: true };
+
+    it('goes ahead when tmux answers and the wrapper is there', () => {
+        expect(spawnPreconditionError(ok)).toBeNull();
+    });
+
+    it('fails rather than falling back to headless when tmux is unreachable', () => {
+        const error = spawnPreconditionError({ ...ok, tmuxAvailable: false });
+
+        expect(error).toMatch(/tmux is not available/);
+        expect(error).toMatch(/the terminal and the app are the same session/);
+    });
+
+    it('names the wrapper it could not find, and how to point at it', () => {
+        const error = spawnPreconditionError({ ...ok, droverExists: false });
+
+        expect(error).toContain('/d/bin/drover');
+        expect(error).toMatch(/DROVER_BIN/);
+    });
+
+    it('reports tmux first, because a missing wrapper is the lesser problem', () => {
+        expect(spawnPreconditionError({ ...ok, tmuxAvailable: false, droverExists: false }))
+            .toMatch(/tmux is not available/);
     });
 });
