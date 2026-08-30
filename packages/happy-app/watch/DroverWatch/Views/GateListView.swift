@@ -77,9 +77,17 @@ struct GateListView: View {
                 // second tab: gates are what the wrist is FOR, and a tab bar
                 // costs a row of pixels on every screen to reach something
                 // used far less often.
+                //
+                // A Label, not a bare Image: the toolbar elides the text, but
+                // the title is what VoiceOver reads, and a bare symbol left it
+                // announcing the SF Symbol name (DROVE-7). The glyph is the
+                // same `terminal` the Sessions empty state shows, so the door
+                // and the room match. It used to be the circlepath arrows,
+                // which read as sync, and the watch has nothing to sync: no
+                // refresh message exists on the wire, snapshots are pushed.
                 ToolbarItem(placement: .topBarTrailing) {
                     NavigationLink(value: DroverRoute.sessions) {
-                        Image(systemName: "arrow.triangle.2.circlepath")
+                        Label("Sessions", systemImage: "terminal")
                     }
                 }
             }

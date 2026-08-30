@@ -118,7 +118,12 @@ struct SessionDetailView: View {
                     store.flip(session)
                     dismiss()
                 } label: {
-                    Label("Next with headroom", systemImage: "arrow.triangle.2.circlepath")
+                    // Left-right arrows, not the circlepath pair: that glyph
+                    // also opened the Sessions list, so one symbol meant two
+                    // things two screens apart (DROVE-7). A flip moves the
+                    // session sideways onto another account, which is what
+                    // this one draws.
+                    Label("Next with headroom", systemImage: "arrow.left.arrow.right")
                         .font(.caption)
                 }
                 .tint(.orange)
