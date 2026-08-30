@@ -26,6 +26,7 @@ export default defineConfig({
             // `drover-watch` import is unresolvable here and `vi.mock` on it
             // throws before the factory ever runs. Mirrors the tsconfig entry.
             'drover-watch': resolve('./modules/drover-watch'),
+            'drover-speech': resolve('./modules/drover-speech'),
         },
     },
 })
