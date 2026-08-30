@@ -16,6 +16,7 @@ import { CodexPatchView } from './CodexPatchView';
 import { CodexDiffView } from './CodexDiffView';
 import { AskUserQuestionView } from './AskUserQuestionView';
 import { DroverAccountLoginView } from './DroverAccountLoginView';
+import { DroverTodoView } from './DroverTodoView';
 import { RequestUserInputView } from './RequestUserInputView';
 import { GeminiEditView } from './GeminiEditView';
 import { GeminiExecuteView } from './GeminiExecuteView';
@@ -54,6 +55,10 @@ export const toolViewRegistry: Record<string, ToolViewComponent> = {
     // The drover bridge's account-login card: a link out and a code back, which
     // the options-only question card cannot render (DROVE-61).
     DroverAccountLogin: DroverAccountLoginView,
+    // The needs-you card (DROVE-69). Its own view because a to-do is answered
+    // by pressing Done or Drop it, and on the permission card it rode before,
+    // any generic approve closed it.
+    DroverTodo: DroverTodoView,
     request_user_input: RequestUserInputView,
     // Gemini tools (lowercase)
     edit: GeminiEditView,
@@ -114,6 +119,7 @@ export { MultiEditView } from './MultiEditView';
 export { TaskView } from './TaskView';
 export { AskUserQuestionView } from './AskUserQuestionView';
 export { DroverAccountLoginView } from './DroverAccountLoginView';
+export { DroverTodoView } from './DroverTodoView';
 export { RequestUserInputView } from './RequestUserInputView';
 export { GeminiEditView } from './GeminiEditView';
 export { GeminiExecuteView } from './GeminiExecuteView';

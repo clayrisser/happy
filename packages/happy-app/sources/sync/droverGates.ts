@@ -37,6 +37,15 @@ function firstQuestion(args: unknown): QuestionCard | null {
 
 export function previewFor(tool: string, args: unknown): string {
     const input = (args ?? {}) as Record<string, unknown>;
+    // A to-do's own card (DROVE-69). Its command is the preview when it has
+    // one, and its title when it does not — "log in to the box" is a job with
+    // nothing to run, and showing an empty line for it says nothing.
+    if (tool === 'DroverTodo') {
+        const command = typeof input.command === 'string' ? input.command.trim() : '';
+        const title = typeof input.title === 'string' ? input.title : '';
+        const text = command || title;
+        return text.length > PREVIEW_LIMIT ? `${text.slice(0, PREVIEW_LIMIT)}…` : text;
+    }
     // A question card carries no `command`: its body lives in
     // questions[0].question. Without this the wrist showed the raw JSON of the
     // whole card, which is unreadable at that size and buries the actual ask.
@@ -67,8 +76,15 @@ export function previewFor(tool: string, args: unknown): string {
  * when it is actually there. A label answers just as well; the CLI matches on
  * either.
  */
-export function optionsFor(args: unknown): DroverGateOption[] {
-    const raw = firstQuestion(args)?.options;
+export function optionsFor(args: unknown, tool?: string): DroverGateOption[] {
+    // A to-do carries its two buttons on the card itself, not inside a
+    // questions[] (DROVE-69). They have to reach the wrist as real options
+    // with ids, because a to-do is now answerable ONLY by naming one of them —
+    // happy-cli's busResolutionFor refuses a bare allow, which is what let the
+    // app ack event 4c3f5082 with nobody touching it.
+    const raw = tool === 'DroverTodo'
+        ? (args as { options?: unknown } | undefined)?.options
+        : firstQuestion(args)?.options;
     if (!Array.isArray(raw)) return [];
     const out: DroverGateOption[] = [];
     for (const entry of raw) {
@@ -131,6 +147,12 @@ export function questionTextFor(
 
 /** Wrist-sized title: the question's own header beats a generic "Question". */
 export function titleFor(tool: string, args: unknown): string {
+    // "Run DroverTodo" is nonsense on a wrist. The to-do's own title is the
+    // whole of what it is.
+    if (tool === 'DroverTodo') {
+        const title = (args as { title?: unknown } | undefined)?.title;
+        return typeof title === 'string' && title.trim() ? title : 'Needs you';
+    }
     if (tool !== 'AskUserQuestion') return `Run ${tool}`;
     const header = firstQuestion(args)?.header;
     return typeof header === 'string' && header.trim() ? header : 'Question';
@@ -157,6 +179,37 @@ export interface DroverGateEntry {
      * holds one session per machine and every local agent's prompt lands in it.
      */
     origin?: DroverGateOrigin;
+    /**
+     * The bus event's own facts, when the bridge mirrored this card. Absent on
+     * a rig or remote session's native permission, which never came off the
+     * bus at all.
+     */
+    event?: DroverGateEvent;
+    /**
+     * A JOB, not a decision (DROVE-71).
+     *
+     * The one distinction the inbox is built on. A pending PROMPT is blocking
+     * a session right now and can time out; a to-do is something Clay does
+     * when he can and never expires. A single count would hide the one that
+     * matters, so the two are counted and grouped apart everywhere.
+     */
+    todo: boolean;
+}
+
+/**
+ * The bus event a mirrored card came from, verbatim (DROVE-71).
+ *
+ * Written by happy-cli's requestForEvent. The card shapes are chosen to
+ * RENDER — a Bash card packs title and reason into one description string —
+ * so an inbox that has to group prompts apart from to-dos, print the why on
+ * its own line and show a true age had only a display string to read.
+ */
+export interface DroverGateEvent {
+    kind?: 'permission' | 'question' | 'idle' | 'expiry' | 'todo' | null;
+    title?: string | null;
+    reason?: string | null;
+    command?: string | null;
+    createdAt?: number | null;
 }
 
 /** Written by happy-cli's droverBridge; see requestForEvent (DROVE-19). */
@@ -217,26 +270,46 @@ export function collectGateEntries(
         for (const [requestId, request] of Object.entries(requests)) {
             const tool = (request as { tool?: string }).tool ?? 'Tool';
             const args = (request as { arguments?: unknown }).arguments;
+            const event = (request as { droverEvent?: DroverGateEvent | null }).droverEvent ?? undefined;
+            // The BUS's createdAt first (DROVE-71). The bridge re-mirrors every
+            // pending event on restart and stamps the card fresh each time, so
+            // a to-do — the one kind that never expires — read as newly raised
+            // after every launchd roll, and the list sorted on that lie.
             const createdAt = createdAtFor(
                 `${sessionId}:${requestId}`,
-                (request as { createdAt?: number | null }).createdAt,
+                event?.createdAt ?? (request as { createdAt?: number | null }).createdAt,
             );
             const account = session?.metadata?.droverAccount;
-            const options = optionsFor(args);
+            const options = optionsFor(args, tool);
             const origin = (request as { droverOrigin?: DroverGateOrigin | null }).droverOrigin;
             const multiSelect = multiSelectFor(args);
+            const todo = event?.kind === 'todo' || tool === 'DroverTodo';
             entries.push({
                 sessionId,
                 requestId,
                 tool,
                 args,
+                todo,
                 ...(origin ? { origin } : {}),
+                ...(event ? { event } : {}),
                 gate: {
                     id: `${sessionId}:${requestId}`,
                     title: titleFor(tool, args),
-                    reason: session?.metadata?.summary?.text ?? session?.metadata?.path ?? '',
+                    // The EVENT's reason when the bus sent one, because that is
+                    // the line that says why this is waiting; the session
+                    // summary is only ever context, and on the bridge session
+                    // it is one fixed string for every gate on the machine.
+                    reason: event?.reason
+                        || session?.metadata?.summary?.text
+                        || session?.metadata?.path
+                        || '',
                     preview: previewFor(tool, args),
-                    kind: tool === 'AskUserQuestion' ? 'question' : 'permission',
+                    // Off the EVENT, so the wrist finally draws a to-do as one.
+                    // GateListView has had the green checklist glyph for `todo`
+                    // since DROVE-53 and never saw the kind, because this line
+                    // read the TOOL name and every drover card that was not a
+                    // question came through as a permission.
+                    kind: todo ? 'todo' : tool === 'AskUserQuestion' ? 'question' : 'permission',
                     createdAt: new Date(createdAt).toISOString(),
                     // Omitted, never null: WatchConnectivity payloads take
                     // property-list types only and JSON null becomes NSNull,

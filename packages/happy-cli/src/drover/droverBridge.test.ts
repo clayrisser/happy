@@ -59,13 +59,43 @@ describe('requestForEvent', () => {
         expect(questions[0].multiSelect).toBe(true)
     })
 
-    it('renders a to-do through the permission card, which already has buttons', () => {
+    it('gives a to-do its own card, not the permission card anything can approve', () => {
+        // DROVE-69. On the permission card, every generic approve path in the
+        // app closed it — the phone's Allow, the wrist's Allow, the voice
+        // tool — and event 4c3f5082 was acked with nobody touching it.
         const card = requestForEvent(todo)
-        expect(card.tool).toBe('Bash')
+        expect(card.tool).toBe('DroverTodo')
         expect(card.arguments).toMatchObject({
+            title: 'push the release',
+            reason: 'the lane is blocked on it (by 10:00)',
             command: 'git push origin lane/DROVE-53',
-            description: 'push the release \u2014 the lane is blocked on it (by 10:00)',
+            options: [{ id: 'done', label: 'Done' }, { id: 'drop', label: 'Drop it' }],
         })
+    })
+
+    it('carries the bus event on every card so the inbox can group and age them', () => {
+        // DROVE-71. The card shapes are chosen to RENDER — a Bash card packs
+        // title and reason into one description string — so an inbox had
+        // nothing to read back but a display string.
+        expect(requestForEvent({ ...todo, createdAt: 1788131047730 }).droverEvent).toEqual({
+            kind: 'todo',
+            title: 'push the release',
+            reason: 'the lane is blocked on it (by 10:00)',
+            command: 'git push origin lane/DROVE-53',
+            createdAt: 1788131047730,
+        })
+        expect(requestForEvent(permission).droverEvent).toMatchObject({ kind: 'permission' })
+        expect(requestForEvent(question).droverEvent).toMatchObject({ kind: 'question' })
+    })
+
+    it('uses the BUS createdAt, so a bridge restart does not reset an age', () => {
+        // The bridge re-mirrors every pending event on restart and the card
+        // stamps its own createdAt then, so a to-do raised an hour before a
+        // launchd roll read as one minute old. A to-do never expires, so it is
+        // the kind most likely to outlive several restarts.
+        const card = requestForEvent({ ...todo, createdAt: 1 })
+        expect(card.droverEvent.createdAt).toBe(1)
+        expect(card.createdAt).not.toBe(1)
     })
 
     it('keeps a permission on the Bash card with its cwd', () => {
@@ -213,11 +243,37 @@ describe('busResolutionFor', () => {
         })).toEqual({ action: 'option', optionId: 'b', by: 'happy' })
     })
 
-    it('closes a to-do with done or drop, never with a bare allow', () => {
-        expect(busResolutionFor(todo, { id: 'ev-4', approved: true }))
-            .toEqual({ action: 'option', optionId: 'done', by: 'happy' })
-        expect(busResolutionFor(todo, { id: 'ev-4', approved: false }))
-            .toEqual({ action: 'option', optionId: 'drop', by: 'happy' })
+    it('closes a to-do only when a button on it was actually named', () => {
+        expect(busResolutionFor(todo, {
+            id: 'ev-4', approved: true, updatedInput: { optionId: 'done' },
+        })).toEqual({ action: 'option', optionId: 'done', by: 'happy' })
+        // By LABEL too: the phone submits labels, the wrist submits ids.
+        expect(busResolutionFor(todo, {
+            id: 'ev-4', approved: true, updatedInput: { optionId: 'Drop it' },
+        })).toEqual({ action: 'option', optionId: 'drop', by: 'happy' })
+    })
+
+    it('leaves a to-do PENDING when the answer names no button at all', () => {
+        // DROVE-69, the whole ticket. `approved ? done : drop` meant any
+        // affirmative closed it, so a to-do could be acked by anything in the
+        // app that can approve a permission. Event 4c3f5082 was resolved that
+        // way 257 seconds after it was raised, `by happy`, while Clay was
+        // asking where the to-do list was. A gate left open blocks a session;
+        // a to-do left open is just a to-do, so pending is the safe direction.
+        expect(busResolutionFor(todo, { id: 'ev-4', approved: true })).toBeNull()
+        expect(busResolutionFor(todo, { id: 'ev-4', approved: false })).toBeNull()
+        // Not even the "allow and stop asking" spellings, which is how the
+        // voice tool and a bypass-mode tap would arrive.
+        expect(busResolutionFor(todo, {
+            id: 'ev-4', approved: true, decision: 'approved_for_session',
+        })).toBeNull()
+        expect(busResolutionFor(todo, {
+            id: 'ev-4', approved: true, allowTools: ['Bash(git push)'],
+        })).toBeNull()
+        // An option that is not on THIS to-do is not an answer to it either.
+        expect(busResolutionFor(todo, {
+            id: 'ev-4', approved: true, updatedInput: { optionId: 'allow' },
+        })).toBeNull()
     })
 
     it('carries allow-for-session through, in both spellings the app uses', () => {

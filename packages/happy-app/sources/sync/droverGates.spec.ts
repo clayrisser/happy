@@ -558,3 +558,73 @@ describe('questionTextFor', () => {
         }, 's1', 'q')).toBeNull();
     });
 });
+
+
+// DROVE-69 and DROVE-71. A to-do rides its own card now, and the inbox counts
+// and groups it apart from the prompts that are actually blocking a session.
+const todoRequest = {
+    tool: 'DroverTodo',
+    createdAt: 5_000,
+    arguments: {
+        title: 'Archive TestFlight build 8',
+        reason: 'The watch work is Swift and can never ship over the air',
+        command: 'pnpm prebuild:ios && make ios/beta',
+        options: [{ id: 'done', label: 'Done' }, { id: 'drop', label: 'Drop it' }],
+    },
+    droverEvent: {
+        kind: 'todo',
+        title: 'Archive TestFlight build 8',
+        reason: 'The watch work is Swift and can never ship over the air',
+        command: 'pnpm prebuild:ios && make ios/beta',
+        createdAt: 1_000,
+    },
+};
+
+describe('a to-do on its own card', () => {
+    it('is a to-do, not a permission, so the wrist draws it as a job', () => {
+        // GateListView has had the green checklist glyph for `todo` since
+        // DROVE-53 and never saw the kind, because this read the TOOL name and
+        // every drover card that was not a question came through as a
+        // permission.
+        const [entry] = collectGateEntries({ s1: session({ requests: { r1: todoRequest } }) });
+        expect(entry.todo).toBe(true);
+        expect(entry.gate.kind).toBe('todo');
+    });
+
+    it('names itself instead of saying "Run DroverTodo"', () => {
+        const [entry] = collectGateEntries({ s1: session({ requests: { r1: todoRequest } }) });
+        expect(entry.gate.title).toBe('Archive TestFlight build 8');
+        expect(entry.gate.preview).toBe('pnpm prebuild:ios && make ios/beta');
+    });
+
+    it('carries Done and Drop it to the wrist as real options', () => {
+        // The wrist can only close a to-do by NAMING one of them now: happy-cli
+        // refuses an answer that names neither (DROVE-69), which is what let
+        // event 4c3f5082 be acked with nobody touching it.
+        expect(optionsFor(todoRequest.arguments, 'DroverTodo'))
+            .toEqual([{ id: 'done', label: 'Done' }, { id: 'drop', label: 'Drop it' }]);
+    });
+
+    it('shows the event reason rather than the bridge session summary', () => {
+        // The bridge holds ONE session per machine, so its summary is the same
+        // fixed line for every gate on the box.
+        const [entry] = collectGateEntries({
+            s1: session({ summary: 'Cattle Drover', requests: { r1: todoRequest } }),
+        });
+        expect(entry.gate.reason).toBe('The watch work is Swift and can never ship over the air');
+    });
+
+    it('ages from the BUS createdAt, so a bridge restart does not reset it', () => {
+        // The bridge re-mirrors every pending event on restart and stamps the
+        // card fresh each time. A to-do never expires, so it is the kind most
+        // likely to outlive several restarts.
+        const [entry] = collectGateEntries({ s1: session({ requests: { r1: todoRequest } }) });
+        expect(Date.parse(entry.gate.createdAt)).toBe(1_000);
+    });
+
+    it('falls back to the tool name for a card an older bridge wrote', () => {
+        const { droverEvent, ...older } = todoRequest;
+        const [entry] = collectGateEntries({ s1: session({ requests: { r9: older } }) });
+        expect(entry.todo).toBe(true);
+    });
+});
