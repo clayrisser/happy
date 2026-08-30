@@ -301,6 +301,16 @@ export class FlipController {
     }
 
     /**
+     * The account this session is on right now, by name, for anyone outside
+     * the controller who has to say so — the usage reporter (DROVE-47) marks
+     * it `current` in every snapshot. Same answer here() gives the flip, so
+     * the strip and the picker cannot name different accounts.
+     */
+    account(): string | undefined {
+        return this.here()?.name
+    }
+
+    /**
      * Say which account this session started on, when the caller knows better
      * than the environment does (a session spawned with explicit env vars
      * rather than through the `drover account` wrapper).

@@ -40,7 +40,8 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { RawJSONLinesSchema, type RawJSONLines } from './types';
 import { FlipController, parseFlipCommand } from '@/drover/flip/controller';
-import { readAccounts } from '@/drover/flip/accounts';
+import { currentAccount, readAccounts } from '@/drover/flip/accounts';
+import { UsageReporter } from '@/drover/flip/usage';
 import { findHappySessionForClaudeSession, resumedClaudeSessionId } from '@/resume/reattachClaudeSession';
 import type { ReconnectableHappySession } from '@/resume/resolveHappySession';
 
@@ -1056,6 +1057,24 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
         logger.debug('[flip] account flip armed');
     }
 
+    // The usage strip (DROVE-47). Built whenever a registry exists at all —
+    // one account still has a quota worth seeing — and NOT gated on the flip
+    // controller, which only exists with two. The account asked of the
+    // controller first, because after a flip it is the only thing that knows;
+    // the environment names the account this process was BORN on.
+    const usageReporter = readAccounts().length > 0
+        ? new UsageReporter({
+            current: () => flipController?.account() ?? currentAccount()?.name,
+            publish: (droverUsage) => {
+                session.updateMetadata((meta) => ({ ...meta, droverUsage }));
+            },
+        })
+        : undefined;
+    if (usageReporter) {
+        usageReporter.start();
+        logger.debug('[flip] usage reporter started');
+    }
+
     const exitCode = await loop({
         path: workingDirectory,
         model: options.model,
@@ -1105,10 +1124,12 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
         hookSettingsPath,
         jsRuntime: options.jsRuntime,
         flip: flipController,
+        usage: usageReporter,
         reattachedClaudeSessionId: reattached ? metadata.claudeSessionId : undefined,
     });
 
     flipController?.stop();
+    usageReporter?.stop();
 
     // Cleanup session resources (intervals, callbacks) - prevents memory leak
     // Note: currentSession is set by onSessionReady callback during loop()

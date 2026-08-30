@@ -244,11 +244,50 @@ export interface UsageExhaustion {
     reason: string
 }
 
-interface UsageLimitRow {
+export interface UsageLimitRow {
     kind?: unknown
     percent?: unknown
     resets_at?: unknown
     scope?: { model?: { display_name?: unknown } | null; surface?: unknown } | null
+}
+
+/** Claude Code's cached usage response for one account, as it sits on disk. */
+export interface UsageCache {
+    /** Epoch ms Claude Code fetched it, or null when the cache does not say. */
+    fetchedAt: number | null
+    rows: UsageLimitRow[]
+}
+
+/**
+ * The usage cache, read off the account's .claude.json, or null when there is
+ * no readable one.
+ *
+ * The ONE place that file is parsed for headroom (DROVE-47). readUsageExhaustion
+ * asks it "is anything at 100%" and the app's usage strip asks it "how full is
+ * everything"; two readers of the same rows is fine, two parsers of the same
+ * file is how `drover accounts` and the picker once disagreed about a limit.
+ * Nothing here interprets a row — that stays with the callers, so this cannot
+ * quietly change what "blocked" means.
+ */
+export function readUsageCache(a: DroverAccount): UsageCache | null {
+    let cached: unknown
+    try {
+        const cfg = accountConfigFile(a)
+        if (!existsSync(cfg)) return null
+        const raw = JSON.parse(readFileSync(cfg, 'utf8')) as { cachedUsageUtilization?: unknown }
+        cached = raw?.cachedUsageUtilization
+    } catch (err) {
+        logger.debug('[flip] could not read the usage cache for ' + a.name, err)
+        return null
+    }
+    const c = cached as { fetchedAtMs?: unknown; utilization?: { limits?: unknown } } | null | undefined
+    const rows = c?.utilization?.limits
+    if (!Array.isArray(rows)) return null
+    const fetchedAt = Number(c?.fetchedAtMs)
+    return {
+        fetchedAt: Number.isFinite(fetchedAt) && fetchedAt > 0 ? fetchedAt : null,
+        rows: rows.filter((row): row is UsageLimitRow => !!row && typeof row === 'object'),
+    }
 }
 
 /**
@@ -305,18 +344,9 @@ export function readUsageExhaustion(
     now = Date.now(),
     demand: ModelDemand = unknownModel,
 ): UsageExhaustion | null {
-    let cached: unknown
-    try {
-        const cfg = accountConfigFile(a)
-        if (!existsSync(cfg)) return null
-        const raw = JSON.parse(readFileSync(cfg, 'utf8')) as { cachedUsageUtilization?: unknown }
-        cached = raw?.cachedUsageUtilization
-    } catch (err) {
-        logger.debug('[flip] could not read the usage cache for ' + a.name, err)
-        return null
-    }
-    const rows = (cached as { utilization?: { limits?: unknown } } | null | undefined)?.utilization?.limits
-    if (!Array.isArray(rows)) return null
+    const cache = readUsageCache(a)
+    if (!cache) return null
+    const rows = cache.rows
 
     let until = 0
     let reason = ''
@@ -328,7 +358,7 @@ export function readUsageExhaustion(
     // on: one says switch models, the other says wait.
     let wideUntil = 0
     let wideReason = ''
-    for (const row of rows as UsageLimitRow[]) {
+    for (const row of rows) {
         const percent = Number(row?.percent)
         if (!Number.isFinite(percent) || percent < 100) continue
         const resets = Date.parse(String(row?.resets_at ?? ''))
@@ -481,7 +511,7 @@ export function clearCooldown(name: string): void {
  * Undefined stays the conservative answer: a notice that names no model means
  * the account, and blocks everything, exactly as it always did.
  */
-function cooldownFamily(c: Cooldown): string | undefined {
+export function cooldownFamily(c: Cooldown): string | undefined {
     return c.family ?? familyOfLimitText(c.reason)
 }
 

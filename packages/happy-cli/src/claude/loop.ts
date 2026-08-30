@@ -8,6 +8,7 @@ import { ApiClient } from "@/lib"
 import type { JsRuntime } from "./runClaude"
 import type { SandboxConfig } from "@/persistence"
 import type { FlipController } from "@/drover/flip/controller"
+import type { UsageReporter } from "@/drover/flip/usage"
 
 // Re-export permission mode type from api/types
 // Single unified type with 7 modes - Codex modes mapped at SDK boundary
@@ -56,6 +57,8 @@ interface LoopOptions {
     jsRuntime?: JsRuntime
     /** Cattle Drover account flip controller, when more than one account exists. */
     flip?: FlipController
+    /** Publishes every account's headroom onto the session's metadata (DROVE-47). */
+    usage?: UsageReporter
     /** Set when runClaude reattached to the Happy session holding this transcript (BASED-98). */
     reattachedClaudeSessionId?: string
 }
@@ -81,6 +84,7 @@ export async function loop(opts: LoopOptions): Promise<number> {
         hookSettingsPath: opts.hookSettingsPath,
         jsRuntime: opts.jsRuntime,
         flip: opts.flip,
+        usage: opts.usage,
         reattachedClaudeSessionId: opts.reattachedClaudeSessionId,
     });
 

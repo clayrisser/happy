@@ -57,6 +57,10 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
             // channel — the SDK's rate_limit_event only exists on the remote
             // path — so the transcript is where a usage limit becomes visible.
             session.flip?.noteTranscriptMessage(message);
+            // DROVE-47: a turn ending or a limit notice landing is when the
+            // usage cache is likeliest to have moved. Coalesced inside, so a
+            // turn's worth of lines costs one look.
+            session.usage?.refresh();
             // BASED-135: the same stream carries "Async agent launched
             // successfully" and, sometimes, the notification that ends it.
             inflight.note(message);
