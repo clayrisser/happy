@@ -35,14 +35,17 @@ export interface DroverOption {
 
 export interface DroverEvent {
     id: string
-    kind: 'permission' | 'question' | 'idle' | 'expiry'
+    /** `todo` is the needs-you record (DROVE-53): an ACTION, not an answer. */
+    kind: 'permission' | 'question' | 'idle' | 'expiry' | 'todo'
     state: string
     title: string
     reason?: string
     preview?: string
     options?: DroverOption[] | null
+    /** Questions only. The human may pick more than one of the options. */
+    multiSelect?: boolean
     origin?: { harness?: string; sessionId?: string | null; cwd?: string | null; account?: string | null }
-    resolution?: { action: string; optionId?: string; text?: string; by: string } | null
+    resolution?: { action: string; optionId?: string; optionIds?: string[]; text?: string; by: string } | null
 }
 
 /** What the app sends back over the `permission` RPC when a card is answered. */
@@ -52,6 +55,18 @@ export interface PermissionAnswer {
     reason?: string
     /** AskUserQuestion answers ride here: `{ answers: { [question]: label } }`. */
     updatedInput?: Record<string, unknown>
+    /**
+     * "Allow, and stop asking" — the two spellings the app already uses.
+     *
+     * PermissionFooter.tsx has had that button all along: the Claude flavour
+     * calls sessionAllow with allowTools ["Bash(<command>)"] and the Codex one
+     * passes decision 'approved_for_session'. This interface read neither, so
+     * both were dropped on the floor, the bus stored a plain one-shot allow,
+     * and the very next identical gate fired again. Clay tapped it and was
+     * asked again immediately (DROVE-53).
+     */
+    allowTools?: string[]
+    decision?: 'approved' | 'approved_for_session' | 'denied' | 'abort'
 }
 
 export function requestForEvent(ev: DroverEvent) {
@@ -78,14 +93,25 @@ export function requestForEvent(ev: DroverEvent) {
                             label: o.label,
                             ...(o.description ? { description: o.description } : {}),
                         })),
-                        multiSelect: false,
+                        // Off the EVENT, not hardcoded false (DROVE-53). It was
+                        // false here for every mirrored question, so a "pick as
+                        // many as apply" drew radio buttons on the phone and one
+                        // pick became the whole answer, with nothing on the
+                        // screen saying so.
+                        multiSelect: ev.multiSelect === true,
                     },
                 ],
             },
             createdAt: Date.now(),
         }
     }
-    if (ev.kind === 'permission') {
+    // A TO-DO rides the permission card (DROVE-53). It is the card that already
+    // has two buttons and needs no options of its own: Done is the approve,
+    // Drop is the deny, and the bus normalizes both onto one verb — so the
+    // phone needs no new card and no new vocabulary to answer one. The command
+    // goes in `command` and the why in `description`, the same split a Bash
+    // gate uses, so it reads the way every other card on that screen reads.
+    if (ev.kind === 'permission' || ev.kind === 'todo') {
         return {
             tool: 'Bash',
             arguments: {
@@ -116,9 +142,16 @@ export function requestForEvent(ev: DroverEvent) {
  */
 function answerCandidates(answer: PermissionAnswer): string[] {
     const input = answer.updatedInput as
-        | { answers?: Record<string, unknown>; optionId?: unknown }
+        | { answers?: Record<string, unknown>; optionId?: unknown; optionIds?: unknown }
         | undefined
     const raw: string[] = []
+    // `optionIds` FIRST: the wrist sends the whole selection under that key for
+    // a multi-select, and reading optionId alone took one tick of three
+    // (DROVE-53). Order matters because the single-select path below returns on
+    // the first match.
+    if (Array.isArray(input?.optionIds)) {
+        for (const v of input.optionIds) if (typeof v === 'string') raw.push(v)
+    }
     if (typeof input?.optionId === 'string') raw.push(input.optionId)
     for (const value of Object.values(input?.answers ?? {})) {
         if (typeof value === 'string') raw.push(value)
@@ -159,6 +192,24 @@ export function busResolutionFor(
         // every other surface with no answer to hand back.
         if (!answer.approved) return null
         const candidates = answerCandidates(answer)
+        // MULTI-SELECT: every candidate that matches an option, not the first.
+        //
+        // The phone joins its picks with ", " and the watch sends them as an
+        // array, and this used to stop at the first match either way — so
+        // ticking three boxes sent one word to the session, at HTTP 200, with
+        // nothing on any screen saying the rest had gone (DROVE-53). The bus
+        // takes `optionIds` now; `optionId` still carries the first pick so a
+        // reader that predates the key is unaffected.
+        if (ev.multiSelect === true) {
+            const ids: string[] = []
+            for (const candidate of candidates) {
+                const option = (ev.options ?? []).find((o) => o.id === candidate || o.label === candidate)
+                if (option && !ids.includes(option.id)) ids.push(option.id)
+            }
+            if (ids.length > 1) {
+                return { action: 'option', optionId: ids[0], optionIds: ids, by: 'happy' }
+            }
+        }
         for (const candidate of candidates) {
             const option = (ev.options ?? []).find((o) => o.id === candidate || o.label === candidate)
             if (option) return { action: 'option', optionId: option.id, by: 'happy' }
@@ -166,9 +217,25 @@ export function busResolutionFor(
         if (candidates.length) return { action: 'text', text: candidates[0], by: 'happy' }
         return null
     }
+    if (ev?.kind === 'todo') {
+        // Done or dropped. The card is a permission card, so the app sends
+        // approved/denied; the bus normalizes every affirmative onto `ack`, so
+        // the option ids are sent rather than a bare allow and the terminal,
+        // the wrist and the phone all close a to-do the same way.
+        return { action: 'option', optionId: answer.approved ? 'done' : 'drop', by: 'happy' }
+    }
+    // ALLOW, AND STOP ASKING. Both of the app's spellings mean it: the Claude
+    // flavour of PermissionFooter sends allowTools ["Bash(<command>)"] and the
+    // Codex one sends decision 'approved_for_session'. Neither reached the bus
+    // before, so the button worked on screen and changed nothing — the next
+    // identical gate fired again. lib/drover-gate.sh is what honours the scope.
+    const forSession =
+        answer.approved &&
+        ((answer.allowTools?.length ?? 0) > 0 || answer.decision === 'approved_for_session')
     return {
         action: answer.approved ? 'allow' : 'deny',
         by: 'happy',
+        ...(forSession ? { scope: 'session' } : {}),
         ...(answer.reason ? { text: answer.reason } : {}),
     }
 }
@@ -198,9 +265,17 @@ export function completedReasonFor(ev: DroverEvent): string | undefined {
  * that buzzes without naming the prompt or the project is barely better than
  * one that stays quiet: nothing tells you which of five running agents stopped.
  */
-function pushMetadata(metadata: Metadata | null, ev: DroverEvent): Metadata {
+export function pushMetadata(metadata: Metadata | null, ev: DroverEvent): Metadata {
     const project = ev.origin?.cwd?.split('/').filter(Boolean).pop()
-    const text = [ev.title, project].filter(Boolean).join(' · ')
+    // The REASON, which never left the Mac (DROVE-53). A gate's reason is the
+    // only part that says WHY it fired — "this command deletes files outside
+    // the repo" — and the push body was title plus project, so the one line
+    // that decides the answer was the one line the phone did not show. Trimmed
+    // hard: a notification body is two lines on a lock screen and one on a
+    // wrist, and a truncated reason reads worse than a short one.
+    const reason = ev.reason?.trim()
+    const short = reason && reason.length > 90 ? `${reason.slice(0, 89)}…` : reason
+    const text = [ev.title, short, project].filter(Boolean).join(' · ')
     return { ...(metadata ?? ({} as Metadata)), summary: { text, updatedAt: Date.now() } }
 }
 
@@ -288,9 +363,11 @@ export async function runDroverBridge(): Promise<void> {
             requests: { ...(s.requests ?? {}), [ev.id]: card },
         }))
         api.push().sendSessionNotification({
-            // A question is not a permission request, and the push title is
-            // picked off this ("Clarification needed" vs "Permission request").
-            kind: ev.kind === 'question' ? 'question' : 'permission',
+            // A question is not a permission request, and a to-do is neither.
+            // The push TITLE is picked off this ("Clarification needed" /
+            // "Needs you" / "Permission request"), which on a lock screen is
+            // most of what you get to read.
+            kind: ev.kind === 'question' ? 'question' : ev.kind === 'todo' ? 'todo' : 'permission',
             // The body is the session summary, and the bridge holds ONE session
             // for the whole machine, so every push read the same fixed line and
             // said nothing about what was being asked or by which agent.
@@ -406,8 +483,11 @@ export async function runDroverBridge(): Promise<void> {
                         } catch {
                             continue
                         }
+                        // `todo` joins the two kinds that get a card (DROVE-53).
+                        // idle and expiry stay out: they are notices, and a card
+                        // for them is a card nobody can retire.
                         if (eventType === 'created' && ev.state === 'pending'
-                            && (ev.kind === 'permission' || ev.kind === 'question')) {
+                            && (ev.kind === 'permission' || ev.kind === 'question' || ev.kind === 'todo')) {
                             addCard(ev)
                         } else if (['resolved', 'canceled', 'expired'].includes(eventType)) {
                             removeCard(ev)

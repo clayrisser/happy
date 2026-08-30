@@ -69,14 +69,25 @@ final class GateStore: NSObject, ObservableObject {
     /// Returns whether the answer actually left this watch, so the caller can
     /// stay put and show `lastError` instead of dismissing on a refusal.
     @discardableResult
-    func answer(_ gate: DroverGate, allow: Bool, optionId: String? = nil, text: String? = nil) -> Bool {
+    func answer(
+        _ gate: DroverGate,
+        allow: Bool,
+        optionId: String? = nil,
+        text: String? = nil,
+        optionIds: [String]? = nil,
+        forSession: Bool = false
+    ) -> Bool {
         // Whitespace is not an answer. The bus refuses a blank one outright
         // (server.js rejects it 400) and an older bus takes it and records
         // nothing, which dismisses every surface and leaves the waiting hook
         // nothing to inject. Caught here rather than at the button, so the
         // dictation that heard silence cannot be sent as a settled answer.
         let typed = text?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let picked = optionId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        // A multi-select answers with a LIST, and the first of that list is
+        // also what goes out as optionId — so a reader that never learned the
+        // new key still gets an answer instead of nothing (DROVE-53).
+        let many = (optionIds ?? []).filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        let picked = (optionId ?? many.first)?.trimmingCharacters(in: .whitespacesAndNewlines)
         if gate.isQuestion && (picked ?? "").isEmpty && (typed ?? "").isEmpty {
             lastError = "A question needs an answer"
             return false
@@ -85,9 +96,15 @@ final class GateStore: NSObject, ObservableObject {
         let answer = DroverAnswer(
             id: gate.id,
             allow: allow,
-            optionId: optionId,
+            optionId: picked,
             // Absent, never empty: see DroverAnswer.text.
-            text: (typed ?? "").isEmpty ? nil : typed
+            text: (typed ?? "").isEmpty ? nil : typed,
+            // Absent for a single pick, never a one-element array: see
+            // DroverAnswer.optionIds.
+            optionIds: many.count > 1 ? many : nil,
+            // Absent unless it was actually asked for. Only a permission can
+            // carry it — nothing else here has a "and stop asking" to remember.
+            scope: forSession && gate.classification == .permission ? "session" : nil
         )
         if !send(answer, describing: "answer") {
             answering.remove(gate.id)

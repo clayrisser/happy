@@ -191,14 +191,30 @@ export function startDroverWatchFeed(): () => void {
         // on a miss. So a typed answer needs no second channel, and inventing
         // one would land it where nothing is looking.
         const answered = event.optionId || event.text;
+        // A MULTI-SELECT carries the whole list alongside (DROVE-53).
+        // `optionId` still holds the first pick, so a CLI that only reads that
+        // key behaves exactly as it did; happy-cli's answerCandidates reads
+        // optionIds first and busResolutionFor turns it into the bus's
+        // `optionIds` array. Dropping it here is where three ticks would have
+        // become one word, since this function copies the fields it names.
+        const many = event.optionIds?.filter((id) => !!id) ?? [];
         const call = event.allow
             ? sessionAllow(
                 sessionId,
                 requestId,
                 undefined,
                 undefined,
-                undefined,
-                answered ? { optionId: answered } : undefined,
+                // 'approved_for_session' rather than an allowTools entry,
+                // because the wrist does not know the tool name — the gate is a
+                // bus event to it, not a Bash call. happy-cli's busResolutionFor
+                // accepts either spelling and turns both into scope 'session'.
+                event.scope === 'session' ? 'approved_for_session' : undefined,
+                answered || many.length
+                    ? {
+                        ...(answered ? { optionId: answered } : {}),
+                        ...(many.length > 1 ? { optionIds: many } : {}),
+                    }
+                    : undefined,
             )
             : sessionDeny(sessionId, requestId);
         // Fire and forget with an explicit catch: an answer that fails to send

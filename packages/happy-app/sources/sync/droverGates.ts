@@ -24,6 +24,7 @@ interface QuestionCard {
     question?: string;
     header?: string;
     options?: unknown;
+    multiSelect?: boolean;
 }
 
 /** The first question on an AskUserQuestion card, drover-mirrored or Claude's own. */
@@ -87,6 +88,19 @@ export function optionsFor(args: unknown): DroverGateOption[] {
         });
     }
     return out;
+}
+
+/**
+ * Whether the question lets the human tick more than one option (DROVE-53).
+ *
+ * Read off the CARD rather than off the bus event, because that is all the
+ * phone has: happy-cli mirrors a bus question into an AskUserQuestion card and
+ * the card is what storage holds. It used to hardcode multiSelect false there,
+ * so this would have been false for every drover gate however the question was
+ * asked — both halves had to change or neither was worth changing.
+ */
+export function multiSelectFor(args: unknown): boolean {
+    return firstQuestion(args)?.multiSelect === true;
 }
 
 /** Wrist-sized title: the question's own header beats a generic "Question". */
@@ -166,6 +180,7 @@ export function collectGateEntries(
             );
             const account = session?.metadata?.droverAccount;
             const options = optionsFor(args);
+            const multiSelect = multiSelectFor(args);
             entries.push({
                 sessionId,
                 requestId,
@@ -188,6 +203,11 @@ export function collectGateEntries(
                     // one is not answerable here" and says so, which is the
                     // truth.
                     ...(options.length ? { options } : {}),
+                    // Omitted when false, so the payload stays exactly the size
+                    // it was and a watch build that predates the key decodes it
+                    // unchanged — absent reads as single-select there, which is
+                    // what every gate was.
+                    ...(multiSelect ? { multiSelect } : {}),
                 },
             });
         }

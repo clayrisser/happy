@@ -204,14 +204,17 @@ private struct GateRow: View {
     let sent: Bool
 
     /// One glyph per kind the bus emits. A question and a permission need
-    /// telling apart at a glance because they take different answers, and idle
-    /// and expiry are not gates on an action at all.
+    /// telling apart at a glance because they take different answers, idle and
+    /// expiry are not gates on an action at all, and a to-do is a job for you
+    /// rather than a decision — green, because nothing is being held up by a
+    /// choice you have not made yet.
     private var symbol: (name: String, tint: Color) {
         switch gate.classification {
         case .question: return ("questionmark.bubble", .blue)
         case .permission, .unknown: return ("exclamationmark.shield", .orange)
         case .idle: return ("hourglass", .secondary)
         case .expiry: return ("clock.badge.exclamationmark", .yellow)
+        case .todo: return ("checklist", .green)
         }
     }
 
