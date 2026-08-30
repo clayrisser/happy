@@ -15,6 +15,7 @@ import { calculateCost } from '@/utils/pricing';
 import { shouldReconnect } from '@/utils/lidState';
 import { createEnvelope, type CreateEnvelopeOptions, type SessionEnvelope, type SessionTurnEndStatus } from '@slopus/happy-wire';
 import {
+    ClaudeActivityPublisher,
     closeClaudeTurnWithStatus,
     mapClaudeLogMessageToSessionEnvelopes,
     type ClaudeSessionProtocolState,
@@ -224,6 +225,14 @@ export class ApiSessionClient extends EventEmitter {
         startedSubagents: new Set<string>(),
         activeSubagents: new Set<string>(),
     };
+    /**
+     * Mirrors the state above into `metadata.activity` (BASED-134). Debounced
+     * and de-duped inside the publisher, so this can be poked after every
+     * mapper call without turning a subagent fan-out into a metadata storm.
+     */
+    private claudeActivity = new ClaudeActivityPublisher((activity) => {
+        this.updateMetadata((metadata) => ({ ...metadata, activity }));
+    });
     /**
      * How far this client has consumed the session's message log.
      *
@@ -696,6 +705,9 @@ export class ApiSessionClient extends EventEmitter {
     }
 
     private enqueueSessionProtocolEnvelopes(envelopes: SessionEnvelope[], invalidate: boolean = true) {
+        // The one funnel every Claude mapper call already goes through, which
+        // is why the activity sync hangs here rather than on each caller.
+        this.claudeActivity.sync(this.claudeSessionProtocolState);
         for (let i = 0; i < envelopes.length; i += 1) {
             this.enqueueSessionProtocolEnvelope(envelopes[i], invalidate && i === envelopes.length - 1);
         }
@@ -1004,6 +1016,7 @@ export class ApiSessionClient extends EventEmitter {
 
     async close() {
         logger.debug('[API] socket.close() called');
+        this.claudeActivity.dispose();
         this.sendSync.stop();
         this.receiveSync.stop();
         if (this.reconnectInterval) {

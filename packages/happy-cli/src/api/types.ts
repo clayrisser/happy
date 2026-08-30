@@ -322,6 +322,18 @@ export type Metadata = {
   gitBranch?: string,
   claudeSessionId?: string, // Claude Code session ID
   codexThreadId?: string, // Codex app-server thread ID
+  /**
+   * Live counters the phone's info screen and the watch already render
+   * (BASED-134). Mirrors happy-app's MetadataSchema, where every sub-object is
+   * required once `activity` is present — publish the whole block or none of
+   * it, or the app's metadata safeParse fails and drops the record.
+   */
+  activity?: {
+    subagents: { running: number, queued: number, total: number },
+    workflows: { running: number, total: number },
+    processes: { running: number },
+    tasks: { pending: number, inProgress: number, completed: number, total: number },
+  },
   tools?: string[],
   slashCommands?: string[],
   mcpServers?: Array<{ name: string; status: string }>,
