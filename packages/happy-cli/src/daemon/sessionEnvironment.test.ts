@@ -112,4 +112,16 @@ describe('sessionEnvironment', () => {
 
         expect(childEnv.TMUX_PANE).toBe('%99');
     });
-});
+
+    it('drops HAPPY_DAEMON_SUPERVISED, which describes the parent and not the child', () => {
+        // DROVE-42: only the process launchd started has a supervisor. A child
+        // that believed it did would exit on the next rebuild and never come back.
+        const sanitized = sanitizeSessionEnvironment({
+            HAPPY_DAEMON_SUPERVISED: '1',
+            PATH: '/usr/bin',
+        });
+
+        expect(sanitized.HAPPY_DAEMON_SUPERVISED).toBeUndefined();
+        expect(sanitized.PATH).toBe('/usr/bin');
+    });
+})

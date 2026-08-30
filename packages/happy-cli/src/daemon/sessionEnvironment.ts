@@ -19,6 +19,20 @@ export const SESSION_SCOPED_ENV_KEYS = [
 ] as const;
 
 /**
+ * Environment variables that describe how THIS process is being run, and are
+ * therefore wrong for any process it spawns (DROVE-42).
+ *
+ * HAPPY_DAEMON_SUPERVISED says "a service manager will restart me if I exit",
+ * which is true of the daemon launchd starts and false of everything that
+ * daemon goes on to spawn. Inherited, a session-started daemon would believe
+ * it had a supervisor, exit on the next rebuild, and leave the machine with no
+ * daemon at all — the exact opposite of the orphan it was added to prevent.
+ */
+export const PROCESS_SCOPED_ENV_KEYS = [
+    'HAPPY_DAEMON_SUPERVISED',
+] as const;
+
+/**
  * Environment variables that name the tmux pane a process is running IN
  * (BASED-140).
  *
@@ -57,6 +71,9 @@ export function sanitizeSessionEnvironment(env?: NodeJS.ProcessEnv): NodeJS.Proc
 export function sanitizeSessionEnvironment(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
     const sanitized = { ...env };
     for (const key of SESSION_SCOPED_ENV_KEYS) {
+        delete sanitized[key];
+    }
+    for (const key of PROCESS_SCOPED_ENV_KEYS) {
         delete sanitized[key];
     }
     return sanitized;
@@ -102,7 +119,11 @@ export function buildDirectSpawnChildEnvironment(
  * starting a child, unless this launch intentionally supplies a replacement.
  */
 export function sessionEnvironmentKeysToUnset(explicitEnv: NodeJS.ProcessEnv = {}): string[] {
-    return SESSION_SCOPED_ENV_KEYS.filter((key) => explicitEnv[key] === undefined);
+    // DROVE-42: process-scoped keys go too. The tmux path is the other way a
+    // daemon's environment reaches a child, and HAPPY_DAEMON_SUPERVISED must
+    // not survive either hop.
+    return [...SESSION_SCOPED_ENV_KEYS, ...PROCESS_SCOPED_ENV_KEYS]
+        .filter((key) => explicitEnv[key] === undefined);
 }
 
 export function wrapTmuxCommandWithSessionEnvironmentSanitizer(
