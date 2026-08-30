@@ -595,6 +595,9 @@ export const pl: TranslationStructure = {
     toolView: {
         input: 'Wejście',
         output: 'Wyjście',
+        raw: 'Surowy JSON',
+        showMore: 'Pokaż więcej',
+        showLess: 'Pokaż mniej',
     },
 
     toolGroup: {

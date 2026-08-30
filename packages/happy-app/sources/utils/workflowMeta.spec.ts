@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseWorkflowMeta } from './workflowMeta';
+import { parseWorkflowMeta, parseWorkflowPhases } from './workflowMeta';
 
 const realScript = `import { runPhase } from 'drover/workflow';
 
@@ -61,5 +61,31 @@ describe('parseWorkflowMeta', () => {
     it('returns only the name when a description is absent', () => {
         const script = `export const meta = {\n  name: 'drover-deep-audit',\n  phases: [],\n}\n`;
         expect(parseWorkflowMeta(script)).toEqual({ name: 'drover-deep-audit' });
+    });
+});
+
+describe('parseWorkflowPhases', () => {
+    it('reads the phases Clay\'s scripts declare', () => {
+        // Measured from the drover-defects-verify-and-file workflow in the transcript.
+        const script = `export const meta = {
+  name: 'drover-defects-verify-and-file',
+  description: 'Adversarially verify each defect, then file one ticket per confirmed one',
+  phases: [
+    { title: 'Verify', detail: 'one skeptic per defect, must cite file:line or live state' },
+    { title: 'File', detail: 'search Huly for a dupe, then create a BASED ticket with acceptance criteria' },
+  ],
+}
+
+const DATE = '2026-08-28/29'`;
+        expect(parseWorkflowPhases(script)).toEqual([
+            { title: 'Verify', detail: 'one skeptic per defect, must cite file:line or live state' },
+            { title: 'File', detail: 'search Huly for a dupe, then create a BASED ticket with acceptance criteria' },
+        ]);
+    });
+
+    it('yields nothing for a computed phase list or a script without one', () => {
+        expect(parseWorkflowPhases('export const meta = {\n  name: "x",\n  phases: PHASES,\n}')).toEqual([]);
+        expect(parseWorkflowPhases('export const meta = {\n  name: "x",\n}')).toEqual([]);
+        expect(parseWorkflowPhases(undefined)).toEqual([]);
     });
 });

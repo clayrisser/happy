@@ -181,7 +181,14 @@ export type RawToolUseContent = z.infer<typeof rawToolUseContentSchema>;
 const rawToolResultContentSchema = z.object({
     type: z.literal('tool_result'),
     tool_use_id: z.string(),
-    content: z.union([z.array(z.object({ type: z.literal('text'), text: z.string() })), z.string()]),
+    // A result block does not have to be text. A Read of an image comes back as
+    // `[{ type: 'image', source: { … } }]`, and a text-only schema rejected the
+    // whole message, so the result was DROPPED and the detail screen honestly
+    // reported "No output was produced" over a result that existed (DROVE-51).
+    content: z.union([
+        z.string(),
+        z.array(z.object({ type: z.string() }).passthrough()),
+    ]),
     is_error: z.boolean().optional(),
     permissions: z.object({
         date: z.number(),
@@ -815,6 +822,32 @@ function normalizeSessionEnvelope(
     return null;
 }
 
+/**
+ * A tool result's content blocks, kept rather than flattened to the first
+ * block's text (DROVE-51). `c.content?.[0]?.text ?? ''` turned a Read of an
+ * image into the empty string, because an image block has no `.text` — which
+ * is why the tool detail screen reported "No output was produced" over a
+ * result that was right there. Text-only blocks still collapse to a string,
+ * which is what every existing view expects; anything else survives whole for
+ * the renderer to deal with. Fold, never drop.
+ */
+function toolResultContent(content: unknown): unknown {
+    if (typeof content === 'string') {
+        return content;
+    }
+    if (!Array.isArray(content)) {
+        return content ?? '';
+    }
+    const isTextBlock = (block: unknown): block is { type: 'text'; text: string } =>
+        !!block && typeof block === 'object'
+        && (block as { type?: unknown }).type === 'text'
+        && typeof (block as { text?: unknown }).text === 'string';
+    if (content.every(isTextBlock)) {
+        return content.map((block) => block.text).join('\n');
+    }
+    return content;
+}
+
 export function normalizeRawMessage(id: string, localId: string | null, createdAt: number, raw: RawRecord): NormalizedMessage | null {
     // Zod transform handles normalization during validation
     let parsed = rawRecordSchema.safeParse(raw);
@@ -975,7 +1008,7 @@ export function normalizeRawMessage(id: string, localId: string | null, createdA
                             content.push({
                                 ...c,  // WOLOG: Preserve all fields including unknown ones
                                 type: 'tool-result',
-                                content: raw.content.data.toolUseResult ? raw.content.data.toolUseResult : (typeof c.content === 'string' ? c.content : c.content?.[0]?.text ?? ''),
+                                content: raw.content.data.toolUseResult ? raw.content.data.toolUseResult : toolResultContent(c.content),
                                 is_error: c.is_error || false,
                                 uuid: raw.content.data.uuid,
                                 parentUUID: raw.content.data.parentUuid ?? null,

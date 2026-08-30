@@ -580,6 +580,9 @@ export const ja: TranslationStructure = {
     toolView: {
         input: '入力',
         output: '出力',
+        raw: '生の JSON',
+        showMore: 'もっと見る',
+        showLess: '折りたたむ',
     },
 
     toolGroup: {

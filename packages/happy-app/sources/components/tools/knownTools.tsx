@@ -2,7 +2,7 @@ import { Metadata, TodoItemsSchema } from '@/sync/storageTypes';
 import { ToolCall, Message } from '@/sync/typesMessage';
 import { resolvePath } from '@/utils/pathUtils';
 import { stringifyToolCommand } from '@/utils/toolCommand';
-import { parseWorkflowMeta } from '@/utils/workflowMeta';
+import { getWorkflowScript, parseWorkflowMeta } from '@/utils/workflowMeta';
 import * as z from 'zod';
 import { Ionicons, Octicons } from '@expo/vector-icons';
 import React from 'react';
@@ -21,18 +21,6 @@ const ICON_REASONING = (size: number = 24, color: string = '#000') => <Octicons 
 const ICON_QUESTION = (size: number = 24, color: string = '#000') => <Ionicons name="help-circle-outline" size={size} color={color} />;
 
 /** The Workflow tool carries its script under one of a few field names depending on flavor. */
-function getWorkflowScript(input: any): string | undefined {
-    if (!input || typeof input !== 'object') {
-        return undefined;
-    }
-    for (const key of ['script', 'code', 'source', 'workflow', 'content']) {
-        if (typeof input[key] === 'string') {
-            return input[key];
-        }
-    }
-    return undefined;
-}
-
 function getPatchFiles(input: any): string[] {
     if (input?.changes && typeof input.changes === 'object' && !Array.isArray(input.changes)) {
         return Object.keys(input.changes);

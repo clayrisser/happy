@@ -1,5 +1,6 @@
 import * as React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { View, Text } from 'react-native';
+import { StyleSheet } from 'react-native-unistyles';
 import { ToolViewProps } from "./_all";
 import { knownTools } from '../../tools/knownTools';
 import { ToolSectionView } from '../../tools/ToolSectionView';
@@ -37,14 +38,14 @@ export const TodoView = React.memo<ToolViewProps>(({ tool }) => {
                         const isPending = todo.status === 'pending';
 
                         let textStyle: any = styles.todoText;
-                        let icon = '☐';
+                        let icon = '○';
 
                         if (isCompleted) {
                             textStyle = [styles.todoText, styles.completedText];
-                            icon = '☑';
+                            icon = '●';
                         } else if (isInProgress) {
                             textStyle = [styles.todoText, styles.inProgressText];
-                            icon = '☐';
+                            icon = '◐';
                         } else if (isPending) {
                             textStyle = [styles.todoText, styles.pendingText];
                         }
@@ -65,7 +66,7 @@ export const TodoView = React.memo<ToolViewProps>(({ tool }) => {
     return null;
 });
 
-const styles = StyleSheet.create({
+const styles = StyleSheet.create((theme) => ({
     container: {
         gap: 4,
     },
@@ -74,17 +75,20 @@ const styles = StyleSheet.create({
     },
     todoText: {
         fontSize: 14,
-        color: '#000',
+        // The list used to be drawn in literal #000/#666, which is invisible on
+        // the dark theme Clay's phone runs (DROVE-51).
+        color: theme.colors.text,
         flex: 1,
     },
     completedText: {
-        color: '#34C759',
+        color: theme.colors.textSecondary,
         textDecorationLine: 'line-through',
     },
     inProgressText: {
-        color: '#007AFF',
+        color: theme.colors.textLink,
+        fontWeight: '600',
     },
     pendingText: {
-        color: '#666',
+        color: theme.colors.textSecondary,
     },
-});
+}));

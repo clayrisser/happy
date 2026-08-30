@@ -5,6 +5,10 @@ import { ToolCall, Message } from '@/sync/typesMessage';
 import { CodeView } from '../CodeView';
 import { Metadata } from '@/sync/storageTypes';
 import { getToolFullViewComponent } from './views/_all';
+import { StructuredFieldsView } from './StructuredFieldsView';
+import { ToolResultView } from './ToolResultView';
+import { structuredRows } from '@/utils/structuredFields';
+import { isEmptyToolResult, toolResultText } from '@/utils/toolResult';
 import { layout } from '../layout';
 import { useLocalSetting } from '@/sync/storage';
 import { StyleSheet } from 'react-native-unistyles';
@@ -42,45 +46,47 @@ export function ToolFullView({ tool, metadata, messages = [] }: ToolFullViewProp
                             <Text style={styles.description}>{tool.description}</Text>
                         </View>
                     )}
-                    {/* Input Parameters */}
+                    {/* Input Parameters, as labelled rows rather than a JSON blob.
+                        The same rows the inline card draws, from the same helper,
+                        so the two surfaces cannot drift apart (DROVE-51). */}
                     {tool.input && (
                         <View style={styles.section}>
                             <View style={styles.sectionHeader}>
                                 <Ionicons name="log-in" size={20} color="#5856D6" />
                                 <Text style={styles.sectionTitle}>{t('tools.fullView.inputParams')}</Text>
                             </View>
-                            <CodeView code={JSON.stringify(tool.input, null, 2)} />
+                            <StructuredFieldsView rows={structuredRows(tool.input)} raw={tool.input} />
                         </View>
                     )}
 
-                    {/* Result/Output */}
-                    {tool.state === 'completed' && tool.result && (
+                    {/* Result/Output. A Read of an image is a result; it used to
+                        reach this screen as "No output was produced" because the
+                        screen only knew how to print strings (DROVE-51). */}
+                    {tool.state === 'completed' && !isEmptyToolResult(tool.result) && (
                         <View style={styles.section}>
                             <View style={styles.sectionHeader}>
                                 <Ionicons name="log-out" size={20} color="#34C759" />
                                 <Text style={styles.sectionTitle}>{t('tools.fullView.output')}</Text>
                             </View>
-                            <CodeView
-                                code={typeof tool.result === 'string' ? tool.result : JSON.stringify(tool.result, null, 2)}
-                            />
+                            <ToolResultView result={tool.result} />
                         </View>
                     )}
 
                     {/* Error Details */}
-                    {tool.state === 'error' && tool.result && (
+                    {tool.state === 'error' && !isEmptyToolResult(tool.result) && (
                         <View style={styles.section}>
                             <View style={styles.sectionHeader}>
                                 <Ionicons name="close-circle" size={20} color="#FF3B30" />
                                 <Text style={styles.sectionTitle}>{t('tools.fullView.error')}</Text>
                             </View>
                             <View style={styles.errorContainer}>
-                                <Text style={styles.errorText}>{String(tool.result)}</Text>
+                                <Text style={styles.errorText}>{toolResultText(tool.result)}</Text>
                             </View>
                         </View>
                     )}
 
-                    {/* No Output Message */}
-                    {tool.state === 'completed' && !tool.result && (
+                    {/* No Output Message — only when the result really is empty. */}
+                    {tool.state === 'completed' && isEmptyToolResult(tool.result) && (
                         <View style={styles.section}>
                             <View style={styles.emptyOutputContainer}>
                                 <Ionicons name="checkmark-circle-outline" size={48} color="#34C759" />
@@ -106,7 +112,10 @@ export function ToolFullView({ tool, metadata, messages = [] }: ToolFullViewProp
                                 state: tool.state,
                                 description: tool.description,
                                 input: tool.input,
-                                result: tool.result,
+                                // A Read of an image puts ~600KB of base64 here;
+                                // rendering that as one Text node locks the screen,
+                                // so the dev dump gets it elided (DROVE-51).
+                                result: toolResultText(tool.result),
                                 createdAt: tool.createdAt,
                                 startedAt: tool.startedAt,
                                 completedAt: tool.completedAt,

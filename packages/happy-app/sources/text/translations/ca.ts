@@ -579,6 +579,9 @@ export const ca: TranslationStructure = {
     toolView: {
         input: 'Entrada',
         output: 'Sortida',
+        raw: 'JSON en brut',
+        showMore: 'Mostra més',
+        showLess: 'Mostra menys',
     },
 
     toolGroup: {

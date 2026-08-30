@@ -19,6 +19,10 @@ import { RequestUserInputView } from './RequestUserInputView';
 import { GeminiEditView } from './GeminiEditView';
 import { GeminiExecuteView } from './GeminiExecuteView';
 import { FileView } from './FileView';
+import { SendMessageView } from './SendMessageView';
+import { WorkflowView } from './WorkflowView';
+import { HulyToolView } from './HulyToolView';
+import { isHulyTool } from '@/utils/hulyTool';
 
 export type ToolViewProps = {
     tool: ToolCall;
@@ -52,6 +56,9 @@ export const toolViewRegistry: Record<string, ToolViewComponent> = {
     execute: GeminiExecuteView,
     // File attachment events
     file: FileView,
+    // The tools a drover session actually shows Clay (DROVE-51)
+    SendMessage: SendMessageView,
+    Workflow: WorkflowView,
 };
 
 export const toolFullViewRegistry: Record<string, ToolViewComponent> = {
@@ -63,12 +70,28 @@ export const toolFullViewRegistry: Record<string, ToolViewComponent> = {
     Agent: TaskView,
 };
 
-// Helper function to get the appropriate view component for a tool
-export function getToolViewComponent(toolName: string): ToolViewComponent | null {
-    return toolViewRegistry[toolName] || null;
+/**
+ * A view chosen by name prefix rather than by exact name. An MCP server names
+ * every one of its tools `mcp__<server>__<op>`, so a per-name registry entry
+ * would need one line per op; the card is the same for all of them (DROVE-51).
+ */
+function getPrefixedToolViewComponent(toolName: string): ToolViewComponent | null {
+    return isHulyTool(toolName) ? HulyToolView : null;
 }
 
-// Helper function to get the full view component for a tool
+// Helper function to get the appropriate view component for a tool
+export function getToolViewComponent(toolName: string): ToolViewComponent | null {
+    return toolViewRegistry[toolName] || getPrefixedToolViewComponent(toolName) || null;
+}
+
+/**
+ * The detail screen deliberately does NOT take the inline cards. It has halves
+ * the cards do not — the error banner, and the honest "no output" — and its
+ * generic path already lays the input out as the same labelled rows. A card
+ * that renders nothing when it has nothing (TodoWrite) would leave the screen
+ * blank, and AskUserQuestion's form cannot submit without a sessionId, which
+ * this screen does not pass (DROVE-51).
+ */
 export function getToolFullViewComponent(toolName: string): ToolViewComponent | null {
     return toolFullViewRegistry[toolName] || null;
 }
@@ -90,3 +113,7 @@ export { RequestUserInputView } from './RequestUserInputView';
 export { GeminiEditView } from './GeminiEditView';
 export { GeminiExecuteView } from './GeminiExecuteView';
 export { FileView } from './FileView';
+export { SendMessageView } from './SendMessageView';
+export { WorkflowView } from './WorkflowView';
+export { HulyToolView } from './HulyToolView';
+export { GenericToolView } from './GenericToolView';

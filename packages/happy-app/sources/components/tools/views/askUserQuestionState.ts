@@ -38,3 +38,41 @@ export function answersFromResolution(
     if (!permission?.reason || questionIds.length === 0) return undefined;
     return { [questionIds[0]]: [permission.reason] };
 }
+
+/**
+ * The answer once it lands in the tool result (DROVE-51). A question answered
+ * at the terminal never goes through this app's permission, so the card only
+ * learns the choice from the result Claude wrote: on disk that is
+ * `{questions, answers: {<question text>: <label>}}`; on the SDK path it is
+ * the sentence `Your questions have been answered: "<question>"="<label>". …`.
+ * Both are measured from the drover transcripts. Anything else yields
+ * undefined so the caller keeps whatever it already knew.
+ */
+export function answersFromResult(
+    result: unknown,
+    questions: Array<{ id: string; question: string }>,
+): InlineQuestionAnswers | undefined {
+    if (questions.length === 0 || result === null || result === undefined) return undefined;
+
+    const byQuestion = new Map<string, string>();
+    const record = result as { answers?: unknown };
+    if (typeof result === 'object' && record.answers && typeof record.answers === 'object') {
+        for (const [question, label] of Object.entries(record.answers as Record<string, unknown>)) {
+            if (typeof label === 'string') byQuestion.set(question, label);
+        }
+    } else if (typeof result === 'string') {
+        // "..."="..." pairs; a question can itself contain quotes, so match the
+        // label back from the closing `"=` rather than forward from the first quote.
+        for (const match of result.matchAll(/"((?:[^"\\]|\\.|"(?!=))*)"="((?:[^"\\]|\\.)*)"/g)) {
+            byQuestion.set(match[1], match[2]);
+        }
+    }
+    if (byQuestion.size === 0) return undefined;
+
+    const answers: InlineQuestionAnswers = {};
+    for (const question of questions) {
+        const label = byQuestion.get(question.question);
+        if (label !== undefined) answers[question.id] = [label];
+    }
+    return Object.keys(answers).length > 0 ? answers : undefined;
+}
