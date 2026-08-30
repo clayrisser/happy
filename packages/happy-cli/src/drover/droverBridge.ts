@@ -41,7 +41,14 @@ export interface DroverEvent {
     reason?: string
     preview?: string
     options?: DroverOption[] | null
-    origin?: { harness?: string; sessionId?: string | null; cwd?: string | null; account?: string | null }
+    origin?: {
+        harness?: string
+        /** Which gate fired. `account-login` is the phone login (DROVE-61). */
+        gate?: string | null
+        sessionId?: string | null
+        cwd?: string | null
+        account?: string | null
+    }
     resolution?: { action: string; optionId?: string; text?: string; by: string } | null
 }
 
@@ -54,10 +61,43 @@ export interface PermissionAnswer {
     updatedInput?: Record<string, unknown>
 }
 
+/**
+ * The URL a login question is carrying, or null when this is not one.
+ *
+ * Keyed on `origin.gate`, which the bus carries end to end, rather than on the
+ * shape of the text: `drover account login` stamps `account-login` on every
+ * card it raises, and the preview of that card is the OAuth link. The URL is
+ * checked as well as the gate because the same gate also raises the FAILED
+ * card, which carries a sentence and no link (docs/hitl.md).
+ */
+export function accountLoginUrl(ev: DroverEvent): string | null {
+    if (ev.origin?.gate !== 'account-login') return null
+    const preview = (ev.preview ?? '').trim()
+    return preview.startsWith('https://') ? preview : null
+}
+
 export function requestForEvent(ev: DroverEvent) {
     // Render through the app's existing permission-card path: a Bash-shaped
     // request carries the command preview; anything else goes descriptive.
     const description = [ev.title, ev.reason].filter(Boolean).join(' — ')
+    const loginUrl = accountLoginUrl(ev)
+    if (loginUrl) {
+        // Its own card, because this one is a LINK and a CODE, not a choice.
+        // The generic question card renders options as buttons and has nowhere
+        // to type, so a login mirrored through it could only ever be
+        // cancelled. The app's DroverAccountLogin view hands the URL to the
+        // iOS share sheet and takes the code in a text field.
+        return {
+            tool: 'DroverAccountLogin',
+            arguments: {
+                url: loginUrl,
+                header: ev.title,
+                reason: ev.reason ?? '',
+                cancelLabel: (ev.options ?? []).find((o) => o.id === 'cancel')?.label ?? 'Cancel',
+            },
+            createdAt: Date.now(),
+        }
+    }
     if (ev.kind === 'question') {
         // The phone renders a question through the same AskUserQuestion card
         // Claude's own tool uses, and that card reads ONE thing: `questions[]`,
@@ -116,9 +156,13 @@ export function requestForEvent(ev: DroverEvent) {
  */
 function answerCandidates(answer: PermissionAnswer): string[] {
     const input = answer.updatedInput as
-        | { answers?: Record<string, unknown>; optionId?: unknown }
+        | { answers?: Record<string, unknown>; optionId?: unknown; code?: unknown }
         | undefined
     const raw: string[] = []
+    // The login card submits the pasted code under its own key: it is not one
+    // of the options, and it must not be shredded on commas the way a
+    // multi-select label list is — an OAuth code is one opaque string.
+    if (typeof input?.code === 'string' && input.code.trim()) return [input.code.trim()]
     if (typeof input?.optionId === 'string') raw.push(input.optionId)
     for (const value of Object.values(input?.answers ?? {})) {
         if (typeof value === 'string') raw.push(value)

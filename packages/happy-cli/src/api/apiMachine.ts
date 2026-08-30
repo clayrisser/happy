@@ -29,6 +29,7 @@ import {
     forkCodexThread,
     listCodexRewindPoints,
 } from '@/codex/codexThreadFork';
+import { startAccountLogin, type AccountLoginRequest } from '@/drover/accountLogin';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -323,6 +324,18 @@ export class ApiMachineClient {
                 }
                 throw error;
             }
+        });
+
+        // Add a Claude account from the phone (DROVE-61).
+        //
+        // It STARTS the login and returns. The rest of the flow is on the bus:
+        // the URL Claude Code prints comes back to the phone as a question with
+        // origin.gate "account-login", and the code is that question's answer.
+        // Holding this RPC open for the fifteen minutes a human takes would
+        // time out long before the card was answered.
+        this.rpcHandlerManager.registerHandler('drover-account-login', async (params: AccountLoginRequest) => {
+            logger.debug('[API MACHINE] Received drover-account-login RPC request');
+            return await startAccountLogin(params ?? {});
         });
 
         // Register stop daemon handler
