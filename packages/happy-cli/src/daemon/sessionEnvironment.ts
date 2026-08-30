@@ -19,6 +19,36 @@ export const SESSION_SCOPED_ENV_KEYS = [
 ] as const;
 
 /**
+ * Environment variables that name the tmux pane a process is running IN
+ * (BASED-140).
+ *
+ * These are not session lineage, so they are kept apart from
+ * SESSION_SCOPED_ENV_KEYS and stripped only where stripping is right.
+ *
+ * A daemon started from a terminal inherited that terminal's TMUX_PANE and
+ * handed it to every child. `adapters/claude-session.sh` then posts
+ * `--arg pane "$TMUX_PANE"` on the honest assumption that a hook runs as a
+ * child of its own session, so the phone-started session registered the
+ * TERMINAL's pane. Two live sessions claimed `%43`, and a message sent from
+ * the phone to one of them could land in the other's input box
+ * (`engine/sender.js` channel 1).
+ *
+ * Stripped for a DIRECT spawn, where nothing else would ever give the child a
+ * pane and any value it inherits is somebody else's. NOT stripped for the tmux
+ * spawn path: tmux gives that child a real pane of its own, and it wins.
+ * Measured on tmux 3.7c — `new-window -e TMUX_PANE=%999 -P -F '#{pane_id}'`
+ * reports `%1` and the child reads `%1`, because spawn_pane() sets TMUX_PANE
+ * after copying the `-e` environment. (TMUX and TMUX_TMPDIR are NOT overridden
+ * that way, but on that path they name the very server the window was created
+ * on, so they are correct by construction.)
+ */
+export const PANE_SCOPED_ENV_KEYS = [
+    'TMUX',
+    'TMUX_PANE',
+    'TMUX_TMPDIR',
+] as const;
+
+/**
  * Remove session-scoped state inherited from a parent process without
  * modifying the source environment.
  */
@@ -45,6 +75,25 @@ export function buildSessionChildEnvironment(
         ...sanitizeSessionEnvironment(ambientEnv),
         ...explicitEnv,
     };
+}
+
+/**
+ * The child environment for a spawn that gets NO pane of its own — the
+ * daemon's direct `spawnHappyCLI` paths. Same rules as
+ * `buildSessionChildEnvironment` plus the pane keys, so the session registers
+ * `pane: null` and the input router falls to the socket instead of typing into
+ * a terminal that belongs to somebody else.
+ */
+export function buildDirectSpawnChildEnvironment(
+    ambientEnv: NodeJS.ProcessEnv = process.env,
+    explicitEnv: NodeJS.ProcessEnv = {},
+): NodeJS.ProcessEnv {
+    const child = buildSessionChildEnvironment(ambientEnv, explicitEnv);
+    for (const key of PANE_SCOPED_ENV_KEYS) {
+        if (explicitEnv[key] !== undefined) continue;
+        delete child[key];
+    }
+    return child;
 }
 
 /**

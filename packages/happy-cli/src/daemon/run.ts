@@ -29,12 +29,13 @@ import { buildResumeLaunch } from '@/resume/handleResumeCommand';
 import { detectResumeSupport } from '@/resume/localHappyAgentAuth';
 import { encodeBase64, decodeBase64, decrypt } from '@/api/encryption';
 import {
+  buildDirectSpawnChildEnvironment,
   buildSessionChildEnvironment,
   sanitizeSessionEnvironment,
   wrapTmuxCommandWithSessionEnvironmentSanitizer,
 } from './sessionEnvironment';
 import { startHappyTerminalDaemon } from './happyTerminalBoot';
-import { appendDaemonSpawnModeArgs, shouldForwardDaemonPermissionMode } from './spawnModeArgs';
+import { appendDaemonPermissionArgs, appendDaemonSpawnModeArgs } from './spawnModeArgs';
 
 /** Shell-escape a string for safe interpolation into tmux commands. */
 function shellescape(s: string): string {
@@ -449,6 +450,12 @@ export async function startDaemon(): Promise<void> {
           const tmuxEnv: Record<string, string> = {};
 
           // Add all safe daemon environment variables (filtering out undefined)
+          //
+          // The pane keys are deliberately NOT stripped here (BASED-140).
+          // tmux hands this child a pane of its own and overrides TMUX_PANE
+          // when it spawns it, so the value passed through `-e` never reaches
+          // the session — see PANE_SCOPED_ENV_KEYS for the measurement. The
+          // direct spawn paths below get no such pane and DO strip.
           for (const [key, value] of Object.entries(buildSessionChildEnvironment(ambientEnvironment, extraEnv))) {
             if (value !== undefined) {
               tmuxEnv[key] = value;
@@ -563,7 +570,7 @@ export async function startDaemon(): Promise<void> {
           return spawnTrackedHappyProcess({
             args,
             cwd: directory,
-            env: buildSessionChildEnvironment(ambientEnvironment, extraEnv),
+            env: buildDirectSpawnChildEnvironment(ambientEnvironment, extraEnv),
             directoryCreated,
             message: directoryCreated ? `The path '${directory}' did not exist. We created a new folder and spawned a new session there.` : undefined,
           });
@@ -720,17 +727,14 @@ export async function startDaemon(): Promise<void> {
         if (options?.model) {
           launch.args.push('--model', options.model);
         }
-        const resumePermissionMode = options?.permissionMode;
-        if (shouldForwardDaemonPermissionMode(metadata.flavor ?? 'claude', resumePermissionMode)) {
-          launch.args.push('--permission-mode', resumePermissionMode);
-        }
+        appendDaemonPermissionArgs(launch.args, metadata.flavor ?? 'claude', options?.permissionMode);
 
         await fs.access(launch.cwd);
 
         return spawnTrackedHappyProcess({
           args: launch.args,
           cwd: launch.cwd,
-          env: buildSessionChildEnvironment(ambientEnvironment, {
+          env: buildDirectSpawnChildEnvironment(ambientEnvironment, {
             HAPPY_RECONNECT_SESSION_ID: happySessionId,
             HAPPY_RECONNECT_ENCRYPTION_KEY: encodeBase64(tracked.encryption.encryptionKey),
             HAPPY_RECONNECT_ENCRYPTION_VARIANT: tracked.encryption.encryptionVariant,

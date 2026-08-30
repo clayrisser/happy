@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+    buildDirectSpawnChildEnvironment,
     buildSessionChildEnvironment,
+    PANE_SCOPED_ENV_KEYS,
     sanitizeSessionEnvironment,
     SESSION_SCOPED_ENV_KEYS,
     sessionEnvironmentKeysToUnset,
@@ -79,5 +81,35 @@ describe('sessionEnvironment', () => {
         expect(command).toContain('CODEX_THREAD_ID');
         expect(command).not.toContain('unset HAPPY_FORK_CODEX_THREAD_ID');
         expect(command).toMatch(/node happy\.mjs codex$/);
+    });
+
+    it('never lets the daemon\'s own tmux pane reach a direct spawn', () => {
+        const childEnv = buildDirectSpawnChildEnvironment({
+            ...contaminatedEnvironment(),
+            TMUX: '/private/tmp/tmux-501/default,1234,0',
+            TMUX_PANE: '%43',
+            TMUX_TMPDIR: '/private/tmp/tmux-501',
+        });
+
+        expect(childEnv).not.toHaveProperty('TMUX_PANE');
+        expect(childEnv).not.toHaveProperty('TMUX');
+        expect(childEnv).not.toHaveProperty('TMUX_TMPDIR');
+        expect(childEnv).toMatchObject({ KEEP_ME: 'safe' });
+    });
+
+    it('keeps the tmux spawn path free to pass the pane keys through', () => {
+        const ambient = { TMUX_PANE: '%43', TMUX: '/tmp/tmux-501/default,1,0' };
+
+        expect(buildSessionChildEnvironment(ambient)).toMatchObject({ TMUX_PANE: '%43' });
+        expect(PANE_SCOPED_ENV_KEYS).toContain('TMUX_PANE');
+    });
+
+    it('lets an explicit pane value win over the strip', () => {
+        const childEnv = buildDirectSpawnChildEnvironment(
+            { TMUX_PANE: '%43' },
+            { TMUX_PANE: '%99' },
+        );
+
+        expect(childEnv.TMUX_PANE).toBe('%99');
     });
 });

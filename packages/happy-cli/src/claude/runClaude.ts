@@ -1091,7 +1091,15 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
         // listening for, which reads as the flip silently not working; with
         // it, the command says "not drover-managed" in as many words. Stamped
         // even with one account, so /flip can explain THAT case too.
-        claudeEnvVars: { ...(options.claudeEnvVars ?? {}), DROVER_WRAPPER_PID: String(process.pid) },
+        //
+        // DROVER_ORIGIN (BASED-140): the session hook adapter forwards it, so
+        // `drover sessions` can say a paneless row is a session started from
+        // the phone rather than one whose pane simply could not be resolved.
+        claudeEnvVars: {
+            ...(options.claudeEnvVars ?? {}),
+            DROVER_WRAPPER_PID: String(process.pid),
+            DROVER_ORIGIN: options.startedBy === 'daemon' ? 'daemon' : 'terminal',
+        },
         claudeArgs: options.claudeArgs,
         sandboxConfig,
         hookSettingsPath,
