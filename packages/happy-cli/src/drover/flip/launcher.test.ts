@@ -222,6 +222,57 @@ async function build(
     return { ...harness, flip, said, terminal, cwd, mainDir, altDir, claudeLocalLauncher, accounts }
 }
 
+/**
+ * Wait for a line the park writes, instead of reading the buffer once.
+ *
+ * A park announces on a TIMER — once as it starts, then again every
+ * parkAnnounceMs — so a test that samples h.terminal at one instant is racing
+ * the output it is asserting on. Under load two of these read the buffer
+ * before the park had said anything and failed quoting the PREVIOUS sentence
+ * back (DROVE-60). This polls instead, and when the line never comes it fails
+ * with the whole buffer rather than with a mismatch on half of one.
+ */
+async function waitForLine(surface: string[], needle: string, atLeast = 1): Promise<string[]> {
+    return await vi.waitFor(
+        () => {
+            const hits = surface.filter((m) => m.includes(needle))
+            if (hits.length < atLeast) {
+                throw new Error(
+                    `waited for ${atLeast} line(s) containing "${needle}", saw ${hits.length}. ` +
+                        `Said so far:\n${surface.join('\n') || '(nothing)'}`,
+                )
+            }
+            return hits
+        },
+        // Under vitest's own 5 s testTimeout on purpose: a waitFor that
+        // outlasts the test is reported as "Test timed out" and the buffer
+        // above is never printed, which is the unhelpful half of loud.
+        { timeout: 2_000, interval: 10 },
+    )
+}
+
+/**
+ * Wait for the fake child to be up and holding the abort signal, rather than
+ * sleeping 20 ms and hoping. claudeLocal records the spawn and registers its
+ * abort listener in the same tick, so a spawn on the list is a child that can
+ * be stopped.
+ */
+async function waitForSpawns(n: number): Promise<void> {
+    await vi.waitFor(() => expect(spawns.length).toBeGreaterThanOrEqual(n), { timeout: 2_000, interval: 5 })
+}
+
+/**
+ * End a park the way life does: the soonest account's window reopens and the
+ * loop notices. Tests that watch a park in progress hold it open for a minute
+ * so nothing they assert on is racing a stopwatch, and this is how they let go
+ * — the alternative is a short real cooldown, which is the flake (DROVE-60).
+ */
+async function endPark(h: { accounts: any; flip: any }, run: Promise<unknown>): Promise<void> {
+    h.accounts.clearCooldown('main')
+    h.flip.request({ account: null, reason: 'cooldown expired', by: 'auto' })
+    await run
+}
+
 /** Tell the controller which model this session is running, the way it learns. */
 function ranModel(flip: any, model: string): void {
     flip.noteTranscriptMessage({
@@ -479,17 +530,27 @@ describe('a flip through the launcher loop', () => {
 
 describe('park and self-resume', () => {
     it('parks when every account is cooling, then resumes itself onto the first to reset', async () => {
-        const now = Date.now()
-        // main resets soonest; alt is out for much longer. main's window has
-        // to still be OPEN when the flip is requested a moment from now, or
-        // there is nothing to park for.
-        const h = await build({ cooldowns: { main: now + 600, alt: now + 60_000 } })
+        // alt is out for much longer than main, so main is the one the park
+        // is waiting on. main's own window is set below, at the moment the
+        // flip is requested, rather than here.
+        const h = await build({ cooldowns: { alt: Date.now() + 60_000 } })
         childScript = ['abort', 'exit']
 
         const run = h.claudeLocalLauncher(h.session)
-        await new Promise((r) => setTimeout(r, 20))
+        await waitForSpawns(1)
+        // main's window has to still be OPEN when the flip lands or there is
+        // nothing to park for, and anchoring it to a clock started before
+        // build() meant everything build() cost came straight out of it —
+        // two dynamic imports among that. Measured 2026-08-30 on an idle box:
+        // 345-548 ms left of a 400-600 ms window by the time the park began,
+        // and under load it reached zero, so there was no park to assert on
+        // (DROVE-60). Set here, the same measurement reads 595 of 600.
+        h.accounts.setCooldown('main', Date.now() + 600, 'usage limit')
         // No account named: this is the auto path, which must consult the ledger.
         h.flip.request({ account: null, reason: 'usage limit', by: 'auto' })
+        // And prove the park actually started before waiting on it to end, so
+        // an outrun window fails saying so rather than three assertions later.
+        await waitForLine(h.events, 'parked — no account has headroom')
         const result = await run
 
         const said = h.events.join('\n')
@@ -509,11 +570,15 @@ describe('park and self-resume', () => {
     })
 
     it('leaves nothing queued after a park, so the session can actually exit', async () => {
-        const h = await build({ cooldowns: { main: Date.now() + 400, alt: Date.now() + 60_000 } })
+        const h = await build({ cooldowns: { alt: Date.now() + 60_000 } })
         childScript = ['abort', 'exit']
         const run = h.claudeLocalLauncher(h.session)
-        await new Promise((r) => setTimeout(r, 20))
+        await waitForSpawns(1)
+        h.accounts.setCooldown('main', Date.now() + 600, 'usage limit')
         h.flip.request({ account: null, reason: 'usage limit', by: 'auto' })
+        // Without this the assertion below passes on a session that never
+        // parked at all, which is exactly what an outrun window looks like.
+        await waitForLine(h.events, 'parked — no account has headroom')
         await run
         expect(h.flip.take()).toBeNull()
     })
@@ -522,7 +587,7 @@ describe('park and self-resume', () => {
         const h = await build({ cooldowns: { main: Date.now() + 60_000 } })
         childScript = ['abort', 'exit']
         const run = h.claudeLocalLauncher(h.session)
-        await new Promise((r) => setTimeout(r, 20))
+        await waitForSpawns(1)
         h.flip.request({ account: null, reason: 'usage limit', by: 'auto' })
         await run
         expect(h.events.join('\n')).not.toContain('parked')
@@ -533,22 +598,26 @@ describe('park and self-resume', () => {
     // child running and saw NOTHING: every note went to session.sendSessionEvent,
     // which is an encrypted envelope to the Happy server. He was at a keyboard.
     it('says it is parked on the TERMINAL, not only the phone', async () => {
-        const now = Date.now()
-        const h = await build({ cooldowns: { main: now + 600, alt: now + 60_000 } })
+        // Both accounts are out for a LONG time, so the park is certain
+        // whatever the fixture cost to build, and it ends when the ledger says
+        // main is back rather than when a stopwatch started before the test
+        // did runs out (DROVE-60).
+        const h = await build({ cooldowns: { main: Date.now() + 60_000, alt: Date.now() + 120_000 } })
         childScript = ['abort', 'exit']
         const run = h.claudeLocalLauncher(h.session)
-        await new Promise((r) => setTimeout(r, 20))
+        await waitForSpawns(1)
         h.flip.request({ account: null, reason: 'usage limit', by: 'auto' })
-        await run
 
-        const printed = h.terminal.join('\n')
-        expect(printed).toContain('parked')
+        // The wait IS the assertion: the park has to reach the terminal.
+        const printed = (await waitForLine(h.terminal, 'parked')).join('\n')
         // Which accounts, until when, and the two commands that override it.
         expect(printed).toContain('main')
         expect(printed).toContain('alt')
         expect(printed).toContain('Resuming on main by itself at')
         expect(printed).toContain('drover flip <account>')
         expect(printed).toContain('drover --account <name> --resume')
+
+        await endPark(h, run)
     })
 
     // prefix+F during a park posted a flip frame, released the park, found
@@ -556,39 +625,47 @@ describe('park and self-resume', () => {
     // Clay was already looking at. That silence is what read as "the key does
     // nothing", and it is the bug, not the parking.
     it('answers a MANUAL flip that lands in a park instead of silently re-parking', async () => {
-        const now = Date.now()
-        const h = await build({ cooldowns: { main: now + 900, alt: now + 60_000 } })
+        const h = await build({ cooldowns: { main: Date.now() + 60_000, alt: Date.now() + 120_000 } })
         childScript = ['abort', 'exit']
 
         const run = h.claudeLocalLauncher(h.session)
-        await new Promise((r) => setTimeout(r, 20))
+        await waitForSpawns(1)
         h.flip.request({ account: null, reason: 'usage limit', by: 'auto' })
-        await new Promise((r) => setTimeout(r, 40))
+        // Wait for the park to be up before pressing the key into it, rather
+        // than sleeping 40 ms and hoping it got there (DROVE-60).
+        await waitForLine(h.terminal, 'parked — no account has headroom')
         // What prefix+F posts: a flip frame naming no account.
         h.flip.request({ account: null, reason: 'requested', by: 'tmux' })
-        await run
 
-        const printed = h.terminal.join('\n')
-        expect(printed).toContain('flip requested by tmux, but no account has headroom')
+        const answer = await waitForLine(h.terminal, 'flip requested by tmux, but no account has headroom')
         // And it says when the soonest one is back rather than going quiet.
-        expect(printed).toContain('Resuming on main by itself at')
+        expect(answer.join('\n')).toContain('Resuming on main by itself at')
+
+        await endPark(h, run)
     })
 
     it('re-announces during a long park, so it cannot be mistaken for a hang', async () => {
-        const now = Date.now()
+        // A LONG park, the way the real one was — four hours fifty — with the
+        // beat dialled right down so the test can watch several go by. The old
+        // fixture parked for 400 ms and hoped one beat fitted inside it, so
+        // setup time came straight out of the window and a loaded box saw none
+        // at all (DROVE-60).
         const h = await build({
-            cooldowns: { main: now + 400, alt: now + 60_000 },
-            parkAnnounceMs: 30,
+            cooldowns: { main: Date.now() + 60_000, alt: Date.now() + 120_000 },
+            parkAnnounceMs: 20,
         })
         childScript = ['abort', 'exit']
         const run = h.claudeLocalLauncher(h.session)
-        await new Promise((r) => setTimeout(r, 20))
+        await waitForSpawns(1)
         h.flip.request({ account: null, reason: 'usage limit', by: 'auto' })
-        await run
 
-        const beats = h.terminal.filter((m) => m.includes('still parked —'))
-        expect(beats.length).toBeGreaterThan(0)
+        // Two, not one: the point is that it says it AGAIN, and one beat does
+        // not prove that. Waiting is the only honest read of output that
+        // arrives on a timer.
+        const beats = await waitForLine(h.terminal, 'still parked —', 2)
         expect(beats[0]).toContain('drover flip <account>')
+
+        await endPark(h, run)
     })
 })
 
