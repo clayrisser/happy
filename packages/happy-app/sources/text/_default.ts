@@ -942,6 +942,10 @@ export const en = {
         usageLimitUntil: ({ time }: { time: string }) => `Usage limit reached until ${time}`,
         sentAsGoal: 'Sent as goal',
         unknownTime: 'unknown time',
+        thoughtProcess: 'Thought process',
+        thinkingNow: 'Thinking…',
+        agentRunning: ({ duration }: { duration: string }) => `Running agent · ${duration}`,
+        agentFinished: ({ duration }: { duration: string }) => `Agent finished · ${duration}`,
     },
 
     codex: {

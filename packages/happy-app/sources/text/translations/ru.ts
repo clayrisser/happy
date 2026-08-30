@@ -920,6 +920,10 @@ export const ru: TranslationStructure = {
         usageLimitUntil: ({ time }: { time: string }) => `Лимит использования достигнут до ${time}`,
         sentAsGoal: 'Отправлено в качестве цели',
         unknownTime: 'неизвестное время',
+        thoughtProcess: 'Ход рассуждений',
+        thinkingNow: 'Думает…',
+        agentRunning: ({ duration }: { duration: string }) => `Агент работает · ${duration}`,
+        agentFinished: ({ duration }: { duration: string }) => `Агент завершён · ${duration}`,
     },
 
     codex: {

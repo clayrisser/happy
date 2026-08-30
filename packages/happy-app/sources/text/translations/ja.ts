@@ -917,6 +917,10 @@ export const ja: TranslationStructure = {
         usageLimitUntil: ({ time }: { time: string }) => `${time}まで使用制限中`,
         sentAsGoal: 'Sent as goal',
         unknownTime: '不明な時間',
+        thoughtProcess: '思考プロセス',
+        thinkingNow: '思考中…',
+        agentRunning: ({ duration }: { duration: string }) => `エージェント実行中 · ${duration}`,
+        agentFinished: ({ duration }: { duration: string }) => `エージェント完了 · ${duration}`,
     },
 
     codex: {

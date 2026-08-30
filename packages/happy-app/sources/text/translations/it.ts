@@ -914,6 +914,10 @@ export const it: TranslationStructure = {
         usageLimitUntil: ({ time }: { time: string }) => `Limite di utilizzo raggiunto fino a ${time}`,
         sentAsGoal: 'Sent as goal',
         unknownTime: 'ora sconosciuta',
+        thoughtProcess: 'Processo di pensiero',
+        thinkingNow: 'Sta pensando…',
+        agentRunning: ({ duration }: { duration: string }) => `Agente in esecuzione · ${duration}`,
+        agentFinished: ({ duration }: { duration: string }) => `Agente terminato · ${duration}`,
     },
 
     codex: {

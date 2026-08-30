@@ -16,6 +16,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { resolveControlMode } from '@/sync/controlHandoff';
 import { usesControlledSessionUi } from '@/sync/rig';
 import { buildAgentTurnCopyTextByMessageId } from '@/utils/agentTurnCopy';
+import { collectSubagentTaskMessageIds } from '@/utils/subagentTaskLinks';
 
 const SCROLL_THRESHOLD = 300;
 const DOCK_DETAILS_SHOW_OFFSET = 16;
@@ -176,6 +177,13 @@ const ChatListInternal = React.memo((props: {
         () => buildAgentTurnCopyTextByMessageId(props.messages, { currentTurnComplete: collapseCurrentTurn }),
         [collapseCurrentTurn, props.messages],
     );
+    const subagentTaskMessageIds = React.useMemo(
+        () => collectSubagentTaskMessageIds(props.messages),
+        [props.messages],
+    );
+    // The newest message while the agent is still working — the only one that
+    // can be mid-thought, so the only one that ticks.
+    const liveMessageId = session?.thinking === true ? props.messages[0]?.id ?? null : null;
 
     // Tracks which groups are explicitly collapsed. Groups start collapsed;
     // pending approval groups are the only ones we auto-expand.
@@ -375,9 +383,11 @@ const ChatListInternal = React.memo((props: {
                 metadata={props.metadata}
                 sessionId={props.sessionId}
                 copyText={agentCopyTextByMessageId.get(item.message.id)}
+                live={item.message.id === liveMessageId}
+                subagentTaskMessageIds={subagentTaskMessageIds}
             />
         );
-    }, [agentCopyTextByMessageId, props.metadata, props.sessionId, collapsedGroups, handleToggleGroup, preserveToolGroupAnchor]);
+    }, [agentCopyTextByMessageId, props.metadata, props.sessionId, collapsedGroups, handleToggleGroup, liveMessageId, preserveToolGroupAnchor, subagentTaskMessageIds]);
 
     // In inverted FlatList, offset 0 = latest messages (visual bottom).
     // Offset increases as user scrolls up to see older messages.
