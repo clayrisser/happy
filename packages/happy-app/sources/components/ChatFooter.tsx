@@ -7,9 +7,11 @@ import { useUnistyles } from 'react-native-unistyles';
 interface ChatFooterProps {
     controlledByUser?: boolean;
     /**
-     * The session is a live Claude in a tmux pane (metadata.hasPane). Nothing
-     * has to be reset or taken over to send from here, so the footer says what
-     * IS true instead of what to do about it (BASED-113).
+     * The session is a live Claude in a tmux pane (metadata.hasPane). Under
+     * one mode that is the ONLY shape a session has, so it earns no banner:
+     * announcing the normal case in the app's warning colours reads as a
+     * problem (DROVE-39). Only its absence is worth saying, because a session
+     * with no pane is the state DROVE-1 is removing.
      */
     hasPane?: boolean;
 }
@@ -39,7 +41,7 @@ export const ChatFooter = React.memo((props: ChatFooterProps) => {
     };
     return (
         <View style={containerStyle}>
-            {props.controlledByUser && (
+            {props.controlledByUser && !props.hasPane && (
                 <View style={warningContainerStyle}>
                     <Ionicons 
                         name="information-circle" 
@@ -47,9 +49,7 @@ export const ChatFooter = React.memo((props: ChatFooterProps) => {
                         color={theme.colors.box.warning.text}
                     />
                     <Text style={warningTextStyle}>
-                        {props.hasPane
-                            ? 'Live in your terminal. Messages go straight to it.'
-                            : 'Permissions shown in terminal only. Reset or send a message to control from app.'}
+                        Permissions shown in terminal only. Reset or send a message to control from app.
                     </Text>
                 </View>
             )}
