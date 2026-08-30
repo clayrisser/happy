@@ -13,6 +13,14 @@ export interface DroverWatchStatus {
     /** The watch has the drover watch app installed. */
     installed: boolean;
     reachable: boolean;
+    /**
+     * How many more background wakes of the watch app this phone may spend
+     * today (DROVE-62). Absent on a build whose native module predates the
+     * key. Zero means the wrist cannot be woken at all — either the budget is
+     * spent, or, far more often, the Drover complication is on no watch face,
+     * which is the documented condition for the count being zero.
+     */
+    wakes?: number;
 }
 
 export interface DroverAnswerEvent {
@@ -129,6 +137,13 @@ export interface DroverFlipEvent {
 type DroverWatchModuleType = {
     status: () => DroverWatchStatus;
     publish: (json: string) => Promise<boolean>;
+    /**
+     * Optional: builds up to 7 have no such native function. Called through a
+     * feature check rather than a runtimeVersion bump, so an OTA carrying this
+     * file still runs on those builds — they simply never wake the wrist,
+     * which is what they did before this existed.
+     */
+    wake?: (json: string) => Promise<boolean>;
     addListener: {
         (eventName: 'onAnswer', listener: (event: DroverAnswerEvent) => void): EventSubscription;
         (eventName: 'onFlip', listener: (event: DroverFlipEvent) => void): EventSubscription;
@@ -157,6 +172,30 @@ export async function publishDroverSnapshot(snapshot: DroverSnapshot): Promise<b
     } catch {
         // A failed publish must never take the app down: the wrist is a
         // convenience surface and the phone UI still shows every gate.
+        return false;
+    }
+}
+
+/**
+ * Wake the watch app in the background and hand it this snapshot (DROVE-62).
+ *
+ * Resolves true when the wake was actually spent as a background launch, false
+ * when it was downgraded to an ordinary queued transfer — which is what
+ * happens with no budget left and, far more commonly, with the Drover
+ * complication on no watch face. False therefore means "the wrist will find
+ * out when Clay next opens the app", which is worth reporting rather than
+ * treating as success.
+ *
+ * Costs one of a limited daily budget, so call it only for an arrival that
+ * deserves a buzz. Never for the heartbeat.
+ */
+export async function wakeDroverWatch(snapshot: DroverSnapshot): Promise<boolean> {
+    if (!native || typeof native.wake !== 'function') return false;
+    try {
+        return await native.wake(JSON.stringify(snapshot));
+    } catch {
+        // Same rule as publish: the wrist is a convenience surface and a
+        // failed wake must never take the app down.
         return false;
     }
 }

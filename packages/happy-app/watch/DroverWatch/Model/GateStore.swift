@@ -24,16 +24,28 @@ final class GateStore: NSObject, ObservableObject {
     /// cannot queue two.
     @Published private(set) var flipping: Set<String> = []
     @Published private(set) var lastError: String?
+    /// Why the wrist did not buzz, when it did not. Nil is the normal case.
+    @Published private(set) var buzzRefusal: String?
 
     private var session: WCSession?
+    private let buzzer = WristBuzzer()
 
     override init() {
         super.init()
+        buzzer.onRefusal = { [weak self] reason in
+            Task { @MainActor in self?.buzzRefusal = reason }
+        }
         guard WCSession.isSupported() else { return }
         let session = WCSession.default
         session.delegate = self
         session.activate()
         self.session = session
+    }
+
+    /// Ask for the permission the background buzz needs, from the foreground,
+    /// which is the only place watchOS will show the prompt (DROVE-62).
+    func prepareBuzzer() {
+        buzzer.requestAuthorization()
     }
 
     /// Every gate the phone lists, newest first.
@@ -158,6 +170,13 @@ final class GateStore: NSObject, ObservableObject {
     fileprivate func apply(_ context: [String: Any]) {
         guard let data = try? JSONSerialization.data(withJSONObject: context),
               let decoded = try? DroverSnapshot.decoder.decode(DroverSnapshot.self, from: data) else { return }
+        // Diffed BEFORE the assignment, because the snapshot being replaced is
+        // the only record of what this wrist already knew — on a background
+        // wake it is the copy loaded from the app group, which is exactly the
+        // case the buzz exists for (DROVE-62). Deduped inside the buzzer, so
+        // the same arrival reaching us twice (once as the wake that launched
+        // this process, once as the application context) is one tap.
+        buzzer.buzz(WristCueDiff.cues(from: snapshot, to: decoded))
         snapshot = decoded
         decoded.save()
         // A snapshot arriving IS the link working, so whatever the last send
@@ -193,5 +212,15 @@ extension GateStore: WCSessionDelegate {
 
     nonisolated func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
         Task { @MainActor in self.apply(message) }
+    }
+
+    /// A snapshot the phone sent as a background transfer — in practice the
+    /// one it sent with `transferCurrentComplicationUserInfo`, which is the
+    /// only documented phone-to-watch call that LAUNCHES this app in the
+    /// background (DROVE-62). It is the same dictionary the application
+    /// context carries, so it goes through the same apply and the buzz falls
+    /// out of the diff rather than needing a second cue format on the wire.
+    nonisolated func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any]) {
+        Task { @MainActor in self.apply(userInfo) }
     }
 }

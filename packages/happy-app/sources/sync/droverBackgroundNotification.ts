@@ -43,6 +43,7 @@ import {
     getDroverWatchStatus,
     isDroverWatchAvailable,
     publishDroverSnapshot,
+    wakeDroverWatch,
 } from 'drover-watch';
 import { collectAccounts, collectGates, collectSessions } from './droverWatchFeed';
 import { storage } from './storage';
@@ -78,13 +79,26 @@ async function republishWatchSnapshot(): Promise<boolean> {
 
     const watchSessions = collectSessions();
     const status = getDroverWatchStatus();
-    return publishDroverSnapshot({
+    const snapshot = {
         gates: collectGates(),
         sessions: watchSessions,
         accounts: collectAccounts(watchSessions),
         updatedAt: new Date().toISOString(),
         connected: !!status.activated && status.paired && status.installed,
-    });
+    };
+    const published = await publishDroverSnapshot(snapshot);
+    // Wake the wrist too, unconditionally, because reaching this task at all
+    // means a gate changed — that is the entire content of the wake that
+    // brought us here — and the phone app being in the background is exactly
+    // the case where a publish alone reaches the watch app only "on next
+    // launch", which is whenever Clay next opens it (DROVE-62).
+    //
+    // No change detection here, unlike the foreground feed: this path has no
+    // previous snapshot to diff against, and Apple's own budget for the push
+    // that triggers it is two or three an hour, so it cannot drain the
+    // background-launch allowance on its own.
+    if (published) void wakeDroverWatch(snapshot);
+    return published;
 }
 
 // iOS only. drover-watch is a watchOS bridge with no counterpart on Android or

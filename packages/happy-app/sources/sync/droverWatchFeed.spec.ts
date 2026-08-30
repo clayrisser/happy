@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { DroverSnapshot } from 'drover-watch';
+import type { DroverGate, DroverSession, DroverSnapshot } from 'drover-watch';
 
 const mocks = vi.hoisted(() => ({
     sessions: {} as Record<string, unknown>,
@@ -7,6 +7,10 @@ const mocks = vi.hoisted(() => ({
     deny: vi.fn(),
     sendMessage: vi.fn(),
     published: [] as DroverSnapshot[],
+    /** Snapshots sent through the background wake (DROVE-62). */
+    woken: [] as DroverSnapshot[],
+    /** The watch app is frontmost, so publish's own sendMessage reaches it. */
+    reachable: true,
     onAnswer: null as
         ((event: { id: string; allow: boolean; optionId?: string; text?: string }) => void) | null,
     onFlip: null as ((event: { sessionId: string; account?: string }) => void) | null,
@@ -37,10 +41,14 @@ vi.mock('./ops', () => ({
 vi.mock('drover-watch', () => ({
     isDroverWatchAvailable: () => true,
     getDroverWatchStatus: () => ({
-        supported: true, activated: true, paired: true, installed: true, reachable: true,
+        supported: true, activated: true, paired: true, installed: true, reachable: mocks.reachable,
     }),
     publishDroverSnapshot: (snapshot: DroverSnapshot) => {
         mocks.published.push(snapshot);
+        return Promise.resolve(true);
+    },
+    wakeDroverWatch: (snapshot: DroverSnapshot) => {
+        mocks.woken.push(snapshot);
         return Promise.resolve(true);
     },
     addDroverAnswerListener: (listener: typeof mocks.onAnswer) => {
@@ -53,7 +61,13 @@ vi.mock('drover-watch', () => ({
     },
 }));
 
-import { collectAccounts, collectGates, collectSessions, startDroverWatchFeed } from './droverWatchFeed';
+import {
+    collectAccounts,
+    collectGates,
+    collectSessions,
+    deservesAWake,
+    startDroverWatchFeed,
+} from './droverWatchFeed';
 
 /** Only the fields the feed reads; the real sessions are built in storage.ts. */
 function session(options: {
@@ -101,6 +115,8 @@ function start() {
 beforeEach(() => {
     mocks.sessions = {};
     mocks.published = [];
+    mocks.woken = [];
+    mocks.reachable = true;
     mocks.onAnswer = null;
     mocks.onFlip = null;
     mocks.onStorage = null;
@@ -487,5 +503,116 @@ describe('startDroverWatchFeed', () => {
         } finally {
             vi.useRealTimers();
         }
+    });
+});
+
+// The wrist buzz, DROVE-62. A publish reaches a sleeping watch app only "on
+// next launch" — whenever Clay next opens it — so an ordinary publish cannot
+// buzz anything. The wake spends one of a small daily budget to launch the
+// watch app in the background, and the whole question here is which publishes
+// are worth one.
+describe('waking the wrist', () => {
+    const gate = (id: string): DroverGate => ({
+        id,
+        title: 'Question',
+        reason: '',
+        preview: '',
+        kind: 'question',
+        createdAt: new Date().toISOString(),
+    });
+    const live = (id: string, active: boolean): DroverSession => ({ id, title: id, active });
+
+    it('wakes for a gate that was not there before', () => {
+        expect(
+            deservesAWake({ gates: [], sessions: [] }, { gates: [gate('s1:r1')], sessions: [] }),
+        ).toBe(true);
+    });
+
+    it('does not wake for a gate already on the wall', () => {
+        const gates = [gate('s1:r1')];
+        expect(deservesAWake({ gates, sessions: [] }, { gates, sessions: [] })).toBe(false);
+    });
+
+    it('wakes when a running session stops, and not when a stopped one stays stopped', () => {
+        expect(
+            deservesAWake(
+                { gates: [], sessions: [live('a', true)] },
+                { gates: [], sessions: [live('a', false)] },
+            ),
+        ).toBe(true);
+        expect(
+            deservesAWake(
+                { gates: [], sessions: [live('a', false)] },
+                { gates: [], sessions: [live('a', false)] },
+            ),
+        ).toBe(false);
+    });
+
+    // The budget is the reason this is a question at all: a wake on every
+    // publish would be drained by the 60s heartbeat before lunch.
+    it('does not wake on a heartbeat, or on a subagent count moving', () => {
+        vi.useFakeTimers();
+        try {
+            mocks.reachable = false;
+            mocks.sessions = { s1: session({ path: '/a', running: true, subagents: 1 }) };
+            start();
+            expect(mocks.published).toHaveLength(1);
+            expect(mocks.woken).toHaveLength(0);
+
+            vi.advanceTimersByTime(60_000);
+            expect(mocks.published).toHaveLength(2);
+            expect(mocks.woken).toHaveLength(0);
+
+            mocks.sessions = { s1: session({ path: '/a', running: true, subagents: 4 }) };
+            mocks.onStorage!();
+            expect(mocks.published).toHaveLength(3);
+            expect(mocks.woken).toHaveLength(0);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    // The first publish of a run has nothing to compare against, so every gate
+    // on it reads as new. Waking there would spend the budget on a wall that
+    // was already up — and buy no buzz, because the watch filters gates older
+    // than its own freshness window.
+    it('does not wake for the wall that was already up when the feed started', () => {
+        mocks.reachable = false;
+        mocks.sessions = {
+            s1: session({ path: '/a', requests: { r1: { tool: 'Bash', arguments: { command: 'ls' } } } }),
+        };
+        start();
+        expect(mocks.published).toHaveLength(1);
+        expect(mocks.woken).toHaveLength(0);
+    });
+
+    it('wakes with the same snapshot it published, so the watch has one apply', () => {
+        mocks.reachable = false;
+        mocks.sessions = { s1: session({ path: '/a' }) };
+        start();
+        expect(mocks.woken).toHaveLength(0);
+
+        mocks.sessions = {
+            s1: session({ path: '/a', requests: { r1: { tool: 'Bash', arguments: { command: 'ls' } } } }),
+        };
+        mocks.onStorage!();
+        expect(mocks.published).toHaveLength(2);
+        expect(mocks.woken).toHaveLength(1);
+        expect(mocks.woken[0]).toBe(mocks.published[1]);
+    });
+
+    // Reachable means the watch app is frontmost and publish's own sendMessage
+    // has already landed. A background launch of a screen someone is holding
+    // up is the one case where the budget buys nothing.
+    it('does not spend a wake on a watch that is already looking', () => {
+        mocks.reachable = true;
+        mocks.sessions = { s1: session({ path: '/a' }) };
+        start();
+        mocks.sessions = {
+            s1: session({ path: '/a', requests: { r1: { tool: 'Bash', arguments: { command: 'ls' } } } }),
+        };
+        mocks.onStorage!();
+        expect(mocks.published).toHaveLength(2);
+        expect(mocks.woken).toHaveLength(0);
     });
 });
