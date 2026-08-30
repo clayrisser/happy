@@ -77,6 +77,21 @@ type PendingClaudeGoalAction = {
     timeout: ReturnType<typeof setTimeout>;
 };
 
+/**
+ * Should this launch refuse local mode? (DROVE-2)
+ *
+ * True only for a daemon spawn that got no pane. A daemon spawn that landed in
+ * a tmux window reads its own `TMUX_PANE` and is a terminal session in every
+ * way that matters.
+ */
+export function refusesDaemonLocalStart(
+    startedBy: string | undefined,
+    startingMode: string | undefined,
+    tmuxPane: string | undefined,
+): boolean {
+    return startedBy === 'daemon' && startingMode === 'local' && !tmuxPane;
+}
+
 export async function runClaude(credentials: Credentials, options: StartOptions = {}): Promise<void> {
     logger.debug(`[CLAUDE] ===== CLAUDE MODE STARTING =====`);
     logger.debug(`[CLAUDE] This is the Claude agent, NOT Gemini`);
@@ -89,8 +104,15 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
     logger.debug(`[START] Options: startedBy=${options.startedBy}, startingMode=${options.startingMode}`);
 
     // Validate daemon spawn requirements - fail fast on invalid config
-    if (options.startedBy === 'daemon' && options.startingMode === 'local') {
-        throw new Error('Daemon-spawned sessions cannot use local/interactive mode. Use --happy-starting-mode remote or spawn sessions directly from terminal.');
+    //
+    // DROVE-2: the daemon now spawns into a tmux window of the user's own
+    // server, so a daemon-started session HAS a pane and local mode is exactly
+    // right for it — that is what makes the terminal and the app one session.
+    // The refusal stands only where its premise still holds: a daemon spawn
+    // with no pane has no keyboard, so local mode would leave it with no input
+    // at all.
+    if (refusesDaemonLocalStart(options.startedBy, options.startingMode, process.env.TMUX_PANE)) {
+        throw new Error('A daemon-spawned session with no tmux pane cannot use local/interactive mode. Use --happy-starting-mode remote, or spawn it into a tmux window.');
     }
 
     // Set backend for offline warnings (before any API calls)

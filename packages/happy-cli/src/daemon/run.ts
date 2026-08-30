@@ -36,11 +36,15 @@ import {
 } from './sessionEnvironment';
 import { startHappyTerminalDaemon } from './happyTerminalBoot';
 import { appendDaemonPermissionArgs, appendDaemonSpawnModeArgs } from './spawnModeArgs';
-
-/** Shell-escape a string for safe interpolation into tmux commands. */
-function shellescape(s: string): string {
-    return "'" + s.replace(/'/g, "'\\''") + "'";
-}
+import {
+  droverBinExists,
+  droverBinPath,
+  formatDroverPaneCommand,
+  resolveDaemonAgent,
+  spawnPreconditionError,
+  tmuxWindowNameForDirectory,
+} from './tmuxSpawn';
+import { resolveTrackedPid } from '@/utils/processTree';
 
 // Prepare initial metadata
 // Suffix host with `-dev` for the HAPPY_VARIANT=dev variant so the dev daemon
@@ -231,9 +235,29 @@ export async function startDaemon(): Promise<void> {
       }
 
       // Check if we already have this PID (daemon-spawned)
-      const existingSession = pidToTrackedSession.get(pid);
+      //
+      // A tmux spawn is tracked by its PANE pid, which is the shell tmux
+      // started, and the process reporting here is two hops further down —
+      // `bin/drover` and then `bin/drover.mjs`, which runs the entrypoint
+      // through `execFileSync` (DROVE-2). Walking up finds the pid the daemon
+      // is actually waiting on; matching only on equality left the awaiter
+      // hanging for its whole 15 seconds and the phone saw a timeout for a
+      // session that had started perfectly well.
+      const trackedPid = resolveTrackedPid(pid, (candidate) => (
+        pidToTrackedSession.get(candidate)?.startedBy === 'daemon' && pidToAwaiter.has(candidate)
+      ));
+      const existingSession = pidToTrackedSession.get(trackedPid);
 
       if (existingSession && existingSession.startedBy === 'daemon') {
+        // Re-key onto the pid that reported itself, so `stop-session` signals
+        // the session rather than the launcher that has already exec'd away.
+        if (trackedPid !== pid) {
+          logger.debug(`[DAEMON RUN] Session webhook PID ${pid} is a descendant of tracked PID ${trackedPid}`);
+          pidToTrackedSession.delete(trackedPid);
+          existingSession.pid = pid;
+          pidToTrackedSession.set(pid, existingSession);
+        }
+
         // Update daemon-spawned session with reported data
         existingSession.happySessionId = sessionId;
         existingSession.happySessionMetadataFromLocalWebhook = sessionMetadata;
@@ -241,11 +265,11 @@ export async function startDaemon(): Promise<void> {
         logger.debug(`[DAEMON RUN] Updated daemon-spawned session ${sessionId} with metadata`);
 
         // Resolve any awaiter for this PID
-        const awaiter = pidToAwaiter.get(pid);
+        const awaiter = pidToAwaiter.get(trackedPid);
         if (awaiter) {
-          pidToAwaiter.delete(pid);
+          pidToAwaiter.delete(trackedPid);
           awaiter(existingSession);
-          logger.debug(`[DAEMON RUN] Resolved session awaiter for PID ${pid}`);
+          logger.debug(`[DAEMON RUN] Resolved session awaiter for PID ${trackedPid}`);
         }
       } else if (!existingSession) {
         // New session started externally
@@ -396,191 +420,155 @@ export async function startDaemon(): Promise<void> {
           };
         }
 
-        // Check if tmux is available and should be used
-        const tmuxAvailable = await isTmuxAvailable();
-        let useTmux = tmuxAvailable;
+        // A session started from the phone lands in a tmux window of the
+        // user's own tmux server, running the drover wrapper, in LOCAL mode
+        // (DROVE-2). That makes it the same kind of thing as a session started
+        // in a terminal: the window can be opened and typed in while the app
+        // drives the same session, with no mode switch and no takeover.
+        //
+        // REACHABILITY is the condition, not `TMUX_SESSION_NAME`. That
+        // variable only ever chose WHICH session; it can only be set by a
+        // hand-written RPC or the localhost control server, and the app's
+        // spawn request has no field that could carry it (`ops.ts`
+        // `machineSpawnNewSession`). So the tmux path was unreachable from the
+        // phone and every phone spawn fell through to a headless SDK loop.
+        //
+        // Clay's ruling on DROVE-2: no headless session is ever created. tmux
+        // unreachable is a spawn FAILURE the phone shows; tmux present with no
+        // server running gets one started, because `spawnInTmux` calls
+        // `ensureSessionExists`, which runs `new-session -d`.
+        const agent = resolveDaemonAgent(options.agent);
+        if (!agent) {
+          return {
+            type: 'error',
+            errorMessage: `Unsupported agent type: '${options.agent}'. Please update your CLI to the latest version.`
+          };
+        }
 
-        // Get tmux session name from environment variables (now set by profile system)
-        // Empty string means "use current/most recent session" (tmux default behavior)
-        let tmuxSessionName: string | undefined = extraEnv.TMUX_SESSION_NAME;
+        const droverBin = droverBinPath();
+        const precondition = spawnPreconditionError({
+          tmuxAvailable: await isTmuxAvailable(),
+          droverBin,
+          droverExists: droverBinExists(droverBin),
+        });
+        if (precondition) {
+          logger.debug(`[DAEMON RUN] Refusing to spawn: ${precondition}`);
+          return { type: 'error', errorMessage: precondition };
+        }
 
-        // If tmux is not available or session name is explicitly undefined, fall back to regular spawning
-        // Note: Empty string is valid (means use current/most recent tmux session)
-        if (!tmuxAvailable || tmuxSessionName === undefined) {
-          useTmux = false;
-          if (tmuxSessionName !== undefined) {
-            logger.debug(`[DAEMON RUN] tmux session name specified but tmux not available, falling back to regular spawning`);
+        // Unset now means "the user's existing server" rather than "headless":
+        // `spawnInTmux` resolves an empty name to the first session it lists.
+        const tmuxSessionName = extraEnv.TMUX_SESSION_NAME ?? '';
+        logger.debug(`[DAEMON RUN] Spawning session in tmux session: ${tmuxSessionName || 'the first existing one'}`);
+
+        const tmux = getTmuxUtilities(tmuxSessionName);
+
+        // The pane command is the drover WRAPPER, not `node dist/index.mjs`.
+        // The wrapper is where the terminal's policy lives — `drover-trust` so
+        // the workspace dialog cannot kill a first run, `drover-sync-commands`
+        // so `/flip` exists, and the `DROVER_URL` / `DROVER_DIR` / `STATE_DIR`
+        // exports the bus hooks read. A fork requested from the phone arrives
+        // here as an ordinary spawn carrying `resumeClaudeSessionId`, so it
+        // opens its own window the same way.
+        const modeArgs: string[] = [];
+        appendDaemonSpawnModeArgs(modeArgs, options, agent);
+        const resumeId = agent === 'claude'
+          ? options.resumeClaudeSessionId
+          : (agent === 'codex' ? options.resumeCodexThreadId : undefined);
+        const paneCommand = formatDroverPaneCommand({ droverBin, agent, modeArgs, resumeId });
+        const sanitizedTmuxCommand = wrapTmuxCommandWithSessionEnvironmentSanitizer(paneCommand, extraEnv);
+
+        // Named for the directory, so `tmux list-windows` reads like the work
+        // instead of `happy-<epoch-ms>-<agent>`.
+        const windowName = tmuxWindowNameForDirectory(directory);
+
+        // Spawn in tmux with environment variables.
+        // IMPORTANT: Pass the complete safe environment (ambient + extraEnv) because:
+        // 1. tmux sessions need daemon's expanded auth variables (e.g., ANTHROPIC_AUTH_TOKEN)
+        // 2. regular spawning uses the same clean environment
+        // 3. tmux needs explicit -e values, and the command unsets omitted
+        //    session variables that could otherwise survive in its server environment
+        const tmuxEnv: Record<string, string> = {};
+
+        // Add all safe daemon environment variables (filtering out undefined)
+        //
+        // The pane keys are deliberately NOT stripped here (BASED-140).
+        // tmux hands this child a pane of its own and overrides TMUX_PANE
+        // when it spawns it, so the value passed through `-e` never reaches
+        // the session — see PANE_SCOPED_ENV_KEYS for the measurement. The
+        // direct spawn path in `spawnTrackedHappyProcess` gets no such pane
+        // and DOES strip.
+        for (const [key, value] of Object.entries(buildSessionChildEnvironment(ambientEnvironment, extraEnv))) {
+          if (value !== undefined) {
+            tmuxEnv[key] = value;
           }
         }
 
-        if (useTmux && tmuxSessionName !== undefined) {
-          // Try to spawn in tmux session
-          const sessionDesc = tmuxSessionName || 'current/most recent session';
-          logger.debug(`[DAEMON RUN] Attempting to spawn session in tmux: ${sessionDesc}`);
+        const tmuxResult = await tmux.spawnInTmux([sanitizedTmuxCommand], {
+          sessionName: tmuxSessionName,
+          windowName: windowName,
+          cwd: directory
+        }, tmuxEnv);  // Pass complete environment for tmux session
 
-          const tmux = getTmuxUtilities(tmuxSessionName);
-
-          // Construct command for the CLI
-          const cliPath = join(projectPath(), 'dist', 'index.mjs');
-          // Determine agent command - support claude, codex, gemini, openclaw, and agy
-          const agent = options.agent === 'gemini' ? 'gemini' : (options.agent === 'codex' ? 'codex' : (options.agent === 'openclaw' ? 'openclaw' : (options.agent === 'agy' ? 'agy' : 'claude')));
-          const resumeId = agent === 'claude'
-            ? options.resumeClaudeSessionId
-            : (agent === 'codex' ? options.resumeCodexThreadId : undefined);
-          const resumeFragment = resumeId
-            ? ` --resume ${shellescape(resumeId)}`
-            : '';
-          const launchArgs = [
-            agent,
-            '--happy-starting-mode', 'remote',
-            '--started-by', 'daemon',
-          ];
-          appendDaemonSpawnModeArgs(launchArgs, options, agent);
-          const modeFragment = launchArgs.map(shellescape).join(' ');
-          const fullCommand = `node --no-warnings --no-deprecation ${shellescape(cliPath)} ${modeFragment}${resumeFragment}`;
-          const sanitizedTmuxCommand = wrapTmuxCommandWithSessionEnvironmentSanitizer(fullCommand, extraEnv);
-
-          // Spawn in tmux with environment variables.
-          // IMPORTANT: Pass the complete safe environment (ambient + extraEnv) because:
-          // 1. tmux sessions need daemon's expanded auth variables (e.g., ANTHROPIC_AUTH_TOKEN)
-          // 2. regular spawning uses the same clean environment
-          // 3. tmux needs explicit -e values, and the command unsets omitted
-          //    session variables that could otherwise survive in its server environment
-          const windowName = `happy-${Date.now()}-${agent}`;
-          const tmuxEnv: Record<string, string> = {};
-
-          // Add all safe daemon environment variables (filtering out undefined)
-          //
-          // The pane keys are deliberately NOT stripped here (BASED-140).
-          // tmux hands this child a pane of its own and overrides TMUX_PANE
-          // when it spawns it, so the value passed through `-e` never reaches
-          // the session — see PANE_SCOPED_ENV_KEYS for the measurement. The
-          // direct spawn paths below get no such pane and DO strip.
-          for (const [key, value] of Object.entries(buildSessionChildEnvironment(ambientEnvironment, extraEnv))) {
-            if (value !== undefined) {
-              tmuxEnv[key] = value;
-            }
-          }
-
-          const tmuxResult = await tmux.spawnInTmux([sanitizedTmuxCommand], {
-            sessionName: tmuxSessionName,
-            windowName: windowName,
-            cwd: directory
-          }, tmuxEnv);  // Pass complete environment for tmux session
-
-          if (tmuxResult.success) {
-            logger.debug(`[DAEMON RUN] Successfully spawned in tmux session: ${tmuxResult.sessionId}, PID: ${tmuxResult.pid}`);
-
-            // Validate we got a PID from tmux
-            if (!tmuxResult.pid) {
-              throw new Error('Tmux window created but no PID returned');
-            }
-
-            // Create a tracked session for tmux windows - now we have the real PID!
-            const trackedSession: TrackedSession = {
-              startedBy: 'daemon',
-              pid: tmuxResult.pid, // Real PID from tmux -P flag
-              tmuxSessionId: tmuxResult.sessionId,
-              directoryCreated,
-              message: directoryCreated
-                ? `The path '${directory}' did not exist. We created a new folder and spawned a new session in tmux session '${tmuxSessionName}'. Use 'tmux attach -t ${tmuxSessionName}' to view the session.`
-                : `Spawned new session in tmux session '${tmuxSessionName}'. Use 'tmux attach -t ${tmuxSessionName}' to view the session.`
-            };
-
-            // Add to tracking map so webhook can find it later
-            pidToTrackedSession.set(tmuxResult.pid, trackedSession);
-
-            // Wait for webhook to populate session with happySessionId (exact same as regular flow)
-            logger.debug(`[DAEMON RUN] Waiting for session webhook for PID ${tmuxResult.pid} (tmux)`);
-
-            return new Promise((resolve) => {
-              // Set timeout for webhook (same as regular flow)
-              const timeout = setTimeout(() => {
-                pidToAwaiter.delete(tmuxResult.pid!);
-                logger.debug(`[DAEMON RUN] Session webhook timeout for PID ${tmuxResult.pid} (tmux)`);
-                resolve({
-                  type: 'error',
-                  errorMessage: `Session webhook timeout for PID ${tmuxResult.pid} (tmux)`
-                });
-              }, 15_000); // Same timeout as regular sessions
-
-              // Register awaiter for tmux session (exact same as regular flow)
-              pidToAwaiter.set(tmuxResult.pid!, (completedSession) => {
-                clearTimeout(timeout);
-                logger.debug(`[DAEMON RUN] Session ${completedSession.happySessionId} fully spawned with webhook (tmux)`);
-                resolve({
-                  type: 'success',
-                  sessionId: completedSession.happySessionId!
-                });
-              });
-            });
-          } else {
-            logger.debug(`[DAEMON RUN] Failed to spawn in tmux: ${tmuxResult.error}, falling back to regular spawning`);
-            useTmux = false;
-          }
+        if (!tmuxResult.success) {
+          logger.debug(`[DAEMON RUN] Failed to spawn in tmux: ${tmuxResult.error}`);
+          return {
+            type: 'error',
+            errorMessage: `Could not open a tmux window for this session: ${tmuxResult.error ?? 'unknown tmux error'}. `
+              + 'Nothing was started headless — a drover session is only a session when the terminal can see it.'
+          };
         }
 
-        // Regular process spawning (fallback or if tmux not available)
-        if (!useTmux) {
-          logger.debug(`[DAEMON RUN] Using regular process spawning`);
+        logger.debug(`[DAEMON RUN] Successfully spawned in tmux session: ${tmuxResult.sessionId}, PID: ${tmuxResult.pid}`);
 
-          // Construct arguments for the CLI - support claude, codex, and gemini
-          let agentCommand: string;
-          switch (options.agent) {
-            case 'claude':
-            case undefined:
-              agentCommand = 'claude';
-              break;
-            case 'codex':
-              agentCommand = 'codex';
-              break;
-            case 'gemini':
-              agentCommand = 'gemini';
-              break;
-            case 'openclaw':
-              agentCommand = 'openclaw';
-              break;
-            case 'agy':
-              agentCommand = 'agy';
-              break;
-            default:
-              return {
-                type: 'error',
-                errorMessage: `Unsupported agent type: '${options.agent}'. Please update your CLI to the latest version.`
-              };
-          }
-          const args = [
-            agentCommand,
-            '--happy-starting-mode', 'remote',
-            '--started-by', 'daemon'
-          ];
-          appendDaemonSpawnModeArgs(args, options, agentCommand);
-
-          // Resume ids attach the new Happy session to a pre-existing provider
-          // conversation created by the fork / duplicate RPC.
-          if (options.resumeClaudeSessionId && agentCommand === 'claude') {
-            args.push('--resume', options.resumeClaudeSessionId);
-          }
-          if (options.resumeCodexThreadId && agentCommand === 'codex') {
-            args.push('--resume', options.resumeCodexThreadId);
-          }
-
-          // TODO: In future, sessionId could be used with --resume to continue existing sessions
-          // For now, we ignore it - each spawn creates a new session
-          return spawnTrackedHappyProcess({
-            args,
-            cwd: directory,
-            env: buildDirectSpawnChildEnvironment(ambientEnvironment, extraEnv),
-            directoryCreated,
-            message: directoryCreated ? `The path '${directory}' did not exist. We created a new folder and spawned a new session there.` : undefined,
-          });
+        // Validate we got a PID from tmux
+        if (!tmuxResult.pid) {
+          throw new Error('Tmux window created but no PID returned');
         }
 
-        // This should never be reached, but TypeScript requires a return statement
-        return {
-          type: 'error',
-          errorMessage: 'Unexpected error in session spawning'
+        // Create a tracked session for tmux windows - now we have the real PID!
+        //
+        // This PID is the pane's, which is the launcher chain's head rather
+        // than the session process itself; `onHappySessionWebhook` walks up
+        // from the reporting pid to find it and then re-keys the record.
+        const tmuxWindowDesc = tmuxResult.sessionId ?? windowName;
+        const trackedSession: TrackedSession = {
+          startedBy: 'daemon',
+          pid: tmuxResult.pid, // Real PID from tmux -P flag
+          tmuxSessionId: tmuxResult.sessionId,
+          directoryCreated,
+          message: directoryCreated
+            ? `The path '${directory}' did not exist. We created a new folder and opened a tmux window '${tmuxWindowDesc}' for the session.`
+            : `Opened a tmux window '${tmuxWindowDesc}' for the session. Attach with 'tmux attach'.`
         };
+
+        // Add to tracking map so webhook can find it later
+        pidToTrackedSession.set(tmuxResult.pid, trackedSession);
+
+        // Wait for webhook to populate session with happySessionId (exact same as regular flow)
+        logger.debug(`[DAEMON RUN] Waiting for session webhook for PID ${tmuxResult.pid} (tmux)`);
+
+        return new Promise((resolve) => {
+          // Set timeout for webhook (same as regular flow)
+          const timeout = setTimeout(() => {
+            pidToAwaiter.delete(tmuxResult.pid!);
+            logger.debug(`[DAEMON RUN] Session webhook timeout for PID ${tmuxResult.pid} (tmux)`);
+            resolve({
+              type: 'error',
+              errorMessage: `Session webhook timeout for PID ${tmuxResult.pid} (tmux)`
+            });
+          }, 15_000); // Same timeout as regular sessions
+
+          // Register awaiter for tmux session (exact same as regular flow)
+          pidToAwaiter.set(tmuxResult.pid!, (completedSession) => {
+            clearTimeout(timeout);
+            logger.debug(`[DAEMON RUN] Session ${completedSession.happySessionId} fully spawned with webhook (tmux)`);
+            resolve({
+              type: 'success',
+              sessionId: completedSession.happySessionId!
+            });
+          });
+        });
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
         logger.debug('[DAEMON RUN] Failed to spawn session:', error);
