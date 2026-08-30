@@ -191,3 +191,27 @@ function mtime(path: string): string {
         return '-'
     }
 }
+
+/**
+ * The seed a clone starts with (DROVE-58).
+ *
+ * `drover clone` writes the exported conversation to a file and passes the
+ * PATH — a seed is tens of kilobytes and a command line is where one stray
+ * quote turns it into a syntax error. It is read here and handed to the FIRST
+ * child only, through `pendingInitialPrompt`: an argv survives every relaunch,
+ * so a seed put there would paste the whole conversation in again after each
+ * flip or crash.
+ *
+ * An unreadable or empty seed THROWS. A session that starts with no context
+ * and reports success is the failure this whole path exists to avoid.
+ */
+export function readSeedPrompt(seedFile: string): string {
+    let text: string
+    try {
+        text = readFileSync(seedFile, 'utf8')
+    } catch (err) {
+        throw new Error(`--seed: cannot read ${seedFile}: ${String(err)}`)
+    }
+    if (!text.trim()) throw new Error(`--seed: ${seedFile} is empty`)
+    return text
+}

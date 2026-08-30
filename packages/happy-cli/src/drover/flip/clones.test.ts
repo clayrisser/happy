@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { CloneReporter, cloneLedgerPath, cloneLineage, readCloneLedger, type CloneRow, type DroverClone } from './clones'
+import { CloneReporter, cloneLedgerPath, cloneLineage, readCloneLedger, readSeedPrompt, type CloneRow, type DroverClone } from './clones'
 
 let root: string
 
@@ -162,5 +162,25 @@ describe('the reporter', () => {
         r.stop()
         expect(r.tick()).toBe(false)
         expect(published).toHaveLength(0)
+    })
+})
+
+describe('the seed', () => {
+    it('is read from the file the path names', () => {
+        const seed = join(root, 'seed.md')
+        writeFileSync(seed, '# Cloned session\n\nthe whole conversation\n')
+        expect(readSeedPrompt(seed)).toContain('the whole conversation')
+    })
+
+    it('THROWS when it cannot be read, rather than starting with no context', () => {
+        // A session that opens with an empty context and reports success is
+        // the failure the whole clone path exists to avoid.
+        expect(() => readSeedPrompt(join(root, 'nope.md'))).toThrow(/cannot read/)
+    })
+
+    it('THROWS on an empty seed', () => {
+        const seed = join(root, 'empty.md')
+        writeFileSync(seed, '   \n')
+        expect(() => readSeedPrompt(seed)).toThrow(/is empty/)
     })
 })
