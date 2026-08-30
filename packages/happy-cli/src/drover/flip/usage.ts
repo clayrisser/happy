@@ -49,7 +49,11 @@ import { familyOfDisplayName } from './limits'
 export interface UsageRowSnapshot {
     /** `session`, `weekly_all`, `weekly_scoped`, … as Claude Code names them. */
     kind: string
-    /** Percent USED, 0-100, the way the cache and the app's colour thresholds both count. */
+    /**
+     * Percent USED, as the cache wrote it. A row whose percent is present but
+     * not a number counts as 0, the way `drover accounts` counts it; the app
+     * clamps for display.
+     */
     percent: number
     /** Epoch ms, or null when the row carries no parseable reset. */
     resetsAt: number | null
@@ -85,9 +89,19 @@ export interface DroverUsage {
     accounts: AccountUsageSnapshot[]
 }
 
+/**
+ * Which rows count, decided the way `drover accounts` decides it (limits_for in
+ * libexec/drover-accounts): a row with no percent is not a measurement and is
+ * dropped; a row whose percent is present but not a number is kept at 0. It
+ * used to be Number(percent) with NaN dropped, which read "abc" the other way
+ * round and read null as 0, so on a malformed cache the app's headroom could
+ * differ from the table's. Same rule, same number, in both places.
+ */
 function rowSnapshot(row: UsageLimitRow): UsageRowSnapshot | null {
-    const percent = Number(row?.percent)
-    if (!Number.isFinite(percent)) return null
+    const raw = row?.percent
+    // jq's `//` treats false like null, so the shell drops both.
+    if (raw === undefined || raw === null || raw === false) return null
+    const percent = typeof raw === 'number' && Number.isFinite(raw) ? raw : 0
     const resets = Date.parse(String(row?.resets_at ?? ''))
     const scope = row?.scope
     const display = scope?.model?.display_name
@@ -99,7 +113,7 @@ function rowSnapshot(row: UsageLimitRow): UsageRowSnapshot | null {
         : typeof display === 'string' && display ? display : null
     return {
         kind: String(row?.kind ?? 'usage'),
-        percent: Math.min(100, Math.max(0, percent)),
+        percent,
         resetsAt: Number.isFinite(resets) ? resets : null,
         scope: scopeName,
         family: scope?.surface == null ? familyOfDisplayName(display) ?? null : null,
@@ -141,7 +155,9 @@ function accountSnapshot(a: DroverAccount, ledger: Ledger, current: string | und
         current: a.name === current,
         loggedIn: isLoggedIn(a),
         fetchedAt: cache?.fetchedAt ?? null,
-        headroom: limits.length ? 100 - Math.max(...limits.map((r) => r.percent)) : null,
+        // 100 minus the fullest row, clamped to the scale the way the table clamps
+        // it, so a cache that says 120% reads as 0 left in both places.
+        headroom: limits.length ? Math.min(100, Math.max(0, 100 - Math.max(...limits.map((r) => r.percent)))) : null,
         cooling: cooling.until > 0
             ? { until: cooling.until, reason: cooling.reason, ...(family ? { family } : {}) }
             : null,

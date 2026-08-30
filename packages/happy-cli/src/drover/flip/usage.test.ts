@@ -158,6 +158,60 @@ describe('the usage snapshot', () => {
         const { usageSnapshot } = await usageModule()
         expect(usageSnapshot(undefined).accounts.map((a) => a.current)).toEqual([false])
     })
+
+    // The same rule `drover accounts` applies in limits_for (libexec/
+    // drover-accounts): no percent is no measurement and the row goes; a
+    // percent that is there but is not a number is kept and counts as 0. The
+    // two disagreed on both edges once, and then the phone's headroom and the
+    // table's could differ on a malformed cache.
+    it('counts a malformed row the way drover accounts counts it', async () => {
+        const dirs = writeAccounts(['main'])
+        const now = Date.parse('2026-08-30T18:00:00Z')
+        writeCache(dirs.main, [
+            { kind: 'session', percent: null, resets_at: '2026-08-30T21:00:00+00:00', scope: null },
+            { kind: 'weekly_all', percent: 'lots', resets_at: '2026-09-03T20:00:00+00:00', scope: null },
+            { kind: 'weekly_scoped', percent: 30, resets_at: '2026-09-05T19:00:00+00:00', scope: fable },
+        ] as unknown as CacheRow[])
+        const { usageSnapshot } = await usageModule()
+        const [main] = usageSnapshot('main', now).accounts
+        expect(main.limits.map((r) => [r.kind, r.percent])).toEqual([
+            ['weekly_all', 0],
+            ['weekly_scoped', 30],
+        ])
+        expect(main.headroom).toBe(70)
+        expect(main.cooling).toBeNull()
+    })
+
+    it('reads a cache of unreadable percents as measured at nothing used, not as never measured', async () => {
+        const dirs = writeAccounts(['main', 'spare'])
+        writeCache(dirs.main, [
+            { kind: 'session', percent: '49', resets_at: '2026-08-30T21:00:00+00:00', scope: null },
+        ] as unknown as CacheRow[])
+        // jq's `//` drops false with null; so does the snapshot.
+        writeCache(dirs.spare, [
+            { kind: 'session', percent: false, resets_at: '2026-08-30T21:00:00+00:00', scope: null },
+        ] as unknown as CacheRow[])
+        const { usageSnapshot } = await usageModule()
+        const [main, spare] = usageSnapshot('main').accounts
+        expect(main.limits).toHaveLength(1)
+        expect(main.headroom).toBe(100)
+        expect(spare.limits).toEqual([])
+        expect(spare.headroom).toBeNull()
+    })
+
+    it('clamps headroom to the scale like the table, and leaves the row as the cache wrote it', async () => {
+        const dirs = writeAccounts(['main'])
+        const now = Date.parse('2026-08-30T18:00:00Z')
+        writeCache(dirs.main, [
+            { kind: 'session', percent: 120, resets_at: '2026-08-30T21:00:00+00:00', scope: null },
+        ])
+        const { usageSnapshot } = await usageModule()
+        const [main] = usageSnapshot('main', now).accounts
+        expect(main.limits[0].percent).toBe(120)
+        expect(main.headroom).toBe(0)
+        // Over the top is still over the top: the row blocks until it resets.
+        expect(main.cooling?.until).toBe(Date.parse('2026-08-30T21:00:00Z'))
+    })
 })
 
 describe('the usage reporter', () => {
