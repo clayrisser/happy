@@ -4,6 +4,37 @@ import { z } from "zod";
 // Agent states
 //
 
+/**
+ * Every Cattle Drover account's headroom, stamped by the CLI from Claude Code's
+ * own usage cache (DROVE-47). A pane session has no SDK rate-limit stream, so
+ * this is what fills the strip under the composer; the account marked
+ * `current` is the one the session is on and the rest are folded beside it.
+ * Ephemeral and additive: a malformed block degrades to absent rather than
+ * failing the whole metadata parse and dropping the session.
+ */
+const DroverUsageSchema = z.object({
+    capturedAt: z.number(),
+    accounts: z.array(z.object({
+        name: z.string(),
+        current: z.boolean().nullish(),
+        loggedIn: z.boolean().nullish(),
+        fetchedAt: z.number().nullish(),
+        headroom: z.number().nullish(),
+        cooling: z.object({
+            until: z.number(),
+            reason: z.string().nullish(),
+            family: z.string().nullish(),
+        }).passthrough().nullish(),
+        limits: z.array(z.object({
+            kind: z.string(),
+            percent: z.number(),
+            resetsAt: z.number().nullish(),
+            scope: z.string().nullish(),
+            family: z.string().nullish(),
+        }).passthrough()).nullish(),
+    }).passthrough()),
+}).passthrough().optional().catch(undefined);
+
 export const MetadataSchema = z.object({
     models: z.array(z.object({
         code: z.string(),
@@ -139,6 +170,7 @@ export const MetadataSchema = z.object({
     // Cattle Drover account this session runs under (one CLAUDE_CONFIG_DIR per
     // account; claude-acct exports it, the CLI stamps it — BASED-98).
     droverAccount: z.string().optional(),
+    droverUsage: DroverUsageSchema,
     claudeSessionId: z.string().optional(), // Claude Code session ID
     codexThreadId: z.string().optional(), // Codex app-server thread ID
     tools: z.array(z.string()).optional(),

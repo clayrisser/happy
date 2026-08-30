@@ -34,6 +34,31 @@ describe('MetadataSchema', () => {
         expect(metadata.activity?.subagents.queued).toBe(2);
         expect((metadata as any).futureCapability).toEqual({ supported: true });
     });
+
+    it('keeps the drover usage snapshot and degrades a malformed one to absent (DROVE-47)', () => {
+        const base = { path: '/tmp/project', host: 'local-machine', droverAccount: 'jamrizzi' };
+        const good = MetadataSchema.parse({
+            ...base,
+            droverUsage: {
+                capturedAt: 1_000,
+                accounts: [
+                    {
+                        name: 'jamrizzi', current: true, loggedIn: true, fetchedAt: 900, headroom: 51, cooling: null,
+                        limits: [{ kind: 'weekly_scoped', percent: 39, resetsAt: 2_000, scope: 'Fable', family: 'fable' }],
+                    },
+                    { name: 'spare', current: false, loggedIn: false, fetchedAt: null, headroom: null, cooling: null, limits: [] },
+                ],
+            },
+        });
+        expect(good.droverUsage?.accounts.map((a) => a.name)).toEqual(['jamrizzi', 'spare']);
+        expect(good.droverUsage?.accounts[0].limits?.[0]).toMatchObject({ family: 'fable', percent: 39 });
+
+        // A snapshot a newer CLI wrote in a shape this build cannot read must
+        // not take the session with it: the record parses, the strip is empty.
+        const bad = MetadataSchema.parse({ ...base, droverUsage: { capturedAt: 'soon', accounts: 'many' } });
+        expect(bad.droverUsage).toBeUndefined();
+        expect(bad.droverAccount).toBe('jamrizzi');
+    });
 });
 
 describe('MachineMetadataSchema', () => {

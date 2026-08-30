@@ -1097,6 +1097,8 @@ export function SessionViewLoaded({
                 sessionStatusGitBranch={statusBarGitBranch ?? 'main'}
                 sessionStatusGitChanges={statusBarGitChanges}
                 sessionStatusUsageLimits={session.agentState?.usageLimits ?? null}
+                sessionStatusDroverUsage={session.metadata?.droverUsage ?? null}
+                sessionStatusDroverAccount={session.metadata?.droverAccount ?? null}
                 onActionAreaOffsetChange={usesFloatingMobileDock ? handleComposerCardOffsetChange : undefined}
             />
         </View>
