@@ -24,6 +24,17 @@ struct DroverGate: Codable, Identifiable, Equatable, Hashable {
     /// twice: a synthesized decoder forgives a missing key only for an
     /// Optional, and every gate that is not a question has none.
     let options: [DroverGateOption]?
+    /// The human may pick MORE THAN ONE option (DROVE-53).
+    ///
+    /// Optional for the same decoder reason as `options`, and because a phone
+    /// that predates the key must still yield gates rather than failing the
+    /// whole snapshot. Absent reads as single-select, which is what every gate
+    /// was before this existed.
+    ///
+    /// Without it the wrist drew one button per option and the first tap was
+    /// the whole answer — Claude asked "pick as many as apply" and got one word
+    /// back, with nothing on any screen saying the rest had gone.
+    let multiSelect: Bool?
 
     /// The kinds schema/event.json defines, plus the one it cannot: a kind this
     /// build has never heard of. Decoded through `Kind(rawValue:) ?? .unknown`
@@ -36,6 +47,11 @@ struct DroverGate: Codable, Identifiable, Equatable, Hashable {
         case question
         case idle
         case expiry
+        /// The needs-you record (DROVE-53): the session asking you to DO
+        /// something — push this, run that on the box, log in — rather than to
+        /// answer something. It is not a gate: nothing is blocked on a
+        /// decision, something is blocked on you having done the thing.
+        case todo
         case unknown
     }
 
@@ -49,6 +65,12 @@ struct DroverGate: Codable, Identifiable, Equatable, Hashable {
     var answerableOptions: [DroverGateOption] {
         isQuestion ? (options ?? []) : []
     }
+
+    /// Whether the wrist should draw toggles and a Send button rather than one
+    /// button per option. Only ever true on a question — the bus refuses
+    /// multiSelect on any other kind — but tested against the kind here as
+    /// well, because a snapshot is data from another process.
+    var allowsMultipleAnswers: Bool { isQuestion && multiSelect == true }
 }
 
 /// One pickable answer on a question gate (schema/event.json `options[]`).
@@ -292,6 +314,22 @@ struct DroverAnswer: Codable {
     /// left out of the JSON, which is also what keeps NSNull off a
     /// WatchConnectivity payload.
     let text: String?
+    /// EVERY pick on a multi-select question, in the order they were tapped
+    /// (DROVE-53).
+    ///
+    /// `optionId` still carries the first one, so the phone and the CLI paths
+    /// that only ever knew that key keep working. Absent on a single-select
+    /// answer rather than a one-element array: an array where the reader
+    /// expects one string is how a "pick one" answer would start arriving as a
+    /// list nobody asked for.
+    let optionIds: [String]?
+    /// ALLOW, AND STOP ASKING for the rest of this session (DROVE-53).
+    ///
+    /// Only ever "session", and absent otherwise — including on a plain allow,
+    /// because a default worth writing down is a default that will drift. The
+    /// phone turns it into the `approved_for_session` decision the app's own
+    /// card already sends, and lib/drover-gate.sh is what remembers it.
+    let scope: String?
 }
 
 /// Flip a session onto another account, from the wrist (BASED-98).

@@ -137,6 +137,15 @@ final class DroverWatchDelegate: NSObject, WCSessionDelegate {
         // here would have made every free-text question on the wrist a black
         // hole again, since the tap travels and the answer does not.
         if let text = payload["text"] as? String { event["text"] = text }
+        // The WHOLE selection on a multi-select question (DROVE-53). Forwarded
+        // for the same reason `text` is: this function copies keys one at a
+        // time, so a key it does not name is a key that travels off the wrist
+        // and stops here. optionId carries the first pick either way, which is
+        // why the loss would have been silent — three ticks, one word, no error.
+        if let optionIds = payload["optionIds"] as? [String] { event["optionIds"] = optionIds }
+        // "Allow, and stop asking this session" from the wrist. Same rule: a
+        // key this function does not name is a key that dies here.
+        if let scope = payload["scope"] as? String { event["scope"] = scope }
         onAnswer?(event)
     }
 }

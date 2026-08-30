@@ -29,6 +29,21 @@ export interface DroverAnswerEvent {
      * string against the question's options (see droverWatchFeed's onAnswer).
      */
     text?: string;
+    /**
+     * EVERY pick on a multi-select question, in tap order (DROVE-53).
+     *
+     * `optionId` still carries the first, so nothing that only knows that key
+     * changes. Absent on a single pick rather than a one-element array — an
+     * array where the reader expects one string is how a pick-one answer would
+     * start arriving as a list nobody asked for.
+     */
+    optionIds?: string[];
+    /**
+     * "Allow, and stop asking this session", from the wrist's third permission
+     * button. Only ever 'session'; absent on a plain allow, because a default
+     * worth writing down is a default that will drift.
+     */
+    scope?: 'session';
 }
 
 /**
@@ -55,7 +70,8 @@ export interface DroverGate {
     title: string;
     reason: string;
     preview: string;
-    kind: 'permission' | 'question';
+    /** `todo` is the needs-you record: an ACTION to do, not a decision. */
+    kind: 'permission' | 'question' | 'todo';
     /** ISO-8601; Swift's JSONDecoder reads these with .iso8601. */
     createdAt: string;
     account?: string | null;
@@ -72,6 +88,14 @@ export interface DroverGate {
      * these before this field existed, which is why it is here.
      */
     options?: DroverGateOption[];
+    /**
+     * The human may tick MORE THAN ONE option (DROVE-53).
+     *
+     * Omitted, never false, so a payload stays as small as it was and an older
+     * watch build decodes it unchanged — absent reads as single-select there,
+     * which is what every gate was before this existed.
+     */
+    multiSelect?: boolean;
 }
 
 /** A session the wrist may flip onto another account. */

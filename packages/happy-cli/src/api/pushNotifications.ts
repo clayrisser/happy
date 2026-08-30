@@ -11,7 +11,7 @@ export interface PushToken {
     updatedAt: number
 }
 
-export type SessionNotificationKind = 'done' | 'permission' | 'question'
+export type SessionNotificationKind = 'done' | 'permission' | 'question' | 'todo'
 
 /**
  * Seconds a wake is still worth delivering for.
@@ -103,6 +103,12 @@ export function getSessionNotificationTitle(
             return 'Permission request'
         case 'question':
             return 'Clarification needed'
+        // A to-do asks for an ACTION, not a decision and not an answer, so it
+        // says so (DROVE-53). Filing it under 'permission' would have read
+        // "Permission request" on a lock screen for "push the release", which
+        // tells you nothing about what is actually wanted.
+        case 'todo':
+            return 'Needs you'
     }
 }
 

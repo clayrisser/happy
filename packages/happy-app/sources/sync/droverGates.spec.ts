@@ -11,6 +11,7 @@ import {
     collectGates,
     gateForQuestion,
     gatesForSession,
+    multiSelectFor,
     previewFor,
     optionsFor,
     sortGateEntries,
@@ -239,6 +240,36 @@ describe('optionsFor', () => {
             s1: session({ requests: { r1: { tool: 'Bash', createdAt: 0, arguments: { command: 'ls' } } } }),
         });
         expect('options' in entry.gate).toBe(false);
+    });
+});
+
+describe('multiSelectFor', () => {
+    it('carries a multi-select question through to the wrist (DROVE-53)', () => {
+        const args = {
+            questions: [{ question: 'Which suites?', multiSelect: true, options: [{ label: 'A' }] }],
+        };
+        expect(multiSelectFor(args)).toBe(true);
+        expect(collectGateEntries({
+            s1: session({ requests: { r1: { tool: 'AskUserQuestion', createdAt: 0, arguments: args } } }),
+        })[0].gate.multiSelect).toBe(true);
+    });
+
+    it('leaves the key OFF a single-select gate rather than sending false', () => {
+        // The payload stays the size it was, and a watch build that predates
+        // the key decodes it unchanged — absent reads as single-select there,
+        // which is what every gate was.
+        const [entry] = collectGateEntries({
+            s1: session({
+                requests: {
+                    r1: {
+                        tool: 'AskUserQuestion',
+                        createdAt: 0,
+                        arguments: { questions: [{ question: 'Which one?', options: [{ label: 'A' }] }] },
+                    },
+                },
+            }),
+        });
+        expect('multiSelect' in entry.gate).toBe(false);
     });
 });
 

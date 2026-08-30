@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { ActivityIndicator, Platform, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Platform, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
@@ -23,6 +23,18 @@ export interface InlineQuestion {
 
 export type InlineQuestionAnswers = Record<string, string[]>;
 
+/**
+ * The index of the freeform row, which sits after the last real option
+ * (DROVE-53).
+ *
+ * A sentinel index rather than a synthetic option, so the selection state stays
+ * one Set of indices and nothing downstream has to tell a real option from a
+ * fake one. Selection maps back to `question.options[index]` everywhere else,
+ * and that lookup is undefined here on purpose — the typed text is used
+ * instead.
+ */
+const otherIndex = (question: InlineQuestion) => question.options.length;
+
 interface InlineQuestionFormProps {
     questions: InlineQuestion[];
     canInteract: boolean;
@@ -37,12 +49,19 @@ export const InlineQuestionForm = React.memo<InlineQuestionFormProps>((props) =>
     const { questions, onSubmit } = props;
     const { theme } = useUnistyles();
     const [selections, setSelections] = React.useState<Map<string, Set<number>>>(new Map());
+    // What was typed into the "Something else" row, per question. The wrist has
+    // been able to answer a question in words since it grew TextFieldLink, and
+    // the phone could not — so the answer that is not on the list, which is the
+    // one worth interrupting somebody for, had to be given on a watch or not at
+    // all (DROVE-53).
+    const [otherText, setOtherText] = React.useState<Map<string, string>>(new Map());
     const [isSubmitting, setIsSubmitting] = React.useState(false);
     const [locallySubmittedAnswers, setLocallySubmittedAnswers] = React.useState<InlineQuestionAnswers | null>(null);
     const questionKey = questions.map(question => question.id).join('\u0000');
 
     React.useEffect(() => {
         setSelections(new Map());
+        setOtherText(new Map());
         setLocallySubmittedAnswers(null);
         setIsSubmitting(false);
     }, [questionKey]);
@@ -63,7 +82,15 @@ export const InlineQuestionForm = React.memo<InlineQuestionFormProps>((props) =>
 
     const allQuestionsAnswered = questions.every((question) => {
         if (question.required === false) return true;
-        return (selections.get(question.id)?.size ?? 0) > 0;
+        const selected = selections.get(question.id);
+        if (!selected || selected.size === 0) return false;
+        // A ticked "Something else" with nothing typed in it is not an answer.
+        // Submitting it would send an empty string, which the bus refuses with
+        // a 400 and the session never hears about.
+        if (selected.has(otherIndex(question)) && !(otherText.get(question.id) ?? '').trim()) {
+            return selected.size > 1;
+        }
+        return true;
     });
 
     const handleOptionToggle = React.useCallback((question: InlineQuestion, optionIndex: number) => {
@@ -95,7 +122,11 @@ export const InlineQuestionForm = React.memo<InlineQuestionFormProps>((props) =>
             const selected = selections.get(question.id);
             if (!selected || selected.size === 0) continue;
             answers[question.id] = Array.from(selected)
-                .map(optionIndex => question.options[optionIndex]?.label)
+                .map(optionIndex => (
+                    optionIndex === otherIndex(question)
+                        ? (otherText.get(question.id) ?? '').trim()
+                        : question.options[optionIndex]?.label
+                ))
                 .filter((label): label is string => Boolean(label));
         }
 
@@ -109,7 +140,7 @@ export const InlineQuestionForm = React.memo<InlineQuestionFormProps>((props) =>
         } finally {
             setIsSubmitting(false);
         }
-    }, [allQuestionsAnswered, isSubmitting, onSubmit, questions, selections]);
+    }, [allQuestionsAnswered, isSubmitting, onSubmit, otherText, questions, selections]);
 
     // An answered card keeps its question and every option on screen, with the
     // chosen one marked (DROVE-52). It used to collapse to "<header>: <answer>"
@@ -172,6 +203,76 @@ export const InlineQuestionForm = React.memo<InlineQuestionFormProps>((props) =>
                                         </TouchableOpacity>
                                     );
                                 })}
+                                {/*
+                                  The freeform row, offered on EVERY question
+                                  rather than only where the producer asked for
+                                  one. The options are the agent's guess at what
+                                  you might say, and the answer that is not among
+                                  them is exactly the one worth a prompt. It
+                                  looks like an option and behaves like one — the
+                                  same radio or checkbox, the same selection
+                                  state — so a multi-select can tick two boxes
+                                  and add a note.
+                                */}
+                                {(() => {
+                                    const index = question.options.length;
+                                    const isSelected = selectedOptions.has(index);
+                                    return (
+                                        <View>
+                                            <TouchableOpacity
+                                                key={`${question.id}:other`}
+                                                style={[
+                                                    styles.optionButton,
+                                                    isSelected && styles.optionButtonSelected,
+                                                    !canInteract && styles.optionButtonDisabled,
+                                                ]}
+                                                onPress={() => handleOptionToggle(question, index)}
+                                                disabled={!canInteract}
+                                                activeOpacity={0.7}
+                                            >
+                                                {question.multiSelect ? (
+                                                    <View style={[
+                                                        styles.checkboxOuter,
+                                                        isSelected && styles.checkboxOuterSelected,
+                                                    ]}>
+                                                        {isSelected && <Ionicons name="checkmark" size={14} color="#fff" />}
+                                                    </View>
+                                                ) : (
+                                                    <View style={[
+                                                        styles.radioOuter,
+                                                        isSelected && styles.radioOuterSelected,
+                                                    ]}>
+                                                        {isSelected && <View style={styles.radioInner} />}
+                                                    </View>
+                                                )}
+                                                <View style={styles.optionContent}>
+                                                    <Text style={styles.optionLabel}>
+                                                        {t('tools.askUserQuestion.other')}
+                                                    </Text>
+                                                    <Text style={styles.optionDescription}>
+                                                        {t('tools.askUserQuestion.otherDescription')}
+                                                    </Text>
+                                                </View>
+                                            </TouchableOpacity>
+                                            {isSelected && (
+                                                <TextInput
+                                                    style={styles.otherInput}
+                                                    value={otherText.get(question.id) ?? ''}
+                                                    onChangeText={(value) => setOtherText((previous) => {
+                                                        const next = new Map(previous);
+                                                        next.set(question.id, value);
+                                                        return next;
+                                                    })}
+                                                    editable={canInteract}
+                                                    multiline
+                                                    autoFocus
+                                                    placeholder={t('tools.askUserQuestion.otherPlaceholder')}
+                                                    placeholderTextColor={theme.colors.textSecondary}
+                                                />
+                                            )}
+                                        </View>
+                                    );
+                                })()}
                             </View>
                             {notes.length > 0 && (
                                 <View style={styles.submittedItem}>
@@ -296,6 +397,18 @@ const styles = StyleSheet.create((theme) => ({
     },
     optionContent: {
         flex: 1,
+    },
+    otherInput: {
+        marginTop: 4,
+        minHeight: 44,
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: theme.colors.radio.active,
+        backgroundColor: Platform.select({ web: 'transparent', default: theme.colors.surface }),
+        color: theme.colors.text,
+        fontSize: 14,
     },
     optionLabel: {
         fontSize: 14,
