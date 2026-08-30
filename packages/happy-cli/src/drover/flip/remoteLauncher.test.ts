@@ -175,6 +175,13 @@ function makeSession(opts: {
 }
 
 beforeEach(() => {
+    // Point every bus call at a dead port. These tests never had a bus, but
+    // DROVER_URL defaulted to 127.0.0.1:7970 — so on a machine where the real
+    // drover bus is running they were quietly talking to it, and once a flip
+    // started asking it who is live (DROVE-37) that turned into real HTTP
+    // inside a 5s test. Connection refused is instant and is what "no bus"
+    // should have meant all along.
+    process.env.DROVER_URL = 'http://127.0.0.1:1'
     root = mkdtempSync(join(tmpdir(), 'drover-remote-'))
     process.env.XDG_STATE_HOME = join(root, 'state')
     process.env.DROVER_ACCOUNTS = join(root, 'accounts.json')
@@ -409,6 +416,89 @@ describe('running out of headroom while REMOTE', () => {
 
         expect(engines).toHaveLength(1)
         expect(h.accounts.isCooling('main')).toBe(false)
+
+        h.handlers.switch()
+        await expect(run).resolves.toBe('switch')
+    })
+})
+
+describe('warning about the Remote Control it will sever', () => {
+    // The bus is stubbed at fetch, not at a seam invented for the test, so the
+    // real fetchBusSessions -> sessionsAtRisk -> warningFor path runs.
+    // Routed by URL, not blanket: the FlipController also opens the bus event
+    // stream at /v1/stream, and a stub that answered everything with a session
+    // list broke six unrelated tests in this file.
+    const busReturns = (rows: unknown[]) => {
+        const spy = vi.fn(async (url: any) => {
+            if (String(url).includes('/v1/sessions')) {
+                return { ok: true, json: async () => rows } as any
+            }
+            throw new Error('no bus in tests')
+        })
+        ;(globalThis as any).fetch = spy
+        return spy
+    }
+    const realFetch: any = (globalThis as any).fetch
+    afterEach(() => { (globalThis as any).fetch = realFetch })
+
+    it('names the other live session on the terminal AND the phone', async () => {
+        // DROVE-37. The warning is only worth anything if a REAL flip emits it,
+        // so this goes through the launcher rather than calling the formatter.
+        // `employees` is UNMANAGED — account null — which is the exact shape
+        // Clay lost and the one a naive filter on named accounts would skip.
+        busReturns([
+            { id: 'sess-1', account: 'main', title: 'drover', state: 'live-interactive' },
+            { id: 'emp', account: null, title: 'employees', state: 'live-interactive' },
+            { id: 'old', account: 'main', title: 'finished', state: 'ended' },
+        ])
+        const h = await build()
+        const run = h.claudeRemoteLauncher(h.session)
+        await settle()
+
+        h.flip.request({ account: 'alt', reason: 'manual', by: 'app' })
+        await settle()
+
+        const said = h.said.join('\n')
+        expect(said).toContain('employees (main)')
+        expect(said).toContain('/remote-control')
+        // Not the session doing the flipping, and not the one that has ended.
+        expect(said).not.toContain('drover (main)')
+        expect(said).not.toContain('finished')
+        // say() reaches the keyboard too, which is where Clay was sitting.
+        expect(h.terminal.join('\n')).toContain('employees (main)')
+
+        h.handlers.switch()
+        await expect(run).resolves.toBe('switch')
+    })
+
+    it('stays silent when every other live session is already on the target', async () => {
+        busReturns([{ id: 'other', account: 'alt', title: 'already there', state: 'live-interactive' }])
+        const h = await build()
+        const run = h.claudeRemoteLauncher(h.session)
+        await settle()
+
+        h.flip.request({ account: 'alt', reason: 'manual', by: 'app' })
+        await settle()
+
+        expect(h.said.join('\n')).not.toContain('Remote Control')
+
+        h.handlers.switch()
+        await expect(run).resolves.toBe('switch')
+    })
+
+    it('flips anyway when the bus cannot be reached', async () => {
+        // A flip is usually asked for BECAUSE an account ran out. A bus that is
+        // down must cost the warning, never the flip.
+        ;(globalThis as any).fetch = vi.fn(async () => { throw new Error('bus unreachable') })
+        const h = await build()
+        const run = h.claudeRemoteLauncher(h.session)
+        await settle()
+
+        h.flip.request({ account: 'alt', reason: 'manual', by: 'app' })
+        await settle()
+
+        expect(engines).toHaveLength(2)
+        expect(engines[1].account).toBe('alt')
 
         h.handlers.switch()
         await expect(run).resolves.toBe('switch')

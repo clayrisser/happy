@@ -32,6 +32,7 @@ import { join } from 'node:path'
 
 import { defaultSessionName, isDefaultSessionName, type Session } from '@/claude/session'
 import { logger } from '@/ui/logger'
+import { remoteControlWarning, type BusSession } from './remoteControl'
 
 import { ambientDataDir } from './accounts'
 import { projectDirFor } from './transcript'
@@ -90,6 +91,11 @@ export interface ApplyPendingFlipOptions {
      * spawn. Launchers that mint a fresh controller per iteration pass nothing.
      */
     resetAbort?: () => void
+    /**
+     * Who is live on this machine, for the Remote Control warning (DROVE-37).
+     * Injected only by tests; the default asks the bus.
+     */
+    listSessions?: () => Promise<BusSession[]>
 }
 
 /**
@@ -222,6 +228,24 @@ export async function applyPendingFlip(opts: ApplyPendingFlipOptions): Promise<b
     }))
     session.client.sendSessionEvent({ type: 'message', message: result.note })
     flip.say(result.note)
+
+    // DROVE-37: and say who else just went quiet. Claude Code binds Remote
+    // Control to one account per machine, so landing on a new account tears
+    // down the binding every OTHER live session was holding — Clay flipped
+    // this session and watched an unrelated `employees` chat stop answering
+    // his phone with no idea why. Drover cannot prevent that (nothing it
+    // writes is shared; the binding is Claude Code's own), but it can stop it
+    // being a mystery. Best effort: never blocks, never fails the flip.
+    try {
+        const warning = await remoteControlWarning({
+            target: result.account.name,
+            selfId: session.sessionId ?? '',
+            ...(opts.listSessions ? { listSessions: opts.listSessions } : {}),
+        })
+        if (warning) flip.say(warning)
+    } catch (err) {
+        logger.debug(`[${mode}]: could not check Remote Control fallout: ${String(err)}`)
+    }
     logger.debug(`[${mode}]: flipped to ${result.account.name}, relaunching with --resume ${session.sessionId}`)
 
     resetAbort?.()

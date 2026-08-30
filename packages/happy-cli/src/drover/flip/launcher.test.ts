@@ -144,6 +144,13 @@ function makeSession(opts: { cwd: string; sessionId: string; flip: any; account:
 }
 
 beforeEach(() => {
+    // Point every bus call at a dead port. These tests never had a bus, but
+    // DROVER_URL defaulted to 127.0.0.1:7970 — so on a machine where the real
+    // drover bus is running they were quietly talking to it, and once a flip
+    // started asking it who is live (DROVE-37) that turned into real HTTP
+    // inside a 5s test. Connection refused is instant and is what "no bus"
+    // should have meant all along.
+    process.env.DROVER_URL = 'http://127.0.0.1:1'
     root = mkdtempSync(join(tmpdir(), 'drover-launcher-'))
     process.env.XDG_STATE_HOME = join(root, 'state')
     process.env.DROVER_ACCOUNTS = join(root, 'accounts.json')
