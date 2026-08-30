@@ -9,6 +9,7 @@ vi.mock('./storage', () => ({
 import {
     collectGateEntries,
     collectGates,
+    gateForQuestion,
     gatesForSession,
     previewFor,
     optionsFor,
@@ -287,5 +288,40 @@ describe('gatesForSession', () => {
 
     it('puts the longest-waiting gate first, so the screen presents what is holding the session up', () => {
         expect(gatesForSession(sessions, 'watched')[0].gate.id).toBe('watched:req-0');
+    });
+});
+
+describe('gateForQuestion', () => {
+    // DROVE-52. The in-session AskUserQuestion card of a pane session has no
+    // permission of its own — the drover PreToolUse hook holds the answer — so
+    // it has to submit against the bus event mirrored into the bridge session.
+    // Matching is on the question text, the one string both sides carry.
+    const QUESTION = 'Every restart of drover creates a new session in the phone app, with empty history. Which fix?';
+    const args = {
+        questions: [{
+            question: QUESTION,
+            header: 'DROVE-50',
+            options: [{ label: 'Drover owns the picker (Recommended)' }, { label: 'Archive and backfill' }],
+        }],
+    };
+    const sessions: Record<string, GateSession> = {
+        bridge: session({ requests: { '1f0666d6-5b79-4cf2-8218-dff2f5329c8f': { tool: 'AskUserQuestion', arguments: args } } }),
+    };
+
+    it('finds the mirrored gate asking the same question', () => {
+        const gate = gateForQuestion(sessions, QUESTION);
+        expect(gate?.sessionId).toBe('bridge');
+        expect(gate?.requestId).toBe('1f0666d6-5b79-4cf2-8218-dff2f5329c8f');
+    });
+
+    it('finds nothing once the gate is gone, so the card falls back to read-only', () => {
+        expect(gateForQuestion({ bridge: session({ requests: {} }) }, QUESTION)).toBeNull();
+        expect(gateForQuestion(sessions, 'a different question')).toBeNull();
+        expect(gateForQuestion(sessions, '')).toBeNull();
+    });
+
+    it('never matches a permission gate that merely quotes the text', () => {
+        const bash = { bridge: session({ requests: { r: { tool: 'Bash', arguments: { command: QUESTION } } } }) };
+        expect(gateForQuestion(bash, QUESTION)).toBeNull();
     });
 });

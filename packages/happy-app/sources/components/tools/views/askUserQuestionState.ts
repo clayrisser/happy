@@ -38,3 +38,48 @@ export function answersFromResolution(
     if (!permission?.reason || questionIds.length === 0) return undefined;
     return { [questionIds[0]]: [permission.reason] };
 }
+
+/**
+ * The answer Claude Code itself recorded, read off the tool RESULT.
+ *
+ * DROVE-52. When the drover PreToolUse hook answers an AskUserQuestion in a
+ * gum popup, Claude Code writes the chosen label into the tool result's
+ * `answers`, keyed by the question's own text, and never touches the app's
+ * permission machinery — a pane session has no `tool.permission` at all. The
+ * card only ever read `permission.reason`, so a question answered at the
+ * terminal came back on the phone as "DROVE-50: —": the header, an em dash,
+ * no question, no options, and it stayed a dash forever.
+ *
+ * Measured on session 19c2f0a8's transcript, tool_use toolu_01AAvS8Ps…,
+ * answered 2026-08-30T18:32:20Z, whose toolUseResult is
+ * `{questions:[…], answers:{"<question text>":"Drover owns the picker …"}}`.
+ * typesRaw.ts hands that whole object through as `tool.result`.
+ *
+ * A multi-select arrives as one string joined with ", " — the same separator
+ * providerAnswersFor writes and happy-cli's busResolutionFor splits on — so it
+ * is split back apart here and nowhere else.
+ */
+export function answersFromToolResult(
+    result: unknown,
+    cards: Array<{ question: string; multiSelect?: boolean }>,
+): InlineQuestionAnswers | undefined {
+    if (!result || typeof result !== 'object') return undefined;
+    const answers = (result as { answers?: unknown }).answers;
+    if (!answers || typeof answers !== 'object' || Array.isArray(answers)) return undefined;
+    const byQuestion = answers as Record<string, unknown>;
+    const out: InlineQuestionAnswers = {};
+    cards.forEach((card, index) => {
+        const picked = labelsFor(byQuestion[card.question], card.multiSelect === true);
+        if (picked.length) out[`question-${index}`] = picked;
+    });
+    return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function labelsFor(value: unknown, multiSelect: boolean): string[] {
+    if (Array.isArray(value)) {
+        return value.filter((entry): entry is string => typeof entry === 'string' && entry.length > 0);
+    }
+    if (typeof value !== 'string' || !value) return [];
+    if (!multiSelect) return [value];
+    return value.split(', ').map((part) => part.trim()).filter(Boolean);
+}
