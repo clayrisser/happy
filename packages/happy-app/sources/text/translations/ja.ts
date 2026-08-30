@@ -445,6 +445,18 @@ export const ja: TranslationStructure = {
     },
 
     agentInput: {
+        readAloud: {
+            label: '返信を読み上げる',
+            settingsTitle: '返信を読み上げる',
+            settingsSubtitle: '届いた返信をそのつど読み上げます。コード、差分、ツール出力は読みません。',
+        },
+        dictate: {
+            label: '長押しで話す',
+            settingsTitle: '長押しで話す',
+            settingsSubtitle: '入力欄の長押しボタン。この端末で文字起こしします。',
+            listening: '聞いています…',
+            failed: '音声入力に失敗しました',
+        },
         permissionMode: {
             title: '権限モード',
             auto: '自分で判断し、迷ったら確認します',

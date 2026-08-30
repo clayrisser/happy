@@ -445,6 +445,18 @@ export const zhHans: TranslationStructure = {
     },
 
     agentInput: {
+        readAloud: {
+            label: '朗读回复',
+            settingsTitle: '朗读回复',
+            settingsSubtitle: '每条助手回复到达时朗读。代码、差异和工具输出会被跳过。',
+        },
+        dictate: {
+            label: '按住说话',
+            settingsTitle: '按住说话',
+            settingsSubtitle: '输入框中的按住说话按钮。在本机转写。',
+            listening: '正在聆听…',
+            failed: '听写失败',
+        },
         permissionMode: {
             title: '权限模式',
             auto: '自行判断，不确定时询问',

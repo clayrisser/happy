@@ -458,6 +458,18 @@ export const en = {
     },
 
     agentInput: {
+        readAloud: {
+            label: 'Read replies aloud',
+            settingsTitle: 'Read replies aloud',
+            settingsSubtitle: 'Speaks each assistant reply as it arrives. Code, diffs and tool output are skipped.',
+        },
+        dictate: {
+            label: 'Hold to talk',
+            settingsTitle: 'Hold to talk',
+            settingsSubtitle: 'A press-and-hold button in the composer. Transcribed on this device.',
+            listening: 'Listening…',
+            failed: 'Dictation failed',
+        },
         permissionMode: {
             // Modes are named with one untranslated word so they fit the
             // composer chip; these strings describe them under that name.

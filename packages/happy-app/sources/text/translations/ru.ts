@@ -460,6 +460,18 @@ export const ru: TranslationStructure = {
     },
 
     agentInput: {
+        readAloud: {
+            label: 'Читать ответы вслух',
+            settingsTitle: 'Читать ответы вслух',
+            settingsSubtitle: 'Произносит каждый ответ по мере поступления. Код, диффы и вывод инструментов пропускаются.',
+        },
+        dictate: {
+            label: 'Удерживайте, чтобы говорить',
+            settingsTitle: 'Удерживайте, чтобы говорить',
+            settingsSubtitle: 'Кнопка с удержанием в поле ввода. Распознавание на этом устройстве.',
+            listening: 'Слушаю…',
+            failed: 'Не удалось распознать речь',
+        },
         permissionMode: {
             title: 'РЕЖИМ РАЗРЕШЕНИЙ',
             auto: 'решает сам, спрашивает при сомнении',

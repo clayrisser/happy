@@ -4,6 +4,8 @@ import { AgentGoalBar, type AgentGoalAction } from '@/components/AgentGoalBar';
 import { AgentQuestionBanner } from '@/components/AgentQuestionBanner';
 import { SessionGateBanner } from '@/components/SessionGateBanner';
 import { AgentInput } from '@/components/AgentInput';
+import { readAloud } from '@/voice/readAloudService';
+import { useVoiceComposer } from '@/voice/useVoiceComposer';
 import { resolveVisibleAgentGoalStatus } from '@/components/agentGoalStatus';
 import type { MultiTextInputHandle } from '@/components/MultiTextInput';
 import { layout } from '@/components/layout';
@@ -562,6 +564,8 @@ const AGENT_INPUT_AUTOCOMPLETE_PREFIXES = ['@', '/'];
 type ChatComposerHandle = {
     getMessage: () => string;
     clearMessage: () => void;
+    /** Drop dictated text into the draft, after whatever is already typed. */
+    appendMessage: (text: string) => void;
 };
 
 type ChatComposerProps = Omit<
@@ -596,6 +600,10 @@ const ChatComposer = React.memo(function ChatComposer(props: ChatComposerProps) 
     const { clearDraft } = useDraft(sessionId, message, applyDraft);
 
     const handleChangeText = React.useCallback((text: string) => {
+        // Typing means the user has stopped listening and started writing, so
+        // read-aloud is cut here rather than at the end of the sentence
+        // (DROVE-30). Idempotent: only the first keystroke reaches the engine.
+        readAloud.interrupt('typed');
         // Transition keeps the textarea responsive even when the draft
         // autosave / re-render takes longer than a frame.
         React.startTransition(() => setMessage(text));
@@ -607,6 +615,12 @@ const ChatComposer = React.memo(function ChatComposer(props: ChatComposerProps) 
             inputHandleRef.current?.setTextAndSelection('', { start: 0, end: 0 });
             setMessage('');
             clearDraft();
+        },
+        appendMessage: (text: string) => {
+            const current = inputHandleRef.current?.getText() ?? '';
+            const next = current.trimEnd().length > 0 ? `${current.trimEnd()} ${text}` : text;
+            inputHandleRef.current?.setTextAndSelection(next, { start: next.length, end: next.length });
+            setMessage(next);
         },
     }), [clearDraft]);
 
@@ -855,6 +869,7 @@ export function SessionViewLoaded({
     const handleSend = React.useCallback(() => {
         const liveMessage = composerHandleRef.current?.getMessage() ?? '';
         if (liveMessage.trim() || selectedImages.length > 0) {
+            readAloud.interrupt('sent');
             const attachments = selectedImages.length > 0 ? selectedImages : undefined;
             const communicationsToDismiss = [...pendingCommunications];
             composerHandleRef.current?.clearMessage();
@@ -975,6 +990,7 @@ export function SessionViewLoaded({
         }
         if (realtimeStatus === 'disconnected' || realtimeStatus === 'error') {
             try {
+                readAloud.interrupt('call-started');
                 const initialPrompt = voiceHooks.onVoiceStarted(sessionId);
                 const conversationId = await startRealtimeSession(sessionId, initialPrompt);
                 if (conversationId) {
@@ -1010,6 +1026,23 @@ export function SessionViewLoaded({
             voiceHooks.onVoiceStopped();
         }
     }, [realtimeStatus, sessionId]);
+
+    const handleVoiceError = React.useCallback((message: string) => {
+        Modal.alert(t('agentInput.dictate.failed'), message);
+    }, []);
+    const appendDictatedText = React.useCallback((text: string) => {
+        composerHandleRef.current?.appendMessage(text);
+    }, []);
+    const voiceComposer = useVoiceComposer({
+        sessionId,
+        // An embedded side chat and a disconnected session are both surfaces
+        // that must stay silent (DROVE-30).
+        active: !embedded && !isDisconnected,
+        voiceCallActive: realtimeStatus === 'connected' || realtimeStatus === 'connecting',
+        appendToComposer: appendDictatedText,
+        send: handleSend,
+        onError: handleVoiceError,
+    });
 
     // Memoize mic button state to prevent flashing during chat transitions.
     // While a call runs the pill under the header is the only stop control,
@@ -1098,6 +1131,12 @@ export function SessionViewLoaded({
                 onSend={handleSend}
                 onMicPress={(embedded || isDisconnected) ? undefined : micButtonState.onMicPress}
                 isMicActive={(embedded || isDisconnected) ? false : micButtonState.isMicActive}
+                readAloudEnabled={voiceComposer.readAloudEnabled}
+                onReadAloudToggle={voiceComposer.onReadAloudToggle}
+                onTalkStart={voiceComposer.onTalkStart}
+                onTalkEnd={voiceComposer.onTalkEnd}
+                onTalkCancel={voiceComposer.onTalkCancel}
+                isTalking={voiceComposer.isTalking}
                 onAbort={isDisconnected || !rigCanAbort(session.metadata) ? undefined : handleAbort}
                 showAbortButton={rigCanAbort(session.metadata) && (
                     sessionStatus.state === 'thinking'

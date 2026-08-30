@@ -19,6 +19,11 @@ export const LocalSettingsSchema = z.object({
     // Persisted so the layout survives reloads and long absences.
     sidebarPanelsOpen: z.array(z.enum(['changes', 'allFiles', 'sideChat'])).describe('Open right-sidebar panels, in tab order'),
     sidebarPanelActive: z.enum(['changes', 'allFiles', 'sideChat']).nullable().describe('Currently active right-sidebar panel (null shows the picker)'),
+    // Voice (DROVE-30). Device-local, not synced: a phone reads replies
+    // aloud on the walk to the car, a desktop with the terminal right there
+    // almost never should.
+    readAloudEnabled: z.boolean().describe('Read assistant replies aloud as they arrive'),
+    voiceDictationEnabled: z.boolean().describe('Show the press-and-hold talk button in the composer'),
     // CLI version acknowledgments - keyed by machineId
     acknowledgedCliVersions: z.record(z.string(), z.string()).describe('Acknowledged CLI versions per machine'),
     // Collapsed Rig projects in the session list - keyed by project id
@@ -48,6 +53,8 @@ export const localSettingsDefaults: LocalSettings = {
     consoleLoggingEnabled: false,
     verboseLogging: false,
     zenMode: false,
+    readAloudEnabled: false,
+    voiceDictationEnabled: true,
     sidebarPanelsOpen: [],
     sidebarPanelActive: null,
     acknowledgedCliVersions: {},

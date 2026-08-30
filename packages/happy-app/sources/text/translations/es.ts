@@ -444,6 +444,18 @@ export const es: TranslationStructure = {
     },
 
     agentInput: {
+        readAloud: {
+            label: 'Leer respuestas en voz alta',
+            settingsTitle: 'Leer respuestas en voz alta',
+            settingsSubtitle: 'Pronuncia cada respuesta a medida que llega. Se omiten el código, los diffs y la salida de herramientas.',
+        },
+        dictate: {
+            label: 'Mantén pulsado para hablar',
+            settingsTitle: 'Mantén pulsado para hablar',
+            settingsSubtitle: 'Un botón de mantener pulsado en el campo de mensaje. Se transcribe en este dispositivo.',
+            listening: 'Escuchando…',
+            failed: 'Error al dictar',
+        },
         permissionMode: {
             title: 'MODO DE PERMISOS',
             auto: 'decide por sí mismo, pregunta si duda',
