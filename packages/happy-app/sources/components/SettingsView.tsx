@@ -226,6 +226,15 @@ export const SettingsView = React.memo(function SettingsView({
                     icon={<Ionicons name="options-outline" size={29} color="#5AC8FA" />}
                     onPress={() => router.push('/settings/agents' as any)}
                 />
+                {/* Cattle Drover's flip and model-fallback defaults (DROVE-3).
+                    Reachable without a session, because the case it exists for
+                    is setting what the NEXT session starts with. */}
+                <Item
+                    title="Flip policy"
+                    subtitle="What a session does when an account runs out"
+                    icon={<Ionicons name="swap-horizontal-outline" size={29} color="#FF9500" />}
+                    onPress={() => router.push('/settings/flip-policy' as any)}
+                />
                 {experiments && (
                     <Item
                         title={t('settings.usage')}
