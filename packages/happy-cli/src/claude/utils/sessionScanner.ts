@@ -72,6 +72,7 @@ type SessionLogEntry =
     | { kind: 'message'; key: string; message: RawJSONLines }
     | { kind: 'transcript-event'; key: string; event: ScannerTranscriptEvent }
     | { kind: 'custom-title'; key: string; title: string }
+    | { kind: 'permission-mode'; key: string; mode: string }
     | { kind: 'queued-prompt'; key: string; prompt: ScannerQueuedPrompt };
 
 export async function createSessionScanner(opts: {
@@ -115,6 +116,23 @@ export async function createSessionScanner(opts: {
      */
     onRunObserved?: (run: ObservedRun) => void
     /**
+     * The permission mode the pane is ACTUALLY in, reported whenever it
+     * changes (DROVE-36).
+     *
+     * Claude Code writes a `{"type":"permission-mode","permissionMode":...}`
+     * record into the transcript as part of the state block it appends around
+     * every prompt — 123 of them in one of Clay's sessions, one per turn,
+     * always reading the mode in force at that point. So this is the same
+     * last-one-wins shape onRunObserved uses, and for the same reason: the app
+     * showed a stored PICK where the terminal had its own answer.
+     *
+     * It is a per-turn snapshot, not a keystroke feed. A shift+tab at an idle
+     * prompt does not append one, so this is the right source for what to SHOW
+     * on the phone and the wrong one for driving a mode change — that reads
+     * the pane's own footer instead (panePermissionSync.ts).
+     */
+    onPermissionModeObserved?: (mode: string) => void
+    /**
      * How long a session transcript may stay absent before its watcher gives
      * up and the session is dropped. Defaults to the startFileWatcher default
      * (60s). Exposed mainly so tests can exercise the drop path quickly.
@@ -146,6 +164,10 @@ export async function createSessionScanner(opts: {
     // switching opus -> sonnet -> opus has to report opus the second time, and
     // a per-uuid key would swallow it. Last one wins, compared by value.
     let lastObservedRun: ObservedRun | null = null;
+    // Same shape, same argument, for the permission mode (DROVE-36). Claude
+    // Code re-appends the record every turn even when nothing changed, so the
+    // repetition is filtered on the way out rather than by keying the entry.
+    let lastObservedPermissionMode: string | null = null;
     // Size and mtime of each transcript as of the last pass that actually read
     // it. Per scanner instance, never module-global: a stale entry left by an
     // earlier scanner would make the next one skip a file whose entries it has
@@ -194,6 +216,7 @@ export async function createSessionScanner(opts: {
         // marking it processed would leave the app showing a stale pick until
         // the next turn (DROVE-45).
         reportRun(latestRunFromEntries(entries));
+        reportPermissionMode(latestPermissionModeFromEntries(entries));
         seedTitleFrom(entries);
         // IMPORTANT: Also start watching the initial session file because Claude Code
         // may continue writing to it even after creating a new session with --resume
@@ -210,6 +233,15 @@ export async function createSessionScanner(opts: {
         lastObservedRun = run;
         logger.debug(`[SESSION_SCANNER] Pane is running ${run.model} at effort ${run.effort ?? 'unset'}`);
         opts.onRunObserved?.(run);
+    }
+
+    /** Tell the caller about a permission mode only when it actually moved. */
+    function reportPermissionMode(mode: string | null): void {
+        if (!mode) return;
+        if (lastObservedPermissionMode === mode) return;
+        lastObservedPermissionMode = mode;
+        logger.debug(`[SESSION_SCANNER] Pane is in permission mode ${mode}`);
+        opts.onPermissionModeObserved?.(mode);
     }
 
     // Main sync function
@@ -279,6 +311,12 @@ export async function createSessionScanner(opts: {
                     sentMessages++;
                 } else if (entry.kind === 'custom-title') {
                     reportTitle(entry.title, 'Session renamed in Claude Code');
+                } else if (entry.kind === 'permission-mode') {
+                    // Reported from the same last-one-wins pass below, so
+                    // nothing to do per entry — marking it processed is what
+                    // this branch is for. Without it the record falls through
+                    // to the transcript-event branch and asks for a uuid it
+                    // does not have.
                 } else if (entry.kind === 'queued-prompt') {
                     logger.debug(`[SESSION_SCANNER] Prompt queued in the terminal (${entry.prompt.carrier})`);
                     opts.onQueuedPrompt?.(entry.prompt);
@@ -294,6 +332,7 @@ export async function createSessionScanner(opts: {
             // current model is exactly the stale reading DROVE-45 is about.
             if (!currentSessionId || session === currentSessionId) {
                 reportRun(latestRunFromEntries(sessionEntries));
+                reportPermissionMode(latestPermissionModeFromEntries(sessionEntries));
             }
             if (sessionEntries.length > 0) {
                 logger.debug(`[SESSION_SCANNER] Session ${session}: found=${sessionEntries.length}, skipped=${skipped}, sentMessages=${sentMessages}, sentTranscriptEvents=${sentTranscriptEvents}`);
@@ -502,6 +541,21 @@ function latestRunFromEntries(entries: SessionLogEntry[]): ObservedRun | null {
     return null;
 }
 
+/**
+ * The newest permission mode in `entries`, or null when the transcript has not
+ * recorded one yet (DROVE-36).
+ *
+ * Backwards to the first hit, like latestRunFromEntries and for the same
+ * reason: a mode is a level, and only the newest one is current.
+ */
+function latestPermissionModeFromEntries(entries: SessionLogEntry[]): string | null {
+    for (let i = entries.length - 1; i >= 0; i--) {
+        const entry = entries[i];
+        if (entry.kind === 'permission-mode') return entry.mode;
+    }
+    return null;
+}
+
 function transcriptEventKey(event: ScannerTranscriptEvent): string {
     return `event:${event.uuid}`;
 }
@@ -588,6 +642,20 @@ async function readSessionEntries(projectDir: string, sessionId: string): Promis
                     kind: 'custom-title',
                     key: `custom-title:${lineIndex}:${message.customTitle}`,
                     title: message.customTitle,
+                });
+                continue;
+            }
+
+            // DROVE-36. Keyed by line index for the same reason custom-title
+            // is: the record has no uuid and repeats verbatim every turn, so a
+            // value key would mark `bypassPermissions` as history the first
+            // time it appeared and never report a switch back to it.
+            if (message.type === 'permission-mode' && typeof message.permissionMode === 'string'
+                && message.permissionMode.length > 0) {
+                entries.push({
+                    kind: 'permission-mode',
+                    key: `permission-mode:${lineIndex}:${message.permissionMode}`,
+                    mode: message.permissionMode,
                 });
                 continue;
             }

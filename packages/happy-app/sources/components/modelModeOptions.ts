@@ -608,6 +608,28 @@ export function includePaneModel(models: ModelMode[], paneModelKey: string | nul
     return [...models, { key: paneModelKey, name: paneModelKey, description: 'running in the terminal', disabled: true }];
 }
 
+/**
+ * Make sure the permission mode the pane is in has a row to be selected
+ * against (DROVE-36).
+ *
+ * The twin of includePaneModel, for the same reason. getClaudePermissionModes
+ * offers the five modes worth picking; Claude Code's own cycle also has
+ * `dontAsk`, and a session that reaches it from the keyboard would otherwise
+ * leave resolveCurrentOption with nothing and the chip reading a bare
+ * "PERMISSIONS" — which looks like the session having no policy at all, the
+ * scariest possible way to be wrong about this particular setting. Disabled,
+ * because it says what the terminal is doing rather than offering it.
+ */
+export function includePanePermissionMode(
+    modes: PermissionMode[],
+    paneModeKey: string | null | undefined,
+): PermissionMode[] {
+    if (!paneModeKey || modes.some((mode) => mode.key === paneModeKey)) {
+        return modes;
+    }
+    return [...modes, { key: paneModeKey, name: paneModeKey, description: 'set in the terminal', disabled: true }];
+}
+
 export function getRigCurrentModelOptionKey(metadata: Metadata | null | undefined): string | null {
     return getRigSelectedModelKey(metadata);
 }

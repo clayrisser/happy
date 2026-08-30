@@ -9,6 +9,9 @@ const {
     mockFindInbox,
     mockSendToInbox,
     mockInterruptPane,
+    mockReadPaneMode,
+    mockPressCycleKey,
+    callLog,
 } = vi.hoisted(() => ({
     mockClaudeLocal: vi.fn(),
     mockCreateSessionScanner: vi.fn(),
@@ -17,6 +20,12 @@ const {
     mockFindInbox: vi.fn(),
     mockSendToInbox: vi.fn(),
     mockInterruptPane: vi.fn(),
+    mockReadPaneMode: vi.fn(),
+    mockPressCycleKey: vi.fn(),
+    // DROVE-36 is partly a question of ORDER — did the mode reach the pane
+    // before the message that came with it — and per-mock call counts cannot
+    // answer that. One log, in the order things actually happened.
+    callLog: [] as string[],
 }));
 
 vi.mock('./claudeLocal', () => ({
@@ -54,6 +63,15 @@ vi.mock('./utils/paneInject', () => ({
 vi.mock('./utils/inboxSocket', () => ({
     findInbox: mockFindInbox,
     sendToInbox: mockSendToInbox,
+}));
+
+// DROVE-36. Only the two tmux calls are faked: the cycle loop itself is the
+// real one, because "press, read back, press again" is the whole design and a
+// fake of it would prove nothing about the launcher's use of it.
+vi.mock('./utils/panePermissionSync', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('./utils/panePermissionSync')>()),
+    readPaneMode: mockReadPaneMode,
+    pressCycleKey: mockPressCycleKey,
 }));
 
 vi.mock('@/ui/logger', () => ({
@@ -525,12 +543,34 @@ describe('claudeLocalLauncher in a tmux pane', () => {
 
     beforeEach(() => {
         vi.clearAllMocks();
+        callLog.length = 0;
         vi.stubEnv('TMUX_PANE', pane);
         mockCreateSessionScanner.mockResolvedValue({
             onNewSession: vi.fn(),
             cleanup: vi.fn(async () => {}),
         });
+        // A pane nobody asked to change mode: reads back whatever it is on and
+        // refuses nothing. Tests that care override it with `paneCycle`.
+        mockReadPaneMode.mockResolvedValue('default');
+        mockPressCycleKey.mockResolvedValue(true);
     });
+
+    /**
+     * A pane that walks `ring` on every shift+tab, starting at `start` — the
+     * behaviour measured in Claude Code 2.1.251, where the cycle is a ring of
+     * plan / default / acceptEdits plus auto and bypassPermissions when each is
+     * available. Every read and press is logged so ordering can be asserted.
+     */
+    function paneCycle(ring: string[], start: string) {
+        let index = ring.indexOf(start);
+        mockReadPaneMode.mockImplementation(async () => ring[index]);
+        mockPressCycleKey.mockImplementation(async () => {
+            index = (index + 1) % ring.length;
+            callLog.push(`cycle:${ring[index]}`);
+            return true;
+        });
+        return { at: () => ring[index] };
+    }
 
     afterEach(() => {
         vi.unstubAllEnvs();
@@ -693,6 +733,160 @@ describe('claudeLocalLauncher in a tmux pane', () => {
 
             emitMetadata({ modelMode: 'claude-sonnet-5' });
             await vi.waitFor(() => expect(readMetadata().paneModel).toBe('claude-sonnet-5'));
+
+            runs[0].run.resolve();
+            await launcher;
+        });
+    });
+
+    /**
+     * DROVE-36. Clay had Yolo selected in the composer for this very session
+     * and every Bash call still raised a permission card, because the pick was
+     * metadata nothing in the pane path ever read. 2.1.251 has no slash
+     * command for the permission mode — measured, see panePermissionSync.ts —
+     * so the carrier is the keystroke a person would use.
+     */
+    describe('a permission mode picked in the app', () => {
+        it('cycles the pane to Yolo with shift+tab, without restarting anything', async () => {
+            const runs = trackRuns();
+            const cycle = paneCycle(['plan', 'default', 'acceptEdits', 'auto', 'bypassPermissions'], 'default');
+            const { session, emitMetadata, readMetadata } = paneSession({ permissionMode: 'default' });
+
+            const launcher = claudeLocalLauncher(session as any);
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+
+            emitMetadata({ permissionMode: 'bypassPermissions' });
+
+            await vi.waitFor(() => expect(cycle.at()).toBe('bypassPermissions'), { timeout: 5000 });
+            // The chip on the phone says so too, without waiting for a turn.
+            await vi.waitFor(() => expect(readMetadata().panePermissionMode).toBe('bypassPermissions'));
+            // One child, start to finish: the mode changed under a running
+            // session rather than by relaunching it.
+            expect(runs).toHaveLength(1);
+
+            runs[0].run.resolve();
+            await launcher;
+        });
+
+        it('reads the app\'s Yolo as Claude\'s bypassPermissions, through the one mapping', async () => {
+            // `yolo` is Codex's spelling and mapToClaudeMode is the single
+            // place it is folded into Claude's. A second copy of that table
+            // here is how the two drift.
+            const runs = trackRuns();
+            const cycle = paneCycle(['default', 'bypassPermissions'], 'default');
+            const { session, emitMetadata } = paneSession({ permissionMode: 'default' });
+
+            const launcher = claudeLocalLauncher(session as any);
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+
+            emitMetadata({ permissionMode: 'yolo' });
+            await vi.waitFor(() => expect(cycle.at()).toBe('bypassPermissions'), { timeout: 5000 });
+
+            runs[0].run.resolve();
+            await launcher;
+        });
+
+        it('lands the mode BEFORE the message that came with it, on the inbox socket', async () => {
+            // The whole complaint in one line: a turn started from the phone
+            // must not run under the mode the session had before the pick.
+            mockFindInbox.mockResolvedValue(inbox);
+            mockSendToInbox.mockImplementation(async () => { callLog.push('inbox'); return 'ok'; });
+            const runs = trackRuns();
+            paneCycle(['default', 'bypassPermissions'], 'default');
+            const { session, queue, emitMetadata } = paneSession({ permissionMode: 'default' });
+
+            const launcher = claudeLocalLauncher(session as any);
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+
+            // The composer's own order: pick Yolo, then hit send.
+            emitMetadata({ permissionMode: 'bypassPermissions' });
+            queue.push('go', mode);
+
+            await vi.waitFor(() => expect(callLog).toContain('inbox'), { timeout: 5000 });
+            expect(callLog).toEqual(['cycle:bypassPermissions', 'inbox']);
+
+            runs[0].run.resolve();
+            await launcher;
+        });
+
+        it('lands the mode BEFORE the message on the pane paste path too', async () => {
+            // No socket to find — an older Claude, or a stale registry record.
+            // The keyboard is the carrier there, and the ordering rule is the
+            // same one.
+            mockFindInbox.mockResolvedValue(null);
+            mockInjectIntoPane.mockImplementation(async () => { callLog.push('paste'); return true; });
+            const runs = trackRuns();
+            paneCycle(['default', 'bypassPermissions'], 'default');
+            const { session, queue, emitMetadata } = paneSession({ permissionMode: 'default' });
+
+            const launcher = claudeLocalLauncher(session as any);
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+
+            emitMetadata({ permissionMode: 'bypassPermissions' });
+            queue.push('go', mode);
+
+            await vi.waitFor(() => expect(callLog).toContain('paste'), { timeout: 5000 });
+            expect(callLog).toEqual(['cycle:bypassPermissions', 'paste']);
+
+            runs[0].run.resolve();
+            await launcher;
+        });
+
+        it('presses nothing while the pane is busy, and cycles when the prompt opens', async () => {
+            const runs = trackRuns();
+            const cycle = paneCycle(['default', 'bypassPermissions'], 'default');
+            const { session, emitMetadata } = paneSession({ permissionMode: 'default' });
+            mockPaneIsIdle.mockResolvedValue(false);
+
+            const launcher = claudeLocalLauncher(session as any);
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+
+            emitMetadata({ permissionMode: 'bypassPermissions' });
+            await new Promise((r) => setTimeout(r, 50));
+            expect(mockPressCycleKey).not.toHaveBeenCalled();
+
+            mockPaneIsIdle.mockResolvedValue(true);
+            await vi.waitFor(() => expect(cycle.at()).toBe('bypassPermissions'), { timeout: 5000 });
+
+            runs[0].run.resolve();
+            await launcher;
+        });
+
+        it('says so on the phone when the mode is not in this session\'s cycle, and puts the pane back', async () => {
+            // Bypass disabled by settings: it is simply absent from the ring.
+            // Leaving the pane on whatever the last press reached would change
+            // a mode nobody picked.
+            const runs = trackRuns();
+            const cycle = paneCycle(['plan', 'default', 'acceptEdits'], 'acceptEdits');
+            const { session, emitMetadata } = paneSession({ permissionMode: 'default' });
+
+            const launcher = claudeLocalLauncher(session as any);
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+
+            emitMetadata({ permissionMode: 'bypassPermissions' });
+
+            await vi.waitFor(() => expect(session.client.sendSessionEvent).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    message: expect.stringContaining('cannot switch to bypassPermissions'),
+                }),
+            ), { timeout: 8000 });
+            expect(cycle.at()).toBe('acceptEdits');
+
+            runs[0].run.resolve();
+            await launcher;
+        });
+
+        it('presses nothing at all when it cannot see a prompt to press at', async () => {
+            const runs = trackRuns();
+            const { session, emitMetadata } = paneSession({ permissionMode: 'default' });
+            mockReadPaneMode.mockResolvedValue(null);
+
+            const launcher = claudeLocalLauncher(session as any);
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+
+            emitMetadata({ permissionMode: 'bypassPermissions' });
+            await new Promise((r) => setTimeout(r, 100));
+            expect(mockPressCycleKey).not.toHaveBeenCalled();
 
             runs[0].run.resolve();
             await launcher;

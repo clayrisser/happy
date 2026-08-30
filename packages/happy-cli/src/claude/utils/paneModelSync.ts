@@ -28,9 +28,13 @@
  * a draft the way a message is — a half-typed slash command sitting in Clay's
  * input box is worse than a late one.
  *
- * The carrier is deliberately generic over the command string so DROVE-36
- * (permission mode set in the app never reaching a terminal session) can hang
- * its own `/permissions`-shaped command off the same queue.
+ * The carrier is deliberately generic over the command string, and DROVE-36
+ * now hangs the permission-mode pick off the same queue. That one is NOT a
+ * slash command — 2.1.251 has none, see panePermissionSync.ts — so it is
+ * spelled `#permission-mode <mode>` and the launcher's `send` routes it to a
+ * shift+tab cycle instead of the keyboard. The `#` is deliberate: a pseudo
+ * command that fell through to the paste path would type a visible `#` line
+ * rather than something that reads like a command Claude Code refused.
  */
 
 import { logger } from '@/ui/logger'
@@ -41,6 +45,13 @@ export interface PaneModelSelection {
     modelMode?: string | null
     /** `low` | `medium` | `high` | `xhigh` | `max` | `ultracode`. Null resets. */
     effortLevel?: string | null
+    /**
+     * A Claude permission mode — `bypassPermissions`, `plan`, `acceptEdits`,
+     * `auto`, `default` (DROVE-36). The app's own key is mapped to one of
+     * those by mapToClaudeMode before it gets here, so `yolo` never appears.
+     * Explicit null means "reset", which for a permission mode is `default`.
+     */
+    permissionMode?: string | null
 }
 
 /**
@@ -48,7 +59,7 @@ export interface PaneModelSelection {
  * `/effort` calls it `auto`; there is no shared word, and sending the wrong one
  * gets `Invalid argument` rather than a reset.
  */
-const resetArgument = { model: 'default', effort: 'auto' } as const
+const resetArgument = { model: 'default', effort: 'auto', 'permission-mode': 'default' } as const
 
 /**
  * A value safe to type at a live prompt. Model IDs carry dots, colons, slashes
@@ -60,8 +71,14 @@ const resetArgument = { model: 'default', effort: 'auto' } as const
  */
 const safeArgument = /^[A-Za-z0-9._:/[\]-]+$/
 
+/**
+ * `/` for the two real slash commands, `#` for the permission-mode pseudo
+ * command the launcher has to interpret itself. See the file header.
+ */
+const commandSigil = { model: '/', effort: '/', 'permission-mode': '#' } as const
+
 function commandFor(
-    kind: 'model' | 'effort',
+    kind: 'model' | 'effort' | 'permission-mode',
     previous: string | null | undefined,
     next: string | null | undefined,
 ): string | null {
@@ -70,28 +87,38 @@ function commandFor(
     // retyping the last value at the prompt would be noise.
     if (next === undefined) return null
     if (previous === next) return null
-    if (next === null) return `/${kind} ${resetArgument[kind]}`
+    if (next === null) return `${commandSigil[kind]}${kind} ${resetArgument[kind]}`
     if (!safeArgument.test(next)) {
         logger.debug(`[paneModelSync] refusing to type ${kind} value that is not a plain argument`)
         return null
     }
-    return `/${kind} ${next}`
+    return `${commandSigil[kind]}${kind} ${next}`
 }
 
 /**
- * The slash commands that turn `previous` into `next`, in the order they must
- * be typed.
+ * The pane commands that turn `previous` into `next`, in the order they must
+ * be carried out.
+ *
+ * Not all of them are slash commands any more — hence the rename from
+ * slashCommandsForSelection when DROVE-36 joined. See the file header.
  *
  * Model first, deliberately: effort is capped by the model (`/effort ultracode`
  * is refused with "which <model> doesn't support" on a model that cannot reach
  * xhigh), so switching model first is what lets a paired change land. The other
  * order silently keeps the old effort.
  */
-export function slashCommandsForSelection(
+export function paneCommandsForSelection(
     previous: PaneModelSelection,
     next: PaneModelSelection,
 ): string[] {
     return [
+        // Permission mode first, and not for the reason model precedes effort.
+        // Its carrier is a shift+tab loop that READS THE PANE BACK after every
+        // press (panePermissionSync.ts), so it needs the prompt to look the way
+        // it found it. `/model` can open a one-time consent dialog, and a
+        // shift+tab aimed at that dialog is a keystroke landing on whatever is
+        // highlighted — exactly the failure the idle gate exists to prevent.
+        commandFor('permission-mode', previous.permissionMode, next.permissionMode),
         commandFor('model', previous.modelMode, next.modelMode),
         commandFor('effort', previous.effortLevel, next.effortLevel),
     ].filter((c): c is string => c !== null)
@@ -113,7 +140,10 @@ export interface PaneCommandQueue {
     pending: () => string[]
 }
 
-/** `/model claude-opus-5` -> `/model`. Two picks of the same kind collapse. */
+/**
+ * `/model claude-opus-5` -> `/model`, `#permission-mode plan` ->
+ * `#permission-mode`. Two picks of the same kind collapse.
+ */
 function commandKind(command: string): string {
     const space = command.indexOf(' ')
     return space === -1 ? command : command.slice(0, space)

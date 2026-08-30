@@ -7,7 +7,9 @@ import { launchFailureMessage } from "./utils/launchFailureMessage";
 import { ambientDataDir } from "@/drover/flip/accounts";
 import { parseFlipCommand } from "@/drover/flip/controller";
 import { injectIntoPane, injectIntoPaneGated, interruptPane, paneIsIdle } from "./utils/paneInject";
-import { createPaneCommandQueue, slashCommandsForSelection, type PaneModelSelection } from "./utils/paneModelSync";
+import { createPaneCommandQueue, paneCommandsForSelection, type PaneModelSelection } from "./utils/paneModelSync";
+import { cyclePaneMode, pressCycleKey, readPaneMode, type PaneMode } from "./utils/panePermissionSync";
+import { isPermissionMode, mapToClaudeMode } from "./utils/permissionMode";
 import { findInbox, sendToInbox } from "./utils/inboxSocket";
 import { stageAttachments, withAttachmentNote } from "./utils/stageAttachments";
 import type { QueueItem } from "@/utils/MessageQueue2";
@@ -104,6 +106,17 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
                 ...metadata,
                 paneModel: run.model,
                 paneEffort: run.effort,
+            }))
+            : undefined,
+        // DROVE-36: the same half, for the permission mode. Clay had Yolo
+        // selected in the composer while the pane asked for permission on
+        // every call, and the app had no way at all to know what the pane was
+        // actually in — the composer was showing its own stored pick. This is
+        // also how a shift+tab typed at the keyboard reaches the phone.
+        onPermissionModeObserved: process.env.TMUX_PANE
+            ? (mode) => session.client.updateMetadata((metadata) => ({
+                ...metadata,
+                panePermissionMode: mode,
             }))
             : undefined,
         onMessage: (message) => {
@@ -223,11 +236,76 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
         }),
         send: async (command) => {
             if (!childAlive) return false;
+            // DROVE-36 rides this queue but not this carrier. 2.1.251 has no
+            // slash command for the permission mode (measured — see
+            // panePermissionSync.ts), so its pick is applied by cycling
+            // shift+tab and reading the footer back. Routed by the `#` sigil
+            // rather than by a name, so a pseudo command this launcher has not
+            // learned yet is REFUSED instead of typed at the prompt.
+            if (!command.startsWith('/')) {
+                if (command.startsWith('#permission-mode ')) {
+                    return applyPanePermissionMode(command.slice('#permission-mode '.length));
+                }
+                logger.debug(`[local]: no carrier for pane command ${command} — dropping it`);
+                return true;
+            }
             const ok = await injectIntoPane(tmuxPane!, command, { submit: true });
             if (ok) notePaneCommandApplied(command);
             return ok;
         },
     });
+
+    /**
+     * How long the TUI gets to repaint its footer after a shift+tab.
+     *
+     * The cycle re-reads the pane after every press, so this is the whole cost
+     * of a wrong guess: too short and we read the old chip and press again,
+     * landing a mode past the one we wanted.
+     */
+    const paneCycleSettleMs = 150;
+
+    /**
+     * Put the pane into `mode`, and say so on the phone once it is there.
+     *
+     * Returns false only for a keystroke that did not go in or a prompt we
+     * could not see — the two cases worth retrying. A mode this session will
+     * not give (bypass disabled by policy, auto behind its flag) returns TRUE:
+     * the request was carried out as far as it can be, and re-queuing it every
+     * two seconds would press shift+tab at Clay's prompt forever.
+     */
+    async function applyPanePermissionMode(mode: string): Promise<boolean> {
+        // Narrowed upstream, not here: the only producer of this string is
+        // paneModeFor, which runs the app's key through isPermissionMode and
+        // mapToClaudeMode. And cyclePaneMode never acts on the value anyway —
+        // it only compares it to what it reads back off the pane.
+        const outcome = await cyclePaneMode(mode as PaneMode, {
+            read: () => readPaneMode(tmuxPane!),
+            press: () => pressCycleKey(tmuxPane!),
+            settle: () => new Promise((r) => setTimeout(r, paneCycleSettleMs)),
+        });
+        if (outcome === 'applied') {
+            logger.debug(`[local]: pane is now in permission mode ${mode}`);
+            session.client.updateMetadata((metadata) => ({
+                ...metadata,
+                panePermissionMode: mode,
+            }));
+            return true;
+        }
+        if (outcome === 'unreachable') {
+            // Said out loud rather than logged. A pick that cannot happen and
+            // reports nothing is the complaint DROVE-36 is about, one level up.
+            logger.debug(`[local]: ${mode} is not available in this session's cycle`);
+            session.client.sendSessionEvent({
+                type: 'message',
+                message: `Cattle Drover: this session cannot switch to ${mode} — `
+                    + 'it is not in the terminal\'s permission-mode cycle (disabled by '
+                    + 'settings or policy). The pane is back on the mode it was in.',
+            });
+            return true;
+        }
+        logger.debug(`[local]: could not reach the prompt to set ${mode} (${outcome}) — retrying later`);
+        return false;
+    }
 
     /**
      * Say the switch happened as soon as it is typed, rather than waiting
@@ -293,16 +371,38 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
         ? {
             modelMode: session.client.getMetadata()?.modelMode,
             effortLevel: session.client.getMetadata()?.effortLevel,
+            permissionMode: paneModeFor(session.client.getMetadata()?.permissionMode),
         }
         : {};
 
-    const onMetadataChanged = (metadata: { modelMode?: string | null, effortLevel?: string | null } | null) => {
+    /**
+     * The app's permission key as a mode the pane understands (DROVE-36).
+     *
+     * mapToClaudeMode is the ONE place Codex's vocabulary is folded into
+     * Claude's — `yolo` is bypass, `safe-yolo` and `read-only` are default —
+     * so the composer's Yolo row lands on bypassPermissions here rather than on
+     * a second copy of that table. An unknown string from a newer app is
+     * dropped rather than guessed at: undefined means "no pick", which the
+     * queue reads as nothing to do.
+     */
+    function paneModeFor(picked: string | null | undefined): string | null | undefined {
+        if (picked === undefined) return undefined;
+        if (picked === null) return null;
+        if (!isPermissionMode(picked)) {
+            logger.debug(`[local]: app asked for permission mode ${picked}, which this CLI does not know`);
+            return undefined;
+        }
+        return mapToClaudeMode(picked);
+    }
+
+    const onMetadataChanged = (metadata: { modelMode?: string | null, effortLevel?: string | null, permissionMode?: string | null } | null) => {
         if (!tmuxPane || !metadata) return;
         const next: PaneModelSelection = {
             modelMode: metadata.modelMode,
             effortLevel: metadata.effortLevel,
+            permissionMode: paneModeFor(metadata.permissionMode),
         };
-        const commands = slashCommandsForSelection(paneSelection, next);
+        const commands = paneCommandsForSelection(paneSelection, next);
         if (commands.length === 0) return;
         // Record the intent even if the pane is busy. The queue owns the
         // retry; re-deriving the same commands on the next metadata write
@@ -565,6 +665,18 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
          */
         async function deliverToChild(message: string): Promise<boolean> {
             if (!tmuxPane) return false;
+            // DROVE-36: a mode picked in the composer and a message sent from
+            // the composer arrive as two separate writes, and the mode's
+            // carrier waits for an idle prompt. Sending the message first would
+            // mean the turn Clay just started runs under the OLD mode and the
+            // switch lands after it — which is exactly "Yolo is selected and it
+            // still asks". So the queue is drained first, on the way in.
+            //
+            // Awaited, but not required to succeed. Both of this session's
+            // carriers queue INSIDE Claude, so a message is never lost by
+            // going second; a mode change that cannot land right now stays
+            // queued for the retry and the message still goes.
+            await paneCommands.flush();
             // Recorded before either carrier runs, because Claude Code writes
             // the enqueue record the instant the text lands (DROVE-41).
             noteDeliveredFromApp(message);

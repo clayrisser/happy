@@ -371,15 +371,28 @@ export type Metadata = {
   paneModel?: string | null,
   paneEffort?: string | null,
   /**
+   * The permission mode the pane is ACTUALLY in (DROVE-36). Same report-only
+   * rule as the two above: `permissionMode` stays the PICK, and this is what
+   * the terminal answered. Read off the transcript's own `permission-mode`
+   * record, so a shift+tab at the keyboard reaches the phone too. Absent for a
+   * session with no pane.
+   */
+  panePermissionMode?: string | null,
+  /**
    * The per-session picks any client made (#1492). Written by the app's
    * composer, and until DROVE-45 read only by the SDK path, which hands them to
    * query(). They were missing from this type entirely because nothing in the
    * CLI had ever needed to READ them — the pane launcher does, to turn a pick
    * into the `/model` / `/effort` the TUI understands. Explicit null means
    * "reset to default"; absent means "never picked".
+   *
+   * `permissionMode` joined them for DROVE-36. The pane's carrier for it is
+   * not a slash command — 2.1.251 has none — so the launcher cycles shift+tab
+   * instead; see panePermissionSync.ts.
    */
   modelMode?: string | null,
   effortLevel?: string | null,
+  permissionMode?: string | null,
   // Lifecycle state management
   lifecycleState?: 'running' | 'archiveRequested' | 'archived' | string,
   lifecycleStateSince?: number,
