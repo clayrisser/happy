@@ -585,6 +585,8 @@ export const it: TranslationStructure = {
         taskView: {
             initializing: 'Inizializzazione agente...',
             moreTools: ({ count }: { count: number }) => `+${count} altri ${plural({ count, singular: 'strumento', plural: 'strumenti' })}`,
+            showAll: ({ count }: { count: number }) => `Mostra tutti i ${count} passaggi`,
+            showLess: 'Mostra meno',
         },
         askUserQuestion: {
             submit: 'Invia risposta',

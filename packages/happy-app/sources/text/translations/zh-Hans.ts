@@ -588,6 +588,8 @@ export const zhHans: TranslationStructure = {
         taskView: {
             initializing: '正在初始化 agent...',
             moreTools: ({ count }: { count: number }) => `+${count} 个更多${plural({ count, singular: '工具', plural: '工具' })}`,
+            showAll: ({ count }: { count: number }) => `显示全部 ${count} 个步骤`,
+            showLess: '收起',
         },
         multiEdit: {
             editNumber: ({ index, total }: { index: number; total: number }) => `编辑 ${index}/${total}`,

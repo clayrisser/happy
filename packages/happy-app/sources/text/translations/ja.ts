@@ -588,6 +588,8 @@ export const ja: TranslationStructure = {
         taskView: {
             initializing: 'エージェントを初期化中...',
             moreTools: ({ count }: { count: number }) => `+${count} 個のツール`,
+            showAll: ({ count }: { count: number }) => `${count}件のステップをすべて表示`,
+            showLess: '折りたたむ',
         },
         askUserQuestion: {
             submit: '回答を送信',

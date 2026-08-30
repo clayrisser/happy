@@ -587,6 +587,8 @@ export const zhHant: TranslationStructure = {
         taskView: {
             initializing: '正在初始化 agent...',
             moreTools: ({ count }: { count: number }) => `+${count} 個更多${plural({ count, singular: '工具', plural: '工具' })}`,
+            showAll: ({ count }: { count: number }) => `顯示全部 ${count} 個步驟`,
+            showLess: '收合',
         },
         multiEdit: {
             editNumber: ({ index, total }: { index: number; total: number }) => `編輯 ${index}/${total}`,

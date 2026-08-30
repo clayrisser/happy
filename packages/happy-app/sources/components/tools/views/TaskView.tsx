@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { ToolViewProps } from './_all';
-import { Text, View, ActivityIndicator, StyleSheet, Platform } from 'react-native';
+import { Text, View, ActivityIndicator, StyleSheet, Platform, Pressable } from 'react-native';
 import { knownTools } from '../../tools/knownTools';
 import { Ionicons } from '@expo/vector-icons';
 import { ToolCall } from '@/sync/typesMessage';
@@ -15,6 +15,13 @@ interface FilteredTool {
 
 export const TaskView = React.memo<ToolViewProps>(({ tool, metadata, messages }) => {
     const { theme } = useUnistyles();
+    // Every step the subagent took stays reachable, not just the last three.
+    // Claude Code's own app lets you open a Task and watch the whole run; the
+    // drover bridge already forwards the subagent's sidechain tool calls, so
+    // the data was here — collapsing it to "+N more tools" with no way to
+    // expand is what hid the run. Tap the footer to see all of it, tap again to
+    // fold it back. Collapsed by default so a fan-out of tasks stays scannable.
+    const [expanded, setExpanded] = React.useState(false);
     const filtered: FilteredTool[] = [];
 
     for (let m of messages) {
@@ -81,14 +88,18 @@ export const TaskView = React.memo<ToolViewProps>(({ tool, metadata, messages })
             color: theme.colors.textSecondary,
         },
         moreToolsItem: {
-            paddingVertical: 4,
+            flexDirection: 'row',
+            alignItems: 'center',
+            paddingVertical: 6,
             paddingHorizontal: 4,
         },
         moreToolsText: {
             fontSize: 14,
-            color: theme.colors.textSecondary,
-            fontStyle: 'italic',
-            opacity: 0.7,
+            color: theme.colors.textLink ?? theme.colors.textSecondary,
+            fontWeight: '500',
+        },
+        chevron: {
+            marginLeft: 4,
         },
     });
 
@@ -96,14 +107,19 @@ export const TaskView = React.memo<ToolViewProps>(({ tool, metadata, messages })
         return null;
     }
 
-    const visibleTools = filtered.slice(filtered.length - 3);
-    const remainingCount = filtered.length - 3;
+    // Collapsed shows the tail (what it is doing NOW); expanded shows the whole
+    // run from the top so the order reads the way it happened.
+    const COLLAPSED = 3;
+    const canExpand = filtered.length > COLLAPSED;
+    const visibleTools = expanded || !canExpand
+        ? filtered
+        : filtered.slice(filtered.length - COLLAPSED);
 
     return (
         <View style={styles.container}>
             {visibleTools.map((item, index) => (
                 <View key={`${item.tool.name}-${index}`} style={styles.toolItem}>
-                    <Text style={styles.toolTitle}>{item.title}</Text>
+                    <Text style={styles.toolTitle} numberOfLines={expanded ? 2 : 1}>{item.title}</Text>
                     <View style={styles.statusContainer}>
                         {item.state === 'running' && (
                             <ActivityIndicator size={Platform.OS === 'ios' ? "small" : 14 as any} color={theme.colors.warning} />
@@ -117,12 +133,25 @@ export const TaskView = React.memo<ToolViewProps>(({ tool, metadata, messages })
                     </View>
                 </View>
             ))}
-            {remainingCount > 0 && (
-                <View style={styles.moreToolsItem}>
+            {canExpand && (
+                <Pressable
+                    style={styles.moreToolsItem}
+                    onPress={() => setExpanded((v) => !v)}
+                    hitSlop={8}
+                    accessibilityRole="button"
+                >
                     <Text style={styles.moreToolsText}>
-                        {t('tools.taskView.moreTools', { count: remainingCount })}
+                        {expanded
+                            ? t('tools.taskView.showLess')
+                            : t('tools.taskView.showAll', { count: filtered.length })}
                     </Text>
-                </View>
+                    <Ionicons
+                        name={expanded ? 'chevron-up' : 'chevron-down'}
+                        size={14}
+                        color={theme.colors.textLink ?? theme.colors.textSecondary}
+                        style={styles.chevron}
+                    />
+                </Pressable>
             )}
         </View>
     );
