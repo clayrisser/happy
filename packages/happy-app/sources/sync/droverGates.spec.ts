@@ -22,6 +22,7 @@ function session(options: {
     path?: string;
     summary?: string;
     account?: string;
+    claudeSessionId?: string;
     requests?: Record<string, unknown>;
 }): GateSession {
     return {
@@ -30,6 +31,7 @@ function session(options: {
             path: options.path,
             summary: options.summary ? { text: options.summary } : undefined,
             droverAccount: options.account,
+            claudeSessionId: options.claudeSessionId,
         },
     };
 }
@@ -287,5 +289,116 @@ describe('gatesForSession', () => {
 
     it('puts the longest-waiting gate first, so the screen presents what is holding the session up', () => {
         expect(gatesForSession(sessions, 'watched')[0].gate.id).toBe('watched:req-0');
+    });
+});
+
+/**
+ * A pane session's prompts never reach its own agentState (DROVE-19).
+ *
+ * The PreToolUse hook publishes to the bus and the bridge mirrors every local
+ * agent's gate into ONE bridge session per machine, so the session Clay was
+ * watching held nothing and the only copy was on the home screen. These are
+ * the fixtures the live bus produces: two lanes of the same checkout, each a
+ * separate Claude session uuid, both mirrored into 'bridge'.
+ */
+describe('gatesForSession, for a gate the bridge mirrored', () => {
+    const checkout = '/Users/clay/Projects/bitspur/cattle-drover';
+    const sessions: Record<string, GateSession> = {
+        bridge: session({
+            path: checkout,
+            requests: {
+                'ev-a': {
+                    tool: 'AskUserQuestion',
+                    createdAt: 100,
+                    droverOrigin: { sessionId: 'claude-a', cwd: checkout },
+                    arguments: {
+                        questions: [{
+                            header: 'DROVE-50',
+                            question: 'Who owns the picker?',
+                            options: [{ label: 'Drover owns it' }, { label: 'Claude owns it' }],
+                        }],
+                    },
+                },
+                'ev-b': {
+                    tool: 'Bash',
+                    createdAt: 200,
+                    droverOrigin: { sessionId: 'claude-b', cwd: checkout },
+                    arguments: { command: 'rm -rf build' },
+                },
+            },
+        }),
+        paneA: session({ path: checkout, claudeSessionId: 'claude-a' }),
+        paneB: session({ path: checkout, claudeSessionId: 'claude-b' }),
+        paneNoClaude: session({ path: checkout }),
+    };
+
+    it('presents the prompt on the session that raised it', () => {
+        expect(gatesForSession(sessions, 'paneA').map((entry) => entry.gate.id)).toEqual(['bridge:ev-a']);
+    });
+
+    // The answer goes to whoever HOLDS the card, which is the bridge. Sending
+    // it to the session on screen would reach an agent that never asked.
+    it('keeps the answer addressed to the bridge session that holds the card', () => {
+        const entry = gatesForSession(sessions, 'paneA')[0];
+        expect(entry.sessionId).toBe('bridge');
+        expect(entry.requestId).toBe('ev-a');
+    });
+
+    // Two lanes, one checkout, which is the normal case here. Matching on cwd
+    // would drop lane A's question onto lane B's screen.
+    it('never puts one lane\'s prompt on another lane\'s screen, same cwd or not', () => {
+        expect(gatesForSession(sessions, 'paneB').map((entry) => entry.gate.id)).toEqual(['bridge:ev-b']);
+    });
+
+    // Both undefined must not compare equal: an older CLI sends no origin, and
+    // a session that never recorded a Claude id would otherwise inherit it.
+    it('gives a session with no Claude session id nothing at all', () => {
+        expect(gatesForSession({
+            ...sessions,
+            bridge: session({
+                path: checkout,
+                requests: { 'ev-old': { tool: 'Bash', createdAt: 1, arguments: { command: 'ls' } } },
+            }),
+        }, 'paneNoClaude')).toEqual([]);
+    });
+
+    // The bridge session is the drover thread. Routing a gate to its origin
+    // must not take it away from the one screen that shows every gate.
+    it('still shows both on the bridge session itself', () => {
+        expect(gatesForSession(sessions, 'bridge').map((entry) => entry.gate.id))
+            .toEqual(['bridge:ev-a', 'bridge:ev-b']);
+    });
+
+    it('folds a session\'s own request in with the mirrored one, oldest first', () => {
+        const withOwn = {
+            ...sessions,
+            paneA: session({
+                path: checkout,
+                claudeSessionId: 'claude-a',
+                requests: { own: { tool: 'Bash', createdAt: 50, arguments: { command: 'ls' } } },
+            }),
+        };
+        expect(gatesForSession(withOwn, 'paneA').map((entry) => entry.gate.id))
+            .toEqual(['paneA:own', 'bridge:ev-a']);
+    });
+
+    // Collecting over a one-session map made collectGateEntries believe every
+    // other session's gate had gone away, which evicted them from the
+    // first-seen map and re-clocked them on the next global read. A createdAt
+    // that moves is the render/read loop that map exists to stop.
+    it('does not re-clock another session\'s unstamped gate on the way past', () => {
+        vi.useFakeTimers();
+        try {
+            const unstamped = {
+                paneA: session({ path: checkout, claudeSessionId: 'claude-a' }),
+                noisy: session({ path: '~/elsewhere', requests: { r: { tool: 'Bash', arguments: {} } } }),
+            };
+            const before = collectGateEntries(unstamped)[0].gate.createdAt;
+            gatesForSession(unstamped, 'paneA');
+            vi.advanceTimersByTime(5000);
+            expect(collectGateEntries(unstamped)[0].gate.createdAt).toBe(before);
+        } finally {
+            vi.useRealTimers();
+        }
     });
 });

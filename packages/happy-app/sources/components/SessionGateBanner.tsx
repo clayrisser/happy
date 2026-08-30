@@ -1,65 +1,111 @@
 import * as React from 'react';
-import { ActivityIndicator, Pressable, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, Text, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
-import { Text } from '@/components/StyledText';
 import { Typography } from '@/constants/Typography';
 import { useSessionGates, type DroverGateEntry } from '@/hooks/usePendingGates';
 import { sessionAllow, sessionDeny } from '@/sync/ops';
+import { describePendingGates } from './pendingGatesSummary';
+import { sessionGateAction, sessionGateReadOnlyHint } from './sessionGateAction';
 import {
-    hasAnswerableOptions,
     providerAnswersFor,
     questionCards,
     toInlineQuestions,
-} from '@/components/tools/views/askUserQuestionAnswers';
+} from './tools/views/askUserQuestionAnswers';
 import {
     InlineQuestionForm,
     type InlineQuestionAnswers,
-} from '@/components/tools/views/InlineQuestionForm';
+} from './tools/views/InlineQuestionForm';
 
 /**
- * The prompt this session is waiting on, presented on this session's own view
- * (BASED-113).
+ * The prompt this session raised, on this session's own screen (DROVE-19).
  *
- * Clay: "Whatever the active session I'm in, shouldn't it just, like, boom, pop
- * up on it?" Delivery was never the problem — a gate reaches the phone and is
- * answerable. It just had nowhere to appear except the /gates list or a card
- * somewhere up the transcript, so seeing it meant navigating away from the
- * session you were already watching.
+ * Clay, watching a session work: "I was kinda hoping that I wouldn't have to
+ * navigate away to see notifications that are popping up. Whatever the active
+ * session I'm in, shouldn't it just, like, boom, pop up on it?" It did not. The
+ * delivery path was healthy the whole time — the same question rendered on the
+ * watch and was answered there — but the phone showed it only on the home
+ * screen and the gates list, so watching a session live meant leaving the
+ * session to find out it had stopped.
  *
- * This sits above the composer, so it is on screen whatever the scrollback is
- * doing. The transcript still renders its own card for the same request; both
- * call the same ops and the request leaves agentState.requests once either one
- * answers, so the two cannot disagree and there is no second decision path.
+ * It sits directly above the composer because that is where you are already
+ * looking when you are waiting on an agent, and because the composer is the
+ * thing the prompt is blocking.
  *
- * Scoped to ONE session by useSessionGates. A gate belonging to a different
- * session never reaches this component, so it cannot take over the screen you
- * are on — which matters because driving several sessions at once is the
- * normal case here.
+ * It shows ONLY this session's gates. useSessionGates does that matching on an
+ * exact Claude session uuid; a prompt from one of the other four sessions
+ * running right now must never take this screen, so there is no cwd match and
+ * no "closest" match anywhere in the path.
  */
 export function SessionGateBanner({ sessionId }: { sessionId: string }) {
-    const gates = useSessionGates(sessionId);
-    // Oldest first, so the prompt actually holding this session up is the one
-    // presented. The rest are a count, not a stack of cards over the composer.
-    const entry = gates[0];
-    if (!entry) return null;
-    return <SessionGateCard entry={entry} waiting={gates.length - 1} />;
+    const { theme } = useUnistyles();
+    const entries = useSessionGates(sessionId);
+    const summary = describePendingGates(entries.map((entry) => entry.gate));
+
+    // Collapse is remembered against the gate SET, not as a plain boolean, so a
+    // new prompt re-opens the banner on its own. Collapsing one question and
+    // then silently swallowing the next one is the bug this component exists to
+    // fix, wearing a different hat.
+    const gateKey = entries.map((entry) => entry.gate.id).join(' ');
+    const [collapsedKey, setCollapsedKey] = React.useState<string | null>(null);
+    const collapsed = collapsedKey === gateKey;
+
+    if (!summary) return null;
+
+    return (
+        <View style={styles.container}>
+            <Pressable
+                style={styles.header}
+                onPress={() => setCollapsedKey(collapsed ? null : gateKey)}
+                accessibilityRole="button"
+                accessibilityLabel={collapsed ? `Show ${summary.title}` : `Hide ${summary.title}`}
+            >
+                <Ionicons name="hand-left-outline" size={18} color={theme.colors.box.warning.text} />
+                <View style={styles.headerText}>
+                    <Text style={styles.headerTitle} numberOfLines={1}>{summary.title}</Text>
+                    {collapsed && (
+                        <Text style={styles.headerSubtitle} numberOfLines={2}>{summary.subtitle}</Text>
+                    )}
+                </View>
+                <Ionicons
+                    name={collapsed ? 'chevron-up' : 'chevron-down'}
+                    size={18}
+                    color={theme.colors.textSecondary}
+                />
+            </Pressable>
+            {!collapsed && (
+                <ScrollView
+                    style={styles.body}
+                    contentContainerStyle={styles.bodyContent}
+                    // Bounded so a long question cannot push the composer off a
+                    // phone screen. Answering a prompt you cannot reach the
+                    // keyboard behind is not answering it.
+                    nestedScrollEnabled={true}
+                    // The keyboard is usually up when a prompt lands, and
+                    // without this the first tap on an option only dismisses it.
+                    keyboardShouldPersistTaps="handled"
+                >
+                    {entries.map((entry) => (
+                        <SessionGateCard key={entry.gate.id} entry={entry} />
+                    ))}
+                </ScrollView>
+            )}
+        </View>
+    );
 }
 
-const SessionGateCard = React.memo(({ entry, waiting }: {
-    entry: DroverGateEntry;
-    waiting: number;
-}) => {
+const SessionGateCard = React.memo(({ entry }: { entry: DroverGateEntry }) => {
     const { theme } = useUnistyles();
-    const router = useRouter();
+    // `entry.sessionId` is who HOLDS the card, which for a drover gate is the
+    // bridge session and not the session on screen. Answering the session you
+    // are looking at would reach an agent that never asked anything.
     const { gate, sessionId, requestId } = entry;
     const [busy, setBusy] = React.useState<'allow' | 'deny' | null>(null);
 
     const cards = React.useMemo(() => questionCards(entry.args), [entry.args]);
     const questions = React.useMemo(() => toInlineQuestions(cards), [cards]);
-    const answerable = gate.kind === 'question' && hasAnswerableOptions(cards);
+    const action = sessionGateAction(gate.kind, entry.args);
 
     const submitAnswer = React.useCallback(async (answers: InlineQuestionAnswers) => {
         await sessionAllow(
@@ -72,9 +118,6 @@ const SessionGateCard = React.memo(({ entry, waiting }: {
         );
     }, [cards, requestId, sessionId]);
 
-    // A question has no "no": denying one resolves it for every other surface
-    // with no answer to hand back. Allow/Deny is offered for a permission only,
-    // the same split the gates list makes.
     const decide = React.useCallback(async (allow: boolean) => {
         if (busy) return;
         setBusy(allow ? 'allow' : 'deny');
@@ -85,76 +128,52 @@ const SessionGateCard = React.memo(({ entry, waiting }: {
                 await sessionDeny(sessionId, requestId);
             }
         } catch (error) {
-            console.error('Failed to answer gate:', error);
+            console.error('Failed to answer gate in place:', error);
         } finally {
             setBusy(null);
         }
     }, [busy, requestId, sessionId]);
 
+    if (action === 'answer-question') {
+        return (
+            <View style={styles.card}>
+                <InlineQuestionForm
+                    questions={questions}
+                    canInteract={true}
+                    onSubmit={submitAnswer}
+                />
+            </View>
+        );
+    }
+
     return (
         <View style={styles.card}>
-            <View style={styles.header}>
-                <Ionicons
-                    name={gate.kind === 'question' ? 'help-circle-outline' : 'lock-closed-outline'}
-                    size={18}
-                    color={theme.colors.box.warning.text}
-                />
-                <Text style={styles.title} numberOfLines={1}>{gate.title}</Text>
-                {waiting > 0 && (
-                    <Pressable
-                        onPress={() => router.push('/gates')}
-                        hitSlop={8}
-                        accessibilityRole="button"
-                        accessibilityLabel={`${waiting} more waiting on this session`}
-                    >
-                        <Text style={styles.more}>+{waiting}</Text>
-                    </Pressable>
-                )}
-            </View>
-
-            {answerable ? (
-                <View style={styles.body}>
-                    <InlineQuestionForm
-                        questions={questions}
-                        canInteract={true}
-                        onSubmit={submitAnswer}
-                    />
-                </View>
+            <Text style={styles.cardTitle} numberOfLines={1}>{gate.title}</Text>
+            <Text style={styles.preview}>{gate.preview || gate.title}</Text>
+            {action === 'read-only' ? (
+                <Text style={styles.hint}>{sessionGateReadOnlyHint}</Text>
             ) : (
-                <View style={styles.body}>
-                    <Text style={styles.preview} numberOfLines={4}>
-                        {gate.preview || gate.title}
-                    </Text>
-                    {gate.kind === 'question' ? (
-                        // A question that arrived without its options cannot be
-                        // answered here: submitting blind would resolve it for
-                        // every other surface with nothing to inject. The
-                        // transcript card is the honest place to read it.
-                        <Text style={styles.hint}>Scroll up to answer this one.</Text>
-                    ) : (
-                        <View style={styles.actions}>
-                            <TouchableOpacity
-                                style={[styles.action, styles.deny]}
-                                onPress={() => decide(false)}
-                                disabled={busy !== null}
-                                activeOpacity={0.7}
-                            >
-                                {busy === 'deny'
-                                    ? <ActivityIndicator size="small" color={theme.colors.text} />
-                                    : <Text style={styles.denyText}>Deny</Text>}
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                                style={[styles.action, styles.allow]}
-                                onPress={() => decide(true)}
-                                disabled={busy !== null}
-                                activeOpacity={0.7}
-                            >
-                                {busy === 'allow'
-                                    ? <ActivityIndicator size="small" color={theme.colors.button.primary.tint} />
-                                    : <Text style={styles.allowText}>Allow</Text>}
-                            </TouchableOpacity>
-                        </View>
-                    )}
+                <View style={styles.actions}>
+                    <TouchableOpacity
+                        style={[styles.action, styles.deny]}
+                        onPress={() => decide(false)}
+                        disabled={busy !== null}
+                        activeOpacity={0.7}
+                    >
+                        {busy === 'deny'
+                            ? <ActivityIndicator size="small" color={theme.colors.text} />
+                            : <Text style={styles.denyText}>Deny</Text>}
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                        style={[styles.action, styles.allow]}
+                        onPress={() => decide(true)}
+                        disabled={busy !== null}
+                        activeOpacity={0.7}
+                    >
+                        {busy === 'allow'
+                            ? <ActivityIndicator size="small" color={theme.colors.button.primary.tint} />
+                            : <Text style={styles.allowText}>Allow</Text>}
+                    </TouchableOpacity>
                 </View>
             )}
         </View>
@@ -164,9 +183,7 @@ const SessionGateCard = React.memo(({ entry, waiting }: {
 SessionGateCard.displayName = 'SessionGateCard';
 
 const styles = StyleSheet.create((theme) => ({
-    // Same slot and margins as AgentQuestionBanner, which sits beside this one
-    // above the composer, so the two never look like different furniture.
-    card: {
+    container: {
         marginHorizontal: 12,
         marginBottom: 8,
         borderRadius: 14,
@@ -178,45 +195,62 @@ const styles = StyleSheet.create((theme) => ({
     header: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: 10,
         paddingHorizontal: 12,
-        paddingTop: 10,
+        paddingVertical: 10,
+        minHeight: 44,
     },
-    title: {
-        ...Typography.default('semiBold'),
+    headerText: {
         flex: 1,
+        minWidth: 0,
+    },
+    headerTitle: {
+        ...Typography.default('semiBold'),
         fontSize: 14,
         color: theme.colors.text,
     },
-    more: {
-        ...Typography.default('semiBold'),
+    headerSubtitle: {
+        ...Typography.default(),
         fontSize: 13,
-        color: theme.colors.textLink,
+        color: theme.colors.textSecondary,
     },
     body: {
+        maxHeight: 320,
+        borderTopWidth: StyleSheet.hairlineWidth,
+        borderTopColor: theme.colors.divider,
+    },
+    bodyContent: {
         paddingHorizontal: 12,
-        paddingTop: 8,
-        // InlineQuestionForm's ToolSectionView carries its own 12pt bottom
-        // margin, so a matching pad here would sit the card lopsided.
-        paddingBottom: 4,
+        paddingTop: 12,
+    },
+    card: {
+        // InlineQuestionForm's own ToolSectionView carries a bottom margin, so
+        // the gap between stacked cards lives on the card, not on the list.
+        marginBottom: 4,
+    },
+    cardTitle: {
+        ...Typography.default('semiBold'),
+        fontSize: 14,
+        color: theme.colors.text,
+        marginBottom: 4,
     },
     preview: {
         ...Typography.mono(),
         fontSize: 13,
         lineHeight: 18,
         color: theme.colors.text,
-        marginBottom: 10,
+        marginBottom: 12,
     },
     hint: {
         ...Typography.default(),
         fontSize: 12,
         color: theme.colors.textSecondary,
-        marginBottom: 10,
+        marginBottom: 12,
     },
     actions: {
         flexDirection: 'row',
         gap: 8,
-        marginBottom: 10,
+        marginBottom: 12,
     },
     action: {
         flex: 1,

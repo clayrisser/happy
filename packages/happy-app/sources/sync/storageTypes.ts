@@ -477,7 +477,19 @@ export const AgentStateSchema = z.object({
         // Raw provider tool-use id when the request id is scoped (e.g. claude
         // subagent ids are `agentID:toolUseID`); used to join the permission
         // to its tool call, while the request id stays the response key.
-        toolUseId: z.string().nullish()
+        toolUseId: z.string().nullish(),
+        // Which agent raised this, on a card the drover bridge mirrored
+        // (DROVE-19). The bridge owns ONE session per machine, so every gate
+        // from every local agent lands in that one session's requests; this is
+        // the only thing that says which of them stopped, and it is what lets
+        // a session view present its own prompt in place instead of sending
+        // you to the home screen to find it. Matching is on `sessionId`
+        // against the pane session's `metadata.claudeSessionId`; `cwd` is for
+        // reading only, because several lanes share one checkout.
+        droverOrigin: z.object({
+            sessionId: z.string().nullish(),
+            cwd: z.string().nullish(),
+        }).nullish()
     })).nullish(),
     completedRequests: z.record(z.string(), z.object({
         tool: z.string(),

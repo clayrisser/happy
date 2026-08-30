@@ -76,10 +76,45 @@ export function accountLoginUrl(ev: DroverEvent): string | null {
     return preview.startsWith('https://') ? preview : null
 }
 
+/**
+ * Where the gate was actually raised, carried on the mirrored card (DROVE-19).
+ *
+ * Every bus gate is mirrored into ONE bridge session per machine, so the app's
+ * copy of it belongs to the bridge and not to the agent that stopped. That is
+ * the whole of "a prompt raised by the session already on screen does not
+ * present in place": the session view held nothing of its own to show, so the
+ * only copy was on the home screen and you had to go and find it.
+ *
+ * The Claude session uuid is the join. The app already stores it on a pane
+ * session as `metadata.claudeSessionId`, and the bus event carries the same
+ * uuid in `origin.sessionId` — measured on the live bus, e.g. event
+ * 580fed9e-db4b-42e1-b6f9-1d0033708461 origin.sessionId
+ * e495e6e8-43f6-4699-a984-ff19f5ab4551.
+ *
+ * `cwd` rides along for reading, never for matching. Several lanes share one
+ * checkout here, so matching on cwd would drop one lane's question onto
+ * another lane's screen, which is exactly the hijack this must not do.
+ */
+function droverOriginFor(ev: DroverEvent): { droverOrigin?: { sessionId?: string; cwd?: string } } {
+    const sessionId = ev.origin?.sessionId
+    const cwd = ev.origin?.cwd
+    if (!sessionId && !cwd) return {}
+    return {
+        droverOrigin: {
+            ...(sessionId ? { sessionId } : {}),
+            ...(cwd ? { cwd } : {}),
+        },
+    }
+}
+
 export function requestForEvent(ev: DroverEvent) {
     // Render through the app's existing permission-card path: a Bash-shaped
     // request carries the command preview; anything else goes descriptive.
     const description = [ev.title, ev.reason].filter(Boolean).join(' — ')
+    // Computed before the login branch returns: DROVE-19 requires every
+    // mirrored card to name the session it was raised in, and an account
+    // login gate belongs to a session like any other.
+    const origin = droverOriginFor(ev)
     const loginUrl = accountLoginUrl(ev)
     if (loginUrl) {
         // Its own card, because this one is a LINK and a CODE, not a choice.
@@ -88,6 +123,7 @@ export function requestForEvent(ev: DroverEvent) {
         // cancelled. The app's DroverAccountLogin view hands the URL to the
         // iOS share sheet and takes the code in a text field.
         return {
+            ...origin,
             tool: 'DroverAccountLogin',
             arguments: {
                 url: loginUrl,
@@ -123,6 +159,7 @@ export function requestForEvent(ev: DroverEvent) {
                 ],
             },
             createdAt: Date.now(),
+            ...origin,
         }
     }
     if (ev.kind === 'permission') {
@@ -134,6 +171,7 @@ export function requestForEvent(ev: DroverEvent) {
                 ...(ev.origin?.cwd ? { cwd: ev.origin.cwd } : {}),
             },
             createdAt: Date.now(),
+            ...origin,
         }
     }
     return {
@@ -143,6 +181,7 @@ export function requestForEvent(ev: DroverEvent) {
             description,
         },
         createdAt: Date.now(),
+        ...origin,
     }
 }
 
