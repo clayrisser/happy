@@ -2,6 +2,7 @@ import { AgentContentView } from '@/components/AgentContentView';
 import { MobileGlassBackdrop } from '@/components/MobileGlass';
 import { AgentGoalBar, type AgentGoalAction } from '@/components/AgentGoalBar';
 import { AgentQuestionBanner } from '@/components/AgentQuestionBanner';
+import { SessionGateBanner } from '@/components/SessionGateBanner';
 import { AgentInput } from '@/components/AgentInput';
 import { resolveVisibleAgentGoalStatus } from '@/components/agentGoalStatus';
 import type { MultiTextInputHandle } from '@/components/MultiTextInput';
@@ -1160,6 +1161,16 @@ export function SessionViewLoaded({
                     </CenteredInputWidth>
                 </AnimatedFade>
             )}
+            {/*
+                Deliberately NOT inside the showBottomDockDetails fade every
+                other row here uses. That flag goes false on a phone as soon as
+                the chat is scrolled off the bottom, which is precisely when a
+                pending prompt is hardest to find — fading it out there would
+                rebuild the bug this banner exists to kill (BASED-113).
+            */}
+            <CenteredInputWidth horizontalPadding={sessionInputHorizontalPadding}>
+                <SessionGateBanner sessionId={sessionId} />
+            </CenteredInputWidth>
             <AnimatedFade visible={showBottomDockDetails}>
                 <CenteredInputWidth horizontalPadding={sessionInputHorizontalPadding}>
                     <AgentQuestionBanner sessionId={sessionId} />

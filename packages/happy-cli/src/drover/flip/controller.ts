@@ -185,6 +185,8 @@ export class FlipController {
     private currentKnown = false
     /** Set once this process has flipped, after which nothing on disk knows better. */
     private flippedHere = false
+    /** True when startedOn() was given a name: the wrapper stamped this process (DROVE-21). */
+    private stamped = false
 
     /** The last REAL model this session ran, as a family. See modelFamily(). */
     private seenFamily: string | undefined
@@ -270,8 +272,17 @@ export class FlipController {
         // written by the flip that actually moved the transcript, whereas the
         // stamp is where the session was born. Skipped once this process has
         // flipped, because then nothing on disk knows better than we do.
+        //
+        // UNLESS the process was stamped (DROVE-21). bin/drover now derives
+        // DROVER_ACCOUNT from this very record, or from a human typing
+        // `-a <name>`, before the first spawn — so at start the stamp is the
+        // record or better, and the child's CLAUDE_CONFIG_DIR really is the
+        // stamped account. Letting an older record overrule it would put the
+        // controller on jamrizzi while the child runs on main, which is the
+        // DROVE-43 wedge from the other side. The record still wins for an
+        // unstamped start (a daemon spawn), where nothing else knows.
         if (!this.flippedHere && this.claudeSessionId) {
-            const remembered = recallWhereabouts(this.claudeSessionId, this.cwd)
+            const remembered = this.stamped ? undefined : recallWhereabouts(this.claudeSessionId, this.cwd)
             if (remembered && remembered !== this.current?.name) {
                 logger.debug(
                     `[flip] whereabouts: ${this.claudeSessionId} was left on ${remembered}, ` +
@@ -312,6 +323,24 @@ export class FlipController {
             configDir: process.env.CLAUDE_CONFIG_DIR || '',
         }
         this.currentKnown = true
+        this.stamped = true
+    }
+
+    /**
+     * Claude has reported its session id.
+     *
+     * Written down at once (DROVE-21): the whereabouts record used to be
+     * written only by a flip, so a session that never flipped was never
+     * remembered and the next bare `drover` in its directory had nothing to
+     * go on. Now every managed session leaves a record of where it was last
+     * seen, and `at` is refreshed on every start so "the newest record for
+     * this cwd" is the session Clay used most recently. here() is asked first
+     * so what lands on disk is the corrected account, not a stale stamp.
+     */
+    sessionFound(claudeSessionId: string): void {
+        this.claudeSessionId = claudeSessionId
+        const here = this.here()
+        if (here) rememberWhereabouts(claudeSessionId, this.cwd, here.name)
     }
 
     // --- triggers -----------------------------------------------------------

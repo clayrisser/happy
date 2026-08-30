@@ -12,12 +12,12 @@
  * cached here would be a lie within the hour.
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
 import { logger } from '@/ui/logger'
-import { familyOfDisplayName, familyOfLimitText } from './limits'
+import { familyOf, familyOfDisplayName, familyOfLimitText } from './limits'
 import { projectDirFor } from './transcript'
 
 /**
@@ -218,6 +218,53 @@ export function isLoggedIn(a: DroverAccount): boolean {
 
 export function accountByName(name: string): DroverAccount | undefined {
     return readAccounts().find((a) => a.name === name)
+}
+
+// --- one login wearing two names ---------------------------------------------
+//
+// DROVE-21. `main` (~/.claude) and `risserproperties` both hold
+// risserproperties@gmail.com in their .claude.json: one claude.ai login that
+// drover has two names for. Measured 2026-08-30: main's cache said weekly_all
+// 100% until Sep 3 while risserproperties' older cache still said 89%, so the
+// table showed one dead row and one live row for the SAME quota, and a bare
+// `drover` landed on the "live" one. Headroom and cooldowns are per login, so
+// twins are read as one account. Nothing here edits the registry: the rows
+// stay, and the duplicate is only marked.
+
+/** The address an account is logged in as, from the same key isLoggedIn tests. */
+export function loginEmail(a: DroverAccount): string | undefined {
+    try {
+        const cfg = accountConfigFile(a)
+        if (!existsSync(cfg)) return undefined
+        const raw = JSON.parse(readFileSync(cfg, 'utf8')) as { oauthAccount?: { emailAddress?: unknown } }
+        const email = raw?.oauthAccount?.emailAddress
+        return typeof email === 'string' && email ? email.trim().toLowerCase() : undefined
+    } catch (err) {
+        logger.debug('[flip] could not read the login for ' + a.name, err)
+        return undefined
+    }
+}
+
+/** Every OTHER registry account logged in as the same address. */
+export function loginTwins(a: DroverAccount, accounts: DroverAccount[] = readAccounts()): DroverAccount[] {
+    const email = loginEmail(a)
+    if (!email) return []
+    return accounts.filter((b) => b.name !== a.name && loginEmail(b) === email)
+}
+
+/**
+ * The name this account duplicates, or undefined when it is the first of its
+ * login in registry order. Registry order is what makes the answer stable:
+ * `risserproperties` is "same login as main", never the other way round.
+ */
+export function sameLoginAs(a: DroverAccount, accounts: DroverAccount[] = readAccounts()): string | undefined {
+    const email = loginEmail(a)
+    if (!email) return undefined
+    for (const b of accounts) {
+        if (b.name === a.name) return undefined
+        if (loginEmail(b) === email) return b.name
+    }
+    return undefined
 }
 
 // --- what Claude Code already knows about headroom ---------------------------
@@ -519,6 +566,21 @@ export function coolingState(
     now = Date.now(),
     demand: ModelDemand = unknownModel,
 ): Cooling {
+    let best = ownCoolingState(a, ledger, now, demand)
+    // A twin's evidence is evidence about THIS account (DROVE-21): the quota
+    // is the login's, not the name's. The later deadline wins, exactly as it
+    // does between the ledger and the cache above, and the reason says which
+    // name saw it so the table stays explainable.
+    for (const twin of loginTwins(a)) {
+        const theirs = ownCoolingState(twin, ledger, now, demand)
+        if (theirs.until > best.until) {
+            best = { until: theirs.until, reason: `${theirs.reason} (seen on ${twin.name}, the same login)` }
+        }
+    }
+    return best
+}
+
+function ownCoolingState(a: DroverAccount, ledger: Ledger, now: number, demand: ModelDemand): Cooling {
     const recorded = ledger[a.name]
     let until = 0
     let reason = ''
@@ -730,6 +792,24 @@ export function accountByNewestTranscript(
     return best
 }
 
+/**
+ * The account the newest session in this directory was left on, if any.
+ *
+ * The same whereabouts file, asked by cwd instead of by session id. A bare
+ * `drover` has no id yet (Claude mints one at startup) and `--continue`
+ * resolves its id only by reading the project dir, so "the account I was last
+ * using here" is the record that fits — and it is one record, not a second
+ * memory: every entry already carries its cwd.
+ */
+export function lastAccountIn(cwd: string): string | undefined {
+    let best: Whereabouts | undefined
+    for (const w of Object.values(readWhereabouts())) {
+        if (w.cwd !== cwd) continue
+        if (!best || w.at > best.at) best = w
+    }
+    return best?.account
+}
+
 /** One row of "why we are parked", so the terminal can print the whole story. */
 export interface CoolingAccount {
     name: string
@@ -831,7 +911,12 @@ export function pickTarget(
     // deadline either. Leaving it in made auto-flip pick a dead account and
     // then park the session waiting for a limit that account never had.
     const usable = accounts.filter(isLoggedIn)
-    const others = usable.filter((a) => a.name !== current)
+    // A twin of the current account is the same login (DROVE-21): moving
+    // there changes nothing but the name and costs a relaunch, so it is no
+    // more a target than the account we are on.
+    const here = accounts.find((a) => a.name === current)
+    const twins = new Set(here ? loginTwins(here, accounts).map((a) => a.name) : [])
+    const others = usable.filter((a) => a.name !== current && !twins.has(a.name))
     if (others.length === 0) return { kind: 'none' }
 
     const wants = modelDemand(family)
@@ -938,4 +1023,121 @@ export function pickTarget(
         cooling: candidates.map(({ a, until, reason }) => ({ name: a.name, until, reason })),
         ...(wants.kind === 'family' ? { family: wants.family } : {}),
     }
+}
+
+// --- which account a session STARTS on --------------------------------------
+//
+// DROVE-21. A bare `drover` made no account decision at all: CLAUDE_CONFIG_DIR
+// stayed unset, so every restart opened on the ambient login — Clay's words,
+// "it's always starting back with risserproperties" — while the account the
+// session was actually left on sat in whereabouts.json unread, and the one
+// with headroom sat unused. bin/drover asks this before the first spawn and
+// execs through `drover account use`, so the child is stamped.
+//
+// Precedence, and why:
+//   1. whereabouts for the resumed id   — the session was left there; under
+//                                        the shared store any account can
+//                                        resume it, so "last on" is the whole
+//                                        of what "resume" means for accounts
+//   2. the newest whereabouts for cwd   — a bare start has no id yet, so the
+//                                        directory stands in for the session
+//   3. pickTarget                       — nothing remembered, or the memory is
+//                                        cooling for the model in use
+//   4. nothing                          — no registry; bin/drover runs as it
+//                                        always did
+// An explicit -a/--account never reaches here: bin/drover handles it first.
+
+export interface StartPick {
+    account?: DroverAccount
+    /** Where the answer came from, for the log and the tests. */
+    via: 'session' | 'cwd' | 'picker' | 'none'
+    /** One line for stderr, or nothing when there is nothing worth saying. */
+    note?: string
+    /** The family this account cannot run, when it was taken anyway. */
+    withoutModel?: string
+}
+
+/** "21:00", or "Thu 21:00" when it is more than a day out — as `drover accounts` prints it. */
+function whenBack(until: number, now: number): string {
+    const d = new Date(until)
+    const hm = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+    if (until - now < 24 * 60 * 60 * 1000) return hm
+    return `${d.toLocaleDateString([], { weekday: 'short' })} ${hm}`
+}
+
+export function pickStartAccount(opts: {
+    cwd: string
+    /** The id behind --resume/--continue, when the args named one. */
+    sessionId?: string | null
+    /** The --model flag, when one was typed. */
+    model?: string
+    now?: number
+}): StartPick {
+    const now = opts.now ?? Date.now()
+    const accounts = readAccounts()
+    if (accounts.length === 0) return { via: 'none' }
+
+    let via: StartPick['via'] = 'none'
+    let remembered = opts.sessionId ? recallWhereabouts(opts.sessionId, opts.cwd) : undefined
+    if (remembered) {
+        via = 'session'
+    } else {
+        remembered = lastAccountIn(opts.cwd)
+        if (remembered) via = 'cwd'
+    }
+    const memory = remembered ? accounts.find((a) => a.name === remembered) : undefined
+    const where = via === 'session' ? 'where this session was left' : 'last used in this directory'
+
+    // What the session will run: the flag if there is one, else the remembered
+    // account's own default. The same startup seed the controller uses, and
+    // the same fallback — unknown, which counts every limit — when neither
+    // says. A guess here would send a Fable session to an account that only
+    // has Opus left and call it headroom.
+    const family = familyOf(opts.model) ?? (memory ? familyOf(readSettingsModel(memory)) : undefined)
+    const ledger = readLedger()
+
+    if (memory && isLoggedIn(memory)) {
+        const cooling = coolingState(memory, ledger, now, modelDemand(family))
+        if (cooling.until === 0) {
+            return { account: memory, via, note: `on ${memory.name} — ${where}` }
+        }
+        const choice = pickTarget(memory.name, null, now, family)
+        const why = `${memory.name} is cooling: ${cooling.reason}, back ${whenBack(cooling.until, now)}.`
+        if (choice.kind === 'account' && choice.account.name !== memory.name) {
+            return {
+                account: choice.account,
+                via: 'picker',
+                note:
+                    `${why} Starting on ${choice.account.name} instead` +
+                    (choice.withoutModel ? `, which is out of ${choice.withoutModel} too; switch models with /model` : ''),
+                ...(choice.withoutModel ? { withoutModel: choice.withoutModel } : {}),
+            }
+        }
+        // Nowhere better: pickTarget parked, or settled on the account we
+        // remembered. Staying is the honest answer — the memory is still where
+        // the work is, and a park with no child is not a session start.
+        const back = choice.kind === 'parked' ? ` Every account is cooling; ${choice.account.name} is back first.` : ''
+        return { account: memory, via, note: `${why}${back} Starting there anyway` }
+    }
+
+    const choice = pickTarget(undefined, null, now, family)
+    if (choice.kind === 'account') {
+        return {
+            account: choice.account,
+            via: 'picker',
+            note:
+                `on ${choice.account.name} — ${memory ? `${memory.name} has no login; ` : 'nothing remembered here; '}` +
+                (choice.onlyOption ? 'the only account with headroom' : 'the first account with headroom') +
+                (choice.withoutModel ? `, though it is out of ${choice.withoutModel}; switch models with /model` : ''),
+            ...(choice.withoutModel ? { withoutModel: choice.withoutModel } : {}),
+        }
+    }
+    if (choice.kind === 'parked') {
+        return {
+            account: choice.account,
+            via: 'picker',
+            note: `every account is cooling; ${choice.account.name} is back first (${whenBack(choice.until, now)}) — starting there`,
+        }
+    }
+    return { via: 'none' }
 }

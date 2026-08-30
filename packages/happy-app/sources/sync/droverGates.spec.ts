@@ -9,6 +9,7 @@ vi.mock('./storage', () => ({
 import {
     collectGateEntries,
     collectGates,
+    gatesForSession,
     previewFor,
     optionsFor,
     sortGateEntries,
@@ -235,5 +236,56 @@ describe('optionsFor', () => {
             s1: session({ requests: { r1: { tool: 'Bash', createdAt: 0, arguments: { command: 'ls' } } } }),
         });
         expect('options' in entry.gate).toBe(false);
+    });
+});
+
+describe('gatesForSession', () => {
+    const sessions: Record<string, GateSession> = {
+        watched: session({
+            path: '~/work',
+            requests: {
+                'req-1': {
+                    tool: 'AskUserQuestion',
+                    createdAt: 200,
+                    arguments: {
+                        questions: [{
+                            header: 'Flip?',
+                            question: 'Move this session to work-2?',
+                            options: [{ label: 'Yes' }, { label: 'Stay here' }],
+                        }],
+                    },
+                },
+                'req-0': { tool: 'Bash', createdAt: 100, arguments: { command: 'ls' } },
+            },
+        }),
+        other: session({
+            path: '~/elsewhere',
+            requests: {
+                'req-9': { tool: 'Bash', createdAt: 50, arguments: { command: 'rm -rf /' } },
+            },
+        }),
+    };
+
+    it('returns only the gates raised by the session asked for', () => {
+        const entries = gatesForSession(sessions, 'watched');
+        expect(entries.map((entry) => entry.gate.id)).toEqual(['watched:req-0', 'watched:req-1']);
+        expect(entries.every((entry) => entry.sessionId === 'watched')).toBe(true);
+    });
+
+    // The screen renders entries[0]. A different session's prompt reaching it
+    // would hijack the view the user is on, which is worse than the walk to the
+    // gates list — several sessions running at once is the normal case here.
+    it('never leaks another session\'s gate, even the oldest one', () => {
+        const ids = gatesForSession(sessions, 'watched').map((entry) => entry.gate.id);
+        expect(ids).not.toContain('other:req-9');
+    });
+
+    it('is empty for a session with no requests, and for one that is not there', () => {
+        expect(gatesForSession(sessions, 'missing')).toEqual([]);
+        expect(gatesForSession({ quiet: session({ path: '~/quiet' }) }, 'quiet')).toEqual([]);
+    });
+
+    it('puts the longest-waiting gate first, so the screen presents what is holding the session up', () => {
+        expect(gatesForSession(sessions, 'watched')[0].gate.id).toBe('watched:req-0');
     });
 });

@@ -1,6 +1,11 @@
 import { storage } from '@/sync/storage';
 import { useDeepEqual } from '@/sync/storeSelectors';
-import { collectGateEntries, sortGateEntries, type DroverGateEntry } from '@/sync/droverGates';
+import {
+    collectGateEntries,
+    gatesForSession,
+    sortGateEntries,
+    type DroverGateEntry,
+} from '@/sync/droverGates';
 
 /**
  * Every pending gate across every session, for the global gates surface
@@ -14,6 +19,18 @@ import { collectGateEntries, sortGateEntries, type DroverGateEntry } from '@/syn
  */
 export function usePendingGates(): DroverGateEntry[] {
     return storage(useDeepEqual((state) => sortGateEntries(collectGateEntries(state.sessions))));
+}
+
+/**
+ * The gates raised by one session, for presenting them on that session's own
+ * view (BASED-113).
+ *
+ * Deep-equal for the same reason usePendingGates is: the entries are minted
+ * fresh on every read, so identity comparison reports a change every time and
+ * spins render against read.
+ */
+export function useSessionGates(sessionId: string): DroverGateEntry[] {
+    return storage(useDeepEqual((state) => gatesForSession(state.sessions ?? {}, sessionId)));
 }
 
 export type { DroverGateEntry };

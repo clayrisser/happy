@@ -204,7 +204,7 @@ export class Session {
         // A flip resumes by claude session id, and bus frames may address the
         // session by it, so the controller has to learn it the moment Claude
         // reports it rather than waiting for the next flip to go looking.
-        if (this.flip) this.flip.claudeSessionId = sessionId;
+        if (this.flip) this.flip.sessionFound(sessionId);
 
         // Update metadata with Claude Code session ID
         this.client.updateMetadata((metadata) => ({

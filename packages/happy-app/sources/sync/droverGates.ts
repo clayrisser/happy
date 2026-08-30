@@ -212,6 +212,26 @@ export function collectGates(
 }
 
 /**
+ * The gates raised by ONE session, oldest first (BASED-113).
+ *
+ * The session view presents its own gates in place, so it must never be handed
+ * another session's. Narrowing the map to a single entry BEFORE collecting is
+ * what makes that structural rather than a filter someone can later forget:
+ * collectGateEntries cannot emit a gate for a session it was never given.
+ * Driving several sessions at once is the normal case here, and a prompt from
+ * the one you are not looking at stealing the screen is worse than the walk to
+ * the gates list.
+ */
+export function gatesForSession(
+    sessions: Record<string, GateSession | undefined>,
+    sessionId: string,
+): DroverGateEntry[] {
+    const session = sessions[sessionId];
+    if (!session) return [];
+    return sortGateEntries(collectGateEntries({ [sessionId]: session }));
+}
+
+/**
  * Oldest first. A gate that has been waiting longest is the one holding up
  * work, and a list that reorders under you as new gates arrive is unanswerable
  * on a phone — the row you were reaching for moves.

@@ -32,6 +32,8 @@ import { claudeCliPath } from './claude/claudeLocal'
 import { execFileSync } from 'node:child_process'
 import { extractNoSandboxFlag } from './utils/sandboxFlags'
 import { handleResumeCommand } from '@/resume/handleResumeCommand'
+import { resumedClaudeSessionId } from '@/resume/reattachClaudeSession'
+import { pickStartAccount } from '@/drover/flip/accounts'
 import { ensureDaemonRunning } from './daemon/ensureDaemonRunning'
 import { handleCodexCommand } from './commands/codexCommand'
 import { sanitizeSessionEnvironment } from './daemon/sessionEnvironment'
@@ -40,16 +42,63 @@ import { sanitizeSessionEnvironment } from './daemon/sessionEnvironment'
 (async () => {
   const args = process.argv.slice(2)
 
-  // If --version is passed - do not log, its likely daemon inquiring about our version
-  if (!args.includes('--version')) {
+  // Check if first argument is a subcommand
+  const subcommand = args[0]
+
+  // If --version is passed - do not log, its likely daemon inquiring about our
+  // version. pick-account runs before EVERY session start (DROVE-21) and would
+  // otherwise leave a one-line log file per start.
+  if (!args.includes('--version') && subcommand !== 'pick-account') {
     logger.debug('Starting drover CLI with args: ', process.argv)
   }
 
-  // Check if first argument is a subcommand
-  const subcommand = args[0]
-  
-  // Log which subcommand was detected (for debugging)
-  if (!args.includes('--version')) {
+  if (subcommand === 'pick-account') {
+    // Cattle Drover (DROVE-21): which account should a session START on?
+    // bin/drover asks this before the first spawn — it is the one place the
+    // headroom logic lives, so the shell never grows a second copy — and
+    // execs `drover account use <answer>`. The answer is the name on stdout,
+    // nothing when there is no opinion, and one line on stderr saying why.
+    //
+    // Everything after `--` is the session's own argv, so --resume/--continue
+    // and --model are read by the same parsers the session will use.
+    const own = args.slice(1)
+    const split = own.indexOf('--')
+    const claudeArgs = split >= 0 ? own.slice(split + 1) : []
+    const flags = split >= 0 ? own.slice(0, split) : own
+    let cwd = process.cwd()
+    let asJson = false
+    for (let i = 0; i < flags.length; i++) {
+      if (flags[i] === '--cwd' && flags[i + 1]) cwd = flags[++i]
+      else if (flags[i] === '--json') asJson = true
+      else if (flags[i] === '-h' || flags[i] === '--help') {
+        console.log(`
+${chalk.bold('drover pick-account')} [--cwd <dir>] [--json] [-- <claude args>]
+
+Prints the account a session started with those args, in that directory,
+would open on: where the resumed session was left, else the account last used
+in the directory, else the first one with headroom. Reads only.
+`)
+        process.exit(0)
+      }
+    }
+    const model = (() => {
+      const i = claudeArgs.indexOf('--model')
+      if (i >= 0 && claudeArgs[i + 1]) return claudeArgs[i + 1]
+      const eq = claudeArgs.find((a) => a.startsWith('--model='))
+      return eq ? eq.slice('--model='.length) : undefined
+    })()
+    const pick = pickStartAccount({
+      cwd,
+      sessionId: resumedClaudeSessionId(claudeArgs, cwd),
+      ...(model ? { model } : {}),
+    })
+    if (asJson) {
+      console.log(JSON.stringify({ account: pick.account?.name ?? null, via: pick.via, note: pick.note ?? null }))
+    } else {
+      if (pick.note) console.error(`drover: ${pick.note}`)
+      if (pick.account) console.log(pick.account.name)
+    }
+    process.exit(0)
   }
 
   if (subcommand === 'doctor') {
