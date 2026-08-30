@@ -939,6 +939,27 @@ export const knownTools = {
             return typeof header === 'string' && header ? header : null;
         },
     },
+    // The needs-you card (DROVE-69). Its own entry so the row reads as a job
+    // rather than as a permission to grant, and so it is never collapsed away —
+    // a to-do stays until it is done, so the two buttons are the whole point.
+    'DroverTodo': {
+        title: () => 'Needs you',
+        icon: ICON_QUESTION,
+        minimal: false,
+        noStatus: true,
+        input: z.object({
+            title: z.string().describe('What the agent needs done'),
+            reason: z.string().describe('Why it is waiting on you'),
+            command: z.string().describe('The command to run, if there is one'),
+            cwd: z.string().describe('Where it was raised'),
+            options: z.array(z.object({ id: z.string(), label: z.string() }))
+                .describe('Done and Drop it, as the bus injected them'),
+        }).partial().passthrough(),
+        extractSubtitle: (opts: { metadata: Metadata | null, tool: ToolCall }) => {
+            const title = opts.tool.input?.title;
+            return typeof title === 'string' && title ? title : null;
+        },
+    },
     'request_user_input': {
         title: (opts: { metadata: Metadata | null, tool: ToolCall }) => {
             const input = opts.tool.input?.input ?? opts.tool.input;

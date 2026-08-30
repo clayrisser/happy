@@ -7,6 +7,10 @@ const socketStatus = vi.hoisted(() => ({
     status: 'disconnected' as 'disconnected' | 'connecting' | 'connected' | 'error',
 }));
 
+// What the longhorn is counting (DROVE-71). Separate numbers on purpose: a
+// pending prompt is blocking a session right now, a to-do is not.
+const inbox = vi.hoisted(() => ({ prompts: 0, todos: 0 }));
+
 vi.mock('react-native', async () => {
     const ReactModule = await import('react');
     const host = (name: string) => (props: any) => ReactModule.createElement(name, props, props.children);
@@ -27,6 +31,10 @@ vi.mock('@/sync/storage', () => ({
     useSocketStatus: () => socketStatus,
 }));
 
+vi.mock('@/hooks/usePendingGates', () => ({
+    useInboxCounts: () => ({ ...inbox, total: inbox.prompts + inbox.todos }),
+}));
+
 vi.mock('expo-router', () => ({
     useRouter: () => ({ navigate: vi.fn(), push: vi.fn() }),
     useSegments: () => [],
@@ -45,6 +53,7 @@ vi.mock('react-native-unistyles', () => ({
     StyleSheet: {
         create: (factory: any) => typeof factory === 'function' ? factory({
             colors: {
+                box: { warning: { text: 'warning', background: 'warning-bg' } },
                 groupped: { background: 'background' },
                 header: { tint: 'tint' },
                 status: {
@@ -63,6 +72,7 @@ vi.mock('react-native-unistyles', () => ({
     useUnistyles: () => ({
         theme: {
             colors: {
+                box: { warning: { text: 'warning', background: 'warning-bg' } },
                 groupped: { background: 'background' },
                 header: { tint: 'tint' },
             },
@@ -98,7 +108,10 @@ beforeAll(() => {
 afterAll(() => vi.restoreAllMocks());
 afterEach(() => {
     socketStatus.status = 'disconnected';
+    inbox.prompts = 0;
+    inbox.todos = 0;
 });
+
 
 function renderHomeHeaderTitle(component: React.ReactElement) {
     let renderer: ReturnType<typeof create>;
@@ -169,3 +182,4 @@ describe('home header connection status', () => {
         expect(texts[1].props.children).toBe('192.168.0.108:3005');
     });
 });
+

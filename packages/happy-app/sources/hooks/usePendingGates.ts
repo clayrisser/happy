@@ -4,6 +4,7 @@ import {
     collectGateEntries,
     gateForQuestion,
     gatesForSession,
+    inboxCounts,
     sortGateEntries,
     type DroverGateEntry,
 } from '@/sync/droverGates';
@@ -45,3 +46,16 @@ export function useGateForQuestion(question: string): DroverGateEntry | null {
 }
 
 export type { DroverGateEntry };
+
+/**
+ * What the longhorn shows without being tapped (DROVE-71).
+ *
+ * Two counts, never a sum. A pending prompt is blocking a session right now;
+ * a to-do is a job that never expires and stalls nothing. Reduced to three
+ * numbers on purpose: the header re-renders on every store change, and
+ * comparing a scalar record is what keeps that cheap next to the entry list
+ * the inbox screen itself reads.
+ */
+export function useInboxCounts(): { prompts: number; todos: number; total: number } {
+    return storage(useDeepEqual((state) => inboxCounts(collectGateEntries(state.sessions))));
+}

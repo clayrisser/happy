@@ -540,6 +540,25 @@ export const AgentStateSchema = z.object({
         droverOrigin: z.object({
             sessionId: z.string().nullish(),
             cwd: z.string().nullish(),
+        }).nullish(),
+        // The bus event's own facts, on a card the drover bridge mirrored
+        // (DROVE-71). The card SHAPES are chosen to render — a Bash card packs
+        // title and reason into one `description`, a question card puts the
+        // title in a header — so the inbox, which has to group prompts apart
+        // from to-dos and print a real age, had only a display string to read.
+        // `kind` is also what tells "a session is stopped waiting on you" from
+        // "you must DO something", which the card alone cannot say.
+        //
+        // `createdAt` here is the BUS's, not the card's: the bridge re-mirrors
+        // every pending event on restart and stamps the card fresh each time,
+        // so a to-do — the one kind that never expires — read as new after
+        // every launchd roll.
+        droverEvent: z.object({
+            kind: z.enum(['permission', 'question', 'idle', 'expiry', 'todo']).nullish(),
+            title: z.string().nullish(),
+            reason: z.string().nullish(),
+            command: z.string().nullish(),
+            createdAt: z.number().nullish(),
         }).nullish()
     })).nullish(),
     completedRequests: z.record(z.string(), z.object({

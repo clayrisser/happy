@@ -38,6 +38,16 @@ export interface DroverEvent {
     /** `todo` is the needs-you record (DROVE-53): an ACTION, not an answer. */
     kind: 'permission' | 'question' | 'idle' | 'expiry' | 'todo'
     state: string
+    /**
+     * When the BUS raised it, which is the only honest age (DROVE-71).
+     *
+     * The mirrored card stamps its own `createdAt` at mirror time, and the
+     * bridge re-mirrors every pending event on each restart, so a to-do raised
+     * an hour before a launchd roll would read as one minute old on the phone.
+     * A to-do never expires, so it is the kind most likely to outlive several
+     * restarts and the kind whose age matters most.
+     */
+    createdAt?: number
     title: string
     reason?: string
     preview?: string
@@ -122,6 +132,34 @@ function droverOriginFor(ev: DroverEvent): { droverOrigin?: { sessionId?: string
     }
 }
 
+/**
+ * The bus event's own facts, carried on the card so a surface can read them
+ * back without unpicking the rendering (DROVE-71).
+ *
+ * The card shapes are chosen to render — a Bash card packs title and reason
+ * into one `description` string, a question card puts the title in a header —
+ * so an inbox that has to GROUP prompts apart from to-dos, print the real
+ * reason on its own line and show a true age had nothing to read. It would
+ * have had to parse a display string back into fields, which is the thing that
+ * breaks the first time an em-dash appears in a title.
+ *
+ * `kind` here is also what makes a to-do refusable in busResolutionFor: the
+ * card it rides is a permission card, and without a kind on it there is no way
+ * for either side to tell "you must DO something" from "a session is stopped
+ * waiting on you".
+ */
+function droverEventFor(ev: DroverEvent) {
+    return {
+        droverEvent: {
+            kind: ev.kind,
+            title: ev.title,
+            ...(ev.reason ? { reason: ev.reason } : {}),
+            ...(ev.preview ? { command: ev.preview } : {}),
+            ...(typeof ev.createdAt === 'number' ? { createdAt: ev.createdAt } : {}),
+        },
+    }
+}
+
 export function requestForEvent(ev: DroverEvent) {
     // Render through the app's existing permission-card path: a Bash-shaped
     // request carries the command preview; anything else goes descriptive.
@@ -129,7 +167,7 @@ export function requestForEvent(ev: DroverEvent) {
     // Computed before the login branch returns: DROVE-19 requires every
     // mirrored card to name the session it was raised in, and an account
     // login gate belongs to a session like any other.
-    const origin = droverOriginFor(ev)
+    const origin = { ...droverOriginFor(ev), ...droverEventFor(ev) }
     const loginUrl = accountLoginUrl(ev)
     if (loginUrl) {
         // Its own card, because this one is a LINK and a CODE, not a choice.
@@ -182,13 +220,39 @@ export function requestForEvent(ev: DroverEvent) {
             ...origin,
         }
     }
-    // A TO-DO rides the permission card (DROVE-53). It is the card that already
-    // has two buttons and needs no options of its own: Done is the approve,
-    // Drop is the deny, and the bus normalizes both onto one verb — so the
-    // phone needs no new card and no new vocabulary to answer one. The command
-    // goes in `command` and the why in `description`, the same split a Bash
-    // gate uses, so it reads the way every other card on that screen reads.
-    if (ev.kind === 'permission' || ev.kind === 'todo') {
+    if (ev.kind === 'todo') {
+        // A TO-DO GETS ITS OWN CARD (DROVE-69). It used to ride the permission
+        // card, on the reasoning that Done is the approve and Drop is the deny
+        // and no new vocabulary was needed. That reasoning had a hole: a
+        // permission card is answerable by every generic approve path in the
+        // app, on the wrist and in the voice tool, and busResolutionFor turned
+        // a bare `approved: true` into optionId "done" with nobody having
+        // chosen anything. Bus event 4c3f5082 went from raised to
+        // {"action":"ack","optionId":"done","by":"happy"} while Clay was
+        // asking where the list was — an ack he never made, which is the whole
+        // of DROVE-69.
+        //
+        // A gate owes its caller a decision, so leaving one unanswered is the
+        // expensive state and any answer is progress. A to-do owes nobody
+        // anything: it stays open until it is DONE, so a spurious answer is
+        // pure loss and the card must be answerable only by its own two
+        // buttons. The card carries the options explicitly for the same
+        // reason — an answer to this card names which button was pressed, and
+        // busResolutionFor refuses anything that names neither.
+        return {
+            tool: 'DroverTodo',
+            arguments: {
+                title: ev.title,
+                reason: ev.reason ?? '',
+                command: ev.preview ?? '',
+                ...(ev.origin?.cwd ? { cwd: ev.origin.cwd } : {}),
+                options: (ev.options ?? []).map((o) => ({ id: o.id, label: o.label })),
+            },
+            createdAt: Date.now(),
+            ...origin,
+        }
+    }
+    if (ev.kind === 'permission') {
         return {
             tool: 'Bash',
             arguments: {
@@ -303,11 +367,27 @@ export function busResolutionFor(
         return null
     }
     if (ev?.kind === 'todo') {
-        // Done or dropped. The card is a permission card, so the app sends
-        // approved/denied; the bus normalizes every affirmative onto `ack`, so
-        // the option ids are sent rather than a bare allow and the terminal,
-        // the wrist and the phone all close a to-do the same way.
-        return { action: 'option', optionId: answer.approved ? 'done' : 'drop', by: 'happy' }
+        // A NAMED BUTTON, OR NOTHING (DROVE-69).
+        //
+        // This used to read `answer.approved ? 'done' : 'drop'`, so ANY
+        // affirmative answer to the card closed the to-do: the phone's generic
+        // Allow, the wrist's Allow, the realtime voice tool's
+        // processPermissionRequest, or anything else that can approve a
+        // permission. Event 4c3f5082 was acked that way with nobody having
+        // touched it — resolved 257 seconds after it was raised, `by happy`,
+        // while Clay was asking where the to-do list was.
+        //
+        // A to-do is answered by pressing Done or Drop it, and an answer that
+        // names neither is not a person having decided. Returning null leaves
+        // the to-do PENDING, which is the safe direction for this kind: a gate
+        // left open blocks a session, a to-do left open is just a to-do.
+        // DroverTodoView and the inbox both send the option id, and the wrist
+        // sends it too now that the card carries real options.
+        const chosen = (ev.options ?? []).find((o) =>
+            answerCandidates(answer).some((c) => c === o.id || c === o.label)
+        )
+        if (chosen) return { action: 'option', optionId: chosen.id, by: 'happy' }
+        return null
     }
     // ALLOW, AND STOP ASKING. Both of the app's spellings mean it: the Claude
     // flavour of PermissionFooter sends allowTools ["Bash(<command>)"] and the
@@ -431,7 +511,14 @@ export async function runDroverBridge(): Promise<void> {
         async (message) => {
             const body = busResolutionFor(mirrored.get(message.id), message)
             if (!body) {
-                logger.debug(`[drover] app answered ${message.id} with nothing the bus takes; left pending`)
+                // Named, because for a to-do this is now a REFUSAL rather than
+                // a shrug: an answer that pressed neither Done nor Drop it
+                // leaves it open on purpose (DROVE-69), and that has to read
+                // differently in the log from a question answered with nothing.
+                const kind = mirrored.get(message.id)?.kind ?? 'unknown'
+                logger.debug(
+                    `[drover] app answered ${kind} ${message.id} with nothing the bus takes; left pending`
+                )
                 return
             }
             const status = await resolveOnBus(message.id, body)

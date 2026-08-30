@@ -14,6 +14,35 @@ export interface PushToken {
 export type SessionNotificationKind = 'done' | 'permission' | 'question' | 'todo'
 
 /**
+ * The kinds `/v1/sessions/:id/push-event` will actually take (DROVE-70).
+ *
+ * MEASURED, not assumed: happy-server's pushRoutes.ts declares the body as
+ * `kind: z.enum(['done', 'permission', 'question'])`, and Fastify rejects
+ * anything else with a 400 before the handler runs. The live route is
+ * UPSTREAM's (api.cluster-fluster.com) and its schema only knows Happy's own
+ * kinds, so `todo` — which is ours, invented in DROVE-53 — is refused outright.
+ *
+ * WHY DIRECT-TO-EXPO RATHER THAN KIND-MAPPING. Mapping `todo` onto
+ * `permission` and carrying the real kind in `data` keeps one path, but it
+ * lies in the envelope twice over: the server fans the kind out to web tabs as
+ * a session event, and it presence-suppresses on it. A to-do is precisely the
+ * thing that must survive suppression — nothing is blocked on it, so it will
+ * still be waiting long after the desktop tab that suppressed it was closed.
+ * `sendBackgroundWake` already goes direct for the same class of reason (its
+ * shape is unrepresentable on that route), so the direct path is not a new
+ * one. What is given up is the ephemeral fan-out to open web tabs; a to-do
+ * appears there through the ordinary session sync instead.
+ *
+ * A new drover kind that upstream later learns belongs in this set, not in a
+ * second branch somewhere else.
+ */
+const serverPushEventKinds: ReadonlySet<SessionNotificationKind> = new Set([
+    'done',
+    'permission',
+    'question',
+])
+
+/**
  * Seconds a wake is still worth delivering for.
  *
  * Past this the phone has nothing to add: it resyncs on its own the next time
@@ -62,6 +91,27 @@ export function buildWakeMessages(
         priority: 'normal',
         ttl: WAKE_TTL_SECONDS,
     }))
+}
+
+/**
+ * What actually went wrong with a push, in one line (DROVE-70).
+ *
+ * An HTTP error from the push route carries its reason in the RESPONSE BODY —
+ * Fastify's schema validation names the offending field there
+ * ("body/kind must be equal to one of the allowed values") — and logging the
+ * error object alone throws that away and prints a stack instead. Exported so
+ * a test can assert the body survives.
+ */
+export function describePushError(error: unknown): string {
+    if (axios.isAxiosError(error)) {
+        const status = error.response?.status
+        const data = error.response?.data
+        const body = data === undefined ? '' : typeof data === 'string' ? data : JSON.stringify(data)
+        if (status !== undefined) {
+            return `HTTP ${status}${body ? ` ${body}` : ' (empty body)'}`
+        }
+    }
+    return error instanceof Error ? `${error.name}: ${error.message}` : String(error)
 }
 
 function getSessionTitle(metadata: Metadata | null | undefined): string {
@@ -341,8 +391,8 @@ export class PushNotificationClient {
     /**
      * Routes session-event pushes through the server so it can apply
      * presence-based suppression (active desktop/web, mobile foreground).
-     * Falls back to direct Expo send only when sessionId is missing — that
-     * shouldn't happen for session notifications but guards against regressions.
+     * Falls back to direct Expo send when sessionId is missing, and for any
+     * kind the route's schema does not know — see `serverPushEventKinds`.
      */
     sendSessionNotification(params: {
         kind: SessionNotificationKind
@@ -362,6 +412,17 @@ export class PushNotificationClient {
         const sessionId = typeof params.data?.sessionId === 'string' ? params.data.sessionId : null
         if (!sessionId) {
             logger.debug('[PUSH] sendSessionNotification: missing sessionId, falling back to direct send')
+            this.sendToAllDevices(title, body, payloadData)
+            return
+        }
+        // A kind the route will refuse never gets handed to it (DROVE-70). It
+        // is not a soft failure there: the body schema rejects the whole
+        // request with a 400, so the push does not merely arrive mislabelled,
+        // it does not arrive at all. `drover needs` raised a to-do on
+        // 2026-08-31 00:04 BST and the one card that means "Clay must DO
+        // something" was the one card that could never buzz his phone.
+        if (!serverPushEventKinds.has(params.kind)) {
+            logger.debug(`[PUSH] kind=${params.kind} is not on the push-event route; sending direct to Expo`)
             this.sendToAllDevices(title, body, payloadData)
             return
         }
@@ -404,7 +465,12 @@ export class PushNotificationClient {
                         : `[PUSH] sendSessionNotification accepted by server (kind=${params.kind})`
                 )
             } catch (error) {
-                logger.debug('[PUSH] sendSessionNotification failed:', error)
+                // The RESPONSE BODY, not just the stack (DROVE-70). The 400
+                // that killed the first live to-do push logged a bare
+                // AxiosError, and the one thing that would have named the
+                // rejected field in seconds — the server's own validation
+                // message — was the one thing never written down.
+                logger.debug(`[PUSH] sendSessionNotification failed (kind=${params.kind}): ${describePushError(error)}`)
             }
         })()
     }

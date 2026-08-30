@@ -9,6 +9,7 @@ import { MOBILE_GLASS_HEADER_HEIGHT } from '@/components/navigation/headerMetric
 import { Typography } from '@/constants/Typography';
 import { usePendingGates, type DroverGateEntry } from '@/hooks/usePendingGates';
 import { useNavigateToSession } from '@/hooks/useNavigateToSession';
+import { ageLabel, splitInbox } from '@/sync/droverGates';
 import { sessionAllow, sessionDeny } from '@/sync/ops';
 import {
     hasAnswerableOptions,
@@ -22,12 +23,21 @@ import {
 } from '@/components/tools/views/InlineQuestionForm';
 
 /**
- * Every pending gate, from every session, in one place (BASED-98).
+ * The drover inbox: everything Clay has to respond to, in one place
+ * (BASED-98, DROVE-71).
  *
- * The wrist has had this list since the watch shipped — GateListView reads the
- * snapshot the feed publishes. The phone never did: a request rendered only
- * inside its own session's transcript, so answering one meant knowing which
- * session to open. This screen is the phone's GateListView.
+ * Reached by tapping the longhorn top-left of the Sessions screen, and from
+ * the "N waiting" banner. The wrist has had this list since the watch shipped;
+ * the phone had nothing until BASED-98, and had no TO-DO half at all until
+ * DROVE-71 — `drover needs` wrote records the app could not show, so Clay went
+ * looking for his list and found nothing.
+ *
+ * TWO GROUPS, NEVER ONE COUNT. A pending PROMPT — a permission gate, a
+ * question — is blocking a session right now: a turn is stopped and it can
+ * time out. A TO-DO is a job to do when he can; nothing is stalled on it and
+ * it never expires. Prompts come first because they are the blocking ones, and
+ * both halves are oldest first, which for a prompt is not a preference: the
+ * oldest is the one that has held a session up longest.
  *
  * It answers through sessionAllow / sessionDeny, the same ops the transcript's
  * own buttons call, and builds a question's payload with the same helper the
@@ -36,6 +46,7 @@ import {
  */
 export default function GatesScreen() {
     const gates = usePendingGates();
+    const { prompts, todos } = React.useMemo(() => splitInbox(gates), [gates]);
     // The header is transparent glass on iOS, so the first card would sit under
     // it. Same inset the settings screen applies for the same header.
     const topContentInset = Platform.OS === 'ios' ? MOBILE_GLASS_HEADER_HEIGHT : 0;
@@ -50,11 +61,61 @@ export default function GatesScreen() {
             containerStyle={{ paddingTop: topContentInset }}
         >
             <View style={styles.list}>
-                {gates.map((entry) => (
+                {prompts.length > 0 && (
+                    <SectionHeading
+                        icon="hand-left-outline"
+                        label={prompts.length === 1 ? '1 prompt waiting' : `${prompts.length} prompts waiting`}
+                        note="A session is stopped until you answer"
+                        loud={true}
+                    />
+                )}
+                {prompts.map((entry) => (
+                    <GateCard key={entry.gate.id} entry={entry} />
+                ))}
+                {todos.length > 0 && (
+                    <SectionHeading
+                        icon="checkbox-outline"
+                        label={todos.length === 1 ? '1 to-do' : `${todos.length} to-dos`}
+                        note="Nothing is blocked; these wait until you do them"
+                        loud={false}
+                    />
+                )}
+                {todos.map((entry) => (
                     <GateCard key={entry.gate.id} entry={entry} />
                 ))}
             </View>
         </ItemList>
+    );
+}
+
+/**
+ * Which half of the inbox you are looking at.
+ *
+ * The count is spelled out rather than badged because the heading is where the
+ * DIFFERENCE is explained — "a session is stopped" against "nothing is
+ * blocked" — and that sentence is the whole reason the two are not one list.
+ */
+function SectionHeading({ icon, label, note, loud }: {
+    icon: 'hand-left-outline' | 'checkbox-outline';
+    label: string;
+    note: string;
+    loud: boolean;
+}) {
+    const { theme } = useUnistyles();
+    return (
+        <View style={styles.sectionHeading}>
+            <Ionicons
+                name={icon}
+                size={16}
+                color={loud ? theme.colors.box.warning.text : theme.colors.textSecondary}
+            />
+            <View style={styles.sectionHeadingText}>
+                <Text style={[styles.sectionLabel, loud && { color: theme.colors.box.warning.text }]}>
+                    {label}
+                </Text>
+                <Text style={styles.sectionNote}>{note}</Text>
+            </View>
+        </View>
     );
 }
 
@@ -65,7 +126,8 @@ function EmptyGates({ topContentInset }: { topContentInset: number }) {
             <Ionicons name="checkmark-circle-outline" size={48} color={theme.colors.textSecondary} />
             <Text style={styles.emptyTitle}>Nothing waiting</Text>
             <Text style={styles.emptyBody}>
-                Questions and permission requests from every session land here.
+                Prompts from every session land here, and so does anything an
+                agent has asked you to do.
             </Text>
         </View>
     );
@@ -80,6 +142,35 @@ const GateCard = React.memo(({ entry }: { entry: DroverGateEntry }) => {
     const cards = React.useMemo(() => questionCards(entry.args), [entry.args]);
     const questions = React.useMemo(() => toInlineQuestions(cards), [cards]);
     const answerable = gate.kind === 'question' && hasAnswerableOptions(cards);
+    // Recomputed on every render rather than ticked on a timer: this list is
+    // re-rendered by the store whenever anything on the bus changes, and a
+    // per-card interval to move "3m" to "4m" would keep the screen awake for
+    // a digit nobody is watching.
+    const age = ageLabel(entry.event?.createdAt ?? gate.createdAt);
+    const command = entry.event?.command?.trim() || '';
+
+    /**
+     * Close a to-do by naming the button that was pressed (DROVE-69).
+     *
+     * The option id is what makes this an answer at all. happy-cli's
+     * busResolutionFor refuses a to-do answer that names neither Done nor Drop
+     * it, because the old `approved ? done : drop` let every generic approve
+     * path in the app close one — which is how event 4c3f5082 was acked with
+     * nobody having touched it. Both buttons go through sessionAllow because
+     * the bus reads the OPTION and not the verb; a drop is not a denial of
+     * anything, it is a choice to not do the job.
+     */
+    const close = React.useCallback(async (optionId: 'done' | 'drop') => {
+        if (busy) return;
+        setBusy(optionId === 'done' ? 'allow' : 'deny');
+        try {
+            await sessionAllow(sessionId, requestId, undefined, undefined, 'approved', { optionId });
+        } catch (error) {
+            console.error('Failed to close a to-do:', error);
+        } finally {
+            setBusy(null);
+        }
+    }, [busy, requestId, sessionId]);
 
     const submitAnswer = React.useCallback(async (answers: InlineQuestionAnswers) => {
         await sessionAllow(
@@ -137,6 +228,10 @@ const GateCard = React.memo(({ entry }: { entry: DroverGateEntry }) => {
                         <Text style={styles.accountChipText} numberOfLines={1}>{gate.account}</Text>
                     </View>
                 )}
+                {/* How long it has been waiting, in the same three bands
+                    `drover todos` prints, so a row reads the same on the phone
+                    and in the terminal. */}
+                {!!age && <Text style={styles.ageText}>{age}</Text>}
                 <Ionicons name="chevron-forward" size={16} color={theme.colors.textSecondary} />
             </Pressable>
 
@@ -147,6 +242,37 @@ const GateCard = React.memo(({ entry }: { entry: DroverGateEntry }) => {
                         canInteract={true}
                         onSubmit={submitAnswer}
                     />
+                </View>
+            ) : entry.todo ? (
+                <View style={styles.cardBody}>
+                    {/* What to do is the card TITLE, in the header above. This
+                        is the command, if the agent gave one — `drover needs
+                        --do` — and nothing at all if it did not, because an
+                        empty mono line reads as a command that failed to
+                        render. */}
+                    {!!command && <Text style={styles.preview}>{command}</Text>}
+                    <View style={styles.actions}>
+                        <TouchableOpacity
+                            style={[styles.action, styles.deny]}
+                            onPress={() => close('drop')}
+                            disabled={busy !== null}
+                            activeOpacity={0.7}
+                        >
+                            {busy === 'deny'
+                                ? <ActivityIndicator size="small" color={theme.colors.text} />
+                                : <Text style={styles.denyText}>Drop it</Text>}
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={[styles.action, styles.allow]}
+                            onPress={() => close('done')}
+                            disabled={busy !== null}
+                            activeOpacity={0.7}
+                        >
+                            {busy === 'allow'
+                                ? <ActivityIndicator size="small" color={theme.colors.button.primary.tint} />
+                                : <Text style={styles.allowText}>Done</Text>}
+                        </TouchableOpacity>
+                    </View>
                 </View>
             ) : (
                 <View style={styles.cardBody}>
@@ -252,6 +378,31 @@ const styles = StyleSheet.create((theme) => ({
     cardReason: {
         ...Typography.default(),
         fontSize: 12,
+        color: theme.colors.textSecondary,
+    },
+    sectionHeading: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        paddingTop: 4,
+    },
+    sectionHeadingText: {
+        flex: 1,
+        gap: 1,
+    },
+    sectionLabel: {
+        ...Typography.default('semiBold'),
+        fontSize: 13,
+        color: theme.colors.textSecondary,
+    },
+    sectionNote: {
+        ...Typography.default(),
+        fontSize: 11,
+        color: theme.colors.textSecondary,
+    },
+    ageText: {
+        ...Typography.default(),
+        fontSize: 11,
         color: theme.colors.textSecondary,
     },
     accountChip: {
