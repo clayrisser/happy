@@ -6,6 +6,7 @@ import { createSessionScanner } from "./utils/sessionScanner";
 import { launchFailureMessage } from "./utils/launchFailureMessage";
 import { ambientDataDir } from "@/drover/flip/accounts";
 import { parseFlipCommand } from "@/drover/flip/controller";
+import { injectIntoPane } from "./utils/paneInject";
 import { InFlightTracker, describeInFlight } from "@/drover/flip/inflight";
 // The flip itself lives in @/drover/flip/apply because BOTH launchers carry
 // one out now (BASED-127). It used to be defined here, which is precisely why
@@ -119,6 +120,18 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
     // Handle abort
     let exitReason: LauncherResult | null = null;
     let switchRequested = false;
+
+    // Is a Claude child in the foreground of our pane RIGHT NOW? Gates
+    // pane-injection (BASED-113): between spawns, or during a park, the pane is
+    // a shell prompt and a phone message must not be typed into it. Set around
+    // the one `await claudeLocal` below, the only window a child is live.
+    let childAlive = false;
+
+    // The tmux pane this session is running in, if any. `$TMUX_PANE` is set for
+    // every process started inside a pane, so a drover session launched from a
+    // key binding or a normal shell has it; a daemon-spawned one does not, and
+    // that absence is exactly the signal to keep using remote mode for it.
+    const tmuxPane = process.env.TMUX_PANE;
     // `let`, not `const`: a Cattle Drover flip aborts the child on purpose and
     // then needs a FRESH controller for the replacement, because an aborted
     // signal stays aborted and would kill the new child on spawn.
@@ -277,6 +290,24 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
                 session.flip.request(flipCommand);
                 return;
             }
+            // Cattle Drover (BASED-113): if this session is a live Claude in a
+            // tmux pane, type the phone's message straight into that pane
+            // instead of switching to remote mode. The pane you are watching IS
+            // the session — same `$TMUX_PANE` the flip keys use — so the
+            // message lands as if typed at the desk, no takeover, no new
+            // session, and whatever is running (subagents included) stays on
+            // screen. injectIntoPane declines when the pane is gone or parked at
+            // a shell, and the switch below is the fallback for exactly that and
+            // for sessions with no pane at all.
+            if (tmuxPane && childAlive) {
+                void injectIntoPane(tmuxPane, message).then((delivered) => {
+                    if (!delivered) {
+                        logger.debug('[local]: pane injection declined — switching to remote');
+                        void doSwitch();
+                    }
+                });
+                return;
+            }
             // Remote messages request control from the app. Stop local Claude
             // so queued app messages can be picked up by remote mode now —
             // unless subagents are running, in which case doSwitch holds off
@@ -316,6 +347,12 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
                 // ...and a hold that belonged to the child that just died must
                 // not fire against its replacement.
                 deferredSwitch = false;
+                // A child is about to be in the foreground of our pane; phone
+                // messages may be typed into it now rather than switching to
+                // remote (BASED-113). Cleared in `finally` so a parked or
+                // between-spawns pane, which is a shell, never gets typed into.
+                childAlive = true;
+                try {
                 await claudeLocal({
                     path: session.path,
                     sessionId: session.sessionId,
@@ -330,6 +367,12 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
                     sandboxConfig: session.sandboxConfig,
                     initialPrompt,
                 });
+                } finally {
+                    // The child is no longer in the foreground — whether it
+                    // exited cleanly or threw, the pane is back to a shell (or
+                    // about to relaunch), so injection must stop here.
+                    childAlive = false;
+                }
 
                 // Consume one-time Claude flags after spawn
                 // For example we don't want to pass --resume flag after first spawn
