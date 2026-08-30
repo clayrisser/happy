@@ -42,6 +42,7 @@ import { join } from 'node:path';
 import { RawJSONLinesSchema, type RawJSONLines } from './types';
 import { FlipController, parseFlipCommand } from '@/drover/flip/controller';
 import { currentAccount, readAccounts } from '@/drover/flip/accounts';
+import { CloneReporter } from '@/drover/flip/clones';
 import { UsageReporter } from '@/drover/flip/usage';
 import { findHappySessionForClaudeSession, resumedClaudeSessionId } from '@/resume/reattachClaudeSession';
 import type { ReconnectableHappySession } from '@/resume/resolveHappySession';
@@ -1142,6 +1143,33 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
         logger.debug('[flip] usage reporter started');
     }
 
+    // Clone lineage (DROVE-58). A flip is ONE session on another account; a
+    // clone is TWO sessions, because no harness but Claude Code can read a
+    // Claude Code transcript. Two rows in the app, and neither can say on its
+    // own what it is — so both read the ledger `drover clone` writes and show
+    // the other end of the pair.
+    //
+    // POLLED, not read once. `drover clone` writes the row BEFORE it opens the
+    // window, with the clone's own session id still unknown, and the bus fills
+    // that in from the clone's first SessionStart hook. A snapshot taken at
+    // start-up would be taken before that happened, every time.
+    //
+    // Not gated on the registry the way the two above are: a clone has nothing
+    // to do with how many accounts exist.
+    const cloneReporter = new CloneReporter({
+        current: currentClaudeSessionId,
+        publish: (droverClone) => {
+            session.updateMetadata((meta) => {
+                if (!droverClone) {
+                    const { droverClone: _gone, ...rest } = meta as Metadata;
+                    return rest as Metadata;
+                }
+                return { ...meta, droverClone };
+            });
+        },
+    });
+    cloneReporter.start();
+
     const exitCode = await loop({
         path: workingDirectory,
         model: options.model,
@@ -1197,6 +1225,7 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
 
     flipController?.stop();
     usageReporter?.stop();
+    cloneReporter.stop();
 
     // Cleanup session resources (intervals, callbacks) - prevents memory leak
     // Note: currentSession is set by onSessionReady callback during loop()
