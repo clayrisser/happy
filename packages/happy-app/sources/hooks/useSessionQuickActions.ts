@@ -196,7 +196,10 @@ export function useSessionQuickActions(
     // account too, and specific-account rows fill in as more are seen. A flip
     // with nowhere to go is refused gracefully now (BASED-113), so offering it
     // can never strand the session. The signal that this IS a drover session is
-    // metadata.droverAccount, stamped at start from DROVER_ACCOUNT.
+    // metadata.droverAccount, which the CLI now works out from the config dir
+    // the session is running on rather than reading DROVER_ACCOUNT alone
+    // (DROVE-31) — a bare `drover` sets no stamp, so gating on the stamp hid
+    // this row from most sessions.
     const canFlipAccount = currentDroverAccount != null;
 
     const sendFlip = React.useCallback((account?: string | null) => {

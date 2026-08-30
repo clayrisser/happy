@@ -167,7 +167,15 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
     // unless a flip renamed it. `name` and `summary` are both stamped because
     // they feed different screens: `summary` is the title and the push body,
     // `name` is the command palette and the projects sidebar.
-    const startingSessionName = defaultSessionName(workingDirectory, process.env.DROVER_ACCOUNT);
+    // The account this session is on, NOT the stamp alone (DROVE-31). A bare
+    // `drover` with no -a exports no DROVER_ACCOUNT, and `happy` never has,
+    // so the stamp is absent for most sessions and both the name below and
+    // metadata.droverAccount came out blank. currentAccount falls back to the
+    // config dir this process is actually reading, which is what the account
+    // IS. Undefined only when the registry knows nothing about it, and then
+    // the name goes back to being unprefixed exactly as before.
+    const startedOnAccount = process.env.DROVER_ACCOUNT || currentAccount()?.name;
+    const startingSessionName = defaultSessionName(workingDirectory, startedOnAccount);
 
     let metadata: Metadata = {
         path: workingDirectory,
@@ -195,7 +203,7 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
         // per-account identity to show and filter on, and the account prefix
         // defaultSessionName puts on the two names above makes the account
         // visible today with no app changes.
-        ...(process.env.DROVER_ACCOUNT ? { droverAccount: process.env.DROVER_ACCOUNT } : {}),
+        ...(startedOnAccount ? { droverAccount: startedOnAccount } : {}),
         ...(forkedFromSessionId ? { parentSessionId: forkedFromSessionId } : {}),
         ...(forkedFromMessageId ? { forkedFromMessageId } : {}),
         ...(isSideChat ? { isSideChat: true } : {}),
@@ -1119,6 +1127,12 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
         // Tell it where we started rather than letting it infer from the
         // environment twice — the environment is only right until the first
         // flip, and a stale answer there loses the transcript.
+        // The STAMP, deliberately, not startedOnAccount: startedOn() sets the
+        // controller's `stamped` flag, which is what suppresses the
+        // whereabouts recall a daemon spawn depends on (DROVE-43). An account
+        // derived from the config dir is not a stamp and must not pretend to
+        // be one — the controller reaches the same answer through
+        // currentAccount() without claiming a wrapper put it there.
         flipController.startedOn(process.env.DROVER_ACCOUNT);
         flipController.start();
         logger.debug('[flip] account flip armed');
