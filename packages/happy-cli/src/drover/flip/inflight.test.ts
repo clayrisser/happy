@@ -431,6 +431,17 @@ describe('describeInFlight', () => {
  * that the decision happens BEFORE anything is stopped.
  */
 describe('FlipController, gated on running subagents', () => {
+    // Point the registry and the ledger at a directory that does not exist.
+    // The gate now also asks whether an explicitly named account has headroom
+    // (DROVE-64), and without this these tests would read whatever accounts
+    // and cooldowns the machine running them happens to have — a unit test of
+    // the gate that passes or fails on Clay's own quota is not a test.
+    beforeEach(() => {
+        const nowhere = join(tmpdir(), `drover-gate-${process.pid}-${Date.now()}`)
+        process.env.DROVER_ACCOUNTS = join(nowhere, 'no-registry.json')
+        process.env.XDG_STATE_HOME = join(nowhere, 'no-state')
+    })
+
     async function controller(opts: { running: number }) {
         const { FlipController } = await import('./controller')
         const said: string[] = []
@@ -441,6 +452,7 @@ describe('FlipController, gated on running subagents', () => {
         }
         const flip = new FlipController('/tmp/project', (m: string) => said.push(m), {
             toTerminal: () => {},
+            toPane: () => {},
             flipConfirmMs: 30_000,
         })
         flip.setAbortHandler(() => {
@@ -488,6 +500,7 @@ describe('FlipController, gated on running subagents', () => {
         tracker.note(launchRecord('a1', { description: 'job 1' }))
         const flip = new FlipController('/tmp/project', (m: string) => said.push(m), {
             toTerminal: () => {},
+            toPane: () => {},
             flipConfirmMs: 0,
         })
         flip.setAbortHandler(() => {
@@ -516,7 +529,7 @@ describe('FlipController, gated on running subagents', () => {
     it('behaves exactly as before when no probe is wired up', async () => {
         const { FlipController } = await import('./controller')
         let aborts = 0
-        const flip = new FlipController('/tmp/project', () => {}, { toTerminal: () => {} })
+        const flip = new FlipController('/tmp/project', () => {}, { toTerminal: () => {}, toPane: () => {} })
         flip.setAbortHandler(() => {
             aborts++
         })
@@ -527,7 +540,7 @@ describe('FlipController, gated on running subagents', () => {
     it('does not let a broken probe block a flip', async () => {
         const { FlipController } = await import('./controller')
         let aborts = 0
-        const flip = new FlipController('/tmp/project', () => {}, { toTerminal: () => {} })
+        const flip = new FlipController('/tmp/project', () => {}, { toTerminal: () => {}, toPane: () => {} })
         flip.setAbortHandler(() => {
             aborts++
         })

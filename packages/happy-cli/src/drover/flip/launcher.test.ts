@@ -95,6 +95,25 @@ function writeAccounts(accounts: { name: string; configDir: string }[]): void {
     }
 }
 
+/**
+ * Plant Claude Code's own usage cache in an account's config, as it writes it.
+ *
+ * The shape is the one measured on disk: `scope: {model: {id: null,
+ * display_name: "Fable"}}`, with `id` genuinely null on every scoped row that
+ * has ever appeared here. bitspur.com carried exactly this on 2026-08-30 —
+ * weekly_scoped, 100%, resetting Sep 3 — and nothing in the flip path read it
+ * before the session had already moved there.
+ */
+function writeUsage(
+    configDir: string,
+    limits: { kind: string; percent: number; resets_at: string; scope?: unknown }[],
+): void {
+    const cfg = join(configDir, '.claude.json')
+    const raw = JSON.parse(readFileSync(cfg, 'utf8'))
+    raw.cachedUsageUtilization = { fetchedAtMs: Date.now(), utilization: { limits } }
+    writeFileSync(cfg, JSON.stringify(raw))
+}
+
 /** A transcript in `from`'s config dir, so the flip has something to carry. */
 function writeTranscript(configDir: string, cwd: string, sessionId: string): void {
     const projectId = cwd.replace(/[^a-zA-Z0-9-]/g, '-')
@@ -208,8 +227,13 @@ async function build(
     // production this is a stderr write, and it is the surface a park was
     // never reaching — `announce` above is the phone and only the phone.
     const terminal: string[] = []
+    // The tmux STATUS BAR half (DROVE-64). Captured for the same reason, and
+    // because the real one shells out to `tmux display-message` — a test run
+    // inside tmux would otherwise paint the developer's own status line.
+    const pane: string[] = []
     const flip = new FlipController(cwd, (m: string) => said.push(m), {
         toTerminal: (m: string) => terminal.push(m),
+        toPane: (m: string) => pane.push(m),
         ...(opts.parkAnnounceMs === undefined ? {} : { parkAnnounceMs: opts.parkAnnounceMs }),
     })
     // Same seeding runClaude does: say where the session started rather than
@@ -219,7 +243,7 @@ async function build(
     writeTranscript(mainDir, cwd, 'sess-1')
 
     const { claudeLocalLauncher } = await import('@/claude/claudeLocalLauncher')
-    return { ...harness, flip, said, terminal, cwd, mainDir, altDir, claudeLocalLauncher, accounts }
+    return { ...harness, flip, said, terminal, pane, cwd, mainDir, altDir, claudeLocalLauncher, accounts }
 }
 
 /** Tell the controller which model this session is running, the way it learns. */
@@ -732,5 +756,164 @@ describe('the auto-flip trigger', () => {
         })
         expect(h.flip.take()).toBeNull()
         expect(h.accounts.isCooling('main')).toBe(false)
+    })
+})
+
+/**
+ * An explicit flip onto an account the ledger already knows is out (DROVE-64).
+ *
+ * pickTarget honours a named account and deliberately skips the cooldown
+ * check, and that part is right — Clay has to be able to overrule a stale
+ * ledger. What was wrong is that it did so with nothing said. Measured from
+ * his own flip log, 2026-08-30, with bitspur.com at Fable weekly 100% until
+ * Sep 3:
+ *
+ *   19:53:17  manual -> bitspur.com
+ *   19:53:21  limit detected
+ *   19:53:22  auto -> jamrizzi
+ *   19:53:51  manual -> bitspur.com
+ *   19:53:54  limit
+ *   19:53:57  auto -> jamrizzi
+ *
+ * Two presses, four relaunches, and the session ended up where it started.
+ * These drive the real loop and count the spawns, because the spawn count IS
+ * the bug: a warning that still stops the child has fixed nothing.
+ */
+describe('an explicit flip onto an account that is already out', () => {
+    const eightHours = 8 * 60 * 60 * 1000
+
+    it('warns and relaunches nothing, then moves on the second ask', async () => {
+        const now = Date.now()
+        const h = await build({ familyCooldowns: { alt: { until: now + eightHours, family: 'fable' } } })
+        childScript = ['abort', 'exit']
+
+        const run = h.claudeLocalLauncher(h.session)
+        await new Promise((r) => setTimeout(r, 20))
+        ranModel(h.flip, 'claude-fable-5')
+        h.flip.request({ account: 'alt', reason: 'manual', by: 'tmux' })
+        await new Promise((r) => setTimeout(r, 40))
+
+        // The whole point: the child is still the one that was running.
+        expect(spawns).toHaveLength(1)
+        expect(h.flip.hasPending()).toBe(false)
+        const warned = h.said.join('\n')
+        expect(warned).toContain('not flipping to alt')
+        expect(warned).toContain('no Fable headroom until')
+        expect(warned).toContain('Ask again within 30s')
+        // And it reached the KEYBOARD, not only the phone. The claude TUI owns
+        // the terminal here, so the status bar is the only surface left.
+        expect(h.pane.join('\n')).toContain('not flipping to alt')
+
+        // The override is intact and it is one action from the same surface.
+        h.flip.request({ account: 'alt', reason: 'manual', by: 'tmux' })
+        await run
+
+        expect(spawns).toHaveLength(2)
+        expect(spawns[1].account).toBe('alt')
+        expect(h.said.join('\n')).toContain('confirmed — flipping onto alt')
+    })
+
+    it('names the family that is out and says another model still runs there', async () => {
+        const now = Date.now()
+        const h = await build({ familyCooldowns: { alt: { until: now + eightHours, family: 'fable' } } })
+        childScript = ['abort', 'exit']
+
+        const run = h.claudeLocalLauncher(h.session)
+        await new Promise((r) => setTimeout(r, 20))
+        ranModel(h.flip, 'claude-fable-5')
+        h.flip.request({ account: 'alt', reason: 'manual', by: 'tmux' })
+        await new Promise((r) => setTimeout(r, 40))
+
+        // /model is the real remedy and the limit notice says so itself. A
+        // warning that only names the wait sends Clay away for eight hours
+        // from an account that would have run Opus.
+        const warned = h.said.join('\n')
+        expect(warned).toContain('Another model still runs there')
+        expect(warned).toContain('/model')
+        expect(spawns).toHaveLength(1)
+        h.flip.stop()
+    })
+
+    it('says so when nothing runs there, so /model is not offered as a way out', async () => {
+        const now = Date.now()
+        // No family on the cooldown: the whole account is out, which is what
+        // an unscoped limit notice records.
+        const h = await build({ cooldowns: { alt: now + eightHours } })
+        childScript = ['abort', 'exit']
+
+        const run = h.claudeLocalLauncher(h.session)
+        await new Promise((r) => setTimeout(r, 20))
+        ranModel(h.flip, 'claude-fable-5')
+        h.flip.request({ account: 'alt', reason: 'manual', by: 'tmux' })
+        await new Promise((r) => setTimeout(r, 40))
+
+        const warned = h.said.join('\n')
+        expect(warned).toContain('Nothing else has headroom there either')
+        expect(warned).not.toContain('Another model still runs there')
+        expect(spawns).toHaveLength(1)
+        h.flip.stop()
+    })
+
+    it('reads Claude Code\'s own usage cache, not just the ledger', async () => {
+        // bitspur.com's cooldown was never recorded by a drover session — the
+        // account was emptied elsewhere and the evidence sat in its
+        // .claude.json. A warning that only reads the ledger misses exactly
+        // the case that was measured.
+        const now = Date.now()
+        const h = await build()
+        writeUsage(h.altDir, [
+            {
+                kind: 'weekly_scoped',
+                percent: 100,
+                resets_at: new Date(now + eightHours).toISOString(),
+                scope: { model: { id: null, display_name: 'Fable' } },
+            },
+        ])
+        childScript = ['abort', 'exit']
+
+        const run = h.claudeLocalLauncher(h.session)
+        await new Promise((r) => setTimeout(r, 20))
+        ranModel(h.flip, 'claude-fable-5')
+        h.flip.request({ account: 'alt', reason: 'manual', by: 'tmux' })
+        await new Promise((r) => setTimeout(r, 40))
+
+        expect(spawns).toHaveLength(1)
+        expect(h.said.join('\n')).toContain('Fable weekly limit at 100%')
+        h.flip.stop()
+    })
+
+    it('lets an Opus session flip straight onto an account that is only out of Fable', async () => {
+        // The warning is about the model in USE. Firing it on a family the
+        // session is not running would put a confirmation in front of every
+        // flip, which is how a guard gets pressed through without reading.
+        const now = Date.now()
+        const h = await build({ familyCooldowns: { alt: { until: now + eightHours, family: 'fable' } } })
+        childScript = ['abort', 'exit']
+
+        const run = h.claudeLocalLauncher(h.session)
+        await new Promise((r) => setTimeout(r, 20))
+        ranModel(h.flip, 'claude-opus-5')
+        h.flip.request({ account: 'alt', reason: 'manual', by: 'tmux' })
+        await run
+
+        expect(spawns).toHaveLength(2)
+        expect(spawns[1].account).toBe('alt')
+        expect(h.said.join('\n')).not.toContain('not flipping')
+    })
+
+    it('never holds an AUTO flip: it names no account, and the one it is on is dead', async () => {
+        const now = Date.now()
+        const h = await build({ familyCooldowns: { main: { until: now + eightHours, family: 'fable' } } })
+        childScript = ['abort', 'exit']
+
+        const run = h.claudeLocalLauncher(h.session)
+        await new Promise((r) => setTimeout(r, 20))
+        ranModel(h.flip, 'claude-fable-5')
+        h.flip.request({ account: null, reason: 'usage limit', by: 'auto' })
+        await run
+
+        expect(spawns).toHaveLength(2)
+        expect(spawns[1].account).toBe('alt')
+        expect(h.said.join('\n')).not.toContain('not flipping')
     })
 })

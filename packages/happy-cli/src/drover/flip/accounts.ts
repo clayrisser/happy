@@ -867,6 +867,66 @@ function withoutModelOf(
     return coolingUntil(a, ledger, now, wants) > 0 ? { withoutModel: wants.family } : {}
 }
 
+/**
+ * What the ledger knows about an account somebody named ON PURPOSE (DROVE-64).
+ *
+ * pickTarget skips the cooldown check for an explicit `wanted`, and that is
+ * right: a human overruling a stale ledger is the escape hatch the whole
+ * feature leans on. What was wrong is that it did so with nothing said. Clay
+ * flipped onto bitspur.com twice on 2026-08-30 while its cache read Fable
+ * weekly 100% until Sep 3; both landed, hit the wall about 3.5 seconds later,
+ * and auto-flipped straight back — two relaunches, then a third press refused
+ * as a no-op. The number was on the same screen he picked from: the menu row
+ * said "bitspur.com - 0% - Fable back Thu 05:00".
+ *
+ * So this answers the question the picker never asked, and it answers it from
+ * the SAME coolingState the automatic choice uses — a second reading of those
+ * files is how the table and the picker once disagreed about a limit.
+ *
+ * Null means there is nothing to warn about: no such account, or it has
+ * headroom for the model in use. Unknown model reads every maxed row, exactly
+ * as everything else here does.
+ */
+export interface Exhaustion {
+    account: DroverAccount
+    /** Epoch ms the blocking limit resets. */
+    until: number
+    /** Why, in the words `drover accounts` and the ledger use. */
+    reason: string
+    /** The family that is out, when the block is scoped to one. */
+    family?: string
+    /**
+     * True when some OTHER model family can still run there. That is the whole
+     * reason to say anything beyond "wait": Claude Code's own limit notice
+     * says "switch models with /model", and a live session on Opus beats eight
+     * hours of nothing.
+     */
+    otherModel: boolean
+}
+
+export function explicitExhaustion(
+    name: string,
+    family: string | undefined,
+    now = Date.now(),
+): Exhaustion | null {
+    const target = accountByName(name)
+    if (!target) return null
+    const ledger = readLedger()
+    const wants = modelDemand(family)
+    const { until, reason } = coolingState(target, ledger, now, wants)
+    if (until === 0) return null
+    return {
+        account: target,
+        until,
+        reason,
+        ...(wants.kind === 'family' ? { family: wants.family } : {}),
+        // Only askable when the family is known. With an unknown model every
+        // maxed row already counts, so "another model is fine" is not a claim
+        // this can make honestly.
+        otherModel: wants.kind === 'family' && coolingUntil(target, ledger, now, anyModel) === 0,
+    }
+}
+
 export type Pick =
     | {
           kind: 'account'
@@ -1088,7 +1148,7 @@ export interface StartPick {
 }
 
 /** "21:00", or "Thu 21:00" when it is more than a day out — as `drover accounts` prints it. */
-function whenBack(until: number, now: number): string {
+export function whenBack(until: number, now: number): string {
     const d = new Date(until)
     const hm = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
     if (until - now < 24 * 60 * 60 * 1000) return hm
