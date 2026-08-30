@@ -6,9 +6,15 @@ import { createSessionScanner } from "./utils/sessionScanner";
 import { launchFailureMessage } from "./utils/launchFailureMessage";
 import { ambientDataDir } from "@/drover/flip/accounts";
 import { parseFlipCommand } from "@/drover/flip/controller";
-import { injectIntoPane, injectIntoPaneGated, interruptPane, paneIsIdle } from "./utils/paneInject";
+import { injectIntoPane, interruptPane, paneIsIdle } from "./utils/paneInject";
 import { createPaneCommandQueue, slashCommandsForSelection, type PaneModelSelection } from "./utils/paneModelSync";
 import { findInbox, sendToInbox } from "./utils/inboxSocket";
+import {
+    noteMessageDelivered,
+    noteMessageUndelivered,
+    undeliveredExplanation,
+    type UndeliveredReason,
+} from "@/drover/messageLedger";
 import { stageAttachments, withAttachmentNote } from "./utils/stageAttachments";
 import type { QueueItem } from "@/utils/MessageQueue2";
 import type { EnhancedMode } from "./loop";
@@ -539,8 +545,15 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
          * message cannot go in right now — between spawns, during a flip
          * relaunch, or with the pane parked at a shell. The flip path already
          * carries a prompt across a relaunch this way.
+         *
+         * `note` is a parameter because the two callers are telling the phone
+         * two different things (DROVE-48). Nothing listening yet is a wait.
+         * A live child whose inbox refused the write is a FAILURE that happens
+         * to be recoverable, and saying "held, goes in the moment Claude is
+         * back" about a Claude that is right there and running is the kind of
+         * reassuring lie this stack keeps getting caught by.
          */
-        function holdForNextSpawn(message: string, item?: QueueItem<EnhancedMode>) {
+        function holdForNextSpawn(message: string, item?: QueueItem<EnhancedMode>, note?: string) {
             session.pendingInitialPrompt = session.pendingInitialPrompt
                 ? `${session.pendingInitialPrompt}\n${message}`
                 : message;
@@ -548,73 +561,84 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
             logger.debug('[local]: no live child to take the message — held for the next spawn');
             session.client.sendSessionEvent({
                 type: 'message',
-                message:
-                    'Cattle Drover: nothing is listening in the terminal right now, so your '
+                message: note
+                    ?? 'Cattle Drover: nothing is listening in the terminal right now, so your '
                     + 'message is held and goes in the moment Claude is back.',
             });
         }
 
         /**
-         * Hand `message` to the Claude running in our pane.
+         * Hand `message` to the Claude running in our pane, or say it did not
+         * arrive. There is no third answer any more (DROVE-48).
          *
-         * Channel 0 is Claude's own inbox socket: it queues the message inside
-         * Claude and serves it between tool calls, so it is safe mid-turn and
-         * cannot merge with a half-typed line or answer an open dialog. The
-         * pane paste is the fallback for a Claude too old to have a socket, or
-         * one whose registry record has gone stale.
+         * The carrier is Claude's own inbox socket: it queues the message
+         * INSIDE Claude and serves it to the main conversation between tool
+         * calls, so it is safe mid-turn, cannot merge with a half-typed line
+         * and cannot answer an open dialog.
+         *
+         * There used to be a pane paste behind it for a Claude too old to have
+         * a socket or one whose registry record had gone stale. It is gone.
+         * A bracketed paste lands on WHATEVER HAS FOCUS, and the terminal
+         * drives subagents now: with Clay inside a background task's view the
+         * message went to that subagent, was answered by the wrong Claude, and
+         * nothing anywhere said so. Clay's ruling on the shape of that fix is
+         * the reason it is a deletion rather than a guard — "if you have to
+         * fall back then things aren't set up correctly in the first place".
+         *
+         * So a socket miss is a failed delivery, reported to the phone with
+         * the reason and counted in `drover status`, rather than a silent
+         * downgrade onto a carrier that can hit the wrong conversation.
          */
-        async function deliverToChild(message: string): Promise<boolean> {
-            if (!tmuxPane) return false;
-            // Recorded before either carrier runs, because Claude Code writes
-            // the enqueue record the instant the text lands (DROVE-41).
+        async function deliverToChild(message: string): Promise<UndeliveredReason | null> {
+            if (!tmuxPane) return 'no-inbox-socket';
+            // Recorded before the write, because Claude Code writes the
+            // enqueue record the instant the text lands (DROVE-41).
             noteDeliveredFromApp(message);
             try {
                 const configDir = session.claudeEnvVars?.CLAUDE_CONFIG_DIR;
                 const inbox = await findInbox(configDir || undefined, session.sessionId, tmuxPane);
-                if (inbox) {
-                    const outcome = await sendToInbox(inbox, message, inbox.sessionId);
-                    if (outcome === 'ok') {
-                        logger.debug('[local]: delivered to the inbox socket');
-                        return true;
-                    }
-                    logger.debug(`[local]: inbox socket ${outcome} — falling back to the pane`);
+                if (!inbox) return 'no-inbox-socket';
+                const outcome = await sendToInbox(inbox, message, inbox.sessionId);
+                if (outcome === 'ok') {
+                    logger.debug('[local]: delivered to the inbox socket');
+                    noteMessageDelivered();
+                    return null;
                 }
+                return outcome === 'gone' ? 'inbox-socket-gone' : 'inbox-socket-refused';
             } catch (err) {
-                // Reading the registry must never cost us the message.
+                // Reading the registry must never throw out of here — but it
+                // is now a failed delivery rather than a reason to paste.
                 logger.debug('[local]: inbox lookup failed', err);
+                return 'inbox-lookup-failed';
             }
-            // The keystroke path. Enter is pressed only when the gate says
-            // Claude is idle at its prompt with nothing pending on the bus;
-            // otherwise the text lands as a draft for the human to submit,
-            // because a stray Enter merges with a half-typed line or answers
-            // an open dialog with whatever is highlighted.
-            const result = await injectIntoPaneGated(
-                {
-                    pane: tmuxPane,
-                    configDir: session.claudeEnvVars?.CLAUDE_CONFIG_DIR,
-                    claudeSessionId: session.sessionId,
-                },
-                message,
-            );
-            if (result.delivered && !result.submitted) {
-                logger.debug('[local]: pasted as a draft — Claude was busy or a prompt is pending');
-                session.client.sendSessionEvent({
-                    type: 'message',
-                    message: 'Drafted in the terminal; press Enter there to send it.',
-                });
-            }
-            return result.delivered;
         }
 
         async function deliverToPaneSession(message: string, item?: QueueItem<EnhancedMode>) {
-            if (childAlive && await deliverToChild(message)) {
+            if (!childAlive) {
+                holdForNextSpawn(message, item);
+                return;
+            }
+            const undelivered = await deliverToChild(message);
+            if (!undelivered) {
                 // Served. Take it back off the queue, or the launcher will
                 // read it later as an unanswered message (BASED-141) and the
                 // remote launcher would replay it as a fresh turn.
                 if (item) session.queue.remove(item);
                 return;
             }
-            holdForNextSpawn(message, item);
+            // FOLD, NEVER DROP: the message is kept for the next child rather
+            // than thrown away, and the phone is told plainly that it has NOT
+            // gone in yet and why — so resending it is Clay's call, not a
+            // guess made for him by a carrier that might hit a subagent.
+            noteMessageUndelivered(undelivered);
+            logger.debug(`[local]: message undelivered — ${undelivered}`);
+            holdForNextSpawn(
+                message,
+                item,
+                `Cattle Drover: your message did NOT reach the terminal — ${undeliveredExplanation(undelivered)}. `
+                + 'It is held for the next time Claude starts here. Nothing was typed into the pane, '
+                + 'because a paste can land on whichever subagent the terminal is showing.',
+            );
         }
 
         /**
