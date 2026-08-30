@@ -215,7 +215,10 @@ async function build(opts: { flipConfirmMs?: number } = {}) {
     writeTranscript(mainDir, cwd, 'sess-1')
 
     const { claudeRemoteLauncher } = await import('@/claude/claudeRemoteLauncher')
-    return { ...harness, flip, said, terminal, cwd, mainDir, altDir, queue, claudeRemoteLauncher }
+    // The module itself is the registry: the cooldown ledger is on disk under
+    // the env this harness already points at a temp root.
+    const accounts = await import('./accounts')
+    return { ...harness, flip, said, terminal, cwd, mainDir, altDir, queue, claudeRemoteLauncher, accounts }
 }
 
 /** Let the loop get as far as an engine waiting for something to say. */
@@ -349,6 +352,66 @@ describe('a flip requested while the session is in REMOTE mode', () => {
 
         h.handlers.switch()
         await run
+    })
+})
+
+describe('running out of headroom while REMOTE', () => {
+    it('flips on a synthetic limit message the engine streams, and records the cooldown', async () => {
+        // The last hole in DROVE-12. The flip itself works in remote mode now,
+        // but nothing FED the limit detector there: noteTranscriptMessage was
+        // called from the local launcher's onMessage and nowhere else, so a
+        // remote session that ran out kept talking to an exhausted account.
+        //
+        // It goes through live.onMessage rather than calling the controller
+        // directly, because the wiring IS the defect — a test that pokes the
+        // controller would have passed all along.
+        process.env.DROVER_ACCOUNT = 'main'
+        const h = await build()
+        const run = h.claudeRemoteLauncher(h.session)
+        await settle()
+        expect(engines).toHaveLength(1)
+
+        live.onMessage({
+            type: 'assistant',
+            message: {
+                role: 'assistant',
+                model: '<synthetic>',
+                content: 'Claude usage limit reached. Resets at 3pm.',
+            },
+        })
+        await settle()
+
+        expect(engines).toHaveLength(2)
+        expect(engines[1].account).toBe('alt')
+        expect(h.accounts.isCooling('main')).toBe(true)
+
+        h.handlers.switch()
+        await expect(run).resolves.toBe('switch')
+    })
+
+    it('does not move the session when the engine merely TALKS about a limit', async () => {
+        // A real model answering a question about rate limits must never move
+        // Clay onto another account behind his back. Same guard local has.
+        process.env.DROVER_ACCOUNT = 'main'
+        const h = await build()
+        const run = h.claudeRemoteLauncher(h.session)
+        await settle()
+
+        live.onMessage({
+            type: 'assistant',
+            message: {
+                role: 'assistant',
+                model: 'claude-opus-4',
+                content: 'The usage limit reached branch is the one to test here.',
+            },
+        })
+        await settle()
+
+        expect(engines).toHaveLength(1)
+        expect(h.accounts.isCooling('main')).toBe(false)
+
+        h.handlers.switch()
+        await expect(run).resolves.toBe('switch')
     })
 })
 

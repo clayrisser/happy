@@ -176,6 +176,17 @@ export async function claudeRemoteLauncher(session: Session): Promise<'switch' |
         // decides whether Clay loses eight agents.
         inflight.note(message);
 
+        // DROVE-12: and it carries the harness's own synthetic limit notice.
+        // The flip itself works in remote mode, but until now nothing FED the
+        // detector here — noteTranscriptMessage was called from the local
+        // launcher and nowhere else — so a remote session that ran out of headroom
+        // neither flipped nor parked and simply kept talking to an exhausted
+        // account. Same detector as local on purpose: the SDK's typed
+        // rate_limit_event is a usage-reporting channel, and a second route
+        // into the same decision is a second thing to keep in agreement.
+        // After inflight.note, which documents above why it goes first.
+        session.flip?.noteTranscriptMessage(message);
+
         // Write to message log
         formatClaudeMessageForInk(message, messageBuffer);
 
