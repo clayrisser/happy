@@ -6,6 +6,12 @@ import { useUnistyles } from 'react-native-unistyles';
 
 interface ChatFooterProps {
     controlledByUser?: boolean;
+    /**
+     * The session is a live Claude in a tmux pane (metadata.hasPane). Nothing
+     * has to be reset or taken over to send from here, so the footer says what
+     * IS true instead of what to do about it (BASED-113).
+     */
+    hasPane?: boolean;
 }
 
 export const ChatFooter = React.memo((props: ChatFooterProps) => {
@@ -41,7 +47,9 @@ export const ChatFooter = React.memo((props: ChatFooterProps) => {
                         color={theme.colors.box.warning.text}
                     />
                     <Text style={warningTextStyle}>
-                        Permissions shown in terminal only. Reset or send a message to control from app.
+                        {props.hasPane
+                            ? 'Live in your terminal. Messages go straight to it.'
+                            : 'Permissions shown in terminal only. Reset or send a message to control from app.'}
                     </Text>
                 </View>
             )}

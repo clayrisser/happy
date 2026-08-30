@@ -146,6 +146,17 @@ export class Session {
         this.hookSettingsPath = opts.hookSettingsPath;
         this.jsRuntime = opts.jsRuntime ?? 'node';
 
+        // Whether this session lives in a tmux pane, stamped once and never
+        // revised: $TMUX_PANE is fixed for the life of the process, and the
+        // phone reads it to know the terminal is the session (BASED-113). A
+        // daemon-spawned session has no pane and gets `false`, which is the
+        // answer the app needs — absent would be indistinguishable from an
+        // older CLI that never said.
+        this.client.updateMetadata((metadata) => ({
+            ...metadata,
+            hasPane: !!process.env.TMUX_PANE,
+        }));
+
         // Start keep alive
         this.client.keepAlive(this.thinking, this.mode);
         this.keepAliveInterval = setInterval(() => {

@@ -150,6 +150,11 @@ export const MetadataSchema = z.object({
     startedFromDaemon: z.boolean().optional(),
     hostPid: z.number().optional(), // Process ID of the session
     startedBy: z.enum(['daemon', 'terminal']).optional(),
+    // The session is a live Claude in a tmux pane ($TMUX_PANE was set when the
+    // CLI started). The terminal IS the session, so the phone is a window on
+    // it: messages go straight into the pane and there is no control to take
+    // over or hand back (BASED-113).
+    hasPane: z.boolean().optional(),
     flavor: z.string().nullish(), // Session flavor/variant identifier
     /**
      * Rig's project / worktree identity. Every worktree of the same repo
