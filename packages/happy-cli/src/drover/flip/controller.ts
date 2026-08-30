@@ -21,21 +21,25 @@
  *   - a usage limit detected in the local transcript, which flips by itself.
  */
 
+import { execFile } from 'node:child_process'
 import { basename } from 'node:path'
 
 import { logger } from '@/ui/logger'
 import {
     type CoolingAccount,
     type DroverAccount,
+    type Exhaustion,
     accountByName,
     currentAccount,
     defaultCooldownMs,
+    explicitExhaustion,
     pickTarget,
     readSettingsModel,
     accountByNewestTranscript,
     recallWhereabouts,
     rememberWhereabouts,
     setCooldown,
+    whenBack,
 } from './accounts'
 import { describeInFlight, emptyInFlight, type InFlightSnapshot } from './inflight'
 import { detectLimit, familyLabel, familyOf, modelOfTranscriptMessage, textOfTranscriptMessage } from './limits'
@@ -77,12 +81,87 @@ function writeToTerminal(message: string): void {
     }
 }
 
+/**
+ * Put ONE line on the tmux status bar of the pane this session runs in.
+ *
+ * The terminal itself is not available while a flip is being decided: the
+ * claude TUI owns it for as long as the child is running, and a stray write
+ * corrupts the screen — which is why every mid-turn note here goes to
+ * `announce`, the phone, and only the phone. That was fine for a note and is
+ * not fine for a QUESTION. A warning Clay has to answer within thirty seconds
+ * cannot live only on a device that is in his pocket (DROVE-64).
+ *
+ * The status bar is the one surface that reaches the keyboard without touching
+ * the pane's contents, and it is already where a pick from `drover flip-menu`
+ * reports — so the warning lands on the same line the choice was made from.
+ *
+ * Best effort throughout: no tmux, no pane, an old tmux without `-d`, and the
+ * phone still got the whole thing.
+ */
+function writeToPane(message: string): void {
+    const pane = process.env.TMUX_PANE
+    if (!pane || !process.env.TMUX) return
+    // The status bar is one line, and tmux reads the string as a FORMAT — a
+    // literal # has to be doubled or it is eaten as the start of #{...}. Same
+    // two rules libexec/drover-flip-menu learned the hard way.
+    const line = message.replace(/\s+/g, ' ').trim().replace(/#/g, '##')
+
+    // Written a second LATER, on purpose. Both flip keys route through
+    // `drover flip-menu --pick`, which writes its own "drover: flip requested"
+    // to this same status bar once `drover flip` returns — and that happens
+    // AFTER we have already heard the frame on the bus, so writing at once
+    // means the confirmation of the key press overwrites the warning about it.
+    // Measured on the loopback bus: the POST plus the picker's live-session
+    // check comes back in 20-30ms, so a second is comfortably clear of it and
+    // still reads as instant. unref'd, so a pending note can never be the
+    // reason the process will not exit.
+    const at = setTimeout(() => {
+        execFile('tmux', ['display-message', '-d', '10000', '-t', pane, line], (err) => {
+            if (!err) return
+            // tmux before 3.2 has no -d and answers with a usage error. Losing
+            // the message to that would be worse than showing it briefly.
+            execFile('tmux', ['display-message', '-t', pane, line], (err2) => {
+                if (err2) logger.debug('[flip] could not reach the tmux status line', err2)
+            })
+        })
+    }, 1000)
+    at.unref()
+}
+
 /** "2h 14m", "43m", "under a minute" — a wait a human can size up. */
 function humanGap(ms: number): string {
     const minutes = Math.round(ms / 60_000)
     if (minutes < 1) return 'under a minute'
     if (minutes < 60) return `${minutes}m`
     return `${Math.floor(minutes / 60)}h ${minutes % 60}m`
+}
+
+/**
+ * "no Fable headroom until Thu 05:00 (8h 12m)" — said the same way in the
+ * warning and in the confirmation that follows it (DROVE-64).
+ *
+ * `whenBack` is `drover accounts`' own spelling of a reset time, so the
+ * sentence Clay reads here matches the row he picked from in the flip menu.
+ */
+function noHeadroom(stale: Exhaustion, now: number): string {
+    const short = stale.family ? `${familyLabel(stale.family)} headroom` : 'headroom'
+    return `no ${short} until ${whenBack(stale.until, now)} (${humanGap(stale.until - now)})`
+}
+
+/**
+ * What to do about it other than wait — and, when there is nothing, saying so.
+ *
+ * Claude Code's own limit notice ends "switch models with /model", and that is
+ * usually the real remedy: bitspur.com was out of Fable for four days and had
+ * every other model going. Both answers are stated, because "another model is
+ * fine there" and "nothing runs there" lead to opposite decisions and only one
+ * of them was ever visible.
+ */
+function modelRemedy(stale: Exhaustion): string {
+    if (!stale.family) return ''
+    return stale.otherModel
+        ? ' Another model still runs there, so `/model` is the fix that works now.'
+        : ' Nothing else has headroom there either, so switching models will not help.'
 }
 
 /** The two ways out of a park, said the same way everywhere they appear. */
@@ -204,6 +283,7 @@ export class FlipController {
     private heldFlip: { until: number; req: FlipRequest } | null = null
 
     private readonly toTerminal: (message: string) => void
+    private readonly toPane: (message: string) => void
     private readonly parkAnnounceMs: number
     private readonly flipConfirmMs: number
 
@@ -219,6 +299,8 @@ export class FlipController {
         opts?: {
             /** Overridden in tests; defaults to stderr. */
             toTerminal?: (message: string) => void
+            /** Overridden in tests; defaults to the tmux status bar. */
+            toPane?: (message: string) => void
             /** Overridden in tests; defaults to fifteen minutes. */
             parkAnnounceMs?: number
             /** Overridden in tests; defaults to thirty seconds. */
@@ -226,6 +308,7 @@ export class FlipController {
         },
     ) {
         this.toTerminal = opts?.toTerminal ?? writeToTerminal
+        this.toPane = opts?.toPane ?? writeToPane
         this.parkAnnounceMs = opts?.parkAnnounceMs ?? parkAnnounceMs
         this.flipConfirmMs = opts?.flipConfirmMs ?? flipConfirmMs
     }
@@ -482,13 +565,24 @@ export class FlipController {
             `[flip] request accepted: account=${req.account ?? '(next with headroom)'} reason=${req.reason} by=${req.by}`,
         )
 
+        // Two things a flip can cost that it used to spend without asking.
+        // Both are settled HERE, before the child is stopped, so a flip that
+        // gets held back costs nothing at all — that is the whole point of
+        // deciding at this end rather than in apply().
+        //
         // BASED-135: stopping the child is a SIGTERM, and async subagents live
         // inside it. Killing them loses their completion notifications
         // SILENTLY — the resumed conversation reads as though every agent
-        // launched fine and never reported — so a flip has to say what it is
-        // about to cost before it costs it.
+        // launched fine and never reported.
+        //
+        // DROVE-64: an account named on purpose skips the cooldown check, so a
+        // flip onto one the ledger already knows is out was simply allowed. Two
+        // of Clay's landed on bitspur.com at Fable weekly 100%, bounced off the
+        // limit about 3.5 seconds later and auto-flipped back — two relaunches
+        // to end up where he started, and a third press refused as a no-op.
         const busy = this.busy()
-        if (busy.count > 0 && !this.confirmed(req, busy)) return
+        const stale = this.exhaustedTarget(req)
+        if ((busy.count > 0 || stale) && !this.confirmed(req, busy, stale)) return
 
         this.pending = req
         this.releasePark()
@@ -499,7 +593,31 @@ export class FlipController {
     }
 
     /**
-     * May this flip stop the child, given what is running inside it?
+     * Is this flip aimed at an account that cannot run the model we are on?
+     *
+     * Only ever asked of a flip that NAMES an account. `account: null` means
+     * "next one with headroom", which pickTarget already answers by skipping
+     * every cooling account, and an auto flip never names one at all.
+     *
+     * Null whenever there is nothing worth warning about: no such account, no
+     * cooldown for this model, or the "target" is the account we are already
+     * on — apply() answers that one as "already on X" and relaunches nothing.
+     */
+    private exhaustedTarget(req: FlipRequest): Exhaustion | null {
+        if (!req.account || req.by === 'auto') return null
+        if (this.here()?.name === req.account) return null
+        try {
+            return explicitExhaustion(req.account, this.modelFamily())
+        } catch (err) {
+            // An unreadable ledger must never be the reason a flip cannot
+            // happen. Same rule the in-flight probe follows.
+            logger.debug('[flip] could not read the target account headroom', err)
+            return null
+        }
+    }
+
+    /**
+     * May this flip stop the child, given what it would cost?
      *
      * Two answers, split on WHO asked, because the alternatives are different:
      *
@@ -509,11 +627,16 @@ export class FlipController {
      *                   announce the loss FIRST so it is on the record instead
      *                   of being discovered an hour afterwards.
      *   anything else   a person or the bus asked. There IS an alternative:
-     *                   wait. So the first request only says what it would
-     *                   cost; a second request inside the window means the
-     *                   answer is "do it anyway" and the second one wins.
+     *                   wait, or switch models. So the first request only says
+     *                   what it would cost; a second request inside the window
+     *                   means "do it anyway" and the second one wins.
+     *
+     * The costs are FOLDED into one hold rather than queued as two: one
+     * warning names everything this move would spend, and one repeat pays for
+     * all of it. Two holds in a row would mean pressing the key three times,
+     * which is not a way out of a trap.
      */
-    private confirmed(req: FlipRequest, busy: InFlightSnapshot): boolean {
+    private confirmed(req: FlipRequest, busy: InFlightSnapshot, stale: Exhaustion | null): boolean {
         const now = Date.now()
         if (req.by === 'auto') {
             this.heldFlip = null
@@ -529,25 +652,66 @@ export class FlipController {
 
         if (this.heldFlip && this.heldFlip.until > now) {
             this.heldFlip = null
-            logger.debug(`[flip] confirmed, abandoning ${busy.count} subagent(s): ${busy.ids.join(', ')}`)
-            this.announce(
-                `Cattle Drover: confirmed — flipping with ${describeInFlight(busy)}. ` +
-                    'Their partial work is under tasks/<agentId>.output.',
-            )
+            const going: string[] = []
+            if (stale) {
+                logger.debug(`[flip] confirmed onto ${stale.account.name} with ${noHeadroom(stale, now)}`)
+                going.push(`onto ${stale.account.name} with ${noHeadroom(stale, now)}.${modelRemedy(stale)}`)
+            }
+            if (busy.count > 0) {
+                logger.debug(`[flip] confirmed, abandoning ${busy.count} subagent(s): ${busy.ids.join(', ')}`)
+                going.push(
+                    `with ${describeInFlight(busy)}. Their partial work is under tasks/<agentId>.output.`,
+                )
+            }
+            this.warn(`Cattle Drover: confirmed — flipping ${going.join(' ')}`)
             return true
         }
 
         this.heldFlip = { until: now + this.flipConfirmMs, req }
-        logger.debug(`[flip] held: ${busy.count} subagent(s) in flight — waiting for a repeat`)
-        // `announce`, not `say`: the claude child owns the terminal for as long
-        // as it is running, and a stray write into a live TUI corrupts the
-        // screen. Same reason the mid-turn limit notice above uses it.
-        this.announce(
-            `Cattle Drover: not flipping yet — ${describeInFlight(busy)}. Moving accounts stops ` +
-                'this Claude, which kills them and loses their results silently. Ask again ' +
-                `within ${Math.round(this.flipConfirmMs / 1000)}s to flip anyway, or wait for them to finish.`,
+        const why: string[] = []
+        if (stale) {
+            logger.debug(
+                `[flip] held: ${stale.account.name} has ${noHeadroom(stale, now)} — waiting for a repeat`,
+            )
+            why.push(
+                `it has ${noHeadroom(stale, now)}: ${stale.reason}. Landing there hits the same wall ` +
+                    'on the first turn and auto-flips straight back, which is two relaunches to end ' +
+                    `up here.${modelRemedy(stale)}`,
+            )
+        }
+        if (busy.count > 0) {
+            logger.debug(`[flip] held: ${busy.count} subagent(s) in flight — waiting for a repeat`)
+            why.push(
+                `${describeInFlight(busy)}. Moving accounts stops this Claude, which kills them and ` +
+                    'loses their results silently.',
+            )
+        }
+        this.warn(
+            `Cattle Drover: not flipping${stale ? ` to ${stale.account.name}` : ''} yet — ` +
+                why.join(' Also: ') +
+                ` Ask again within ${Math.round(this.flipConfirmMs / 1000)}s to flip anyway` +
+                (busy.count > 0 ? ', or wait for them to finish.' : '.'),
         )
         return false
+    }
+
+    /**
+     * Say it on the phone AND on the tmux status bar.
+     *
+     * `say()` cannot be used here and `announce()` is not enough. say() writes
+     * to stderr, and the claude child owns the terminal for as long as it is
+     * running, so a stray write corrupts a live TUI — which is why the
+     * mid-turn limit notice uses announce() directly. But announce() alone
+     * reaches only the phone, and a warning Clay has thirty seconds to answer
+     * has to be readable from the keyboard he pressed the key on (DROVE-64).
+     */
+    private warn(message: string): void {
+        this.announce(message)
+        try {
+            this.toPane(message)
+        } catch (err) {
+            logger.debug('[flip] could not put the warning on the pane', err)
+        }
     }
 
     /** What the launcher's tracker says is running, or nothing if it is not wired up. */
