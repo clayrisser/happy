@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
     onAnswer: null as
         ((event: { id: string; allow: boolean; optionId?: string; text?: string }) => void) | null,
     onFlip: null as ((event: { sessionId: string; account?: string }) => void) | null,
+    onRefresh: null as (() => void) | null,
     onStorage: null as (() => void) | null,
 }));
 
@@ -50,6 +51,10 @@ vi.mock('drover-watch', () => ({
     addDroverFlipListener: (listener: typeof mocks.onFlip) => {
         mocks.onFlip = listener;
         return { remove: () => { mocks.onFlip = null; } };
+    },
+    addDroverRefreshListener: (listener: typeof mocks.onRefresh) => {
+        mocks.onRefresh = listener;
+        return { remove: () => { mocks.onRefresh = null; } };
     },
 }));
 
@@ -103,6 +108,7 @@ beforeEach(() => {
     mocks.published = [];
     mocks.onAnswer = null;
     mocks.onFlip = null;
+    mocks.onRefresh = null;
     mocks.onStorage = null;
     mocks.allow.mockReset();
     mocks.deny.mockReset();
@@ -487,5 +493,34 @@ describe('startDroverWatchFeed', () => {
         } finally {
             vi.useRealTimers();
         }
+    });
+
+    // DROVE-22. The heartbeat above only runs while iOS lets this app run, and
+    // it does not let a backgrounded one run at all — which is every moment
+    // Clay actually looks at his watch. So the wrist asks, iOS wakes this app
+    // to answer, and the answer has to be a real republish.
+    it('republishes when the wrist asks, even though nothing changed', async () => {
+        mocks.sessions = { s1: session({ path: '/a' }) };
+        start();
+        expect(mocks.published).toHaveLength(1);
+        expect(mocks.onRefresh).not.toBeNull();
+
+        // A millisecond of real time, so the two ISO stamps differ.
+        await new Promise((resolve) => setTimeout(resolve, 2));
+        mocks.onRefresh!();
+
+        expect(mocks.published).toHaveLength(2);
+        // The gate set is IDENTICAL, which is exactly why this has to be a
+        // forced publish: the change check would drop it and the watch would be
+        // answered with the same stale snapshot it asked to replace.
+        expect(mocks.published[1].gates).toEqual(mocks.published[0].gates);
+        expect(mocks.published[1].updatedAt > mocks.published[0].updatedAt).toBe(true);
+    });
+
+    it('stops answering asks once the feed is torn down', () => {
+        start();
+        stopFeed!();
+        stopFeed = null;
+        expect(mocks.onRefresh).toBeNull();
     });
 });

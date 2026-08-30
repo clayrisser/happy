@@ -115,6 +115,20 @@ export interface DroverSnapshot {
     accounts: string[];
 }
 
+/**
+ * The wrist asking for a current snapshot (DROVE-22).
+ *
+ * Carries nothing: there is one thing to ask for. It arrives as a
+ * WatchConnectivity `sendMessage`, which is the one call on that wire that
+ * wakes this app in the background — everything else has to be initiated by a
+ * phone app that is already running, and iOS suspends a backgrounded app within
+ * seconds, which is why the wrist's snapshot was stale by definition every time
+ * Clay raised his wrist. The native side holds the watch's reply open until the
+ * next `publishDroverSnapshot`, so answering this promptly is what makes the
+ * wall read fresh.
+ */
+export interface DroverRefreshEvent {}
+
 /** The wrist asking for an account flip (BASED-98). */
 export interface DroverFlipEvent {
     sessionId: string;
@@ -132,6 +146,7 @@ type DroverWatchModuleType = {
     addListener: {
         (eventName: 'onAnswer', listener: (event: DroverAnswerEvent) => void): EventSubscription;
         (eventName: 'onFlip', listener: (event: DroverFlipEvent) => void): EventSubscription;
+        (eventName: 'onRefresh', listener: (event: DroverRefreshEvent) => void): EventSubscription;
     };
 };
 
@@ -169,4 +184,25 @@ export function addDroverAnswerListener(listener: (event: DroverAnswerEvent) => 
 export function addDroverFlipListener(listener: (event: DroverFlipEvent) => void) {
     if (!native) return { remove: () => {} };
     return native.addListener('onFlip', listener);
+}
+
+/**
+ * The wrist asking for a snapshot (DROVE-22). The listener must publish one:
+ * the native side is holding the watch's reply open, and it falls back to the
+ * last snapshot this phone published — timestamp and all — once its deadline
+ * runs out.
+ */
+export function addDroverRefreshListener(listener: (event: DroverRefreshEvent) => void) {
+    if (!native) return { remove: () => {} };
+    try {
+        return native.addListener('onRefresh', listener);
+    } catch {
+        // Build 7's binary declares onAnswer and onFlip and nothing else, and
+        // this file can reach that binary as an OTA update — the JS ships in a
+        // minute, the Swift beside it cannot ship at all (docs/wrist-install.md).
+        // Subscribing to an event a module never declared must therefore cost
+        // nothing: the wrist on that build simply never asks, which is exactly
+        // what it did before DROVE-22.
+        return { remove: () => {} };
+    }
 }

@@ -17,6 +17,7 @@ enum DroverRoute: Hashable {
 /// The wall: every gate waiting on a human, newest first (BASED-98).
 struct GateListView: View {
     @EnvironmentObject private var store: GateStore
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         NavigationStack {
@@ -26,12 +27,12 @@ struct GateListView: View {
             // list was fresh however long the phone had been gone. A 30s tick
             // is well inside the 180s threshold.
             TimelineView(.periodic(from: Date(), by: 30)) { context in
-                let stale = store.snapshot.isStale(at: context.date)
+                let freshness = store.freshness(at: context.date)
                 Group {
                     if store.gates.isEmpty {
                         EmptyStateView(
                             connected: store.snapshot.connected,
-                            stale: stale,
+                            freshness: freshness,
                             updatedAt: store.snapshot.updatedAt,
                             lastError: store.lastError
                         )
@@ -43,8 +44,12 @@ struct GateListView: View {
                             // A stale list is the dangerous one: every gate on
                             // it may already have been answered in tmux or on
                             // the phone, and the wrist has no way to know.
-                            if stale {
-                                StaleRow(updatedAt: store.snapshot.updatedAt)
+                            // Only shown once the phone has been ASKED and
+                            // brought back nothing newer (DROVE-22) — age alone
+                            // used to be enough, and age alone is the steady
+                            // state of a phone in a pocket.
+                            if case let .stale(reason) = freshness {
+                                StaleRow(updatedAt: store.snapshot.updatedAt, reason: reason)
                             }
                             ForEach(store.gates) { gate in
                                 NavigationLink(value: gate) {
@@ -59,6 +64,12 @@ struct GateListView: View {
                         .listStyle(.carousel)
                     }
                 }
+                // The tick is also when the wrist asks again. A wall left open
+                // while the phone sleeps would otherwise age out and stay aged
+                // out: nothing else on this screen ever reaches the phone.
+                .onChange(of: context.date) { _, now in
+                    store.askIfSnapshotIsAging(at: now)
+                }
             }
             .navigationTitle("Drover")
             .navigationDestination(for: DroverGate.self) { gate in
@@ -71,6 +82,14 @@ struct GateListView: View {
             }
             .navigationDestination(for: DroverSession.self) { session in
                 SessionDetailView(session: session)
+            }
+            // Raising a wrist is the moment the answer has to be current, and
+            // activation only fires on the first launch — a watch app resumed
+            // from the dock is already activated and would have shown whatever
+            // it was holding when it was put away (DROVE-22). The floor stops
+            // a flick in and out of the app waking the phone repeatedly.
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .active { store.askPhoneForSnapshot(notMoreOftenThan: 5) }
             }
             .toolbar {
                 // The flip surface hangs off the gate wall rather than being a
@@ -95,16 +114,17 @@ struct GateListView: View {
     }
 }
 
-/// "Nothing waiting" is a claim about RIGHT NOW, and there are two ways the
+/// "Nothing waiting" is a claim about RIGHT NOW, and there are three ways the
 /// wrist can be in no position to make it: the phone was never feeding this
-/// watch, and the phone stopped. Only the third case is all-clear.
+/// watch, the wrist is still asking it, and the ask came back with nothing
+/// newer. Only the fourth case is all-clear.
 private struct EmptyStateView: View {
     let connected: Bool
-    let stale: Bool
+    let freshness: DroverFreshness
     let updatedAt: Date
     let lastError: String?
 
-    private var clear: Bool { connected && !stale }
+    private var clear: Bool { connected && freshness == .fresh }
 
     var body: some View {
         VStack(spacing: 6) {
@@ -119,11 +139,21 @@ private struct EmptyStateView: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
-            } else if stale {
+            } else if case let .stale(reason) = freshness {
                 // The age, not a vague "maybe out of date": how long the phone
                 // has been quiet is the whole of what the wrist knows, and 40
                 // seconds and 40 minutes mean very different things.
                 UpdatedAgo(updatedAt: updatedAt)
+                // And WHY, when WatchConnectivity said. "Out of date" with no
+                // reason is what Clay was reading every morning; it now only
+                // appears after the phone was asked, so what the ask hit
+                // belongs on screen next to it.
+                if let reason {
+                    Text(reason)
+                        .font(.system(size: 9))
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
             }
             if let lastError {
                 Text(lastError)
@@ -137,19 +167,33 @@ private struct EmptyStateView: View {
 
     private var symbol: String {
         if !connected { return "wifi.slash" }
-        return stale ? "clock.badge.exclamationmark" : "checkmark.circle"
+        switch freshness {
+        case .fresh: return "checkmark.circle"
+        case .asking: return "arrow.clockwise"
+        case .stale: return "clock.badge.exclamationmark"
+        }
     }
 
     private var headline: String {
         if !connected { return "Not connected" }
-        return stale ? "Out of date" : "Nothing waiting"
+        switch freshness {
+        case .fresh: return "Nothing waiting"
+        // Not "Out of date". The wrist has woken the phone and is waiting on
+        // it, which takes about a second — saying the list is stale during
+        // that second is the accusation this whole ticket is about.
+        case .asking: return "Asking your phone"
+        case .stale: return "Out of date"
+        }
     }
 }
 
-/// The phone has gone quiet. Shown above the gates rather than instead of
-/// them: the list is probably still right, it just cannot be relied on.
+/// The phone was asked and brought back nothing newer. Shown above the gates
+/// rather than instead of them: the list is probably still right, it just
+/// cannot be relied on.
 private struct StaleRow: View {
     let updatedAt: Date
+    /// What WatchConnectivity said, where it said anything.
+    let reason: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
@@ -157,6 +201,11 @@ private struct StaleRow: View {
                 .font(.caption2)
                 .foregroundStyle(.yellow)
             UpdatedAgo(updatedAt: updatedAt)
+            if let reason {
+                Text(reason)
+                    .font(.system(size: 9))
+                    .foregroundStyle(.secondary)
+            }
         }
         .padding(.vertical, 2)
     }

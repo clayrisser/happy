@@ -7,7 +7,10 @@ import WidgetKit
 /// (BASED-98).
 ///
 /// The phone is the source of truth: it pushes a snapshot whenever the set of
-/// pending gates changes, and the watch echoes answers back. Answers are sent
+/// pending gates changes, and the watch echoes answers back. The wrist also
+/// ASKS for one — see `askPhoneForSnapshot` — because a push is something only
+/// a running phone app can do, and the phone app is suspended in exactly the
+/// moment Clay raises his wrist (DROVE-22). Answers are sent
 /// with `sendMessage` when the phone is reachable and queued with
 /// `transferUserInfo` when it is not, so a tap on a wrist out of range is
 /// delivered rather than dropped — the bus resolves first-wins, so a late
@@ -24,16 +27,99 @@ final class GateStore: NSObject, ObservableObject {
     /// cannot queue two.
     @Published private(set) var flipping: Set<String> = []
     @Published private(set) var lastError: String?
+    /// What the last ask-the-phone-for-a-snapshot attempt did (DROVE-22).
+    @Published private(set) var refresh: DroverRefresh = .never
 
     private var session: WCSession?
+    /// When the ask in flight was made. Used to drop the reply of an ask that
+    /// has already been superseded, so a slow first answer cannot overwrite the
+    /// state of a later one.
+    private var askedAt: Date?
 
     override init() {
         super.init()
-        guard WCSession.isSupported() else { return }
+        guard WCSession.isSupported() else {
+            // No ask can ever be made here, so `refresh` must not sit on
+            // `never`: freshness reads that as "still asking" and suppresses
+            // the out-of-date warning it exists to give.
+            refresh = .failed("This watch cannot talk to the phone")
+            return
+        }
         let session = WCSession.default
         session.delegate = self
         session.activate()
         self.session = session
+    }
+
+    /// What the wall should say about the snapshot it is holding.
+    func freshness(at now: Date = Date()) -> DroverFreshness {
+        snapshot.freshness(at: now, refresh: refresh)
+    }
+
+    /// Ask the phone for a snapshot, now (DROVE-22).
+    ///
+    /// This is the only thing on the wrist that can restamp `updatedAt` without
+    /// Clay holding the phone. `updateApplicationContext` has to be CALLED by
+    /// the phone app's JS, iOS suspends a backgrounded app within seconds, and
+    /// a suspended app runs no timers — so the snapshot went stale three
+    /// minutes after he put the phone down and the wall said "Out of date"
+    /// every time he raised his wrist. A `sendMessage` in THIS direction is the
+    /// one WatchConnectivity call that wakes the counterpart iOS app in the
+    /// background, so the phone can be locked in a pocket with the Drover app
+    /// off screen and still answer.
+    ///
+    /// Never queued with `transferUserInfo` when the phone is out of range,
+    /// unlike an answer: a request for a snapshot delivered twenty minutes late
+    /// is answered into a watch app that closed nineteen minutes ago.
+    func askPhoneForSnapshot(notMoreOftenThan interval: TimeInterval = 0) {
+        if refresh == .asking { return }
+        if let askedAt, Date().timeIntervalSince(askedAt) < interval { return }
+        guard let session, session.activationState == .activated else {
+            refresh = .failed("Watch is not paired with the phone app")
+            return
+        }
+        let asked = Date()
+        askedAt = asked
+        refresh = .asking
+        session.sendMessage(
+            ["kind": "refresh"],
+            replyHandler: { [weak self] reply in
+                Task { @MainActor in
+                    guard let self, self.askedAt == asked else { return }
+                    // apply() sets `.answered` itself when the reply decodes.
+                    // A reply that does not is the phone waking, finding it had
+                    // nothing to send, and answering with an empty payload
+                    // rather than leaving the wrist on a spinner.
+                    if !self.apply(reply) {
+                        self.refresh = .failed("Your phone had no snapshot to send")
+                    }
+                }
+            },
+            errorHandler: { [weak self] error in
+                Task { @MainActor in
+                    guard let self, self.askedAt == asked else { return }
+                    self.refresh = .failed(error.localizedDescription)
+                }
+            }
+        )
+        // WatchConnectivity does call the error handler on its own timeout, but
+        // nothing here should be able to sit on `asking` forever if it ever
+        // does not: that state suppresses the out-of-date warning, so a silent
+        // hang would put the wrist straight back to trusting an old list as
+        // confidently as a live one.
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 15_000_000_000)
+            guard let self, self.askedAt == asked, self.refresh == .asking else { return }
+            self.refresh = .failed("Your phone did not answer")
+        }
+    }
+
+    /// Ask again while the wall is on screen, if the snapshot has aged past one
+    /// phone heartbeat. Driven by the list's 30s tick; the interval floor is
+    /// what stops a tick storm waking the phone more often than that.
+    func askIfSnapshotIsAging(at now: Date = Date()) {
+        guard snapshot.needsAsking(at: now) else { return }
+        askPhoneForSnapshot(notMoreOftenThan: 30)
     }
 
     /// Every gate the phone lists, newest first.
@@ -155,10 +241,17 @@ final class GateStore: NSObject, ObservableObject {
         return true
     }
 
-    fileprivate func apply(_ context: [String: Any]) {
+    /// Returns whether the payload was a snapshot. The ask needs to know: a
+    /// reply that carries nothing is the phone failing to answer, not the
+    /// phone saying the wrist is up to date (DROVE-22).
+    @discardableResult
+    fileprivate func apply(_ context: [String: Any]) -> Bool {
         guard let data = try? JSONSerialization.data(withJSONObject: context),
-              let decoded = try? DroverSnapshot.decoder.decode(DroverSnapshot.self, from: data) else { return }
+              let decoded = try? DroverSnapshot.decoder.decode(DroverSnapshot.self, from: data) else { return false }
         snapshot = decoded
+        // The phone spoke, however it reached us. Whether the snapshot it sent
+        // is any newer is `isStale`'s question, not this one.
+        refresh = .answered
         decoded.save()
         // A snapshot arriving IS the link working, so whatever the last send
         // complained about is over. Nothing else clears the banner: it is set
@@ -168,6 +261,7 @@ final class GateStore: NSObject, ObservableObject {
         let live = Set(decoded.gates.map(\.id))
         answering.formIntersection(live)
         WidgetCenter.shared.reloadAllTimelines()
+        return true
     }
 }
 
@@ -184,6 +278,10 @@ extension GateStore: WCSessionDelegate {
             // turn, which is how a real error becomes an invisible one.
             if !context.isEmpty { self.apply(context) }
             if let error { self.lastError = error.localizedDescription }
+            // The context above is the LAST one iOS delivered, which on a
+            // phone that has been asleep is exactly the stale snapshot Clay
+            // keeps seeing. Ask for a current one (DROVE-22).
+            self.askPhoneForSnapshot()
         }
     }
 

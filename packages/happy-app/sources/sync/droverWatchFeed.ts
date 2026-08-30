@@ -21,6 +21,7 @@ import { isSessionArchived } from './sessionArchive';
 import {
     addDroverAnswerListener,
     addDroverFlipListener,
+    addDroverRefreshListener,
     getDroverWatchStatus,
     isDroverWatchAvailable,
     publishDroverSnapshot,
@@ -45,10 +46,14 @@ export { collectGates };
  * happened" and "the phone died" equally, so the watch had to trust every list
  * it was holding. The heartbeat is what makes the timestamp mean something.
  *
- * It stops when iOS suspends the app, and that is the point rather than a
- * flaw — a suspended app IS the phone no longer feeding the wrist, and the
- * watch now says so instead of rendering a stale wall of gates as confidently
- * as a live one.
+ * It stops when iOS suspends the app. That was described here as the point
+ * rather than a flaw, and it was half right: the wrist does need to know when
+ * it is no longer being fed. What it got instead was that message ALWAYS, since
+ * Clay looks at his watch precisely when the phone is in his pocket and the app
+ * off screen (DROVE-22). The wrist can now ask for a snapshot, which wakes this
+ * app in the background — see the onRefresh listener below — so the heartbeat
+ * is what keeps the wrist current while the app is up, and the ask is what
+ * covers it while the app is asleep.
  */
 const HEARTBEAT_MS = 60_000;
 
@@ -218,6 +223,14 @@ export function startDroverWatchFeed(): () => void {
         void Promise.resolve(sync.sendMessage(event.sessionId, text)).catch(() => {});
     });
 
+    // The wrist asked, which means iOS has just woken this app in the
+    // background to answer (DROVE-22). Forced, because the ask is about the
+    // TIMESTAMP: the gate set is usually identical and the change check would
+    // drop the publish, leaving the watch holding the same stale snapshot it
+    // asked to replace. The native side is holding the watch's reply open until
+    // this publish lands.
+    const refreshes = addDroverRefreshListener(() => push(true));
+
     const unsubscribe = storage.subscribe(() => push());
     // Forced, so an unchanged snapshot still restamps updatedAt. That restamp
     // is the whole signal: see HEARTBEAT_MS.
@@ -228,6 +241,7 @@ export function startDroverWatchFeed(): () => void {
         started = false;
         answers.remove();
         flips.remove();
+        refreshes.remove();
         clearInterval(heartbeat);
         unsubscribe();
     };
