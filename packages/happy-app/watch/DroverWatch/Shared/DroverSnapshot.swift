@@ -104,6 +104,37 @@ struct DroverSession: Codable, Identifiable, Equatable, Hashable {
     let subagents: Int?
 }
 
+/// What the wrist's last attempt to get a current snapshot did (DROVE-22).
+///
+/// The wrist asks by sending the phone a `sendMessage`, which is the one
+/// WatchConnectivity call that WAKES the counterpart iOS app in the background.
+/// Everything else on this wire has to be called BY the phone, and a suspended
+/// phone app calls nothing — which is why the wrist could only ever hold a
+/// snapshot from the last time Clay had the app on screen.
+enum DroverRefresh: Equatable {
+    /// No ask has been made yet. A fraction of a second in practice — the
+    /// store asks the moment the session activates — and permanent only where
+    /// WatchConnectivity is not supported at all, which the store turns into a
+    /// `failed` rather than leaving here.
+    case never
+    case asking
+    /// A snapshot came back. Whether it is any newer is `isStale`'s business.
+    case answered
+    /// The ask did not land, and this is what WatchConnectivity said.
+    case failed(String)
+}
+
+/// What the wall should tell Clay about the list it is showing.
+enum DroverFreshness: Equatable {
+    /// Recent enough to act on.
+    case fresh
+    /// The wrist has asked the phone and is waiting on it. NOT an accusation.
+    case asking
+    /// An ask was made and brought back nothing newer. `reason` is what
+    /// WatchConnectivity said, where it said anything.
+    case stale(reason: String?)
+}
+
 struct DroverSnapshot: Codable, Equatable {
     var gates: [DroverGate]
     /// Stamped by the phone at publish. The wrist's only liveness signal — see
@@ -150,6 +181,41 @@ struct DroverSnapshot: Codable, Equatable {
     func age(at now: Date = Date()) -> TimeInterval { now.timeIntervalSince(updatedAt) }
 
     func isStale(at now: Date = Date()) -> Bool { age(at: now) > Self.staleAfter }
+
+    /// How old the snapshot may get before the wrist asks the phone for a new
+    /// one, while the wall is on screen (DROVE-22).
+    ///
+    /// One phone heartbeat. The feed restamps every 60s while the phone app is
+    /// awake, so a snapshot older than that means it is not awake, and an ask
+    /// is the only thing that will wake it.
+    static let askAfter: TimeInterval = 60
+
+    func needsAsking(at now: Date = Date()) -> Bool { age(at: now) > Self.askAfter }
+
+    /// What the wall should SAY about the snapshot it is holding.
+    ///
+    /// "Out of date" used to be `age > staleAfter` and nothing else, which made
+    /// it the steady state rather than a fault (DROVE-22). Only the phone app's
+    /// own JS restamps `updatedAt`, iOS suspends a backgrounded app within
+    /// seconds, and a suspended app runs no timers — so three minutes after Clay
+    /// put the phone down the wrist said "Out of date", every time, whether or
+    /// not anything was wrong. He looks at the watch precisely when he is not
+    /// holding the phone, so it was the only message he ever saw.
+    ///
+    /// Age alone is therefore not an accusation. The wrist now asks the phone
+    /// for a snapshot on activation, and a snapshot is out of date only once an
+    /// ask has been made and brought back nothing newer.
+    func freshness(at now: Date = Date(), refresh: DroverRefresh) -> DroverFreshness {
+        if !isStale(at: now) { return .fresh }
+        switch refresh {
+        // Still asking, so there is nothing to accuse the phone of yet. The
+        // store cannot sit here forever: it fails the ask on its own deadline,
+        // and it fails it outright where no ask can ever be made.
+        case .never, .asking: return .asking
+        case .answered: return .stale(reason: nil)
+        case let .failed(why): return .stale(reason: why)
+        }
+    }
 
     /// Shared with the widget through the app group; the widget cannot ask
     /// the phone anything itself.

@@ -13,6 +13,12 @@ import WatchConnectivity
 /// because it is the one WatchConnectivity channel that keeps only the LATEST
 /// value and delivers it even when the watch app is not running. A queue of
 /// stale gate lists is worse than no list at all.
+///
+/// It has one limit that made the wrist read "Out of date" on every open: only
+/// a RUNNING phone app can call it, and iOS suspends a backgrounded app within
+/// seconds. So the wrist can also ask, by sending a `{"kind":"refresh"}`
+/// message — that direction wakes this app in the background — and the reply is
+/// held here until JS publishes a snapshot collected after the ask (DROVE-22).
 
 /// WCSessionDelegate requires NSObjectProtocol, which Expo's `Module` is not,
 /// so the delegate is its own NSObject and the module owns it.
@@ -21,6 +27,45 @@ final class DroverWatchDelegate: NSObject, WCSessionDelegate {
     var onAnswer: (([String: Any]) -> Void)?
     /// Called when the wrist asks for an account flip (BASED-98).
     var onFlip: (([String: Any]) -> Void)?
+    /// Called when the wrist asks for a fresh snapshot (DROVE-22).
+    var onRefresh: (() -> Void)?
+
+    /// How long the wrist may be kept waiting before it is answered with
+    /// whatever this phone last published.
+    ///
+    /// The ask arrives by `sendMessage`, which iOS answers by WAKING this app
+    /// in the background — from suspended the JS resumes in well under a
+    /// second, but from terminated the whole React Native bundle has to boot
+    /// first. Ten seconds covers the common case and gives a cold boot a
+    /// chance; past that the wrist gets the last real snapshot, unchanged, so
+    /// its own staleness check still calls an old list old rather than being
+    /// told a stale one is fresh.
+    private static let replyDeadline: TimeInterval = 10
+
+    private let lock = NSLock()
+    private var pending: [([String: Any]) -> Void] = []
+    private var lastPublished: [String: Any] = [:]
+
+    /// Answer every wrist waiting on a snapshot, and remember what was sent.
+    /// `snapshot` nil means the deadline ran out: answer with the last one.
+    func settle(with snapshot: [String: Any]?) {
+        lock.lock()
+        let waiting = pending
+        pending = []
+        if let snapshot { lastPublished = snapshot }
+        let payload = snapshot ?? lastPublished
+        lock.unlock()
+        for reply in waiting { reply(payload) }
+    }
+
+    private func hold(_ reply: @escaping ([String: Any]) -> Void) {
+        lock.lock()
+        pending.append(reply)
+        lock.unlock()
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.replyDeadline) { [weak self] in
+            self?.settle(with: nil)
+        }
+    }
 
     func session(
         _ session: WCSession,
@@ -38,6 +83,31 @@ final class DroverWatchDelegate: NSObject, WCSessionDelegate {
     /// Live answer from the watch while the phone app is running.
     func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
         forward(message)
+    }
+
+    /// The wrist asking for a current snapshot (DROVE-22).
+    ///
+    /// A `sendMessage` from watchOS wakes this app in the background when it is
+    /// not running, which is the whole point: the wrist's snapshot could only
+    /// ever be restamped by a phone app that happened to be on screen, so it
+    /// was stale by definition every time Clay looked at his watch. The reply
+    /// is held until JS publishes, so the answer carries a snapshot collected
+    /// after the ask rather than whatever was lying around before it.
+    func session(
+        _ session: WCSession,
+        didReceiveMessage message: [String: Any],
+        replyHandler: @escaping ([String: Any]) -> Void
+    ) {
+        guard message["kind"] as? String == "refresh" else {
+            // An answer or a flip that happened to be sent with a reply
+            // handler. Handle it the ordinary way and close the reply, so the
+            // wrist is never left waiting on a channel nothing will answer.
+            forward(message)
+            replyHandler([:])
+            return
+        }
+        hold(replyHandler)
+        onRefresh?()
     }
 
     /// Queued answer: the watch was out of range when it was tapped. Delivered
@@ -97,7 +167,7 @@ public final class DroverWatchModule: Module {
     public func definition() -> ModuleDefinition {
         Name("DroverWatch")
 
-        Events("onAnswer", "onFlip")
+        Events("onAnswer", "onFlip", "onRefresh")
 
         OnCreate {
             self.watchDelegate.onAnswer = { [weak self] event in
@@ -105,6 +175,10 @@ public final class DroverWatchModule: Module {
             }
             self.watchDelegate.onFlip = { [weak self] event in
                 self?.sendEvent("onFlip", event)
+            }
+            self.watchDelegate.onRefresh = { [weak self] in
+                // No body: there is one thing to ask for.
+                self?.sendEvent("onRefresh")
             }
             guard WCSession.isSupported() else { return }
             let session = WCSession.default
@@ -153,6 +227,12 @@ public final class DroverWatchModule: Module {
             if session.isReachable {
                 session.sendMessage(dict, replyHandler: nil, errorHandler: nil)
             }
+            // A wrist that ASKED for this gets it straight back down its own
+            // reply channel rather than waiting on the application context,
+            // which iOS delivers when it feels like it (DROVE-22). Called on
+            // every publish, not only an asked-for one, so the deadline always
+            // has a real snapshot to fall back to.
+            self.watchDelegate.settle(with: dict)
             return true
         }
     }

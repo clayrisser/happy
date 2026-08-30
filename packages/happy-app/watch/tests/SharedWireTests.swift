@@ -35,6 +35,10 @@ struct SharedWireTests {
         answerCarriesTypedText()
         freeTextQuestionSurvivesTheWire()
         optionWithoutAnIdFallsBackToItsLabel()
+        ageAloneIsNotOutOfDate()
+        anAskThatBroughtNothingNewerIsOutOfDate()
+        aFreshSnapshotIsNeverQuestioned()
+        anAgingSnapshotIsWorthAsking()
 
         if failures.isEmpty {
             print("\nall wire checks passed")
@@ -92,6 +96,72 @@ struct SharedWireTests {
         // publishes, and it must not need account or sessions to be present.
         check(gate.account == nil, "a gate with no account decodes rather than throwing")
         check(snapshot.sessions.isEmpty, "a snapshot with no sessions key decodes")
+    }
+
+    /// The DROVE-22 defect, in one check: a snapshot that has merely AGED is
+    /// not out of date. Only a phone app that happened to be on screen ever
+    /// restamped `updatedAt`, and iOS suspends a backgrounded app within
+    /// seconds, so three minutes after Clay put the phone down the wrist said
+    /// "Out of date" whether or not anything was wrong — and he looks at the
+    /// watch precisely when the phone is in his pocket.
+    static func ageAloneIsNotOutOfDate() {
+        let now = Date()
+        let old = DroverSnapshot(
+            gates: [], updatedAt: now.addingTimeInterval(-3600), connected: true
+        )
+        check(old.isStale(at: now), "an hour-old snapshot is still stale by age")
+        check(
+            old.freshness(at: now, refresh: .never) == .asking,
+            "an aged snapshot with no ask yet made reads as asking, not out of date"
+        )
+        check(
+            old.freshness(at: now, refresh: .asking) == .asking,
+            "an aged snapshot with an ask in flight reads as asking"
+        )
+    }
+
+    /// The other half: once the wrist HAS asked and got nothing newer, saying
+    /// so is the honest answer, and the reason goes with it.
+    static func anAskThatBroughtNothingNewerIsOutOfDate() {
+        let now = Date()
+        let old = DroverSnapshot(
+            gates: [], updatedAt: now.addingTimeInterval(-3600), connected: true
+        )
+        check(
+            old.freshness(at: now, refresh: .answered) == .stale(reason: nil),
+            "a phone that answered with the same old snapshot is out of date"
+        )
+        check(
+            old.freshness(at: now, refresh: .failed("Counterpart app not installed"))
+                == .stale(reason: "Counterpart app not installed"),
+            "a failed ask is out of date, and carries what WatchConnectivity said"
+        )
+    }
+
+    /// A recent snapshot is fresh whatever the last ask did — including an ask
+    /// that failed while a pushed context was already on its way.
+    static func aFreshSnapshotIsNeverQuestioned() {
+        let now = Date()
+        let recent = DroverSnapshot(
+            gates: [], updatedAt: now.addingTimeInterval(-5), connected: true
+        )
+        check(recent.freshness(at: now, refresh: .never) == .fresh, "a 5s-old snapshot is fresh")
+        check(
+            recent.freshness(at: now, refresh: .failed("Not reachable")) == .fresh,
+            "a failed ask does not make a snapshot that is five seconds old stale"
+        )
+    }
+
+    /// Asking is cheaper than being wrong, so the wrist asks a whole heartbeat
+    /// before it would have called the list stale — 60s, not 180s.
+    static func anAgingSnapshotIsWorthAsking() {
+        let now = Date()
+        func snapshot(secondsOld: TimeInterval) -> DroverSnapshot {
+            DroverSnapshot(gates: [], updatedAt: now.addingTimeInterval(-secondsOld), connected: true)
+        }
+        check(!snapshot(secondsOld: 30).needsAsking(at: now), "a 30s-old snapshot is left alone")
+        check(snapshot(secondsOld: 90).needsAsking(at: now), "a 90s-old snapshot is worth asking about")
+        check(!snapshot(secondsOld: 90).isStale(at: now), "and it is asked about well before it goes stale")
     }
 
     /// Claude's own AskUserQuestion options carry {label, description} and no
