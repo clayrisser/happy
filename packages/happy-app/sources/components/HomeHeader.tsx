@@ -12,6 +12,8 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { t } from '@/text';
 import { ShortcutHintBadge, useShortcutHints } from './ShortcutHints';
 import { shouldShowHomeConnectionStatus } from './homeConnectionStatus';
+import { useInboxCounts } from '@/hooks/usePendingGates';
+import { InboxBadges, inboxAccessibilityLabel } from './InboxBadges';
 
 // The longhorn is 1.56:1, so it gets a wide box rather than the square one a
 // letterform wanted. Matches HeaderLogo so the mark is the same size on every
@@ -128,7 +130,10 @@ export const HomeHeaderNotAuth = React.memo(() => {
         <Header
             title={<HeaderTitleWithSubtitle subtitle={serverInfo.isCustom ? serverInfo.hostname + (serverInfo.port ? `:${serverInfo.port}` : '') : undefined} />}
             headerRight={() => <HeaderRightNotAuth />}
-            headerLeft={() => <HeaderLeft />}
+            // The plain mark, not the inbox button: there is no inbox to open
+            // before you are logged in, and a tap that pushes an empty screen
+            // is worse than a decoration.
+            headerLeft={() => <HeaderLeftMark />}
             headerLeftGlass={Platform.OS !== 'web'}
             headerShadowVisible={false}
             headerBackgroundColor={theme.colors.groupped.background}
@@ -176,7 +181,24 @@ function HeaderRightNotAuth() {
     );
 }
 
-function HeaderLeft() {
+/**
+ * The longhorn, which is now the way in to the drover inbox (DROVE-71).
+ *
+ * It sat in the corner iOS users reach for first, tinted to the header and
+ * doing nothing, and Clay circled it and asked whether it should. It should:
+ * "use it for todo list AND all active prompts". Tapping it opens the inbox —
+ * every pending prompt and every open to-do, this session's and every other
+ * machine's.
+ *
+ * TWO INDICATORS, NOT ONE COUNT. They mean different things. A pending PROMPT
+ * is blocking a session right now — a turn is stopped and it can time out — so
+ * it gets the loud filled pill in the warning colour. A TO-DO stalls nothing
+ * and never expires, so it gets a quiet outlined dot beside it. A single
+ * number would let three to-dos hide the one prompt that is actually holding
+ * work up. Neither is drawn when its count is zero, so an empty inbox leaves
+ * the mark exactly as it was.
+ */
+function HeaderLeftMark({ children }: { children?: React.ReactNode }) {
     const styles = stylesheet;
     const { theme } = useUnistyles();
     return (
@@ -187,7 +209,34 @@ function HeaderLeft() {
                 style={{ width: HEADER_LOGO_WIDTH, height: HEADER_LOGO_HEIGHT }}
                 tintColor={theme.colors.header.tint}
             />
+            {children}
         </View>
+    );
+}
+
+/**
+ * The longhorn, which is now the way in to the drover inbox (DROVE-71).
+ *
+ * It sat in the corner iOS users reach for first, tinted to the header and
+ * doing nothing, and Clay circled it and asked whether it should. It should:
+ * "use it for todo list AND all active prompts". Tapping it opens the inbox —
+ * every pending prompt and every open to-do, this machine's and every other's
+ * — and InboxBadges says what is in there without a tap.
+ */
+function HeaderLeft() {
+    const router = useRouter();
+    const { prompts, todos } = useInboxCounts();
+    return (
+        <Pressable
+            onPress={() => router.push('/gates')}
+            hitSlop={15}
+            accessibilityRole="button"
+            accessibilityLabel={inboxAccessibilityLabel(prompts, todos)}
+        >
+            <HeaderLeftMark>
+                <InboxBadges prompts={prompts} todos={todos} />
+            </HeaderLeftMark>
+        </Pressable>
     );
 }
 

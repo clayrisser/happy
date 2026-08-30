@@ -434,3 +434,67 @@ export function gateForQuestion(
     }
     return null;
 }
+
+/**
+ * The inbox, split the way the two halves actually differ (DROVE-71).
+ *
+ * A pending PROMPT — a permission gate, a question — is blocking a session
+ * right now: a turn is stopped waiting on an answer and it can time out. A
+ * TO-DO is a job Clay does when he can; nothing is stalled on it and it never
+ * expires (`ttlMs: 0`, by design, because a to-do that timed out is a to-do
+ * nobody did). One combined count would hide the half that is holding work up,
+ * so nothing in this feature ever adds them together.
+ *
+ * Both halves are oldest first. For a prompt that is not a preference: the
+ * oldest is the one that has held a session up longest. For a to-do it keeps
+ * the row you are reaching for from moving as new ones arrive.
+ */
+export function splitInbox(entries: DroverGateEntry[]): {
+    prompts: DroverGateEntry[];
+    todos: DroverGateEntry[];
+} {
+    const sorted = sortGateEntries(entries);
+    return {
+        prompts: sorted.filter((entry) => !entry.todo),
+        todos: sorted.filter((entry) => entry.todo),
+    };
+}
+
+/**
+ * How old, in the terminal renderer's own words.
+ *
+ * The same three bands `libexec/drover-todos` prints — seconds under 90,
+ * minutes under 90, hours above — so a row reads identically on the phone and
+ * in `drover todos`. Two spellings of an age is two things to keep in step for
+ * no gain.
+ */
+export function ageLabel(createdAt: string | number, now: number = Date.now()): string {
+    const at = typeof createdAt === 'number' ? createdAt : Date.parse(createdAt);
+    if (!Number.isFinite(at)) return '';
+    const seconds = Math.max(0, (now - at) / 1000);
+    if (seconds < 90) return `${Math.floor(seconds)}s`;
+    if (seconds < 5400) return `${Math.floor(seconds / 60)}m`;
+    return `${Math.floor(seconds / 3600)}h`;
+}
+
+/**
+ * What the longhorn's two indicators say, and whether it says anything at all.
+ *
+ * Separate counts, never a sum: "2 prompts waiting" and "3 to-dos" mean
+ * different things and carry different urgency, and a single number would hide
+ * the blocking one. No badge at all when both are zero — a badge that is
+ * always there is a badge nobody reads.
+ */
+export function inboxCounts(entries: DroverGateEntry[]): {
+    prompts: number;
+    todos: number;
+    total: number;
+} {
+    let prompts = 0;
+    let todos = 0;
+    for (const entry of entries) {
+        if (entry.todo) todos++;
+        else prompts++;
+    }
+    return { prompts, todos, total: prompts + todos };
+}

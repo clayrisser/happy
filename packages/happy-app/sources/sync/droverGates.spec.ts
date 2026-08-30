@@ -7,15 +7,18 @@ vi.mock('./storage', () => ({
 }));
 
 import {
+    ageLabel,
     collectGateEntries,
     collectGates,
     gateForQuestion,
     gatesForSession,
+    inboxCounts,
     multiSelectFor,
     previewFor,
     optionsFor,
     questionTextFor,
     sortGateEntries,
+    splitInbox,
     titleFor,
     type GateSession,
 } from './droverGates';
@@ -626,5 +629,50 @@ describe('a to-do on its own card', () => {
         const { droverEvent, ...older } = todoRequest;
         const [entry] = collectGateEntries({ s1: session({ requests: { r9: older } }) });
         expect(entry.todo).toBe(true);
+    });
+});
+
+describe('splitInbox', () => {
+    const permission = { tool: 'Bash', createdAt: 3_000, arguments: { command: 'rm -rf build' } };
+    const question = {
+        tool: 'AskUserQuestion',
+        createdAt: 2_000,
+        arguments: { questions: [{ header: 'Which', question: 'Which one?', options: [{ label: 'A' }] }] },
+    };
+
+    it('puts prompts and to-dos in separate piles, each oldest first', () => {
+        // Never one pile and never one count: a prompt is blocking a session
+        // right now and can time out, a to-do stalls nothing and never
+        // expires, so three to-dos must not hide the one prompt holding work
+        // up (DROVE-71).
+        const entries = collectGateEntries({
+            s1: session({ requests: { p: permission, q: question, t: todoRequest } }),
+        });
+        const { prompts, todos } = splitInbox(entries);
+        expect(prompts.map((e) => e.tool)).toEqual(['AskUserQuestion', 'Bash']);
+        expect(todos.map((e) => e.tool)).toEqual(['DroverTodo']);
+    });
+
+    it('counts the two apart, and says nothing at all when both are empty', () => {
+        expect(inboxCounts([])).toEqual({ prompts: 0, todos: 0, total: 0 });
+        const entries = collectGateEntries({
+            s1: session({ requests: { p: permission, q: question, t: todoRequest } }),
+        });
+        expect(inboxCounts(entries)).toEqual({ prompts: 2, todos: 1, total: 3 });
+    });
+});
+
+describe('ageLabel', () => {
+    it('uses the same three bands drover todos prints', () => {
+        const now = 10_000_000;
+        expect(ageLabel(now - 45_000, now)).toBe('45s');
+        expect(ageLabel(now - 89_000, now)).toBe('89s');
+        expect(ageLabel(now - 90_000, now)).toBe('1m');
+        expect(ageLabel(now - 5_399_000, now)).toBe('89m');
+        expect(ageLabel(now - 5_400_000, now)).toBe('1h');
+    });
+
+    it('says nothing rather than NaN for a date it cannot read', () => {
+        expect(ageLabel('not a date')).toBe('');
     });
 });
