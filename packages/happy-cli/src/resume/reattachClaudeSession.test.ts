@@ -56,6 +56,19 @@ describe('resumedClaudeSessionId', () => {
         expect(resumedClaudeSessionId(['--model', 'opus'], '/repo')).toBeNull();
     });
 
+    it('reads the args bin/drover builds from its own picker (DROVE-50)', () => {
+        // A bare `drover --resume` no longer reaches this CLI bare: bin/drover
+        // picks the transcript first and prepends `--resume <id>` to whatever
+        // else was typed, after its own default flag. This is the shape that
+        // has to resolve, or the reattach never runs and the phone gets a
+        // second, empty session for a conversation it already holds.
+        const fromPicker = ['--dangerously-skip-permissions', '--resume', claudeId, '--model', 'opus'];
+        expect(resumedClaudeSessionId(fromPicker, '/repo')).toBe(claudeId);
+        // `drover -c` is rewritten the same way, so the CLI never has to ask
+        // claudeFindLastSession itself for a drover-started session.
+        expect(mocks.mockClaudeFindLastSession).not.toHaveBeenCalled();
+    });
+
     it('resolves --continue the way claudeLocal does', () => {
         mocks.mockClaudeFindLastSession.mockReturnValue(claudeId);
         expect(resumedClaudeSessionId(['--continue'], '/repo')).toBe(claudeId);
@@ -177,6 +190,42 @@ describe('findHappySessionForClaudeSession', () => {
         });
 
         await expect(findHappySessionForClaudeSession(claudeId)).resolves.toMatchObject({ id: 'happy-a' });
+    });
+
+    it('resolves the args bin/drover builds from its own picker onto the session that already holds the transcript (DROVE-50)', async () => {
+        // The two halves of the fix, joined without a mock between them.
+        //
+        // Before DROVE-50 a bare `drover --resume` reached this CLI still
+        // bare, resumedClaudeSessionId returned null, findHappySessionFor-
+        // ClaudeSession was never called, and runClaude minted a second Happy
+        // session for a conversation the phone already had one for. Now
+        // bin/drover's picker resolves the transcript first and starts the CLI
+        // with these args, so the same run finds `happy-a` and joins it.
+        //
+        // What runClaude does with a non-null answer is pinned next door in
+        // runClaude.test.ts: api.getOrCreateSession is not called at all.
+        mocks.mockAxiosGet.mockResolvedValue({
+            data: {
+                sessions: [
+                    serverSession({ id: 'happy-a', key: keyA, metadata: { path: '/repo', claudeSessionId: claudeId, name: 'DROVER' }, updatedAt: 1000 }),
+                ],
+            },
+        });
+
+        const fromPicker = ['--dangerously-skip-permissions', '--resume', claudeId, '--model', 'opus'];
+        const resolved = resumedClaudeSessionId(fromPicker, '/repo');
+        expect(resolved).toBe(claudeId);
+        await expect(findHappySessionForClaudeSession(resolved!)).resolves.toMatchObject({
+            id: 'happy-a',
+            // The name the app already knows survives, which is the other half
+            // of "the conversation is gone" from the phone.
+            metadata: { claudeSessionId: claudeId, name: 'DROVER' },
+        });
+
+        // And the shape it used to arrive in still resolves to nothing, so the
+        // null branch this replaced is still the one an unwrapped `claude
+        // --resume` (or DROVER_RESUME_PICKER=0) takes.
+        expect(resumedClaudeSessionId(['--dangerously-skip-permissions', '--resume'], '/repo')).toBeNull();
     });
 
     it('falls back to a fresh session when nothing matches, the store is empty, or the server is down', async () => {

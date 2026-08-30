@@ -41,6 +41,11 @@ const liveWindowMs = 60_000;
  * Mirrors claudeLocal's own flag handling so the two agree on the transcript.
  * Bare `--resume` is Claude's picker: the id only exists once the SessionStart
  * hook fires, too late to choose a Happy session, so it stays a fresh session.
+ * That is the twin-session bug of DROVE-50, and it is closed on the OTHER side
+ * of the exec: bin/drover answers a bare `--resume` (and `-c`) with its own
+ * picker and starts this CLI as `--resume <id>`, so by the time this runs the
+ * id is always in claudeArgs. The null branch is kept for a plain, unwrapped
+ * invocation and for DROVER_RESUME_PICKER=0, which asks for the old behaviour.
  */
 export function resumedClaudeSessionId(claudeArgs: string[] | undefined, workingDirectory: string): string | null {
     if (!claudeArgs) return null;

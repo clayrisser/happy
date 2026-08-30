@@ -149,7 +149,11 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
     //   --resume <id>, reattach miss  on disk; fresh Happy session, so replaying
     //                                 it just refills a chat nobody asked for
     //   --resume  (bare picker)       on disk; the id does not exist until this
-    //                                 very hook, so reattach cannot run at all
+    //                                 very hook, so reattach cannot run at all.
+    //                                 Under drover this row is unreachable
+    //                                 since DROVE-50: bin/drover's own picker
+    //                                 resolves the id first and hands us row 2.
+    //                                 Still here for a plain, unwrapped run.
     //   --continue                    on disk, same as an explicit --resume
     //   local -> remote -> local      n/a: session.sessionId is set by then, so
     //                                 createSessionScanner's own constructor
