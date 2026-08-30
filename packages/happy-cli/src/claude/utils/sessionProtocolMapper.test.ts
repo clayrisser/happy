@@ -7,6 +7,7 @@ import {
     ClaudeActivityPublisher,
     closeClaudeTurnWithStatus,
     mapClaudeLogMessageToSessionEnvelopes,
+    mapQueuedPromptToSessionEnvelopes,
     readClaudeActivity,
     type ClaudeActivity,
     type ClaudeSessionProtocolState,
@@ -756,5 +757,86 @@ describe('ClaudeActivityPublisher', () => {
         // the settled value is a real change and goes out once.
         expect(writes).toHaveLength(2);
         expect(writes[1].subagents).toEqual({ running: 1, queued: 0, total: 2 });
+    });
+});
+
+describe('mapQueuedPromptToSessionEnvelopes (DROVE-41)', () => {
+    it('shows a prompt the moment the terminal queues it', () => {
+        const state: ClaudeSessionProtocolState = { currentTurnId: 'turn-1' };
+        const result = mapQueuedPromptToSessionEnvelopes(
+            { text: 'why is it taking so long', at: 1788113356575, carrier: 'enqueue' },
+            state,
+        );
+
+        expect(result.envelopes).toHaveLength(1);
+        expect(result.envelopes[0].role).toBe('user');
+        expect(result.envelopes[0].ev).toEqual({ t: 'text', text: 'why is it taking so long' });
+        // Stamped when it was typed, so it sits between the phone's messages
+        // where the human put it rather than where Claude got round to it.
+        expect(result.envelopes[0].time).toBe(1788113356575);
+        // The turn Claude is in the middle of stays open. It is why the prompt
+        // was queued at all, and ending it here would cut its reply in two.
+        expect(result.currentTurnId).toBe('turn-1');
+    });
+
+    it('does not show the absorb record as a second message', () => {
+        // The prompt reaches Claude twice on paper: the enqueue record when it
+        // is typed, then an attachment/queued_command when the running turn
+        // takes it. One message, so one bubble.
+        const state: ClaudeSessionProtocolState = { currentTurnId: 'turn-1' };
+        const typed = mapQueuedPromptToSessionEnvelopes(
+            { text: 'why is it taking so long', at: 1788113356575, carrier: 'enqueue' },
+            state,
+        );
+        const absorbed = mapQueuedPromptToSessionEnvelopes(
+            { text: 'why is it taking so long', at: 1788113421656, carrier: 'absorbed' },
+            state,
+        );
+
+        expect(typed.envelopes).toHaveLength(1);
+        expect(absorbed.envelopes).toHaveLength(0);
+    });
+
+    it('shows an absorb record on its own when the enqueue was never seen', () => {
+        // A scanner that starts mid-turn, or one whose first hook pre-marked
+        // the transcript as history, has no enqueue to pair with. The absorb
+        // record is then the first sighting and must not be swallowed.
+        const state: ClaudeSessionProtocolState = { currentTurnId: 'turn-1' };
+        const result = mapQueuedPromptToSessionEnvelopes(
+            { text: 'resume the subagents', at: 1788113421656, carrier: 'absorbed' },
+            state,
+        );
+
+        expect(result.envelopes).toHaveLength(1);
+        expect(result.envelopes[0].ev).toEqual({ t: 'text', text: 'resume the subagents' });
+    });
+
+    it('reuses the queued envelope id when the prompt lands as a real turn', () => {
+        // A prompt queued while Claude was busy and then dequeued normally
+        // DOES become a `user` record. The app keys messages by envelope id,
+        // so handing it the id we already sent leaves one bubble where the
+        // human typed it instead of adding a second one lower down.
+        const state: ClaudeSessionProtocolState = { currentTurnId: 'turn-1' };
+        const queued = mapQueuedPromptToSessionEnvelopes(
+            { text: 'why is it taking so long', at: 1788113356575, carrier: 'enqueue' },
+            state,
+        );
+        const turn = mapClaudeLogMessageToSessionEnvelopes({
+            type: 'user',
+            uuid: 'ce582d10-2d6e-421d-96e8-7856e6ac21c4',
+            isSidechain: false,
+            message: { role: 'user', content: 'why is it taking so long' },
+            timestamp: '2026-08-30T16:41:57.071Z',
+        } as any, state);
+
+        const userEnvelope = turn.envelopes.find((e) => e.role === 'user');
+        expect(userEnvelope?.id).toBe(queued.envelopes[0].id);
+        // And the id is spent: a second prompt with the same words is its own
+        // message and gets its own bubble.
+        const again = mapQueuedPromptToSessionEnvelopes(
+            { text: 'why is it taking so long', at: 1788113500000, carrier: 'enqueue' },
+            state,
+        );
+        expect(again.envelopes[0].id).not.toBe(queued.envelopes[0].id);
     });
 });

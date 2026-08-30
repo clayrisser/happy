@@ -530,6 +530,7 @@ describe('claudeLocalLauncher in a tmux pane', () => {
             client: {
                 sendClaudeSessionMessage: vi.fn(),
                 sendClaudeSessionMessageFromLocalTranscript: vi.fn(async () => {}),
+                sendQueuedPromptFromLocalTranscript: vi.fn(),
                 closeClaudeSessionTurn: vi.fn(),
                 sendSessionEvent: vi.fn(),
                 rpcHandlerManager: { registerHandler: vi.fn() },
@@ -580,6 +581,41 @@ describe('claudeLocalLauncher in a tmux pane', () => {
         expect(mockSendToInbox).toHaveBeenCalledWith(inbox, 'from the phone', claudeSessionId);
         expect(mockInjectIntoPane).not.toHaveBeenCalled();
         expect(runs[0].opts.abort.aborted).toBe(false);
+
+        runs[0].run.resolve();
+        await expect(launcher).resolves.toEqual({ type: 'exit', code: 0 });
+    });
+
+    it('sends a terminal-queued prompt to the app, but not its own echo (DROVE-41)', async () => {
+        // A message typed while Claude is busy is queued inside Claude Code
+        // and only ever recorded as queue/attachment records, so nothing used
+        // to carry it to the app. The scanner reports it now — but everything
+        // WE put in the pane comes back through the same records, and the app
+        // is already showing those: it sent them.
+        mockFindInbox.mockResolvedValue(inbox);
+        mockSendToInbox.mockResolvedValue('ok');
+        const runs = trackRuns();
+        const { session, queue } = paneSession();
+
+        const launcher = claudeLocalLauncher(session as any);
+        await vi.waitFor(() => expect(runs).toHaveLength(1));
+        const scannerOpts = mockCreateSessionScanner.mock.calls.at(-1)![0];
+
+        queue.push('from the phone', mode);
+        await vi.waitFor(() => expect(mockSendToInbox).toHaveBeenCalled());
+
+        // Both records one delivery produces are swallowed, not just the first.
+        scannerOpts.onQueuedPrompt({ text: 'from the phone', at: 1788113356575, carrier: 'enqueue' });
+        scannerOpts.onQueuedPrompt({ text: 'from the phone', at: 1788113421656, carrier: 'absorbed' });
+        expect(session.client.sendQueuedPromptFromLocalTranscript).not.toHaveBeenCalled();
+
+        scannerOpts.onQueuedPrompt({ text: 'typed at the keyboard', at: 1788113356600, carrier: 'enqueue' });
+        expect(session.client.sendQueuedPromptFromLocalTranscript).toHaveBeenCalledWith({
+            text: 'typed at the keyboard',
+            at: 1788113356600,
+            carrier: 'enqueue',
+        });
+        expect(session.client.sendQueuedPromptFromLocalTranscript).toHaveBeenCalledTimes(1);
 
         runs[0].run.resolve();
         await expect(launcher).resolves.toEqual({ type: 'exit', code: 0 });

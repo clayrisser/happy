@@ -75,6 +75,88 @@ describe('sessionScanner', () => {
     expect(titles).toEqual(['zap', 'zing'])
   })
 
+  it('carries a message typed while Claude was busy, which never becomes a user record (DROVE-41)', async () => {
+    // Measured on Clay's live transcript. Type while Claude is mid-turn and
+    // Claude Code queues the text instead of starting a turn with it: a
+    // `queue-operation` enqueue record on the way in, then, when the running
+    // turn absorbs it, an `attachment` holding a `queued_command`. 20 of the
+    // 26 prompts queued in that session NEVER became a `user` record at all.
+    // Both carriers died here — queue-operation in INTERNAL_CLAUDE_EVENT_TYPES,
+    // attachment in RawJSONLinesSchema — so the app saw nothing, which is
+    // exactly "when I enter a new message in the terminal it doesn't show up".
+    const queued: Array<{ text: string, carrier: string }> = []
+    scanner = await createSessionScanner({
+      sessionId: null,
+      workingDirectory: testDir,
+      onMessage: (msg) => collectedMessages.push(msg),
+      onQueuedPrompt: (p) => queued.push({ text: p.text, carrier: p.carrier }),
+    })
+
+    const sessionId = 'bbbbbbbb-cccc-dddd-eeee-ffffffffffff'
+    const file = join(projectDir, `${sessionId}.jsonl`)
+    await writeFile(file, JSON.stringify({
+      type: 'queue-operation',
+      operation: 'enqueue',
+      timestamp: '2026-08-30T18:09:16.575Z',
+      sessionId,
+      content: 'why is it taking so long',
+    }) + '\n')
+    scanner.onNewSession(sessionId)
+    await new Promise(resolve => setTimeout(resolve, 200))
+
+    // The moment it is queued, not a minute later when the turn takes it.
+    expect(queued).toEqual([{ text: 'why is it taking so long', carrier: 'enqueue' }])
+    expect(collectedMessages).toHaveLength(0)
+
+    // The absorb record follows. Its timestamp is the enqueue's, but only to
+    // the millisecond ONE of Clay's 23 pairs actually agreed on, so the two
+    // carriers are reported separately and paired downstream by text.
+    await appendFile(file, JSON.stringify({
+      type: 'attachment',
+      uuid: 'd34bdba5-4a3c-4caa-a490-4e6c592a360e',
+      timestamp: '2026-08-30T18:10:21.656Z',
+      sessionId,
+      isSidechain: false,
+      attachment: {
+        type: 'queued_command',
+        prompt: 'why is it taking so long',
+        commandMode: 'prompt',
+        origin: { kind: 'human' },
+        timestamp: '2026-08-30T18:09:16.574Z',
+      },
+    }) + '\n')
+    await new Promise(resolve => setTimeout(resolve, 200))
+
+    expect(queued).toEqual([
+      { text: 'why is it taking so long', carrier: 'enqueue' },
+      { text: 'why is it taking so long', carrier: 'absorbed' },
+    ])
+    expect(collectedMessages).toHaveLength(0)
+  })
+
+  it('ignores the queue records that carry no prompt (DROVE-41)', async () => {
+    // dequeue says a prompt left the queue and remove says it was taken into
+    // the running turn. Neither is a new thing to show, and `remove` repeats
+    // the content, so reporting them would double every queued message.
+    const queued: string[] = []
+    scanner = await createSessionScanner({
+      sessionId: null,
+      workingDirectory: testDir,
+      onMessage: (msg) => collectedMessages.push(msg),
+      onQueuedPrompt: (p) => queued.push(p.text),
+    })
+
+    const sessionId = 'cccccccc-dddd-eeee-ffff-000000000000'
+    await writeFile(join(projectDir, `${sessionId}.jsonl`),
+      JSON.stringify({ type: 'queue-operation', operation: 'dequeue', timestamp: '2026-08-30T18:09:16.575Z', sessionId }) + '\n' +
+      JSON.stringify({ type: 'queue-operation', operation: 'remove', timestamp: '2026-08-30T18:10:21.656Z', sessionId, content: 'why is it taking so long', reason: 'absorbed_mid_turn' }) + '\n')
+    scanner.onNewSession(sessionId)
+    await new Promise(resolve => setTimeout(resolve, 200))
+
+    expect(queued).toEqual([])
+    expect(collectedMessages).toHaveLength(0)
+  })
+
   it('should process initial session and resumed session correctly', async () => {
     // TEST SCENARIO:
     // Phase 1: User says "lol" → Assistant responds "lol" → Session closes

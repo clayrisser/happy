@@ -15,15 +15,46 @@ import { getProjectPath } from "./path";
 const INTERNAL_CLAUDE_EVENT_TYPES = new Set([
     'file-history-snapshot',
     'change',
-    'queue-operation',
 ]);
 
 export type ScannerTranscriptEvent = ClaudeGoalStatusTranscriptEvent;
 
+/**
+ * A prompt typed at the keyboard while Claude was mid-turn (DROVE-41).
+ *
+ * Claude Code does not start a turn with it. It queues the text and writes
+ * two records instead, neither of which is a conversation message:
+ *
+ *   queue-operation   `{operation:'enqueue', content}` the instant it is typed
+ *   attachment        `{attachment:{type:'queued_command', prompt}}` when the
+ *                     running turn absorbs it
+ *
+ * Whether a `user` record ever follows depends on which way it leaves the
+ * queue. Counted over Clay's live session: 26 prompts queued, 6 dequeued into
+ * a real `user` turn and 20 absorbed mid-turn with no `user` record at all.
+ * Those 20 are the messages he typed and never saw on his phone.
+ *
+ * Both carriers are reported, because pairing them here is not reliable: the
+ * absorb record repeats the enqueue timestamp but only to the millisecond,
+ * and one of the 23 pairs on disk was 1ms out. The consumer pairs them by
+ * text instead, which is exact.
+ */
+export type ScannerQueuedPrompt = {
+    /** What the human typed, before Claude Code wraps it for the model. */
+    text: string
+    /** When it was queued, ms since epoch. 0 if the record carried no time. */
+    at: number
+    /** Which record this came from. See the pairing note above. */
+    carrier: 'enqueue' | 'absorbed'
+    /** Set only on the absorb record — the enqueue record has no uuid. */
+    claudeUuid?: string
+};
+
 type SessionLogEntry =
     | { kind: 'message'; key: string; message: RawJSONLines }
     | { kind: 'transcript-event'; key: string; event: ScannerTranscriptEvent }
-    | { kind: 'custom-title'; key: string; title: string };
+    | { kind: 'custom-title'; key: string; title: string }
+    | { kind: 'queued-prompt'; key: string; prompt: ScannerQueuedPrompt };
 
 export async function createSessionScanner(opts: {
     sessionId: string | null,
@@ -51,6 +82,12 @@ export async function createSessionScanner(opts: {
      * failed RawJSONLinesSchema, so it was dropped as an unknown type.
      */
     onCustomTitle?: (title: string) => void
+    /**
+     * A prompt typed at the terminal while Claude was busy (DROVE-41). Fires
+     * once per carrier record; see ScannerQueuedPrompt for why both are
+     * reported and who pairs them.
+     */
+    onQueuedPrompt?: (prompt: ScannerQueuedPrompt) => void
     /**
      * How long a session transcript may stay absent before its watcher gives
      * up and the session is dropped. Defaults to the startFileWatcher default
@@ -177,6 +214,9 @@ export async function createSessionScanner(opts: {
                 } else if (entry.kind === 'custom-title') {
                     logger.debug(`[SESSION_SCANNER] Session renamed in Claude Code: ${entry.title}`);
                     opts.onCustomTitle?.(entry.title);
+                } else if (entry.kind === 'queued-prompt') {
+                    logger.debug(`[SESSION_SCANNER] Prompt queued in the terminal (${entry.prompt.carrier})`);
+                    opts.onQueuedPrompt?.(entry.prompt);
                 } else {
                     logger.debug(`[SESSION_SCANNER] Sending new transcript event: type=${entry.event.type}, uuid=${entry.event.uuid}`);
                     opts.onTranscriptEvent?.(entry.event);
@@ -385,6 +425,23 @@ async function readSessionEntries(projectDir: string, sessionId: string): Promis
                 continue;
             }
 
+            // DROVE-41: before the internal-type skip below, because the
+            // enqueue record IS a queue-operation and is the only sighting of
+            // a typed message until the turn that swallows it ends.
+            const queuedPrompt = parseQueuedPrompt(message);
+            if (queuedPrompt) {
+                entries.push({
+                    kind: 'queued-prompt',
+                    // Keyed per carrier so both are reported once each. The
+                    // enqueue record has no uuid, so its time and text are all
+                    // there is to key it by; two identical prompts queued in
+                    // the same millisecond are one message as far as we can
+                    // tell, and collapsing them is the safe way round.
+                    key: `queued:${queuedPrompt.carrier}:${queuedPrompt.at}:${queuedPrompt.text}`,
+                    prompt: queuedPrompt,
+                });
+                continue;
+            }
             const transcriptEvent = parseClaudeGoalStatusTranscriptEvent(message);
             if (transcriptEvent) {
                 entries.push({
@@ -392,6 +449,16 @@ async function readSessionEntries(projectDir: string, sessionId: string): Promis
                     key: transcriptEventKey(transcriptEvent),
                     event: transcriptEvent,
                 });
+                continue;
+            }
+
+            // Everything else these two types carry is bookkeeping. dequeue
+            // says a prompt left the queue and remove says the running turn
+            // took it — neither is a new message, and remove repeats the
+            // content, so reporting it would double every queued prompt. The
+            // other attachment kinds are skill listings, hook results and
+            // token reminders, and only goal_status above is worth surfacing.
+            if (message.type === 'queue-operation' || message.type === 'attachment') {
                 continue;
             }
             
@@ -422,4 +489,47 @@ async function readSessionEntries(projectDir: string, sessionId: string): Promis
         }
     }
     return entries;
+}
+
+function timestampMs(value: unknown): number {
+    if (typeof value !== 'string') {
+        return 0;
+    }
+    const parsed = Date.parse(value);
+    return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+/**
+ * The two records Claude Code writes for a prompt typed mid-turn, or null for
+ * everything else that shares their `type`. See ScannerQueuedPrompt.
+ */
+function parseQueuedPrompt(message: any): ScannerQueuedPrompt | null {
+    if (message?.type === 'queue-operation') {
+        if (message.operation !== 'enqueue' || typeof message.content !== 'string') {
+            return null;
+        }
+        return {
+            text: message.content,
+            at: timestampMs(message.timestamp),
+            carrier: 'enqueue',
+        };
+    }
+    if (message?.type === 'attachment') {
+        // `attachment` is a busy channel — skill listings, hook results, token
+        // reminders and eight other kinds ride it. Only queued_command is a
+        // human talking.
+        const attachment = message.attachment;
+        if (!attachment || attachment.type !== 'queued_command' || typeof attachment.prompt !== 'string') {
+            return null;
+        }
+        return {
+            text: attachment.prompt,
+            at: timestampMs(attachment.timestamp ?? message.timestamp),
+            carrier: 'absorbed',
+            ...(typeof message.uuid === 'string' && message.uuid.length > 0
+                ? { claudeUuid: message.uuid }
+                : {}),
+        };
+    }
+    return null;
 }

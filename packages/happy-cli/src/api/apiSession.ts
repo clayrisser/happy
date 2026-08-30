@@ -18,6 +18,7 @@ import {
     ClaudeActivityPublisher,
     closeClaudeTurnWithStatus,
     mapClaudeLogMessageToSessionEnvelopes,
+    mapQueuedPromptToSessionEnvelopes,
     type ClaudeSessionProtocolState,
 } from '@/claude/utils/sessionProtocolMapper';
 import { InvalidateSync } from '@/utils/sync';
@@ -780,6 +781,20 @@ export class ApiSessionClient extends EventEmitter {
             this.sendSync.invalidate();
         }
         this.applyClaudeSessionMessageSideEffects(body);
+    }
+
+    /**
+     * A prompt typed at the terminal while Claude was busy (DROVE-41).
+     *
+     * Not a transcript message — Claude Code queues it and may never write it
+     * as one — so it does not go through the local-transcript path above. It
+     * is a message all the same, and the app has no other way to learn it was
+     * typed.
+     */
+    sendQueuedPromptFromLocalTranscript(prompt: { text: string; at?: number; carrier: 'enqueue' | 'absorbed'; claudeUuid?: string }): void {
+        const mapped = mapQueuedPromptToSessionEnvelopes(prompt, this.claudeSessionProtocolState);
+        this.claudeSessionProtocolState.currentTurnId = mapped.currentTurnId;
+        this.enqueueSessionProtocolEnvelopes(mapped.envelopes);
     }
 
     closeClaudeSessionTurn(status: SessionTurnEndStatus = 'completed') {
