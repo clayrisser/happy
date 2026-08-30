@@ -6,12 +6,14 @@ const {
     mockInjectIntoPane,
     mockFindInbox,
     mockSendToInbox,
+    mockInterruptPane,
 } = vi.hoisted(() => ({
     mockClaudeLocal: vi.fn(),
     mockCreateSessionScanner: vi.fn(),
     mockInjectIntoPane: vi.fn(),
     mockFindInbox: vi.fn(),
     mockSendToInbox: vi.fn(),
+    mockInterruptPane: vi.fn(),
 }));
 
 vi.mock('./claudeLocal', () => ({
@@ -39,6 +41,7 @@ vi.mock('./utils/paneInject', () => ({
         const delivered = Boolean(await mockInjectIntoPane(gate.pane, text));
         return { delivered, submitted: delivered };
     },
+    interruptPane: mockInterruptPane,
 }));
 
 vi.mock('./utils/inboxSocket', () => ({
@@ -230,6 +233,59 @@ describe('claudeLocalLauncher', () => {
 
         await expect(launcher).resolves.toEqual({ type: 'switch' });
         expect(session.client.closeClaudeSessionTurn).toHaveBeenCalledWith('completed');
+    });
+
+    it('still hands a PANELESS session to remote mode when the phone presses Stop', async () => {
+        // DROVE-13 softens Stop for a pane session only. A daemon-spawned one
+        // has no terminal to protect and no other carrier the phone can reach,
+        // so the upstream kill-and-switch stays exactly as it was.
+        const localRun = createDeferred<void>();
+        let abortSignal: AbortSignal | undefined;
+        mockClaudeLocal.mockImplementation(async (opts: { abort: AbortSignal }) => {
+            abortSignal = opts.abort;
+            await localRun.promise;
+        });
+        const handlers = new Map<string, () => Promise<void>>();
+        const session = {
+            sessionId: 'claude-session-paneless',
+            path: '/tmp/project',
+            client: {
+                sendClaudeSessionMessage: vi.fn(),
+                sendClaudeSessionMessageFromLocalTranscript: vi.fn(async () => {}),
+                closeClaudeSessionTurn: vi.fn(),
+                sendSessionEvent: vi.fn(),
+                rpcHandlerManager: {
+                    registerHandler: vi.fn((name: string, fn: () => Promise<void>) => {
+                        if (!handlers.has(name)) handlers.set(name, fn);
+                    }),
+                },
+            },
+            queue: { reset: vi.fn(), setOnMessage: vi.fn(), size: vi.fn(() => 0) },
+            addSessionFoundCallback: vi.fn(),
+            removeSessionFoundCallback: vi.fn(),
+            onAbort: vi.fn(),
+            onSessionFound: vi.fn(),
+            onThinkingChange: vi.fn(),
+            consumeOneTimeFlags: vi.fn(),
+            claudeEnvVars: undefined,
+            claudeArgs: undefined,
+            mcpServers: {},
+            allowedTools: [],
+            hookSettingsPath: '/tmp/hook-settings.json',
+            sandboxConfig: undefined,
+        };
+
+        const launcher = claudeLocalLauncher(session as any);
+        await vi.waitFor(() => expect(handlers.has('abort')).toBe(true));
+
+        void handlers.get('abort')!();
+
+        await vi.waitFor(() => expect(abortSignal?.aborted).toBe(true));
+        expect(mockInterruptPane).not.toHaveBeenCalled();
+        expect(session.queue.reset).toHaveBeenCalled();
+
+        localRun.resolve();
+        await expect(launcher).resolves.toEqual({ type: 'switch' });
     });
 
     it('routes scanner messages through local transcript replay so attachments can be uploaded', async () => {
@@ -661,6 +717,115 @@ describe('claudeLocalLauncher in a tmux pane', () => {
 
         runs[1].run.resolve();
         await expect(launcher).resolves.toEqual({ type: 'exit', code: 0 });
+    });
+
+    /**
+     * DROVE-13. The fifth way the phone took the terminal, and the loudest:
+     * pressing Stop. Upstream's doAbort SIGTERMed the child and set
+     * `{type:'switch'}`, so a button the app labels "cancel the active turn"
+     * killed the TUI and handed the session to a headless run.
+     */
+    describe('Stop from the phone', () => {
+        /** The handler the app's `abort` RPC actually calls. */
+        function abortHandler(session: any): () => Promise<void> {
+            const call = session.client.rpcHandlerManager.registerHandler.mock.calls
+                .find(([name]: [string]) => name === 'abort');
+            expect(call, 'no abort handler registered').toBeDefined();
+            return call[1];
+        }
+
+        it('cancels the turn with an Escape and leaves the child running', async () => {
+            mockInterruptPane.mockResolvedValue('cancelled');
+            const runs = trackRuns();
+            const { session } = paneSession();
+
+            const launcher = claudeLocalLauncher(session as any);
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+
+            await abortHandler(session)();
+
+            expect(mockInterruptPane).toHaveBeenCalledWith(
+                expect.objectContaining({ pane, claudeSessionId }),
+            );
+            // The three things Stop must not do: kill the child, end the
+            // launcher, or hand the session to remote mode.
+            expect(runs[0].opts.abort.aborted).toBe(false);
+            expect(runs).toHaveLength(1);
+            expect(session.client.closeClaudeSessionTurn).toHaveBeenCalledWith('cancelled');
+
+            // ...and the session is still there for the next message.
+            runs[0].run.resolve();
+            await expect(launcher).resolves.toEqual({ type: 'exit', code: 0 });
+        });
+
+        it('still does not kill the child when the pane refuses the interrupt', async () => {
+            mockInterruptPane.mockResolvedValue('unavailable');
+            const runs = trackRuns();
+            const { session } = paneSession();
+
+            const launcher = claudeLocalLauncher(session as any);
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+
+            await abortHandler(session)();
+
+            expect(runs[0].opts.abort.aborted).toBe(false);
+            expect(session.client.sendSessionEvent).toHaveBeenCalledWith(
+                expect.objectContaining({ message: expect.stringContaining('no turn to stop') }),
+            );
+
+            runs[0].run.resolve();
+            await expect(launcher).resolves.toEqual({ type: 'exit', code: 0 });
+        });
+
+        it('leaves a message that is still queued alone', async () => {
+            // Stop is about the turn in flight. A message held for the next
+            // child never ran, so cancelling does not un-send it.
+            mockInterruptPane.mockResolvedValue('cancelled');
+            mockFindInbox.mockResolvedValue(null);
+            mockInjectIntoPane.mockResolvedValue(false);
+            const runs = trackRuns();
+            const { session, queue } = paneSession();
+
+            const launcher = claudeLocalLauncher(session as any);
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+            queue.push('from the phone', mode);
+            await vi.waitFor(() => expect(queue.size()).toBe(1));
+
+            await abortHandler(session)();
+
+            expect(queue.size()).toBe(1);
+
+            runs[0].run.resolve();
+            await expect(launcher).resolves.toEqual({ type: 'exit', code: 0 });
+        });
+
+        it('a flip still gets the child killed, because it has to relaunch it', async () => {
+            // Stop and a flip share the word "abort" and nothing else. The flip
+            // goes through setAbortHandler, so softening Stop must not soften it.
+            mockInterruptPane.mockResolvedValue('cancelled');
+            const runs = trackRuns();
+            const { session } = paneSession();
+            let flipAbort: (() => void) | null = null;
+            (session as any).flip = {
+                setAbortHandler: (fn: (() => void) | null) => { flipAbort = fn; },
+                setInFlightProbe: vi.fn(),
+                hasPending: () => false,
+                take: () => null,
+                request: vi.fn(),
+            };
+
+            const launcher = claudeLocalLauncher(session as any);
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+
+            expect(flipAbort).toBeTruthy();
+            flipAbort!();
+
+            expect(runs[0].opts.abort.aborted).toBe(true);
+            expect(mockInterruptPane).not.toHaveBeenCalled();
+
+            runs[0].run.resolve();
+            await launcher;
+        });
     });
 });
 

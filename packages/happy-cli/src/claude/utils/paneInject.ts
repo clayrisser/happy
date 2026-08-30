@@ -213,6 +213,52 @@ export async function paneIsIdle(gate: PaneGate): Promise<boolean> {
     return true
 }
 
+/** What an in-place interrupt attempt came to. */
+export type PaneInterruptOutcome = 'cancelled' | 'idle' | 'unavailable'
+
+/**
+ * Cancel the active turn of the Claude running in `pane` without killing it —
+ * one Escape keystroke, exactly what a person at the keyboard presses to stop
+ * a turn (DROVE-13). The only other lever the launcher has is SIGTERM, which
+ * takes the whole TUI down along with the scrollback, a half-typed line and
+ * any open plan or permission prompt, so a phone Stop reaches for this first.
+ *
+ * Outcomes:
+ *   'cancelled'   — Escape went in; the turn is stopping, the TUI stands.
+ *   'idle'        — Claude's own registry says it is sitting at its prompt.
+ *                   There is no turn to cancel, and Escape at an idle prompt
+ *                   CLEARS whatever the human has half-typed, so nothing is
+ *                   sent. The caller must not read this as "fall back to a kill".
+ *   'unavailable' — the pane is gone, is back at a shell, or tmux refused.
+ *
+ * An UNKNOWN registry status still gets the Escape: Stop is surfaced on the
+ * phone exactly while a turn is running, so mid-turn is the overwhelmingly
+ * likely state, and an older Claude with no registry record must still be
+ * stoppable.
+ *
+ * One Escape, never two. A second one inside Claude Code's double-tap window
+ * opens the rewind picker, which is a different button entirely.
+ */
+export async function interruptPane(gate: PaneGate): Promise<PaneInterruptOutcome> {
+    if (!(await paneRunningClaude(gate.pane))) {
+        logger.debug(`[paneInject] interrupt: ${gate.pane} is not running Claude`)
+        return 'unavailable'
+    }
+    const status = await registryStatus(gate.configDir, gate.claudeSessionId, gate.pane)
+    if (status === 'idle') {
+        logger.debug('[paneInject] interrupt: registry says idle — no turn to cancel, no keystroke sent')
+        return 'idle'
+    }
+    try {
+        await run('tmux', ['send-keys', '-t', gate.pane, 'Escape'])
+        logger.debug(`[paneInject] interrupt: sent Escape to ${gate.pane} (registry said ${status ?? 'nothing'})`)
+        return 'cancelled'
+    } catch (e) {
+        logger.debug('[paneInject] interrupt failed:', e)
+        return 'unavailable'
+    }
+}
+
 export interface PaneInjectOptions {
     /**
      * Press Enter after the paste. Default true, which is the historical
