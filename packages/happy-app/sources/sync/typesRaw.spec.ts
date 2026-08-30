@@ -1990,7 +1990,7 @@ describe('Zod Transform - WOLOG Content Normalization', () => {
             }
         });
 
-        it('drops start/stop lifecycle markers', () => {
+        it('maps start/stop lifecycle markers to a subagent row', () => {
             const subagent = createId();
             const start = normalizeRawMessage('db-start-1', null, 1, {
                 ...base,
@@ -2006,7 +2006,16 @@ describe('Zod Transform - WOLOG Content Normalization', () => {
                     }
                 }
             });
-            expect(start).toBeNull();
+            expect(start).not.toBeNull();
+            expect(start!.role).toBe('event');
+            expect(start!.isSidechain).toBe(false);
+            expect(start!.role === 'event' ? start!.content : null).toEqual({
+                type: 'subagent',
+                subagent,
+                title: 'Research agent',
+                state: 'running',
+                startedAt: 1,
+            });
 
             const stop = normalizeRawMessage('db-stop-1', null, 1, {
                 ...base,
@@ -2022,7 +2031,13 @@ describe('Zod Transform - WOLOG Content Normalization', () => {
                     }
                 }
             });
-            expect(stop).toBeNull();
+            expect(stop).not.toBeNull();
+            expect(stop!.role).toBe('event');
+            expect(stop!.role === 'event' ? stop!.content : null).toEqual({
+                type: 'subagent-stop',
+                subagent,
+                completedAt: 1,
+            });
         });
 
         it('returns null for non-cuid subagent identifiers', () => {

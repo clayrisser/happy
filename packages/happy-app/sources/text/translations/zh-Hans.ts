@@ -917,6 +917,10 @@ export const zhHans: TranslationStructure = {
         usageLimitUntil: ({ time }: { time: string }) => `使用限制到 ${time}`,
         sentAsGoal: 'Sent as goal',
         unknownTime: '未知时间',
+        thoughtProcess: '思考过程',
+        thinkingNow: '正在思考…',
+        agentRunning: ({ duration }: { duration: string }) => `代理运行中 · ${duration}`,
+        agentFinished: ({ duration }: { duration: string }) => `代理已完成 · ${duration}`,
     },
 
     codex: {
