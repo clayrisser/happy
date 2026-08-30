@@ -583,6 +583,9 @@ export const ru: TranslationStructure = {
     toolView: {
         input: 'Входные данные',
         output: 'Результат',
+        raw: 'Исходный JSON',
+        showMore: 'Показать больше',
+        showLess: 'Показать меньше',
     },
 
     toolGroup: {

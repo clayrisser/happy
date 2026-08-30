@@ -568,6 +568,9 @@ export const zhHans: TranslationStructure = {
     toolView: {
         input: '输入',
         output: '输出',
+        raw: '原始 JSON',
+        showMore: '显示更多',
+        showLess: '显示更少',
     },
 
     toolGroup: {

@@ -581,6 +581,9 @@ export const en: TranslationStructure = {
     toolView: {
         input: 'Input',
         output: 'Output',
+        raw: 'Raw JSON',
+        showMore: 'Show more',
+        showLess: 'Show less',
     },
 
     toolGroup: {

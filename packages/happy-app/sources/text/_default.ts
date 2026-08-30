@@ -592,6 +592,9 @@ export const en = {
     toolView: {
         input: 'Input',
         output: 'Output',
+        raw: 'Raw JSON',
+        showMore: 'Show more',
+        showLess: 'Show less',
     },
 
     toolGroup: {

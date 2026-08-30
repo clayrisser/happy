@@ -567,6 +567,9 @@ export const es: TranslationStructure = {
     toolView: {
         input: 'Entrada',
         output: 'Salida',
+        raw: 'JSON sin procesar',
+        showMore: 'Mostrar más',
+        showLess: 'Mostrar menos',
     },
 
     toolGroup: {

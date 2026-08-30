@@ -567,6 +567,9 @@ export const zhHant: TranslationStructure = {
     toolView: {
         input: '輸入',
         output: '輸出',
+        raw: '原始 JSON',
+        showMore: '顯示更多',
+        showLess: '顯示更少',
     },
 
     toolGroup: {

@@ -3,10 +3,9 @@ import { Text, View, TouchableOpacity, ActivityIndicator, Platform } from 'react
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Ionicons, Octicons } from '@expo/vector-icons';
 import { getToolViewComponent } from './views/_all';
+import { GenericToolView } from './views/GenericToolView';
+import { hulyToolTitle, isHulyTool } from '@/utils/hulyTool';
 import { Message, ToolCall } from '@/sync/typesMessage';
-import { CodeView } from '../CodeView';
-import { ToolSectionView } from './ToolSectionView';
-import { ToolCollapsibleSection } from './ToolCollapsibleSection';
 import { useElapsedTime } from '@/hooks/useElapsedTime';
 import { ToolError } from './ToolError';
 import { knownTools } from '@/components/tools/knownTools';
@@ -14,7 +13,6 @@ import { Metadata } from '@/sync/storageTypes';
 import { useRouter } from 'expo-router';
 import { PermissionFooter } from './PermissionFooter';
 import { parseToolUseError } from '@/utils/toolErrorParser';
-import { t } from '@/text';
 import {
     formatMCPTitle,
     getToolActivityLabel,
@@ -93,9 +91,13 @@ export const ToolView = React.memo<ToolViewProps>((props) => {
     
     // Special handling for MCP tools
     if (tool.name.startsWith('mcp__')) {
-        toolTitle = formatMCPTitle(tool.name);
+        // `MCP: Huly Huly Update` is what formatMCPTitle makes of the raw name;
+        // the ticket ops say who they are much better than that (DROVE-51).
+        toolTitle = isHulyTool(tool.name) ? hulyToolTitle(tool.name, tool.input) : formatMCPTitle(tool.name);
         icon = <Ionicons name="extension-puzzle-outline" size={18} color={theme.colors.textSecondary} />;
-        minimal = true;
+        // Every MCP tool used to collapse to a one-line row with its payload
+        // out of reach. One that has a card earns the card (DROVE-51).
+        minimal = !getToolViewComponent(tool.name);
     } else if (knownTool?.title) {
         if (typeof knownTool.title === 'function') {
             toolTitle = knownTool.title({ tool, metadata: props.metadata });
@@ -282,33 +284,16 @@ export const ToolView = React.memo<ToolViewProps>((props) => {
                     );
                 }
 
-                // Fall back to default view
-                // A big payload (a Workflow script, say) collapses behind a disclosure row
-                // instead of dumping screens of code into the transcript.
-                const renderSerialized = (title: string, code: string) => {
-                    const lineCount = code.split('\n').length;
-                    if (lineCount > 20 || code.length > 1200) {
-                        return (
-                            <ToolCollapsibleSection title={title} lineCount={lineCount}>
-                                <CodeView code={code} />
-                            </ToolCollapsibleSection>
-                        );
-                    }
-                    return (
-                        <ToolSectionView title={title}>
-                            <CodeView code={code} />
-                        </ToolSectionView>
-                    );
-                };
+                // Fall back to the generic structured card. A tool input is a
+                // JSON-schema'd object, so it lays out as labelled rows without
+                // anyone hand-writing a view for this tool (DROVE-51). The raw
+                // JSON is still one tap away.
                 return (
                     <View style={styles.content}>
-                        {/* Default content when no custom view available */}
-                        {tool.input && renderSerialized(t('toolView.input'), JSON.stringify(tool.input, null, 2))}
-
-                        {tool.state === 'completed' && tool.result && renderSerialized(
-                            t('toolView.output'),
-                            typeof tool.result === 'string' ? tool.result : JSON.stringify(tool.result, null, 2),
-                        )}
+                        <GenericToolView
+                            input={tool.input}
+                            result={tool.state === 'completed' ? tool.result : undefined}
+                        />
                     </View>
                 );
             })()}

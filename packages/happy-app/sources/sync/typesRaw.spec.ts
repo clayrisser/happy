@@ -2133,3 +2133,48 @@ describe('Zod Transform - WOLOG Content Normalization', () => {
         });
     });
 });
+
+/**
+ * DROVE-51. A Read of an image reached the tool detail screen as "No output was
+ * produced": the normalizer read `content[0].text` off the result blocks, and an
+ * image block has no `.text`, so a real result became the empty string.
+ */
+describe('tool result content blocks (DROVE-51)', () => {
+    const userMessage = (content: unknown) => ({
+        role: 'agent',
+        content: {
+            type: 'output',
+            data: {
+                type: 'user',
+                message: {
+                    role: 'user',
+                    content: [{ type: 'tool_result', tool_use_id: 'call_1', content, is_error: false }],
+                },
+                uuid: 'uuid-1',
+            },
+        },
+    });
+
+    const resultContent = (raw: unknown) => {
+        const normalized = normalizeRawMessage('msg-1', null, 1, raw as any);
+        expect(normalized).not.toBeNull();
+        const blocks = normalized!.content as Array<{ type: string; content?: unknown }>;
+        expect(blocks[0].type).toBe('tool-result');
+        return blocks[0].content;
+    };
+
+    it('keeps an image block instead of flattening it to an empty string', () => {
+        const blocks = [{ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: 'AAAA' } }];
+        expect(resultContent(userMessage(blocks))).toEqual(blocks);
+    });
+
+    it('still collapses text-only blocks to a string, and joins the ones past the first', () => {
+        expect(resultContent(userMessage([{ type: 'text', text: 'one' }]))).toBe('one');
+        expect(resultContent(userMessage([{ type: 'text', text: 'one' }, { type: 'text', text: 'two' }])))
+            .toBe('one\ntwo');
+    });
+
+    it('passes a plain string result through untouched', () => {
+        expect(resultContent(userMessage('file1.txt'))).toBe('file1.txt');
+    });
+});
