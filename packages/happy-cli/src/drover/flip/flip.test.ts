@@ -1022,3 +1022,236 @@ describe('/flip from the app', () => {
         expect(parseFlipCommand('')).toBeNull()
     })
 })
+
+// --- DROVE-21: the account a session STARTS on --------------------------------
+
+/** A whereabouts file written by hand, so the `at` order is the test's to set. */
+function writeWhereabouts(entries: Record<string, { account: string; cwd: string; at: number }>): void {
+    const dir = join(process.env.XDG_STATE_HOME!, 'cattle-drover')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'whereabouts.json'), JSON.stringify(entries))
+}
+
+const inAnHour = () => new Date(Date.now() + 60 * 60 * 1000).toISOString()
+
+describe('one login wearing two names', () => {
+    // main (~/.claude) and risserproperties both hold risserproperties@gmail.com:
+    // one claude.ai login, two drover names, and until now two rows with two
+    // separate headrooms for the same quota.
+    function twoNames() {
+        writeAccounts([
+            { name: 'main', configDir: join(root, 'tw-main') },
+            { name: 'alt', configDir: join(root, 'tw-alt') },
+            { name: 'twin', configDir: join(root, 'tw-twin') },
+        ])
+        writeFileSync(join(root, 'tw-twin', '.claude.json'),
+            JSON.stringify({ oauthAccount: { emailAddress: 'Main@example.com' } }))
+    }
+
+    it('names the duplicate after the first of its login in registry order', async () => {
+        twoNames()
+        const { readAccounts, sameLoginAs, loginTwins } = await accountsModule()
+        const accounts = readAccounts()
+        const by = (n: string) => accounts.find((a) => a.name === n)!
+        expect(sameLoginAs(by('twin'), accounts)).toBe('main')
+        expect(sameLoginAs(by('main'), accounts)).toBeUndefined()
+        expect(sameLoginAs(by('alt'), accounts)).toBeUndefined()
+        expect(loginTwins(by('main'), accounts).map((a) => a.name)).toEqual(['twin'])
+    })
+
+    it("reads a twin's exhaustion as this account's, and says whose cache saw it", async () => {
+        twoNames()
+        // The twin's cache is the fresh one: weekly_all at 100%. main's own
+        // cache says nothing, which used to read as headroom.
+        writeUsage(join(root, 'tw-twin'), [{ kind: 'weekly_all', percent: 100, resets_at: inAnHour() }])
+        const { readAccounts, coolingState } = await accountsModule()
+        const main = readAccounts().find((a) => a.name === 'main')!
+        const state = coolingState(main, {})
+        expect(state.until).toBeGreaterThan(0)
+        expect(state.reason).toContain('seen on twin, the same login')
+    })
+
+    it('never flips onto a twin of the account it is leaving', async () => {
+        twoNames()
+        const { pickTarget } = await accountsModule()
+        // Registry order would offer twin before alt; twin is the same login.
+        const choice = pickTarget('main', null)
+        expect(choice.kind).toBe('account')
+        if (choice.kind === 'account') expect(choice.account.name).toBe('alt')
+    })
+})
+
+describe('where the shared session store leaves the transcript', () => {
+    it('names no account when every account reaches the same file (DROVE-40)', async () => {
+        // Since DROVE-40 every projects/ is a symlink into one store, so the
+        // "newest copy" is one inode under four names and the mtime tie fell to
+        // whichever account the registry listed first. That is a guess, and it
+        // overruled a whereabouts record that was right.
+        const shared = join(root, 'shared-projects')
+        mkdirSync(shared, { recursive: true })
+        for (const n of ['s-main', 's-alt']) {
+            mkdirSync(join(root, n), { recursive: true })
+            symlinkSync(shared, join(root, n, 'projects'))
+        }
+        writeAccounts([
+            { name: 'main', configDir: join(root, 's-main') },
+            { name: 'alt', configDir: join(root, 's-alt') },
+        ])
+        const cwd = join(root, 'work-shared')
+        const id = 'dddddddd-eeee-ffff-0000-111111111111'
+        const file = join(projectDirFor(join(root, 's-main'), cwd), `${id}.jsonl`)
+        mkdirSync(dirname(file), { recursive: true })
+        writeFileSync(file, '{"type":"user"}\n')
+        const { accountByNewestTranscript } = await accountsModule()
+        expect(accountByNewestTranscript(id, cwd)).toBeUndefined()
+    })
+})
+
+describe('the account a session starts on', () => {
+    const cwd = '/work/thing'
+    function three() {
+        writeAccounts([
+            { name: 'main', configDir: join(root, 'st-main') },
+            { name: 'alt', configDir: join(root, 'st-alt') },
+            { name: 'third', configDir: join(root, 'st-third') },
+        ])
+    }
+
+    it('has no opinion without a registry', async () => {
+        const { pickStartAccount } = await accountsModule()
+        expect(pickStartAccount({ cwd })).toEqual({ via: 'none' })
+    })
+
+    it('falls back to the first account with headroom when nothing is remembered', async () => {
+        three()
+        const { pickStartAccount } = await accountsModule()
+        const pick = pickStartAccount({ cwd })
+        expect(pick.via).toBe('picker')
+        expect(pick.account?.name).toBe('main')
+        expect(pick.note).toContain('nothing remembered here')
+    })
+
+    it('starts on the account last used in this directory', async () => {
+        // Clay's words: "when I restart it should always resume with the
+        // account I was last using". The newest record for this cwd, whatever
+        // session id it was under.
+        three()
+        writeWhereabouts({
+            s1: { account: 'alt', cwd, at: 1000 },
+            s2: { account: 'third', cwd, at: 2000 },
+            s3: { account: 'main', cwd: '/work/other', at: 3000 },
+        })
+        const { pickStartAccount } = await accountsModule()
+        const pick = pickStartAccount({ cwd })
+        expect(pick.via).toBe('cwd')
+        expect(pick.account?.name).toBe('third')
+        expect(pick.note).toContain('last used in this directory')
+    })
+
+    it('prefers where the resumed session itself was left', async () => {
+        three()
+        writeWhereabouts({
+            s1: { account: 'alt', cwd, at: 1000 },
+            s2: { account: 'third', cwd, at: 2000 },
+        })
+        const { pickStartAccount } = await accountsModule()
+        const pick = pickStartAccount({ cwd, sessionId: 's1' })
+        expect(pick.via).toBe('session')
+        expect(pick.account?.name).toBe('alt')
+        // The same id in another directory is a different session.
+        expect(pickStartAccount({ cwd: '/work/other', sessionId: 's1' }).via).toBe('picker')
+    })
+
+    it('falls through to the picker when the remembered account is cooling, and says so', async () => {
+        three()
+        writeWhereabouts({ s1: { account: 'alt', cwd, at: 1000 } })
+        writeUsage(join(root, 'st-alt'), [{ kind: 'weekly_all', percent: 100, resets_at: inAnHour() }])
+        const { pickStartAccount } = await accountsModule()
+        const pick = pickStartAccount({ cwd })
+        expect(pick.via).toBe('picker')
+        expect(pick.account?.name).toBe('main')
+        expect(pick.note).toMatch(/^alt is cooling: weekly limit at 100%/)
+        expect(pick.note).toContain('Starting on main instead')
+    })
+
+    it('judges the memory against the model that will run there', async () => {
+        three()
+        writeWhereabouts({ s1: { account: 'alt', cwd, at: 1000 } })
+        // Only Fable is out on alt.
+        writeUsage(join(root, 'st-alt'), [
+            { kind: 'weekly_scoped', percent: 100, resets_at: inAnHour(), scope: scopedTo('Fable') },
+        ])
+        const { pickStartAccount } = await accountsModule()
+        // An Opus session stays put; a Fable one moves.
+        expect(pickStartAccount({ cwd, model: 'claude-opus-5' }).account?.name).toBe('alt')
+        expect(pickStartAccount({ cwd, model: 'claude-fable-5[1m]' }).account?.name).toBe('main')
+        // With no flag the account's own settings.json is the seed...
+        writeFileSync(join(root, 'st-alt', 'settings.json'), JSON.stringify({ model: 'opus[1m]' }))
+        expect(pickStartAccount({ cwd }).account?.name).toBe('alt')
+        // ...and with no seed either, unknown counts every limit.
+        rmSync(join(root, 'st-alt', 'settings.json'))
+        expect(pickStartAccount({ cwd }).account?.name).toBe('main')
+    })
+
+    it('stays on the memory when every account is cooling, rather than parking', async () => {
+        three()
+        writeWhereabouts({ s1: { account: 'alt', cwd, at: 1000 } })
+        for (const d of ['st-main', 'st-alt', 'st-third']) {
+            writeUsage(join(root, d), [{ kind: 'weekly_all', percent: 100, resets_at: inAnHour() }])
+        }
+        const { pickStartAccount } = await accountsModule()
+        const pick = pickStartAccount({ cwd })
+        expect(pick.via).toBe('cwd')
+        expect(pick.account?.name).toBe('alt')
+        expect(pick.note).toContain('Every account is cooling')
+        expect(pick.note).toContain('Starting there anyway')
+    })
+
+    it('skips a remembered account that has no login', async () => {
+        three()
+        writeWhereabouts({ s1: { account: 'alt', cwd, at: 1000 } })
+        rmSync(join(root, 'st-alt', '.claude.json'))
+        const { pickStartAccount } = await accountsModule()
+        const pick = pickStartAccount({ cwd })
+        expect(pick.via).toBe('picker')
+        expect(pick.account?.name).toBe('main')
+        expect(pick.note).toContain('alt has no login')
+    })
+})
+
+describe('the controller remembers where a session was seen', () => {
+    it('writes the stamped account when Claude reports the id, over an older record', async () => {
+        // With bin/drover stamping every start from this very record (or from
+        // -a), the stamp is the record or better; an older record must not
+        // put the controller on one account while the child runs on another.
+        writeAccounts([
+            { name: 'main', configDir: join(root, 'c-main') },
+            { name: 'alt', configDir: join(root, 'c-alt') },
+        ])
+        const { rememberWhereabouts, recallWhereabouts } = await accountsModule()
+        const { FlipController } = await import('./controller')
+        const cwd = join(root, 'work-ctl')
+        rememberWhereabouts('s1', cwd, 'alt')
+        const flip = new FlipController(cwd, () => {}, { toTerminal: () => {} })
+        flip.startedOn('main')
+        flip.sessionFound('s1')
+        expect(recallWhereabouts('s1', cwd)).toBe('main')
+    })
+
+    it('lets the record win for an unstamped start, and refreshes it', async () => {
+        writeAccounts([
+            { name: 'main', configDir: join(root, 'u-main') },
+            { name: 'alt', configDir: join(root, 'u-alt') },
+        ])
+        process.env.DROVER_ACCOUNT = 'main'
+        const { rememberWhereabouts, recallWhereabouts, readWhereabouts } = await accountsModule()
+        const { FlipController } = await import('./controller')
+        const cwd = join(root, 'work-unstamped')
+        rememberWhereabouts('s2', cwd, 'alt')
+        const before = readWhereabouts().s2.at
+        const flip = new FlipController(cwd, () => {}, { toTerminal: () => {} })
+        flip.sessionFound('s2')
+        expect(recallWhereabouts('s2', cwd)).toBe('alt')
+        expect(readWhereabouts().s2.at).toBeGreaterThanOrEqual(before)
+    })
+})
