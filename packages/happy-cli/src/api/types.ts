@@ -467,6 +467,14 @@ export type AgentState = {
       // subagent ids are `agentID:toolUseID`); the app joins the permission
       // card to its tool call through this.
       toolUseId?: string
+      // Which agent actually raised this, for a card the drover bridge
+      // mirrored (DROVE-19). The bridge holds one session for the whole
+      // machine, so without this the app cannot tell whose prompt it is and
+      // the session view has nothing of its own to present.
+      droverOrigin?: {
+        sessionId?: string
+        cwd?: string
+      }
     }
   }
   completedRequests?: {

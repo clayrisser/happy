@@ -106,10 +106,25 @@ export function titleFor(tool: string, args: unknown): string {
  */
 export interface DroverGateEntry {
     gate: DroverGate;
+    /** The session HOLDING the card — which is who an answer is sent to. */
     sessionId: string;
     requestId: string;
     tool: string;
     args: unknown;
+    /**
+     * The session that actually RAISED it, when the bridge mirrored it here
+     * (DROVE-19). Different from `sessionId` for every drover gate: the bridge
+     * holds one session per machine and every local agent's prompt lands in it.
+     */
+    origin?: DroverGateOrigin;
+}
+
+/** Written by happy-cli's droverBridge; see requestForEvent (DROVE-19). */
+export interface DroverGateOrigin {
+    /** The Claude Code session uuid, the same one the bus event carries. */
+    sessionId?: string | null;
+    /** For reading only — never matched on, see gatesForSession. */
+    cwd?: string | null;
 }
 
 /**
@@ -123,6 +138,8 @@ export interface GateSession {
         path?: string;
         summary?: { text: string } | null;
         droverAccount?: string;
+        /** What a mirrored gate's `droverOrigin.sessionId` is matched against. */
+        claudeSessionId?: string;
     } | null;
 }
 
@@ -166,11 +183,13 @@ export function collectGateEntries(
             );
             const account = session?.metadata?.droverAccount;
             const options = optionsFor(args);
+            const origin = (request as { droverOrigin?: DroverGateOrigin | null }).droverOrigin;
             entries.push({
                 sessionId,
                 requestId,
                 tool,
                 args,
+                ...(origin ? { origin } : {}),
                 gate: {
                     id: `${sessionId}:${requestId}`,
                     title: titleFor(tool, args),
@@ -212,15 +231,33 @@ export function collectGates(
 }
 
 /**
- * The gates raised by ONE session, oldest first (BASED-113).
+ * The gates the session on screen is waiting on, oldest first (DROVE-19).
  *
- * The session view presents its own gates in place, so it must never be handed
- * another session's. Narrowing the map to a single entry BEFORE collecting is
- * what makes that structural rather than a filter someone can later forget:
- * collectGateEntries cannot emit a gate for a session it was never given.
- * Driving several sessions at once is the normal case here, and a prompt from
- * the one you are not looking at stealing the screen is worse than the walk to
- * the gates list.
+ * Two kinds, and the second is the whole ticket:
+ *
+ * 1. A card the session holds itself. That is a rig or remote session, whose
+ *    permissions come back through the app's own permission machinery.
+ * 2. A card the drover bridge mirrored. A pane session's prompts never reach
+ *    its own agentState at all — the PreToolUse hook publishes to the bus and
+ *    the bridge mirrors every local agent's gate into ONE bridge session per
+ *    machine. So the session Clay was watching held nothing, the only copy was
+ *    on the home screen, and he had to navigate away to find a prompt his own
+ *    session had just raised.
+ *
+ * The join for (2) is the Claude session uuid: `droverOrigin.sessionId` on the
+ * card against `metadata.claudeSessionId` on the session. Exact uuid or
+ * nothing. NOT cwd — several lanes share one checkout here, so a cwd match
+ * would put one lane's question on another lane's screen, and a prompt from
+ * the session you are NOT looking at taking the screen is worse than the walk
+ * to the gates list. An older bridge that sends no origin leaves its gate
+ * where it is, on the bridge session and the gates screen, rather than being
+ * guessed onto a session.
+ *
+ * Collecting over the WHOLE map and filtering after is deliberate. Collecting
+ * over a one-session map instead made collectGateEntries believe every other
+ * session's gate had gone away, which evicted them from `firstSeenAt` and
+ * minted them a new "first seen" timestamp on the next global read — a
+ * createdAt that moves is exactly the render/read loop the map exists to stop.
  */
 export function gatesForSession(
     sessions: Record<string, GateSession | undefined>,
@@ -228,7 +265,11 @@ export function gatesForSession(
 ): DroverGateEntry[] {
     const session = sessions[sessionId];
     if (!session) return [];
-    return sortGateEntries(collectGateEntries({ [sessionId]: session }));
+    const claudeSessionId = session.metadata?.claudeSessionId;
+    return sortGateEntries(collectGateEntries(sessions).filter((entry) => (
+        entry.sessionId === sessionId
+        || (!!claudeSessionId && entry.origin?.sessionId === claudeSessionId)
+    )));
 }
 
 /**

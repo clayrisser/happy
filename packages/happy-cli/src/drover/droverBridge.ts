@@ -54,10 +54,42 @@ export interface PermissionAnswer {
     updatedInput?: Record<string, unknown>
 }
 
+/**
+ * Where the gate was actually raised, carried on the mirrored card (DROVE-19).
+ *
+ * Every bus gate is mirrored into ONE bridge session per machine, so the app's
+ * copy of it belongs to the bridge and not to the agent that stopped. That is
+ * the whole of "a prompt raised by the session already on screen does not
+ * present in place": the session view held nothing of its own to show, so the
+ * only copy was on the home screen and you had to go and find it.
+ *
+ * The Claude session uuid is the join. The app already stores it on a pane
+ * session as `metadata.claudeSessionId`, and the bus event carries the same
+ * uuid in `origin.sessionId` — measured on the live bus, e.g. event
+ * 580fed9e-db4b-42e1-b6f9-1d0033708461 origin.sessionId
+ * e495e6e8-43f6-4699-a984-ff19f5ab4551.
+ *
+ * `cwd` rides along for reading, never for matching. Several lanes share one
+ * checkout here, so matching on cwd would drop one lane's question onto
+ * another lane's screen, which is exactly the hijack this must not do.
+ */
+function droverOriginFor(ev: DroverEvent): { droverOrigin?: { sessionId?: string; cwd?: string } } {
+    const sessionId = ev.origin?.sessionId
+    const cwd = ev.origin?.cwd
+    if (!sessionId && !cwd) return {}
+    return {
+        droverOrigin: {
+            ...(sessionId ? { sessionId } : {}),
+            ...(cwd ? { cwd } : {}),
+        },
+    }
+}
+
 export function requestForEvent(ev: DroverEvent) {
     // Render through the app's existing permission-card path: a Bash-shaped
     // request carries the command preview; anything else goes descriptive.
     const description = [ev.title, ev.reason].filter(Boolean).join(' — ')
+    const origin = droverOriginFor(ev)
     if (ev.kind === 'question') {
         // The phone renders a question through the same AskUserQuestion card
         // Claude's own tool uses, and that card reads ONE thing: `questions[]`,
@@ -83,6 +115,7 @@ export function requestForEvent(ev: DroverEvent) {
                 ],
             },
             createdAt: Date.now(),
+            ...origin,
         }
     }
     if (ev.kind === 'permission') {
@@ -94,6 +127,7 @@ export function requestForEvent(ev: DroverEvent) {
                 ...(ev.origin?.cwd ? { cwd: ev.origin.cwd } : {}),
             },
             createdAt: Date.now(),
+            ...origin,
         }
     }
     return {
@@ -103,6 +137,7 @@ export function requestForEvent(ev: DroverEvent) {
             description,
         },
         createdAt: Date.now(),
+        ...origin,
     }
 }
 

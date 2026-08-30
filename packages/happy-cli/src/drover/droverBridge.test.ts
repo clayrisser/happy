@@ -57,6 +57,39 @@ describe('requestForEvent', () => {
         expect(card.tool).toBe('Bash')
         expect(card.arguments).toMatchObject({ command: 'rm -rf build', cwd: '/Users/clay/Projects/thing' })
     })
+
+    // Every gate is mirrored into ONE bridge session per machine, so without
+    // this the app cannot tell which of five running agents stopped and the
+    // session view has nothing of its own to present (DROVE-19).
+    it('names the session that raised a question, so the app can present it there', () => {
+        const card = requestForEvent({
+            ...question,
+            origin: {
+                harness: 'claude-code',
+                sessionId: 'e495e6e8-43f6-4699-a984-ff19f5ab4551',
+                cwd: '/Users/clay/Projects/bitspur/cattle-drover',
+            },
+        })
+        expect(card.droverOrigin).toEqual({
+            sessionId: 'e495e6e8-43f6-4699-a984-ff19f5ab4551',
+            cwd: '/Users/clay/Projects/bitspur/cattle-drover',
+        })
+    })
+
+    it('names it on a permission too', () => {
+        const card = requestForEvent({
+            ...permission,
+            origin: { harness: 'claude-code', sessionId: 'sess-9', cwd: '/Users/clay/Projects/thing' },
+        })
+        expect(card.droverOrigin).toEqual({ sessionId: 'sess-9', cwd: '/Users/clay/Projects/thing' })
+    })
+
+    // An event with no origin gets no origin key rather than an empty one: the
+    // app treats a missing origin as "this gate belongs to nobody in
+    // particular" and leaves it on the bridge session, which is the truth.
+    it('leaves the key off entirely when the bus event carries no origin', () => {
+        expect(requestForEvent(question).droverOrigin).toBeUndefined()
+    })
 })
 
 describe('busResolutionFor', () => {
