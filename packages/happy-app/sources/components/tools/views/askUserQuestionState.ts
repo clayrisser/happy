@@ -40,25 +40,48 @@ export function answersFromResolution(
 }
 
 /**
- * The answer once it lands in the tool result (DROVE-51). A question answered
- * at the terminal never goes through this app's permission, so the card only
- * learns the choice from the result Claude wrote: on disk that is
- * `{questions, answers: {<question text>: <label>}}`; on the SDK path it is
- * the sentence `Your questions have been answered: "<question>"="<label>". …`.
- * Both are measured from the drover transcripts. Anything else yields
- * undefined so the caller keeps whatever it already knew.
+ * The answer Claude Code itself recorded, read off the tool RESULT.
+ *
+ * DROVE-51 and DROVE-52 arrived at this from opposite ends and it is one
+ * function because there is one question: what did the user actually pick,
+ * when the app's permission machinery never saw the answer? A session Claude
+ * Code drives from a tmux pane has no `tool.permission` at all — the drover
+ * PreToolUse hook holds the prompt and answers it in a gum popup — so the card
+ * read `permission.reason`, found nothing, and drew "DROVE-50: —" for good.
+ *
+ * Two shapes, both copied off real drover transcripts:
+ *  - on disk, `{questions: […], answers: {"<question text>": "<label>"}}`,
+ *    which typesRaw.ts hands the reducer verbatim as `tool.result` (measured on
+ *    session 19c2f0a8, tool_use toolu_01AAvS8Ps…, answered 18:32:20Z);
+ *  - on the SDK path, the sentence `Your questions have been answered:
+ *    "<question>"="<label>". …`.
+ *
+ * A multi-select arrives as one string joined with ", " — the same separator
+ * providerAnswersFor writes and happy-cli's busResolutionFor splits on — so it
+ * is split back apart here and nowhere else. Anything else yields undefined so
+ * the caller keeps whatever it already knew; an empty map is never returned,
+ * because an empty map is truthy and that is what drew the em dash.
+ *
+ * `id` is optional so a caller holding raw AskUserQuestionCards can pass them
+ * straight in: the ids the form uses are positional (`question-0`), the same
+ * key providerAnswersFor joins on, so the fallback here is the same rule.
  */
 export function answersFromResult(
     result: unknown,
-    questions: Array<{ id: string; question: string }>,
+    questions: Array<{ id?: string; question: string; multiSelect?: boolean | null }>,
 ): InlineQuestionAnswers | undefined {
     if (questions.length === 0 || result === null || result === undefined) return undefined;
 
-    const byQuestion = new Map<string, string>();
+    const byQuestion = new Map<string, unknown>();
     const record = result as { answers?: unknown };
-    if (typeof result === 'object' && record.answers && typeof record.answers === 'object') {
+    if (
+        typeof result === 'object'
+        && record.answers
+        && typeof record.answers === 'object'
+        && !Array.isArray(record.answers)
+    ) {
         for (const [question, label] of Object.entries(record.answers as Record<string, unknown>)) {
-            if (typeof label === 'string') byQuestion.set(question, label);
+            byQuestion.set(question, label);
         }
     } else if (typeof result === 'string') {
         // "..."="..." pairs; a question can itself contain quotes, so match the
@@ -70,9 +93,18 @@ export function answersFromResult(
     if (byQuestion.size === 0) return undefined;
 
     const answers: InlineQuestionAnswers = {};
-    for (const question of questions) {
-        const label = byQuestion.get(question.question);
-        if (label !== undefined) answers[question.id] = [label];
-    }
+    questions.forEach((question, index) => {
+        const picked = labelsFor(byQuestion.get(question.question), question.multiSelect === true);
+        if (picked.length) answers[question.id ?? `question-${index}`] = picked;
+    });
     return Object.keys(answers).length > 0 ? answers : undefined;
+}
+
+function labelsFor(value: unknown, multiSelect: boolean): string[] {
+    if (Array.isArray(value)) {
+        return value.filter((entry): entry is string => typeof entry === 'string' && entry.length > 0);
+    }
+    if (typeof value !== 'string' || !value) return [];
+    if (!multiSelect) return [value];
+    return value.split(', ').map((part) => part.trim()).filter(Boolean);
 }

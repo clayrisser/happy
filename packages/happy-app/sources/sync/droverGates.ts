@@ -288,3 +288,30 @@ export function sortGateEntries(entries: DroverGateEntry[]): DroverGateEntry[] {
         return a.gate.id.localeCompare(b.gate.id);
     });
 }
+
+/**
+ * The pending gate that is asking THIS question, wherever it was raised.
+ *
+ * DROVE-52. A pane session's AskUserQuestion has no `tool.permission` of its
+ * own: the drover PreToolUse hook owns the answer, so nothing in the session's
+ * own agentState can be resolved. The bus event for it is mirrored into the
+ * bridge session instead, which is why the prompt appears on the home screen
+ * and the in-session card was a dead form — every option tappable, submit
+ * doing nothing because `tool.permission?.id` was undefined.
+ *
+ * Matching is on the question TEXT, which is what both sides carry: happy-cli
+ * mirrors the bus event's `preview` into `questions[0].question`, and the bus
+ * event's preview is the same string Claude Code put in the tool input. Ids
+ * cannot be used — the bus id and the tool_use id are minted independently.
+ */
+export function gateForQuestion(
+    sessions: Record<string, GateSession | undefined>,
+    question: string,
+): DroverGateEntry | null {
+    if (!question) return null;
+    for (const entry of sortGateEntries(collectGateEntries(sessions))) {
+        if (entry.tool !== 'AskUserQuestion') continue;
+        if (firstQuestion(entry.args)?.question === question) return entry;
+    }
+    return null;
+}

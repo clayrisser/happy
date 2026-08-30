@@ -2,6 +2,7 @@ import { storage } from '@/sync/storage';
 import { useDeepEqual } from '@/sync/storeSelectors';
 import {
     collectGateEntries,
+    gateForQuestion,
     gatesForSession,
     sortGateEntries,
     type DroverGateEntry,
@@ -31,6 +32,16 @@ export function usePendingGates(): DroverGateEntry[] {
  */
 export function useSessionGates(sessionId: string): DroverGateEntry[] {
     return storage(useDeepEqual((state) => gatesForSession(state.sessions ?? {}, sessionId)));
+}
+
+/**
+ * The pending gate asking a given question, for an in-session question card
+ * that has no permission of its own to answer through (DROVE-52).
+ *
+ * Deep-equal for the same reason the two above are.
+ */
+export function useGateForQuestion(question: string): DroverGateEntry | null {
+    return storage(useDeepEqual((state) => gateForQuestion(state.sessions ?? {}, question)));
 }
 
 export type { DroverGateEntry };

@@ -1,6 +1,7 @@
 import * as React from 'react';
 
 import { sessionAllow } from '@/sync/ops';
+import { useGateForQuestion } from '@/hooks/usePendingGates';
 import { ToolViewProps } from './_all';
 import {
     InlineQuestionForm,
@@ -13,35 +14,50 @@ import { answersFromResolution, answersFromResult, isQuestionSettled } from './a
 export const AskUserQuestionView = React.memo<ToolViewProps>(({ tool, sessionId }) => {
     const cards = React.useMemo(() => questionCards(tool.input), [tool.input]);
     const questions = React.useMemo<InlineQuestion[]>(() => toInlineQuestions(cards), [cards]);
+    const gate = useGateForQuestion(cards[0]?.question ?? '');
+
+    // Where an answer typed here has to go. A session Claude Code drives from
+    // a tmux pane carries no permission on the tool — the drover PreToolUse
+    // hook is holding the answer — so the card submits against the bus event
+    // mirrored into the bridge session instead (DROVE-52). Without this the
+    // in-session card drew a full form whose Submit silently did nothing.
+    const target = React.useMemo(() => {
+        if (sessionId && tool.permission?.id) {
+            return { sessionId, requestId: tool.permission.id };
+        }
+        return gate ? { sessionId: gate.sessionId, requestId: gate.requestId } : null;
+    }, [gate, sessionId, tool.permission?.id]);
 
     const handleSubmit = React.useCallback(async (answers: InlineQuestionAnswers) => {
-        if (!sessionId || !tool.permission?.id) return;
+        if (!target) return;
 
         // Claude resolves AskUserQuestion through its permission callback and
         // expects the chosen values merged into the tool input. The gates
         // screen submits through the same helper, so the two surfaces cannot
         // drift apart.
         await sessionAllow(
-            sessionId,
-            tool.permission.id,
+            target.sessionId,
+            target.requestId,
             undefined,
             undefined,
             'approved',
             { answers: providerAnswersFor(cards, answers) },
         );
-    }, [cards, sessionId, tool.permission?.id]);
+    }, [cards, target]);
 
     // Settled the moment ANY surface answers — see askUserQuestionState for why
     // the tool's own state cannot decide that.
     const settled = isQuestionSettled(tool.permission, tool.state);
-    // A question answered at the terminal never goes through this app's
-    // permission, so the only record of the choice is the result Claude wrote.
-    // Without this the card showed the question answered but not WHICH option
-    // won, which is the half Clay actually wanted on the phone (DROVE-51).
+    // Two places an answer can be, in the order they become true. The
+    // permission's reason is written by the bridge when another surface won the
+    // race; the tool result is what Claude Code itself recorded once the hook
+    // returned, and it is the ONLY record of a gum-popup answer (DROVE-51,
+    // DROVE-52). There is no third fallback: passing an empty map here is what
+    // drew "DROVE-50: —" and left it a dash for good.
     const answeredElsewhere = React.useMemo<InlineQuestionAnswers | undefined>(
         () => answersFromResolution(tool.permission, tool.state, questions.map((q) => q.id))
             ?? answersFromResult(tool.result, questions),
-        [tool.permission, tool.state, tool.result, questions],
+        [tool.permission, tool.result, tool.state, questions],
     );
 
     if (questions.length === 0) return null;
@@ -49,8 +65,8 @@ export const AskUserQuestionView = React.memo<ToolViewProps>(({ tool, sessionId 
     return (
         <InlineQuestionForm
             questions={questions}
-            canInteract={tool.state === 'running' && !settled}
-            submittedAnswers={answeredElsewhere ?? (tool.state === 'completed' ? {} : undefined)}
+            canInteract={tool.state === 'running' && !settled && target !== null}
+            submittedAnswers={answeredElsewhere}
             onSubmit={handleSubmit}
         />
     );

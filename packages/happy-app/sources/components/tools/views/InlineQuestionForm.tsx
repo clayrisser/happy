@@ -5,6 +5,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { t } from '@/text';
 import { ToolSectionView } from '../ToolSectionView';
+import { answerNotes, selectedOptionIndexes } from './inlineQuestionMatch';
 
 export interface InlineQuestionOption {
     label: string;
@@ -48,6 +49,18 @@ export const InlineQuestionForm = React.memo<InlineQuestionFormProps>((props) =>
 
     const submittedAnswers = props.submittedAnswers ?? locallySubmittedAnswers;
     const canInteract = props.canInteract && submittedAnswers === null;
+
+    // Which options an already-given answer picked. See inlineQuestionMatch
+    // for why an answer is not always exactly a label.
+    const answeredSelections = React.useMemo(() => {
+        const map = new Map<string, Set<number>>();
+        if (!submittedAnswers) return map;
+        for (const question of questions) {
+            map.set(question.id, selectedOptionIndexes(question.options, submittedAnswers[question.id]));
+        }
+        return map;
+    }, [questions, submittedAnswers]);
+
     const allQuestionsAnswered = questions.every((question) => {
         if (question.required === false) return true;
         return (selections.get(question.id)?.size ?? 0) > 0;
@@ -98,28 +111,20 @@ export const InlineQuestionForm = React.memo<InlineQuestionFormProps>((props) =>
         }
     }, [allQuestionsAnswered, isSubmitting, onSubmit, questions, selections]);
 
-    if (submittedAnswers) {
-        return (
-            <ToolSectionView>
-                <View style={styles.submittedContainer}>
-                    {questions.map(question => (
-                        <View key={question.id} style={styles.submittedItem}>
-                            <Text style={styles.submittedHeader}>{question.header}:</Text>
-                            <Text style={styles.submittedValue}>
-                                {submittedAnswers[question.id]?.join(', ') || '—'}
-                            </Text>
-                        </View>
-                    ))}
-                </View>
-            </ToolSectionView>
-        );
-    }
-
+    // An answered card keeps its question and every option on screen, with the
+    // chosen one marked (DROVE-52). It used to collapse to "<header>: <answer>"
+    // and, when the answer was not in `submittedAnswers` — which is every
+    // question the terminal answered — to "<header>: —". Fold, never drop: the
+    // ask and what it was answered with are both worth reading back.
     return (
         <ToolSectionView>
             <View style={styles.container}>
                 {questions.map(question => {
-                    const selectedOptions = selections.get(question.id) ?? new Set<number>();
+                    const answered = submittedAnswers?.[question.id];
+                    const selectedOptions = submittedAnswers
+                        ? answeredSelections.get(question.id) ?? new Set<number>()
+                        : selections.get(question.id) ?? new Set<number>();
+                    const notes = answerNotes(question.options, answered);
                     return (
                         <View key={question.id} style={styles.questionSection}>
                             <View style={styles.headerChip}>
@@ -135,7 +140,9 @@ export const InlineQuestionForm = React.memo<InlineQuestionFormProps>((props) =>
                                             style={[
                                                 styles.optionButton,
                                                 isSelected && styles.optionButtonSelected,
-                                                !canInteract && styles.optionButtonDisabled,
+                                                // The chosen option stays bright once the card is
+                                                // settled; only the roads not taken dim.
+                                                !canInteract && !isSelected && styles.optionButtonDisabled,
                                             ]}
                                             onPress={() => handleOptionToggle(question, optionIndex)}
                                             disabled={!canInteract}
@@ -166,6 +173,12 @@ export const InlineQuestionForm = React.memo<InlineQuestionFormProps>((props) =>
                                     );
                                 })}
                             </View>
+                            {notes.length > 0 && (
+                                <View style={styles.submittedItem}>
+                                    <Text style={styles.submittedHeader}>{question.header}:</Text>
+                                    <Text style={styles.submittedValue}>{notes.join(', ')}</Text>
+                                </View>
+                            )}
                         </View>
                     );
                 })}
@@ -323,9 +336,6 @@ const styles = StyleSheet.create((theme) => ({
         color: Platform.select({ web: theme.colors.button.primary.tint, default: theme.colors.text }),
         fontSize: 14,
         fontWeight: '600',
-    },
-    submittedContainer: {
-        gap: 8,
     },
     submittedItem: {
         flexDirection: 'row',

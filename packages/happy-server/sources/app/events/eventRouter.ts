@@ -11,6 +11,38 @@ import type { SessionMessageContent } from "@slopus/happy-wire";
  */
 const PRESENCE_FETCH_TIMEOUT_MS = 2_000;
 
+/**
+ * How long an `active` claim is believed without being re-asserted.
+ *
+ * The app re-sends `app-state` every ACTIVE_CLAIM_HEARTBEAT_MS while it is
+ * genuinely foreground (sync.ts), so three missed beats is the budget. Short
+ * enough that a suspended phone stops suppressing within a minute; long enough
+ * that one dropped frame on a bad connection does not cost a redundant buzz.
+ */
+export const ACTIVE_CLAIM_HEARTBEAT_MS = 20_000;
+export const ACTIVE_CLAIM_TTL_MS = ACTIVE_CLAIM_HEARTBEAT_MS * 3;
+
+/** Socket bookkeeping hasActiveUiClient reads. Exported for its test. */
+export interface UiPresenceData {
+    clientType?: string;
+    appState?: string;
+    appStateAt?: number;
+}
+
+/**
+ * Whether one socket proves the user is looking at a UI right now.
+ *
+ * An `active` with no `appStateAt` at all is a client too old to stamp it.
+ * Those are believed, because the alternative is pushing to someone who is
+ * demonstrably watching; the stamp arrives with the app build that also sends
+ * the heartbeat.
+ */
+export function isActiveUiSocket(data: UiPresenceData, now: number = Date.now()): boolean {
+    if (data.clientType !== 'user-scoped' || data.appState !== 'active') return false;
+    if (typeof data.appStateAt !== 'number') return true;
+    return now - data.appStateAt < ACTIVE_CLAIM_TTL_MS;
+}
+
 // === CONNECTION TYPES ===
 
 export interface SessionScopedConnection {
@@ -312,17 +344,26 @@ class EventRouter {
      *     mobile push went silent whenever a session was live.
      *   - Only an explicit `app-state: active` counts. A client that never
      *     reported is unknown, not present.
+     *   - And only a RECENT one. `appState` used to be a latch: set once and
+     *     believed for the life of the socket. iOS suspends the app's JS the
+     *     moment it is backgrounded, so the `app-state: background` event often
+     *     never leaves the device while the socket itself stays open — and the
+     *     user stayed "active" forever. Measured on Clay's account 2026-08-30:
+     *     every one of 40 session pushes between 03:22 and 21:26 came back
+     *     `suppressed reason=active-ui-client`, including the 19:28:43 question
+     *     he was sitting in tmux for. A client that means it re-asserts on
+     *     ACTIVE_CLAIM_HEARTBEAT_MS; anything staler is unknown, so we send.
      *
      * Uses fetchSockets() which works cross-replica via Redis streams adapter,
      * bounded so an unresponsive peer replica cannot stall a push. On timeout
      * this throws and the caller fails open — an infrastructure problem must
      * never turn into silence.
      */
-    async hasActiveUiClient(userId: string): Promise<boolean> {
+    async hasActiveUiClient(userId: string, now: number = Date.now()): Promise<boolean> {
         const sockets = await this.io.in(`user:${userId}`)
             .timeout(PRESENCE_FETCH_TIMEOUT_MS)
             .fetchSockets();
-        return sockets.some(s => s.data.clientType === 'user-scoped' && s.data.appState === 'active');
+        return sockets.some(s => isActiveUiSocket(s.data, now));
     }
 
     // === PRIVATE ROUTING LOGIC ===
