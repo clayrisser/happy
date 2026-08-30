@@ -188,9 +188,16 @@ export function useSessionQuickActions(
     // message. The watch sends the identical string (sync/droverWatchFeed.ts).
     const droverAccounts = useDroverAccounts();
     const currentDroverAccount = session.metadata?.droverAccount ?? null;
-    // Same rule as the account chips on the sessions list: with one account
-    // there is nowhere to flip to, so the row stays hidden.
-    const canFlipAccount = droverAccounts.length >= 2;
+    // Flip shows on ANY Cattle Drover session, not only once the app has itself
+    // seen two accounts (BASED-133 gated on that, which hid the button from
+    // anyone who had only ever run on one — the common case). The account
+    // roster lives in the CLI, not here: a bare `/flip` asks it to pick the
+    // next account with headroom, so the action is useful with a single KNOWN
+    // account too, and specific-account rows fill in as more are seen. A flip
+    // with nowhere to go is refused gracefully now (BASED-113), so offering it
+    // can never strand the session. The signal that this IS a drover session is
+    // metadata.droverAccount, stamped at start from DROVER_ACCOUNT.
+    const canFlipAccount = currentDroverAccount != null;
 
     const sendFlip = React.useCallback((account?: string | null) => {
         void Promise.resolve(sync.sendMessage(session.id, droverFlipMessage(account))).catch(() => {});
@@ -198,11 +205,11 @@ export function useSessionQuickActions(
 
     const flipAccount = React.useCallback(() => {
         if (!canFlipAccount) return;
+        // Always confirm through the sheet, even when this app only knows the
+        // one account it is on: "Next available" is a real choice the CLI
+        // resolves, and a silent immediate flip reads as the button doing
+        // nothing. Any OTHER accounts the app has seen become named rows.
         const targets = droverAccounts.filter((account) => account !== currentDroverAccount);
-        if (targets.length === 0) {
-            sendFlip();
-            return;
-        }
         const buttons: Array<{ text: string; onPress?: () => void; style?: 'cancel' | 'destructive' | 'default' }> = [
             { text: 'Next available', onPress: () => sendFlip() },
             ...targets.map((account) => ({ text: account, onPress: () => sendFlip(account) })),
