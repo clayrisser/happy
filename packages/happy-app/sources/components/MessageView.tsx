@@ -17,7 +17,7 @@ import { layout } from "./layout";
 import { parseLocalCommandMessage, isUserSlashCommandEcho } from './parseLocalCommandMessage';
 import { resolveUserMessageBubbleColor } from '@/utils/userMessageBubbleColor';
 import { LongPressCopyable } from './LongPressCopyable';
-import { extractThinkingText } from '@/utils/thinkingText';
+import { extractThinkingText, isEmptyThinking } from '@/utils/thinkingText';
 import { useElapsedTime } from '@/hooks/useElapsedTime';
 import { formatWorkDuration } from '@/hooks/useGroupedMessages';
 
@@ -33,6 +33,15 @@ export const MessageView = React.memo((props: {
   /** subagent id -> the Task/Agent tool-call message that owns its transcript. */
   subagentTaskMessageIds?: ReadonlyMap<string, string>;
 }) => {
+  // Claude Code stores most thinking as a signature with no words, so this row
+  // would open onto nothing. Fold what exists, draw nothing for what does not,
+  // and two such blocks in a row leave no trace instead of two blank rows
+  // (DROVE-46). The grouping layer filters these too; this is the backstop for
+  // every other path that renders a message directly.
+  if (props.message.kind === 'agent-text' && props.message.isThinking && isEmptyThinking(props.message.text)) {
+    return null;
+  }
+
   return (
     <View
       style={styles.messageContainer}

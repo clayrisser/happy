@@ -11,3 +11,13 @@ export function extractThinkingText(stored: string): string {
     }
     return trimmed;
 }
+
+/**
+ * Claude Code writes almost every thinking block to the transcript as
+ * `{"type":"thinking","thinking":"","signature":"CAIS…"}` — the signature
+ * without the words (163 of 172 blocks in one live session). There is nothing
+ * to fold behind such a block, so nothing may draw a row for it (DROVE-46).
+ */
+export function isEmptyThinking(stored: string): boolean {
+    return extractThinkingText(stored).length === 0;
+}

@@ -478,6 +478,89 @@ describe('useGroupedMessages', () => {
         expect(items.map((item) => item.id)).toEqual(['user']);
     });
 
+    // DROVE-46: grouping is off by default (settings `groupToolCalls: false`),
+    // and that path used to hand every message straight to the list — so the
+    // empty blocks Claude Code writes drew a row each.
+    it('drops empty thinking blocks with grouping off and keeps the one with text', () => {
+        const messages: Message[] = [
+            {
+                kind: 'agent-text',
+                id: 'agent-final',
+                localId: null,
+                createdAt: 6,
+                text: 'Here is the answer',
+            },
+            {
+                kind: 'agent-text',
+                id: 'agent-empty-two',
+                localId: null,
+                createdAt: 5,
+                text: '**',
+                isThinking: true,
+            },
+            {
+                kind: 'agent-text',
+                id: 'agent-empty-one',
+                localId: null,
+                createdAt: 4,
+                text: '**',
+                isThinking: true,
+            },
+            {
+                kind: 'agent-text',
+                id: 'agent-thinking',
+                localId: null,
+                createdAt: 3,
+                text: '*Weighing the two options.*',
+                isThinking: true,
+            },
+            {
+                kind: 'user-text',
+                id: 'user',
+                localId: null,
+                createdAt: 1,
+                text: 'which one?',
+            },
+        ];
+
+        const items = groupMessagesForDisplay(messages, false);
+
+        expect(items.map((item) => item.id)).toEqual(['agent-final', 'agent-thinking', 'user']);
+    });
+
+    // DROVE-46: two blocks in a row must not leave two rows behind, grouped or not.
+    it('leaves no row for consecutive empty thinking blocks when grouping is on', () => {
+        const messages: Message[] = [
+            {
+                kind: 'agent-text',
+                id: 'agent-empty-two',
+                localId: null,
+                createdAt: 4,
+                text: '**',
+                isThinking: true,
+            },
+            {
+                kind: 'agent-text',
+                id: 'agent-empty-one',
+                localId: null,
+                createdAt: 3,
+                text: '*   *',
+                isThinking: true,
+            },
+            {
+                kind: 'user-text',
+                id: 'user',
+                localId: null,
+                createdAt: 1,
+                text: 'go',
+            },
+        ];
+
+        const items = groupMessagesForDisplay(messages, true, { collapseCurrentTurn: false });
+
+        expect(items.map((item) => item.id)).toEqual(['user']);
+    });
+
     it('folds a completed turn around its answer, not around its thinking', () => {
         const messages: Message[] = [
             {

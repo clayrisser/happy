@@ -2,7 +2,7 @@ import * as React from 'react';
 import { Message } from '@/sync/typesMessage';
 import { knownTools } from '@/components/tools/knownTools';
 import { getToolSummaryCategory, isInteractiveQuestionToolName } from '@/utils/toolDisplay';
-import { extractThinkingText } from '@/utils/thinkingText';
+import { isEmptyThinking } from '@/utils/thinkingText';
 import { t } from '@/text';
 
 // Display item types for the grouped message list
@@ -58,7 +58,13 @@ export function groupMessagesForDisplay(
     options: { collapseCurrentTurn?: boolean } = {},
 ): DisplayItem[] {
     if (!enabled) {
-        return messages.map((msg) => ({ type: 'message', id: msg.id, message: msg } as TextItem));
+        // Grouping off is the default (`groupToolCalls: false`), and this path
+        // used to hand every message to the list untouched — which is how the
+        // empty thinking blocks Claude Code stores each drew their own
+        // "Thought process" row opening onto nothing (DROVE-46).
+        return messages
+            .filter((msg) => !isInvisibleMessage(msg))
+            .map((msg) => ({ type: 'message', id: msg.id, message: msg } as TextItem));
     }
 
     const collapseCurrentTurn = options.collapseCurrentTurn ?? true;
@@ -150,7 +156,11 @@ export function groupToolCallsForDisplay(
     options: { groupSingleToolCalls?: boolean } = {},
 ): ToolDisplayItem[] {
     if (!enabled) {
-        return messages.map((msg) => ({ type: 'message', id: msg.id, message: msg } as TextItem));
+        // Same reason as groupMessagesForDisplay: a message that renders as
+        // nothing must not reach the list (DROVE-46).
+        return messages
+            .filter((msg) => !isInvisibleMessage(msg))
+            .map((msg) => ({ type: 'message', id: msg.id, message: msg } as TextItem));
     }
 
     const groupSingleToolCalls = options.groupSingleToolCalls ?? false;
@@ -329,7 +339,7 @@ function isInvisibleMessage(msg: Message): boolean {
     // Thinking is kept — it draws as a collapsed "Thought process" row. Only an
     // empty block has nothing to show.
     if (msg.kind === 'agent-text') {
-        if (msg.isThinking) return extractThinkingText(msg.text).length === 0;
+        if (msg.isThinking) return isEmptyThinking(msg.text);
         if (msg.text.trim().length === 0) return true;
     }
     return false;

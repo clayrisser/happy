@@ -3,6 +3,7 @@ import { NormalizedMessage } from '../typesRaw';
 import { createReducer } from './reducer';
 import { reducer } from './reducer';
 import { AgentState } from '../storageTypes';
+import { extractThinkingText, isEmptyThinking } from '@/utils/thinkingText';
 
 describe('reducer', () => {
     // it('should process golden cases', () => {
@@ -191,6 +192,55 @@ describe('reducer', () => {
             if (result.messages[0].kind === 'agent-text') {
                 expect(result.messages[0].text).toBe('Hello from Claude!');
             }
+        });
+
+        // DROVE-46: Claude Code persists `{"type":"thinking","thinking":"",
+        // "signature":"CAIS…"}` for almost every thought — the signature without
+        // the words. The reducer still carries the block, so the display layer is
+        // the one that has to know there is nothing behind it.
+        it('carries an empty thinking block through as thinking with no text', () => {
+            const state = createReducer();
+            const messages: NormalizedMessage[] = [
+                {
+                    id: 'agent-thinking-empty',
+                    localId: null,
+                    createdAt: 1000,
+                    role: 'agent',
+                    isSidechain: false,
+                    content: [{
+                        type: 'thinking',
+                        thinking: '',
+                        uuid: 'thinking-uuid-empty',
+                        parentUUID: null
+                    }]
+                },
+                {
+                    id: 'agent-thinking-text',
+                    localId: null,
+                    createdAt: 1001,
+                    role: 'agent',
+                    isSidechain: false,
+                    content: [{
+                        type: 'thinking',
+                        thinking: 'Weighing the two options.',
+                        uuid: 'thinking-uuid-text',
+                        parentUUID: null
+                    }]
+                }
+            ];
+
+            const result = reducer(state, messages);
+
+            expect(result.messages).toHaveLength(2);
+            const [empty, withText] = result.messages;
+            if (empty.kind !== 'agent-text' || withText.kind !== 'agent-text') {
+                throw new Error('expected two agent-text messages');
+            }
+            expect(empty.isThinking).toBe(true);
+            expect(isEmptyThinking(empty.text)).toBe(true);
+            expect(withText.isThinking).toBe(true);
+            expect(isEmptyThinking(withText.text)).toBe(false);
+            expect(extractThinkingText(withText.text)).toBe('Weighing the two options.');
         });
 
         it('should update latest usage from agent messages', () => {
