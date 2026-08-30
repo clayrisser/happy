@@ -2,6 +2,11 @@
 
 # dependencies
 node_modules/
+# A worktree points node_modules at the main checkout with a symlink, and the
+# trailing-slash pattern above matches only a directory, so the link itself was
+# committed once (DROVE-47) as an absolute path into a home dir. No slash matches
+# the link too.
+node_modules
 
 # Expo
 .expo/
