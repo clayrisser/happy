@@ -46,6 +46,7 @@ import {
   tmuxWindowNameForDirectory,
 } from './tmuxSpawn';
 import { resolveTrackedPid } from '@/utils/processTree';
+import { awaitSessionWebhook } from './spawnAwaiter';
 
 /**
  * Is this daemon running under a service manager that will restart it?
@@ -563,27 +564,9 @@ export async function startDaemon(): Promise<void> {
         // Wait for webhook to populate session with happySessionId (exact same as regular flow)
         logger.debug(`[DAEMON RUN] Waiting for session webhook for PID ${tmuxResult.pid} (tmux)`);
 
-        return new Promise((resolve) => {
-          // Set timeout for webhook (same as regular flow)
-          const timeout = setTimeout(() => {
-            pidToAwaiter.delete(tmuxResult.pid!);
-            logger.debug(`[DAEMON RUN] Session webhook timeout for PID ${tmuxResult.pid} (tmux)`);
-            resolve({
-              type: 'error',
-              errorMessage: `Session webhook timeout for PID ${tmuxResult.pid} (tmux)`
-            });
-          }, 15_000); // Same timeout as regular sessions
-
-          // Register awaiter for tmux session (exact same as regular flow)
-          pidToAwaiter.set(tmuxResult.pid!, (completedSession) => {
-            clearTimeout(timeout);
-            logger.debug(`[DAEMON RUN] Session ${completedSession.happySessionId} fully spawned with webhook (tmux)`);
-            resolve({
-              type: 'success',
-              sessionId: completedSession.happySessionId!
-            });
-          });
-        });
+        // Same 15s budget as the regular flow, but it does not run while a
+        // drover build holds the lock — a rebuild is not a failed spawn.
+        return awaitSessionWebhook(tmuxResult.pid, pidToAwaiter, ' (tmux)');
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
         logger.debug('[DAEMON RUN] Failed to spawn session:', error);
@@ -650,25 +633,7 @@ export async function startDaemon(): Promise<void> {
 
       logger.debug(`[DAEMON RUN] Waiting for session webhook for PID ${happyProcess.pid}`);
 
-      return new Promise((resolve) => {
-        const timeout = setTimeout(() => {
-          pidToAwaiter.delete(happyProcess.pid!);
-          logger.debug(`[DAEMON RUN] Session webhook timeout for PID ${happyProcess.pid}`);
-          resolve({
-            type: 'error',
-            errorMessage: `Session webhook timeout for PID ${happyProcess.pid}`
-          });
-        }, 15_000);
-
-        pidToAwaiter.set(happyProcess.pid!, (completedSession) => {
-          clearTimeout(timeout);
-          logger.debug(`[DAEMON RUN] Session ${completedSession.happySessionId} fully spawned with webhook`);
-          resolve({
-            type: 'success',
-            sessionId: completedSession.happySessionId!
-          });
-        });
-      });
+      return awaitSessionWebhook(happyProcess.pid!, pidToAwaiter, '');
     };
 
     const findTrackedSessionById = (happySessionId: string): TrackedSession | undefined => {
