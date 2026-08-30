@@ -23,6 +23,39 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
 
     let scannerMessageChain = Promise.resolve();
 
+    // Text this launcher put into the pane itself (DROVE-41). A phone message
+    // goes in through the inbox socket or the keyboard, so Claude Code queues
+    // it exactly like a typed one and it comes back to us as a queued-prompt
+    // record — but the app is already showing it, because the app is what
+    // sent it.
+    //
+    // Kept for a window rather than taken on the first match, because ONE
+    // delivery produces two of those records (the enqueue, then the absorb)
+    // and both have to be swallowed. The window is what keeps the list from
+    // growing forever and, more importantly, from suppressing a real message:
+    // a delivery made while Claude was idle never queues at all, so nothing
+    // ever comes back to clear it, and a stale entry would silence the next
+    // thing Clay typed that happened to repeat those words.
+    const deliveredFromApp: Array<{ text: string, at: number }> = [];
+    const deliveredEchoWindowMs = 60_000;
+
+    function pruneDeliveredEchoes() {
+        const cutoff = Date.now() - deliveredEchoWindowMs;
+        while (deliveredFromApp.length > 0 && deliveredFromApp[0].at < cutoff) {
+            deliveredFromApp.shift();
+        }
+    }
+
+    function noteDeliveredFromApp(text: string) {
+        pruneDeliveredEchoes();
+        deliveredFromApp.push({ text, at: Date.now() });
+    }
+
+    function takeDeliveredEcho(text: string): boolean {
+        pruneDeliveredEchoes();
+        return deliveredFromApp.some((d) => d.text === text);
+    }
+
     // A switch that doSwitch held back because subagents were running. Taken
     // the moment the last one reports in, so the deferral costs the rest of
     // the agents' run rather than the rest of the session.
@@ -52,6 +85,13 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
             ? undefined
             : (startingConfigDir || ambientDataDir()),
         onCustomTitle: (title) => applyCustomTitle(session, title),
+        onQueuedPrompt: (prompt) => {
+            if (takeDeliveredEcho(prompt.text)) {
+                logger.debug('[local]: queued prompt is our own delivery coming back — not re-sending it');
+                return;
+            }
+            session.client.sendQueuedPromptFromLocalTranscript(prompt);
+        },
         onMessage: (message) => {
             // Cattle Drover (BASED-98): local mode has no typed rate-limit
             // channel — the SDK's rate_limit_event only exists on the remote
@@ -331,6 +371,9 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
          */
         async function deliverToChild(message: string): Promise<boolean> {
             if (!tmuxPane) return false;
+            // Recorded before either carrier runs, because Claude Code writes
+            // the enqueue record the instant the text lands (DROVE-41).
+            noteDeliveredFromApp(message);
             try {
                 const configDir = session.claudeEnvVars?.CLAUDE_CONFIG_DIR;
                 const inbox = await findInbox(configDir || undefined, session.sessionId, tmuxPane);

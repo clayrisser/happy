@@ -28,6 +28,11 @@ export type ClaudeSessionProtocolState = {
      * has to outlive the turn.
      */
     subagentsStartedTotal?: number;
+    /**
+     * Envelope ids already spent on prompts the terminal queued (DROVE-41),
+     * FIFO per exact text. See mapQueuedPromptToSessionEnvelopes.
+     */
+    queuedPromptEnvelopeIds?: Map<string, string[]>;
 };
 
 /**
@@ -636,6 +641,94 @@ export function closeClaudeTurnWithStatus(
     };
 }
 
+/**
+ * A prompt typed at the terminal while Claude was mid-turn (DROVE-41).
+ *
+ * It is not a turn yet and may never be one: 20 of the 26 prompts queued in
+ * Clay's live session were absorbed into the running turn and never written
+ * as a `user` record at all. So the queue records are the message, and this
+ * turns the first sighting of one into the bubble the app shows.
+ *
+ * Three things it deliberately does NOT do:
+ *
+ *   - It does not close the running turn. Claude being mid-turn is WHY the
+ *     prompt was queued; ending the turn here would cut its reply in two.
+ *   - It does not open one either. A user envelope needs no turn, and opening
+ *     one would put an empty agent turn in front of the human's own words.
+ *   - It does not stamp `now`. The prompt is stamped when it was typed, so it
+ *     sits between the phone's messages where the human put it rather than
+ *     where Claude got round to it.
+ *
+ * The id it hands out is remembered against the text, because the same prompt
+ * can arrive twice more: as the absorb record, and — when it leaves the queue
+ * the other way — as a real `user` turn. The app keys messages by envelope id,
+ * so replaying that id is what keeps one message to one bubble.
+ */
+export function mapQueuedPromptToSessionEnvelopes(
+    prompt: { text: string; at?: number; carrier: 'enqueue' | 'absorbed'; claudeUuid?: string },
+    state: ClaudeSessionProtocolState,
+): ClaudeMapperResult {
+    const text = prompt.text;
+    if (text.trim().length === 0) {
+        return { currentTurnId: state.currentTurnId, envelopes: [] };
+    }
+
+    if (prompt.carrier === 'absorbed' && takeQueuedPromptEnvelopeId(state, text)) {
+        // The enqueue record already showed this one. Falling through when
+        // there is nothing to take matters just as much: a scanner that
+        // started mid-turn, or one whose first hook pre-marked the transcript
+        // as history, never saw the enqueue and this record is the only
+        // sighting it will get.
+        return { currentTurnId: state.currentTurnId, envelopes: [] };
+    }
+
+    const id = createId();
+    if (prompt.carrier === 'enqueue') {
+        // Only the enqueue carrier is remembered. An absorbed prompt never
+        // becomes a `user` record, so an id left here for one would be spent
+        // silencing some later message that happened to repeat the words.
+        rememberQueuedPromptEnvelopeId(state, text, id);
+    }
+
+    return {
+        currentTurnId: state.currentTurnId,
+        envelopes: [createEnvelope('user', { t: 'text', text }, {
+            id,
+            ...(prompt.at ? { time: prompt.at } : {}),
+            ...(prompt.claudeUuid ? { claudeUuid: prompt.claudeUuid } : {}),
+        })],
+    };
+}
+
+function rememberQueuedPromptEnvelopeId(state: ClaudeSessionProtocolState, text: string, id: string): void {
+    if (!state.queuedPromptEnvelopeIds) {
+        state.queuedPromptEnvelopeIds = new Map<string, string[]>();
+    }
+    const existing = state.queuedPromptEnvelopeIds.get(text);
+    if (existing) {
+        existing.push(id);
+        return;
+    }
+    state.queuedPromptEnvelopeIds.set(text, [id]);
+}
+
+/**
+ * The envelope id already spent on this exact prompt, if it was queued in the
+ * terminal first. FIFO, and taken rather than read: the same words typed twice
+ * are two messages and get one id each.
+ */
+function takeQueuedPromptEnvelopeId(state: ClaudeSessionProtocolState, text: string): string | undefined {
+    const ids = state.queuedPromptEnvelopeIds?.get(text);
+    if (!ids || ids.length === 0) {
+        return undefined;
+    }
+    const id = ids.shift();
+    if (ids.length === 0) {
+        state.queuedPromptEnvelopeIds?.delete(text);
+    }
+    return id;
+}
+
 export function mapClaudeLogMessageToSessionEnvelopes(
     message: RawJSONLines,
     state: ClaudeSessionProtocolState,
@@ -773,7 +866,14 @@ function mapClaudeLogMessageToSessionEnvelopesInternal(
                 envelopes.push(createEnvelope('agent', { t: 'text', text: message.message.content }, { turn: turnId, subagent, claudeUuid }));
             } else {
                 closeTurn(state, 'completed', envelopes);
-                envelopes.push(createEnvelope('user', { t: 'text', text: message.message.content }, { claudeUuid }));
+                // DROVE-41: if the terminal queued this prompt, the app has
+                // already been shown it under that id. Reusing it leaves the
+                // one bubble where the human typed it.
+                const queuedId = takeQueuedPromptEnvelopeId(state, message.message.content);
+                envelopes.push(createEnvelope('user', { t: 'text', text: message.message.content }, {
+                    ...(queuedId ? { id: queuedId } : {}),
+                    claudeUuid,
+                }));
             }
 
             return {
@@ -797,7 +897,11 @@ function mapClaudeLogMessageToSessionEnvelopesInternal(
             closeTurn(state, 'completed', envelopes);
             for (const block of blocks) {
                 if (block.type === 'text' && typeof block.text === 'string' && block.text.trim().length > 0) {
-                    envelopes.push(createEnvelope('user', { t: 'text', text: block.text }, { claudeUuid }));
+                    const queuedId = takeQueuedPromptEnvelopeId(state, block.text);
+                    envelopes.push(createEnvelope('user', { t: 'text', text: block.text }, {
+                        ...(queuedId ? { id: queuedId } : {}),
+                        claudeUuid,
+                    }));
                 }
             }
 
