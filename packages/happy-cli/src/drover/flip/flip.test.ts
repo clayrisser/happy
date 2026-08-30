@@ -6,9 +6,9 @@
  * and "every account is cooling" is not a state anyone can wait around for.
  */
 
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import {
@@ -915,6 +915,35 @@ describe('carrying the transcript', () => {
         expect(readFileSync(join(dstProject, id, 'subagents', 'agent-1.jsonl'), 'utf8')).toBe('{"type":"assistant"}\n')
         // The source keeps its copy: a flip is reversible.
         expect(readFileSync(join(srcProject, `${id}.jsonl`), 'utf8')).toBe('{"type":"user"}\n')
+    })
+
+    it('copies nothing when both accounts already share one store', () => {
+        // DROVE-40. Two accounts whose project dirs are the same directory on
+        // disk. Copying here is at best pointless and at worst destructive:
+        // copyFileSync onto its own source truncates before it reads.
+        const from = join(root, 'cfg-share-a')
+        const to = join(root, 'cfg-share-b')
+        const cwd = join(root, 'work-shared')
+        const id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+
+        const shared = join(root, 'shared-store', 'projects', 'munged')
+        mkdirSync(shared, { recursive: true })
+        const body = '{"type":"user"}\n{"type":"assistant"}\n'
+        writeFileSync(join(shared, `${id}.jsonl`), body)
+
+        // Both accounts reach that one directory through a symlink.
+        for (const cfg of [from, to]) {
+            const project = projectDirFor(cfg, cwd)
+            mkdirSync(dirname(project), { recursive: true })
+            symlinkSync(shared, project)
+        }
+
+        const result = carryTranscript({ sessionId: id, workingDirectory: cwd, fromConfigDir: from, toConfigDir: to })
+        expect(result.ok).toBe(true)
+        expect(result.shared).toBe(true)
+        expect(result.bytes).toBeUndefined()
+        // The transcript is intact, not truncated by a copy onto itself.
+        expect(readFileSync(join(shared, `${id}.jsonl`), 'utf8')).toBe(body)
     })
 
     it('reports a session with no transcript as nothing to carry, not a failure', () => {
