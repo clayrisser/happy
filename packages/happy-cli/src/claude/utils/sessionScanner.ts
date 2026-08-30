@@ -359,6 +359,25 @@ export async function createSessionScanner(opts: {
                 for (const entry of existing) {
                     processedEntryKeys.add(entry.key);
                 }
+                // ...but NOT the title. Same reasoning as the constructor
+                // above, and the constructor was the only half that had it
+                // (DROVE-44). A title is the session's current NAME, not a
+                // message to replay, so pre-marking it means a session renamed
+                // in an earlier run keeps the start-up default in the app for
+                // the whole of this run — and it never self-heals, because the
+                // record is keyed by its own text and Claude Code re-appends
+                // the identical line on every turn.
+                //
+                // This is the path a bare `drover --resume` takes, which is
+                // how Clay's "DROVER" showed up on the phone as
+                // "[jamrizzi] cattle-drover": the seed never ran, the name
+                // stayed default-shaped, and a flip is entitled to restamp a
+                // default-shaped name with the account it just moved to.
+                const seeded = existing.filter((e) => e.kind === 'custom-title').pop();
+                if (seeded?.kind === 'custom-title') {
+                    logger.debug(`[SESSION_SCANNER] Seeding title from transcript: ${seeded.title}`);
+                    opts.onCustomTitle?.(seeded.title);
+                }
             }
             if (currentSessionId) {
                 pendingSessions.add(currentSessionId);
