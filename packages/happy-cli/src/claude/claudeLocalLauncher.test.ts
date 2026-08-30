@@ -699,6 +699,183 @@ describe('claudeLocalLauncher in a tmux pane', () => {
         });
     });
 
+    /**
+     * DROVE-63. Same carrier, one command, and one difference that matters:
+     * `/remote-control` is a TOGGLE. Measured in 2.1.251's command table —
+     * `get description(){ return rc() ? "Disconnect Remote Control" : … }`,
+     * `get argumentHint(){ return rc() ? void 0 : "[name]" }` — so there is no
+     * on/off word to send and typing it blind flips whatever is there. Every
+     * test below is about only typing it when the pane's real state is known
+     * and is not the one the app asked for.
+     */
+    describe('the Remote Control toggle in the app', () => {
+        /** Fake the transcript telling the launcher where the bridge is. */
+        function observe(active: boolean) {
+            const scannerOpts = mockCreateSessionScanner.mock.calls.at(-1)![0];
+            scannerOpts.onRemoteControlObserved?.(active);
+        }
+
+        it('types /remote-control when the app asks for on and the pane is off', async () => {
+            const runs = trackRuns();
+            const { session, emitMetadata } = paneSession({});
+            mockInjectIntoPane.mockResolvedValue(true);
+
+            const launcher = claudeLocalLauncher(session as any);
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+            observe(false);
+
+            emitMetadata({ remoteControl: 'on' });
+
+            await vi.waitFor(() => expect(mockInjectIntoPane).toHaveBeenCalledWith(
+                pane, '/remote-control', { submit: true },
+            ));
+
+            runs[0].run.resolve();
+            await launcher;
+        });
+
+        it('types it to turn Remote Control OFF as well — one command, both ways', async () => {
+            const runs = trackRuns();
+            const { session, emitMetadata } = paneSession({});
+            mockInjectIntoPane.mockResolvedValue(true);
+
+            const launcher = claudeLocalLauncher(session as any);
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+            observe(true);
+
+            emitMetadata({ remoteControl: 'off' });
+
+            await vi.waitFor(() => expect(mockInjectIntoPane).toHaveBeenCalledWith(
+                pane, '/remote-control', { submit: true },
+            ));
+
+            runs[0].run.resolve();
+            await launcher;
+        });
+
+        it('types nothing when the pane is already where the app asked', async () => {
+            // The idempotence question the ticket asked to measure, answered by
+            // the caller rather than by the command: /remote-control is not
+            // idempotent, so asking for `on` twice must not send it twice.
+            const runs = trackRuns();
+            const { session, emitMetadata } = paneSession({});
+            mockInjectIntoPane.mockResolvedValue(true);
+
+            const launcher = claudeLocalLauncher(session as any);
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+            observe(true);
+
+            emitMetadata({ remoteControl: 'on' });
+            await new Promise((r) => setTimeout(r, 50));
+
+            expect(mockInjectIntoPane).not.toHaveBeenCalled();
+
+            runs[0].run.resolve();
+            await launcher;
+        });
+
+        it('types nothing while the pane has not said where it is', async () => {
+            // Unknown is not off. A toggle on a guess can silence the session
+            // the tap was meant to wake.
+            const runs = trackRuns();
+            const { session, emitMetadata } = paneSession({});
+            mockInjectIntoPane.mockResolvedValue(true);
+
+            const launcher = claudeLocalLauncher(session as any);
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+
+            emitMetadata({ remoteControl: 'on' });
+            await new Promise((r) => setTimeout(r, 50));
+
+            expect(mockInjectIntoPane).not.toHaveBeenCalled();
+
+            runs[0].run.resolve();
+            await launcher;
+        });
+
+        it('holds for the prompt rather than pasting the toggle mid-turn', async () => {
+            const runs = trackRuns();
+            const { session, emitMetadata } = paneSession({});
+            mockInjectIntoPane.mockResolvedValue(true);
+            mockPaneIsIdle.mockResolvedValue(false);
+
+            const launcher = claudeLocalLauncher(session as any);
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+            observe(false);
+
+            emitMetadata({ remoteControl: 'on' });
+            await new Promise((r) => setTimeout(r, 50));
+            expect(mockInjectIntoPane).not.toHaveBeenCalled();
+
+            mockPaneIsIdle.mockResolvedValue(true);
+            await vi.waitFor(() => expect(mockInjectIntoPane).toHaveBeenCalledWith(
+                pane, '/remote-control', { submit: true },
+            ), { timeout: 5000 });
+
+            runs[0].run.resolve();
+            await launcher;
+        });
+
+        it('drops a held toggle when the terminal gets there first', async () => {
+            // The failure only a toggle has: the command waits for an idle
+            // prompt, Clay types /remote-control himself while it waits, and
+            // sending the queued one would now turn OFF what he just turned on.
+            const runs = trackRuns();
+            const { session, emitMetadata } = paneSession({});
+            mockInjectIntoPane.mockResolvedValue(true);
+            mockPaneIsIdle.mockResolvedValue(false);
+
+            const launcher = claudeLocalLauncher(session as any);
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+            observe(false);
+
+            emitMetadata({ remoteControl: 'on' });
+            await new Promise((r) => setTimeout(r, 50));
+
+            observe(true);
+            mockPaneIsIdle.mockResolvedValue(true);
+            await new Promise((r) => setTimeout(r, 2500));
+
+            expect(mockInjectIntoPane).not.toHaveBeenCalled();
+
+            runs[0].run.resolve();
+            await launcher;
+        });
+
+        it('publishes what the transcript says, so /remote-control in the terminal reaches the app', async () => {
+            const runs = trackRuns();
+            const { session, readMetadata } = paneSession({});
+            mockInjectIntoPane.mockResolvedValue(true);
+
+            const launcher = claudeLocalLauncher(session as any);
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+
+            observe(true);
+            await vi.waitFor(() => expect(readMetadata().paneRemoteControl).toBe(true));
+            observe(false);
+            await vi.waitFor(() => expect(readMetadata().paneRemoteControl).toBe(false));
+
+            runs[0].run.resolve();
+            await launcher;
+        });
+
+        it('says the toggle landed the moment it is typed, so the switch stops lagging', async () => {
+            const runs = trackRuns();
+            const { session, emitMetadata, readMetadata } = paneSession({});
+            mockInjectIntoPane.mockResolvedValue(true);
+
+            const launcher = claudeLocalLauncher(session as any);
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+            observe(false);
+
+            emitMetadata({ remoteControl: 'on' });
+            await vi.waitFor(() => expect(readMetadata().paneRemoteControl).toBe(true));
+
+            runs[0].run.resolve();
+            await launcher;
+        });
+    });
+
     it('takes a message off the queue once the inbox socket has it', async () => {
         mockFindInbox.mockResolvedValue(inbox);
         mockSendToInbox.mockResolvedValue('ok');

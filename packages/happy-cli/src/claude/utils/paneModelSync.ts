@@ -97,6 +97,58 @@ export function slashCommandsForSelection(
     ].filter((c): c is string => c !== null)
 }
 
+/**
+ * The app's Remote Control request, as a tri-state (DROVE-63).
+ *
+ * On the wire it is the string `on` / `off`, which is what the app's existing
+ * per-session pick machinery carries (permissionMode, modelMode, effortLevel
+ * are all `string | null`), so the button needed no new transport. Booleans are
+ * accepted too because an older or newer client writing one is easy to be kind
+ * about and impossible to misread. Anything else — including a cleared pick —
+ * is "no request".
+ */
+export function parseRemoteControlRequest(value: unknown): boolean | null {
+    if (value === true || value === 'on') return true
+    if (value === false || value === 'off') return false
+    return null
+}
+
+/**
+ * Whether to type `/remote-control`, given what the pane is on and what the app
+ * asked for (DROVE-63).
+ *
+ * `/remote-control` is a TOGGLE, not a setting, and that is the whole reason
+ * this function exists rather than another `commandFor` line. Measured in
+ * 2.1.251, both from the command table and from a live transcript:
+ *
+ *     name:"remote-control", aliases:["rc"],
+ *     get description(){ return rc() ? "Disconnect Remote Control"
+ *                                    : "Control this session from your phone…" },
+ *     get argumentHint(){ return rc() ? void 0 : "[name]" }
+ *
+ * The description flips with the current state, the only argument it ever takes
+ * is an optional NAME for the remote session, and there is no `on` / `off`
+ * word to send. Clay ran it twice three seconds apart and the transcript reads
+ * `Remote Control disconnected.` then a fresh `cse_…` bridge — one command, two
+ * opposite outcomes.
+ *
+ * So the command is safe to send only when we know the current state and it is
+ * not the one asked for. `observed === null` means nothing has been read yet,
+ * and typing a toggle then is a coin flip that can silence the session the
+ * button was meant to wake.
+ */
+export function remoteControlCommand(
+    observed: boolean | null,
+    desired: boolean | null | undefined,
+): string | null {
+    // Absent or reset is not a request. Unlike `/model`, there is no "default"
+    // for a bridge — clearing the pick means "stop asking", not "turn it off".
+    if (desired === undefined || desired === null) return null
+    if (observed === null) return null
+    if (observed === desired) return null
+    return '/remote-control'
+}
+
 export interface PaneCommandQueueOptions {
     /** Is the pane sitting at an idle prompt right now? */
     isIdle: () => Promise<boolean>
@@ -107,6 +159,16 @@ export interface PaneCommandQueueOptions {
 export interface PaneCommandQueue {
     /** Queue commands for the next idle prompt. Later picks replace earlier ones. */
     request: (commands: string[]) => void
+    /**
+     * Drop anything of this kind that has not been typed yet (DROVE-63).
+     *
+     * Only a toggle needs this. `/model x` then `/model y` collapses to `y` and
+     * sending the last one is always right, but Remote Control off-then-on
+     * while the pane is busy leaves the state where it started, and a queued
+     * `/remote-control` would then be the command that breaks it. The launcher
+     * re-derives the need on every metadata write and cancels when it is gone.
+     */
+    cancel: (kind: string) => void
     /** Try to drain now. Safe to call concurrently; overlapping calls are one. */
     flush: () => Promise<void>
     /** What is still waiting, in order. For tests and logging. */
@@ -168,6 +230,9 @@ export function createPaneCommandQueue(opts: PaneCommandQueueOptions): PaneComma
                 queued = queued.filter((q) => commandKind(q) !== kind)
                 queued.push(command)
             }
+        },
+        cancel: (kind: string) => {
+            queued = queued.filter((q) => commandKind(q) !== kind)
         },
         flush: async () => {
             // One drain at a time. Two overlapping drains would both read

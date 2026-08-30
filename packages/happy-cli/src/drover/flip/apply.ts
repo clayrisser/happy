@@ -284,7 +284,21 @@ export async function applyPendingFlip(opts: ApplyPendingFlipOptions): Promise<b
             selfId: session.sessionId ?? '',
             ...(opts.listSessions ? { listSessions: opts.listSessions } : {}),
         })
-        if (warning) flip.say(warning)
+        if (warning) {
+            flip.say(warning.text)
+            // DROVE-63: the same list in a shape the app can act on. The
+            // warning's own remedy is "/remote-control there", which is the one
+            // thing Clay cannot do from the phone — so the sessions it names
+            // ride along as ids, and the app puts the toggle next to each of
+            // them. Written on THIS session because this is the chat he is
+            // reading the warning in; nothing here reaches across to another
+            // session's metadata.
+            session.client.updateMetadata((metadata) => ({
+                ...metadata,
+                remoteControlAtRisk: warning.atRisk,
+                remoteControlAtRiskAt: Date.now(),
+            }))
+        }
     } catch (err) {
         logger.debug(`[${mode}]: could not check Remote Control fallout: ${String(err)}`)
     }

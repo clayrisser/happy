@@ -473,6 +473,31 @@ describe('warning about the Remote Control it will sever', () => {
         await expect(run).resolves.toBe('switch')
     })
 
+    it('leaves the named sessions on the metadata, so the app can put a button on them (DROVE-63)', async () => {
+        // The warning's own remedy is "/remote-control there", which is the one
+        // thing Clay cannot do from the phone. The ids ride along so the app
+        // can offer the toggle beside each name it just read out.
+        busReturns([
+            { id: 'sess-1', account: 'main', title: 'drover', state: 'live-interactive' },
+            { id: 'emp', account: null, title: 'employees', state: 'live-interactive' },
+            { id: 'old', account: 'main', title: 'finished', state: 'ended' },
+        ])
+        const h = await build()
+        const run = h.claudeRemoteLauncher(h.session)
+        await settle()
+
+        h.flip.request({ account: 'alt', reason: 'manual', by: 'app' })
+        await settle()
+
+        expect(h.metadata().remoteControlAtRisk).toEqual([
+            { id: 'emp', label: 'employees', account: 'main' },
+        ])
+        expect(typeof h.metadata().remoteControlAtRiskAt).toBe('number')
+
+        h.handlers.switch()
+        await expect(run).resolves.toBe('switch')
+    })
+
     it('stays silent when every other live session is already on the target', async () => {
         busReturns([{ id: 'other', account: 'alt', title: 'already there', state: 'live-interactive' }])
         const h = await build()

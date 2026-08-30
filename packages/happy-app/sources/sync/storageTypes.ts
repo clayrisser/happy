@@ -235,6 +235,30 @@ export const MetadataSchema = z.object({
     modelMode: z.string().nullish(),
     effortLevel: z.string().nullish(),
     /**
+     * Remote Control asked for on this session: `'on'` | `'off'`, null when the
+     * ask is withdrawn (DROVE-63). A string, not a boolean, because it rides
+     * the same per-session pick transport as the three above — one carrier, the
+     * one DROVE-45 built.
+     */
+    remoteControl: z.string().nullish(),
+    /**
+     * Sessions that lost Remote Control when this one flipped account
+     * (DROVE-37, made actionable by DROVE-63).
+     *
+     * Claude Code binds Remote Control to one account per machine, so landing
+     * on a new account tears down the binding every OTHER live session held.
+     * The flip already SAID which ones went quiet; this is the same list in a
+     * shape the app can put a button on, so the message that names four dead
+     * sessions can also turn them back on.
+     */
+    remoteControlAtRisk: z.array(z.object({
+        id: z.string(),
+        label: z.string(),
+        account: z.string(),
+    }).passthrough()).nullish(),
+    /** When that list was written, ms since epoch. Used to age the banner out. */
+    remoteControlAtRiskAt: z.number().nullish(),
+    /**
      * What a `hasPane` session is ACTUALLY running, read off the transcript by
      * the CLI's session scanner and republished here (DROVE-45).
      *
@@ -247,6 +271,18 @@ export const MetadataSchema = z.object({
      */
     paneModel: z.string().nullish(),
     paneEffort: z.string().nullish(),
+    /**
+     * Whether Claude Code's Remote Control is on for this pane RIGHT NOW
+     * (DROVE-63). Same split as the pair above: `remoteControl` is the request,
+     * this is the truth, and the toggle shows THIS so it cannot lie about a tap
+     * that never landed or about `/remote-control` typed in the terminal.
+     *
+     * The CLI reads it off the transcript's `bridge-session` records, which is
+     * the only place on disk that says it. `~/.claude.json`'s
+     * `hasUsedRemoteControl` / `remoteControlSurfacesSeen` are install-wide
+     * "ever" counters and would report on for every session forever.
+     */
+    paneRemoteControl: z.boolean().nullish(),
     // Passthrough so read-modify-write metadata updates from this app never
     // drop fields written by newer CLI or app versions.
 }).passthrough();
@@ -435,6 +471,8 @@ export interface SessionAgentModesPatch {
     permissionMode?: string | null;
     modelMode?: string | null;
     effortLevel?: string | null;
+    /** `'on'` | `'off'` | null — Cattle Drover's Remote Control toggle (DROVE-63). */
+    remoteControl?: string | null;
 }
 
 export interface Session {
@@ -458,6 +496,7 @@ export interface Session {
     permissionMode?: string | null; // Permission pick; local mirror of synced metadata.permissionMode (#1492)
     modelMode?: string | null; // Model pick; local mirror of synced metadata.modelMode (#1492)
     effortLevel?: string | null; // Effort pick; local mirror of synced metadata.effortLevel (#1492)
+    remoteControl?: string | null; // Remote Control ask; local mirror of synced metadata.remoteControl (DROVE-63)
     lastMessageSentAt?: number; // Local timestamp of last user-sent message, not synced to server; used for activity-based sort
     // IMPORTANT: latestUsage is extracted from reducerState.latestUsage after message processing.
     // We store it directly on Session to ensure it's available immediately on load.
