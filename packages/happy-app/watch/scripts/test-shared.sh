@@ -16,3 +16,23 @@ swiftc -o "$out/shared-wire-test" \
 	"$root/tests/SharedWireTests.swift"
 
 "$out/shared-wire-test"
+
+# Every push in the navigation stack has to be VALUE-based (DROVE-10).
+#
+# A view-based `NavigationLink { SessionListView() }` in the toolbar silently
+# killed the value-based links on the session rows inside it: SwiftUI built
+# SessionDetailView — its strings showed up in the log — and then never
+# presented it, so tapping a session did nothing at all. No warning, no crash,
+# no missing destination. Nothing about that shows up in a compile or in the
+# wire checks above, and it survived two builds on Clay's wrist, so the guard
+# has to be on the source itself. Comment lines are skipped because the one in
+# GateListView describes the bug.
+offenders=$(grep -rn 'NavigationLink' "$root/DroverWatch" |
+	grep -v 'NavigationLink(value:' |
+	grep -v '^[^:]*:[0-9]*:[[:space:]]*//' || true)
+if [ -n "$offenders" ]; then
+	echo "FAIL: a NavigationLink that is not value-based (DROVE-10):"
+	echo "$offenders"
+	exit 1
+fi
+echo "ok: every NavigationLink in DroverWatch is value-based (DROVE-10)"
