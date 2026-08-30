@@ -110,16 +110,17 @@ export default {
         name,
         slug: "happy",
         version: "1.7.0",
-        // Held at 21 deliberately (DROVE-30). The voice lane added the
-        // drover-speech native module and bumped this in the same commit,
-        // which is the documented rule — but build 7 on Clay's phone IS
-        // runtime 21, so bumping cut him off from every OTA: the manifest
-        // correctly answered 204 for 22 and kept serving an hour-old update.
-        // drover-speech is loaded with requireOptionalNativeModule, so its JS
-        // ships fine here and simply finds no native module until build 8.
-        // Bump this to 22 in the SAME change that archives build 8, which is
-        // also what the watch work is waiting on.
-        runtimeVersion: "21",
+        // Bumped to 22 in the change that archives build 8, which is the
+        // documented rule: the voice lane added a real autolinked pod
+        // (modules/drover-speech, podspec + DroverSpeechModule.swift), so a
+        // JS bundle that calls into it must not be served to a binary that
+        // does not have it. It was held at 21 until now because build 7 on
+        // Clay's wrist IS runtime 21 and bumping ahead of the binary cut him
+        // off from every OTA — the manifest correctly answered 204 for 22
+        // while it went on serving an hour-old 21 update.
+        // From build 8 on, every OTA must be published at 22 or it reaches
+        // nothing. Builds 6 and 7 are orphaned from updates by design.
+        runtimeVersion: "22",
         orientation: "default",
         icon: "./sources/assets/images/icon.png",
         scheme: "happy",

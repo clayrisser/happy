@@ -17,6 +17,7 @@
 # host's references to them, are torn down and rebuilt, so a re-run after
 # `pod install` never doubles anything.
 
+require 'fileutils'
 require 'xcodeproj'
 
 ios_dir = ARGV[0] or abort('usage: add-watch-targets.rb <ios dir> <watch dir>')
@@ -67,6 +68,26 @@ host_name = File.basename(project_path, '.xcodeproj')
 host = project.targets.find { |t| t.name == host_name } ||
        project.targets.find { |t| t.product_type == 'com.apple.product-type.application' }
 abort("no host application target in #{project_path}") unless host
+
+# --- pin the PHONE app's entitlements before anything else -----------------
+# expo's entitlements mod picks its output path by asking the project, and on
+# a project that already carries the watch targets it can answer with a WATCH
+# target's name against the PHONE's source root — writing the phone's
+# aps-environment and associated-domains into
+# `ios/<Host>/DroverWatchWidget.entitlements` and pointing the phone target
+# there. On a reused `ios/` the correct file already exists so the bug never
+# shows; on a FRESH checkout the archive then dies with "no entitlements at
+# ios/<Host>/<Host>.entitlements", which is where build 8 lost an hour.
+# Pinning the setting here settles the answer before expo asks it.
+host_entitlements = "#{host_name}/#{host_name}.entitlements"
+host.build_configurations.each do |config|
+  config.build_settings['CODE_SIGN_ENTITLEMENTS'] = host_entitlements
+end
+entitlements_path = File.join(ios_dir, host_entitlements)
+unless File.exist?(entitlements_path)
+  FileUtils.mkdir_p(File.dirname(entitlements_path))
+  Xcodeproj::Plist.write_to_path({}, entitlements_path)
+end
 
 # --- tear down a previous run ---------------------------------------------
 # Host references FIRST. Removing a target leaves any dependency still
