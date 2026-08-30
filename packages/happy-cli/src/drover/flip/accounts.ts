@@ -231,18 +231,22 @@ export function accountByName(name: string): DroverAccount | undefined {
 // twins are read as one account. Nothing here edits the registry: the rows
 // stay, and the duplicate is only marked.
 
-/** The address an account is logged in as, from the same key isLoggedIn tests. */
-export function loginEmail(a: DroverAccount): string | undefined {
+/** The address a .claude.json is logged in as, or undefined for anything else. */
+function loginEmailOf(configFile: string): string | undefined {
     try {
-        const cfg = accountConfigFile(a)
-        if (!existsSync(cfg)) return undefined
-        const raw = JSON.parse(readFileSync(cfg, 'utf8')) as { oauthAccount?: { emailAddress?: unknown } }
+        if (!existsSync(configFile)) return undefined
+        const raw = JSON.parse(readFileSync(configFile, 'utf8')) as { oauthAccount?: { emailAddress?: unknown } }
         const email = raw?.oauthAccount?.emailAddress
         return typeof email === 'string' && email ? email.trim().toLowerCase() : undefined
     } catch (err) {
-        logger.debug('[flip] could not read the login for ' + a.name, err)
+        logger.debug('[flip] could not read the login in ' + configFile, err)
         return undefined
     }
+}
+
+/** The address an account is logged in as, from the same key isLoggedIn tests. */
+export function loginEmail(a: DroverAccount): string | undefined {
+    return loginEmailOf(accountConfigFile(a))
 }
 
 /** Every OTHER registry account logged in as the same address. */
@@ -427,10 +431,21 @@ export function readUsageExhaustion(
 /**
  * Which account this process is running as.
  *
- * DROVER_ACCOUNT is the stamp `drover account` exports and is authoritative.
- * Without it, CLAUDE_CONFIG_DIR still identifies the account if it happens to
- * match a registry entry — that covers a session started before the wrapper
- * existed, or one started by hand.
+ * DROVER_ACCOUNT is the stamp `drover account` exports and is authoritative
+ * here — a flip inside this process is tracked by the controller, not by
+ * re-reading the environment, so nothing below has to second-guess the stamp.
+ * Without it, the config dir is what identifies the account.
+ *
+ * DROVE-31 widened that second half, because it is the COMMON case rather
+ * than the leftover it was written as: a bare `drover` with no -a exports no
+ * DROVER_ACCOUNT at all, and neither does `happy`, so most sessions arrive
+ * here with only a config dir. It used to be one exact string compare, which
+ * missed a trailing slash and a tilde and answered undefined — and an
+ * undefined account is a session with no name on the phone and a limit hit
+ * with nowhere to record itself.
+ *
+ * The transcript path is deliberately not consulted: every account shares one
+ * projects/ store now (DROVE-40), so it names all of them at once.
  */
 export function currentAccount(): DroverAccount | undefined {
     const stamped = process.env.DROVER_ACCOUNT
@@ -441,14 +456,38 @@ export function currentAccount(): DroverAccount | undefined {
         // to know what it is flipping AWAY from to avoid choosing it again.
         return { name: stamped, configDir: process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude') }
     }
-    // Unset CLAUDE_CONFIG_DIR means the ambient account, and that is a
-    // different thing from one whose configDir happens to be ~/.claude — see
-    // DroverAccount.ambient. Matching them together is how a session on the
-    // real login was mistaken for one on an empty config dir.
-    const explicit = process.env.CLAUDE_CONFIG_DIR
+    return accountOfConfigDir(process.env.CLAUDE_CONFIG_DIR)
+}
+
+/**
+ * The registry account that owns a config dir, by path and then by login.
+ *
+ * Unset (or empty) means the AMBIENT account, and that is a different thing
+ * from one whose configDir happens to be ~/.claude — see DroverAccount.ambient.
+ * Matching them together is how a session on the real login was mistaken for
+ * one on an empty config dir.
+ *
+ * The login is the second look, not the first: `main` and `risserproperties`
+ * hold the same address (DROVE-21), so an address alone cannot tell two rows
+ * apart while a path always can. It earns its place for a dir the registry
+ * does not spell the same way, where the alternative answer is nothing at all.
+ *
+ * Kept in step with libexec/drover-account-of, which is the same resolution in
+ * POSIX sh for the shell producers. Change one, change the other.
+ */
+export function accountOfConfigDir(configDir: string | undefined): DroverAccount | undefined {
     const accounts = readAccounts()
+    const explicit = configDir?.trim()
     if (!explicit) return accounts.find((a) => a.ambient)
-    return accounts.find((a) => !a.ambient && a.configDir === explicit)
+    const dir = expandTilde(explicit).replace(/\/+$/, '')
+    const byPath = accounts.find((a) => !a.ambient && a.configDir.replace(/\/+$/, '') === dir)
+    if (byPath) return byPath
+    // ~/.claude spelled out longhand is the ambient account, not a fourth
+    // spelling of a registry row.
+    if (dir === ambientDataDir()) return accounts.find((a) => a.ambient)
+    const email = loginEmailOf(join(dir, '.claude.json'))
+    if (!email) return undefined
+    return accounts.find((a) => loginEmail(a) === email)
 }
 
 export function readLedger(): Ledger {

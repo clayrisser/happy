@@ -7,7 +7,7 @@
  */
 
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
@@ -1522,5 +1522,87 @@ describe('the controller remembers where a session was seen', () => {
         flip.sessionFound('s2')
         expect(recallWhereabouts('s2', cwd)).toBe('alt')
         expect(readWhereabouts().s2.at).toBeGreaterThanOrEqual(before)
+    })
+})
+
+describe('naming the account a session with no stamp is on (DROVE-31)', () => {
+    // A bare `drover` with no -a exports no DROVER_ACCOUNT, and `happy` never
+    // has, so most sessions arrive with only a config dir. Measured on Clay's
+    // own live session 2026-08-30: pid 61366 carried DROVER_ORIGIN=terminal
+    // and neither DROVER_ACCOUNT nor CLAUDE_CONFIG_DIR, so every event went
+    // out with account null and the phone had nothing to render.
+    function two() {
+        writeAccounts([
+            { name: 'main' },
+            { name: 'alt', configDir: join(root, 'd31-alt') },
+        ])
+    }
+
+    it('reads an unset config dir as the ambient account, not as nothing', async () => {
+        two()
+        const { currentAccount } = await accountsModule()
+        expect(currentAccount()?.name).toBe('main')
+    })
+
+    it('matches a config dir with a trailing slash', async () => {
+        two()
+        process.env.CLAUDE_CONFIG_DIR = join(root, 'd31-alt') + '/'
+        const { currentAccount } = await accountsModule()
+        expect(currentAccount()?.name).toBe('alt')
+    })
+
+    it('reads ~/.claude spelled longhand as the ambient account', async () => {
+        // Not a fourth registry row: the ambient account is reached by
+        // UNSETTING the variable, and a session pointed at ~/.claude is the
+        // one whose login lives in ~/.claude.json all the same.
+        two()
+        process.env.CLAUDE_CONFIG_DIR = join(homedir(), '.claude')
+        const { currentAccount } = await accountsModule()
+        expect(currentAccount()?.name).toBe('main')
+    })
+
+    it('names a config dir the registry does not hold by its login', async () => {
+        two()
+        const odd = join(root, 'd31-elsewhere')
+        mkdirSync(odd, { recursive: true })
+        writeFileSync(join(odd, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'alt@example.com' } }))
+        process.env.CLAUDE_CONFIG_DIR = odd
+        const { currentAccount } = await accountsModule()
+        expect(currentAccount()?.name).toBe('alt')
+    })
+
+    it('says nothing rather than guessing for a dir with no login at all', async () => {
+        two()
+        const blank = join(root, 'd31-blank')
+        mkdirSync(blank, { recursive: true })
+        process.env.CLAUDE_CONFIG_DIR = blank
+        const { currentAccount } = await accountsModule()
+        expect(currentAccount()).toBeUndefined()
+    })
+
+    it('still lets the stamp win when a wrapper set one', async () => {
+        two()
+        process.env.DROVER_ACCOUNT = 'alt'
+        const { currentAccount } = await accountsModule()
+        expect(currentAccount()?.name).toBe('alt')
+    })
+
+    it('records a limit hit against the account the unstamped session is on', async () => {
+        // The ledger is what stops the next flip landing straight back on a
+        // maxed account. An unstamped session used to reach here with no
+        // account at all, so the hit was detected, announced, and written
+        // down nowhere.
+        two()
+        process.env.CLAUDE_CONFIG_DIR = join(root, 'd31-alt')
+        const { isCooling, readLedger } = await accountsModule()
+        const { FlipController } = await import('./controller')
+        const flip = new FlipController(join(root, 'work-d31'), () => {}, { toTerminal: () => {} })
+        flip.noteTranscriptMessage({
+            type: 'assistant',
+            message: { role: 'assistant', model: '<synthetic>', content: 'Claude usage limit reached.' },
+        })
+        expect(isCooling('alt')).toBe(true)
+        expect(isCooling('main')).toBe(false)
+        expect(Object.keys(readLedger())).toEqual(['alt'])
     })
 })
