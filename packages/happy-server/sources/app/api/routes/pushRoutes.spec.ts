@@ -61,7 +61,7 @@ vi.mock("@/app/push/pushSend", () => ({ sendPushNotifications: pushSendMock }));
 // rule end to end — a regression in hasActiveUiClient fails them. Only the
 // socket.io server is stubbed: `state.sockets` is what fetchSockets returns,
 // and emit paths are swallowed.
-import { eventRouter } from "@/app/events/eventRouter";
+import { ACTIVE_CLAIM_TTL_MS, eventRouter } from "@/app/events/eventRouter";
 import { pushThrottleReset } from "@/app/push/pushThrottle";
 import { pushRoutes } from "./pushRoutes";
 
@@ -157,6 +157,37 @@ describe('POST /v1/sessions/:sessionId/push-event', () => {
         const res = await postPushEvent(app);
         expect(res.statusCode).toBe(200);
         expect(res.json()).toMatchObject({ success: true, result: 'suppressed', reason: 'active-ui-client' });
+        expect(state.sent).toHaveLength(0);
+    });
+
+    it('sends once a foreground claim goes stale, because the app stopped saying so', async () => {
+        // DROVE-52. appState was a latch: set once and believed for the life of
+        // the socket. iOS suspends the app's JS the moment it backgrounds, so
+        // the `background` transition often never left the phone and every push
+        // after that was dropped — 40 of 40 on Clay's account on 2026-08-30,
+        // including a question he was answering in tmux at the time.
+        state.sockets.push({
+            data: {
+                clientType: 'user-scoped',
+                appState: 'active',
+                appStateAt: Date.now() - (ACTIVE_CLAIM_TTL_MS + 1_000),
+            },
+        });
+        const res = await postPushEvent(app);
+        expect(res.json()).toMatchObject({ result: 'sent' });
+        expect(state.sent).toHaveLength(1);
+    });
+
+    it('still suppresses while the foreground claim is being re-asserted', async () => {
+        state.sockets.push({
+            data: {
+                clientType: 'user-scoped',
+                appState: 'active',
+                appStateAt: Date.now() - 5_000,
+            },
+        });
+        const res = await postPushEvent(app);
+        expect(res.json()).toMatchObject({ result: 'suppressed', reason: 'active-ui-client' });
         expect(state.sent).toHaveLength(0);
     });
 

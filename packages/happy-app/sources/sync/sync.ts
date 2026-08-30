@@ -125,6 +125,14 @@ function avatarDescriptorKey(descriptor: NonNullable<DecryptedProjectRecord['ava
 
 class Sync {
     private static readonly BACKGROUND_SEND_TIMEOUT_MS = 30_000;
+    /**
+     * How often a foreground client re-asserts `app-state: active`.
+     *
+     * Must stay under the server's ACTIVE_CLAIM_TTL_MS (three beats) or a
+     * client that IS foreground starts looking stale and gets buzzed
+     * needlessly. See the heartbeat in #init for what went wrong without it.
+     */
+    private static readonly ACTIVE_STATE_HEARTBEAT_MS = 20_000;
     encryption!: Encryption;
     serverID!: string;
     anonID!: string;
@@ -261,6 +269,26 @@ class Sync {
             window.addEventListener('focus', broadcast);
             window.addEventListener('blur', broadcast);
         }
+
+        // Keep saying so while it is true (DROVE-52).
+        //
+        // The server suppresses a session push whenever any user-scoped socket
+        // has reported `active`, and that claim used to be a latch it believed
+        // for the life of the socket. iOS suspends the app's JS the instant it
+        // is backgrounded, so the `background` transition frequently never
+        // leaves the phone — and every push after that was dropped. Measured on
+        // Clay's account 2026-08-30: 40 of 40 session pushes came back
+        // `suppressed reason=active-ui-client`, over a stretch that included
+        // 03:22 and the 19:28:43 question he was answering in tmux.
+        //
+        // A heartbeat costs one tiny frame every 20s while foreground and
+        // nothing at all in the background, and it turns "active" from
+        // something asserted once into something continuously true. The server
+        // expires a claim that stops arriving (ACTIVE_CLAIM_TTL_MS).
+        setInterval(() => {
+            if (getCurrentAppState() !== 'active') return;
+            apiSocket.sendAppState('active');
+        }, Sync.ACTIVE_STATE_HEARTBEAT_MS);
     }
 
     async create(credentials: AuthCredentials, encryption: Encryption) {

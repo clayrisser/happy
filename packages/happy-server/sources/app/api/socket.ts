@@ -175,13 +175,18 @@ export function startSocket(app: Fastify) {
         // State lives on socket.data — no external storage needed.
         // Read initial state from handshake to close the race window between
         // connect and the first async app-state event.
+        // Stamped, not latched: an `active` claim expires unless the client
+        // keeps re-asserting it. See eventRouter.isActiveUiSocket for the
+        // suppression this feeds and why a latch went stale (DROVE-52).
         const initialAppState = socket.handshake.auth.appState as string | undefined;
         if (initialAppState) {
             socket.data.appState = initialAppState === 'active' ? 'active' : 'background';
+            socket.data.appStateAt = Date.now();
         }
 
         socket.on('app-state', (data: { state: string }) => {
             socket.data.appState = data?.state === 'active' ? 'active' : 'background';
+            socket.data.appStateAt = Date.now();
         });
 
         socket.on('disconnect', () => {
