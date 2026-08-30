@@ -460,6 +460,18 @@ export const pl: TranslationStructure = {
     },
 
     agentInput: {
+        readAloud: {
+            label: 'Czytaj odpowiedzi na głos',
+            settingsTitle: 'Czytaj odpowiedzi na głos',
+            settingsSubtitle: 'Wypowiada każdą odpowiedź, gdy nadejdzie. Kod, diffy i wyniki narzędzi są pomijane.',
+        },
+        dictate: {
+            label: 'Przytrzymaj, aby mówić',
+            settingsTitle: 'Przytrzymaj, aby mówić',
+            settingsSubtitle: 'Przycisk z przytrzymaniem w polu wiadomości. Transkrypcja na tym urządzeniu.',
+            listening: 'Słucham…',
+            failed: 'Dyktowanie nie powiodło się',
+        },
         permissionMode: {
             title: 'TRYB UPRAWNIEŃ',
             auto: 'decyduje samodzielnie, pyta w razie wątpliwości',

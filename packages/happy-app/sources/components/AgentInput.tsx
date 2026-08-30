@@ -63,6 +63,22 @@ interface AgentInputProps {
     sendIcon?: React.ReactNode;
     onMicPress?: () => void;
     isMicActive?: boolean;
+    /**
+     * Read-aloud (DROVE-30, mode B). Absent when the device has no speech
+     * synthesiser at all, so the toggle is not offered where it cannot work.
+     */
+    readAloudEnabled?: boolean;
+    onReadAloudToggle?: () => void;
+    /**
+     * Push-to-talk dictation (DROVE-30, mode A). Press and hold to record,
+     * release to transcribe into the composer. Separate from `onMicPress`,
+     * which starts the meta voice conversation and on the compact composer
+     * already owns the send button.
+     */
+    onTalkStart?: () => void;
+    onTalkEnd?: () => void;
+    onTalkCancel?: () => void;
+    isTalking?: boolean;
     permissionMode?: PermissionMode | null;
     availableModes?: PermissionMode[];
     onPermissionModeChange?: (mode: PermissionMode) => void;
@@ -2160,6 +2176,57 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
 
                         {!compactMobileComposer && (
                             <GitStatusButton sessionId={props.sessionId} onPress={props.onFileViewerPress} />
+                        )}
+
+                        {props.onReadAloudToggle && (
+                            <BubblePressable
+                                onPress={() => {
+                                    hapticsLight();
+                                    props.onReadAloudToggle?.();
+                                }}
+                                hitSlop={6}
+                                style={styles.mobileIconButton}
+                                accessibilityRole="button"
+                                accessibilityState={{ selected: !!props.readAloudEnabled }}
+                                accessibilityLabel={t('agentInput.readAloud.label')}
+                            >
+                                <Ionicons
+                                    name={props.readAloudEnabled ? 'volume-high' : 'volume-mute-outline'}
+                                    size={16}
+                                    color={props.readAloudEnabled
+                                        ? theme.colors.radio.active
+                                        : theme.colors.text}
+                                />
+                            </BubblePressable>
+                        )}
+
+                        {props.onTalkStart && (
+                            <BubblePressable
+                                // Press and hold, not tap: releasing is the
+                                // signal that the sentence is finished, which
+                                // is what lets the transcript go straight into
+                                // the composer without a second gesture.
+                                onPressIn={() => {
+                                    hapticsLight();
+                                    props.onTalkStart?.();
+                                }}
+                                onPressOut={() => props.onTalkEnd?.()}
+                                onLongPress={() => { }}
+                                delayLongPress={100000}
+                                hitSlop={6}
+                                style={styles.mobileIconButton}
+                                accessibilityRole="button"
+                                accessibilityState={{ busy: !!props.isTalking }}
+                                accessibilityLabel={t('agentInput.dictate.label')}
+                            >
+                                <Ionicons
+                                    name={props.isTalking ? 'mic' : 'mic-outline'}
+                                    size={16}
+                                    color={props.isTalking
+                                        ? theme.colors.radio.active
+                                        : theme.colors.text}
+                                />
+                            </BubblePressable>
                         )}
 
                         <Shaker ref={shakerRef}>

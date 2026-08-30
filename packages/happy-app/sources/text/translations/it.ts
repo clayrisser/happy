@@ -442,6 +442,18 @@ export const it: TranslationStructure = {
     },
 
     agentInput: {
+        readAloud: {
+            label: 'Leggi le risposte ad alta voce',
+            settingsTitle: 'Leggi le risposte ad alta voce',
+            settingsSubtitle: 'Pronuncia ogni risposta appena arriva. Codice, diff e output degli strumenti vengono saltati.',
+        },
+        dictate: {
+            label: 'Tieni premuto per parlare',
+            settingsTitle: 'Tieni premuto per parlare',
+            settingsSubtitle: 'Un pulsante da tenere premuto nel campo del messaggio. Trascrizione su questo dispositivo.',
+            listening: 'In ascolto…',
+            failed: 'Dettatura non riuscita',
+        },
         permissionMode: {
             title: 'MODALITÀ PERMESSI',
             auto: 'decide da sé, chiede in caso di dubbio',

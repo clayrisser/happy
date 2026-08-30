@@ -32,6 +32,10 @@ export default React.memo(function VoiceSettingsScreen() {
     const [voiceCustomAgentId, setVoiceCustomAgentId] = useSettingMutable('voiceCustomAgentId');
     const [voiceBypassToken, setVoiceBypassToken] = useSettingMutable('voiceBypassToken');
     const [voiceUpsellOverride, setVoiceUpsellOverride] = useLocalSettingMutable('voiceUpsellOverride');
+    // Modes A and B (DROVE-30). Device-local and unrelated to the paid meta
+    // assistant below — neither of them calls a server at all.
+    const [readAloudEnabled, setReadAloudEnabled] = useLocalSettingMutable('readAloudEnabled');
+    const [voiceDictationEnabled, setVoiceDictationEnabled] = useLocalSettingMutable('voiceDictationEnabled');
     const experiments = useSetting('experiments');
     const devModeEnabled = __DEV__ || useLocalSetting('devModeEnabled');
 
@@ -144,6 +148,34 @@ export default React.memo(function VoiceSettingsScreen() {
 
     return (
         <ItemList style={{ paddingTop: 0 }}>
+            {/* Talking to a session directly, on this device (DROVE-30) */}
+            <ItemGroup>
+                <Item
+                    title={t('agentInput.readAloud.settingsTitle')}
+                    subtitle={t('agentInput.readAloud.settingsSubtitle')}
+                    subtitleLines={0}
+                    icon={<Ionicons name="volume-high-outline" size={29} color="#34C759" />}
+                    rightElement={
+                        <Switch
+                            value={readAloudEnabled}
+                            onValueChange={setReadAloudEnabled}
+                        />
+                    }
+                />
+                <Item
+                    title={t('agentInput.dictate.settingsTitle')}
+                    subtitle={t('agentInput.dictate.settingsSubtitle')}
+                    subtitleLines={0}
+                    icon={<Ionicons name="mic-outline" size={29} color="#34C759" />}
+                    rightElement={
+                        <Switch
+                            value={voiceDictationEnabled}
+                            onValueChange={setVoiceDictationEnabled}
+                        />
+                    }
+                />
+            </ItemGroup>
+
             {/* Voice Usage */}
             {usageLoading ? (
                 <View style={{ paddingVertical: 24, alignItems: 'center' }}>

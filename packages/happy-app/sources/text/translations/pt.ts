@@ -443,6 +443,18 @@ export const pt: TranslationStructure = {
     },
 
     agentInput: {
+        readAloud: {
+            label: 'Ler respostas em voz alta',
+            settingsTitle: 'Ler respostas em voz alta',
+            settingsSubtitle: 'Fala cada resposta assim que chega. Código, diffs e saída de ferramentas são ignorados.',
+        },
+        dictate: {
+            label: 'Mantenha pressionado para falar',
+            settingsTitle: 'Mantenha pressionado para falar',
+            settingsSubtitle: 'Um botão de manter pressionado no campo de mensagem. Transcrição neste dispositivo.',
+            listening: 'A ouvir…',
+            failed: 'Falha ao ditar',
+        },
         permissionMode: {
             title: 'MODO DE PERMISSÃO',
             auto: 'decide sozinho, pergunta na dúvida',

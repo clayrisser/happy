@@ -458,6 +458,18 @@ export const en: TranslationStructure = {
     },
 
     agentInput: {
+        readAloud: {
+            label: 'Read replies aloud',
+            settingsTitle: 'Read replies aloud',
+            settingsSubtitle: 'Speaks each assistant reply as it arrives. Code, diffs and tool output are skipped.',
+        },
+        dictate: {
+            label: 'Hold to talk',
+            settingsTitle: 'Hold to talk',
+            settingsSubtitle: 'A press-and-hold button in the composer. Transcribed on this device.',
+            listening: 'Listening…',
+            failed: 'Dictation failed',
+        },
         permissionMode: {
             title: 'PERMISSION MODE',
             auto: 'asks when unsure',

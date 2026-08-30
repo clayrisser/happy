@@ -50,6 +50,7 @@ import { log } from '@/log';
 import { gitStatusSync } from './gitStatusSync';
 import { AsyncLock } from '@/utils/lock';
 import { voiceHooks } from '@/realtime/hooks/voiceHooks';
+import { readAloud } from '@/voice/readAloudService';
 import { Message } from './typesMessage';
 import { EncryptionCache } from './encryption/encryptionCache';
 import { systemPrompt } from './prompt/systemPrompt';
@@ -3003,6 +3004,10 @@ class Sync {
         }
         if (m.length > 0) {
             voiceHooks.onMessages(sessionId, m);
+            // Read-aloud rides the same seam as the meta voice agent, but not
+            // through voiceHooks: VOICE_CONFIG can silence that one, and mode B
+            // is a different feature that must not go quiet with it (DROVE-30).
+            readAloud.onMessages(sessionId, m);
         }
         if (result.hasReadyEvent) {
             voiceHooks.onReady(sessionId);

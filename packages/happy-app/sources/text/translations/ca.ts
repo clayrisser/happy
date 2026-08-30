@@ -444,6 +444,18 @@ export const ca: TranslationStructure = {
     },
 
     agentInput: {
+        readAloud: {
+            label: 'Llegeix les respostes en veu alta',
+            settingsTitle: 'Llegeix les respostes en veu alta',
+            settingsSubtitle: 'Pronuncia cada resposta a mesura que arriba. El codi, els diffs i la sortida de les eines s\'ometen.',
+        },
+        dictate: {
+            label: 'Mantén premut per parlar',
+            settingsTitle: 'Mantén premut per parlar',
+            settingsSubtitle: 'Un botó de mantenir premut al camp de missatge. Transcripció en aquest dispositiu.',
+            listening: 'Escoltant…',
+            failed: 'No s\'ha pogut dictar',
+        },
         permissionMode: {
             title: 'MODE DE PERMISOS',
             auto: 'decideix pel seu compte, pregunta si dubta',

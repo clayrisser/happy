@@ -110,7 +110,7 @@ export default {
         name,
         slug: "happy",
         version: "1.7.0",
-        runtimeVersion: "21",
+        runtimeVersion: "22",
         orientation: "default",
         icon: "./sources/assets/images/icon.png",
         scheme: "happy",
@@ -132,6 +132,15 @@ export default {
             },
             infoPlist: {
                 NSMicrophoneUsageDescription: "Allow $(PRODUCT_NAME) to access your microphone for voice conversations with AI.",
+                // Dictation (DROVE-30, mode A). SFSpeechRecognizer refuses to
+                // start without this key, and it runs with
+                // requiresOnDeviceRecognition, so the audio really does stay here.
+                NSSpeechRecognitionUsageDescription: "Allow $(PRODUCT_NAME) to turn what you say into a prompt. Transcription happens on this device.",
+                // Read-aloud (DROVE-30, mode B) has to keep speaking with the
+                // screen locked, which is what the audio background mode buys.
+                // The AVAudioSession category is .playback/.spokenAudio with
+                // .duckOthers, set in DroverSpeechModule.
+                UIBackgroundModes: ["audio"],
                 NSLocalNetworkUsageDescription: "Allow $(PRODUCT_NAME) to find and connect to local devices on your network.",
                 NSBonjourServices: ["_http._tcp", "_https._tcp"],
                 // ATS:
