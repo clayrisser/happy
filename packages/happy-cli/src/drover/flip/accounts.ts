@@ -669,33 +669,62 @@ export function recallWhereabouts(claudeSessionId: string, cwd: string): string 
  * main, and the flip answered "already on jamrizzi" four times and refused to
  * move, locking him out of the only account with headroom.
  *
- * The transcript cannot lie the same way. Every account is its own
- * CLAUDE_CONFIG_DIR with its own projects tree, and a session appends to the
- * one it is actually using, so the NEWEST copy of <id>.jsonl names the account
- * that is live right now. That is the same principle the bus registry already
- * applies to titles ("the transcript is where the session is writing NOW, so
- * it is the one that is true").
+ * The transcript cannot lie the same way. A session appends to the projects
+ * tree it is actually using, so the NEWEST copy of <id>.jsonl names the
+ * account that is live right now. That is the same principle the bus registry
+ * already applies to titles ("the transcript is where the session is writing
+ * NOW, so it is the one that is true").
  *
- * Undefined when no account holds a transcript for this session yet, which is
- * an untouched session — nothing to correct, so the caller keeps its stamp.
+ * IT ONLY WORKS WHEN THE TREES ARE SEPARATE, and since DROVE-40 they are not
+ * (DROVE-59). Sharing pointed every account's projects/ at one store so a flip
+ * stops copying transcripts — which means six accounts now stat ONE INODE and
+ * get one mtime six times. A strict `>` then keeps whichever account the
+ * registry lists first, and that is `main`. Measured twice tonight, while both
+ * /status and the whereabouts record correctly said jamrizzi:
+ *
+ *   [flip] transcript: 19c2f0a8… is writing under main, not jamrizzi
+ *          — taking the transcript
+ *
+ * So the file is only evidence about an account if it belongs to exactly ONE.
+ * A copy reachable through several accounts names all of them, which is to say
+ * none, and it is dropped rather than broken by age — this function's whole
+ * claim is "I know where it is", and it must not make that claim from a stat
+ * that cannot tell two accounts apart. Identity first, then recency among what
+ * is left.
+ *
+ * Undefined when nothing is left to point at: no account holds a transcript
+ * (an untouched session), or every copy is shared. Either way the caller keeps
+ * its stamp, which is the answer DROVE-43 overrode with a wrong one.
  */
 export function accountByNewestTranscript(
     claudeSessionId: string,
     cwd: string,
 ): DroverAccount | undefined {
-    let best: DroverAccount | undefined
-    let bestMtime = -1
+    // Keyed by device+inode, because two accounts reach the same bytes through
+    // different paths — a symlinked projects/ is exactly that, and so is the
+    // hard link the sharing migration leaves behind.
+    const byFile = new Map<string, { accounts: DroverAccount[], mtime: number }>()
     for (const a of readAccounts()) {
         const file = join(projectDirFor(a.configDir, cwd), `${claudeSessionId}.jsonl`)
-        let mtime: number
+        let st
         try {
-            mtime = statSync(file).mtimeMs
+            st = statSync(file)
         } catch {
             continue
         }
+        const key = `${st.dev}:${st.ino}`
+        const seen = byFile.get(key)
+        if (seen) seen.accounts.push(a)
+        else byFile.set(key, { accounts: [a], mtime: st.mtimeMs })
+    }
+
+    let best: DroverAccount | undefined
+    let bestMtime = -1
+    for (const { accounts, mtime } of byFile.values()) {
+        if (accounts.length !== 1) continue
         if (mtime > bestMtime) {
             bestMtime = mtime
-            best = a
+            best = accounts[0]
         }
     }
     return best

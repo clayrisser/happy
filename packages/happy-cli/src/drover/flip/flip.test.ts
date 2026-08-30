@@ -176,6 +176,53 @@ describe('limit detection', () => {
         expect(detectLimit(real)).not.toBeNull()
     })
 
+    it('matches the phrasing 2.1.251 actually blocks with (DROVE-59)', () => {
+        // The one that got away. Clay watched a session sit at its limit all
+        // evening, announcing itself over and over, while auto-flip never
+        // fired — and 47 transcripts in the shared store carry this sentence.
+        //
+        // Claude Code builds it from `You've hit your ${window} limit`, and
+        // its own hard-block prefix table (RTt in the 2.1.251 bundle) leads
+        // with BOTH voices:
+        //
+        //   ["You've hit your", "You've reached your", "You're out of usage
+        //    credits", ...]
+        //
+        // Only the second was here. "reached" is what the API says; "hit" is
+        // what the subscription TUI says, which is the entire local path this
+        // file exists to read.
+        const now = Date.parse('2026-08-30T19:53:00')
+        const real = "You've hit your session limit · resets 9:20pm (Europe/London)"
+        const hit = detectLimit(real, now)
+        expect(hit).not.toBeNull()
+        expect(hit?.resetsAt).toBe(Date.parse('2026-08-30T21:20:00'))
+
+        for (const text of [
+            "You've hit your limit",
+            "You've hit your weekly limit",
+            "You've hit your monthly limit \u00b7 raise it below, or it resets next month.",
+            "You've hit your fast limit · resets in 12m",
+            "You're out of usage credits",
+            "You're out of extra usage",
+        ]) {
+            expect(detectLimit(text), text).not.toBeNull()
+        }
+    })
+
+    it('does not read a limit WINDOW as the model that ran out (DROVE-59)', () => {
+        // The window name sits exactly where the model name sits, so widening
+        // the pattern to "hit" put "session" and "weekly" in the family slot.
+        // A family is only a family if it IS one — otherwise null, which
+        // blocks the account for every model. Conservative on purpose: a
+        // wrong family unparks an account that has nothing left.
+        expect(detectLimit("You've hit your session limit")?.family).toBeNull()
+        expect(detectLimit("You've hit your weekly limit")?.family).toBeNull()
+        expect(detectLimit("You've hit your monthly limit")?.family).toBeNull()
+        expect(detectLimit("You've hit your fast limit")?.family).toBeNull()
+        // ...but a model named in the same breath still reads as one.
+        expect(detectLimit("You've hit your Fable 5 limit")?.family).toBe('fable')
+    })
+
     it('ignores the user quoting a limit message back at Claude', () => {
         const userTurn = { type: 'user', message: { role: 'user', content: 'Claude usage limit reached — why?' } }
         expect(textOfTranscriptMessage(userTurn)).toBeNull()
@@ -927,6 +974,92 @@ describe('where the session actually is', () => {
         utimesSync(mainFile, later, later)
 
         expect(accountByNewestTranscript(id, cwd)?.name).toBe('main')
+    })
+
+    it('says nothing when every account is reading ONE shared store (DROVE-59)', async () => {
+        // DROVE-40 pointed every account's projects/ at ~/.claude-shared so a
+        // flip stops copying transcripts. That silently broke this function's
+        // premise: "every account is its own CLAUDE_CONFIG_DIR with its own
+        // projects tree". Six accounts now stat the SAME INODE, so six
+        // identical mtimes come back, `mtime > bestMtime` is strict, and the
+        // first registry row wins every time. That row is `main`.
+        //
+        // Measured tonight, twice, while the session was demonstrably on
+        // jamrizzi (both /status and the whereabouts record said so):
+        //
+        //   [flip] transcript: 19c2f0a8… is writing under main, not jamrizzi
+        //          — taking the transcript
+        //
+        // A shared transcript names no account, so the honest answer is that
+        // it does not know. Confidently naming `main` is the same wrong answer
+        // with the whereabouts record overruled on the way past.
+        const { accountByNewestTranscript, rememberWhereabouts } = await import('./accounts')
+        const cwd = join(root, 'work-shared')
+        const id = 'dddddddd-eeee-ffff-0000-111111111111'
+        const store = join(root, 'shared-store', 'projects')
+        mkdirSync(store, { recursive: true })
+
+        const dirs = ['s-main', 's-jam', 's-bits'].map((n) => join(root, n))
+        for (const d of dirs) {
+            mkdirSync(d, { recursive: true })
+            symlinkSync(store, join(d, 'projects'))
+        }
+        writeAccounts([
+            { name: 'main', configDir: dirs[0] },
+            { name: 'jamrizzi', configDir: dirs[1] },
+            { name: 'bitspur.com', configDir: dirs[2] },
+        ])
+
+        // One file, reachable as all three. Written through the first.
+        const file = join(projectDirFor(dirs[0], cwd), `${id}.jsonl`)
+        mkdirSync(dirname(file), { recursive: true })
+        writeFileSync(file, '{"type":"user"}\n')
+
+        expect(accountByNewestTranscript(id, cwd)).toBeUndefined()
+
+        // ...so the record the session kept is what the caller falls back on,
+        // instead of being overruled by a stat that knows nothing.
+        rememberWhereabouts(id, cwd, 'jamrizzi')
+        const { recallWhereabouts } = await import('./accounts')
+        expect(recallWhereabouts(id, cwd)).toBe('jamrizzi')
+    })
+
+    it('still reads a private transcript when one account is off the store (DROVE-59)', async () => {
+        // Half-shared is the real shape of the machine: a new account added
+        // after the migration has its own projects/ until something links it
+        // in. The shared inode names no single account, so it is not a
+        // candidate — but the account holding the one private copy is.
+        const { accountByNewestTranscript } = await import('./accounts')
+        const cwd = join(root, 'work-half')
+        const id = 'eeeeeeee-ffff-0000-1111-222222222222'
+        const store = join(root, 'half-store', 'projects')
+        mkdirSync(store, { recursive: true })
+
+        const shared = ['h-main', 'h-jam'].map((n) => join(root, n))
+        for (const d of shared) {
+            mkdirSync(d, { recursive: true })
+            symlinkSync(store, join(d, 'projects'))
+        }
+        const lone = join(root, 'h-new')
+        mkdirSync(join(lone, 'projects'), { recursive: true })
+        writeAccounts([
+            { name: 'main', configDir: shared[0] },
+            { name: 'jamrizzi', configDir: shared[1] },
+            { name: 'newbie', configDir: lone },
+        ])
+
+        const sharedFile = join(projectDirFor(shared[0], cwd), `${id}.jsonl`)
+        const loneFile = join(projectDirFor(lone, cwd), `${id}.jsonl`)
+        mkdirSync(dirname(sharedFile), { recursive: true })
+        mkdirSync(dirname(loneFile), { recursive: true })
+        writeFileSync(sharedFile, '{"type":"user"}\n')
+        writeFileSync(loneFile, '{"type":"user"}\n')
+        // The shared copy is NEWER, and still loses: it names three accounts,
+        // so it names none. Age cannot break a tie that identity already lost.
+        const later = new Date(Date.now() + 60_000)
+        utimesSync(sharedFile, later, later)
+
+        expect(accountByNewestTranscript(id, cwd)?.name).toBe('newbie')
     })
 
     it('says nothing when no account holds a transcript, so a fresh session keeps its stamp', async () => {

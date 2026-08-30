@@ -112,7 +112,25 @@ export interface LimitHit {
 // and that middle is now CAPTURED rather than skipped, because it is the
 // harness naming the model that actually ran out at the exact instant the
 // cooldown is recorded. Nothing else on disk says it as plainly.
-const namedModelLimit = /\byou(?:'ve| have) reached your (?:([\w.+\- ]{1,30}) )?limit\b/i
+//
+// "reached" is only HALF the voice, and the missing half is the one that
+// matters locally (DROVE-59). Claude Code 2.1.251 builds its block notice as
+// `You've hit your ${window} limit`, and the bundle's own hard-block prefix
+// table opens with both spellings:
+//
+//   ["You've hit your", "You've reached your", "You're out of usage credits",
+//    "You're out of extra usage", …]
+//
+// "reached" is the API's word; "hit" is what the subscription TUI prints,
+// which is the whole local path this file was written to read. Clay watched a
+// session announce "You've hit your session limit · resets 9:20pm" all
+// evening while auto-flip stayed silent, and 47 transcripts in the shared
+// store carry that sentence.
+//
+// The middle stays a capture, and the window name ("session", "weekly") lands
+// in it — but familyOfDisplayName only answers for words that ARE families,
+// so a window reads as no family at all and the cooldown blocks every model.
+const namedModelLimit = /\byou(?:'ve| have) (?:reached|hit) your (?:([\w.+\- ]{1,30}) )?limit\b/i
 
 const limitPatterns: RegExp[] = [
     /\b(?:claude )?usage limit reached\b/i,
@@ -121,6 +139,9 @@ const limitPatterns: RegExp[] = [
     /\bapproaching (?:your )?usage limit\b/i,
     /\brate[_ ]limit[_ ]error\b/i,
     /\bout of (?:usage )?credits\b/i,
+    // The credit-exhaustion prefixes from that same table. They block exactly
+    // as hard as a window limit and never say the word "limit".
+    /\byou(?:'re| are) out of (?:usage credits|extra usage)\b/i,
 ]
 
 // "resets at 3pm", "will reset at 2026-08-28T20:00:00Z", "resets 3:30pm (PDT)"
