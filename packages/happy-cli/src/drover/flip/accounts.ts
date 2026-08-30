@@ -12,12 +12,13 @@
  * cached here would be a lie within the hour.
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
 import { logger } from '@/ui/logger'
 import { familyOfDisplayName, familyOfLimitText } from './limits'
+import { projectDirFor } from './transcript'
 
 /**
  * Whose headroom a question is about.
@@ -655,6 +656,49 @@ export function recallWhereabouts(claudeSessionId: string, cwd: string): string 
     const w = readWhereabouts()[claudeSessionId]
     if (!w || w.cwd !== cwd) return undefined
     return w.account
+}
+
+/**
+ * Which account this session is REALLY on, read from where it is writing.
+ *
+ * DROVE-43. The whereabouts record and the DROVER_ACCOUNT stamp both describe
+ * the past: the stamp is where the session was born, the record is where some
+ * earlier flip left it. Neither survives Clay quitting drover and starting it
+ * again, because a bare `drover` starts on the ambient account and updates
+ * neither. He hit exactly that — the record said jamrizzi, the session was on
+ * main, and the flip answered "already on jamrizzi" four times and refused to
+ * move, locking him out of the only account with headroom.
+ *
+ * The transcript cannot lie the same way. Every account is its own
+ * CLAUDE_CONFIG_DIR with its own projects tree, and a session appends to the
+ * one it is actually using, so the NEWEST copy of <id>.jsonl names the account
+ * that is live right now. That is the same principle the bus registry already
+ * applies to titles ("the transcript is where the session is writing NOW, so
+ * it is the one that is true").
+ *
+ * Undefined when no account holds a transcript for this session yet, which is
+ * an untouched session — nothing to correct, so the caller keeps its stamp.
+ */
+export function accountByNewestTranscript(
+    claudeSessionId: string,
+    cwd: string,
+): DroverAccount | undefined {
+    let best: DroverAccount | undefined
+    let bestMtime = -1
+    for (const a of readAccounts()) {
+        const file = join(projectDirFor(a.configDir, cwd), `${claudeSessionId}.jsonl`)
+        let mtime: number
+        try {
+            mtime = statSync(file).mtimeMs
+        } catch {
+            continue
+        }
+        if (mtime > bestMtime) {
+            bestMtime = mtime
+            best = a
+        }
+    }
+    return best
 }
 
 /** One row of "why we are parked", so the terminal can print the whole story. */

@@ -6,7 +6,7 @@
  * and "every account is cooling" is not a state anyone can wait around for.
  */
 
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -891,6 +891,47 @@ describe('the arrival prompt', () => {
             cwd: '/work/thing',
         })
         expect(out).toBe('main -> alt because usage limit in thing; keep {braces}')
+    })
+})
+
+describe('where the session actually is', () => {
+    it('takes the growing transcript over a whereabouts record left by an old flip', async () => {
+        // DROVE-43, Clay's exact case. He flipped to jamrizzi, quit drover,
+        // started it again — which lands on the ambient account and updates
+        // nothing — and then every flip to jamrizzi answered "already on
+        // jamrizzi" and refused to move, locking him out of the only account
+        // with headroom.
+        const { accountByNewestTranscript, rememberWhereabouts, recallWhereabouts } =
+            await import('./accounts')
+        const cwd = join(root, 'work-drove43')
+        const id = 'cccccccc-dddd-eeee-ffff-000000000000'
+        // The registry has to know both accounts: this reads real config dirs.
+        writeAccounts([
+            { name: 'main', configDir: join(root, 'd43-main') },
+            { name: 'alt', configDir: join(root, 'd43-alt') },
+        ])
+
+        // An old flip left a record saying alt...
+        rememberWhereabouts(id, cwd, 'alt')
+        expect(recallWhereabouts(id, cwd)).toBe('alt')
+
+        // ...but the session is writing under main, and more recently.
+        const altFile = join(projectDirFor(join(root, 'd43-alt'), cwd), `${id}.jsonl`)
+        const mainFile = join(projectDirFor(join(root, 'd43-main'), cwd), `${id}.jsonl`)
+        mkdirSync(dirname(altFile), { recursive: true })
+        mkdirSync(dirname(mainFile), { recursive: true })
+        writeFileSync(altFile, '{"type":"user"}\n')
+        writeFileSync(mainFile, '{"type":"user"}\n')
+        // Make main unambiguously the newer of the two.
+        const later = new Date(Date.now() + 60_000)
+        utimesSync(mainFile, later, later)
+
+        expect(accountByNewestTranscript(id, cwd)?.name).toBe('main')
+    })
+
+    it('says nothing when no account holds a transcript, so a fresh session keeps its stamp', async () => {
+        const { accountByNewestTranscript } = await import('./accounts')
+        expect(accountByNewestTranscript('no-such-session', join(root, 'nowhere'))).toBeUndefined()
     })
 })
 

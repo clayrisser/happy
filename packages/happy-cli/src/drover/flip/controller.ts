@@ -32,6 +32,7 @@ import {
     defaultCooldownMs,
     pickTarget,
     readSettingsModel,
+    accountByNewestTranscript,
     recallWhereabouts,
     rememberWhereabouts,
     setCooldown,
@@ -277,6 +278,23 @@ export class FlipController {
                         `not ${this.current?.name ?? '(unknown)'} as the environment says`,
                 )
                 this.current = accountByName(remembered) ?? this.current
+            }
+            // DROVE-43. Both of the above describe the PAST — the stamp is
+            // where the session was born, the record is where an earlier flip
+            // left it — and neither survives quitting drover and starting it
+            // again, because a bare `drover` lands on the ambient account and
+            // updates neither. Clay hit that: the record said jamrizzi, the
+            // session was on main, and every flip to jamrizzi came back
+            // "already on jamrizzi" without moving, locking him out of the one
+            // account with headroom. Where the transcript is GROWING cannot go
+            // stale that way, so it has the last word.
+            const writing = accountByNewestTranscript(this.claudeSessionId, this.cwd)
+            if (writing && writing.name !== this.current?.name) {
+                logger.debug(
+                    `[flip] transcript: ${this.claudeSessionId} is writing under ${writing.name}, ` +
+                        `not ${this.current?.name ?? '(unknown)'} — taking the transcript`,
+                )
+                this.current = writing
             }
         }
         return this.current
