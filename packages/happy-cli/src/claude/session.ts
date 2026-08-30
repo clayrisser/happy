@@ -120,6 +120,8 @@ export class Session {
         claudeArgs?: string[],
         mcpServers: Record<string, any>,
         messageQueue: MessageQueue2<EnhancedMode>,
+        /** Mode the loop starts in; what the heartbeat reports until a switch. */
+        startingMode?: 'local' | 'remote',
         onModeChange: (mode: 'local' | 'remote') => void,
         onAbort?: () => void,
         allowedTools?: string[],
@@ -148,6 +150,10 @@ export class Session {
         this.sandboxConfig = opts.sandboxConfig;
         this._onModeChange = opts.onModeChange;
         this._onAbort = opts.onAbort;
+        // The daemon's resume path starts a session remote and, under DROVE-1,
+        // it stays there: no switch ever runs, so this initial value is the
+        // only mode that session will ever put on the wire (DROVE-8).
+        this.mode = opts.startingMode ?? 'local';
         this.hookSettingsPath = opts.hookSettingsPath;
         this.jsRuntime = opts.jsRuntime ?? 'node';
 

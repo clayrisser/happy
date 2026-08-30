@@ -79,6 +79,7 @@ export async function loop(opts: LoopOptions): Promise<number> {
         messageQueue: opts.messageQueue,
         allowedTools: opts.allowedTools,
         sandboxConfig: opts.sandboxConfig,
+        startingMode: opts.startingMode,
         onModeChange: opts.onModeChange,
         onAbort: opts.onAbort,
         hookSettingsPath: opts.hookSettingsPath,
@@ -100,7 +101,13 @@ export async function loop(opts: LoopOptions): Promise<number> {
                 switch (result.type ) {
                     case 'switch':
                         mode = 'remote';
-                        opts.onModeChange?.(mode);
+                        // Through the session, not straight to the callback
+                        // (DROVE-8): Session.onModeChange records the new mode,
+                        // fires one heartbeat carrying it, THEN calls this same
+                        // callback. Calling opts.onModeChange directly left
+                        // session-alive saying 'local' for the life of the
+                        // process, whichever launcher was actually running.
+                        session.onModeChange(mode);
                         break;
                     case 'exit':
                         return result.code;
@@ -117,7 +124,7 @@ export async function loop(opts: LoopOptions): Promise<number> {
                         return 0;
                     case 'switch':
                         mode = 'local';
-                        opts.onModeChange?.(mode);
+                        session.onModeChange(mode);
                         break;
                     default:
                         const _: never = reason satisfies never;
