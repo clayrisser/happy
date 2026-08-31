@@ -144,7 +144,7 @@ export function flipRiskSubtitle(rows: readonly FlipRiskRow[]): string | null {
  */
 export function flipRiskFooter(rows: readonly FlipRiskRow[]): string | undefined {
     if (rows.length === 0) return undefined;
-    return `A flip drops Remote Control for ${flipRiskNames(rows)}.`;
+    return `Switching accounts drops Remote Control for ${flipRiskNames(rows)}.`;
 }
 
 /**
@@ -159,7 +159,7 @@ export function flipRiskWarning(rows: readonly FlipRiskRow[], target: string | n
     const them = rows.length === 1 ? 'it' : 'them';
     const names = flipRiskNames(rows);
     return (
-        `Moving ${where} drops Remote Control for ${rows.length} other live ${noun} `
+        `Switching ${where} drops Remote Control for ${rows.length} other live ${noun} `
         + `on this machine: ${names}. Claude Code binds Remote Control to one account per `
         + `machine, so ${them} will go quiet on the phone until Remote Control is turned `
         + `back on for ${them}.`

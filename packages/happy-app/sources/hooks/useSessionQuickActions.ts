@@ -12,7 +12,7 @@ import { resolveMessageModeMeta, UnsupportedPermissionModeError } from '@/sync/m
 import { t } from '@/text';
 import { HappyError } from '@/utils/errors';
 import { copySessionMetadataToClipboard, copySessionMetadataAndLogsToClipboard } from '@/utils/copySessionMetadataToClipboard';
-import { getSessionName, useSessionStatus } from '@/utils/sessionUtils';
+import { useSessionStatus } from '@/utils/sessionUtils';
 import { isMachineOnline } from '@/utils/machineUtils';
 import { getSessionForkSource } from '@/utils/sessionFork';
 import { useRouter } from 'expo-router';
@@ -20,8 +20,8 @@ import { useSession } from '@/sync/storage';
 import { DuplicateSheet } from '@/components/DuplicateSheet';
 import type { SessionActionShortcutId } from '@/keyboard/shortcuts';
 import { isRigMetadata } from '@/sync/rig';
-import { collectDroverAccountsFromSessions, droverFlipMessage } from '@/utils/droverAccounts';
-import { flipRiskWarning, sessionsLosingRemoteControl } from '@/utils/droverSessionAccount';
+import { collectDroverAccountsFromSessions } from '@/utils/droverAccounts';
+import { confirmDroverSwitch } from '@/utils/droverAccountSwitch';
 
 /**
  * Menu rows are keyed by their keyboard shortcut where one exists. `flip-account`
@@ -183,10 +183,12 @@ export function useSessionQuickActions(
         && isMachineOnline(machine)
     );
 
-    // Cattle Drover flip (BASED-133). There is no flip RPC and there must not
-    // be one: happy-cli intercepts `/flip` in the message stream before the
-    // queue, so moving a session to another account is an ordinary chat
-    // message. The watch sends the identical string (sync/droverWatchFeed.ts).
+    // Cattle Drover account switch (BASED-133). There is no flip RPC and there
+    // must not be one: happy-cli intercepts `/flip` in the message stream
+    // before the queue, so moving a session to another account is an ordinary
+    // chat message. The watch sends the identical string
+    // (sync/droverWatchFeed.ts), and so does the quota sheet (DROVE-160). The
+    // user-facing word is "switch"; `flip` is the mechanism's own name.
     const droverAccounts = useDroverAccounts();
     const currentDroverAccount = session.metadata?.droverAccount ?? null;
     // Flip shows on ANY Cattle Drover session, not only once the app has itself
@@ -203,63 +205,18 @@ export function useSessionQuickActions(
     // this row from most sessions.
     const canFlipAccount = currentDroverAccount != null;
 
-    const sendFlip = React.useCallback((account?: string | null) => {
-        void Promise.resolve(sync.sendMessage(session.id, droverFlipMessage(account))).catch(() => {});
-    }, [session.id]);
-
-    // DROVE-37, said BEFORE the flip rather than after it. Claude Code binds
-    // Remote Control to one account per machine, so moving this session drops
-    // every other live session bound to a different one, and Clay's experience
-    // of that was a chat going silent with no explanation. The CLI announces it
-    // once the flip has happened; the phone knows the same sessions and can say
-    // it while it is still a choice. Read from the store at press time rather
-    // than subscribed: this hook runs once per row in the session lists, and a
-    // list of every session per row is a real cost for a sentence nobody sees
-    // until they tap.
-    //
-    // It warns and never blocks. A flip is usually asked for BECAUSE an account
-    // ran out, so refusing it would strand the session that asked.
+    // DROVE-37's warning is said BEFORE the switch rather than after it, and
+    // both it and the send live in utils/droverAccountSwitch.ts (DROVE-160), so
+    // the menu here and the quota sheet cannot drift into two paths.
     const confirmFlip = React.useCallback((account: string | null) => {
-        const state = storage.getState();
-        const sessions = state.isDataReady
-            // Side chats are hidden children of a session, not panes of their
-            // own, so they are not sessions that can lose Remote Control.
-            ? Object.values(state.sessions).filter((s) => !s.metadata?.isSideChat)
-            : [];
-        const atRisk = sessionsLosingRemoteControl({
-            sessions,
-            selfId: session.id,
-            target: account,
-            nameOf: getSessionName,
-        });
-        const warning = flipRiskWarning(atRisk, account);
-        if (!warning) {
-            sendFlip(account);
-            return;
-        }
-        // Next tick: this runs from the account picker's own button handler, so
-        // the picker is still tearing down. Presenting straight into that is
-        // the classic way a second alert never appears at all.
-        setTimeout(() => {
-            Modal.alert(
-                'Other sessions will go quiet',
-                warning,
-                [
-                    { text: t('common.cancel'), style: 'cancel' },
-                    {
-                        text: account ? `Move to ${account}` : 'Move anyway',
-                        onPress: () => sendFlip(account),
-                    },
-                ],
-            );
-        }, 0);
-    }, [sendFlip, session.id]);
+        confirmDroverSwitch({ sessionId: session.id, account, from: currentDroverAccount });
+    }, [currentDroverAccount, session.id]);
 
     const flipAccount = React.useCallback(() => {
         if (!canFlipAccount) return;
-        // Always confirm through the sheet, even when this app only knows the
+        // Always confirm through the picker, even when this app only knows the
         // one account it is on: "Next available" is a real choice the CLI
-        // resolves, and a silent immediate flip reads as the button doing
+        // resolves, and a silent immediate switch reads as the button doing
         // nothing. Any OTHER accounts the app has seen become named rows.
         const targets = droverAccounts.filter((account) => account !== currentDroverAccount);
         const buttons: Array<{ text: string; onPress?: () => void; style?: 'cancel' | 'destructive' | 'default' }> = [
@@ -268,7 +225,7 @@ export function useSessionQuickActions(
         ];
         buttons.push({ text: t('common.cancel'), style: 'cancel' });
         Modal.alert(
-            'Move to another account',
+            'Switch account',
             currentDroverAccount ? `Now on ${currentDroverAccount}` : undefined,
             buttons,
         );
@@ -410,7 +367,7 @@ export function useSessionQuickActions(
         }
 
         if (canFlipAccount) {
-            items.push({ id: 'flip-account', icon: 'swap-horizontal-outline', label: 'Move to another account', onPress: flipAccount });
+            items.push({ id: 'flip-account', icon: 'swap-horizontal-outline', label: 'Switch account', onPress: flipAccount });
         }
 
         if (canCopySessionMetadata) {

@@ -6,6 +6,7 @@ import { useUnistyles } from 'react-native-unistyles';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 import { useSession } from '@/sync/storage';
+import { confirmDroverSwitch } from '@/utils/droverAccountSwitch';
 import { isLiveStatusFresh, summarizeLiveStatus, type LiveStatusSummary } from '@/utils/liveStatus';
 import { STATUS_ROW_TAP_SLOP_BOTTOM, STATUS_ROW_TAP_SLOP_TOP } from './agentDockLayout';
 import { AnimatedFade } from './AnimatedOverlay';
@@ -189,6 +190,19 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
     const summary = useLiveStatusSummary(p.sessionId);
     const closeSheet = React.useCallback(() => setOpenSheet(null), []);
 
+    // Tapping an account block in the quota sheet moves the session onto it
+    // (DROVE-160). The sheet is closed first and the confirm is raised on the
+    // next tick, so the alert is not presented into a sheet still tearing down.
+    // Nothing new is sent: confirmDroverSwitch is the `/flip` message every
+    // other surface already sends.
+    const sessionId = p.sessionId;
+    const currentAccount = p.usageBarGroups.find((group) => group.active)?.account ?? null;
+    const onSwitchAccount = React.useCallback((account: string) => {
+        if (!sessionId) return;
+        setOpenSheet(null);
+        confirmDroverSwitch({ sessionId, account, from: currentAccount, always: true });
+    }, [currentAccount, sessionId]);
+
     const hasUsage = p.weekPercent != null || p.contextStatus != null;
     if (!summary && !p.connectionStatus && !hasUsage) {
         return null;
@@ -358,6 +372,7 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
                     groups={p.usageBarGroups}
                     open={openSheet === 'usage'}
                     onClose={closeSheet}
+                    onSwitchAccount={sessionId ? onSwitchAccount : undefined}
                 />
             ) : null}
             {canExpand && p.sessionId ? (

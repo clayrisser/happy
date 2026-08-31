@@ -55,7 +55,7 @@ export function SessionActionsNativeMenu({
                 */}
                 {canFlipAccount && (
                     <DropdownMenuItem onClick={flipAccount}>
-                        <DropdownMenuItem.Text>Move to another account</DropdownMenuItem.Text>
+                        <DropdownMenuItem.Text>Switch account</DropdownMenuItem.Text>
                     </DropdownMenuItem>
                 )}
                 {canCopySessionMetadata && (
