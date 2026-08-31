@@ -24,6 +24,13 @@ export const LocalSettingsSchema = z.object({
     // almost never should.
     readAloudEnabled: z.boolean().describe('Read assistant replies aloud as they arrive'),
     voiceDictationEnabled: z.boolean().describe('Show the press-and-hold talk button in the composer'),
+    // Whether the sentence tap has ever been used on this device (DROVE-195).
+    // Not a preference and not shown in Settings: it is what retires the hint
+    // on the read-aloud toast. DROVE-163 changed the gesture from a double tap
+    // to a single one and nothing announced it, so Clay kept reaching for the
+    // old one and concluding the feature was broken. The toast tells him until
+    // he has done it once, then stops.
+    sentenceTapUsed: z.boolean().describe('The tap-a-sentence-to-read-from-there gesture has been used on this device'),
     // Haptics on THIS handset, off by default (DROVE-190). The wrist is the
     // surface meant to tap Clay; the phone buzzing for the same events is
     // duplicate noise, and it fires in his pocket while a reply is read
@@ -67,6 +74,7 @@ export const localSettingsDefaults: LocalSettings = {
     zenMode: false,
     readAloudEnabled: false,
     voiceDictationEnabled: true,
+    sentenceTapUsed: false,
     phoneHaptics: false,
     droverDemoSeenAt: null,
     sidebarPanelsOpen: [],

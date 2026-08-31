@@ -1,3 +1,5 @@
+import type { ReadAloudDetourSentence } from './readAloud';
+
 /**
  * Tap a sentence to read from there (DROVE-146, sharpened by DROVE-163).
  *
@@ -31,10 +33,20 @@
  * it: two taps on a sentence would otherwise seek twice and then be undone by
  * a third seek to the top of the block.
  *
- * The decision is here, importing nothing, so both guards are testable: the
- * tap only moves the voice when read-aloud is on, and only from the surface it
- * is reading. A subagent transcript or a side panel scrolls and is tapped on
- * its own and must not steer the session's voice.
+ * The decision is here, taking only a type from elsewhere, so all of it is
+ * testable: the tap only moves the voice when read-aloud is on, and only from
+ * a surface belonging to the session it is reading. A side panel showing
+ * another session scrolls and is tapped on its own and must not steer the
+ * voice.
+ *
+ * A SUBAGENT SCREEN IS SUCH A SURFACE, and DROVE-195 is what that turned out
+ * to mean. It belongs to the session, so both guards pass, but its transcript
+ * came from somewhere the reader has never read and its sentences are not in
+ * the timeline. The sentence tap therefore missed, fell back to the block, and
+ * seeked the SESSION to whatever it happened to have at that createdAt: a tap
+ * that moved the reading somewhere he never pointed at. So the two are
+ * separate entry points now, and the subagent's one hands its sentences over
+ * rather than naming a position the reader cannot resolve.
  */
 export interface ReadAloudTapTarget {
     readonly isEnabled: boolean;
@@ -42,6 +54,8 @@ export interface ReadAloudTapTarget {
     seekTo(createdAt: number): void;
     /** True when the tapped sentence was found in the queue (DROVE-163). */
     seekToSentence(messageId: string, sentence: string): boolean;
+    /** Read a transcript the reader is not following, then come back (DROVE-195). */
+    readDetour(sentences: readonly ReadAloudDetourSentence[]): boolean;
 }
 
 /** Both guards, shared by the two entry points below. */
@@ -82,4 +96,24 @@ export function readSentenceFromHere(
     if (target.seekToSentence(messageId, sentence)) return true;
     target.seekTo(createdAt);
     return true;
+}
+
+/**
+ * True when the tap moved reading into a transcript the reader is not
+ * following (DROVE-195).
+ *
+ * The sentences are resolved by the caller, because only the surface drawing
+ * that transcript has it. What is decided here is the same pair of guards the
+ * session's tap gets, plus the one that is new: no sentences means there is
+ * nothing under the finger to read, and the voice is left exactly where it is
+ * rather than seeking to a position invented from a createdAt.
+ */
+export function readDetourFromHere(
+    target: ReadAloudTapTarget,
+    sessionId: string,
+    sentences: readonly ReadAloudDetourSentence[],
+): boolean {
+    if (!steers(target, sessionId)) return false;
+    if (sentences.length === 0) return false;
+    return target.readDetour(sentences);
 }

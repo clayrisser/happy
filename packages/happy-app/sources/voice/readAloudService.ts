@@ -8,7 +8,9 @@ import { cueWatchReplyStart, watchSpeechEngine } from './watchSpeaker';
 import { storage } from '@/sync/storage';
 import { resolveAudioCues, resolveStreamTalk } from '@/sync/settings';
 import { extractThinkingText, isEmptyThinking } from '@/utils/thinkingText';
-import { readFromHere, readSentenceFromHere } from './readAloudTap';
+import { readDetourFromHere, readFromHere, readSentenceFromHere } from './readAloudTap';
+import { subagentDetourFrom } from './subagentRead';
+import { getSubagentMessages } from '@/sync/subagentMessages';
 import { startBackgroundAudio } from './backgroundAudio';
 
 /**
@@ -85,7 +87,7 @@ export const readAloud = new ReadAloudReader(
  * about when a tap counts is in readAloudTap.ts.
  */
 export function readAloudFromHere(sessionId: string, createdAt: number): boolean {
-    return readFromHere(readAloud, sessionId, createdAt);
+    return rememberSentenceTap(readFromHere(readAloud, sessionId, createdAt));
 }
 
 /**
@@ -98,7 +100,49 @@ export function readAloudSentenceFromHere(
     sentence: string,
     createdAt: number,
 ): boolean {
-    return readSentenceFromHere(readAloud, sessionId, messageId, sentence, createdAt);
+    return rememberSentenceTap(readSentenceFromHere(readAloud, sessionId, messageId, sentence, createdAt));
+}
+
+/**
+ * Tap a sentence on a SUBAGENT screen and the reading follows him there
+ * (DROVE-195).
+ *
+ * The agent screen holds a transcript the reader has never seen, so the
+ * sentences are handed over rather than looked up. What comes back is a
+ * detour: the session keeps its focus, its timeline and its place, and gets
+ * it back the moment the agent's transcript runs out. The reasoning is in
+ * `readAloud.readDetour`.
+ *
+ * False means nothing moved, and there are only three ways to get it: read
+ * aloud is off, this is not the session being read, or there is no prose at or
+ * after the row. None of them is a position worth inventing.
+ */
+export function readAloudSubagentSentenceFromHere(
+    sessionId: string,
+    agentId: string,
+    messageId: string,
+    sentence: string,
+): boolean {
+    const messages = getSubagentMessages(sessionId, agentId);
+    return rememberSentenceTap(
+        readDetourFromHere(readAloud, sessionId, subagentDetourFrom(messages, messageId, sentence)),
+    );
+}
+
+/**
+ * He used the gesture, so the app can stop telling him about it (DROVE-195).
+ *
+ * DROVE-163 moved the tap from a double to a single and announced it nowhere,
+ * which is the whole of why this ticket exists. The read-aloud toast carries
+ * the hint until this flips, and is a plain line after. Written here rather
+ * than in the component so both taps retire it, the session's and the
+ * subagent's alike.
+ */
+function rememberSentenceTap(moved: boolean): boolean {
+    if (moved && !storage.getState().localSettings.sentenceTapUsed) {
+        storage.getState().applyLocalSettings({ sentenceTapUsed: true });
+    }
+    return moved;
 }
 
 audioCues.attach(readAloud);

@@ -79,6 +79,20 @@ export function hasSubagentScope(sessionId: Ids, agentId: Ids): boolean {
     return scopes.has(subagentScopeKey(sessionId, agentId));
 }
 
+/**
+ * Everything the agent screen is drawing, as a list (DROVE-195).
+ *
+ * The reader needs the whole transcript, not one row: a tap on a sentence
+ * means "read from here on", and "on" is the rest of the agent's work.
+ */
+export function getSubagentMessages(sessionId: Ids, agentId: Ids): Message[] {
+    if (!sessionId || !agentId) {
+        return [];
+    }
+    const scope = scopes.get(subagentScopeKey(sessionId, agentId));
+    return scope ? Object.values(scope) : [];
+}
+
 export function getSubagentMessage(sessionId: Ids, agentId: Ids, messageId: Ids): Message | null {
     if (!sessionId || !agentId || !messageId) {
         return null;

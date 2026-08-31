@@ -19,7 +19,8 @@ import { LongPressCopyable } from './LongPressCopyable';
 import { extractThinkingText, isEmptyThinking } from '@/utils/thinkingText';
 import { useElapsedTime } from '@/hooks/useElapsedTime';
 import { useSpokenSentence } from '@/voice/readAloudPlayhead';
-import { readAloudSentenceFromHere } from '@/voice/readAloudService';
+import { readAloudSentenceFromHere, readAloudSubagentSentenceFromHere } from '@/voice/readAloudService';
+import { useSubagentScope } from '@/sync/subagentMessages';
 import { formatWorkDuration } from '@/hooks/useGroupedMessages';
 import { agentLongPressCopyText } from '@/utils/agentTurnCopy';
 import { DisclosureFooter, useInlineDisclosure } from './DisclosureFooter';
@@ -223,12 +224,29 @@ function AgentTextBlock(props: {
   // gestures around it are separated by target rather than by tap count, and
   // hitting the same sentence twice inside the double-tap window is harder
   // than hitting it once. The reasoning is written out in readAloudTap.ts.
+  //
+  // On a SUBAGENT screen the same tap means the same thing and cannot take
+  // the same route (DROVE-195). Every row there carries the session's id, so
+  // both of the tap's guards pass, but the transcript came from the agent
+  // screen's own RPC poll and none of it is in the reader's timeline. The
+  // sentence lookup therefore missed and the block fallback seeked the
+  // SESSION by createdAt, landing the reading on whatever unrelated reply
+  // shared that minute. So the subagent's tap hands its sentences over
+  // instead, and the reader reads them as a detour and gives the session
+  // back. The scope comes from a context because this component is several
+  // memoized layers below the screen that knows.
+  //
   const sessionId = props.sessionId;
   const messageId = props.message.id;
   const createdAt = props.message.createdAt;
+  const agentId = useSubagentScope();
   const readFromSentence = React.useCallback((sentence: string) => {
+    if (agentId !== null) {
+      readAloudSubagentSentenceFromHere(sessionId, agentId, messageId, sentence);
+      return;
+    }
     readAloudSentenceFromHere(sessionId, messageId, sentence, createdAt);
-  }, [sessionId, messageId, createdAt]);
+  }, [agentId, sessionId, messageId, createdAt]);
 
   // The model's reasoning is folded, never dropped — one muted row that opens
   // to the whole of what the CLI sent.
