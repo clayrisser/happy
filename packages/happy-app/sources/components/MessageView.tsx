@@ -19,6 +19,8 @@ import { LongPressCopyable } from './LongPressCopyable';
 import { extractThinkingText, isEmptyThinking } from '@/utils/thinkingText';
 import { useElapsedTime } from '@/hooks/useElapsedTime';
 import { useSpokenSentence } from '@/voice/readAloudPlayhead';
+import { readAloudFromHere } from '@/voice/readAloudService';
+import { DoubleTap } from './CodeWrapToggle';
 import { formatWorkDuration } from '@/hooks/useGroupedMessages';
 import { agentLongPressCopyText } from '@/utils/agentTurnCopy';
 import { DisclosureFooter, useInlineDisclosure } from './DisclosureFooter';
@@ -215,6 +217,14 @@ function AgentTextBlock(props: {
   // changes, and read above the early return below because hooks are hooks.
   const spokenSentence = useSpokenSentence(props.message.id);
 
+  // Double tap this section and reading moves here (DROVE-146). The one way
+  // the voice is steered now that scrolling does not touch it.
+  const sessionId = props.sessionId;
+  const createdAt = props.message.createdAt;
+  const readFromHere = React.useCallback(() => {
+    readAloudFromHere(sessionId, createdAt);
+  }, [sessionId, createdAt]);
+
   // The model's reasoning is folded, never dropped — one muted row that opens
   // to the whole of what the CLI sent.
   if (props.message.isThinking) {
@@ -242,13 +252,20 @@ function AgentTextBlock(props: {
     />
   );
 
+  // The tap sits on the PROSE, outside the code and terminal cards, which
+  // carry their own double tap for wrapping (DROVE-95, DROVE-149). Those are
+  // nested inside this one, and a gesture-handler tap in a descendant wins
+  // over its ancestor, so the two never have to guess at each other: a double
+  // tap on a monospace card wraps it, a double tap on prose reads from there.
   return (
     <View style={styles.agentMessageContainer}>
-      {copyText !== null ? (
-        <LongPressCopyable fill style={styles.agentCopyTarget} text={copyText}>
-          {body}
-        </LongPressCopyable>
-      ) : body}
+      <DoubleTap onDoubleTap={readFromHere}>
+        {copyText !== null ? (
+          <LongPressCopyable fill style={styles.agentCopyTarget} text={copyText}>
+            {body}
+          </LongPressCopyable>
+        ) : body}
+      </DoubleTap>
     </View>
   );
 }
