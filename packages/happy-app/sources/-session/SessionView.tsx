@@ -7,6 +7,7 @@ import { PushPermissionNotice } from '@/components/PushPermissionNotice';
 import { AgentInput } from '@/components/AgentInput';
 import { readAloud } from '@/voice/readAloudService';
 import { useVoiceComposer } from '@/voice/useVoiceComposer';
+import { ReadAloudRouteToast } from '@/voice/ReadAloudRouteToast';
 import { resolveVisibleAgentGoalStatus } from '@/components/agentGoalStatus';
 import type { MultiTextInputHandle } from '@/components/MultiTextInput';
 import { layout } from '@/components/layout';
@@ -1211,6 +1212,10 @@ export function SessionViewLoaded({
                 onSessionInfoPress={handleSessionInfoPress}
                 onActionAreaOffsetChange={usesFloatingMobileDock ? handleComposerCardOffsetChange : undefined}
             />
+            {/* Why read-aloud went quiet, when the route took it away
+                (DROVE-119). Absolute over the composer, so it costs the
+                chat no height. */}
+            <ReadAloudRouteToast />
         </View>
     );
 

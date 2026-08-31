@@ -460,6 +460,7 @@ export const zhHans: TranslationStructure = {
         streamTalk: {
             on: '正在朗读回复',
             off: '不朗读回复',
+            headphonesOff: '朗读已关闭，耳机已断开',
         },
         dictate: {
             label: '按住说话，轻点锁定',
