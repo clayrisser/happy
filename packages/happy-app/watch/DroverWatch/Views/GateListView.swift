@@ -18,9 +18,12 @@ enum DroverRoute: Hashable {
 struct GateListView: View {
     @EnvironmentObject private var store: GateStore
     @Environment(\.scenePhase) private var scenePhase
+    /// The stack's path lives on the router so a tap on the watch-local gate
+    /// notification can push a gate the same way a row tap does (DROVE-94).
+    @ObservedObject private var router = WatchNotificationRouter.shared
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $router.path) {
             // The clock has to keep moving for staleness to mean anything: a
             // plain `snapshot.isStale()` is evaluated once at render and then
             // never again, so a wrist left on the wall would go on saying the

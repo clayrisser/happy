@@ -132,11 +132,39 @@ final class WristBuzzer {
         // The cue is on the category so a future notification action ("Allow",
         // "Deny") can hang off it without another wire change.
         content.categoryIdentifier = "drover.\(event.cue.rawValue)"
+        // What a tap needs to land on the gate (DROVE-94): the gate id, and
+        // the session the phone filed it under. WatchNotificationRouter reads
+        // these back and pushes the gate's detail.
+        content.userInfo = Self.userInfo(for: event)
         let request = UNNotificationRequest(identifier: event.id, content: content, trigger: nil)
         center.add(request) { [weak self] error in
             guard let error else { return }
             Task { @MainActor in self?.onRefusal?(error.localizedDescription) }
         }
+    }
+
+    /// The gate id and session id a tap on the alert routes by.
+    ///
+    /// A cue id is the phone's gate id, `${sessionId}:${requestId}` (the
+    /// session is the one HOLDING the card, which for a bus gate is the
+    /// bridge session), or `finished:<sessionId>` for a session that stopped.
+    /// Session ids never contain a colon; request ids can, so the split is on
+    /// the first one. Absent rather than empty when nothing can be read, so a
+    /// reader can tell "no session" from "".
+    static func userInfo(for event: WristCueEvent) -> [String: String] {
+        var info = [WatchNotificationRouter.gateIdKey: event.id]
+        let sessionId: Substring?
+        if event.cue == .finished, let colon = event.id.firstIndex(of: ":") {
+            sessionId = event.id[event.id.index(after: colon)...]
+        } else if let colon = event.id.firstIndex(of: ":") {
+            sessionId = event.id[..<colon]
+        } else {
+            sessionId = nil
+        }
+        if let sessionId, !sessionId.isEmpty {
+            info[WatchNotificationRouter.sessionIdKey] = String(sessionId)
+        }
+        return info
     }
 
     private func remember(_ ids: [String]) {
