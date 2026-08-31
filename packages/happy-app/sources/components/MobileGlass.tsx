@@ -6,7 +6,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useUnistyles } from 'react-native-unistyles';
 import { isRunningOnMac } from '@/utils/platform';
 import { chromeGlassTint } from './glassChrome';
-import { getNativeGlassInteractivity } from './glassInteractionPolicy';
+import { getGlassSurfaceOverflow, getNativeGlassInteractivity } from './glassInteractionPolicy';
 import { GlassPressProvider } from './glassPress';
 
 type MobileGlassMaterial = 'liquid' | 'static' | 'frosted';
@@ -60,6 +60,11 @@ export function MobileGlassSurface({
     const { theme } = useUnistyles();
     const usesStaticMaterial = nativeEffect && material === 'static';
     const usesFrostedMaterial = nativeEffect && material === 'frosted';
+    // An interactive surface stops clipping its children (DROVE-202), so the
+    // full-bleed overlay has to round its own corners instead of borrowing the
+    // parent's clip. Read off the caller's style rather than taken as a prop,
+    // because every caller already says it there.
+    const surfaceRadius = RNStyleSheet.flatten(style)?.borderRadius;
 
     if (!enabled || Platform.OS === 'web' || isRunningOnMac()) {
         return <View {...props} style={style}>{children}</View>;
@@ -84,7 +89,7 @@ export function MobileGlassSurface({
                     backgroundColor: theme.dark
                         ? usesFrostedMaterial ? 'rgba(20, 20, 22, 0.82)' : 'rgba(44, 44, 47, 0.40)'
                         : usesFrostedMaterial ? 'rgba(255, 255, 255, 0.82)' : 'rgba(0, 0, 0, 0.024)',
-                    borderRadius: usesStaticMaterial ? 999 : undefined,
+                    borderRadius: usesStaticMaterial ? 999 : surfaceRadius,
                 },
             ]}
         />
@@ -97,7 +102,7 @@ export function MobileGlassSurface({
             locations={[0, 0.48, 1]}
             start={{ x: 0, y: 0 }}
             end={{ x: 1, y: 1 }}
-            style={RNStyleSheet.absoluteFill}
+            style={[RNStyleSheet.absoluteFill, { borderRadius: surfaceRadius }]}
         />
     );
 
@@ -137,7 +142,12 @@ export function MobileGlassSurface({
                 colorScheme={theme.dark ? 'dark' : 'light'}
                 tintColor={tintColor ?? chromeGlassTint(theme.dark)}
                 isInteractive={getNativeGlassInteractivity(interactive, isGlassEffectAPIAvailable())}
-                style={style}
+                // An interactive surface has to be free to swell past its
+                // resting frame on press, and a caller that clipped it turned
+                // that swell into an inner zoom (DROVE-202). A surface nothing
+                // lands on keeps whatever clipping it asked for: the composer
+                // card needs it to round the field it holds.
+                style={[style, interactive && { overflow: getGlassSurfaceOverflow(true) }]}
             >
                 {surfaceOverlay}
                 <GlassPressProvider value={interactive}>

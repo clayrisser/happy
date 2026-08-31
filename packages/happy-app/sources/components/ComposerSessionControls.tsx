@@ -6,6 +6,8 @@ import Svg, { Circle, Line, Path } from 'react-native-svg';
 import { Typography } from '@/constants/Typography';
 import { BubblePressable } from './BubblePressable';
 import { GlassChromeSurface } from './GlassChromeControl';
+import { shouldDrawPressedFallback } from './glassInteractionPolicy';
+import { useNativeGlassPress } from './glassPress';
 import { NativeSettingsMenu, type NativeSettingsMenuGroup } from './NativeSettingsMenu';
 import {
     effortAccessibility,
@@ -205,6 +207,11 @@ function Control(props: {
 }) {
     const groups = props.groups ?? (props.group ? [props.group] : []);
     const segmentStyle = props.wide ? styles.modelSegment : styles.control;
+    // Inside the capsule's own material, so the press is drawn by
+    // UIGlassEffect and this segment must not fade on top of it (DROVE-202).
+    // A dimming glyph in a frame that does not move is the "scaling up inside"
+    // Clay was looking at, one segment at a time.
+    const nativePress = useNativeGlassPress();
     if (props.nativeMenus && groups.length > 0) {
         return (
             <NativeSettingsMenu
@@ -229,7 +236,7 @@ function Control(props: {
             style={(p) => [
                 segmentStyle,
                 props.open && styles.controlOpen,
-                { opacity: p.pressed && props.onPress ? 0.7 : 1 },
+                { opacity: shouldDrawPressedFallback(nativePress, p.pressed, !props.onPress) ? 0.7 : 1 },
             ]}
             accessibilityRole="button"
             accessibilityLabel={props.accessibilityLabel}

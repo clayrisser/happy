@@ -20,7 +20,11 @@ import {
     resolveGlassChromeMaterial,
     type GlassChromeMaterial,
 } from './glassChrome';
-import { getNativeGlassInteractivity } from './glassInteractionPolicy';
+import {
+    getGlassSurfaceOverflow,
+    getNativeGlassInteractivity,
+    shouldDrawPressedFallback,
+} from './glassInteractionPolicy';
 import { GlassPressProvider, useNativeGlassPress } from './glassPress';
 
 /**
@@ -131,6 +135,12 @@ export interface GlassChromeSurfaceProps {
  * forced to the app's theme rather than left on `auto`, so a light chat behind
  * a dark-theme composer cannot flip the control's fill out from under a white
  * glyph.
+ *
+ * `overflow` goes on LAST, after the caller's style, and is the primitive's to
+ * decide (DROVE-202). On the material the control has to be free to swell past
+ * its resting frame on press; off it, the flat surface is the only thing
+ * rounding its content. Eight chrome styles had clipped the material, which is
+ * why the decision moved in here rather than being fixed eight times.
  */
 export function GlassChromeSurface({
     tintColor,
@@ -153,7 +163,7 @@ export function GlassChromeSurface({
                 colorScheme={theme.dark ? 'dark' : 'light'}
                 tintColor={tintColor ?? chromeGlassTint(theme.dark)}
                 isInteractive={getNativeGlassInteractivity(interactive, isGlassEffectAPIAvailable())}
-                style={[{ borderRadius: radius, overflow: 'visible' }, style]}
+                style={[{ borderRadius: radius }, style, { overflow: getGlassSurfaceOverflow(true) }]}
             >
                 <GlassPressProvider value={interactive}>
                     {children}
@@ -172,9 +182,9 @@ export function GlassChromeSurface({
                     backgroundColor: tintColor ?? theme.colors.surfaceHigh,
                     borderWidth: RNStyleSheet.hairlineWidth,
                     borderColor: theme.colors.glass.border,
-                    overflow: 'hidden',
                 },
                 style,
+                { overflow: getGlassSurfaceOverflow(false) },
             ]}
         >
             {children}
@@ -260,7 +270,7 @@ function GlassChromeButtonContent({
                 alignItems: 'center',
                 justifyContent: 'center',
                 borderRadius: cornerRadius,
-                opacity: !nativePress && pressed && !pressable.disabled ? 0.6 : 1,
+                opacity: shouldDrawPressedFallback(nativePress, pressed, pressable.disabled) ? 0.6 : 1,
             })}
         >
             {children}

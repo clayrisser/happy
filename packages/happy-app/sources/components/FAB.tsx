@@ -4,7 +4,7 @@ import { Platform, View, Pressable } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { FAB_RADIUS, FAB_SIZE } from './glassChromeScreens';
-import { GlassChromeSurface } from './GlassChromeControl';
+import { GlassChromeSurface, useGlassChromeMaterial } from './GlassChromeControl';
 
 const stylesheet = StyleSheet.create((theme, runtime) => ({
     container: {
@@ -36,7 +36,8 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         alignItems: 'center',
         justifyContent: 'center',
         borderRadius: FAB_RADIUS,
-        overflow: 'hidden',
+        // No clip (DROVE-202): the surface decides it, and on the material it
+        // has to be `visible` or the press swell never leaves the frame.
         shadowColor: theme.colors.glass.shadow,
         shadowOffset: { width: 0, height: 8 },
         shadowOpacity: Platform.select({ web: 0, default: 1 }),
@@ -49,6 +50,12 @@ export const FAB = React.memo(({ onPress }: { onPress: () => void }) => {
     const { theme } = useUnistyles();
     const styles = stylesheet;
     const safeArea = useSafeAreaInsets();
+    // On the material the glass draws the press itself (DROVE-202). The scale
+    // and the fade below are the imitation DROVE-169 went through the app
+    // removing, and scaling a GlassView is the worst of them: the effect
+    // renders as a refractive blob rather than a button reacting. Off the
+    // material they are the only pressed state there is, so they stay.
+    const nativePress = useGlassChromeMaterial() === 'liquid';
     return (
         <View
             style={[
@@ -59,7 +66,7 @@ export const FAB = React.memo(({ onPress }: { onPress: () => void }) => {
             <Pressable
                 style={({ pressed }) => [
                     styles.button,
-                    pressed ? styles.buttonPressed : styles.buttonDefault
+                    pressed && !nativePress ? styles.buttonPressed : styles.buttonDefault
                 ]}
                 onPress={onPress}
             >
@@ -82,6 +89,7 @@ export const FAB = React.memo(({ onPress }: { onPress: () => void }) => {
                     <GlassChromeSurface
                         radius={FAB_RADIUS}
                         tintColor={theme.colors.fab.background}
+                        interactive
                         style={styles.glass}
                     >
                         <Ionicons name="add" size={24} color={theme.colors.fab.icon} />
