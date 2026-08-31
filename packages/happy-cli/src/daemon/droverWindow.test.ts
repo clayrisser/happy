@@ -11,7 +11,9 @@ import {
     buildDaemonResumeLaunch,
     openDroverWindow,
     resumeInDroverWindow,
+    startAccountEnvironment,
     type DroverWindowDeps,
+    type PickStartAccount,
 } from './droverWindow';
 import { tmuxUnreachableMessage } from './tmuxSpawn';
 import type { SessionEncryptionData, TrackedSession } from './types';
@@ -303,5 +305,158 @@ describe('the daemon has no headless path left', () => {
             // A definition or a call; prose may still say the name is gone.
             expect(source, name).not.toMatch(/\bspawnTrackedHappyProcess\s*[(=]/);
         }
+    });
+});
+
+// DROVE-87: a NEW session started from the phone gets the account decision a
+// terminal start and a phone Resume both make. The pane runs `drover claude
+// ...`, agent name first, and bin/drover deliberately asks nothing for that
+// shape, so the daemon decides, with the function the resume path uses.
+describe('a phone-started NEW session', () => {
+    const cwd = '/Users/clay/Projects/bitspur/cattle-drover';
+    const registry: DroverAccount = { name: 'jamrizzi', configDir: '/Users/clay/.claude-accounts/jamrizzi' };
+    const ambient: DroverAccount = { name: 'main', configDir: '/Users/clay/.claude', ambient: true };
+
+    // What spawnSession in run.ts does with the decision, no more: decide,
+    // merge the env, hand the unset list to the window.
+    async function spawnLike(
+        deps: DroverWindowDeps,
+        input: { pickAccount?: PickStartAccount; requestEnv?: Record<string, string>; agent?: 'claude' | 'codex'; resumeId?: string; model?: string },
+    ) {
+        const agent = input.agent ?? 'claude';
+        const requestEnv = input.requestEnv ?? {};
+        const account = startAccountEnvironment({
+            agent,
+            cwd,
+            resumeId: input.resumeId,
+            model: input.model,
+            requestEnv,
+            ambientEnv: deps.ambientEnvironment,
+            pickAccount: input.pickAccount,
+        });
+        return openDroverWindow(deps, {
+            directory: cwd,
+            paneCommand: (bin) => `${bin} ${agent} --happy-starting-mode local --started-by daemon`,
+            extraEnv: { ...requestEnv, ...account.env },
+            unsetKeys: account.unset,
+            message: () => '',
+        });
+    }
+
+    it('runs on the registry account the picker names, as CLAUDE_CONFIG_DIR plus the stamp', async () => {
+        const { deps, spawnInTmux } = fakeDeps();
+        const pickAccount = vi.fn((): DroverAccount => registry);
+
+        await spawnLike(deps, { pickAccount });
+
+        expect(pickAccount).toHaveBeenCalledTimes(1);
+        expect(pickAccount).toHaveBeenCalledWith({ cwd });
+        const { command, env } = spawnCall(spawnInTmux);
+        expect(env.CLAUDE_CONFIG_DIR).toBe('/Users/clay/.claude-accounts/jamrizzi');
+        expect(env.DROVER_ACCOUNT).toBe('jamrizzi');
+        expect(command).toMatch(/drover claude --happy-starting-mode local --started-by daemon$/);
+    });
+
+    it('reaches the ambient account by UNSETTING CLAUDE_CONFIG_DIR the daemon carries', async () => {
+        const { deps, spawnInTmux } = fakeDeps({
+            ambientEnvironment: { PATH: '/usr/bin', CLAUDE_CONFIG_DIR: '/Users/clay/.claude-accounts/risserproperties', DROVER_ACCOUNT: 'risserproperties' },
+        });
+
+        await spawnLike(deps, { pickAccount: () => ambient });
+
+        const { command, env } = spawnCall(spawnInTmux);
+        expect(env.CLAUDE_CONFIG_DIR).toBeUndefined();
+        expect(env.DROVER_ACCOUNT).toBe('main');
+        expect(command).toMatch(/^unset [^;]*\bCLAUDE_CONFIG_DIR\b[^;]*; /);
+    });
+
+    it('leaves the account alone when the picker has no opinion', async () => {
+        const { deps, spawnInTmux } = fakeDeps({ ambientEnvironment: { CLAUDE_CONFIG_DIR: '/Users/clay/.claude-accounts/alt' } });
+
+        await spawnLike(deps, { pickAccount: () => undefined });
+
+        const { command, env } = spawnCall(spawnInTmux);
+        expect(env.CLAUDE_CONFIG_DIR).toBe('/Users/clay/.claude-accounts/alt');
+        expect(env.DROVER_ACCOUNT).toBeUndefined();
+        expect(command).not.toMatch(/\bCLAUDE_CONFIG_DIR\b/);
+    });
+
+    it('hands a fork its transcript id and the model the phone asked for, so whereabouts can answer', async () => {
+        const { deps } = fakeDeps();
+        const pickAccount = vi.fn((): DroverAccount => registry);
+
+        await spawnLike(deps, { pickAccount, resumeId: claudeSessionId, model: 'opus' });
+
+        expect(pickAccount).toHaveBeenCalledWith({ cwd, sessionId: claudeSessionId, model: 'opus' });
+    });
+
+    it('keeps an account the request itself names, and never asks', async () => {
+        const { deps, spawnInTmux } = fakeDeps();
+        const pickAccount = vi.fn((): DroverAccount => registry);
+
+        await spawnLike(deps, { pickAccount, requestEnv: { CLAUDE_CONFIG_DIR: '/Users/clay/.claude-accounts/alt' } });
+        expect(pickAccount).not.toHaveBeenCalled();
+        expect(spawnCall(spawnInTmux).env.CLAUDE_CONFIG_DIR).toBe('/Users/clay/.claude-accounts/alt');
+
+        await spawnLike(deps, { pickAccount, requestEnv: { DROVER_ACCOUNT: 'alt' } });
+        expect(pickAccount).not.toHaveBeenCalled();
+    });
+
+    it('is switched off by DROVER_PICK_ACCOUNT=0, as bin/drover is', async () => {
+        const { deps, spawnInTmux } = fakeDeps({ ambientEnvironment: { DROVER_PICK_ACCOUNT: '0' } });
+        const pickAccount = vi.fn((): DroverAccount => registry);
+
+        await spawnLike(deps, { pickAccount });
+
+        expect(pickAccount).not.toHaveBeenCalled();
+        expect(spawnCall(spawnInTmux).env.DROVER_ACCOUNT).toBeUndefined();
+    });
+
+    it('makes no account decision for Codex', async () => {
+        const { deps } = fakeDeps();
+        const pickAccount = vi.fn((): DroverAccount => registry);
+
+        await spawnLike(deps, { pickAccount, agent: 'codex' });
+
+        expect(pickAccount).not.toHaveBeenCalled();
+    });
+});
+
+describe('the account decision is one decision, made once', () => {
+    const cwd = '/Users/clay/Projects/bitspur/cattle-drover';
+    const cases: [string, DroverAccount | undefined][] = [
+        ['registry', { name: 'jamrizzi', configDir: '/Users/clay/.claude-accounts/jamrizzi' }],
+        ['ambient', { name: 'main', configDir: '/Users/clay/.claude', ambient: true }],
+        ['none', undefined],
+    ];
+
+    it.each(cases)('spawn and resume produce the same env for the same inputs (%s)', (_, account) => {
+        const spawnPick = vi.fn(() => account);
+        const resumePick = vi.fn(() => account);
+
+        const spawned = startAccountEnvironment({ agent: 'claude', cwd, resumeId: claudeSessionId, model: 'opus', pickAccount: spawnPick });
+        const resumed = buildDaemonResumeLaunch({
+            happySessionId, metadata: claudeMetadata({ path: cwd }), encryption, options: { model: 'opus' }, pickAccount: resumePick, skipPermissions: false,
+        });
+
+        expect(spawnPick.mock.calls).toEqual(resumePick.mock.calls);
+        expect(spawnPick).toHaveBeenCalledTimes(1);
+        const accountKeys = (env: Record<string, string>) => Object.fromEntries(
+            Object.entries(env).filter(([key]) => key === 'DROVER_ACCOUNT' || key === 'CLAUDE_CONFIG_DIR'),
+        );
+        expect(accountKeys(resumed.extraEnv)).toEqual(spawned.env);
+        expect(resumed.unsetKeys).toEqual(spawned.unset);
+    });
+
+    it('run.ts asks the picker in one place and hands that one to spawn and resume', () => {
+        const source = readFileSync(join(__dirname, 'run.ts'), 'utf8');
+        // One wrapper around pickStartAccount, nothing inline.
+        expect(source.match(/\bpickStartAccount\(/g)).toHaveLength(1);
+        // The spawn path decides through startAccountEnvironment with that
+        // wrapper; the resume path hands the same wrapper to
+        // buildDaemonResumeLaunch, which calls the same function.
+        expect(source.match(/\bstartAccountEnvironment\(\{/g)).toHaveLength(1);
+        expect(source.match(/pickAccount: daemonPickAccount/g)).toHaveLength(2);
+        expect(source).not.toMatch(/accountStartEnvironment\(/);
     });
 });

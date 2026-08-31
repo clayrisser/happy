@@ -172,6 +172,66 @@ export function accountStartEnvironment(account: DroverAccount | undefined): { e
     return { env: { DROVER_ACCOUNT: account.name, CLAUDE_CONFIG_DIR: account.configDir }, unset: [] };
 }
 
+/**
+ * The start-path account decision (DROVE-21) as the daemon asks it: where the
+ * session was left, else the account last used in the directory, else the
+ * first with headroom. `run.ts` wraps `pickStartAccount` in one of these.
+ */
+export type PickStartAccount = (pick: { cwd: string; sessionId?: string; model?: string }) => DroverAccount | undefined;
+
+export interface StartAccountInput {
+    agent: DaemonAgent;
+    cwd: string;
+    /** The provider conversation the pane resumes, when there is one. */
+    resumeId?: string;
+    /** The model the phone asked for, when it asked for one. */
+    model?: string;
+    /**
+     * What the request itself set on the window. A request that already names
+     * an account (DROVER_ACCOUNT or CLAUDE_CONFIG_DIR) keeps it, as bin/drover
+     * keeps a start that arrives stamped.
+     */
+    requestEnv?: Record<string, string>;
+    /** The daemon's own environment, for the DROVER_PICK_ACCOUNT=0 off switch. */
+    ambientEnv?: NodeJS.ProcessEnv;
+    pickAccount?: PickStartAccount;
+}
+
+/**
+ * The ONE account decision for a session the daemon starts, spawn or resume
+ * (DROVE-87).
+ *
+ * A terminal `drover` asks pick-account before it execs; a phone-started
+ * window runs `drover claude ...`, which names the agent first, and bin/drover
+ * deliberately makes no account decision for that shape. So the daemon makes
+ * it, and it makes it HERE for both paths: a resume from the phone went
+ * through this rule since DROVE-76 while a new session took whatever account
+ * the daemon's environment carried, which is how a fresh phone session landed
+ * on risserproperties when Clay was last on jamrizzi.
+ *
+ * Claude only: the registry is a registry of Claude logins. A request that
+ * already carries a stamp or a config dir is left alone, and so is a start
+ * with the picker switched off, the two skips bin/drover applies. Nothing
+ * else decides: the wrapper sees the agent name first and asks nothing
+ * (tests/start.bats in cattle-drover pins that), so the decision is made
+ * exactly once.
+ */
+export function startAccountEnvironment(input: StartAccountInput): { env: Record<string, string>; unset: string[] } {
+    const requestEnv = input.requestEnv ?? {};
+    if (input.agent !== 'claude' || !input.pickAccount) return accountStartEnvironment(undefined);
+    if (requestEnv.DROVER_ACCOUNT !== undefined || requestEnv.CLAUDE_CONFIG_DIR !== undefined) {
+        return accountStartEnvironment(undefined);
+    }
+    if ((requestEnv.DROVER_PICK_ACCOUNT ?? input.ambientEnv?.DROVER_PICK_ACCOUNT) === '0') {
+        return accountStartEnvironment(undefined);
+    }
+    return accountStartEnvironment(input.pickAccount({
+        cwd: input.cwd,
+        ...(input.resumeId ? { sessionId: input.resumeId } : {}),
+        ...(input.model ? { model: input.model } : {}),
+    }));
+}
+
 export interface DaemonResumeLaunch {
     agent: DaemonAgent;
     cwd: string;
@@ -189,11 +249,9 @@ export interface DaemonResumeInput {
     options?: { model?: string; permissionMode?: string };
     /**
      * The start-path account decision (DROVE-21), asked only for a Claude
-     * resume: where the session was left, else the account last used in the
-     * directory, else the first with headroom. Same rule bin/drover applies
-     * to a terminal `drover --resume <id>`.
+     * resume, through `startAccountEnvironment`: the same call a spawn makes.
      */
-    pickAccount?: (pick: { cwd: string; sessionId: string; model?: string }) => DroverAccount | undefined;
+    pickAccount?: PickStartAccount;
     skipPermissions?: boolean;
 }
 
@@ -230,10 +288,13 @@ export function buildDaemonResumeLaunch(input: DaemonResumeInput): DaemonResumeL
         appendDaemonPermissionArgs(modeArgs, flavor, options?.permissionMode, input.skipPermissions);
     }
 
-    const account = flavor === 'claude' && input.pickAccount
-        ? input.pickAccount({ cwd: metadata.path, sessionId: resumeId, ...(options?.model ? { model: options.model } : {}) })
-        : undefined;
-    const accountEnv = accountStartEnvironment(account);
+    const accountEnv = startAccountEnvironment({
+        agent: flavor,
+        cwd: metadata.path,
+        resumeId,
+        model: options?.model,
+        pickAccount: input.pickAccount,
+    });
 
     return {
         agent: flavor,

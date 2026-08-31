@@ -32,7 +32,7 @@ import { sanitizeSessionEnvironment } from './sessionEnvironment';
 import { startHappyTerminalDaemon } from './happyTerminalBoot';
 import { appendDaemonSpawnModeArgs } from './spawnModeArgs';
 import { formatDroverPaneCommand, resolveDaemonAgent } from './tmuxSpawn';
-import { openDroverWindow, resumeInDroverWindow, type DroverWindowDeps } from './droverWindow';
+import { openDroverWindow, resumeInDroverWindow, startAccountEnvironment, type DroverWindowDeps, type PickStartAccount } from './droverWindow';
 import { pickStartAccount } from '@/drover/flip/accounts';
 import { resolveTrackedPid } from '@/utils/processTree';
 import { awaitSessionWebhook } from './spawnAwaiter';
@@ -301,6 +301,15 @@ export async function startDaemon(): Promise<void> {
       awaitWebhook: (pid, label) => awaitSessionWebhook(pid, pidToAwaiter, label),
     };
 
+    // The start-path account decision (DROVE-21), asked once per start by
+    // `startAccountEnvironment` for a spawn and a resume alike (DROVE-87).
+    // This is the only place the daemon calls the picker.
+    const daemonPickAccount: PickStartAccount = (pick) => {
+      const chosen = pickStartAccount(pick);
+      if (chosen.note) logger.debug(`[DAEMON RUN] Start account: ${chosen.note}`);
+      return chosen.account;
+    };
+
     // Spawn a new session (sessionId reserved for future --resume functionality)
     const spawnSession = async (options: SpawnSessionOptions): Promise<SpawnSessionResult> => {
       logger.debugLargeJson('[DAEMON RUN] Spawning session', options);
@@ -474,6 +483,22 @@ export async function startDaemon(): Promise<void> {
           ? options.resumeClaudeSessionId
           : (agent === 'codex' ? options.resumeCodexThreadId : undefined);
 
+        // WHICH ACCOUNT (DROVE-87): the same decision a resume makes, from
+        // the same function. The pane command names the agent first, and
+        // bin/drover makes no account decision for that shape, so the window
+        // has to arrive stamped or the session lands on whatever the daemon's
+        // own environment carries.
+        const account = startAccountEnvironment({
+          agent,
+          cwd: directory,
+          resumeId,
+          model: options.modelMode && options.modelMode !== 'default' ? options.modelMode : undefined,
+          requestEnv: extraEnv,
+          ambientEnv: ambientEnvironment,
+          pickAccount: daemonPickAccount,
+        });
+        extraEnv = { ...extraEnv, ...account.env };
+
         // The window itself, the precondition check included, is the path a
         // resume from the phone takes too (droverWindow.ts, DROVE-76).
         // Unset TMUX_SESSION_NAME means "the user's existing server" rather
@@ -482,6 +507,7 @@ export async function startDaemon(): Promise<void> {
           directory,
           paneCommand: (droverBin) => formatDroverPaneCommand({ droverBin, agent, modeArgs, resumeId }),
           extraEnv,
+          unsetKeys: account.unset,
           tmuxSessionName: extraEnv.TMUX_SESSION_NAME ?? '',
           directoryCreated,
           message: (windowDesc) => directoryCreated
@@ -560,18 +586,15 @@ export async function startDaemon(): Promise<void> {
         // The account is the start-path decision bin/drover makes for a
         // terminal `drover --resume <id>` (DROVE-21): where the session was
         // left first. The wrapper does not make it for a launch that names
-        // the agent first, so it is made here.
+        // the agent first, so it is made here, by the same picker a spawn
+        // uses (DROVE-87).
         const encryption = tracked.encryption;
         return resumeInDroverWindow(windowDeps, {
           happySessionId,
           metadata,
           encryption,
           options,
-          pickAccount: (pick) => {
-            const chosen = pickStartAccount(pick);
-            if (chosen.note) logger.debug(`[DAEMON RUN] Resume account: ${chosen.note}`);
-            return chosen.account;
-          },
+          pickAccount: daemonPickAccount,
         }, async (path) => {
           try {
             await fs.access(path);
