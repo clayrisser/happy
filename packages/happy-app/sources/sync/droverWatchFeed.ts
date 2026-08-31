@@ -110,14 +110,23 @@ const HEARTBEAT_MS = 60_000;
 export function collectAccountRows(
     sessions: Record<string, { metadata?: { droverUsage?: unknown } | null } | undefined>,
 ): DroverAccountRow[] {
-    let freshest: { capturedAt: number; accounts: unknown[] } | null = null;
+    let freshest: { capturedAt: number; modelFamily: string | null; accounts: unknown[] } | null = null;
     for (const session of Object.values(sessions)) {
         const usage = session?.metadata?.droverUsage as
-            | { capturedAt?: unknown; accounts?: unknown }
+            | { capturedAt?: unknown; modelFamily?: unknown; accounts?: unknown }
             | undefined;
         if (!usage || typeof usage.capturedAt !== 'number' || !Array.isArray(usage.accounts)) continue;
         if (!freshest || usage.capturedAt > freshest.capturedAt) {
-            freshest = { capturedAt: usage.capturedAt, accounts: usage.accounts };
+            freshest = {
+                capturedAt: usage.capturedAt,
+                // The model the CLI computed `headroom` for (DROVE-173). The
+                // wrist's binding limit has to be picked over the same rows,
+                // or the bar and its label name different windows (DROVE-129).
+                modelFamily: typeof usage.modelFamily === 'string' && usage.modelFamily
+                    ? usage.modelFamily
+                    : null,
+                accounts: usage.accounts,
+            };
         }
     }
     if (!freshest) return [];
@@ -135,7 +144,7 @@ export function collectAccountRows(
         // ranking rather than re-derived on the wrist (DROVE-131, DROVE-129).
         // Its percentLeft is the same number `headroom` is — both are 100
         // minus the fullest row — so the bar and the label always agree.
-        const binding = droverBindingLimit(account);
+        const binding = droverBindingLimit(account, freshest.modelFamily);
         rows.push({
             name: account.name,
             // Omitted, never null: WatchConnectivity payloads take

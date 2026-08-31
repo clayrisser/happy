@@ -1268,6 +1268,10 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
     const usageReporter = readAccounts().length > 0
         ? new UsageReporter({
             current: () => flipController?.account() ?? currentAccount()?.name,
+            // Headroom is computed for the model this session is running
+            // (DROVE-173). Only the flip controller tracks it; with no
+            // controller the snapshot stays model-blind, as it always was.
+            family: () => flipController?.modelFamily(),
             publish: (droverUsage) => {
                 session.updateMetadata((meta) => ({ ...meta, droverUsage }));
             },

@@ -22,6 +22,8 @@ import type { UsageBarGroup } from './agentInputUsage';
 
 export function UsageAccountBarsSheet(props: {
     groups: UsageBarGroup[];
+    /** The zone and the model the numbers are for (DROVE-173). */
+    footer?: string;
     open: boolean;
     onClose: () => void;
     /** Tapping an account block switches the session onto it (DROVE-160). */
@@ -32,7 +34,11 @@ export function UsageAccountBarsSheet(props: {
             open={props.open}
             onClose={props.onClose}
         >
-            <UsageAccountBars groups={props.groups} onSwitchAccount={props.onSwitchAccount} />
+            <UsageAccountBars
+                groups={props.groups}
+                footer={props.footer}
+                onSwitchAccount={props.onSwitchAccount}
+            />
         </ComposerSheet>
     );
 }

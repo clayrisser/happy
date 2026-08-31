@@ -607,6 +607,13 @@ export const en = {
             familyBack: ({ family, time }: { family: string; time: string }) => `${family} back ${time}`,
             unmeasured: 'not measured',
             noLogin: 'no login',
+            stale: 'stale',
+            /** "Bars show used" — the direction the bare figures count in. */
+            barsShow: ({ direction }: { direction: string }) => `Bars show ${direction}`,
+            /** Said once under the bars, never per row: the column is too narrow. */
+            zoneNote: ({ zone }: { zone: string }) => `Times in ${zone}`,
+            /** Which model the headroom above is FOR (DROVE-173). */
+            forModel: ({ family }: { family: string }) => `headroom for ${family}`,
         },
         suggestion: {
             fileLabel: 'FILE',

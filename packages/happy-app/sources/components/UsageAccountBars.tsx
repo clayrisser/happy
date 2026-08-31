@@ -252,9 +252,16 @@ function UsageAccountBlock(props: {
 export function UsageAccountBars(props: {
     groups: UsageBarGroup[];
     width?: number;
+    /**
+     * "Times in BST · headroom for Opus" (DROVE-173). One caption under every
+     * block, because both facts apply to all of them and neither fits in an
+     * 88pt trailing column.
+     */
+    footer?: string;
     /** Tapping a block moves the session onto that account (DROVE-160). */
     onSwitchAccount?: (account: string) => void;
 }) {
+    const { theme } = useUnistyles();
     const [measured, setMeasured] = React.useState<number | null>(null);
     const onLayout = React.useCallback((event: LayoutChangeEvent) => {
         const width = event.nativeEvent.layout.width;
@@ -279,6 +286,19 @@ export function UsageAccountBars(props: {
                     />
                 </View>
             ))}
+            {props.footer ? (
+                <Text
+                    numberOfLines={1}
+                    style={{
+                        marginTop: 8,
+                        fontSize: 10,
+                        color: theme.colors.textSecondary,
+                        ...Typography.default(),
+                    }}
+                >
+                    {props.footer}
+                </Text>
+            ) : null}
         </View>
     );
 }

@@ -336,7 +336,12 @@ export class FlipController {
      * which is written at SHUTDOWN, is cumulative across models with no
      * ordering, and after a flip lives in the wrong account's file entirely.
      */
-    private modelFamily(): string | undefined {
+    /**
+     * Public because the usage snapshot needs it (DROVE-173): headroom is
+     * computed for the model this session is running, and this is the only
+     * place that tracks it. Still the same three-source preference below.
+     */
+    modelFamily(): string | undefined {
         if (this.seenFamily) return this.seenFamily
         if (this.noticedFamily) return this.noticedFamily
         const here = this.here()

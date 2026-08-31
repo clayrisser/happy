@@ -37,6 +37,7 @@ import {
     resolveUsageStrip,
     truncateUsageName,
     usageBarFraction,
+    usageBarFooterText,
     usageBarNameLimit,
     usageBarTone,
 } from './agentInputUsage';
@@ -119,13 +120,20 @@ describe('resolveUsageStrip on a pane session', () => {
         expect(mine.rows.every((r) => !`${r.name}${r.percentText}${r.trailing}`.includes('\n'))).toBe(true);
     });
 
-    it('fills every bar to the headroom LEFT, whichever number the setting prints', () => {
+    // DROVE-173. Clay, with the sheet beside Claude Code's /usage: a session
+    // 1% used drew a nearly full green bar, because the fill was the headroom
+    // LEFT whatever the printed number said. Claude Code fills with USED, and
+    // that is the default now: bar and figure say the same thing.
+    it('fills every bar in the direction the number is printed in, used by default', () => {
         const used = resolveUsageStrip(pane).usageBarGroups[0];
         const left = resolveUsageStrip({ ...pane, showRemaining: true }).usageBarGroups[0];
-        // 49% used and 51% left are the same bar; only the text flips.
-        expect(used.rows.map((r) => r.fraction)).toEqual([0.51, 0.77, 0.61]);
-        expect(left.rows.map((r) => r.fraction)).toEqual([0.51, 0.77, 0.61]);
+        expect(used.rows.map((r) => r.fraction)).toEqual([0.49, 0.23, 0.39]);
         expect(used.rows.map((r) => r.percentText)).toEqual(['49%', '23%', '39%']);
+        expect(left.rows.map((r) => r.fraction)).toEqual([0.51, 0.77, 0.61]);
+        expect(left.rows.map((r) => r.percentText)).toEqual(['51%', '77%', '61%']);
+        // The colour is still read off what is LEFT either way: it is what
+        // "close to the wall" means, and it must not flip with the setting.
+        expect(used.rows.map((r) => r.tone)).toEqual(left.rows.map((r) => r.tone));
     });
 
     it('gives every other account the same three measures, headed by its own name', () => {
@@ -296,7 +304,7 @@ describe('resolveUsageStrip on a remote session', () => {
 describe('resolveUsageStrip with nothing to show', () => {
     it('hides the figure and offers no popup', () => {
         const strip = resolveUsageStrip({ usageLimits: null, droverUsage: null, showRemaining: false, contextShown: true });
-        expect(strip).toEqual({ weekPercent: null, usageFromDrover: false, usageBarGroups: [] });
+        expect(strip).toMatchObject({ weekPercent: null, usageFromDrover: false, usageBarGroups: [] });
     });
 
     it('does not read a snapshot of other accounts as this session\'s own usage', () => {
@@ -335,6 +343,34 @@ describe('droverBindingLimit', () => {
             tone: 'ample',
         });
         expect(binding!.percentLeft).toBe(account('jamrizzi').headroom);
+    });
+
+    // DROVE-173. Clay was on Opus; the wrist said bitspur.com's binding limit
+    // was the Fable week, at 0% left, so an account with a 40%-free week read
+    // as dead. A family window binds only a session in that family.
+    it('ignores a family window the session is not running', () => {
+        expect(droverBindingLimit(account('bitspur.com'), 'opus')).toEqual({
+            id: 'seven_day',
+            label: 'Week',
+            percentLeft: 40,
+            resetsAt: sep3,
+            tone: 'ample',
+        });
+    });
+
+    it('lets a family window bind a session that IS in that family', () => {
+        expect(droverBindingLimit(account('bitspur.com'), 'fable')).toMatchObject({
+            id: 'seven_day_fable',
+            label: 'Fable week',
+            percentLeft: 0,
+        });
+    });
+
+    it('still lets an unscoped window bind whatever the model is', () => {
+        expect(droverBindingLimit(account('main'), 'opus')).toMatchObject({
+            id: 'seven_day',
+            percentLeft: 0,
+        });
     });
 
     it('names a family window with the family, the same word the sheet prints', () => {
@@ -399,22 +435,32 @@ describe('droverBindingLimit', () => {
 });
 
 describe('the bar model', () => {
+    // The argument is percent LEFT; the fill is percent USED unless the
+    // setting asks otherwise (DROVE-173).
     it('turns a percentage into a track fraction and clamps what is out of range', () => {
-        expect(usageBarFraction(43)).toBeCloseTo(0.43);
-        expect(usageBarFraction(100)).toBe(1);
-        expect(usageBarFraction(140)).toBe(1);
-        expect(usageBarFraction(-5)).toBe(0);
+        expect(usageBarFraction(43)).toBeCloseTo(0.57);
+        expect(usageBarFraction(43, true)).toBeCloseTo(0.43);
+        expect(usageBarFraction(100)).toBe(0);
+        expect(usageBarFraction(100, true)).toBe(1);
+        expect(usageBarFraction(140, true)).toBe(1);
+        expect(usageBarFraction(-5, true)).toBe(0);
+        expect(usageBarFraction(140)).toBe(0);
+        expect(usageBarFraction(-5)).toBe(1);
     });
 
-    it('draws an empty track at zero rather than no track', () => {
-        expect(usageBarFraction(0)).toBe(0);
+    it('draws a full track at zero left, and an empty one when nothing is used', () => {
+        expect(usageBarFraction(0)).toBe(1);
+        expect(usageBarFraction(0, true)).toBe(0);
         expect(usageBarTone(0)).toBe('critical');
     });
 
     it('reads a not-measured figure as empty and grey, never as full', () => {
+        // Empty in BOTH directions: no figure must never look like a full
+        // tank and must never look like a spent one either.
         expect(usageBarFraction(null)).toBe(0);
         expect(usageBarFraction(undefined)).toBe(0);
         expect(usageBarFraction(Number.NaN)).toBe(0);
+        expect(usageBarFraction(null, true)).toBe(0);
         expect(usageBarTone(null)).toBe('unknown');
         expect(usageBarTone(Number.NaN)).toBe('unknown');
     });
@@ -432,5 +478,74 @@ describe('the bar model', () => {
         expect(truncateUsageName('bitspur.com')).toEqual({ name: 'bitspur.com', truncated: false });
         expect(truncateUsageName('risserproperties')).toEqual({ name: 'risserpropert\u2026', truncated: true });
         expect(truncateUsageName('risserproperties', 6)).toEqual({ name: 'risse\u2026', truncated: true });
+    });
+});
+
+/**
+ * The caption under the bars (DROVE-173).
+ *
+ * Two facts were invisible and both made the sheet read as wrong. Clay saw
+ * "Resets 7:49 AM" beside /usage's "Resets 1:49pm (Europe/London)" and they
+ * are the SAME minute — his phone was five hours behind the Mac — and the
+ * same instant printed "Sep 2" here and "Sep 3" there. Naming the zone is the
+ * fix; converting to the Mac's would print a clock the phone never shows.
+ * The model goes on the same line because headroom now ignores windows the
+ * session is not in, and a number that ignores something has to say what.
+ */
+describe('usageBarFooterText', () => {
+    it('names the direction, the zone and the model the headroom is for', () => {
+        expect(usageBarFooterText('opus'))
+            .toMatch(/^Bars show used \u00b7 Times in \S+ \u00b7 headroom for Opus$/);
+    });
+
+    // The measure rows print a bare "99%" in a 34pt column, so the direction
+    // has to be said somewhere; it is the fact that made a session 1% used
+    // read as nearly gone.
+    it('follows the setting when it is turned the other way', () => {
+        expect(usageBarFooterText('opus', true)).toMatch(/^Bars show left \u00b7 /);
+    });
+
+    it('says the direction and the zone when the model is unknown', () => {
+        expect(usageBarFooterText(null)).toMatch(/^Bars show used \u00b7 Times in \S+$/);
+        expect(usageBarFooterText(undefined)).toMatch(/^Bars show used \u00b7 Times in \S+$/);
+    });
+
+    it('rides the strip so the sheet gets it', () => {
+        expect(resolveUsageStrip({ ...pane, droverUsage: { ...paneUsage!, modelFamily: 'opus' } }).usageBarFooter)
+            .toMatch(/headroom for Opus$/);
+    });
+});
+
+/**
+ * A reading nobody has refreshed says so (DROVE-173).
+ *
+ * The five-hour session window means a cache one window old prints LAST
+ * window's reset as if it were the next one. Rather than show it as current,
+ * the block's heading says stale.
+ */
+describe('a stale account block', () => {
+    const stale: DroverUsageLike = {
+        capturedAt: sep5,
+        accounts: [{
+            name: 'risserproperties',
+            current: true,
+            loggedIn: true,
+            // 34 hours before the snapshot, and its session window reset long ago.
+            fetchedAt: sep5 - 34 * 3600_000,
+            headroom: 11,
+            cooling: null,
+            limits: [{ kind: 'session', percent: 89, resetsAt: sep3, scope: null, family: null }],
+        }],
+    };
+
+    it('marks the heading rather than passing the numbers off as current', () => {
+        const [block] = resolveUsageStrip({ ...pane, droverUsage: stale, droverAccount: 'risserproperties' })
+            .usageBarGroups;
+        expect(block.title).toBe('risserproperties · 89% used · stale');
+    });
+
+    it('leaves a fresh account heading alone', () => {
+        const [block] = resolveUsageStrip(pane).usageBarGroups;
+        expect(block.title).toBe('jamrizzi · 49% used');
     });
 });

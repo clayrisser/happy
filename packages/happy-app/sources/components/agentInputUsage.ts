@@ -31,6 +31,7 @@ import {
     currentDroverAccountRow,
     droverAccountsUsage,
     droverFamilyLabel,
+    droverRowApplies,
     droverWindowId,
     usageLimitsFromDroverUsage,
     type DroverAccountUsageRow,
@@ -42,6 +43,7 @@ import {
     formatUsageLimitResetTime,
     getUsageLimitDisplayPercentage,
     getUsageLimitRows,
+    usageLimitZoneLabel,
     type UsageLimitsLike,
 } from '@/utils/sessionStatusBar';
 import { t } from '@/text';
@@ -79,9 +81,14 @@ export type UsageBarRow = {
     /** True when `name` is shorter than `fullName`. */
     nameTruncated: boolean;
     /**
-     * How much of the track the fill covers, 0..1. Always the headroom LEFT,
-     * whatever the "% left" setting says, so every row in the popup fills the
-     * same direction and the column can be read down.
+     * How much of the track the fill covers, 0..1.
+     *
+     * Percent USED by default, which is Claude Code's own convention
+     * (DROVE-173). It used to be the headroom LEFT whatever the setting said,
+     * so a session 1% used drew a nearly full green bar and Clay read it as
+     * nearly gone. The fill now follows the same direction as the printed
+     * number, so bar and figure say one thing; the colour still comes from how
+     * much is LEFT, which is what "close to the wall" means either way.
      */
     fraction: number;
     /** The number the setting asks for, "43%"; null when nothing was measured. */
@@ -125,7 +132,45 @@ export type UsageStrip = {
      * same Session, Week and family-week rows under its own headroom.
      */
     usageBarGroups: UsageBarGroup[];
+    /**
+     * One caption under the bars (DROVE-173): which zone every time on this
+     * sheet is in, and which model the headroom figures are for.
+     *
+     * Both facts were invisible and both made the sheet read as wrong. The
+     * times are the phone's, /usage's are the Mac's, and the same instant
+     * printed 7:49 AM here and 1:49pm there. The headroom now ignores windows
+     * the session's model is not in, and a number that ignores something has
+     * to say what.
+     */
+    usageBarFooter: string;
 };
+
+/**
+ * "Bars show used · Times in BST · headroom for Opus" (DROVE-173).
+ *
+ * The measure rows print a bare "99%" in a 34pt column, so which direction it
+ * counts in has to be said somewhere, and it is said once here rather than
+ * three times a block. It is the fact that made Clay read a session 1% used as
+ * nearly gone.
+ */
+export function usageBarFooterText(
+    modelFamily: string | null | undefined,
+    showRemaining = false,
+): string {
+    const parts: string[] = [t('agentInput.usagePopup.barsShow', {
+        direction: showRemaining
+            ? t('agentInput.usagePopup.left', { percent: 0 }).replace(/^0%\s*/, '')
+            : t('agentInput.usagePopup.used', { percent: 0 }).replace(/^0%\s*/, ''),
+    })];
+    const zone = usageLimitZoneLabel();
+    if (zone) parts.push(t('agentInput.usagePopup.zoneNote', { zone }));
+    if (modelFamily) {
+        parts.push(t('agentInput.usagePopup.forModel', {
+            family: modelFamily.charAt(0).toUpperCase() + modelFamily.slice(1),
+        }));
+    }
+    return parts.join(' \u00b7 ');
+}
 
 /** How wide the name column is, in characters, before a name is cut. */
 export const usageBarNameLimit = 14;
@@ -182,12 +227,17 @@ export function usageBarPercentLabel(percentText: string | null | undefined): st
 }
 
 /**
- * Percent left to a track fraction. Nothing measured reads as an empty track
- * rather than a full one: a row with no figure must not look healthy.
+ * Percent left to a track fraction, in the direction the setting asks for
+ * (DROVE-173). Nothing measured reads as an empty track rather than a full
+ * one: a row with no figure must not look healthy.
  */
-export function usageBarFraction(percentLeft: number | null | undefined): number {
+export function usageBarFraction(
+    percentLeft: number | null | undefined,
+    showRemaining = false,
+): number {
     if (typeof percentLeft !== 'number' || !Number.isFinite(percentLeft)) return 0;
-    return Math.min(100, Math.max(0, percentLeft)) / 100;
+    const left = Math.min(100, Math.max(0, percentLeft));
+    return (showRemaining ? left : 100 - left) / 100;
 }
 
 /**
@@ -220,6 +270,8 @@ export function usageBarRowFrom(input: {
     percentText: string | null;
     trailing: string;
     disabled?: boolean;
+    /** Fill with what is LEFT instead of what is USED; the setting's direction. */
+    showRemaining?: boolean;
 }): UsageBarRow {
     const cut = truncateUsageName(input.name);
     return {
@@ -227,7 +279,7 @@ export function usageBarRowFrom(input: {
         name: cut.name,
         fullName: input.name,
         nameTruncated: cut.truncated,
-        fraction: usageBarFraction(input.percentLeft),
+        fraction: usageBarFraction(input.percentLeft, input.showRemaining === true),
         percentText: input.percentText,
         trailing: input.trailing,
         tone: usageBarTone(input.percentLeft),
@@ -303,6 +355,7 @@ export function usageAccountBarRow(a: DroverOtherAccountRow, showRemaining: bool
         percentLeft: a.headroom,
         percentText: `${percent}%`,
         trailing: back,
+        showRemaining,
     });
 }
 
@@ -379,13 +432,19 @@ export function usageAccountBarGroup(
                 ? t('agentInput.usagePopup.resets', { time: formatUsageLimitResetTime(window.resetsAt) })
                 : '',
             disabled: !account.loggedIn,
+            showRemaining,
         });
     });
     // The cooling time is normally the reset on one of the rows above, so it
     // is not repeated. When the account has no windows at all it is the only
     // thing there is to say, and it goes on the title rather than nowhere.
     const back = rows.some((row) => row.trailing) ? '' : usageAccountBackLabel(account);
-    const title = usageAccountGroupTitle(account, showRemaining);
+    const base = usageAccountGroupTitle(account, showRemaining);
+    // A reading nobody has refreshed says so rather than passing as current
+    // (DROVE-173). The five-hour session window means a snapshot one window
+    // old prints LAST window's reset time, which is what read as a wrong
+    // clock next to /usage.
+    const title = account.stale && base ? `${base} · ${t('agentInput.usagePopup.stale')}` : base;
     return {
         key: account.name ? `account:${account.name}` : 'usage',
         title: back && title ? `${title} · ${back}` : title,
@@ -407,12 +466,16 @@ export function usageAccountBarGroup(
  * has to be DECIDED rather than shown, and it is decided here so the wrist and
  * the phone cannot disagree about which limit is the problem (DROVE-129).
  *
- * Most binding is the window with the most USED, which is the same window
- * `headroom` is computed from: the CLI writes `100 - max(percent)`
- * (happy-cli src/drover/flip/usage.ts), so `percentLeft` here and the
+ * Most binding is the window with the most USED among the windows that APPLY
+ * to the session's model, which is the same set `headroom` is computed from:
+ * the CLI writes `100 - max(percent)` over exactly those rows (happy-cli
+ * src/drover/flip/usage.ts `headroomOf`), so `percentLeft` here and the
  * `headroom` on the same account are two readings of one number and can never
  * drift apart. The label is the popup's own word for the window, so a wrist
  * saying "Fable week" and a phone row saying "Fable week" mean the same row.
+ *
+ * Model awareness is DROVE-173: Fable's exhausted week is not what is stopping
+ * an Opus session, and the wrist naming it made the whole account look dead.
  */
 export type DroverBindingLimit = {
     /** `five_hour`, `seven_day`, `seven_day_fable` — the strip's own ids. */
@@ -428,11 +491,13 @@ export type DroverBindingLimit = {
 
 export function droverBindingLimit(
     account: DroverUsageAccountLike | null | undefined,
+    modelFamily?: string | null,
 ): DroverBindingLimit | null {
     const limits = Array.isArray(account?.limits) ? account.limits : [];
     let worst: (typeof limits)[number] | null = null;
     for (const row of limits) {
         if (!row || typeof row.percent !== 'number' || !Number.isFinite(row.percent)) continue;
+        if (!droverRowApplies(row, modelFamily)) continue;
         // Strictly greater, so a tie keeps the FIRST row: the cache lists
         // session before week before the family windows, and the shorter
         // window is the one that bites first at equal utilisation.
@@ -512,5 +577,10 @@ export function resolveUsageStrip(input: UsageStripInput): UsageStrip {
         // snapshot is the only reading there is for every other one.
         account.current ? input.usageLimits : null,
     ));
-    return { weekPercent, usageFromDrover, usageBarGroups: groups };
+    return {
+        weekPercent,
+        usageFromDrover,
+        usageBarGroups: groups,
+        usageBarFooter: usageBarFooterText(input.droverUsage?.modelFamily ?? null, input.showRemaining),
+    };
 }

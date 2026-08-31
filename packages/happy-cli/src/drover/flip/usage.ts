@@ -28,11 +28,14 @@ import {
     cooldownFamily,
     isLoggedIn,
     ledgerPath,
+    modelDemand,
     readAccounts,
     readLedger,
     readUsageCache,
+    unknownModel,
     type DroverAccount,
     type Ledger,
+    type ModelDemand,
     type UsageLimitRow,
 } from './accounts'
 import { familyOfDisplayName } from './limits'
@@ -86,7 +89,57 @@ export interface AccountUsageSnapshot {
 
 export interface DroverUsage {
     capturedAt: number
+    /**
+     * The model family this session is running ("opus"), or null when nothing
+     * on disk said (DROVE-173).
+     *
+     * It rides the snapshot because headroom below is computed FOR it, and the
+     * app has to apply the same rule to the wrist's binding limit (DROVE-129).
+     * Two readers, one rule; without the family on the wire the app would have
+     * to guess, and a guess here is what made a live account read as dead.
+     */
+    modelFamily: string | null
     accounts: AccountUsageSnapshot[]
+}
+
+/**
+ * Does this row stand between THIS session and a turn? (DROVE-173)
+ *
+ * The same question `rowBlocks` in accounts.ts asks of a maxed row, asked of
+ * every row so headroom can be computed for the model actually running. An
+ * unscoped window (`session`, `weekly_all`) binds every model. A window scoped
+ * to a family binds only a session in that family. A scope nobody can read
+ * binds, because an unreadable scope must never make a dead account look
+ * alive, and an UNKNOWN model binds on everything, which is byte-for-byte
+ * what this did before families existed.
+ *
+ * Clay, with the sheet and /usage side by side: "bitspur.com · 0% left" on an
+ * account whose session was 1% used, because Fable's week was exhausted and he
+ * was on Opus. At 3:25am the same arithmetic told the flip logic every other
+ * account was out of headroom and it stayed put.
+ */
+export function rowApplies(row: UsageRowSnapshot, demand: ModelDemand): boolean {
+    if (!row.scope) return true
+    if (demand.kind === 'unknown') return true
+    if (!row.family) return true
+    if (demand.kind === 'any') return false
+    return row.family === demand.family
+}
+
+/**
+ * Percent LEFT on the fullest window that applies to `demand`, or null when
+ * none of them does (DROVE-173).
+ *
+ * Exported because the flip's own "is there room over there" is the same
+ * question (DROVE-187): one function, so the sheet's number and the decision
+ * the flip makes on it cannot disagree.
+ */
+export function headroomOf(rows: UsageRowSnapshot[], demand: ModelDemand = unknownModel): number | null {
+    const applies = rows.filter((r) => rowApplies(r, demand))
+    if (!applies.length) return null
+    // Clamped to the scale the way the table clamps it, so a cache that says
+    // 120% reads as 0 left in both places.
+    return Math.min(100, Math.max(0, 100 - Math.max(...applies.map((r) => r.percent))))
 }
 
 /**
@@ -145,7 +198,13 @@ function coolingFamilyOf(rows: UsageRowSnapshot[], ledger: Ledger, name: string,
     return families.size === 1 ? [...families][0] : undefined
 }
 
-function accountSnapshot(a: DroverAccount, ledger: Ledger, current: string | undefined, now: number): AccountUsageSnapshot {
+function accountSnapshot(
+    a: DroverAccount,
+    ledger: Ledger,
+    current: string | undefined,
+    now: number,
+    demand: ModelDemand,
+): AccountUsageSnapshot {
     const cache = readUsageCache(a)
     const limits = (cache?.rows ?? []).map(rowSnapshot).filter((r): r is UsageRowSnapshot => r !== null)
     const cooling = coolingState(a, ledger, now)
@@ -155,9 +214,10 @@ function accountSnapshot(a: DroverAccount, ledger: Ledger, current: string | und
         current: a.name === current,
         loggedIn: isLoggedIn(a),
         fetchedAt: cache?.fetchedAt ?? null,
-        // 100 minus the fullest row, clamped to the scale the way the table clamps
-        // it, so a cache that says 120% reads as 0 left in both places.
-        headroom: limits.length ? Math.min(100, Math.max(0, 100 - Math.max(...limits.map((r) => r.percent)))) : null,
+        // 100 minus the fullest row that APPLIES to the model this session is
+        // running (DROVE-173). With no model known that is every row, which is
+        // exactly what it was before.
+        headroom: headroomOf(limits, demand),
         cooling: cooling.until > 0
             ? { until: cooling.until, reason: cooling.reason, ...(family ? { family } : {}) }
             : null,
@@ -165,12 +225,23 @@ function accountSnapshot(a: DroverAccount, ledger: Ledger, current: string | und
     }
 }
 
-/** What every registry account looks like right now, with `current` marked. */
-export function usageSnapshot(current: string | undefined, now = Date.now()): DroverUsage {
+/**
+ * What every registry account looks like right now, with `current` marked.
+ *
+ * `family` is the model this session is running, and headroom is computed for
+ * it (DROVE-173). Undefined keeps the old, model-blind arithmetic.
+ */
+export function usageSnapshot(
+    current: string | undefined,
+    now = Date.now(),
+    family?: string | undefined,
+): DroverUsage {
     const ledger = readLedger()
+    const demand = modelDemand(family)
     return {
         capturedAt: now,
-        accounts: readAccounts().map((a) => accountSnapshot(a, ledger, current, now)),
+        modelFamily: demand.kind === 'family' ? demand.family : null,
+        accounts: readAccounts().map((a) => accountSnapshot(a, ledger, current, now, demand)),
     }
 }
 
@@ -196,6 +267,12 @@ const settleMs = 1_500
 export interface UsageReporterOptions {
     /** The account this session is on, asked fresh each time — a flip moves it. */
     current: () => string | undefined
+    /**
+     * The model family this session is running, asked fresh each time — a
+     * mid-session /model changes which windows bind (DROVE-173). Undefined
+     * from the option or from the call keeps the model-blind arithmetic.
+     */
+    family?: () => string | undefined
     /** Where the snapshot goes; runClaude points this at session metadata. */
     publish: (usage: DroverUsage) => void
     /** Overridden in tests. */
@@ -215,6 +292,7 @@ export interface UsageReporterOptions {
  */
 export class UsageReporter {
     private readonly current: () => string | undefined
+    private readonly family: () => string | undefined
     private readonly publish: (usage: DroverUsage) => void
     private readonly now: () => number
     private readonly pollEvery: number
@@ -229,6 +307,7 @@ export class UsageReporter {
 
     constructor(opts: UsageReporterOptions) {
         this.current = opts.current
+        this.family = opts.family ?? (() => undefined)
         this.publish = opts.publish
         this.now = opts.now ?? Date.now
         this.pollEvery = opts.pollMs ?? pollMs
@@ -274,7 +353,7 @@ export class UsageReporter {
             const stamp = this.stampOf()
             if (stamp === this.stamp && !stale) return false
             this.stamp = stamp
-            const usage = usageSnapshot(this.current(), now)
+            const usage = usageSnapshot(this.current(), now, this.family())
             const signature = JSON.stringify(usage.accounts)
             if (signature === this.signature && !stale) return false
             this.signature = signature
@@ -291,7 +370,10 @@ export class UsageReporter {
 
     /** What could have changed the answer, cheaply: file mtimes and who we are. */
     private stampOf(): string {
-        const parts: string[] = [this.current() ?? '']
+        // The family is in the stamp because it changes the ANSWER: a /model
+        // from Fable to Opus re-decides which windows bind (DROVE-173), with
+        // no file on disk moving.
+        const parts: string[] = [this.current() ?? '', this.family() ?? '']
         const mtime = (path: string) => {
             try {
                 return String(statSync(path).mtimeMs)

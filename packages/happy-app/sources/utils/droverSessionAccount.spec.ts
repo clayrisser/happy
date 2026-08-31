@@ -58,11 +58,11 @@ describe('resolveSessionAccount', () => {
         expect(view.headroom).toBe(51);
         expect(view.label).toBe('jamrizzi · 51% left');
         expect(view.row?.percentText).toBe('51%');
-        // The track fills to what is LEFT whichever way the setting prints it.
+        // The track fills in the direction the number is printed (DROVE-173).
         expect(view.row?.fraction).toBeCloseTo(0.51);
     });
 
-    it('prints used rather than left when the setting says so, and still fills to what is left', () => {
+    it('prints used rather than left by default, and fills the same way', () => {
         const view = resolveSessionAccount({
             droverUsage: usage([{ name: 'jamrizzi', current: true, headroom: 51, limits: [] }]),
             droverAccount: 'jamrizzi',
@@ -70,7 +70,7 @@ describe('resolveSessionAccount', () => {
         });
         expect(view.label).toBe('jamrizzi · 49% used');
         expect(view.row?.percentText).toBe('49%');
-        expect(view.row?.fraction).toBeCloseTo(0.51);
+        expect(view.row?.fraction).toBeCloseTo(0.49);
     });
 
     it('falls back to the stamp when the snapshot marks nothing current', () => {
