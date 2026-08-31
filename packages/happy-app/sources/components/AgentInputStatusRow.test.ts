@@ -66,7 +66,7 @@ vi.mock('./StatusDot', () => ({ StatusDot: host('StatusDot') }));
 vi.mock('./AnimatedOverlay', () => ({ AnimatedFade: host('AnimatedFade') }));
 
 // Both sheets (DROVE-117's quota, DROVE-111's agent tree) pull in
-// gesture-handler and reanimated through ComposerAnchoredSheet, neither of
+// gesture-handler and reanimated through ComposerSheet, neither of
 // which vitest can transform. What the row owes them is the open flag and the
 // content; UsageAccountBars.test.ts renders the real bars.
 vi.mock('./UsageAccountBarsSheet', () => ({ UsageAccountBarsSheet: host('UsageAccountBarsSheet') }));

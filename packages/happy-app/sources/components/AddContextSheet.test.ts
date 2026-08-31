@@ -37,7 +37,7 @@ vi.mock('./BubblePressable', () => ({ BubblePressable: host('Pressable') }));
 
 // The shell pulls in gesture-handler and reanimated, neither of which vitest
 // can transform. What this sheet owes it is the open flag and the children.
-vi.mock('./ComposerAnchoredSheet', () => ({ ComposerAnchoredSheet: host('ComposerAnchoredSheet') }));
+vi.mock('./ComposerSheet', () => ({ ComposerSheet: host('ComposerSheet') }));
 
 vi.mock('@/text', async () => {
     const { en } = await import('@/text/_default');
@@ -93,7 +93,7 @@ describe('AddContextSheet', () => {
 
     it('rides the shared shell rather than drawing its own backdrop (DROVE-117 mechanism)', () => {
         const renderer = mount();
-        const shell = renderer.root.findByType('ComposerAnchoredSheet' as any);
+        const shell = renderer.root.findByType('ComposerSheet' as any);
         expect(shell.props.open).toBe(true);
         expect(typeof shell.props.onClose).toBe('function');
     });
@@ -129,11 +129,11 @@ describe('AddContextSheet', () => {
 
     it('stays shut when no source is available at all', () => {
         const renderer = mount({ available: { camera: false, photos: false, files: false } });
-        expect(renderer.root.findByType('ComposerAnchoredSheet' as any).props.open).toBe(false);
+        expect(renderer.root.findByType('ComposerSheet' as any).props.open).toBe(false);
     });
 
     it('stays shut when it is not asked to open', () => {
         const renderer = mount({ open: false });
-        expect(renderer.root.findByType('ComposerAnchoredSheet' as any).props.open).toBe(false);
+        expect(renderer.root.findByType('ComposerSheet' as any).props.open).toBe(false);
     });
 });

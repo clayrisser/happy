@@ -15,7 +15,7 @@ import * as React from 'react';
 import { Text, View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 import { Typography } from '@/constants/Typography';
-import { ComposerAnchoredSheet } from './ComposerAnchoredSheet';
+import { ComposerSheet } from './ComposerSheet';
 import { SessionLiveStatusTree } from './SessionLiveStatus';
 import type { LiveStatusSummary } from '@/utils/liveStatus';
 
@@ -24,15 +24,13 @@ export function SessionAgentsSheet(props: {
     summary: LiveStatusSummary | null;
     open: boolean;
     onClose: () => void;
-    horizontalInset?: number;
 }) {
     const { theme } = useUnistyles();
     const rows = props.summary?.rows ?? [];
     return (
-        <ComposerAnchoredSheet
+        <ComposerSheet
             open={props.open && rows.length > 0}
             onClose={props.onClose}
-            horizontalInset={props.horizontalInset}
         >
             {props.summary ? (
                 <View style={{ paddingHorizontal: 18, paddingTop: 2, paddingBottom: 4 }}>
@@ -52,6 +50,6 @@ export function SessionAgentsSheet(props: {
             {/* The sheet is the cap now, so the tree stops capping itself at
                 the 180pt the composer's furniture allowed. */}
             <SessionLiveStatusTree sessionId={props.sessionId} rows={rows} maxHeight={260} />
-        </ComposerAnchoredSheet>
+        </ComposerSheet>
     );
 }

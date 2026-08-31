@@ -4,7 +4,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Ionicons } from '@expo/vector-icons';
 import { Typography } from '@/constants/Typography';
 import { BubblePressable } from './BubblePressable';
-import { ComposerAnchoredSheet } from './ComposerAnchoredSheet';
+import { ComposerSheet } from './ComposerSheet';
 import { t } from '@/text';
 
 /**
@@ -16,7 +16,7 @@ import { t } from '@/text';
  * files." So three tiles and a heading, and deliberately none of that sheet's
  * other two rows.
  *
- * On ComposerAnchoredSheet, which is the fourth thing to use it after the
+ * On ComposerSheet, which is the fourth thing to use it after the
  * quota (DROVE-117), the channel sheet (DROVE-123) and the agent tree
  * (DROVE-111). The plus used to jump straight into the photo library, which is
  * still exactly what the Photos tile does, so nothing it reached before became
@@ -75,7 +75,6 @@ export function AddContextSheet(props: {
     onSelect: (source: AddContextSource) => void;
     /** A tile with nothing behind it is not drawn; see AgentInput. */
     available?: Record<AddContextSource, boolean>;
-    horizontalInset?: number;
 }) {
     const styles = stylesheet;
     const { theme } = useUnistyles();
@@ -88,10 +87,9 @@ export function AddContextSheet(props: {
         onSelect(source);
     }, [onClose, onSelect]);
     return (
-        <ComposerAnchoredSheet
+        <ComposerSheet
             open={props.open && shown.length > 0}
             onClose={onClose}
-            horizontalInset={props.horizontalInset}
         >
             <View style={styles.body}>
                 <Text style={styles.heading}>{t('imageUpload.addContextTitle')}</Text>
@@ -110,6 +108,6 @@ export function AddContextSheet(props: {
                     ))}
                 </View>
             </View>
-        </ComposerAnchoredSheet>
+        </ComposerSheet>
     );
 }
