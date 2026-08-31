@@ -6,7 +6,7 @@
  *
  *  - where the dock's frame sits above the screen edge,
  *  - how much height the inverted chat list reserves at its visual bottom,
- *  - how far the transcript is faded before it reaches the composer.
+ *  - how much of the transcript is masked out under the composer.
  *
  * They drifted apart twice before. DROVE-82 put the status row inside the
  * dock and DROVE-88 mounted the gate overlay inside it at `bottom: '100%'`,
@@ -35,87 +35,125 @@
 export const DOCK_CONTENT_BOTTOM_PADDING = 8;
 
 /**
- * How tall the transcript's fade is, and why it is this number (DROVE-168).
+ * The painted backdrop's ramp on Android and web, and why the number is 32
+ * (DROVE-168, kept where it still applies).
  *
- * Clay: "Honestly let the text go behind my liquid glass here. But they should
- * be faded out by the time they get here." That reverses part of DROVE-113 on
- * purpose. DROVE-113 made the dock opaque because chat text stayed legible
- * through a 66% scrim and read as a bug; the composer is real Liquid Glass now
- * (DROVE-153), and a solid slab of `groupped.background` painted behind it is
- * the thing that made it look flat.
+ * DROVE-168 derived 32 like this, and the derivation is still right for a
+ * PAINTED backdrop. The transcript's tallest ordinary line box is 24pt
+ * (`MarkdownView`'s paragraph and list rows); code is 20pt. Below one line box
+ * a line goes from full strength to nothing across less than its own height,
+ * which reads as a clip rather than a fade. 32 is one and a third body lines
+ * and the smallest multiple of the app's 8pt grid that clears one.
  *
- * The fade replaces that slab. It runs on the TRANSCRIPT, not on the dock:
- * `AgentContentView.ios.tsx` masks the chat's own alpha to nothing over this
- * band, so the last line dissolves instead of being covered, and the material
- * keeps the real screen behind it. That distinction is the whole point. An
- * opacity on the dock is what killed the material the first time.
- *
- * 32pt, and the length is the ticket. The transcript's tallest ordinary line
- * box is 24pt (`MarkdownView`'s paragraph and list rows); code is 20pt. The
- * floor is one line box: below that a line goes from full strength to nothing
- * across less than its own height, which reads as a clip rather than a fade,
- * and Clay would be looking at text colliding with the glass edge. The ceiling
- * is the reading area, because the two are the same number. The list has to
- * hold the newest line above the ramp or it sits dimmed at rest, so every
- * point of fade is a point of transcript. 32 is one and a third body lines,
- * one and three fifths of a code line, and the smallest multiple of the app's
- * 8pt grid that clears a body line.
- *
- * It costs 24pt: the list used to keep 8pt over the dock and now keeps 32.
- * On a portrait phone that is about 4% of the visible chat, one line of body
- * text, paid once at the bottom.
+ * What DROVE-180 changed is WHERE it applies. Android and web have no Liquid
+ * Glass: `resolveGlassChromeMaterial` returns `fallback` there, so the dock is
+ * a flat surface and the transcript really does have to be painted out before
+ * it reaches one. iOS 26 has the material, and on iOS the transcript now runs
+ * behind it at full strength instead. So this constant stayed on the platforms
+ * that still paint, and the iOS mask no longer uses it.
  */
-export const TRANSCRIPT_FADE_HEIGHT = 32;
+export const DOCK_SCRIM_FADE_HEIGHT = 32;
 
 /**
- * The ramp's shape, top of the band down to the glass edge.
+ * The iOS mask, inverted from DROVE-168 (DROVE-180).
  *
- * Eased, and eased the opposite way from the obvious guess. The temptation is
- * to collapse the alpha early so nothing survives anywhere near the glass, but
- * that only drags the dimming up into the part of the band the eye is reading.
- * What actually has to hold is narrower: nothing at all at the glass edge, and
- * no line cut off at full strength on its way there.
+ * Clay, twice: "let the text go behind my liquid glass here", then an hour
+ * later "they should be faded out by the time they get here". DROVE-168 took
+ * the second sentence as the rule and masked the transcript's own alpha to
+ * NOTHING over the 32pt above the composer, so the only thing ever behind the
+ * glass was the page background. DROVE-171 then found the glass had no edge
+ * over black and raised the tint to give it one. Both followed from the same
+ * misreading, and the shape of the mistake is visible in the result: glass
+ * over nothing is a grey slab.
  *
- * So the ramp holds 88% a quarter of the way in, is at 62% halfway, and spends
- * its last quarter falling from 30% to nothing. A 24pt body line whose
- * baseline sits exactly on the edge dissolves from 88% at its cap height to
- * zero at its baseline, across its own height, which is what a fade looks
- * like. Under one line box the same line would go from full strength to
- * nothing over a third of itself, which is what a clip looks like, and that is
- * the floor the length is set by.
+ * Clay, on seeing it: "Also I told you already that we should SEE behind the
+ * chat right?" The transcript passes BEHIND the composer and is visible
+ * THROUGH it, blurred and refracted, the way content shows through a Liquid
+ * Glass tab bar in any iOS 26 app. DROVE-113's original complaint, chat text
+ * legible straight through a weak scrim, is answered by the material being
+ * real (DROVE-153) rather than by hiding the content.
+ *
+ * WHY 0.4 AND NOT 1. The ticket's first instinct is full alpha, and the only
+ * thing standing against it is the other requirement on the same ticket: every
+ * composer control stays legible with light and dark content behind it, by
+ * DROVE-153's measured method. Measured, that is a ceiling on this number, not
+ * a matter of taste. A composer button glyph sits on the transcript, then the
+ * card's glass tint, then its own (`chromeGlassTint`, both). Worst case is a
+ * white code block under a white glyph on the dark theme:
+ *
+ *   alpha  dark glyph   light glyph
+ *   0.40   3.17:1       4.79:1
+ *   0.42   3.03:1       4.52:1     <- the last step that clears 3:1
+ *   0.50   2.53:1       3.57:1
+ *   1.00   1.00:1       1.00:1     <- white on white
+ *
+ * So 0.42 is the ceiling and 0.4 is it on a round number with a step of room.
+ * It is a PESSIMISTIC bound: it models `UIGlassEffect` as a plain translucent
+ * tint, and the real `regular` material also blurs, desaturates and clamps
+ * what it samples, all of which can only help. The point of holding the
+ * pessimistic bound is that legibility does not then depend on a private
+ * Apple adaptation that changes between releases.
+ *
+ * At 0.4 a white code block reads as rgb(144, 144, 144) through the composer:
+ * plainly there, plainly behind glass, and not competing with the controls.
+ * That is what Clay asked to see. It is nowhere near DROVE-168's zero.
  */
-export const TRANSCRIPT_FADE_ALPHAS = [1, 0.88, 0.62, 0.3, 0] as const;
-export const TRANSCRIPT_FADE_LOCATIONS = [0, 0.25, 0.5, 0.75, 1] as const;
+export const TRANSCRIPT_GLASS_ALPHA = 0.4;
 
 /**
- * The same stops as a mask gradient. A mask reads ALPHA only, so the colour is
- * arbitrary and the alphas are the whole content. Spelled out rather than
- * mapped so the tuple survives into `LinearGradient`'s props; a test keeps it
- * honest against `TRANSCRIPT_FADE_ALPHAS`.
+ * The short ramp where the transcript meets the capsule's top edge.
+ *
+ * DROVE-168's 32pt ramp was measured against a LINE BOX, because its job was
+ * to have no legible text anywhere near the glass; that is why it had to clear
+ * the tallest thing the transcript could draw. This one is measured against
+ * the MATERIAL EDGE, which is what DROVE-180 asks for. Its only job is that a
+ * line of text does not change strength on a hard boundary at the capsule's
+ * rim, so it is sized to the rim rather than to the text: 12pt is a little
+ * over the composer card's corner radius and half a body line box, which is
+ * enough for the eye to read the change as the glass beginning rather than as
+ * an edge.
+ *
+ * It ends at `TRANSCRIPT_GLASS_ALPHA`, not at zero. That is the difference
+ * between this and the thing it replaces.
  */
-export const TRANSCRIPT_FADE_MASK_COLORS = [
-    'rgba(0, 0, 0, 1)',
-    'rgba(0, 0, 0, 0.88)',
-    'rgba(0, 0, 0, 0.62)',
-    'rgba(0, 0, 0, 0.3)',
-    'rgba(0, 0, 0, 0)',
-] as const;
+export const TRANSCRIPT_EDGE_SOFTEN_HEIGHT = 12;
 
-/** Alpha at `distance` points above the glass edge. Linear between stops. */
-export function transcriptFadeAlphaAbove(distance: number): number {
-    const t = 1 - Math.min(Math.max(distance / TRANSCRIPT_FADE_HEIGHT, 0), 1);
-    for (let i = 1; i < TRANSCRIPT_FADE_LOCATIONS.length; i += 1) {
-        const from = TRANSCRIPT_FADE_LOCATIONS[i - 1];
-        const to = TRANSCRIPT_FADE_LOCATIONS[i];
-        if (t <= to) {
-            const span = to - from;
-            const ratio = span === 0 ? 0 : (t - from) / span;
-            return TRANSCRIPT_FADE_ALPHAS[i - 1]
-                + (TRANSCRIPT_FADE_ALPHAS[i] - TRANSCRIPT_FADE_ALPHAS[i - 1]) * ratio;
-        }
-    }
-    return TRANSCRIPT_FADE_ALPHAS[TRANSCRIPT_FADE_ALPHAS.length - 1];
+/**
+ * The one band that is still cleared, and it is not the composer.
+ *
+ * Everything from the composer card's bottom edge DOWN is the DROVE-82 status
+ * row, its 8pt of container padding, and the gap over the home indicator. That
+ * strip has no material of its own: it is 11pt text drawn straight onto the
+ * dock's transparent frame. Content behind bare text is not "seen through", it
+ * is noise, and 11pt `textSecondary` (#8E8E93 on BOTH themes) does not clear
+ * 3:1 even against its own page today, so there is no alpha that would make it
+ * safe. The real fix for the strip is a material of its own, which is the
+ * composer surface work (DROVE-176/178), not this ticket.
+ *
+ * So the clear band shrank from the WHOLE dock to just this strip: 36pt at the
+ * very bottom edge on Clay's handset, against 156 before. The composer
+ * capsule itself, the part he is actually looking at, is see-through.
+ *
+ * Measured from the screen edge up, the same landmarks
+ * `STATUS_ROW_TAP_SLOP_TOP` lists:
+ *
+ *   0..13   the home indicator.
+ *   16      the status text's bottom (`resolveStatusRowBottomGap`).
+ *   36      the composer card's bottom edge, over the row's 6pt paddingTop.
+ */
+export function resolveStatusStripBandHeight(safeAreaBottom: number): number {
+    return resolveStatusRowBottomGap(safeAreaBottom) + STATUS_ROW_ROW_HEIGHT;
 }
+
+/**
+ * The ramp OUT of that clear band, back up to the glass alpha.
+ *
+ * Same length as the top one and for the same reason: it lands on the card's
+ * bottom rim. It is the last place a ramp still reaches zero in this file, and
+ * it reaches zero because what is below it is bare text, not because anything
+ * above it needed hiding.
+ */
+export const TRANSCRIPT_STRIP_SOFTEN_HEIGHT = 12;
 
 /**
  * The home indicator's own strip, measured from the screen edge up.
@@ -291,37 +329,86 @@ export function resolveDockInset({
 }
 
 /**
- * How far the transcript has to be held above the screen edge so its newest
- * line is never sitting inside the ramp at rest.
+ * How far the transcript is held above the dock at rest.
  *
- * This replaces the flat 8pt gap the list used to keep over the dock. It is
- * the ramp's full height rather than the ramp plus a gap: the band already
- * reads as air, so adding a gap on top of it would spend the reading area
- * twice.
+ * 12pt, the length of the edge ramp (DROVE-180). DROVE-168 held 32 because its
+ * ramp took the newest line to NOTHING, so a line parked in the ramp would
+ * have been gone at rest and every point of ramp had to be a point the list
+ * held clear. This ramp only goes from full to `TRANSCRIPT_GLASS_ALPHA`, but
+ * the newest line still should not sit at rest inside a gradient, so the rule
+ * survives at the ramp's new length. 20pt of the 24 DROVE-168 spent goes back
+ * to the reading area.
  */
 export function resolveTranscriptBottomClearance(): number {
-    return TRANSCRIPT_FADE_HEIGHT;
+    return TRANSCRIPT_EDGE_SOFTEN_HEIGHT;
+}
+
+export interface TranscriptMask {
+    /** Height of the gradient band, from the top ramp down to the clear band. */
+    gradientHeight: number;
+    /** Mask colours for that band. A mask reads ALPHA only; the hue is arbitrary. */
+    colors: string[];
+    /** Stops for those colours, 0 at the top of the band. */
+    locations: number[];
+    /** The status strip at the very bottom, masked out entirely. */
+    clearHeight: number;
 }
 
 /**
  * The mask over the transcript, measured from the screen edge up.
  *
- * `clearHeight` is everything from the glass edge down, the dock and the gap
- * under it, and it is masked to nothing. That is what DROVE-113 was
- * protecting: no scroll position leaves anything legible under the composer.
- * `fadeHeight` is the ramp sitting directly on top of it.
+ * Four bands, and DROVE-168 had two. Reading DOWN from the top:
+ *
+ *   full           everything above the composer, untouched.
+ *   1 -> 0.4       12pt, landing on the capsule's top rim.
+ *   0.4            the whole height of the composer card. THE TICKET.
+ *   0.4 -> 0       12pt, landing on the card's bottom rim.
+ *   0              the status strip, which has no material of its own.
+ *
+ * DROVE-168's two bands were a 32pt ramp to zero above the composer and then
+ * zero for the whole dock and the gap under it. Everything the composer covers
+ * was erased; now everything it covers is visible through it at 0.4, and only
+ * the bare strip below the card is erased.
+ *
+ * Returned as ready-made gradient stops rather than as heights, because three
+ * of the four boundaries move with the measured dock and hand-placing them at
+ * the call site is how the two sides drift.
  */
-export function resolveTranscriptMask(dockHeight: number, safeAreaBottom: number): {
-    fadeHeight: number;
-    clearHeight: number;
-} {
+export function resolveTranscriptMask(dockHeight: number, safeAreaBottom: number): TranscriptMask {
     if (dockHeight <= 0) {
-        return { fadeHeight: 0, clearHeight: 0 };
+        return { gradientHeight: 0, colors: [], locations: [], clearHeight: 0 };
     }
+    const clearHeight = Math.min(resolveStatusStripBandHeight(safeAreaBottom), dockHeight);
+    // The top of the dock's frame, which is where the card's own top edge is.
+    const dockTop = dockHeight + resolveDockBottomOffset(safeAreaBottom, true);
+    const overStrip = Math.max(0, dockTop - clearHeight);
+    const stripSoften = Math.min(TRANSCRIPT_STRIP_SOFTEN_HEIGHT, overStrip);
+    const gradientHeight = TRANSCRIPT_EDGE_SOFTEN_HEIGHT + overStrip;
+    const glassStop = TRANSCRIPT_EDGE_SOFTEN_HEIGHT / gradientHeight;
+    const stripStop = Math.max(glassStop, (gradientHeight - stripSoften) / gradientHeight);
     return {
-        fadeHeight: TRANSCRIPT_FADE_HEIGHT,
-        clearHeight: dockHeight + resolveDockBottomOffset(safeAreaBottom, true),
+        gradientHeight,
+        colors: [
+            'rgba(0, 0, 0, 1)',
+            `rgba(0, 0, 0, ${TRANSCRIPT_GLASS_ALPHA})`,
+            `rgba(0, 0, 0, ${TRANSCRIPT_GLASS_ALPHA})`,
+            'rgba(0, 0, 0, 0)',
+        ],
+        locations: [0, glassStop, stripStop, 1],
+        clearHeight,
     };
+}
+
+/** Alpha at `distance` points above the composer card's top edge. */
+export function transcriptAlphaAboveGlass(distance: number): number {
+    if (distance >= TRANSCRIPT_EDGE_SOFTEN_HEIGHT) {
+        return 1;
+    }
+    if (distance <= 0) {
+        return TRANSCRIPT_GLASS_ALPHA;
+    }
+    const t = distance / TRANSCRIPT_EDGE_SOFTEN_HEIGHT;
+    return TRANSCRIPT_GLASS_ALPHA + (1 - TRANSCRIPT_GLASS_ALPHA) * t;
 }
 
 /**
@@ -329,15 +416,15 @@ export function resolveTranscriptMask(dockHeight: number, safeAreaBottom: number
  *
  * The material only exists on iOS 26. `resolveGlassChromeMaterial` returns
  * `fallback` everywhere else, so there is no glass for the transcript to run
- * behind and nothing to gain from masking a list on those platforms. They get
- * the same ramp length so the two paths cannot drift, over the chat's own
- * surface so the band is invisible against it.
+ * behind and nothing to see through; a flat dock over live text is the
+ * DROVE-113 bug. They keep DROVE-168's full 32pt ramp over the chat's own
+ * surface, which is where that derivation still holds (DROVE-180).
  */
 export function resolveDockScrimHeight(dockHeight: number, safeAreaBottom: number): number {
     if (dockHeight <= 0) {
         return 0;
     }
-    return dockHeight + resolveDockBottomOffset(safeAreaBottom, true) + TRANSCRIPT_FADE_HEIGHT;
+    return dockHeight + resolveDockBottomOffset(safeAreaBottom, true) + DOCK_SCRIM_FADE_HEIGHT;
 }
 
 /**

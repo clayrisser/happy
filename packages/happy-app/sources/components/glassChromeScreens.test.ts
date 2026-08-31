@@ -20,6 +20,12 @@ import {
     screenChromeControls,
     screenChromeSurfaces,
 } from './glassChromeScreens';
+import {
+    MOBILE_HEADER_EDGE_RAMP_POINTS,
+    MOBILE_HOME_SCRIM_OVERLAY_OPACITY,
+    MOBILE_STRONG_HEADER_SCRIM_RESTING_OPACITY,
+    MOBILE_STRONG_HEADER_SCRIM_UNDERLAP_OPACITY,
+} from './navigation/mobileHeaderScrimMetrics';
 
 const sourcesRoot = resolve(__dirname, '..');
 
@@ -295,5 +301,58 @@ describe('legibility on these screens, measured over both backdrops and both the
         // strong one.
         expect(colorAlpha(darkScrim)).toBeCloseTo(0.44, 3);
         expect(colorAlpha(lightScrim)).toBeCloseTo(0.608, 3);
+    });
+});
+
+describe('the header, checked against DROVE-180 rather than changed by it', () => {
+    // DROVE-180 asks for the same treatment on the header and the status strip
+    // "wherever they mask content today". Measured, the header does not mask.
+    // MobileHeaderScrim is a dim gradient over a live BlurView: content behind
+    // it is blurred and dimmed, never erased, which is already what the ticket
+    // asks the composer to become. So nothing was inverted here. What follows
+    // is the measurement that says so, and the reason it must not be lowered.
+    const darkPeak = 0.55;
+    const lightPeak = 0.76;
+
+    it('never reaches opaque at any strength, so content is always behind it', () => {
+        for (const peak of [darkPeak, lightPeak]) {
+            for (const strength of [
+                MOBILE_STRONG_HEADER_SCRIM_RESTING_OPACITY,
+                MOBILE_STRONG_HEADER_SCRIM_UNDERLAP_OPACITY,
+                MOBILE_HOME_SCRIM_OVERLAY_OPACITY,
+            ]) {
+                expect(peak * strength).toBeLessThan(1);
+            }
+        }
+    });
+
+    it('lets more than a quarter of the content through even at its strongest', () => {
+        // Resting: 56% through on dark, 39% on light. Underlapped, when a
+        // message is actually sliding beneath it: 47% and 27%. Those are the
+        // numbers behind "the header already sees through".
+        const through = (peak: number, strength: number) => 1 - peak * strength;
+        expect(through(darkPeak, MOBILE_STRONG_HEADER_SCRIM_RESTING_OPACITY)).toBeCloseTo(0.56, 2);
+        expect(through(lightPeak, MOBILE_STRONG_HEADER_SCRIM_RESTING_OPACITY)).toBeCloseTo(0.392, 3);
+        expect(through(darkPeak, MOBILE_STRONG_HEADER_SCRIM_UNDERLAP_OPACITY)).toBeCloseTo(0.472, 3);
+        expect(through(lightPeak, MOBILE_STRONG_HEADER_SCRIM_UNDERLAP_OPACITY)).toBeCloseTo(0.27, 2);
+    });
+
+    it('is load-bearing for the header glyphs, so it is not the composer’s tint', () => {
+        // The one reason not to take the header down to the composer's
+        // TRANSCRIPT_GLASS_ALPHA and be done. The header has no card of its
+        // own under the pill and the back chevron, so this scrim IS the layer
+        // that carries them; it already sits exactly at the fill floor. Lower
+        // it and the glyphs go, which is the DROVE-153 measurement.
+        const darkScrim = darkPeak * MOBILE_STRONG_HEADER_SCRIM_RESTING_OPACITY;
+        const lightScrim = lightPeak * MOBILE_STRONG_HEADER_SCRIM_RESTING_OPACITY;
+        expect(darkScrim).toBeGreaterThanOrEqual(minimumFillAlpha('#ffffff', '#000000'));
+        expect(lightScrim).toBeGreaterThanOrEqual(minimumFillAlpha('#18171C', '#FFFFFF'));
+    });
+
+    it('feathers over 36pt, which is why the edge does not read as a bar', () => {
+        // The header's own "softening at the material edge", and it predates
+        // the ticket. Longer than the composer's 12pt rim ramp because the
+        // header has no capsule to land on: the gradient IS its edge.
+        expect(MOBILE_HEADER_EDGE_RAMP_POINTS).toBe(36);
     });
 });

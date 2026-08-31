@@ -4,6 +4,14 @@ import { Animated, Platform, StyleSheet, View, type LayoutChangeEvent } from 're
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useUnistyles } from 'react-native-unistyles';
+import {
+    MOBILE_HEADER_EDGE_RAMP_POINTS,
+    MOBILE_HOME_SCRIM_OVERLAY_OPACITY,
+    STRONG_TINT_PEAK_DARK,
+    STRONG_TINT_PEAK_LIGHT,
+    SUBTLE_TINT_PEAK_DARK,
+    SUBTLE_TINT_PEAK_LIGHT,
+} from './mobileHeaderScrimMetrics';
 
 export type MobileHeaderScrimVariant = 'subtle' | 'strong' | 'home';
 export type MobileHeaderScrimEdge = 'top' | 'bottom';
@@ -14,10 +22,17 @@ export type MobileHeaderScrimEdge = 'top' | 'bottom';
  * These scale the wash itself rather than a wrapping view. A translucent
  * ancestor makes iOS re-render UIVisualEffectView against an empty backdrop,
  * so the live blur stays fully opaque and only its gradient mask fades it.
+ *
+ * The numbers live in `mobileHeaderScrimMetrics` so a test can read them
+ * without pulling this component's native imports in (DROVE-180); re-exported
+ * here so every existing caller keeps its import.
  */
-export const MOBILE_STRONG_HEADER_SCRIM_RESTING_OPACITY = 0.80;
-export const MOBILE_STRONG_HEADER_SCRIM_UNDERLAP_OPACITY = 0.96;
-export const MOBILE_HOME_SCRIM_OVERLAY_OPACITY = 1;
+export {
+    MOBILE_HEADER_EDGE_RAMP_POINTS,
+    MOBILE_HOME_SCRIM_OVERLAY_OPACITY,
+    MOBILE_STRONG_HEADER_SCRIM_RESTING_OPACITY,
+    MOBILE_STRONG_HEADER_SCRIM_UNDERLAP_OPACITY,
+} from './mobileHeaderScrimMetrics';
 
 type GradientStops = {
     colors: readonly [string, string, ...string[]];
@@ -29,20 +44,12 @@ type GradientStops = {
 // edge and gentle arrival at the plateau.
 const FEATHER_STEPS = 24;
 
-/** Alpha at the outer edge, before the ramp begins. */
-const STRONG_TINT_PEAK_LIGHT = 0.76;
-const STRONG_TINT_PEAK_DARK = 0.55;
-const SUBTLE_TINT_PEAK_LIGHT = 0.55;
-const SUBTLE_TINT_PEAK_DARK = 0.40;
 const EDGE_BLUR_INTENSITY = 8;
 
 /**
- * How tall the ramp is, in points. Expressed as a length rather than a
- * fraction because the three scrims differ in height, and a fraction would
- * give each of them a different-looking edge. Measured height turns this back
- * into a gradient stop; until the first layout lands, fall back to a fraction.
+ * Measured height turns `MOBILE_HEADER_EDGE_RAMP_POINTS` back into a gradient
+ * stop; until the first layout lands, fall back to a fraction.
  */
-export const MOBILE_HEADER_EDGE_RAMP_POINTS = 36;
 const FALLBACK_FEATHER_START = 0.60;
 
 function feather(rgb: string, peak: number, hold: number): GradientStops {

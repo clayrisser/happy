@@ -1,19 +1,22 @@
 import { describe, expect, it } from 'vitest';
 import {
     DOCK_CONTENT_BOTTOM_PADDING,
-    TRANSCRIPT_FADE_ALPHAS,
-    TRANSCRIPT_FADE_HEIGHT,
-    TRANSCRIPT_FADE_LOCATIONS,
-    TRANSCRIPT_FADE_MASK_COLORS,
+    DOCK_SCRIM_FADE_HEIGHT,
+    TRANSCRIPT_EDGE_SOFTEN_HEIGHT,
+    TRANSCRIPT_GLASS_ALPHA,
+    TRANSCRIPT_STRIP_SOFTEN_HEIGHT,
+    resolveStatusStripBandHeight,
     resolveTranscriptBottomClearance,
     resolveTranscriptMask,
-    transcriptFadeAlphaAbove,
+    transcriptAlphaAboveGlass,
     HOME_INDICATOR_KEEP_OUT,
     STATUS_ROW_BOTTOM_CLEARANCE,
     STATUS_ROW_TAP_SLOP_BOTTOM,
     STATUS_ROW_TAP_SLOP_TOP,
     STATUS_ROW_TAP_HEIGHT,
+    STATUS_ROW_ROW_HEIGHT,
     STATUS_ROW_TEXT_LINE_HEIGHT,
+    COMPOSER_CARD_BOTTOM_PADDING,
     resolveComposerButtonFloor,
     resolveDockBottomOffset,
     resolveDockInset,
@@ -193,7 +196,7 @@ describe('resolveDockInset', () => {
 describe('resolveDockScrimHeight', () => {
     it('covers the dock, the gap under it, and the fade above it', () => {
         expect(resolveDockScrimHeight(withStatusRow, safeAreaBottom))
-            .toBe(withStatusRow + dockBottomOffset + TRANSCRIPT_FADE_HEIGHT);
+            .toBe(withStatusRow + dockBottomOffset + DOCK_SCRIM_FADE_HEIGHT);
     });
 
     it('paints nothing before the dock has been measured', () => {
@@ -295,81 +298,136 @@ describe('transparentOf', () => {
     });
 });
 
-describe('the transcript fade (DROVE-168)', () => {
+describe('seeing the transcript through the glass (DROVE-180, inverting DROVE-168)', () => {
     const safeAreaBottom = 34;
     const dockBottomOffset = resolveDockBottomOffset(safeAreaBottom, true);
     const dockHeight = 148;
+    const mask = resolveTranscriptMask(dockHeight, safeAreaBottom);
+    /** Alpha at a stop, read back off the mask colours the component is handed. */
+    const alphaAt = (index: number) => Number(mask.colors[index].match(/([\d.]+)\)$/)![1]);
 
-    it('clears the tallest transcript line box, so no line is cut off mid-height', () => {
-        // MarkdownView paragraphs and list rows are 24pt; code is 20pt. A ramp
-        // shorter than a line makes a fade look like a clip.
-        expect(TRANSCRIPT_FADE_HEIGHT).toBeGreaterThan(24);
+    //
+    // DROVE-168's specs are inverted here rather than deleted. Its numbers
+    // were right for what it thought it was building, and what changed is the
+    // intent, so each case below names the one it replaces.
+    //
+
+    it('leaves the transcript visible behind the composer instead of erasing it', () => {
+        // WAS: "takes the transcript to nothing exactly at the glass edge",
+        // alpha 0 at the glass and 0 for the whole dock below it. Clay: "we
+        // should SEE behind the chat". The material is what makes the text
+        // illegible; erasing it first is what made the composer a grey slab.
+        expect(TRANSCRIPT_GLASS_ALPHA).toBeGreaterThan(0);
+        expect(alphaAt(1)).toBe(TRANSCRIPT_GLASS_ALPHA);
+        expect(alphaAt(2)).toBe(TRANSCRIPT_GLASS_ALPHA);
     });
 
-    it('stays on the 8pt grid so it can be reasoned about against the dock metrics', () => {
-        expect(TRANSCRIPT_FADE_HEIGHT % 8).toBe(0);
+    it('holds the alpha at the ceiling DROVE-153’s method puts on it', () => {
+        // Not taste, and not 1 either. A composer glyph sits on the
+        // transcript, then the card's glass tint, then its own; the worst case
+        // is a white code block under a white glyph on the dark theme, and
+        // that stack clears 3:1 up to 0.42 and no further. 0.4 is that with a
+        // step of room. glassChrome.test.ts does the arithmetic.
+        expect(TRANSCRIPT_GLASS_ALPHA).toBe(0.4);
+        expect(TRANSCRIPT_GLASS_ALPHA).toBeLessThanOrEqual(0.42);
     });
 
-    it('takes the transcript to nothing exactly at the glass edge', () => {
-        expect(transcriptFadeAlphaAbove(0)).toBe(0);
-        expect(transcriptFadeAlphaAbove(-4)).toBe(0);
+    it('softens onto the capsule rim over 12pt and stops well above zero', () => {
+        // WAS: a 32pt ramp, sized to the tallest line box (24pt), because it
+        // had to leave nothing legible near the glass. This one is sized to
+        // the rim it lands on, which is the DROVE-180 instruction: measure the
+        // softening against the material's edge, not against legibility.
+        expect(TRANSCRIPT_EDGE_SOFTEN_HEIGHT).toBe(12);
+        expect(TRANSCRIPT_EDGE_SOFTEN_HEIGHT).toBeLessThan(24);
+        expect(transcriptAlphaAboveGlass(TRANSCRIPT_EDGE_SOFTEN_HEIGHT)).toBe(1);
+        expect(transcriptAlphaAboveGlass(TRANSCRIPT_EDGE_SOFTEN_HEIGHT + 40)).toBe(1);
+        expect(transcriptAlphaAboveGlass(0)).toBe(TRANSCRIPT_GLASS_ALPHA);
+        expect(transcriptAlphaAboveGlass(-8)).toBe(TRANSCRIPT_GLASS_ALPHA);
     });
 
-    it('dissolves a line across its own height rather than clipping it', () => {
-        // A 24pt body line whose baseline sits on the glass edge: its cap
-        // height is still mostly there, its baseline is gone, and the whole
-        // fall happens inside the line. That is a fade. A ramp shorter than
-        // the line would put the same fall across a third of it, which is a
-        // clip, and is what "text collides with the glass edge" looks like.
-        expect(transcriptFadeAlphaAbove(24)).toBeGreaterThan(0.6);
-        expect(transcriptFadeAlphaAbove(24)).toBeLessThan(1);
-        expect(TRANSCRIPT_FADE_HEIGHT).toBeGreaterThan(24);
-    });
-
-    it('spends its collapse in the last quarter, next to the glass', () => {
-        expect(transcriptFadeAlphaAbove(TRANSCRIPT_FADE_HEIGHT * 0.25)).toBeLessThan(0.35);
-        expect(transcriptFadeAlphaAbove(TRANSCRIPT_FADE_HEIGHT * 0.5)).toBeCloseTo(0.62, 2);
-        expect(transcriptFadeAlphaAbove(TRANSCRIPT_FADE_HEIGHT)).toBe(1);
-        expect(transcriptFadeAlphaAbove(TRANSCRIPT_FADE_HEIGHT + 40)).toBe(1);
-    });
-
-    it('falls monotonically toward the glass', () => {
+    it('rises monotonically away from the glass and never touches zero', () => {
         let previous = -1;
-        for (let d = 0; d <= TRANSCRIPT_FADE_HEIGHT; d += 1) {
-            const alpha = transcriptFadeAlphaAbove(d);
+        for (let d = -8; d <= TRANSCRIPT_EDGE_SOFTEN_HEIGHT + 8; d += 1) {
+            const alpha = transcriptAlphaAboveGlass(d);
             expect(alpha).toBeGreaterThanOrEqual(previous);
+            expect(alpha).toBeGreaterThanOrEqual(TRANSCRIPT_GLASS_ALPHA);
             previous = alpha;
         }
     });
 
-    it('spells the mask colours from the same alphas the ramp is defined by', () => {
-        expect(TRANSCRIPT_FADE_MASK_COLORS).toHaveLength(TRANSCRIPT_FADE_ALPHAS.length);
-        TRANSCRIPT_FADE_ALPHAS.forEach((alpha, index) => {
-            expect(TRANSCRIPT_FADE_MASK_COLORS[index]).toBe(`rgba(0, 0, 0, ${alpha})`);
-        });
-        expect(TRANSCRIPT_FADE_LOCATIONS).toHaveLength(TRANSCRIPT_FADE_ALPHAS.length);
+    it('clears only the status strip, not the whole dock', () => {
+        // WAS: clearHeight === dockHeight + dockBottomOffset, "so no scroll
+        // position leaves anything legible underneath the composer". The card
+        // is glass and can be seen through. The strip under it is bare 11pt
+        // text with no material, so it is the one band left.
+        expect(mask.clearHeight).toBe(resolveStatusStripBandHeight(safeAreaBottom));
+        expect(mask.clearHeight).toBeLessThan(dockHeight + dockBottomOffset);
+        // 36pt on Clay's handset, against 156 before.
+        expect(mask.clearHeight).toBe(36);
+        expect(dockHeight + dockBottomOffset).toBe(156);
     });
 
-    it('masks everything from the glass edge down, which is what DROVE-113 protected', () => {
-        const mask = resolveTranscriptMask(dockHeight, safeAreaBottom);
-        expect(mask.fadeHeight).toBe(TRANSCRIPT_FADE_HEIGHT);
-        // The dock and the gap under it, so no scroll position leaves anything
-        // legible underneath the composer.
-        expect(mask.clearHeight).toBe(dockHeight + dockBottomOffset);
-        expect(mask.clearHeight).toBe(resolveDockInset({
-            dockHeight,
-            safeAreaBottom,
-            floatingDock: true,
-        }));
+    it('puts the strip band exactly at the composer card’s bottom edge', () => {
+        // The same landmarks STATUS_ROW_TAP_SLOP_TOP lists: 16pt to the status
+        // text's bottom, 20 more for the row's box, 36 to the card.
+        expect(resolveStatusStripBandHeight(safeAreaBottom))
+            .toBe(resolveStatusRowBottomGap(safeAreaBottom) + STATUS_ROW_ROW_HEIGHT);
+        expect(resolveStatusStripBandHeight(safeAreaBottom))
+            .toBe(resolveComposerButtonFloor(safeAreaBottom) - COMPOSER_CARD_BOTTOM_PADDING);
+    });
+
+    it('never lets the clear band reach past the dock that was measured', () => {
+        const shortDock = 20;
+        expect(resolveTranscriptMask(shortDock, safeAreaBottom).clearHeight).toBe(shortDock);
+    });
+
+    it('spans the gradient from 12pt above the card down to the strip', () => {
+        expect(mask.gradientHeight + mask.clearHeight)
+            .toBe(dockHeight + dockBottomOffset + TRANSCRIPT_EDGE_SOFTEN_HEIGHT);
+    });
+
+    it('reads full, glass, glass, clear, in that order and monotonically', () => {
+        expect(mask.colors).toHaveLength(4);
+        expect(mask.locations).toHaveLength(4);
+        expect(alphaAt(0)).toBe(1);
+        expect(alphaAt(3)).toBe(0);
+        for (let i = 1; i < mask.locations.length; i += 1) {
+            expect(mask.locations[i]).toBeGreaterThanOrEqual(mask.locations[i - 1]);
+            expect(alphaAt(i)).toBeLessThanOrEqual(alphaAt(i - 1));
+        }
+        expect(mask.locations[0]).toBe(0);
+        expect(mask.locations[3]).toBe(1);
+    });
+
+    it('puts the two ramps on the card’s own two rims', () => {
+        const topRamp = mask.locations[1] * mask.gradientHeight;
+        const bottomRamp = (1 - mask.locations[2]) * mask.gradientHeight;
+        expect(topRamp).toBeCloseTo(TRANSCRIPT_EDGE_SOFTEN_HEIGHT, 6);
+        expect(bottomRamp).toBeCloseTo(TRANSCRIPT_STRIP_SOFTEN_HEIGHT, 6);
+    });
+
+    it('keeps DROVE-168’s 32pt derivation for the platforms with no material', () => {
+        // Android and web have no Liquid Glass, so the dock is a flat surface
+        // and the transcript really does have to be painted out before it
+        // reaches one. The derivation still holds THERE: one and a third body
+        // line boxes, on the 8pt grid.
+        expect(DOCK_SCRIM_FADE_HEIGHT).toBe(32);
+        expect(DOCK_SCRIM_FADE_HEIGHT).toBeGreaterThan(24);
+        expect(DOCK_SCRIM_FADE_HEIGHT % 8).toBe(0);
     });
 
     it('draws no mask before the dock has been measured', () => {
-        expect(resolveTranscriptMask(0, safeAreaBottom)).toEqual({ fadeHeight: 0, clearHeight: 0 });
+        expect(resolveTranscriptMask(0, safeAreaBottom))
+            .toEqual({ gradientHeight: 0, colors: [], locations: [], clearHeight: 0 });
     });
 
-    it('holds the newest line above the ramp rather than inside it', () => {
-        expect(resolveTranscriptBottomClearance()).toBe(TRANSCRIPT_FADE_HEIGHT);
-        // The whole cost of the fade, against the 8pt gap DROVE-113 kept.
-        expect(resolveTranscriptBottomClearance() - 8).toBe(24);
+    it('gives 20 of DROVE-168’s 24pt of reading area back', () => {
+        // WAS: resolveTranscriptBottomClearance() === 32, "every point of ramp
+        // is a point the list has to hold clear", because a line parked in
+        // that ramp would have been gone. This ramp only reaches 0.4, but a
+        // newest line still should not rest inside a gradient, so the rule
+        // survives at the ramp's new length.
+        expect(resolveTranscriptBottomClearance()).toBe(TRANSCRIPT_EDGE_SOFTEN_HEIGHT);
+        expect(32 - resolveTranscriptBottomClearance()).toBe(20);
     });
 });
