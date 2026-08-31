@@ -48,6 +48,8 @@ export function ComposerAnchoredSheet(props: {
     maxHeight?: number;
     /** Side inset, matching the composer's other sheets. */
     horizontalInset?: number;
+    /** A sheet with switches in it must not lose the first tap to the keyboard. */
+    keyboardShouldPersistTaps?: 'always' | 'never' | 'handled';
 }) {
     const { theme } = useUnistyles();
     const dragY = useSharedValue(0);
@@ -112,6 +114,7 @@ export function ComposerAnchoredSheet(props: {
                     <FloatingOverlay
                         maxHeight={props.maxHeight ?? COMPOSER_SHEET_MAX_HEIGHT}
                         showScrollIndicator
+                        keyboardShouldPersistTaps={props.keyboardShouldPersistTaps}
                         header={(
                             <GestureDetector gesture={drag}>
                                 {/* Unlabelled, like the gate overlay's: the

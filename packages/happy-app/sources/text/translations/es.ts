@@ -1178,6 +1178,13 @@ export const es: TranslationStructure = {
             : `No se pudieron subir ${count} imágenes y no se enviaron.`,
         notSupportedTitle: 'Imágenes no compatibles',
         notSupportedMessage: 'Este agente no admite archivos adjuntos de imagen. Las imágenes no se enviaron.',
+        // The Add context sheet the plus opens (DROVE-128).
+        addContextTitle: 'Añadir contexto',
+        sourceCamera: 'Cámara',
+        sourcePhotos: 'Fotos',
+        sourceFiles: 'Archivos',
+        cameraPermissionTitle: 'Acceso a la cámara',
+        cameraPermissionMessage: 'Permite el acceso a la cámara para adjuntar fotos a los mensajes.',
     },
 
     feed: {
