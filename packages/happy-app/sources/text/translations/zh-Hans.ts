@@ -1035,6 +1035,11 @@ export const zhHans: TranslationStructure = {
         unavailable: '无法获取记录',
         result: '结果',
         title: '代理',
+        stateUnknown: '状态未知',
+        waitingForComputer: '电脑正在重启或无法连上。此页面会自行补齐。',
+        waitingForNetwork: '没有网络。手机恢复联网后此页面会自行补齐。',
+        waitingUnknown: '现在读不到记录，仍在重试。',
+        retrying: '仍在重试…',
     },
 
     codex: {

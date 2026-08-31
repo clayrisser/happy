@@ -1035,6 +1035,11 @@ export const ja: TranslationStructure = {
         unavailable: 'トランスクリプトを取得できません',
         result: '結果',
         title: 'エージェント',
+        stateUnknown: '状態は不明',
+        waitingForComputer: 'コンピューターが再起動中か応答しません。この画面はひとりでに埋まります。',
+        waitingForNetwork: '接続がありません。電話がオンラインに戻り次第、この画面は埋まります。',
+        waitingUnknown: 'いまはトランスクリプトを読めません。再試行を続けます。',
+        retrying: '再試行中…',
     },
 
     codex: {

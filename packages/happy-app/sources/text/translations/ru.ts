@@ -1038,6 +1038,11 @@ export const ru: TranslationStructure = {
         unavailable: 'Стенограмма недоступна',
         result: 'Результат',
         title: 'Агент',
+        stateUnknown: 'Состояние неизвестно',
+        waitingForComputer: 'Компьютер перезапускается или недоступен. Экран заполнится сам.',
+        waitingForNetwork: 'Нет соединения. Экран заполнится, как только телефон снова будет в сети.',
+        waitingUnknown: 'Сейчас стенограмму не прочитать. Продолжаем попытки.',
+        retrying: 'Пробуем снова…',
     },
 
     codex: {

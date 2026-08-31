@@ -1034,6 +1034,11 @@ export const es: TranslationStructure = {
         unavailable: 'Transcripción no disponible',
         result: 'Resultado',
         title: 'Agente',
+        stateUnknown: 'Estado desconocido',
+        waitingForComputer: 'El ordenador se está reiniciando o no responde. Esta pantalla se rellenará sola.',
+        waitingForNetwork: 'Sin conexión. Esta pantalla se rellenará en cuanto el teléfono vuelva a estar en línea.',
+        waitingUnknown: 'Ahora mismo no se puede leer la transcripción. Se sigue intentando.',
+        retrying: 'Reintentando…',
     },
 
     codex: {
