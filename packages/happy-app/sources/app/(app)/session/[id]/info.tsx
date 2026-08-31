@@ -134,9 +134,22 @@ function describeDroverWatch(status: DroverWatchStatus): string {
  * The account's headroom, drawn with DROVE-117's row rather than a third
  * variant of a bar. ItemGroup hands every child a `showDivider`, which a bare
  * View would pass down to the DOM, so it is swallowed here.
+ *
+ * It carries the capture stamp so this screen ages its reading the same way
+ * the composer sheet does (DROVE-230). This is the CURRENT account's line, and
+ * the current account is precisely where the ticket asks for the age.
  */
-function AccountBar({ row }: { row: UsageBarRow; showDivider?: boolean }) {
-    return <UsageAccountBars groups={[{ key: 'account', title: '', rows: [row] }]} />;
+function AccountBar({ row, capturedAt }: {
+    row: UsageBarRow;
+    capturedAt?: number | null;
+    showDivider?: boolean;
+}) {
+    return (
+        <UsageAccountBars
+            groups={[{ key: 'account', title: '', rows: [row] }]}
+            capturedAt={capturedAt}
+        />
+    );
 }
 
 function formatSandboxMetadata(sandbox: unknown, homeDir?: string): string {
@@ -229,12 +242,10 @@ function SessionInfoContent({ session }: { session: Session }) {
     // that said where the session actually was. The name, the headroom and the
     // bar are the composer popup's, not a second derivation (DROVE-129), and
     // they follow metadata, so a flip from the Mac moves this line too.
-    const usageLimitShowRemaining = useSetting('usageLimitShowRemaining');
     const sessionAccount = React.useMemo(() => resolveSessionAccount({
         droverUsage: session.metadata?.droverUsage,
         droverAccount: session.metadata?.droverAccount,
-        showRemaining: usageLimitShowRemaining,
-    }), [session.metadata?.droverUsage, session.metadata?.droverAccount, usageLimitShowRemaining]);
+    }), [session.metadata?.droverUsage, session.metadata?.droverAccount]);
 
     // Clone lineage (DROVE-58), and the map from the CLAUDE session ids the
     // ledger names to the HAPPY ids this app routes by. Only sessions this
@@ -571,7 +582,10 @@ function SessionInfoContent({ session }: { session: Session }) {
                             />
                         )}
                         {sessionAccount.row && (
-                            <AccountBar row={sessionAccount.row} />
+                            <AccountBar
+                                row={sessionAccount.row}
+                                capturedAt={session.metadata?.droverUsage?.capturedAt ?? null}
+                            />
                         )}
                         {/* One flip path, not two. This is DROVE-28's action,
                             the same `/flip` message the popover and the watch

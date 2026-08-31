@@ -245,6 +245,8 @@ export type StatusRowProps = {
     usageBarGroups: UsageBarGroup[];
     /** The zone and the model the sheet's numbers are for (DROVE-173). */
     usageBarFooter?: string;
+    /** When the snapshot was taken, so the sheet can say how old it is (DROVE-230). */
+    usageBarCapturedAt?: number | null;
     /**
      * Zen mode hides everything non-essential, and the account's NAME is one
      * of those: the quota reads `23% week` instead of `jamrizzi 23%`, and the
@@ -781,6 +783,7 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
                 <UsageAccountBarsSheet
                     groups={p.usageBarGroups}
                     footer={p.usageBarFooter}
+                    capturedAt={p.usageBarCapturedAt}
                     open={openSheet === 'usage'}
                     onClose={closeSheet}
                     onSwitchAccount={sessionId ? onSwitchAccount : undefined}

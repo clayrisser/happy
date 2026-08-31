@@ -119,6 +119,8 @@ function bar(overrides: Partial<UsageBarRow> = {}): UsageBarRow {
         nameTruncated: false,
         fraction: 0.43,
         percentText: '43%',
+        percentSpoken: '43% used',
+        measured: true,
         trailing: 'Fable back Sep 2',
         tone: 'ample',
         disabled: false,
@@ -126,7 +128,7 @@ function bar(overrides: Partial<UsageBarRow> = {}): UsageBarRow {
     };
 }
 
-/** Name, track, percent and trailing widths, in render order, for one row. */
+/** Mark, name, track, percent and trailing widths, in render order, for one row. */
 function widths(renderer: ReturnType<typeof create>): number[] {
     const row = renderer.root.findAll(
         (node: any) => node.type === 'View' && node.props.accessible === true,
@@ -141,16 +143,17 @@ function texts(renderer: ReturnType<typeof create>): string[] {
 }
 
 describe('usage bar column arithmetic', () => {
-    it('spends the row on four columns and three gaps, and gives the rest to the track', () => {
+    it('spends the row on five columns and four gaps, and gives the rest to the track', () => {
         expect(usageBarFixedWidth).toBe(
             usageBarColumns.horizontalPadding * 2
+            + usageBarColumns.mark
             + usageBarColumns.name
             + usageBarColumns.percent
             + usageBarColumns.trailing
-            + usageBarColumns.gap * 3,
+            + usageBarColumns.gap * 4,
         );
-        // 32 padding + 80 name + 34 percent + 88 trailing + 24 gaps.
-        expect(usageBarFixedWidth).toBe(258);
+        // 32 padding + 5 mark + 80 name + 34 percent + 88 trailing + 32 gaps.
+        expect(usageBarFixedWidth).toBe(271);
     });
 
     it('leaves a readable track on the 393pt phone DROVE-107 sized this for', () => {
@@ -177,13 +180,14 @@ describe('UsageAccountBarRow holds its columns when a field is absent', () => {
     const track = usageBarTrackWidth(393);
     const full = mount(React.createElement(UsageAccountBarRow, { row: bar(), trackWidth: track }));
     const expected = [
+        usageBarColumns.mark,
         usageBarColumns.name,
         track,
         usageBarColumns.percent,
         usageBarColumns.trailing,
     ];
 
-    it('lays a complete row out as name, track, percent, trailing', () => {
+    it('lays a complete row out as mark, name, track, percent, trailing', () => {
         expect(widths(full)).toEqual(expected);
         expect(texts(full)).toEqual(['bitspur.com', '43%', 'Fable back Sep 2']);
     });
@@ -230,8 +234,11 @@ describe('UsageAccountBarRow holds its columns when a field is absent', () => {
         expect(widths(renderer)).toEqual(expected);
         expect(texts(renderer)[0]).toBe(cut.name);
         // The whole name survives for VoiceOver even though the column cut it.
+        // The DIRECTION is spoken, because a screen reader never sees a fill
+        // and the fill is the only thing on a sighted row that carries it
+        // (DROVE-230).
         expect(renderer.root.findByProps({ accessible: true }).props.accessibilityLabel)
-            .toBe('risserproperties, 43%, Fable back Sep 2');
+            .toBe('risserproperties, 43% used, Fable back Sep 2');
     });
 
     it('gives every row in a sheet the same track, measured once for all of them', () => {
@@ -262,6 +269,99 @@ describe('UsageAccountBarRow holds its columns when a field is absent', () => {
         expect(texts(renderer)).toContain('jamrizzi · 51% left');
         expect(texts(renderer)).toContain('main · 0% left');
         expect(texts(renderer)).not.toContain('Other accounts');
+    });
+});
+
+/**
+ * Which way the bar runs, and the three things the track can be (DROVE-230).
+ *
+ * Clay, who owns this app and specified these bars, read a sheet that was
+ * verified correct and asked "Oh so 0% means nothing left?". They emptied as
+ * usage was consumed, and the only thing saying so was one line of small print
+ * at the bottom of a scroll. He decided it: "They should fill up instead so
+ * it's consistent." So the fill grows with usage, and the empty end of the
+ * track now has to hold two facts that used to sit at opposite ends - a
+ * measured zero, and no reading at all. These pin them apart.
+ */
+describe('the direction of the fill, and what an empty track means', () => {
+    const track = usageBarTrackWidth(393);
+
+    /** The track host node and the fill inside it, or null when it has none. */
+    function fill(renderer: ReturnType<typeof create>): any {
+        const trackNode = renderer.root.findAll((node: any) => node.type === 'View'
+            && node.props.style?.width === track)[0];
+        const inner = trackNode.findAll((node: any) => node.type === 'View'
+            && node.props.style?.height === '100%');
+        return { track: trackNode, fill: inner[0] ?? null };
+    }
+
+    it('grows the fill with usage, so a spent window is a full bar', () => {
+        const spent = mount(React.createElement(UsageAccountBarRow, {
+            row: bar({ fraction: 1, percentText: '100%', percentSpoken: '100% used', tone: 'critical' }),
+            trackWidth: track,
+        }));
+        expect(fill(spent).fill.props.style.width).toBe(track);
+        // Warming with the fill: the colour is read off what is LEFT, so the
+        // bar that fills is also the bar that goes red.
+        expect(fill(spent).fill.props.style.backgroundColor).toBe('critical');
+    });
+
+    it('keeps a visible sliver on a window MEASURED at zero used', () => {
+        // Not a rounding detail. A fresh window is the most misleading thing
+        // this sheet could draw as a blank, so it keeps a dot of fill.
+        const fresh = mount(React.createElement(UsageAccountBarRow, {
+            row: bar({ fraction: 0, percentText: '0%', percentSpoken: '0% used', measured: true }),
+            trackWidth: track,
+        }));
+        expect(fill(fresh).fill.props.style.width).toBeGreaterThan(0);
+        expect(fill(fresh).track.props.style.backgroundColor).toBe('divider');
+        expect(fill(fresh).track.props.style.borderWidth).toBe(0);
+    });
+
+    it('draws NO fill and a hollow track when nothing was measured', () => {
+        const none = mount(React.createElement(UsageAccountBarRow, {
+            row: bar({
+                fraction: 0,
+                percentText: null,
+                percentSpoken: null,
+                measured: false,
+                tone: 'unknown',
+                trailing: 'window reset',
+            }),
+            trackWidth: track,
+        }));
+        expect(fill(none).fill).toBeNull();
+        // Outlined rather than solid: the shape of "nobody looked", and it
+        // cannot be confused with the fresh window above.
+        expect(fill(none).track.props.style.backgroundColor).toBe('transparent');
+        expect(fill(none).track.props.style.borderWidth).toBe(1);
+        // And it does not claim a figure it does not have, out loud either.
+        expect(none.root.findByProps({ accessible: true }).props.accessibilityLabel)
+            .toBe('bitspur.com, window reset');
+    });
+
+    it('marks the row the account heading was read off, in that row\'s own tone', () => {
+        // `main · 2% left` over a session bar at 37% used read as a
+        // contradiction because nothing said the heading was about a different
+        // row. Tinted, not filled white, so it is not mistaken for the
+        // heading\'s current-account dot one line up.
+        const binding = mount(React.createElement(UsageAccountBarRow, {
+            row: bar({ name: 'Week', fullName: 'Week', binding: true, tone: 'critical' }),
+            trackWidth: track,
+        }));
+        const marks = binding.root.findAll((node: any) => node.type === 'View'
+            && node.props.style?.width === usageBarColumns.mark);
+        expect(marks[0].props.style.backgroundColor).toBe('critical');
+        // Said out loud too, since the dot is invisible to a screen reader.
+        expect(binding.root.findByProps({ accessible: true }).props.accessibilityLabel)
+            .toBe('Week, 43% used, binding limit, Fable back Sep 2');
+    });
+
+    it('leaves the mark slot empty, not absent, on every other row', () => {
+        const plain = mount(React.createElement(UsageAccountBarRow, { row: bar(), trackWidth: track }));
+        const marks = plain.root.findAll((node: any) => node.type === 'View'
+            && node.props.style?.width === usageBarColumns.mark);
+        expect(marks[0].props.style.backgroundColor).toBe('transparent');
     });
 });
 
@@ -298,7 +398,13 @@ describe('the sheet at five accounts times three bars (DROVE-148)', () => {
         expect(rows).toHaveLength(15);
         expect(new Set(rows.map((node: any) => node.props.trackWidth))).toEqual(new Set([track]));
         // Every column keeps its width in all fifteen, missing figure or not.
-        expect(widths(renderer)).toEqual([usageBarColumns.name, track, usageBarColumns.percent, usageBarColumns.trailing]);
+        expect(widths(renderer)).toEqual([
+            usageBarColumns.mark,
+            usageBarColumns.name,
+            track,
+            usageBarColumns.percent,
+            usageBarColumns.trailing,
+        ]);
     });
 
     it('marks the account the session is on rather than reshaping its rows', () => {
@@ -308,6 +414,15 @@ describe('the sheet at five accounts times three bars (DROVE-148)', () => {
             && node.props.style?.width === 5
             && node.props.style?.backgroundColor === 'text');
         expect(dots).toHaveLength(1);
+        // Every row carries a mark slot of its own, and on all fifteen it is
+        // TRANSPARENT: none of these fixtures is binding, so nothing competes
+        // with the heading's dot (DROVE-230).
+        const rowMarks = renderer.root.findAllByType(UsageAccountBarRow as any)
+            .map((node: any) => node.findAll((child: any) => child.type === 'View'
+                && child.props.style?.width === usageBarColumns.mark)[0]);
+        expect(rowMarks).toHaveLength(15);
+        expect(new Set(rowMarks.map((node: any) => node.props.style.backgroundColor)))
+            .toEqual(new Set(['transparent']));
         const heads = renderer.root.findAllByType('Text' as any)
             .filter((node: any) => String(node.props.children).includes('%')
                 && String(node.props.children).includes('·'));
@@ -322,6 +437,71 @@ describe('the sheet at five accounts times three bars (DROVE-148)', () => {
         expect(head.props.ellipsizeMode).toBe('tail');
         // Shrinks inside the heading row instead of widening it.
         expect(head.props.style.flexShrink).toBe(1);
+    });
+});
+
+/**
+ * How old the reading is, on the caption, and moving (DROVE-230).
+ *
+ * Clay: "When are you going to fix these to make them accurate?" They were
+ * accurate. `main` read 66/99/100 used against a sheet showing 37/2/0 left and
+ * the whole three-point gap was the reading aging, with nothing on the sheet
+ * admitting a reading HAS an age. The stamp is worded here rather than
+ * upstream because `resolveUsageStrip` runs in a memo keyed on the snapshot: a
+ * string built there would still read "Read just now" an hour after the sweep
+ * stopped, which is the same lie in nicer words.
+ */
+describe('the caption ages the reading', () => {
+    const at = 1_700_000_000_000;
+    const groups = [{
+        key: 'account:jamrizzi',
+        title: 'jamrizzi \u00b7 51% left on Session',
+        active: true,
+        rows: [bar({ key: 'jamrizzi:five_hour', name: 'Session', fullName: 'Session' })],
+    }];
+
+    it('puts the age in front of the caption, and says nothing about direction', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(at + 3 * 60_000);
+        try {
+            const renderer = mount(React.createElement(UsageAccountBars, {
+                width: 393,
+                groups,
+                footer: 'Times in CDT',
+                capturedAt: at,
+            }));
+            const caption = texts(renderer).find((text) => text.includes('Times in CDT'));
+            expect(caption).toBe('Read 3m ago \u00b7 Times in CDT');
+            expect(caption).not.toMatch(/Bars show/);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('moves on its own, so a sheet left open stops claiming the reading is fresh', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(at);
+        try {
+            const renderer = mount(React.createElement(UsageAccountBars, {
+                width: 393,
+                groups,
+                footer: 'Times in CDT',
+                capturedAt: at,
+            }));
+            expect(texts(renderer)).toContain('Read just now \u00b7 Times in CDT');
+            act(() => {
+                vi.advanceTimersByTime(11 * 60_000);
+            });
+            // Past the sweep that should have refreshed it, and it says so.
+            expect(texts(renderer)).toContain('Read 11m ago, overdue \u00b7 Times in CDT');
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('draws no caption at all when there is neither a stamp nor a footer', () => {
+        const renderer = mount(React.createElement(UsageAccountBars, { width: 393, groups }));
+        expect(texts(renderer).some((text) => text.includes('Read '))).toBe(false);
     });
 });
 
@@ -372,7 +552,7 @@ describe('switching account from a block (DROVE-160)', () => {
         expect(pressables[0].props.accessible).toBe(true);
         expect(pressables[0].props.accessibilityRole).toBe('button');
         expect(pressables[0].props.accessibilityLabel)
-            .toBe('Switch to main. main · 20% left. Session, 43%, Fable back Sep 2');
+            .toBe('Switch to main. main \u00b7 20% left. Session, 43% used, Fable back Sep 2');
         act(() => {
             pressables[0].props.onPress();
         });

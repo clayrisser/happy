@@ -571,6 +571,8 @@ export const ja: TranslationStructure = {
             familyWeek: ({ family }: { family: string }) => `${family} 週`,
             left: ({ percent }: { percent: number }) => `残り ${percent}%`,
             used: ({ percent }: { percent: number }) => `使用 ${percent}%`,
+            leftOn: ({ percent, window }: { percent: number; window: string }) =>
+                `${percent}% left on ${window}`,
             back: ({ time }: { time: string }) => `${time} に復帰`,
             familyBack: ({ family, time }: { family: string; time: string }) => `${family} は ${time} に復帰`,
             unmeasured: '未計測',
@@ -584,9 +586,16 @@ export const ja: TranslationStructure = {
             windowReset: 'window reset',
             /** Said on the account heading when no figure survives that rule. */
             headroomUnknown: 'headroom unknown',
-            barsShow: ({ direction }: { direction: string }) => `Bars show ${direction}`,
+            bindingRow: 'binding limit',
             zoneNote: ({ zone }: { zone: string }) => `Times in ${zone}`,
-            forModel: ({ family }: { family: string }) => `headroom for ${family}`,
+            captured: ({ age }: { age: string }) => `Read ${age}`,
+            capturedOverdue: ({ age }: { age: string }) => `Read ${age}, overdue`,
+            ageJustNow: 'just now',
+            ageMinutes: ({ minutes }: { minutes: number }) => `${minutes}m ago`,
+            ageHours: ({ hours }: { hours: number }) => `${hours}h ago`,
+            ageDays: ({ days }: { days: number }) => `${days}d ago`,
+            familyNotCounted: ({ windows, family }: { windows: string; family: string }) =>
+                `${windows} not counted for ${family}`,
         },
         suggestion: {
             fileLabel: 'ファイル',

@@ -604,6 +604,15 @@ export const en = {
             familyWeek: ({ family }: { family: string }) => `${family} week`,
             left: ({ percent }: { percent: number }) => `${percent}% left`,
             used: ({ percent }: { percent: number }) => `${percent}% used`,
+            /**
+             * The account heading, and the ONE place headroom survives
+             * (DROVE-230). Every bar and every bare figure on this sheet
+             * counts usage UP; this counts down, and it may only do so
+             * because it says the word out loud and names the window it came
+             * from. `main · 2% left on Week` cannot be read backwards.
+             */
+            leftOn: ({ percent, window }: { percent: number; window: string }) =>
+                `${percent}% left on ${window}`,
             back: ({ time }: { time: string }) => `Back ${time}`,
             familyBack: ({ family, time }: { family: string; time: string }) => `${family} back ${time}`,
             unmeasured: 'not measured',
@@ -617,12 +626,35 @@ export const en = {
             windowReset: 'window reset',
             /** Said on the account heading when no figure survives that rule. */
             headroomUnknown: 'headroom unknown',
-            /** "Bars show used" — the direction the bare figures count in. */
-            barsShow: ({ direction }: { direction: string }) => `Bars show ${direction}`,
+            /**
+             * Spoken on the row the account heading was read off (DROVE-230).
+             * The sighted row is marked with a tinted dot; a screen reader
+             * cannot see a dot, and "2% left on Week" over a session row at
+             * 37% is exactly the pair that read as a contradiction.
+             */
+            bindingRow: 'binding limit',
             /** Said once under the bars, never per row: the column is too narrow. */
             zoneNote: ({ zone }: { zone: string }) => `Times in ${zone}`,
-            /** Which model the headroom above is FOR (DROVE-173). */
-            forModel: ({ family }: { family: string }) => `headroom for ${family}`,
+            /**
+             * How old the snapshot on screen is (DROVE-230). The CLI sweeps
+             * every ten minutes, so a figure can be minutes old with nothing
+             * saying so, which is the reason Clay stopped trusting it.
+             */
+            captured: ({ age }: { age: string }) => `Read ${age}`,
+            /** Past that sweep: nobody has looked since, and the sheet says it. */
+            capturedOverdue: ({ age }: { age: string }) => `Read ${age}, overdue`,
+            ageJustNow: 'just now',
+            ageMinutes: ({ minutes }: { minutes: number }) => `${minutes}m ago`,
+            ageHours: ({ hours }: { hours: number }) => `${hours}h ago`,
+            ageDays: ({ days }: { days: number }) => `${days}d ago`,
+            /**
+             * What the headroom figures actually leave out (DROVE-230). The
+             * caption used to promise `headroom for Opus` while the only
+             * model-scoped window the API returns is Fable's; this names the
+             * window that exists and was skipped.
+             */
+            familyNotCounted: ({ windows, family }: { windows: string; family: string }) =>
+                `${windows} not counted for ${family}`,
         },
         suggestion: {
             fileLabel: 'FILE',

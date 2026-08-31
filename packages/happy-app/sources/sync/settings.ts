@@ -318,7 +318,15 @@ export const SettingsSchema = z.object({
     showFlavorIcons: z.boolean().describe('Whether to show harness icons in the session list'),
     showHarnessIconInSessionHeader: z.boolean().describe('Whether to show the harness icon in the session header'),
     userMessageBubbleColor: z.string().describe('User message bubble color preset'),
-    usageLimitShowRemaining: z.boolean().describe('Show plan rate limits as quota remaining instead of quota used'),
+    /**
+     * DEAD as of DROVE-230, kept so a phone that already stored it still
+     * parses. Nothing reads it. It reversed the quota bars, and a preference
+     * that reverses a mark is a preference that makes the mark unreadable:
+     * Clay, who specified these bars, read his own sheet and asked "Oh so 0%
+     * means nothing left?". The direction is now the mark's, one way, and the
+     * toggle went with it.
+     */
+    usageLimitShowRemaining: z.boolean().describe('Deprecated (DROVE-230); the quota bars fill as usage is consumed'),
     codeWrap: CodeWrapSchema.describe('Legacy opt-in soft wrap for monospace cards (no longer used; see codeScroll)'),
     codeScroll: CodeScrollSchema.describe('Which monospace kinds scroll horizontally instead of wrapping, toggled by double-tap'),
     streamTalk: StreamTalkSchema.describe('Read-aloud voice: chosen voice identifier, pitch, the normal and catch-up speaking rates, and the backlogs at which the voice speeds up and at which it jumps ahead'),

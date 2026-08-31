@@ -571,6 +571,8 @@ export const zhHans: TranslationStructure = {
             familyWeek: ({ family }: { family: string }) => `${family} 周`,
             left: ({ percent }: { percent: number }) => `剩余 ${percent}%`,
             used: ({ percent }: { percent: number }) => `已用 ${percent}%`,
+            leftOn: ({ percent, window }: { percent: number; window: string }) =>
+                `${percent}% left on ${window}`,
             back: ({ time }: { time: string }) => `${time} 恢复`,
             familyBack: ({ family, time }: { family: string; time: string }) => `${family} ${time} 恢复`,
             unmeasured: '未测量',
@@ -584,9 +586,16 @@ export const zhHans: TranslationStructure = {
             windowReset: 'window reset',
             /** Said on the account heading when no figure survives that rule. */
             headroomUnknown: 'headroom unknown',
-            barsShow: ({ direction }: { direction: string }) => `Bars show ${direction}`,
+            bindingRow: 'binding limit',
             zoneNote: ({ zone }: { zone: string }) => `Times in ${zone}`,
-            forModel: ({ family }: { family: string }) => `headroom for ${family}`,
+            captured: ({ age }: { age: string }) => `Read ${age}`,
+            capturedOverdue: ({ age }: { age: string }) => `Read ${age}, overdue`,
+            ageJustNow: 'just now',
+            ageMinutes: ({ minutes }: { minutes: number }) => `${minutes}m ago`,
+            ageHours: ({ hours }: { hours: number }) => `${hours}h ago`,
+            ageDays: ({ days }: { days: number }) => `${days}d ago`,
+            familyNotCounted: ({ windows, family }: { windows: string; family: string }) =>
+                `${windows} not counted for ${family}`,
         },
         suggestion: {
             fileLabel: '文件',

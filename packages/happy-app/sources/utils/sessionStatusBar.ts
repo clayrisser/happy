@@ -152,9 +152,16 @@ export function getUsageLimitRows(limits: UsageLimitsLike): UsageLimitRow[] {
 }
 
 /**
- * `utilization` is always "percent used" — the wire format and the color
+ * `utilization` is always "percent used" - the wire format and the color
  * thresholds both depend on that, so the remaining view is a display-time
  * flip only.
+ *
+ * NOT for a quota MARK any more (DROVE-230). Every bar, figure and strip
+ * percentage runs through `usageFill` in components/agentInputUsage.ts, which
+ * has one direction and no parameter, because a mark that can be reversed is
+ * a mark nobody can read: Clay, who specified these bars, looked at his own
+ * sheet and asked "Oh so 0% means nothing left?". Do not wire this back into
+ * one.
  */
 export function getUsageLimitDisplayPercentage(utilization: number, showRemaining: boolean): number {
     return showRemaining ? 100 - utilization : utilization;

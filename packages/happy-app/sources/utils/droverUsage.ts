@@ -89,6 +89,44 @@ export function droverRowApplies(
 export const droverStaleAfterMs = 60 * 60_000;
 
 /**
+ * How often the CLI goes and looks (happy-cli `src/drover/flip/usage.ts`,
+ * `sweepMs`). Kept in step with it by hand, the way `droverRowApplies` is
+ * kept in step with `rowApplies`: the two run in different processes and the
+ * app has no way to read the CLI's constant.
+ */
+export const droverSweepMs = 10 * 60_000;
+
+/**
+ * How old the snapshot ON SCREEN is (DROVE-230).
+ *
+ * Different from `droverAccountStale`, which asks whether one account's cache
+ * lagged the sweep that read it. This asks whether the whole reading is old,
+ * which is the question Clay was actually asking when he said the numbers
+ * looked wrong: `main` read 66/99/100 against a sheet showing 37/2/0 and the
+ * entire three-point gap was minutes of aging that nothing on the sheet
+ * mentioned.
+ *
+ * Measured against the phone's clock on purpose, and it is the one place that
+ * is right to do so: the question is "how long since anyone looked", and only
+ * the wall clock can answer it.
+ */
+export function droverSnapshotAgeMs(
+    capturedAt: number | null | undefined,
+    now: number,
+): number | null {
+    if (typeof capturedAt !== 'number' || !Number.isFinite(capturedAt)) return null;
+    if (!Number.isFinite(now)) return null;
+    // A snapshot stamped in the future is a clock disagreement, not a negative
+    // age. Zero reads as "just now", which is the honest end of that.
+    return Math.max(0, now - capturedAt);
+}
+
+/** Has the sweep that should have refreshed this reading failed to land? */
+export function droverSnapshotOverdue(ageMs: number | null): boolean {
+    return ageMs != null && ageMs >= droverSweepMs;
+}
+
+/**
  * Is this account's reading old enough that the sheet must not show it as
  * current? (DROVE-173)
  *

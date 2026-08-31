@@ -37,7 +37,7 @@ import { sessionDisplayTitle } from '@/utils/sessionTitle';
 import { deriveSessionTasks } from '@/utils/sessionTasks';
 import { currentDroverAccountRow } from '@/utils/droverUsage';
 import type { DroverUsageAccountLike } from '@/utils/droverUsage';
-import { droverBindingLimit } from '@/components/agentInputUsage';
+import { droverBindingLimit, usageFill } from '@/components/agentInputUsage';
 import { resolveSessionState } from './sessionState';
 import {
     addDroverAnswerListener,
@@ -157,11 +157,18 @@ export function collectAccountRows(
         // Its percentLeft is the same number `headroom` is — both are 100
         // minus the fullest row — so the bar and the label always agree.
         const binding = droverBindingLimit(account, freshest.modelFamily, freshest.capturedAt);
+        // The wrist's bar fills as usage is consumed, same as the phone's, and
+        // it fills to a number the PHONE derived (DROVE-230). `usageFill` is
+        // the one place headroom becomes a mark; sending its output rather
+        // than the input is what keeps the two surfaces from running opposite
+        // ways, which is DROVE-129's rule applied to a direction.
+        const fill = usageFill(headroom === undefined ? null : headroom);
         rows.push({
             name: account.name,
             // Omitted, never null: WatchConnectivity payloads take
             // property-list types only and one NSNull fails the whole publish.
             ...(headroom === undefined ? {} : { headroom }),
+            ...(fill.percentUsed === null ? {} : { used: fill.percentUsed }),
             ...(account.loggedIn === false ? { loggedIn: false } : { loggedIn: true }),
             ...(until ? { backAt: new Date(until).toISOString() } : {}),
             ...(account.current ? { current: true } : {}),
@@ -320,7 +327,8 @@ function sameAccountRows(a: DroverAccountRow[], b: DroverAccountRow[]): boolean 
     // headroom figure unchanged, and a publish keyed only on the numbers would
     // leave the wrist naming yesterday's limit.
     const key = (r: DroverAccountRow) =>
-        `${r.name}|${r.headroom ?? ''}|${r.loggedIn}|${r.backAt ?? ''}|${r.current === true}|${r.limit ?? ''}|${r.resetsAt ?? ''}|${r.tone ?? ''}`;
+        `${r.name}|${r.headroom ?? ''}|${r.used ?? ''}|${r.loggedIn}|${r.backAt ?? ''}`
+        + `|${r.current === true}|${r.limit ?? ''}|${r.resetsAt ?? ''}|${r.tone ?? ''}`;
     return a.every((row, i) => key(row) === key(b[i]));
 }
 
