@@ -16,6 +16,8 @@
  * socket module pulls in react-native, which vitest cannot parse).
  */
 
+import { agentQuietFor, SUBAGENT_QUIET_MS } from '@/utils/agentCard';
+
 import { createReducer, reducer, type ReducerState } from './reducer/reducer';
 import type { Message } from './typesMessage';
 import { normalizeRawMessage, RawRecordSchema } from './typesRaw';
@@ -150,8 +152,12 @@ export function applySubagentTranscriptRows(
     return next;
 }
 
-/** How long a running agent may go unwritten before the header says so. */
-export const SUBAGENT_QUIET_MS = 90_000;
+/**
+ * How long a running agent may go unwritten before the header says so. The
+ * threshold and the rule live in utils/agentCard.ts now, so the inline Agent
+ * card says exactly what this screen says (DROVE-110).
+ */
+export { SUBAGENT_QUIET_MS };
 
 export interface SubagentHeadline {
     state: SubagentState;
@@ -178,9 +184,7 @@ export function describeSubagent(
     const stoppedAt = agent?.endedAt ?? transcript.lastAt ?? agent?.updatedAt ?? now;
     const elapsedMs = Math.max(0, (state === 'running' ? now : stoppedAt) - startedAt);
     const movedAt = Math.max(agent?.updatedAt ?? 0, transcript.lastAt ?? 0);
-    const quietMs = state === 'running' && movedAt > 0 && now - movedAt > SUBAGENT_QUIET_MS
-        ? now - movedAt
-        : undefined;
+    const quietMs = agentQuietFor(state === 'running', movedAt, now);
     return {
         state,
         elapsedMs,
