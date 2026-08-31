@@ -15,10 +15,12 @@ import {
     addAccountEntry,
     addAccountHref,
     addAccountIdle,
+    addAccountLinkWaitMs,
     addAccountMachineParam,
     addAccountStatus,
     addAccountWatchMs,
     advanceAddAccount,
+    autoOpenLoginUrl,
     autoStartAddAccount,
     pendingAccountLoginFor,
     pendingAccountLogins,
@@ -35,8 +37,8 @@ function waiting(overrides: Partial<Extract<AddAccountPhase, { kind: 'waiting' }
         kind: 'waiting' as const,
         startedAt: 1_000,
         before,
-        requested: null,
         linkReady: false,
+        linkLate: false,
         ...overrides,
     };
 }
@@ -45,10 +47,8 @@ describe('advanceAddAccount', () => {
     it('starts, then waits once the machine says the login is running', () => {
         const starting = advanceAddAccount(addAccountIdle, { type: 'start' });
         expect(starting).toEqual({ kind: 'starting' });
-        const next = advanceAddAccount(starting, {
-            type: 'started', at: 1_000, before, requested: 'bitspur.com',
-        });
-        expect(next).toEqual(waiting({ requested: 'bitspur.com' }));
+        const next = advanceAddAccount(starting, { type: 'started', at: 1_000, before });
+        expect(next).toEqual(waiting());
     });
 
     it('ignores a second tap while one login is already running', () => {
@@ -127,7 +127,7 @@ describe('advanceAddAccount', () => {
     });
 
     it('ignores a started or a link that arrives out of order', () => {
-        expect(advanceAddAccount(addAccountIdle, { type: 'started', at: 1, before: [], requested: null }))
+        expect(advanceAddAccount(addAccountIdle, { type: 'started', at: 1, before: [] }))
             .toBe(addAccountIdle);
         expect(advanceAddAccount(addAccountIdle, { type: 'link', ready: true })).toBe(addAccountIdle);
         expect(advanceAddAccount(addAccountIdle, { type: 'startFailed', reason: 'x' })).toBe(addAccountIdle);
@@ -141,13 +141,82 @@ describe('advanceAddAccount', () => {
     it('runs a whole successful login end to end', () => {
         let phase: AddAccountPhase = addAccountIdle;
         phase = advanceAddAccount(phase, { type: 'start' });
-        phase = advanceAddAccount(phase, { type: 'started', at: 0, before, requested: null });
+        phase = advanceAddAccount(phase, { type: 'started', at: 0, before });
         phase = advanceAddAccount(phase, { type: 'accounts', at: 5_000, names: before });
         phase = advanceAddAccount(phase, { type: 'link', ready: true });
         expect(addAccountStatus(phase)?.hasLink).toBe(true);
         phase = advanceAddAccount(phase, { type: 'accounts', at: 60_000, names: [...before, 'new@x.com'] });
         expect(phase).toEqual({ kind: 'added', name: 'new@x.com' });
         expect(addAccountBusy(phase)).toBe(false);
+    });
+
+    it('says so when no link came back, and keeps watching', () => {
+        // DROVE-212. The login runs detached on a Mac nobody is looking at, so
+        // its failure reaches the phone as silence. Silence is what gets said.
+        const phase = waiting();
+        const late = advanceAddAccount(phase, {
+            type: 'accounts', at: 1_000 + addAccountLinkWaitMs, names: before,
+        });
+        expect(late).toEqual(waiting({ linkLate: true }));
+        expect(addAccountBusy(late)).toBe(true);
+    });
+
+    it('does not call it late one tick early', () => {
+        const phase = waiting();
+        expect(advanceAddAccount(phase, {
+            type: 'accounts', at: 1_000 + addAccountLinkWaitMs - 1, names: before,
+        })).toBe(phase);
+    });
+
+    it('a link that turns up late takes the sentence saying there was none with it', () => {
+        const late = waiting({ linkLate: true });
+        expect(advanceAddAccount(late, { type: 'link', ready: true }))
+            .toEqual(waiting({ linkReady: true, linkLate: false }));
+    });
+
+    it('never calls it late once the link is already there', () => {
+        const ready = waiting({ linkReady: true });
+        expect(advanceAddAccount(ready, {
+            type: 'accounts', at: 1_000 + addAccountLinkWaitMs, names: before,
+        })).toBe(ready);
+    });
+
+    it('a new account still wins over the link being late', () => {
+        expect(advanceAddAccount(waiting(), {
+            type: 'accounts', at: 1_000 + addAccountLinkWaitMs, names: [...before, 'added@example.com'],
+        })).toEqual({ kind: 'added', name: 'added@example.com' });
+    });
+});
+
+describe('autoOpenLoginUrl (DROVE-212)', () => {
+    const url = 'https://claude.com/cai/oauth/authorize?code=true';
+
+    it('opens the sign-in page the moment the machine sends it', () => {
+        expect(autoOpenLoginUrl({ phase: waiting({ linkReady: true }), url, opened: null })).toBe(url);
+    });
+
+    it('opens one link exactly once, however often the screen re-renders', () => {
+        expect(autoOpenLoginUrl({ phase: waiting({ linkReady: true }), url, opened: url })).toBeNull();
+    });
+
+    it('opens a second, different link after a retry', () => {
+        const retry = 'https://claude.com/cai/oauth/authorize?code=true&try=2';
+        expect(autoOpenLoginUrl({ phase: waiting({ linkReady: true }), url: retry, opened: url })).toBe(retry);
+    });
+
+    it('opens nothing when no login of ours is in flight', () => {
+        // A card the bridge never cleaned up outlives its login. Opening it on
+        // arrival at this screen would throw Clay into a dead sign-in page he
+        // never asked for.
+        expect(autoOpenLoginUrl({ phase: addAccountIdle, url, opened: null })).toBeNull();
+        expect(autoOpenLoginUrl({ phase: { kind: 'starting' }, url, opened: null })).toBeNull();
+        expect(autoOpenLoginUrl({ phase: { kind: 'added', name: 'x' }, url, opened: null })).toBeNull();
+    });
+
+    it('opens nothing when there is no link, or the link is not https', () => {
+        expect(autoOpenLoginUrl({ phase: waiting(), url: null, opened: null })).toBeNull();
+        expect(autoOpenLoginUrl({ phase: waiting(), url: undefined, opened: null })).toBeNull();
+        expect(autoOpenLoginUrl({ phase: waiting(), url: 'claude://x', opened: null })).toBeNull();
     });
 });
 
@@ -176,8 +245,28 @@ describe('addAccountStatus', () => {
     it('tells him the three steps once the link is there', () => {
         const ready = addAccountStatus(waiting({ linkReady: true }))!;
         expect(ready.hasLink).toBe(true);
-        expect(ready.detail).toContain('sign in');
+        expect(ready.detail).toContain('Sign in');
         expect(ready.detail).toContain('code');
+    });
+
+    it('points at his browser rather than naming a card to go and find', () => {
+        // DROVE-212: the link used to be two taps away behind a share sheet,
+        // so the words pointed at a card. They point at his browser now.
+        expect(addAccountStatus(waiting())!.detail).toContain('browser');
+        expect(addAccountStatus(waiting({ linkReady: true }))!.detail).toContain('browser');
+    });
+
+    it('says no link came back without calling the login failed', () => {
+        const late = addAccountStatus(waiting({ linkLate: true }))!;
+        expect(late.hasLink).toBe(false);
+        expect(late.watching).toBe(true);
+        // Still watching, but the spinner stops: a spinner beside "no link came
+        // back" would be the row disagreeing with itself.
+        expect(late.spinner).toBe(false);
+        expect(addAccountStatus(waiting())!.spinner).toBe(true);
+        expect(late.title).toBe('No sign-in link came back');
+        expect(late.detail).toContain('may have failed');
+        expect(late.title.toLowerCase()).not.toContain('failed');
     });
 
     it('carries the machine’s own refusal, rather than a generic apology', () => {
@@ -194,9 +283,10 @@ describe('addAccountStatus', () => {
 });
 
 describe('pendingAccountLogins', () => {
-    const card = (url: string | null) => ({
+    const card = (url: string | null, createdAt?: number) => ({
         tool: 'DroverAccountLogin',
         arguments: url === null ? {} : { url },
+        ...(createdAt === undefined ? {} : { createdAt }),
     });
 
     it('finds the card and the machine whose login raised it', () => {
@@ -210,6 +300,7 @@ describe('pendingAccountLogins', () => {
             sessionId: 'bridgeA',
             machineId: 'mac-1',
             url: 'https://claude.com/cai/oauth/authorize?x=1',
+            createdAt: null,
         }]);
     });
 
@@ -253,6 +344,31 @@ describe('pendingAccountLogins', () => {
         };
         expect(pendingAccountLoginFor(sessions, 'mac-2')?.url).toBe('https://b/oauth/authorize');
         expect(pendingAccountLoginFor(sessions, 'mac-3')).toBeNull();
+    });
+
+    it('carries when the machine raised the card', () => {
+        const found = pendingAccountLogins({
+            b: {
+                metadata: { machineId: 'mac-1' },
+                agentState: { requests: { r: card('https://a/oauth/authorize', 7_000) } },
+            },
+        });
+        expect(found[0].createdAt).toBe(7_000);
+    });
+
+    it('takes the newest card, so an abandoned login does not win (DROVE-212)', () => {
+        const sessions = {
+            b: {
+                metadata: { machineId: 'mac-1' },
+                agentState: {
+                    requests: {
+                        old: card('https://old/oauth/authorize', 1_000),
+                        fresh: card('https://fresh/oauth/authorize', 9_000),
+                    },
+                },
+            },
+        };
+        expect(pendingAccountLoginFor(sessions, 'mac-1')?.url).toBe('https://fresh/oauth/authorize');
     });
 });
 
