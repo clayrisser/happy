@@ -18,11 +18,17 @@
  * DROVE-208 added the way in at the end of it: an add row, on the machine this
  * session runs on. The row is drawn by UsageAccountBars and the machine is
  * decided by the caller, which is the only place a session is known.
+ *
+ * DROVE-248 made it the thing that HOLDS the order. The accounts are ranked
+ * best-first upstream (`rankUsageAccounts`), which re-ranks on every snapshot,
+ * and this is the one component that knows when the sheet is open and can
+ * therefore pin it. See `holdUsageGroupOrder` for why a list of tap targets
+ * must not re-sort under a thumb.
  */
 import * as React from 'react';
 import { ComposerSheet } from './ComposerSheet';
 import { UsageAccountBars } from './UsageAccountBars';
-import type { UsageBarGroup } from './agentInputUsage';
+import { holdUsageGroupOrder, type UsageBarGroup } from './agentInputUsage';
 
 export function UsageAccountBarsSheet(props: {
     groups: UsageBarGroup[];
@@ -37,13 +43,25 @@ export function UsageAccountBarsSheet(props: {
     /** The add row that ends the list (DROVE-208). */
     addAccount?: { machineName: string; onPress: () => void } | null;
 }) {
+    // The key order as it stood when the sheet opened, empty while it is shut.
+    // Captured in an effect keyed on `open` ALONE: re-running it when `groups`
+    // changes is exactly the re-sort this prevents, and the sweep changes
+    // `groups` every ten minutes. The first frame of an opening renders the
+    // fresh ranking and the effect pins that same order, so nothing moves.
+    const [held, setHeld] = React.useState<string[]>([]);
+    const open = props.open;
+    const groups = props.groups;
+    React.useEffect(() => {
+        setHeld(open ? groups.map((group) => group.key) : []);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [open]);
     return (
         <ComposerSheet
             open={props.open}
             onClose={props.onClose}
         >
             <UsageAccountBars
-                groups={props.groups}
+                groups={holdUsageGroupOrder(groups, held)}
                 footer={props.footer}
                 capturedAt={props.capturedAt}
                 onSwitchAccount={props.onSwitchAccount}

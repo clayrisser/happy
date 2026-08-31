@@ -409,6 +409,11 @@ export type DroverAccountUsageRow = DroverOtherAccountRow & {
  *
  * Current first rather than in registry order, because it is the account being
  * compared against; the rest keep the order `drover accounts` prints.
+ *
+ * That registry order is no longer what the SHEET lists (DROVE-248). It ranks
+ * these by headroom in `rankUsageAccounts`, because "which account should I
+ * move to" is not a question the registry's order answers. What comes out of
+ * here is still the registry's, and it is what breaks the ranking's last tie.
  */
 export function droverAccountsUsage(usage: DroverUsageLike, droverAccount?: string | null): DroverAccountUsageRow[] {
     if (!usage || !Array.isArray(usage.accounts)) return [];

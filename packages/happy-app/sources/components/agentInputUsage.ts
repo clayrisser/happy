@@ -79,6 +79,7 @@ import {
     usageLimitZoneLabel,
     type UsageLimitsLike,
 } from '@/utils/sessionStatusBar';
+import { estimateStatusRowTextWidth, statusRowMetrics } from './statusRowLayout';
 import { t } from '@/text';
 
 export type UsageStripInput = {
@@ -357,6 +358,30 @@ export const usageBarFixedWidth =
 export function usageBarTrackWidth(containerWidth: number): number {
     if (!Number.isFinite(containerWidth)) return usageBarColumns.minTrack;
     return Math.max(usageBarColumns.minTrack, Math.round(containerWidth - usageBarFixedWidth));
+}
+
+/**
+ * The trailing column's font size, and whether a label fits in it (DROVE-248).
+ *
+ * The column is a fixed 88pt at every screen width, so this is one question
+ * and not three: at 320, 375 and 393 the track absorbs the difference and the
+ * trailing slot does not move. Widening it is therefore not free. At 320 the
+ * track is already down to 49pt against a 40pt floor, which is why the reset
+ * label got shorter instead.
+ *
+ * The estimate is the status row's measured advance, scaled from its 11pt to
+ * this column's 10pt. Same font (`Typography.default`, IBM Plex Sans), and it
+ * is read off `statusRowMetrics` rather than written down again so the two
+ * cannot disagree about how wide a character is.
+ */
+export const usageBarTrailingFontSize = 10;
+
+export function usageBarTrailingWidth(text: string): number {
+    return estimateStatusRowTextWidth(text) * (usageBarTrailingFontSize / statusRowMetrics.fontSize);
+}
+
+export function usageBarTrailingFits(text: string): boolean {
+    return usageBarTrailingWidth(text) <= usageBarColumns.trailing;
 }
 
 /** What the number column shows when nothing was measured: a dash, never a gap. */
@@ -807,6 +832,173 @@ export function droverBindingLimit(
     };
 }
 
+/**
+ * WHICH ACCOUNT TO MOVE TO, BEST FIRST (DROVE-248).
+ *
+ * Clay: "Always sort these by most recommended to least where the first one is
+ * the active one." The order after the current account used to be the order
+ * `drover accounts` prints, which is the registry's and answers nothing: in
+ * the sheet he photographed the second row was `main` at 0% left and the best
+ * account he had was fifth. The sheet exists to answer one question and the
+ * order was working against it.
+ *
+ * MOST RECOMMENDED IS HEADROOM ON THE BINDING WINDOW, and the same headroom
+ * the block's own heading prints. Not a score, on purpose. Every block shows
+ * its percentage, so an order that IS that percentage is one a reader can
+ * check at a glance and therefore trust; an order computed from something the
+ * sheet does not show is one he has to take on faith. That is the DROVE-230
+ * mistake in a different coat, a mark whose meaning lived only in the code.
+ *
+ * The reset time was considered as a WEIGHT and is used only as a TIE-BREAK.
+ * The argument for weighting is real: 10% that comes back in an hour is worth
+ * more than 20% that comes back on Saturday. Three things beat it. The weight
+ * depends on `now`, so the order would drift while the sheet sits open with
+ * no figure on it changing. It ranks two visible percentages in an order
+ * neither percentage explains. And it decides on ONE window for an account
+ * that is showing three, when the reset it would weight by is already printed
+ * on the row for anyone who wants it. So at equal headroom the account whose
+ * binding window comes back sooner goes above, which is the insight applied
+ * where it cannot mislead.
+ *
+ * Tiers come first and headroom only sorts within one, because "can this
+ * account take my session at all" outranks how much is left in it.
+ */
+export const usageAccountTier = {
+    /** The account the session is on. Always first, never re-ranked. */
+    current: 0,
+    /** Logged in, not cooling, and a measured headroom above zero. */
+    open: 1,
+    /**
+     * Logged in and usable, with no figure the heading will print. A guess
+     * that could be a full account, so it sits under every account KNOWN to
+     * have room and over every one known to have none.
+     */
+    unknown: 2,
+    /** Measured at zero, or cooling with the whole account out. */
+    spent: 3,
+    /** No login. It cannot take the session, so nothing else about it ranks. */
+    noLogin: 4,
+} as const;
+
+export type UsageAccountRank = {
+    tier: number;
+    /** Percent left on the binding window; -1 when the heading prints none. */
+    headroom: number;
+    /** When this account is worth looking at again; null when nothing says. */
+    revives: number | null;
+    /** Registry position, the last tie-break, so `drover accounts` still decides. */
+    index: number;
+};
+
+/**
+ * The headroom the block's HEADING will print, or null when it prints a reason
+ * instead.
+ *
+ * Read off the same three refusals `usageAccountGroupTitle` makes, rather than
+ * off `headroom` directly. An account whose windows had already reset when the
+ * snapshot was taken carries a stamped figure the heading deliberately will
+ * not show (DROVE-204), and ranking it by a number the sheet refuses to print
+ * is the one way this order could stop being checkable.
+ */
+function rankedHeadroom(
+    account: DroverAccountUsageRow,
+    binding: DroverBindingLimit | null,
+): number | null {
+    if (!account.loggedIn) return null;
+    if (account.headroom == null) return null;
+    if (account.expired && !binding) return null;
+    return account.headroom;
+}
+
+export function usageAccountRank(
+    account: DroverAccountUsageRow,
+    binding: DroverBindingLimit | null,
+    index: number,
+): UsageAccountRank {
+    const headroom = rankedHeadroom(account, binding);
+    // Cooling with no family named is the WHOLE account out until that time.
+    // A family-scoped cooling is not, and needs no special case: `headroom` is
+    // computed over the windows that apply to this session's model, so a
+    // family that is out either already reads zero or does not bind at all.
+    const out = account.back != null && !account.family;
+    const tier = account.current
+        ? usageAccountTier.current
+        : !account.loggedIn
+            ? usageAccountTier.noLogin
+            : out
+                ? usageAccountTier.spent
+                : headroom == null
+                    ? usageAccountTier.unknown
+                    : headroom <= 0
+                        ? usageAccountTier.spent
+                        : usageAccountTier.open;
+    return {
+        tier,
+        headroom: headroom ?? -1,
+        // For an account with room, when the window it is measured on refills.
+        // For a spent one, when it is back, which is the only thing left worth
+        // ordering the dead by.
+        revives: tier === usageAccountTier.spent
+            ? account.back ?? binding?.resetsAt ?? null
+            : binding?.resetsAt ?? null,
+        index,
+    };
+}
+
+function compareUsageAccountRank(a: UsageAccountRank, b: UsageAccountRank): number {
+    if (a.tier !== b.tier) return a.tier - b.tier;
+    if (a.tier === usageAccountTier.open && a.headroom !== b.headroom) return b.headroom - a.headroom;
+    if (a.tier === usageAccountTier.open || a.tier === usageAccountTier.spent) {
+        // Sooner first; an account that never said goes behind one that did.
+        const left = a.revives ?? Number.POSITIVE_INFINITY;
+        const right = b.revives ?? Number.POSITIVE_INFINITY;
+        if (left !== right) return left - right;
+    }
+    return a.index - b.index;
+}
+
+/**
+ * The accounts in the order the sheet lists them.
+ *
+ * Pure and total: same accounts and same bindings, same order, with the
+ * registry index breaking every remaining tie so it is never arbitrary.
+ */
+export function rankUsageAccounts(
+    accounts: DroverAccountUsageRow[],
+    bindings: Map<string, DroverBindingLimit | null>,
+): DroverAccountUsageRow[] {
+    return accounts
+        .map((account, index) => ({
+            account,
+            rank: usageAccountRank(account, bindings.get(account.name) ?? null, index),
+        }))
+        .sort((a, b) => compareUsageAccountRank(a.rank, b.rank))
+        .map((entry) => entry.account);
+}
+
+/**
+ * THE ORDER IS FROZEN WHILE THE SHEET IS OPEN (DROVE-248).
+ *
+ * `rankUsageAccounts` is pure and re-ranks on every snapshot, which is right
+ * for deciding the order and wrong for keeping it. A block on this sheet is a
+ * Pressable that MOVES THE SESSION onto that account (DROVE-160), and
+ * `UsageReporter` sweeps every ten minutes. Re-sorting under a travelling
+ * thumb would land the tap on a different account than the one aimed at, which
+ * is not a cosmetic jump but a switch he did not ask for.
+ *
+ * So the sheet captures the key order when it opens and re-applies it to every
+ * later reading. The figures stay live: bars, percentages, headings and the
+ * freshness caption all keep moving, and only the ORDER is pinned. Closing and
+ * reopening re-ranks. An account the sweep adds while the sheet is open is not
+ * in the held order, so it lands at the tail rather than jumping into place.
+ */
+export function holdUsageGroupOrder(groups: UsageBarGroup[], held: string[]): UsageBarGroup[] {
+    if (held.length === 0) return groups;
+    const order = new Map(held.map((key, index) => [key, index]));
+    const at = (group: UsageBarGroup) => order.get(group.key) ?? Number.MAX_SAFE_INTEGER;
+    return [...groups].sort((a, b) => at(a) - at(b));
+}
+
 export function resolveUsageStrip(input: UsageStripInput): UsageStrip {
     // Agent state first, because it is live from the SDK; the drover snapshot
     // when there is none, which is every pane session.
@@ -883,7 +1075,12 @@ export function resolveUsageStrip(input: UsageStripInput): UsageStrip {
     // Have each one listed." Each block is headed by its own account, which is
     // the name he is choosing between; a label over the whole list told nobody
     // anything.
-    const groups = accounts.map((account) => usageAccountBarGroup(account, measures, {
+    //
+    // Ranked here rather than in `droverAccountsUsage` (DROVE-248), because
+    // the ranking needs the binding window and that is decided in this
+    // function. `droverAccountsUsage` still hands over the registry's order,
+    // which is what breaks the last tie.
+    const groups = rankUsageAccounts(accounts, bindings).map((account) => usageAccountBarGroup(account, measures, {
         binding: bindings.get(account.name) ?? null,
         // The SDK stream is live and belongs to the session's own account; the
         // snapshot is the only reading there is for every other one.

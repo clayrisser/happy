@@ -34,15 +34,18 @@ vi.mock('@/text', async () => {
 
 import {
     droverBindingLimit,
+    holdUsageGroupOrder,
     resolveUsageStrip,
     truncateUsageName,
     usageBarFraction,
     usageBarFooterText,
     usageBarNameLimit,
     usageBarTone,
+    usageBarTrailingFits,
     usageFill,
     usageSkippedFamilyWindows,
     usageSnapshotAgeText,
+    type UsageBarGroup,
 } from './agentInputUsage';
 
 // What the CLI stamps for Clay's registry as measured 2026-08-30: on jamrizzi,
@@ -316,6 +319,181 @@ describe('resolveUsageStrip on a pane session', () => {
             // later on the Mac.
             ['spare', false, false],
         ]);
+    });
+});
+
+/**
+ * WHICH ACCOUNT TO MOVE TO, BEST FIRST (DROVE-248).
+ *
+ * The order after the current account used to be the registry's, which
+ * answers nothing: in the sheet Clay photographed the second row was `main` at
+ * 0% left and the best account he had was fifth. These pin the rule -
+ * headroom on the binding window, tiers before headroom, the registry only as
+ * the last tie-break - and pin that the order does NOT move while the sheet is
+ * open.
+ */
+describe('the order the accounts are listed in', () => {
+    /** Clay's five, in the arbitrary registry order his screenshot showed. */
+    const five: DroverUsageLike = {
+        capturedAt: 1_000,
+        accounts: [
+            { name: 'main', current: false, loggedIn: true, fetchedAt: 950, headroom: 0, cooling: null,
+                limits: [{ kind: 'weekly_all', percent: 100, resetsAt: sep5, scope: null, family: null }] },
+            { name: 'jam@codejam.ninja', current: true, loggedIn: true, fetchedAt: 950, headroom: 25, cooling: null,
+                limits: [{ kind: 'weekly_all', percent: 75, resetsAt: sep5, scope: null, family: null }] },
+            { name: 'jamrizzi', current: false, loggedIn: true, fetchedAt: 950, headroom: 34, cooling: null,
+                limits: [{ kind: 'weekly_all', percent: 66, resetsAt: sep5, scope: null, family: null }] },
+            { name: 'promanagerdevteam', current: false, loggedIn: true, fetchedAt: 950, headroom: 22, cooling: null,
+                limits: [{ kind: 'weekly_all', percent: 78, resetsAt: sep5, scope: null, family: null }] },
+            { name: 'bitspur.com', current: false, loggedIn: true, fetchedAt: 950, headroom: 42, cooling: null,
+                limits: [{ kind: 'weekly_all', percent: 58, resetsAt: sep5, scope: null, family: null }] },
+            { name: 'clayrisser24', current: false, loggedIn: true, fetchedAt: 950, headroom: 0, cooling: null,
+                limits: [{ kind: 'weekly_all', percent: 100, resetsAt: sep5, scope: null, family: null }] },
+        ],
+    };
+    const order = (usage: DroverUsageLike, account: string) =>
+        resolveUsageStrip({ usageLimits: null, droverUsage: usage, droverAccount: account })
+            .usageBarGroups.map((group) => group.account);
+
+    it('puts the current account first and the rest by headroom, best to worst', () => {
+        // The screenshot, fixed. It read current, main at 0%, jamrizzi 34,
+        // promanagerdevteam 22, bitspur.com 42, clayrisser24 0.
+        expect(order(five, 'jam@codejam.ninja')).toEqual([
+            'jam@codejam.ninja',
+            'bitspur.com',
+            'jamrizzi',
+            'promanagerdevteam',
+            'main',
+            'clayrisser24',
+        ]);
+    });
+
+    it('never puts an exhausted account second', () => {
+        const groups = resolveUsageStrip({ usageLimits: null, droverUsage: five, droverAccount: 'jam@codejam.ninja' })
+            .usageBarGroups;
+        // The bug in one line. `main` is at 0% and had the row under the
+        // account in use.
+        expect(groups[1].account).toBe('bitspur.com');
+        // And generally: every account with room is above every spent one.
+        const headroom = groups.slice(1).map((group) => Number(/(\d+)% left/.exec(group.title)![1]));
+        expect(headroom).toEqual([...headroom].sort((a, b) => b - a));
+        expect(headroom.filter((left) => left === 0)).toEqual([0, 0]);
+    });
+
+    it('keeps the current account first even when it is the emptiest of them', () => {
+        // It is not a place to move TO, so it is never ranked. It is the thing
+        // the rest are being compared against.
+        const spentCurrent = {
+            ...five!,
+            accounts: five!.accounts.map((a) => ({ ...a, headroom: a.name === 'jam@codejam.ninja' ? 0 : a.headroom })),
+        };
+        expect(order(spentCurrent, 'jam@codejam.ninja')[0]).toBe('jam@codejam.ninja');
+    });
+
+    it('sinks an account that cannot take the session, whatever its figure says', () => {
+        const mixed: DroverUsageLike = {
+            capturedAt: 1_000,
+            accounts: [
+                { name: 'out', current: false, loggedIn: true, fetchedAt: 950, headroom: 90,
+                    cooling: { until: sep3, reason: 'weekly limit at 100%' }, limits: [] },
+                { name: 'gone', current: false, loggedIn: false, fetchedAt: null, headroom: null, cooling: null, limits: [] },
+                { name: 'unread', current: false, loggedIn: true, fetchedAt: null, headroom: null, cooling: null, limits: [] },
+                { name: 'thin', current: false, loggedIn: true, fetchedAt: 950, headroom: 3, cooling: null,
+                    limits: [{ kind: 'weekly_all', percent: 97, resetsAt: sep5, scope: null, family: null }] },
+                { name: 'here', current: true, loggedIn: true, fetchedAt: 950, headroom: 12, cooling: null, limits: [] },
+            ],
+        };
+        // `out` is cooling with no family named, so the WHOLE account is out
+        // until Thursday and its 90% cannot be spent now. It goes under
+        // `unread`, which nobody has measured and which could be full: a fact
+        // beats a guess, and an unread account beats one known to be shut.
+        // `gone` has no login at all and cannot be switched to, so it is last.
+        expect(order(mixed, 'here')).toEqual(['here', 'thin', 'unread', 'out', 'gone']);
+    });
+
+    it('breaks a tie on which window comes back soonest, then on the registry', () => {
+        const tied: DroverUsageLike = {
+            capturedAt: 1_000,
+            accounts: [
+                { name: 'here', current: true, loggedIn: true, fetchedAt: 950, headroom: 5, cooling: null, limits: [] },
+                { name: 'saturday', current: false, loggedIn: true, fetchedAt: 950, headroom: 20, cooling: null,
+                    limits: [{ kind: 'weekly_all', percent: 80, resetsAt: sep5, scope: null, family: null }] },
+                { name: 'in-an-hour', current: false, loggedIn: true, fetchedAt: 950, headroom: 20, cooling: null,
+                    limits: [{ kind: 'session', percent: 80, resetsAt: sessionReset, scope: null, family: null }] },
+            ],
+        };
+        // 20% either way, so the one whose window refills first is the better
+        // move. This is the ONLY place the reset time ranks anything: as a
+        // weight it would order two visible percentages in an order neither
+        // percentage explains, and it would drift with the clock.
+        expect(order(tied, 'here')).toEqual(['here', 'in-an-hour', 'saturday']);
+    });
+
+    it('holds the order while the sheet is open, so a sweep cannot move a tap target', () => {
+        const opened = resolveUsageStrip({ usageLimits: null, droverUsage: five, droverAccount: 'jam@codejam.ninja' })
+            .usageBarGroups;
+        const held = opened.map((group) => group.key);
+        // Ten minutes later bitspur.com is spent and main has reset. The
+        // ranking flips; the sheet under his thumb must not.
+        const swept: DroverUsageLike = {
+            ...five!,
+            accounts: five!.accounts.map((a) => ({
+                ...a,
+                headroom: a.name === 'bitspur.com' ? 0 : a.name === 'main' ? 100 : a.headroom,
+            })),
+        };
+        const fresh = resolveUsageStrip({ usageLimits: null, droverUsage: swept, droverAccount: 'jam@codejam.ninja' })
+            .usageBarGroups;
+        expect(fresh.map((group) => group.account)[1]).toBe('main');
+        expect(holdUsageGroupOrder(fresh, held).map((group) => group.key)).toEqual(held);
+        // The FIGURES are not held, only the order. main still reads its new
+        // number in the row it already occupied.
+        expect(holdUsageGroupOrder(fresh, held).find((group) => group.account === 'main')!.title)
+            .toContain('100% left');
+    });
+
+    it('lands an account that appears mid-sweep at the tail rather than mid-list', () => {
+        const held = ['account:a', 'account:b'];
+        const groups = [
+            { key: 'account:new' }, { key: 'account:b' }, { key: 'account:a' },
+        ] as UsageBarGroup[];
+        expect(holdUsageGroupOrder(groups, held).map((g) => g.key))
+            .toEqual(['account:a', 'account:b', 'account:new']);
+        // Nothing held means nothing to hold to: the sheet is shut and the
+        // ranking passes through.
+        expect(holdUsageGroupOrder(groups, []).map((g) => g.key))
+            .toEqual(['account:new', 'account:b', 'account:a']);
+    });
+});
+
+describe('the trailing column at 320, 375 and 393', () => {
+    it('fits every reset label the sheet can print', () => {
+        // The column is a fixed 88pt at all three widths, so this is one
+        // assertion and not three: the TRACK absorbs the difference between
+        // phones, and this slot does not move. Which is also why the fix for
+        // `Resets Wed, Se…` was a shorter label rather than a wider column -
+        // at 320 the track is already down to 49pt against a 40pt floor.
+        const now = Date.UTC(2026, 7, 31, 12, 0);
+        const labels = [
+            // Every day of the coming week, so no one weekday name is the one
+            // that overflows, plus the two other things sharing the slot.
+            ...[1, 2, 3, 4, 5, 6].map((day) => `Resets ${formatUsageLimitResetTime(now + day * 86_400_000, now)}`),
+            `Resets ${formatUsageLimitResetTime(now + 3 * 3_600_000, now)}`,
+            `Fable back ${formatUsageLimitResetTime(now + 4 * 86_400_000, now)}`,
+            `Back ${formatUsageLimitResetTime(now + 3 * 3_600_000, now)}`,
+            'window reset',
+            'not measured',
+        ];
+        for (const label of labels) {
+            expect(usageBarTrailingFits(label), label).toBe(true);
+        }
+    });
+
+    it('is what the old label overran, which is why the month went', () => {
+        // The exact string off Clay's screenshot. Kept as the regression: it
+        // does NOT fit, and nothing this function can now build looks like it.
+        expect(usageBarTrailingFits('Resets Wed, Sep 3')).toBe(false);
+        expect(usageBarTrailingFits('Fable back Wed, Sep 3')).toBe(false);
     });
 });
 
