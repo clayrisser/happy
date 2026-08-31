@@ -18,6 +18,13 @@ import { DICTATION_LATCH_IDLE_MS, type MicMode } from './micMode';
  * button before the lift CANCELS and puts the composer back. Everything that
  * is not a gesture at all, the idle stop, a speech cut, the recogniser
  * ending on its own, leaves the transcript in the composer, unsent.
+ *
+ * And one rule under that: A CAPTURE ENDING NEVER COSTS WORDS (DROVE-120).
+ * Text that has already appeared in the composer is not removed by any path
+ * in here. Endings differ only in whether they also SEND. The
+ * single exception is the `cancel` gesture, which is the user asking; it is
+ * named and argued in dictationComposer.ts, which owns what the composer does
+ * with each reason.
  */
 export interface DictationEngine {
     /** Resolves once the microphone is running. */
@@ -65,10 +72,39 @@ export interface DictationCaptureEvents {
     onCommit(text: string, send: boolean, reason: DictationEndReason): void;
     /** A partial transcript landed or was revised. */
     onPartial(text: string): void;
-    /** The capture ended with its words thrown away. */
+    /**
+     * The capture ended with nothing to commit: the audio was dropped, or the
+     * recogniser had nothing to add to what is already on screen. This does
+     * NOT mean the composer should be emptied; see dictationComposer.ts.
+     */
     onDiscard(reason: DictationEndReason): void;
     onError(message: string): void;
     onChange(state: DictationCaptureState): void;
+}
+
+/**
+ * The words to keep when the recogniser's FINAL string and the partials
+ * already on screen disagree (DROVE-105, DROVE-120).
+ *
+ * The invariant is that a capture ending never takes back text the composer
+ * has already shown, so the final only wins when it actually says more.
+ *
+ * - An empty final does NOT mean nothing was said. Apple finalises on its own
+ *   after a pause or at the recogniser's own time limit, and the native module
+ *   clears `latestTranscript` when it does, so a stop landing afterwards
+ *   resolves with "" while the words are still on screen. The last partial
+ *   stands in.
+ * - A final that is a PREFIX of what was shown is the recogniser having been
+ *   cut off mid-sentence. Keep the longer one.
+ * - Anything else is a genuine revision ("um hello" -> "hello", "twenty two"
+ *   -> "22"), and the recogniser is the better authority on its own words.
+ */
+export function keptTranscript(heard: string, final: string): string {
+    const shown = heard.trim();
+    const settled = final.trim();
+    if (settled.length === 0) return shown;
+    if (settled.length < shown.length && shown.startsWith(settled)) return shown;
+    return settled;
 }
 
 const idle: DictationCaptureState = {
@@ -183,9 +219,13 @@ export class DictationCapture {
 
     /**
      * Speech was cut, so capture is cut too (DROVE-30 AC: anything that stops
-     * speech also stops capture). Typing keeps what was heard, because the
-     * user is now editing and losing three dictated sentences to a tap on
-     * the text field is the wrong trade; every other reason drops it.
+     * speech also stops capture). Typing goes through finish(), so the words
+     * are transcribed properly before the user's keystrokes land on them;
+     * every other reason drops the AUDIO immediately, because a call or
+     * another mic wants the audio session now and cannot wait 2s for a stop
+     * to settle. Dropping the audio is not dropping the words: the partials
+     * already in the composer stay there (DROVE-120), which is why this line
+     * used to be the widest route by which a sentence vanished mid-hold.
      */
     interrupt(reason: ReadAloudInterruption): void {
         if (!this.state.active) return;
@@ -208,9 +248,10 @@ export class DictationCapture {
         this.generation += 1;
         void this.engine.cancel();
         this.set(idle);
-        // Same reasoning as finish(): the recogniser giving up with nothing
-        // must not erase the partials it already reported (DROVE-105).
-        const trimmed = text.trim() || heard;
+        // The recogniser giving up, or being cut off at its own time limit,
+        // must not erase the partials it already reported (DROVE-105,
+        // DROVE-120).
+        const trimmed = keptTranscript(heard, text);
         if (trimmed.length > 0) {
             this.events.onCommit(trimmed, false, 'recogniser');
         } else {
@@ -218,7 +259,11 @@ export class DictationCapture {
         }
     }
 
-    /** The screen went away with the mic on. Nothing is left recording. */
+    /**
+     * The screen went away with the mic on, or something took the audio.
+     * Nothing is left recording. The words already shown are NOT taken back;
+     * dictationComposer.ts decides that per reason (DROVE-120).
+     */
     discard(reason: DictationEndReason = 'left-session'): void {
         if (!this.state.active && !this.state.settling) return;
         const wasActive = this.state.active;
@@ -241,13 +286,10 @@ export class DictationCapture {
                 // words go nowhere.
                 if (generation + 1 !== this.generation) return;
                 this.set(idle);
-                // An empty final transcript does NOT mean nothing was said
-                // (DROVE-105). Apple finalises on its own after a pause and a
-                // stop that lands afterwards resolves with nothing, while the
-                // partials are already on screen. Discarding there wipes them
-                // and reads as "a pause cancelled everything I said", so the
-                // last partial stands in for a final that came back empty.
-                const trimmed = text.trim() || heard;
+                // A final that says less than what is already on screen does
+                // NOT mean the words were never said (DROVE-105, DROVE-120);
+                // see keptTranscript.
+                const trimmed = keptTranscript(heard, text);
                 if (trimmed.length === 0) {
                     this.events.onDiscard(reason);
                     return;
