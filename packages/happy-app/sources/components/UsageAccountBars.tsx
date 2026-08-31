@@ -23,6 +23,11 @@
  * whole popup, computed from the measured container, the number column always
  * renders (a dash when nothing was measured) and the trailing column always
  * holds its slot whether or not there is a time to put in it.
+ *
+ * DROVE-148 gave every account the same three rows, so there is one row shape
+ * here and no second one for the account list. A block is a heading and its
+ * measures; the current account's block is marked with a dot, not built
+ * differently.
  */
 import * as React from 'react';
 import { LayoutChangeEvent, Text, View } from 'react-native';
@@ -37,9 +42,16 @@ import {
     type UsageBarTone,
 } from './agentInputUsage';
 
-/** Thin enough that eight rows cost less than the three-line block did for two. */
-const rowHeight = 20;
+/**
+ * Thin enough that eight rows cost less than the three-line block did for two,
+ * and now that every account carries three of them (DROVE-148) the budget is
+ * five accounts times three rows plus five headings: about 380pt, which the
+ * sheet scrolls rather than clips.
+ */
+const rowHeight = 18;
 const trackHeight = 5;
+/** The dot marking the current account's block, and the slot it always keeps. */
+const activeDot = 5;
 
 /**
  * What the track is drawn at until the container has been measured. A phone
@@ -164,18 +176,31 @@ export function UsageAccountBars(props: { groups: UsageBarGroup[]; width?: numbe
         >
             {props.groups.map((group, index) => (
                 <View key={group.key} style={{ marginTop: index > 0 ? 8 : 2 }}>
+                    {/* Every account is headed the same way, so the current one
+                        is told apart by a dot and a brighter name rather than
+                        by a different row shape below it. The dot's slot is
+                        always there, so the names line up down the sheet. */}
                     {group.title ? (
-                        <Text
-                            numberOfLines={1}
-                            style={{
-                                fontSize: 10,
-                                color: theme.colors.textSecondary,
-                                marginBottom: 2,
-                                ...Typography.default(),
-                            }}
-                        >
-                            {group.title}
-                        </Text>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 2 }}>
+                            <View style={{
+                                width: activeDot,
+                                height: activeDot,
+                                borderRadius: activeDot / 2,
+                                backgroundColor: group.active ? theme.colors.text : 'transparent',
+                            }} />
+                            <Text
+                                numberOfLines={1}
+                                ellipsizeMode="tail"
+                                style={{
+                                    flexShrink: 1,
+                                    fontSize: 10,
+                                    color: group.active ? theme.colors.text : theme.colors.textSecondary,
+                                    ...Typography.default(),
+                                }}
+                            >
+                                {group.title}
+                            </Text>
+                        </View>
                     ) : null}
                     {group.rows.map((row) => (
                         <UsageAccountBarRow key={row.key} row={row} trackWidth={trackWidth} />

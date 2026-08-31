@@ -11,19 +11,27 @@
  * Pure so the choice between the two, the gate on the week figure and the
  * popup's rows can be pinned by a test without mounting the composer.
  *
- * The popup's rows are BARS, not sentences (DROVE-107). Each account used to
+ * The sheet's rows are BARS, not sentences (DROVE-107). Each account used to
  * cost three text lines - "bitspur.com · 0% left", then "Fable back Sep 2",
  * and a long name wrapped again - so five accounts filled the screen and the
  * one number Clay scans for was buried in prose. A row is now a name, a track
  * filled to the headroom LEFT, the number, and the reset time trailing behind
  * it, all on one line. The fill is coloured by how much headroom is left, never
  * by which account it is, so 43% and 0% compare down the column at a glance.
+ *
+ * Every account gets all of them (DROVE-148). The current account had Session,
+ * Week and Fable week; every other account had one bar for its fullest limit.
+ * Clay: "This should be listing all three bars for each account." One number
+ * per account cannot answer the question the sheet is opened for, which is
+ * where to flip to, because an account can be fine on the week and burnt on
+ * the session and one figure hides that. So there is one shape now: a block
+ * per account, headed by its name and headroom, over the same measure rows.
  */
 import {
     currentDroverAccountRow,
-    droverFamilyRows,
-    droverOtherAccounts,
+    droverAccountsUsage,
     usageLimitsFromDroverUsage,
+    type DroverAccountUsageRow,
     type DroverOtherAccountRow,
     type DroverUsageLike,
 } from '@/utils/droverUsage';
@@ -84,8 +92,10 @@ export type UsageBarRow = {
 
 export type UsageBarGroup = {
     key: string;
-    /** "jamrizzi · 51% left"; empty for the account list, which has no heading. */
+    /** "jamrizzi · 51% left"; empty when the caller draws bare rows. */
     title: string;
+    /** The account the session is on, so one block reads as yours (DROVE-148). */
+    active?: boolean;
     rows: UsageBarRow[];
 };
 
@@ -95,8 +105,8 @@ export type UsageStrip = {
     /** Nothing from the SDK; the snapshot is what the strip is reading. */
     usageFromDrover: boolean;
     /**
-     * The popup: this account's session, week and family rows under its own
-     * headroom, then every other account as a plain unheaded list.
+     * The sheet: one block per account, the current one first, each with the
+     * same Session, Week and family-week rows under its own headroom.
      */
     usageBarGroups: UsageBarGroup[];
 };
@@ -238,15 +248,19 @@ export function droverAccountHeadroomLabel(
  * account that is out says when it is back, one with no figure says why, and a
  * logged-out one is dimmed rather than hidden.
  */
+/** "Back 6 PM" / "Fable back Sep 4"; empty when the account is not cooling. */
+export function usageAccountBackLabel(a: Pick<DroverOtherAccountRow, 'back' | 'family'>): string {
+    if (a.back == null) return '';
+    return a.family
+        ? t('agentInput.usagePopup.familyBack', { family: a.family, time: formatUsageLimitResetTime(a.back) })
+        : t('agentInput.usagePopup.back', { time: formatUsageLimitResetTime(a.back) });
+}
+
 export function usageAccountBarRow(a: DroverOtherAccountRow, showRemaining: boolean): UsageBarRow {
     // An account that is out says WHEN it is back; that is the fact worth the
     // trailing slot. With no figure at all the trailing text is the reason
     // there is none, so the empty track is explained.
-    const back = a.back != null
-        ? a.family
-            ? t('agentInput.usagePopup.familyBack', { family: a.family, time: formatUsageLimitResetTime(a.back) })
-            : t('agentInput.usagePopup.back', { time: formatUsageLimitResetTime(a.back) })
-        : '';
+    const back = usageAccountBackLabel(a);
     if (!a.loggedIn) {
         return usageBarRowFrom({
             key: `account:${a.name}`,
@@ -276,6 +290,94 @@ export function usageAccountBarRow(a: DroverOtherAccountRow, showRemaining: bool
     });
 }
 
+/** One quota window, named once and drawn on every account's block. */
+export type UsageMeasure = { id: string; label: string };
+
+/**
+ * The rows every block carries, in one order (DROVE-148).
+ *
+ * Session and Week always, then one row per model family any account scopes a
+ * limit to. Computed across ALL accounts rather than per account on purpose:
+ * the blocks are there to be compared down the sheet, so `main` has to draw a
+ * Fable week row even with nothing in it, or its Week row would sit level with
+ * someone else's Fable week and the column would lie.
+ */
+export function usageMeasures(accounts: DroverAccountUsageRow[]): UsageMeasure[] {
+    const measures: UsageMeasure[] = [
+        { id: 'five_hour', label: t('agentInput.usagePopup.session') },
+        { id: 'seven_day', label: t('agentInput.usagePopup.week') },
+    ];
+    const seen = new Set(measures.map((m) => m.id));
+    for (const account of accounts) {
+        for (const window of account.windows) {
+            if (!window.family || seen.has(window.id)) continue;
+            seen.add(window.id);
+            measures.push({ id: window.id, label: t('agentInput.usagePopup.familyWeek', { family: window.family }) });
+        }
+    }
+    return measures;
+}
+
+/** "jamrizzi · 51% left", or the reason there is no figure. */
+export function usageAccountGroupTitle(a: DroverOtherAccountRow, showRemaining: boolean): string {
+    if (!a.name) return '';
+    if (!a.loggedIn) return `${a.name} · ${t('agentInput.usagePopup.noLogin')}`;
+    if (a.headroom == null) return `${a.name} · ${t('agentInput.usagePopup.unmeasured')}`;
+    return droverAccountHeadroomLabel(a, showRemaining);
+}
+
+/**
+ * One account as a block: its name and headroom over the same measure rows
+ * every other block gets (DROVE-148).
+ *
+ * `override` is the SDK's live windows, which only the current account has and
+ * which beat the snapshot's reading of it. A measure the account has no figure
+ * for still draws its row, with the dash the current account already used, so
+ * the blocks stay the same height and line up.
+ */
+export function usageAccountBarGroup(
+    account: DroverAccountUsageRow,
+    measures: UsageMeasure[],
+    showRemaining: boolean,
+    override?: UsageLimitsLike,
+): UsageBarGroup {
+    const byId = new Map<string, { utilization: number | null; resetsAt: number | null }>();
+    for (const window of account.windows) {
+        byId.set(window.id, { utilization: window.utilization, resetsAt: window.resetsAt });
+    }
+    for (const row of getUsageLimitRows(override ?? null)) {
+        byId.set(row.id, { utilization: row.utilization, resetsAt: row.resetsAt });
+    }
+    const rows = measures.map((measure) => {
+        const window = byId.get(measure.id);
+        const utilization = window?.utilization ?? null;
+        // `utilization` is percent USED on the wire; the track fills with what
+        // is left of it either way, only the printed number follows the setting.
+        const percent = utilization == null ? null : getUsageLimitDisplayPercentage(utilization, showRemaining);
+        return usageBarRowFrom({
+            key: `${account.name}:${measure.id}`,
+            name: measure.label,
+            percentLeft: utilization == null ? null : 100 - utilization,
+            percentText: percent == null ? null : `${Math.round(percent)}%`,
+            trailing: window?.resetsAt != null
+                ? t('agentInput.usagePopup.resets', { time: formatUsageLimitResetTime(window.resetsAt) })
+                : '',
+            disabled: !account.loggedIn,
+        });
+    });
+    // The cooling time is normally the reset on one of the rows above, so it
+    // is not repeated. When the account has no windows at all it is the only
+    // thing there is to say, and it goes on the title rather than nowhere.
+    const back = rows.some((row) => row.trailing) ? '' : usageAccountBackLabel(account);
+    const title = usageAccountGroupTitle(account, showRemaining);
+    return {
+        key: account.name ? `account:${account.name}` : 'usage',
+        title: back && title ? `${title} · ${back}` : title,
+        active: account.current,
+        rows,
+    };
+}
+
 export function resolveUsageStrip(input: UsageStripInput): UsageStrip {
     // Agent state first, because it is live from the SDK; the drover snapshot
     // when there is none, which is every pane session.
@@ -285,7 +387,6 @@ export function resolveUsageStrip(input: UsageStripInput): UsageStrip {
     // Only Session and Week are user-meaningful; provider-internal windows
     // (nimbus_quill and friends) stay out of the popup.
     const rows = getUsageLimitRows(usageLimits ?? null);
-    const session = rows.find((row) => row.id === 'five_hour') ?? null;
     const week = rows.find((row) => row.id === 'seven_day') ?? null;
     // A session with the snapshot and no stream shows the strip regardless of
     // the context setting: the number is the reason Clay opens the popup, not
@@ -294,51 +395,39 @@ export function resolveUsageStrip(input: UsageStripInput): UsageStrip {
         ? getUsageLimitDisplayPercentage(week.utilization, input.showRemaining)
         : null;
 
-    const mine: UsageBarRow[] = [];
-    const push = (key: string, label: string, row: { utilization: number | null; resetsAt: number | null } | null) => {
-        if (!row || row.utilization == null) return;
-        // `utilization` is percent USED on the wire; the track fills with what
-        // is left of it either way, only the printed number follows the setting.
-        const left = 100 - row.utilization;
-        const percent = getUsageLimitDisplayPercentage(row.utilization, input.showRemaining);
-        mine.push(usageBarRowFrom({
-            key,
-            name: label,
-            percentLeft: left,
-            percentText: `${Math.round(percent)}%`,
-            trailing: row.resetsAt != null
-                ? t('agentInput.usagePopup.resets', { time: formatUsageLimitResetTime(row.resetsAt) })
-                : '',
-        }));
-    };
-    push('session', t('agentInput.usagePopup.session'), session);
-    push('week', t('agentInput.usagePopup.week'), week);
-    // Per model family, where the cache scopes a limit (DROVE-47): on Clay's
-    // plan a Fable weekly row sits beside weekly_all, and the two differ by
-    // forty points on the day it matters.
-    for (const row of droverFamilyRows(input.droverUsage, input.droverAccount)) {
-        push(row.id, t('agentInput.usagePopup.familyWeek', { family: row.family }), row);
+    // Every account, current first, each its own block (DROVE-148). Before
+    // this the current account got three rows and the rest got one bar apiece,
+    // which is the wrong answer to "where do I flip to": one number cannot say
+    // that an account is fine on the week and burnt on the session.
+    const accounts = droverAccountsUsage(input.droverUsage, input.droverAccount);
+    const sdkRows = getUsageLimitRows(input.usageLimits ?? null);
+    // A session on an account the registry does not know still has the SDK's
+    // own windows, and they still earn a block; it just has no headroom to
+    // head it with.
+    if (!accounts.some((a) => a.current) && sdkRows.length > 0) {
+        const stamped = currentDroverAccountRow(null, input.droverAccount);
+        accounts.unshift({
+            name: stamped?.name ?? '',
+            loggedIn: true,
+            headroom: null,
+            back: null,
+            family: null,
+            current: true,
+            windows: [],
+        });
     }
-    const groups: UsageBarGroup[] = [];
-    if (mine.length > 0) {
-        // The heading carries the picker's own number for THIS account -
-        // "jamrizzi · 65% left" - so the popup and `drover accounts` agree at
-        // a glance.
-        const current = currentDroverAccountRow(input.droverUsage, input.droverAccount);
-        const title = droverAccountHeadroomLabel(current, input.showRemaining);
-        groups.push({ key: 'usage', title, rows: mine });
-    }
-    // Every OTHER account, folded under its own heading rather than dropped
-    // (DROVE-47): the phone has to answer "where can I flip to" without a
-    // terminal. Same figures the flip picker prints.
-    const others = droverOtherAccounts(input.droverUsage, input.droverAccount)
-        .map((a) => usageAccountBarRow(a, input.showRemaining));
-    // No heading over the list (DROVE-117). Clay: "Don't say other accounts.
-    // Have each one listed." The rows above are quota WINDOWS within one
-    // account and earn their heading; below is just the accounts, and a label
-    // over a list of five names told nobody anything.
-    if (others.length > 0) {
-        groups.push({ key: 'accounts', title: '', rows: others });
-    }
+    const measures = usageMeasures(accounts);
+    // No heading over the LIST (DROVE-117). Clay: "Don't say other accounts.
+    // Have each one listed." Each block is headed by its own account, which is
+    // the name he is choosing between; a label over the whole list told nobody
+    // anything.
+    const groups = accounts.map((account) => usageAccountBarGroup(
+        account,
+        measures,
+        input.showRemaining,
+        // The SDK stream is live and belongs to the session's own account; the
+        // snapshot is the only reading there is for every other one.
+        account.current ? input.usageLimits : null,
+    ));
     return { weekPercent, usageFromDrover, usageBarGroups: groups };
 }

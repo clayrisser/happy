@@ -212,7 +212,7 @@ describe('AgentInputStatusRow on an idle pane session', () => {
         expect(onSessionInfoPress).toHaveBeenCalledTimes(1);
     });
 
-    it('opens the quota sheet from the week figure with a bar per window and per account (DROVE-117)', () => {
+    it('opens the quota sheet from the week figure with every window for every account (DROVE-148)', () => {
         const strip = paneStrip(true);
         const renderer = row({ weekPercent: strip.weekPercent, usageBarGroups: strip.usageBarGroups });
         const sheet = () => renderer.root.findByType('UsageAccountBarsSheet' as any);
@@ -223,16 +223,24 @@ describe('AgentInputStatusRow on an idle pane session', () => {
             week.props.onPress();
         });
         expect(sheet().props.open).toBe(true);
+        // Both accounts carry the same three measures, so the sheet answers
+        // "where do I flip to" rather than "which account is fullest".
+        expect(sheet().props.groups.map((g: any) => [g.key, g.active])).toEqual([
+            ['account:jamrizzi', true],
+            ['account:main', false],
+        ]);
         const rows = sheet().props.groups.flatMap((group: any) => group.rows);
         expect(rows.map((r: any) => [r.name, r.percentText])).toEqual([
             ['Session', '51%'],
             ['Week', '77%'],
             ['Fable week', '61%'],
-            ['main', '0%'],
+            ['Session', null],
+            ['Week', '0%'],
+            ['Fable week', null],
         ]);
         // The track is drawn even for the account at zero.
-        expect(rows[3].fraction).toBe(0);
-        expect(rows[3].tone).toBe('critical');
+        expect(rows[4].fraction).toBe(0);
+        expect(rows[4].tone).toBe('critical');
         expect(line(renderer)).toContain('77% week');
         // And the sheet closes itself, which is what the backdrop and the
         // grabber both call.
