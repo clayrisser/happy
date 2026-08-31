@@ -1,11 +1,14 @@
 /**
- * The composer's session capsule, mounted (DROVE-153, DROVE-176, DROVE-178).
+ * The composer's session capsule, mounted (DROVE-153, DROVE-176, DROVE-178,
+ * DROVE-215).
  *
  * composerControlColour.spec.ts measures the colours and sessionPillLabel.spec.ts
  * pins the model's width budget. This is the render: that the three segments
  * come out in the order Clay asked for, that each opens its own picker on the
  * first tap and never a menu of the three (DROVE-111), and that the colour
- * each glyph is drawn in is the one the vocabulary says it should be.
+ * each glyph is drawn in is the one the rule says it should be. The colour
+ * half is the one that has to be a RENDER: the module can only say what it
+ * hands out, and the call site is where a tint gets put back.
  *
  * The model's three assertions moved here from AgentInputStatusRow.test.ts
  * when DROVE-178 moved the segment.
@@ -48,8 +51,12 @@ vi.mock('react-native-svg', () => ({
 
 vi.mock('@expo/vector-icons', () => ({ Ionicons: host('Ionicons') }));
 
+// The theme is a knob, not a constant: the colour rule has to be shown on the
+// light theme too, where "white" is #000000 (DROVE-215).
+const { themeState } = vi.hoisted(() => ({ themeState: { dark: true } }));
+
 vi.mock('react-native-unistyles', () => ({
-    useUnistyles: () => ({ theme: { dark: true, colors: { text: 'text', divider: 'divider', glass: {} } } }),
+    useUnistyles: () => ({ theme: { dark: themeState.dark, colors: { text: 'text', divider: 'divider', glass: {} } } }),
     StyleSheet: { create: (factory: any) => factory({ colors: { text: 'text', divider: 'divider', glass: {} } }) },
 }));
 
@@ -143,35 +150,72 @@ describe('the session capsule', () => {
     });
 });
 
-describe('the colour each glyph is drawn in (DROVE-176)', () => {
-    it('gives the open padlock the warning hue and the shut one the neutral', () => {
-        const open = mount({ modeKind: 'yolo' }).root.findByType('Ionicons' as any);
-        expect(open.props.name).toBe('lock-open-outline');
-        expect(open.props.color).toBe(palette.warning);
-        const shut = mount({ modeKind: 'default' }).root.findByType('Ionicons' as any);
-        expect(shut.props.name).toBe('lock-closed-outline');
-        expect(shut.props.color).toBe(palette.neutral);
+/**
+ * The RENDERED colour of every glyph in the capsule (DROVE-176, DROVE-215).
+ *
+ * This is where the rule is actually pinned. composerControlColour.spec.ts can
+ * say the module hands out the foreground; only a render can say the row does,
+ * because the row is where a tint would be put back.
+ */
+describe('the colour each glyph is drawn in (DROVE-176, DROVE-215)', () => {
+    it('draws the padlock, the shield and the eye in the row’s foreground, whatever the mode', () => {
+        // Clay: "I told you to do white for the color of all the icons." The
+        // mode is a value the session holds, not a thing it is doing, so it
+        // buys no colour. The SHAPE still separates them, which is the trade
+        // DROVE-141 made and DROVE-176 promised to keep good for.
+        const glyph = (modeKind: string) => mount({ modeKind }).root.findByType('Ionicons' as any).props;
+        expect(glyph('yolo').name).toBe('lock-open-outline');
+        expect(glyph('default').name).toBe('lock-closed-outline');
+        expect(glyph('safe-yolo').name).toBe('shield-checkmark-outline');
+        expect(glyph('read-only').name).toBe('eye-outline');
+        for (const mode of ['yolo', 'bypassPermissions', 'safe-yolo', 'read-only', 'plan', 'acceptEdits', 'default']) {
+            expect(glyph(mode).color, mode).toBe(palette.foreground);
+        }
     });
 
-    it('gives safe-yolo and read-only their own, neither of them the warning', () => {
-        const shield = mount({ modeKind: 'safe-yolo' }).root.findByType('Ionicons' as any);
-        expect(shield.props.color).toBe(palette.shield);
-        const eye = mount({ modeKind: 'read-only' }).root.findByType('Ionicons' as any);
-        expect(eye.props.color).toBe(palette.eye);
-    });
-
-    it('warms the needle up the scale, cool at the floor and the warning at the ceiling', () => {
+    it('draws the needle in the foreground at every level, so nothing is a ramp any more', () => {
         const needle = (index: number) => mount({ effortIndex: index }).root
             .findByType('Line' as any).props.stroke;
-        expect(needle(0)).toBe(palette.effort[0]);
-        expect(needle(5)).toBe(palette.warning);
-        expect(needle(2)).not.toBe(needle(4));
+        for (let level = 0; level < 6; level += 1) {
+            expect(needle(level), `level ${level}`).toBe(palette.foreground);
+        }
     });
 
-    it('leaves the model neutral, because a name is not a state', () => {
+    it('leaves the model on the foreground too, because a name is not a state', () => {
         const text = mount().root.findAllByType('Text' as any)
             .find((node: any) => node.props.children === 'Opus 5 1M');
         expect(text.props.style.color).toBe('text');
+    });
+
+    it('does the same on the light theme, where the foreground is #000000 rather than white', () => {
+        // Same rule, other theme. The token is the row's FOREGROUND, so light
+        // gets the theme's own text colour instead of a literal white that
+        // would vanish on it.
+        themeState.dark = false;
+        try {
+            const light = COMPOSER_CONTROL_PALETTE.light;
+            expect(light.foreground).toBe('#000000');
+            for (const mode of ['yolo', 'safe-yolo', 'read-only', 'default']) {
+                expect(mount({ modeKind: mode }).root.findByType('Ionicons' as any).props.color, mode)
+                    .toBe(light.foreground);
+            }
+            for (let level = 0; level < 6; level += 1) {
+                expect(mount({ effortIndex: level }).root.findByType('Line' as any).props.stroke, `level ${level}`)
+                    .toBe(light.foreground);
+            }
+        } finally {
+            themeState.dark = true;
+        }
+    });
+
+    it('draws the whole capsule in one colour, which is what Clay asked for', () => {
+        // The capsule the ticket was filed against had a purple shield and a
+        // pink needle a few points from three plain white glyphs. One assertion
+        // that the two capsules now speak the same vocabulary.
+        const renderer = mount({ modeKind: 'safe-yolo', effortIndex: 5 });
+        const shield = renderer.root.findByType('Ionicons' as any).props.color;
+        const stroke = renderer.root.findByType('Line' as any).props.stroke;
+        expect(new Set([shield, stroke, palette.foreground]).size).toBe(1);
     });
 });
 
@@ -224,15 +268,17 @@ describe('the effort segment when it is a slider', () => {
         const needle = (renderer: any) => renderer.root.findByType('Line' as any).props;
         // At rest the needle reads the session's own level, the fourth of six.
         const resting = needle(mount({ effortSlider: slider(), effortScale: scale }));
-        // Mid-drag it reads the THUMB, which is at the ceiling: hard right,
-        // and the warning amber the DROVE-176 ramp ends on.
+        // Mid-drag it reads the THUMB, which is at the ceiling: hard right.
+        // The ANGLE is the whole of it now (DROVE-215): the stroke is the
+        // foreground at either end, so the drag has to move the line to say
+        // anything, which is the reading the dial was chosen for (DROVE-101).
         const dragging = needle(mount({
             effortSlider: slider({ active: true, index: 5 }),
             effortScale: scale,
         }));
-        expect(dragging.stroke).toBe(palette.effort[2]);
         expect(dragging.x2).toBeGreaterThan(resting.x2);
-        expect(dragging.stroke).not.toBe(resting.stroke);
+        expect(dragging.stroke).toBe(palette.foreground);
+        expect(resting.stroke).toBe(palette.foreground);
     });
 
     it('hangs the popover off a wrapper that clips nothing, outside the glass', () => {

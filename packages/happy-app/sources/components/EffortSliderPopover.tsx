@@ -5,7 +5,7 @@ import { Typography } from '@/constants/Typography';
 import { hapticsSelection } from './haptics';
 import { BubblePressable } from './BubblePressable';
 import { GlassChromeSurface } from './GlassChromeControl';
-import { composerControlPalette, effortColour } from './composerControlColour';
+import { composerControlPalette, composerGlyphColour } from './composerControlColour';
 import { MOBILE_COMPOSER_METRICS } from './agentInputLayout';
 import { COMPOSER_SESSION_CONTROL_SIZE } from './sessionPillLabel';
 import {
@@ -33,9 +33,13 @@ import {
  * why `auto` is off the line, and why a write only ever happens on release —
  * are all in effortSlider.ts, which is pure and specced. This file draws them.
  *
- * WHAT IT REUSES RATHER THAN REDECIDES. The thumb takes DROVE-176's ramp
- * through `effortColour`, so the slider and the dial beside it agree about
- * what a position looks like. The material is DROVE-153's chrome glass, and
+ * WHAT IT REUSES RATHER THAN REDECIDES. The thumb reads the composer row's
+ * foreground through `composerGlyphColour`, so the slider and the dial beside
+ * it agree, and they now agree on the foreground: DROVE-215 took the ramp off
+ * the needle, and a thumb that stayed on a ramp would be the dial's colour
+ * argument reopened one surface away. Its POSITION is what says which level
+ * this is, and the caption above it says the word. The material is DROVE-153's
+ * chrome glass, and
  * the popover is 44pt tall for the same reason every other control is. The
  * detent tick is `hapticsSelection`, which is an INTERACTION haptic and is
  * therefore silent while the phone's haptics switch is off — its default
@@ -342,7 +346,7 @@ export function EffortSliderPopover(props: {
     // The LIVE pick, not the one the gesture started from: grabbing a stop
     // takes the session off auto before the finger has even lifted.
     const onAuto = index === EFFORT_AUTO_INDEX;
-    const thumbColour = effortColour(palette, index, scale.keys.length);
+    const thumbColour = composerGlyphColour(palette);
     const accessibility = effortSliderAccessibility(scale, index);
     const captionX = effortStopX(index, placement) - placement.left;
     return (
@@ -362,8 +366,12 @@ export function EffortSliderPopover(props: {
                     accessibilityLabel="Effort chosen automatically"
                     accessibilityState={{ selected: onAuto }}
                 >
+                    {/* A picker marking its own current choice, which is the
+                        one thing DROVE-215's rule leaves alone: this surface
+                        exists only while a finger is down, so the accent is
+                        not a glyph sitting coloured on the row at rest. */}
                     <Text
-                        style={[styles.autoLabel, { color: onAuto ? palette.accent : palette.neutral }]}
+                        style={[styles.autoLabel, { color: onAuto ? palette.accent : palette.foreground }]}
                         numberOfLines={1}
                     >
                         Auto

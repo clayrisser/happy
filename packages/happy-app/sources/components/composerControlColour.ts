@@ -1,89 +1,138 @@
 /**
- * What colour each composer control is, and why (DROVE-176).
+ * What colour a composer control's glyph is, and why (DROVE-176, DROVE-215).
  *
- * Clay, on the DROVE-153 composer: "Color all the buttons here". Every glyph
- * on the row was white on the glass except the speaker, which is blue because
- * read-aloud is on. DROVE-141 made the SHAPES carry the state, and they still
- * do; this file adds colour as a second carrier, never the only one. A
- * colour-blind reading of the row is the DROVE-141 reading and it is
- * unchanged.
+ * THE RULE, and it is the whole file: a glyph on the composer's control row is
+ * the row's FOREGROUND colour unless it is ACTIVE, where active means something
+ * is happening right now. A control that merely HOLDS a value is not active,
+ * however much the value matters, because it is true of every session all of
+ * the time, and a colour that is always on carries nothing.
  *
- * THE VOCABULARY IS SMALL AND EACH ENTRY MEANS ONE THING. The app already
- * spends most of the wheel: the working blue is the main thread (DROVE-155),
- * yellow is the reading mark (DROVE-125), green is success, red is destructive
- * and recording (DROVE-142), and the subagent tint is a neutral grey ON
- * PURPOSE (DROVE-145). Every entry here is either one of those, used for the
- * thing it already means, or a hue none of them use. The spec measures the
- * distance from every reserved colour so a later edit cannot drift into one.
+ * THE FOREGROUND IS THE THEME'S TEXT COLOUR: #FFFFFF on the dark theme,
+ * #000000 on the light one. Clay asked for white, and on the theme he runs
+ * that is literally white, the same white as the waveform, the speaker and the
+ * mic in the capsule beside it. Light cannot take him literally, so the token
+ * is named for the row's foreground rather than for the word, and it resolves
+ * to `theme.colors.text` so a glyph and the model's name next to it are the
+ * same value rather than two greys that nearly agree.
  *
- *   accent     the app doing or offering something: the `+` that adds, the
- *              send arrow once there is something to send, the speaker that
- *              is speaking. It is the theme's own blue, which is the working
- *              blue: the main thread working is the app doing something, so
- *              this is the same meaning on a control rather than a second
- *              blue beside it.
- *   warning    a setting that costs if glanced past. The OPEN padlock (yolo,
- *              no gate) and the TOP of the effort dial share it on purpose:
- *              both are "this session is running hot". Amber, which is the
- *              warning family everywhere on iOS, and the one hue on the row
- *              that says "look twice" without saying "wrong".
- *   shield     safe-yolo: no gate, but fenced to the workspace. Indigo, a
- *              cool colour with no other meaning in the app, chosen to sit
- *              as far from the amber as the wheel allows so an open door and
- *              a fenced one never read alike.
- *   eye        read-only: it can look. Teal, cool and calm, and measured
- *              apart from the link colour it is nearest to.
- *   effort     a RAMP, not a colour: cool at the floor warming toward the
- *              ceiling, so ultracode is unmistakable without reading the
- *              needle. Cool slate through mauve to the warning amber. The
- *              intermediate stops are positions, not vocabulary, and the spec
- *              holds every one of them off the reserved colours.
- *   recording  the mic latched or held. DROVE-142's banner red, so the glyph
- *              and the bar under it are one signal. Also a live voice turn on
- *              the waveform beside it (DROVE-206), because a live mic is a
- *              live mic wherever it is drawn.
- *   neutral    the theme's text colour: the shut padlock (asks first, nothing
- *              to flag), the mic at rest, the waveform at rest, the speaker
- *              off, the in-field send button with nothing to send, and the
- *              model's name. The name is deliberately neutral: it is read,
- *              not glanced, it has no state axis to map to, and a coloured
- *              word beside coloured glyphs would compete with the state they
- *              carry.
+ * WHY DROVE-176's ROW LOOKED BORROWED FROM ANOTHER APP. It coloured the state
+ * a control was IN rather than the state it was DOING: a purple shield for the
+ * permission mode, a pink needle on the effort dial, both permanent, on two
+ * controls that are always drawn. Clay, with the row cropped: "And please no
+ * colored icons", then, sharpening it, "I told you to do white for the color
+ * of all the icons." The capsule a few points to the right was already three
+ * plain white glyphs, so the row disagreed with itself, and the right-hand
+ * vocabulary is the one that won.
  *
- * DROVE-206 REARRANGED THE COMPOSER AND SPENT NO NEW COLOUR ON IT, which is
- * the test of a vocabulary this small. The `+` moved inside the field and is
- * still the accent, on the same measured glass stack rather than on a fill
- * nothing has measured. The waveform came out of the field onto the row and
- * took `recording` and `neutral`, the entries the mic beside it already uses,
- * through the same `micColour` helper. The send button stopped changing
- * identity, which RETIRED a case rather than adding one.
+ * HOW IT ENFORCES ITSELF, so the next glyph added to the row inherits the rule
+ * without anyone remembering this ticket:
+ *
+ *  1. `composerGlyphColour` is the only way to a colour, and its default is the
+ *     foreground. A glyph written `composerGlyphColour(palette)` is white
+ *     without its author having to know why.
+ *  2. Its second argument is a `ComposerActiveSignal`, and the palette is TYPED
+ *     as the foreground plus exactly one entry per signal. A new hue cannot go
+ *     into the palette without first widening that union, which is a claim, in
+ *     the type, that the hue names something happening now. tsc refuses the
+ *     shortcut, and the diff puts the claim in front of a reviewer.
+ *  3. There is no per-control colour function for a control that only holds a
+ *     value. `permissionModeColour` and `effortColour` are GONE rather than
+ *     rewritten to return the foreground: a helper lives here only where there
+ *     is a live state to compute from, so reaching for one is already the
+ *     question "what is this control doing?".
+ *  4. composerControlColour.spec.ts pins the palette's key set and the default;
+ *     ComposerSessionControls.test.ts asserts the RENDERED colour of the shield
+ *     in every mode and of the needle at every level, which is the assertion
+ *     that survives someone reintroducing a tint at the call site.
+ *
+ * THE SIGNALS. Three names, and adding a fourth is the decision, not a
+ * formality: a member here claims the control is doing something at the moment
+ * it is drawn. "The mode is yolo" and "the effort is high" are values and do
+ * not qualify, which is the whole of DROVE-215.
+ *
+ *   recording  a mic is OPEN: the talk button held or latched, and a live voice
+ *              turn on the waveform beside it (DROVE-206). DROVE-142's banner
+ *              red, so the glyph and the bar under it are one signal. It stays
+ *              because an open mic is the one thing on this row you have to
+ *              notice without going looking for it.
+ *   accent     one press from the app doing something: the send button once
+ *              there is something to send. The theme's working blue, which
+ *              means the same on a control as it does on the thread.
+ *   pending    RESERVED FOR DROVE-217, AND UNWIRED HERE. A control whose
+ *              requested value has not been confirmed by the pane yet: asked
+ *              for, not landed, and back to the foreground once it lands. That
+ *              is happening now, so it belongs in the vocabulary as a named
+ *              state rather than arriving later as a one-off tint, and it gets
+ *              a measured colour so that lane wires a state instead of
+ *              inventing a hue. That lane owns the wiring; this one only holds
+ *              the seat. The amber is what DROVE-176 spent on "look twice",
+ *              already measured on both themes and already held off every
+ *              reserved colour. Yellow proper is taken: the dark theme's
+ *              reading mark is #FFD54F (DROVE-125).
+ *
+ * WHAT WENT WHITE. The permission glyph in every mode, the effort needle at
+ * every level and the slider thumb that follows it, the mic and the waveform at
+ * rest, the speaker off, the model's name. Nothing that was readable stopped
+ * being readable, because the SHAPES carry all of it and were chosen for
+ * exactly that (DROVE-141): a mode is read off its padlock, shield, eye or map,
+ * and a level off the needle's angle, which was always the primary reading
+ * (DROVE-101). DROVE-176 promised colour was never the only carrier. Removing
+ * it is what that promise was for.
+ *
+ * WHAT KEPT COLOUR, and none of it is a mode value:
+ *   - the mic and the waveform while a mic is open (recording).
+ *   - the send button while there is something to send (accent). Empty, it is
+ *     the foreground like everything else.
+ *   - the speaker while read-aloud is on, where the FILL carries it
+ *     (DROVE-118): a solid accent disc with the tint that reads against it,
+ *     never a glyph colour of its own. Off, its glyph is the foreground.
+ *
+ * WHAT IS NOT ON THE ROW, so this file does not rule on it. The `+` at the
+ * field's leading edge keeps its accent: it sits inside the input capsule,
+ * paired with the send button at the other rim (DROVE-206), and DROVE-214 owns
+ * that pair. An open picker still marks its current choice the way a picker
+ * does, the effort popover's `Auto` or a checkmark in a native menu, because
+ * that is selection chrome on a surface that only exists while a finger is
+ * down, not a glyph sitting on the row at rest.
  *
  * MEASURED, NOT EYEBALLED, ON BOTH THEMES. The colour is the glyph, not the
  * fill (the material stays glass, DROVE-153), so every entry is checked as a
- * glyph over the control's stack: the chat at either extreme, the opaque
- * dock scrim, the chrome tint, using DROVE-153's method and DROVE-171's
- * numbers. The light theme is where the system colours fail: iOS blue is
- * 2.88:1 on the light glass and the banner red 2.54:1, so light gets darker
- * siblings of the same hue, exactly as the reading mark did in DROVE-125.
- * A coloured glyph that fails on the glass is worse than a white one, so a
- * value that cannot clear 3:1 does not get in.
+ * glyph over the control's stack: the chat at either extreme, the opaque dock
+ * scrim, the chrome tint, using DROVE-153's method and DROVE-171's numbers.
+ * The light theme is where the system colours fail: iOS blue is 2.88:1 on the
+ * light glass and the banner red 2.54:1, so light gets darker siblings of the
+ * same hue, exactly as the reading mark did in DROVE-125. A coloured glyph
+ * that fails on the glass is worse than a white one, so a value that cannot
+ * clear 3:1 does not get in.
  *
  * Pure, so the numbers can be pinned without a renderer.
- * ComposerSessionControls.tsx and AgentInput.tsx read it.
+ * ComposerSessionControls.tsx, EffortSliderPopover.tsx and AgentInput.tsx
+ * read it.
  */
 
 import { CHROME_GLASS_TINT, CHROME_GROUND } from './glassChrome';
 
-export interface ComposerControlPalette {
-    neutral: string;
-    accent: string;
-    warning: string;
-    shield: string;
-    eye: string;
-    recording: string;
-    /** The effort ramp's stops, floor to ceiling. */
-    effort: readonly [cool: string, mid: string, hot: string];
-}
+/**
+ * The states that earn a colour. Everything else on the row is the foreground.
+ * Read THE SIGNALS above before adding one: the bar is that a session left
+ * alone would go on doing the thing.
+ */
+export type ComposerActiveSignal =
+    /** A mic is open: held, latched, or a live voice turn. */
+    | 'recording'
+    /** One press from the app doing something: a send with something to send. */
+    | 'accent'
+    /** Requested, not yet confirmed by the pane. DROVE-217 wires this. */
+    | 'pending';
+
+/**
+ * The foreground, and one entry per active signal. Nothing else, on purpose:
+ * the type is what stops a decorative hue being added without an argument for
+ * why it names something happening now.
+ */
+export type ComposerControlPalette =
+    & { readonly foreground: string }
+    & { readonly [signal in ComposerActiveSignal]: string };
 
 /**
  * Both themes, side by side, so a change to one is made with the other in
@@ -92,36 +141,32 @@ export interface ComposerControlPalette {
  */
 export const COMPOSER_CONTROL_PALETTE: { dark: ComposerControlPalette; light: ComposerControlPalette } = {
     dark: {
-        neutral: '#FFFFFF',
+        // theme.colors.text on the dark theme. Literal white, which is what
+        // Clay asked for and what the mic and speaker were already drawn in.
+        foreground: '#FFFFFF',
         // iOS system blue, dark variant: the theme's radio.active.
         accent: '#0A84FF',
-        // iOS system orange, dark variant.
-        warning: '#FF9F0A',
-        shield: '#8A88FF',
-        eye: '#5AC8FA',
         // DROVE-142's banner red, unchanged: on the dark glass it clears 4:1.
         recording: '#FF3B30',
-        effort: ['#8FB8C8', '#C990C8', '#FF9F0A'],
+        // iOS system orange, dark variant. Drawn by nothing until DROVE-217.
+        pending: '#FF9F0A',
     },
     light: {
-        neutral: '#000000',
+        // theme.colors.text on the light theme. "White" cannot be literal
+        // here; the token is the row's foreground, and this is what it is.
+        foreground: '#000000',
         // System blue is 2.88:1 on the light glass; this is the same hue at
         // the darkness the glass demands.
         accent: '#0A5FD6',
-        // System orange is under 2:1 on the light glass; darkened, and held
-        // off the light theme's brown reading mark.
-        warning: '#CC4A0A',
-        shield: '#4F46E5',
-        eye: '#0E7490',
-        // The banner's #FF3B30 is 2.54:1 on the light glass. A crimson rather than a
-        // plain darker red, because at glass darkness red and the warning
-        // orange converge, and the blue in a crimson is what keeps them
-        // apart. The exact stop is where two bounds meet: near enough
-        // that red to read as the same signal as DROVE-142's banner (0.14),
-        // far enough from the warning orange not to be mistaken for it
-        // (0.15). It measures 4.04:1 on the light glass.
+        // The banner's #FF3B30 is 2.54:1 on the light glass. A crimson rather
+        // than a plain darker red, because at glass darkness a red darkens
+        // toward orange, and the blue in a crimson is what keeps it a red. It
+        // measures 4.04:1 on the light glass and stays inside the banner's
+        // family (0.14 away), so the glyph and the bar read as one signal.
         recording: '#C8203A',
-        effort: ['#5B6B8C', '#9A4FA0', '#CC4A0A'],
+        // System orange is under 2:1 on the light glass; darkened, and held
+        // off the light theme's brown reading mark. Nothing until DROVE-217.
+        pending: '#CC4A0A',
     },
 };
 
@@ -130,68 +175,38 @@ export function composerControlPalette(dark: boolean): ComposerControlPalette {
 }
 
 /**
- * The permission mode's colour, by the same kind-then-key reading the glyph
- * uses (sessionControlGlyphs.ts), so colour and shape cannot disagree about
- * which mode this is.
- */
-export function permissionModeColour(
-    palette: ComposerControlPalette,
-    kind: string | null | undefined,
-    key?: string | null,
-): string {
-    const value = (kind ?? key ?? '').toLowerCase();
-    if (value === 'yolo' || value === 'bypasspermissions' || value === 'full') return palette.warning;
-    if (value === 'safe-yolo' || value === 'workspace' || value === 'auto') return palette.shield;
-    if (value === 'read-only' || value === 'read' || value === 'read_only') return palette.eye;
-    // Plan, edits and the default that stops and asks: nothing to flag.
-    return palette.neutral;
-}
-
-/**
- * Where on the ramp level `index` of a `count`-long scale sits, 0 at the
- * floor and 1 at the ceiling. The same interpolation the needle's angle
- * uses, so the colour and the angle agree about the position (DROVE-101).
- */
-export function effortPosition(index: number, count: number): number {
-    const levels = Math.max(1, Math.round(count));
-    if (levels === 1) return 0;
-    const level = Math.max(0, Math.min(levels - 1, Math.round(index)));
-    return level / (levels - 1);
-}
-
-/**
- * The needle's colour at a position on the ramp.
+ * THE RULE, as the one function that hands out a colour.
  *
- * Piecewise in sRGB between the three stops, so the middle of the scale is
- * the mauve stop rather than the muddy mean of slate and amber. The ends are
- * the stops exactly: the floor is always the cool stop and the ceiling always
- * the warning amber, whatever the scale's length.
+ * No signal means the foreground, which is why the argument is optional: a
+ * glyph added to the row with nothing to say comes out white by writing less,
+ * not by remembering more. Pass a signal only for a state that is happening at
+ * the moment the glyph is drawn.
  */
-export function effortColour(palette: ComposerControlPalette, index: number, count: number): string {
-    const position = effortPosition(index, count);
-    const [cool, mid, hot] = palette.effort;
-    if (position <= 0.5) return mixHex(cool, mid, position * 2);
-    return mixHex(mid, hot, (position - 0.5) * 2);
+export function composerGlyphColour(
+    palette: ComposerControlPalette,
+    active?: ComposerActiveSignal | null,
+): string {
+    return active ? palette[active] : palette.foreground;
 }
 
 export type MicColourState = 'idle' | 'held' | 'latched';
 
-/** The mic's glyph: neutral at rest, recording once it is live. */
+/** The mic's glyph: the foreground at rest, the recording red once it is open. */
 export function micColour(palette: ComposerControlPalette, state: MicColourState): string {
-    return state === 'idle' ? palette.neutral : palette.recording;
+    return composerGlyphColour(palette, state === 'idle' ? null : 'recording');
 }
 
 /**
  * The in-field send button's glyph: the accent when there is something to
- * send, neutral when there is not.
+ * send, the foreground when there is not.
  *
- * The rule is unchanged by DROVE-206 and says more than it used to. It was
- * competing with the waveform, which was what the same button became on an
- * empty composer, so the accent had to distinguish two controls as well as
- * two states. Now it distinguishes one control's two states and nothing else.
+ * Kept coloured under the rule, and it is the one control the rule argues for
+ * rather than against. An empty composer offers nothing, so the button has
+ * nothing to say; a full one is one press from a message going out, which is a
+ * thing about to happen rather than a setting that has a value.
  */
 export function primaryActionColour(palette: ComposerControlPalette, hasSomethingToSend: boolean): string {
-    return hasSomethingToSend ? palette.accent : palette.neutral;
+    return composerGlyphColour(palette, hasSomethingToSend ? 'accent' : null);
 }
 
 /**
@@ -208,7 +223,7 @@ export function composerGlyphLayers(dark: boolean): readonly string[] {
 
 /**
  * The opaque material a device with no Liquid Glass draws instead
- * (resolveGlassChromeMaterial → 'fallback'): the theme's surfaceHigh.
+ * (resolveGlassChromeMaterial -> 'fallback'): the theme's surfaceHigh.
  */
 export const COMPOSER_FALLBACK_SURFACE = { dark: '#1E1E1E', light: '#F8F8F8' } as const;
 
@@ -218,20 +233,3 @@ export const COMPOSER_FALLBACK_SURFACE = { dark: '#1E1E1E', light: '#F8F8F8' } a
  * sits on a solid fill rather than on the glass.
  */
 export const COMPOSER_PRIMARY_SURFACE = { dark: '#282828', light: '#f0f0f0' } as const;
-
-function mixHex(from: string, to: string, amount: number): string {
-    const t = Math.max(0, Math.min(1, amount));
-    const a = hexChannels(from);
-    const b = hexChannels(to);
-    const channel = (i: number) => Math.round(a[i] + (b[i] - a[i]) * t);
-    return `#${[0, 1, 2].map((i) => channel(i).toString(16).padStart(2, '0')).join('').toUpperCase()}`;
-}
-
-function hexChannels(hex: string): [number, number, number] {
-    const digits = hex.replace('#', '');
-    return [
-        parseInt(digits.slice(0, 2), 16),
-        parseInt(digits.slice(2, 4), 16),
-        parseInt(digits.slice(4, 6), 16),
-    ];
-}
