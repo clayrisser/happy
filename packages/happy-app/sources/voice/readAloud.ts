@@ -176,6 +176,39 @@ import { stopsSpeech, type ReadAloudInterruption } from './readAloudGate';
  * `audioSessionRecovered` are that fix: a REJECTED utterance never made a
  * sound, so it is put back and the queue waits, while a RESOLVED one stays
  * spoken however short it was, which is what keeps DROVE-126 true.
+ *
+ * DROVE-226 gave DROVE-126's invariant the half it was missing. Clay, having
+ * said it before: "I TOLD YOU START READING ONLY NEW FUCKING MESSAGING unless
+ * I double tap a specific place to start."
+ *
+ * The rule is that reading speaks what has ARRIVED. It never walks back into
+ * the conversation on its own; the one thing that starts it anywhere else is
+ * his tap, which is a deliberate act (DROVE-146, DROVE-163, DROVE-195).
+ *
+ * What broke it was not the queue, it was the seam. `onMessages` is fed from
+ * applyMessages, and applyMessages carries the TRANSCRIPT as well as the live
+ * stream: opening a session fetches the most recent page, and a background
+ * prefetch then pages BACKWARDS through the rest of it. Every one of those
+ * pages arrived here looking exactly like a reply landing, so the reader said
+ * them. An older page cannot even be recognised by its turn: the turn only
+ * moves on a user message NEWER than the one that opened it, so a page of
+ * ancient history is stamped with the CURRENT turn, appended after the newest
+ * reply, and read out in full. That is the conversation narrated backwards,
+ * which is what he is describing.
+ *
+ * So the seam says which it is rather than the reader guessing. `onHistory` is
+ * the transcript as it already stood: its sentences go into the timeline, in
+ * their place in time, marked SPOKEN. Nothing there is given up. A sentence in
+ * the timeline is a sentence his tap can find, so DROVE-163 still starts
+ * wherever he points, and `skipSpoken` is what makes the queue itself step
+ * over every one of them. `onMessages` keeps its whole meaning: what has just
+ * arrived.
+ *
+ * DROVE-189 was the first suspect and it is ruled out with a measurement. Its
+ * rewind is exactly one utterance wide: `refused` un-marks the one sentence
+ * the session rejected, `putBack` moves the cursor no further back than that
+ * sentence's own index, and the retry resumes there rather than at the top of
+ * the reply. `readAloudOnlyNew.spec.ts` holds the numbers.
  */
 
 /**
@@ -998,6 +1031,99 @@ export class ReadAloudReader {
         this.cutCurrentUtterance();
         this.markerDue = false;
         this.pump();
+    }
+
+    /**
+     * The transcript this session ALREADY had, which is never spoken
+     * (DROVE-226).
+     *
+     * Clay: "START READING ONLY NEW FUCKING MESSAGING unless I double tap a
+     * specific place to start." Reading speaks what has arrived; it does not
+     * walk back into the conversation on its own.
+     *
+     * The reader could not tell the difference on its own and it should not
+     * have to guess. `applyMessages` in sync.ts carries two quite different
+     * things down one pipe: the live stream, and the transcript being FETCHED:
+     * the most recent page when a session opens, and then, in the background,
+     * every older page in turn. Both looked identical here, so
+     * opening a session read its last reply again and the prefetch then
+     * narrated the whole conversation backwards, one page at a time, stamped
+     * with the current turn so not even `abandonTurnsBefore` could catch it.
+     * So the fetch says what it is and this is where it lands.
+     *
+     * These sentences are REMEMBERED, not dropped, and the difference is his
+     * tap. A sentence that is not in the timeline is a sentence `seekToSentence`
+     * cannot find, and DROVE-163 is the one way reading is allowed to start
+     * anywhere but the newest thing. So they go in, in their place in time,
+     * marked spoken: `skipSpoken` steps over every one of them, and a tap
+     * clears the marks from where he pointed and reads on (`readFrom`).
+     *
+     * Not offered to `asideFor` or `thinkingFor` either. A title is a thing to
+     * SAY as a tool call happens, and there is nothing live about a tool call
+     * that finished before he opened the session.
+     */
+    onHistory(sessionId: string, messages: Message[]): void {
+        if (!this.enabled) return;
+        if (this.focused === null || sessionId !== this.focused) return;
+
+        for (const message of [...messages].sort((a, b) => a.createdAt - b.createdAt)) {
+            if (message.kind !== 'agent-text' || message.isThinking) continue;
+            if (typeof message.text !== 'string' || message.text.length === 0) continue;
+            const { complete, pending } = chunkStreamed(stripToSpeakableProse(message.text), false);
+            // The tail counts as a sentence HERE, unlike in `onMessages`: the
+            // last line of a reply that has been sitting there for an hour is
+            // not waiting for more text, it is the end of the reply, and it is
+            // on his screen to be tapped. It is deliberately not counted into
+            // `queuedChunks`, so a message still being written when he opened
+            // the session has its finished sentence read once it lands.
+            const sentences = pending !== null ? [...complete, pending] : complete;
+            const already = this.queuedChunks.get(message.id) ?? 0;
+            if (sentences.length <= already) continue;
+            this.remember(sentences.slice(already), message.id, message.createdAt);
+            this.queuedChunks.set(message.id, complete.length);
+        }
+    }
+
+    /**
+     * Put sentences in the timeline that must never be said (DROVE-226).
+     *
+     * Two things make this different from `enqueue`, and both are about the
+     * timeline being a TRANSCRIPT rather than a queue:
+     *
+     *   - `spoken` is true from the start. The queue's own invariant then does
+     *     all the work: `skipSpoken` steps over them, `speechPending` does not
+     *     count them, and only a tap (`readFrom`) can clear the marks.
+     *   - They are INSERTED at their place in time rather than appended. The
+     *     older pages arrive newest-first, so appending would leave the
+     *     timeline out of order, and everything that reads it takes the order
+     *     for granted: `seekTo`'s scan, and `readFrom` clearing the marks
+     *     "from here on". A tap in the middle of a reply would otherwise
+     *     un-mark a page of ancient history sitting behind it and read that.
+     *
+     * The cursor is a position in the array, so material inserted at or before
+     * it moves with it. Nothing about the reading position changes.
+     */
+    private remember(sentences: string[], messageId: string, createdAt: number): void {
+        if (sentences.length === 0) return;
+        let at = this.timeline.length;
+        for (let i = 0; i < this.timeline.length; i++) {
+            if (this.timeline[i].createdAt > createdAt) {
+                at = i;
+                break;
+            }
+        }
+        const remembered = sentences.map((text) => ({
+            text,
+            words: countWords(text),
+            turn: this.turn,
+            messageId,
+            createdAt,
+            spoken: true,
+            aside: false,
+            thinking: false,
+        }));
+        this.timeline.splice(at, 0, ...remembered);
+        if (at <= this.cursor) this.cursor += remembered.length;
     }
 
     onMessages(sessionId: string, messages: Message[]): void {

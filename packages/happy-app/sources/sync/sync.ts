@@ -2231,7 +2231,9 @@ class Sync {
         const data = await response.json() as V3GetSessionMessagesResponse;
         const messages = Array.isArray(data.messages) ? data.messages : [];
 
-        await this.applyFetchedMessages(sessionId, encryption, messages);
+        // The transcript as it already stands, not anything arriving, so
+        // read-aloud remembers it rather than saying it (DROVE-226).
+        await this.applyFetchedMessages(sessionId, encryption, messages, true);
 
         // Anchor both ends so future incremental forward sync resumes from
         // maxSeq, and loadOlderMessages can page backward from minSeq.
@@ -2264,6 +2266,13 @@ class Sync {
             const data = await response.json() as V3GetSessionMessagesResponse;
             const messages = Array.isArray(data.messages) ? data.messages : [];
 
+            // NOT historic, on purpose (DROVE-226). A forward sync is what
+            // landed while the socket was down, which is a blip or a
+            // reconnect measured in seconds, and DROVE-179 already ruled that
+            // a reconnect is not a stop: those sentences are still worth
+            // saying. Marking them history would mean a reply that arrived
+            // during a two-second drop is never read at all, which is the
+            // silence DROVE-189 spent three passes removing.
             await this.applyFetchedMessages(sessionId, encryption, messages);
 
             let maxSeq = afterSeq;
@@ -2281,10 +2290,15 @@ class Sync {
         }
     }
 
+    /**
+     * `historic` is true for a page of the transcript and false for a forward
+     * sync (DROVE-226). See `applyMessages`.
+     */
     private applyFetchedMessages = async (
         sessionId: string,
         encryption: ReturnType<Encryption['getSessionEncryption']> & {},
-        messages: ApiMessage[]
+        messages: ApiMessage[],
+        historic = false
     ) => {
         if (messages.length === 0) return;
         const decryptedMessages = await encryption.decryptMessages(messages);
@@ -2298,7 +2312,7 @@ class Sync {
             }
         }
         if (normalizedMessages.length > 0) {
-            this.applyMessages(sessionId, normalizedMessages);
+            this.applyMessages(sessionId, normalizedMessages, historic);
         }
     }
 
@@ -2343,7 +2357,11 @@ class Sync {
                 const data = await response.json() as V3GetSessionMessagesResponse;
                 const messages = Array.isArray(data.messages) ? data.messages : [];
 
-                await this.applyFetchedMessages(sessionId, encryption, messages);
+                // A page from further BACK in the conversation, pulled by a
+                // scroll or by the background prefetch. Nothing here has
+                // arrived; it is history being filled in behind him, and
+                // reading it out is the whole of DROVE-226.
+                await this.applyFetchedMessages(sessionId, encryption, messages, true);
 
                 let minSeq = beforeSeq;
                 for (const message of messages) {
@@ -3037,7 +3055,14 @@ class Sync {
     // Apply store
     //
 
-    private applyMessages = (sessionId: string, messages: NormalizedMessage[]) => {
+    /**
+     * `historic` means these messages are the TRANSCRIPT being loaded rather
+     * than anything arriving (DROVE-226). Only read-aloud cares, and it cares
+     * a great deal: reading speaks what has just arrived and never walks back
+     * into the conversation on its own. The initial page and every older page
+     * are the transcript; the socket and a forward sync are arrivals.
+     */
+    private applyMessages = (sessionId: string, messages: NormalizedMessage[], historic = false) => {
         const result = storage.getState().applyMessages(sessionId, messages);
         let m: Message[] = [];
         for (let messageId of result.changed) {
@@ -3051,7 +3076,13 @@ class Sync {
             // Read-aloud rides the same seam as the meta voice agent, but not
             // through voiceHooks: VOICE_CONFIG can silence that one, and mode B
             // is a different feature that must not go quiet with it (DROVE-30).
-            readAloud.onMessages(sessionId, m);
+            // Which of the two it is decides whether a word is said out loud,
+            // so the seam says it rather than the reader guessing (DROVE-226).
+            if (historic) {
+                readAloud.onHistory(sessionId, m);
+            } else {
+                readAloud.onMessages(sessionId, m);
+            }
         }
         if (result.hasReadyEvent) {
             voiceHooks.onReady(sessionId);
