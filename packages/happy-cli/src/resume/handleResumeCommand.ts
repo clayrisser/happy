@@ -51,6 +51,33 @@ export function resolveResumeFlavor(metadata: Metadata): 'codex' | 'claude' | nu
     return null;
 }
 
+/**
+ * Why a resume is refused, in the harness's own terms (DROVE-56).
+ *
+ * Both resume paths threw `uses unsupported flavor "opencode"`, which reads as
+ * a gap somebody forgot to fill. For OpenCode it is not a gap, it is measured:
+ * on 1.18.20 `opencode --session <id>` will not create or adopt an id the
+ * server does not already own and kills the pane at startup, and `opencode
+ * attach --session <id>` connects but draws an EMPTY transcript. So there is
+ * nothing to reopen a conversation ONTO. A pane that looked like the session
+ * and held none of it would be worse than the refusal.
+ *
+ * Cursor has no resume flag of its own either, and nothing has been measured,
+ * so it gets the plain sentence rather than a confident one.
+ */
+export function unsupportedResumeReason(sessionId: string, flavor: string | null | undefined): string {
+    const named = flavor ?? 'unknown';
+    if (flavor === 'opencode') {
+        return (
+            `Happy session ${sessionId} is an OpenCode session, and OpenCode cannot reopen one. `
+            + '`opencode --session <id>` refuses an id its server does not already hold, and `attach` '
+            + 'draws an empty transcript (measured on 1.18.20). Start a fresh one with `drover opencode`, '
+            + 'or carry this conversation over with `drover clone ' + sessionId + ' --to opencode`.'
+        );
+    }
+    return `Happy session ${sessionId} uses unsupported flavor "${named}".`;
+}
+
 export function buildResumeLaunch(session: ResumableHappySession, options: ResumeLaunchOptions = {}): ResumeLaunch {
     const { metadata } = session;
     const flavor = resolveResumeFlavor(metadata);
@@ -87,7 +114,7 @@ export function buildResumeLaunch(session: ResumableHappySession, options: Resum
         };
     }
 
-    throw new Error(`Happy session ${session.id} uses unsupported flavor "${metadata.flavor ?? 'unknown'}".`);
+    throw new Error(unsupportedResumeReason(session.id, metadata.flavor));
 }
 
 export function formatResumeHelp(): string {

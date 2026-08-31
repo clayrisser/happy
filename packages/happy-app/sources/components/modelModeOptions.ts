@@ -274,7 +274,44 @@ export function filterPermissionModesForCli<T extends ModeOption>(
     return modes.filter((mode) => modeSupportedByCli(mode, cliVersion));
 }
 
+/**
+ * Harnesses drover drives as a PANE, whose own TUI owns the conversation
+ * (DROVE-56/DROVE-57).
+ *
+ * They reach the phone through the drover bus rather than through a happy-cli
+ * runner, and neither of them has a per-session mode or model switch to reach:
+ *
+ *   opencode  permissions are `permission: {bash: "ask"}` in opencode.json,
+ *             read at startup. There is no route that changes them on a
+ *             running session, so a mode pick has nowhere to land. The MODEL
+ *             does have a route (`POST /api/session/{id}/model`, measured on
+ *             1.18.20) but nothing carries a pick to it yet, so the picker
+ *             stays off until something does.
+ *   cursor    cursor-agent exposes no inbox at all, so nothing typed in the
+ *             app reaches a running session, a mode pick least of all.
+ *
+ * The lists are EMPTY rather than Claude's, which is what they used to fall
+ * through to. That fallback is why this function is not just a default: the
+ * composer read Claude's five permission modes and four Claude models onto an
+ * OpenCode session, drew the capsule and the model name, and every tap did
+ * nothing. A control that cannot work has to be absent — an inert one that
+ * looks live is the worse failure, because it is answered by waiting.
+ *
+ * An empty list is already the "absent" path everywhere downstream:
+ * AgentInput hides the mode segment when no mode resolves, drops the whole
+ * capsule when neither segment draws, and leaves the model off the status row
+ * when there is no model to name.
+ */
+const PANE_HARNESSES_WITHOUT_MODE_CONTROLS = new Set(['opencode', 'cursor']);
+
+export function harnessHasModeControls(flavor: AgentFlavor): boolean {
+    return !PANE_HARNESSES_WITHOUT_MODE_CONTROLS.has(flavor ?? '');
+}
+
 export function getHardcodedPermissionModes(flavor: AgentFlavor, translate: Translate): PermissionMode[] {
+    if (!harnessHasModeControls(flavor)) {
+        return [];
+    }
     if (flavor === 'codex') {
         return getCodexPermissionModes(translate);
     }
@@ -314,6 +351,11 @@ export function getAgyModelModes(): ModelMode[] {
 }
 
 export function getHardcodedModelModes(flavor: AgentFlavor, _translate: Translate): ModelMode[] {
+    // Same reason as the permission modes above: an OpenCode or Cursor pane
+    // read Claude's model list and every pick was silently dropped.
+    if (!harnessHasModeControls(flavor)) {
+        return [];
+    }
     if (flavor === 'codex') {
         return getCodexModelModes();
     }
