@@ -24,6 +24,15 @@ import WatchKit
 /// notification is the load-bearing path and the pattern is a bonus, rather
 /// than the other way round.
 ///
+/// WHICH ROUTE IS LIVE IS `WristReach`'s CALL, not a branch written twice
+/// (DROVE-124). It used to be `applicationState == .active` inline, which is
+/// only half the question: the notification route also needs alert
+/// authorization, and without it `add` succeeds and UserNotifications drops
+/// the alert at delivery. No error, no callback, no buzz. So this class now
+/// tracks the authorization it was assuming, refreshes it on EVERY launch
+/// including the background ones, and reports the silence rather than
+/// pretending a buzz happened.
+///
 /// NOT PROVEN ON HARDWARE. The watch simulator has no Taptic Engine and no
 /// paired phone, so everything above is the documented contract plus the
 /// decision logic under test — not a buzz anyone has felt. See DROVE-62.
@@ -43,6 +52,15 @@ final class WristBuzzer {
     /// which is the exact failure push already has.
     var onRefusal: ((String?) -> Void)?
 
+    /// Called whenever the route to this wrist changes, so a screen can say
+    /// which one is live without asking UserNotifications itself.
+    var onDeliveryChanged: ((WristDelivery) -> Void)?
+
+    /// What the last `getNotificationSettings` said. `.notDetermined` until
+    /// asked, which is also the honest starting value: a process that has not
+    /// looked does not know.
+    private(set) var permission: WristAlertPermission = .notDetermined
+
     private static let playedKey = "drover.buzzed.v1"
     /// Enough to cover a long stretch of gates without growing forever. The
     /// oldest ids are dropped first; a gate that old cannot arrive again.
@@ -57,24 +75,89 @@ final class WristBuzzer {
         played = defaults?.stringArray(forKey: Self.playedKey) ?? []
     }
 
-    /// Ask once, from the foreground, for permission to alert.
+    /// Read the real authorization state, without prompting.
     ///
-    /// Without this the background route is silently dead: `add` accepts the
-    /// request and UserNotifications drops it. Called from the wall's
-    /// `onAppear`, because watchOS refuses the prompt from a background launch
-    /// and the wall is the first thing a wrist sees.
+    /// Called from `applicationDidFinishLaunching`, which is the one point
+    /// reached on EVERY launch including the background wake that a
+    /// `transferCurrentComplicationUserInfo` makes (DROVE-86). Before this the
+    /// only thing that ever set the state was the prompt callback on the
+    /// wall's `onAppear`, so a wrist that had never had the app open, or had
+    /// turned alerts off in the Watch app since, posted a notification into
+    /// the void and said nothing about it.
+    func refreshPermission() {
+        guard let center else { return }
+        center.getNotificationSettings { [weak self] settings in
+            let permission = WristAlertPermission(settings.authorizationStatus)
+            Task { @MainActor in self?.apply(permission) }
+        }
+    }
+
+    /// Ask, from the foreground, for permission to alert — but only when it
+    /// has never been asked.
+    ///
+    /// Without authorization the background route is silently dead: `add`
+    /// accepts the request and UserNotifications drops it. Called from the
+    /// wall's `onAppear`, because watchOS refuses the prompt from a background
+    /// launch and the wall is the first thing a wrist sees.
+    ///
+    /// A second `requestAuthorization` after a denial does NOT re-prompt —
+    /// watchOS returns `granted: false` immediately — so asking again would
+    /// only produce the same dead callback. Once denied, the fix is in the
+    /// Watch app's own settings, which is what `WristSilence.denied` says.
     func requestAuthorization() {
+        guard let center else { return }
+        center.getNotificationSettings { [weak self] settings in
+            let current = WristAlertPermission(settings.authorizationStatus)
+            Task { @MainActor in
+                guard let self else { return }
+                guard current == .notDetermined else {
+                    self.apply(current)
+                    return
+                }
+                self.prompt()
+            }
+        }
+    }
+
+    /// The one-shot system prompt. Split out of `requestAuthorization` rather
+    /// than nested inside its settings callback: nesting captured both the
+    /// center and `self` across two `@Sendable` closures, which Swift 6 turns
+    /// from a warning into an error.
+    private func prompt() {
         guard let center else { return }
         center.requestAuthorization(options: [.alert, .sound]) { [weak self] granted, error in
             Task { @MainActor in
                 guard let self else { return }
-                if granted {
-                    self.onRefusal?(nil)
-                } else {
-                    self.onRefusal?(error?.localizedDescription ?? "Notifications are off — the wrist cannot buzz")
+                if let error {
+                    self.onRefusal?(error.localizedDescription)
+                    return
                 }
+                self.apply(granted ? .allowed : .denied)
             }
         }
+    }
+
+    /// Record a new authorization state and say what it means for the wrist.
+    ///
+    /// The refusal is stated for the BACKGROUND route only: with the app
+    /// frontmost the pattern plays straight to the Taptic Engine whatever
+    /// alerts are set to, so a banner claiming the wrist is muted while it is
+    /// visibly buzzing would be its own lie.
+    private func apply(_ permission: WristAlertPermission) {
+        let changed = permission != self.permission
+        self.permission = permission
+        let background = WristReach.delivery(frontmost: false, permission: permission)
+        onRefusal?(background.silence.map { WristReach.refusal(for: $0, cue: nil) })
+        guard changed else { return }
+        onDeliveryChanged?(delivery())
+    }
+
+    /// The route to this wrist right now.
+    func delivery() -> WristDelivery {
+        WristReach.delivery(
+            frontmost: WKApplication.shared().applicationState == .active,
+            permission: permission
+        )
     }
 
     /// Play the most urgent of `events`, and remember all of them as played.
@@ -93,10 +176,18 @@ final class WristBuzzer {
         if DroverDemo.isDemoId(loudest.id) {
             DroverDemo.log("snapshot gate \(loudest.id) plays \(loudest.cue.rawValue) by the real path")
         }
-        if WKApplication.shared().applicationState == .active {
+        switch delivery() {
+        case .pattern:
             play(loudest.cue)
-        } else {
+        case .systemAlert:
             alert(loudest)
+        case let .silent(silence):
+            // The one case that used to be indistinguishable from nothing
+            // having happened. Name the cue that was lost, so the wall says
+            // "Question could not buzz" rather than leaving Clay to guess
+            // whether anything was ever raised (DROVE-124).
+            droverLog.error("wrist silent for \(loudest.cue.rawValue, privacy: .public): \(silence.rawValue, privacy: .public)")
+            onRefusal?(WristReach.refusal(for: silence, cue: loudest.cue))
         }
     }
 
@@ -107,7 +198,7 @@ final class WristBuzzer {
     /// are gates and ranked against each other, and a reply starting must
     /// never outrank, or be deduplicated against, a question.
     func replyStarted() {
-        guard WKApplication.shared().applicationState == .active else { return }
+        guard delivery().keepsPattern else { return }
         WKInterfaceDevice.current().play(.start)
     }
 
@@ -120,7 +211,7 @@ final class WristBuzzer {
     /// demo before it plays, so a demo buzz reads as one in the console.
     func demo(_ cue: WristCue) {
         DroverDemo.log("buzz \(cue.rawValue): \(cue.beats.map(\.rawValue).joined(separator: " "))")
-        guard WKApplication.shared().applicationState == .active else {
+        guard delivery().keepsPattern else {
             DroverDemo.log("app not frontmost, \(cue.rawValue) cannot play")
             return
         }
@@ -222,6 +313,28 @@ extension WristBeat {
         case .retry: return .retry
         case .success: return .success
         case .failure: return .failure
+        }
+    }
+}
+
+extension WristAlertPermission {
+    /// The UserNotifications status, narrowed to the four outcomes that differ
+    /// on the wrist.
+    ///
+    /// `.ephemeral` is an App Clip state a watch app cannot reach; it is an
+    /// authorization that alerts normally, so it maps onto `.allowed` rather
+    /// than being a fifth case the decision has to carry. An unknown future
+    /// case maps to `.allowed` too, on the same principle as
+    /// `WristCue.forGateKind`: guessing that alerts work and being wrong costs
+    /// one silent buzz, while guessing they do not would put a false "your
+    /// wrist is muted" banner on a wrist that is buzzing fine.
+    init(_ status: UNAuthorizationStatus) {
+        switch status {
+        case .notDetermined: self = .notDetermined
+        case .denied: self = .denied
+        case .authorized, .ephemeral: self = .allowed
+        case .provisional: self = .provisional
+        @unknown default: self = .allowed
         }
     }
 }
