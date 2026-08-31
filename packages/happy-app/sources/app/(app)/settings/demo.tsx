@@ -2,8 +2,9 @@
  * The kitchen-sink demo, and the onboarding, in one screen (DROVE-75).
  *
  * Every announce channel from the DROVE-72 taxonomy, on demand: each wrist
- * buzz as the phone approximates it, the two voices, every card shape, and a
- * real push. Shown once on the first authenticated launch so the first thing
+ * buzz ON THE WRIST (DROVE-222), the phone's approximation of the same five
+ * patterns in its own group below that, the two voices, every card shape, and
+ * a real push. Shown once on the first authenticated launch so the first thing
  * a new phone learns is which buzz means what; reachable from Settings after.
  *
  * NOTHING HERE ANSWERS A REAL EVENT. Every card carries a `demo:` id, and
@@ -16,7 +17,7 @@ import * as React from 'react';
 import { AppState, Platform, Text, View } from 'react-native';
 import { Stack, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { StyleSheet } from 'react-native-unistyles';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { GateCard } from '@/app/(app)/gates';
 import { Item } from '@/components/Item';
@@ -28,7 +29,6 @@ import { MOBILE_GLASS_HEADER_HEIGHT } from '@/components/navigation/headerMetric
 import { Typography } from '@/constants/Typography';
 import { hapticsConfirm, playPhoneTaptic, playWristCue } from '@/components/haptics';
 import {
-    canBuzzWatch,
     describeWristFidelity,
     wristCueDurationMs,
     wristCues,
@@ -37,7 +37,7 @@ import {
 import { phoneTaptics } from '@/utils/phoneTaptics';
 import { channelReadout, findDroverSettings, readoutIsEmpty } from '@/utils/channelReadout';
 import { useAllMachines, useAllSessions } from '@/sync/storage';
-import { buzzDroverWatch, type DemoBuzzOutcome } from '@/sync/droverDemoBuzz';
+import { buzzDroverWatch, demoBuzzLine, type DemoBuzzOutcome } from '@/sync/droverDemoBuzz';
 import { machineDroverPolicy, type DroverPolicyResponse } from '@/sync/droverPolicy';
 import { getDroverWatchStatus, isDroverWatchAvailable } from 'drover-watch';
 import type { DroverGateEntry } from '@/sync/droverGates';
@@ -66,6 +66,28 @@ import { splitIntoSentences, stripToSpeakableProse } from '@/voice/speakable';
  */
 const PUSH_DELAY_SECONDS = 5;
 
+/**
+ * EVERY GLYPH ON THIS SCREEN IS THE FOREGROUND COLOUR (DROVE-222).
+ *
+ * DROVE-215's rule, not a second one invented here: a glyph is the surface's
+ * FOREGROUND unless it is ACTIVE, and active means something is happening
+ * right now, not a value being held. Clay: "I told you to do white for the
+ * color of all the icons." This screen had fourteen glyphs in five hues, none
+ * of them doing anything — a purple pulse on the header, a purple watch on
+ * every haptic row, green on audio, blue on push, amber on a reset.
+ *
+ * There is no exception on this screen, deliberately. Nothing here is a live
+ * signal: a row that is working shows the spinner `Item` already draws for
+ * `loading`, a row that failed says so in its subtitle, and the wrist's
+ * fidelity is carried by its words and by watch vs watch-outline. So the
+ * whole file gets one colour and the next row added inherits it by copying
+ * its neighbour.
+ */
+function useGlyphColour(): string {
+    const { theme } = useUnistyles();
+    return theme.colors.text;
+}
+
 /** The pause between two patterns when they play back to back. */
 const BETWEEN_CUES_MS = 900;
 
@@ -76,6 +98,7 @@ type PushPhase =
     | { phase: 'done'; line: string; ok: boolean };
 
 export default function DroverDemoScreen() {
+    const glyph = useGlyphColour();
     const params = useLocalSearchParams<{ onboarding?: string }>();
     const onboarding = params.onboarding === '1';
     const topContentInset = Platform.OS === 'ios' ? MOBILE_GLASS_HEADER_HEIGHT : 0;
@@ -96,13 +119,13 @@ export default function DroverDemoScreen() {
                         title={onboarding ? 'Learn the signals' : 'Every channel, on demand'}
                         subtitle="Haptic, audio and visual announce; push proves the path from the Mac"
                         subtitleLines={0}
-                        icon={<Ionicons name="pulse-outline" size={29} color="#AF52DE" />}
+                        icon={<Ionicons name="pulse-outline" size={29} color={glyph} />}
                         showChevron={false}
                     />
                 </ItemGroup>
                 <ChannelsSection />
-                <HapticSection />
-                <WatchSection />
+                <WristHapticSection />
+                <PhoneHapticSection />
                 <PhoneTapticSection />
                 <AudioSection />
                 <PushSection />
@@ -122,6 +145,7 @@ export default function DroverDemoScreen() {
  * mirror in the store.
  */
 function ChannelsSection() {
+    const glyph = useGlyphColour();
     const machines = useAllMachines();
     const sessions = useAllSessions();
     const machineId = machines.length > 0 ? machines[0].id : null;
@@ -160,7 +184,7 @@ function ChannelsSection() {
             key={title}
             title={title}
             detail={value}
-            icon={<Ionicons name={icon} size={29} color={value === 'not set' ? '#8E8E93' : '#5856D6'} />}
+            icon={<Ionicons name={icon} size={29} color={glyph} />}
             showChevron={false}
         />
     );
@@ -178,7 +202,7 @@ function ChannelsSection() {
             <Item
                 title="Read again"
                 subtitle={machineId ? 'Asks the Mac for its current settings' : 'Start the drover daemon and come back'}
-                icon={<Ionicons name="refresh-outline" size={29} color="#5856D6" />}
+                icon={<Ionicons name="refresh-outline" size={29} color={glyph} />}
                 loading={loading}
                 disabled={!machineId || loading}
                 showChevron={false}
@@ -188,15 +212,40 @@ function ChannelsSection() {
     );
 }
 
-// ---- watch ----------------------------------------------------------------
+// ---- haptic, on the wrist -------------------------------------------------
 
 /**
- * Buzz the WRIST with each pattern, through the real path: a demo gate of
- * that kind in a snapshot, which WristCueDiff turns into the cue (see
- * sync/droverDemoBuzz.ts). The first tap on a sleeping watch says it would
- * cost a background wake; the second spends one.
+ * THE WRIST, fired from the phone (DROVE-222).
+ *
+ * Clay, on this screen: "Triggering haptics on the watch, it's not working
+ * from the phone." It was doing what it was written to do, and the writing was
+ * the bug: the haptic rows played each pattern on the PHONE and admitted it in
+ * a footer, which is no use at all on a screen whose whole job is to confirm
+ * that the WATCH buzzes correctly. An approximation cannot answer that
+ * question, and a buzz felt in the hand holding the phone reads as a buzz
+ * anyway, so "the watch is broken" and "the watch is asleep" looked identical.
+ *
+ * A tap now fires the wrist by the LIVE path (sync/droverDemoBuzz.ts): the
+ * phone publishes a demo gate of the cue's kind, the watch's own WristCueDiff
+ * decides which pattern that is, and WristBuzzer plays it — the same code a
+ * real gate runs through, so this screen tests the thing it claims to test.
+ * "Session finished" is not a gate; it is staged as a demo session that stops,
+ * which is how the wrist reaches that cue for real.
+ *
+ * THE PHONE DOES NOT BUZZ ALONGSIDE, and that is the deliberate half. Firing
+ * both would make them easy to compare, which is worth something here and only
+ * here — but the phone is in the hand and the watch a foot away on the wrist,
+ * so at the moment of the tap the two are not told apart, and mistaking one
+ * for the other is precisely what filed this ticket. One engine per tap, named
+ * by the group it is in. The approximation keeps its own group below, so
+ * nothing is lost for a phone with no watch to reach.
+ *
+ * An unreachable wrist is SAID, on the row that was tapped, and nothing is
+ * played anywhere. buzzDroverWatch returns why, down to "tap again to spend
+ * one background wake", and the row prints it verbatim.
  */
-function WatchSection() {
+function WristHapticSection() {
+    const glyph = useGlyphColour();
     const available = isDroverWatchAvailable();
     const [busy, setBusy] = React.useState<string | null>(null);
     const [last, setLast] = React.useState<{ cue: string; outcome: DemoBuzzOutcome } | null>(null);
@@ -221,92 +270,114 @@ function WatchSection() {
         });
         return () => sub.remove();
     }, [readStatus]);
-    const fidelity = describeWristFidelity(status);
+    // One verdict for the row at the top, whether or not this build has a
+    // watch module at all: "no wrist" is an answer and an empty space is not.
+    const reach = available ? describeWristFidelity(status) : {
+        fidelity: 'none' as const,
+        headline: 'No wrist to reach',
+        detail: 'This build has no watch module, so nothing here can reach a wrist.',
+    };
 
-    const buzz = React.useCallback(async (spec: WristCueSpec) => {
-        if (busy) return;
-        setBusy(spec.cue);
+    const buzz = React.useCallback(async (spec: WristCueSpec): Promise<DemoBuzzOutcome> => {
         const outcome = await buzzDroverWatch(spec, armWake);
-        if (!alive.current) return;
+        if (!alive.current) return outcome;
         setLast({ cue: spec.cue, outcome });
         setArmWake(!outcome.ok && outcome.why.includes('spend one background wake'));
         setStatus(readStatus());
-        setBusy(null);
-    }, [busy, armWake, readStatus]);
+        return outcome;
+    }, [armWake, readStatus]);
 
+    const buzzOne = React.useCallback(async (spec: WristCueSpec) => {
+        if (busy) return;
+        setBusy(spec.cue);
+        await buzz(spec);
+        if (alive.current) setBusy(null);
+    }, [busy, buzz]);
+
+    // Most urgent first, the wrist's own order, with a pause long enough that
+    // the end of one pattern is not mistaken for the start of the next.
+    const buzzAll = React.useCallback(async () => {
+        if (busy) return;
+        setBusy('all');
+        demoLog('watch buzz: every cue back to back');
+        for (const spec of wristCues) {
+            if (!alive.current) return;
+            const outcome = await buzz(spec);
+            // Stop on the first refusal rather than printing the same one five
+            // times: a wrist that could not take the first cue cannot take the
+            // rest either, and the row that failed is the one to read.
+            if (!outcome.ok) break;
+            await new Promise<void>((resolve) => setTimeout(resolve, wristCueDurationMs(spec) + BETWEEN_CUES_MS));
+        }
+        if (alive.current) setBusy(null);
+    }, [busy, buzz]);
+
+    // Until this row is the one that was tapped, it teaches: what the cue
+    // means and how many beats it is. After, it reports what actually happened
+    // to the wrist, refusal and all (demoBuzzLine).
     const line = (spec: WristCueSpec): string => {
-        if (last?.cue !== spec.cue) return `${spec.beats.length} ${spec.beats.length === 1 ? 'beat' : 'beats'} on the wrist`;
-        if (last.outcome.ok) return last.outcome.how === 'wake' ? 'Sent with a background wake' : 'Sent; the watch app was open';
-        return last.outcome.why;
+        if (last?.cue !== spec.cue) return `${spec.meaning}\n${spec.beats.map(beatWord).join(' · ')}`;
+        return demoBuzzLine(last.outcome);
     };
 
     return (
         <ItemGroup
-            title="Watch"
-            footer={available
-                ? 'Each row puts one demo gate on the wall for a few seconds, by the same path a real gate takes. The card is a demo: answering it sends nothing. "Session finished" is not a gate and plays when a session stops.'
-                : 'No watch module on this build; nothing here can reach a wrist.'}
+            title="Haptic, on the watch"
+            footer={'Each tap fires the WRIST and nothing else. The cue leaves as a demo gate and the watch decides its own pattern from it, by the path a real gate takes, so what you feel is what a real gate feels like. The card is a demo: answering it sends nothing. "Session finished" is staged as a session that stops, and needs the watch app open. '
+                + (reach.fidelity === 'none'
+                    ? 'There is no wrist to reach right now, so every row here will say so when tapped; the group below plays the phone\u2019s approximation instead.'
+                    : 'A tap the wrist cannot take says why on the row it was made on, and buzzes nothing anywhere.')}
         >
-            {available ? (
-                <Item
-                    title={fidelity.headline}
-                    subtitle={fidelity.detail}
-                    subtitleLines={0}
-                    icon={<Ionicons
-                        name={fidelity.fidelity === 'pattern' ? 'watch' : 'watch-outline'}
-                        size={29}
-                        color={fidelity.fidelity === 'pattern' ? '#34C759' : '#FF9500'}
-                    />}
-                    showChevron={false}
-                />
-            ) : null}
-            {wristCues.filter(canBuzzWatch).map((spec) => (
+            <Item
+                title={reach.headline}
+                subtitle={reach.detail}
+                subtitleLines={0}
+                icon={<Ionicons
+                    name={reach.fidelity === 'pattern' ? 'watch' : 'watch-outline'}
+                    size={29}
+                    color={glyph}
+                />}
+                showChevron={false}
+            />
+            <Item
+                title="Play all, back to back"
+                subtitle="Most urgent first, a pause between each"
+                icon={<Ionicons name="play-outline" size={29} color={glyph} />}
+                loading={busy === 'all'}
+                disabled={busy !== null}
+                showChevron={false}
+                onPress={() => void buzzAll()}
+            />
+            {wristCues.map((spec) => (
                 <Item
                     key={spec.cue}
-                    title={`Buzz the watch: ${spec.headline}`}
+                    title={spec.headline}
                     subtitle={line(spec)}
                     subtitleLines={0}
-                    icon={<Ionicons name="watch-outline" size={29} color="#AF52DE" />}
+                    icon={<Ionicons name={cueIcon(spec)} size={29} color={glyph} />}
                     loading={busy === spec.cue}
-                    disabled={!available || busy !== null}
+                    disabled={busy !== null}
                     showChevron={false}
-                    onPress={() => void buzz(spec)}
+                    onPress={() => void buzzOne(spec)}
                 />
             ))}
         </ItemGroup>
     );
 }
 
-// ---- phone taptics --------------------------------------------------------
+// ---- haptic, on the phone -------------------------------------------------
 
-/** The phone's own one-shot feedbacks, beside the wrist patterns for contrast. */
-function PhoneTapticSection() {
-    return (
-        <ItemGroup
-            title="Phone taptics"
-            footer="What the app itself taps for. Different engine from the wrist, listed so a composer tick is never mistaken for a gate."
-        >
-            {phoneTaptics.map((spec) => (
-                <Item
-                    key={spec.id}
-                    title={spec.title}
-                    subtitle={spec.meaning}
-                    subtitleLines={0}
-                    icon={<Ionicons name="radio-button-on-outline" size={29} color="#AF52DE" />}
-                    showChevron={false}
-                    onPress={() => {
-                        demoLog(`phone taptic ${spec.id}`);
-                        playPhoneTaptic(spec.id, true);
-                    }}
-                />
-            ))}
-        </ItemGroup>
-    );
-}
-
-// ---- haptic ---------------------------------------------------------------
-
-function HapticSection() {
+/**
+ * The phone's approximation of the same five patterns, under its own name
+ * (DROVE-222).
+ *
+ * It is kept because it is the only way to learn the vocabulary on a phone
+ * with no watch paired, which is the onboarding case this screen was built
+ * for. It is SEPARATE and titled for the device it plays on, because when it
+ * was the first thing on the screen it was read as the watch.
+ */
+function PhoneHapticSection() {
+    const glyph = useGlyphColour();
     const [playing, setPlaying] = React.useState<string | null>(null);
     const alive = React.useRef(true);
     React.useEffect(() => () => { alive.current = false; }, []);
@@ -336,15 +407,15 @@ function HapticSection() {
 
     return (
         <ItemGroup
-            title="Haptic"
+            title="The same patterns on this phone"
             footer={Platform.OS === 'web'
                 ? 'No taptic engine on the web. The rows say what each pattern is.'
-                : 'The phone approximates the watch: the same beats and gaps, on a different engine. The Watch rows below play the real patterns on the wrist.'}
+                : 'A PREVIEW, on the phone\u2019s own engine: the same beats and gaps, different textures, and no evidence at all about the watch. Nothing above ever falls back to this \u2014 it plays only when a row here is tapped.'}
         >
             <Item
                 title="Play all, back to back"
                 subtitle="Most urgent first, a pause between each"
-                icon={<Ionicons name="play-outline" size={29} color="#AF52DE" />}
+                icon={<Ionicons name="play-outline" size={29} color={glyph} />}
                 loading={playing === 'all'}
                 disabled={playing !== null}
                 showChevron={false}
@@ -356,11 +427,39 @@ function HapticSection() {
                     title={spec.headline}
                     subtitle={`${spec.meaning}\n${spec.beats.map(beatWord).join(' · ')}`}
                     subtitleLines={0}
-                    icon={<Ionicons name={cueIcon(spec)} size={29} color="#AF52DE" />}
+                    icon={<Ionicons name={cueIcon(spec)} size={29} color={glyph} />}
                     loading={playing === spec.cue}
                     disabled={playing !== null}
                     showChevron={false}
                     onPress={() => void playOne(spec)}
+                />
+            ))}
+        </ItemGroup>
+    );
+}
+
+// ---- phone taptics --------------------------------------------------------
+
+/** The phone's own one-shot feedbacks, beside the wrist patterns for contrast. */
+function PhoneTapticSection() {
+    const glyph = useGlyphColour();
+    return (
+        <ItemGroup
+            title="Phone taptics"
+            footer="What the app itself taps for. Different engine from the wrist, listed so a composer tick is never mistaken for a gate."
+        >
+            {phoneTaptics.map((spec) => (
+                <Item
+                    key={spec.id}
+                    title={spec.title}
+                    subtitle={spec.meaning}
+                    subtitleLines={0}
+                    icon={<Ionicons name="radio-button-on-outline" size={29} color={glyph} />}
+                    showChevron={false}
+                    onPress={() => {
+                        demoLog(`phone taptic ${spec.id}`);
+                        playPhoneTaptic(spec.id, true);
+                    }}
                 />
             ))}
         </ItemGroup>
@@ -392,6 +491,7 @@ function cueIcon(spec: WristCueSpec): React.ComponentProps<typeof Ionicons>['nam
 type Speaking = 'question' | 'reply' | 'confirm' | null;
 
 function AudioSection() {
+    const glyph = useGlyphColour();
     const available = canReadAloud();
     const [speaking, setSpeaking] = React.useState<Speaking>(null);
     // Bumped on stop so a queue of sentences from the sample reply does not
@@ -437,7 +537,7 @@ function AudioSection() {
                 title="Speak a question"
                 subtitle={questionText}
                 subtitleLines={0}
-                icon={<Ionicons name="help-circle-outline" size={29} color="#34C759" />}
+                icon={<Ionicons name="help-circle-outline" size={29} color={glyph} />}
                 loading={speaking === 'question'}
                 disabled={!available || (speaking !== null && speaking !== 'question')}
                 showChevron={false}
@@ -447,7 +547,7 @@ function AudioSection() {
                 title="Read a sample reply"
                 subtitle={splitIntoSentences(stripToSpeakableProse(demoSampleReply)).join(' ')}
                 subtitleLines={0}
-                icon={<Ionicons name="volume-high-outline" size={29} color="#34C759" />}
+                icon={<Ionicons name="volume-high-outline" size={29} color={glyph} />}
                 loading={speaking === 'reply'}
                 disabled={!available || (speaking !== null && speaking !== 'reply')}
                 showChevron={false}
@@ -458,7 +558,7 @@ function AudioSection() {
             <Item
                 title="Confirmation after a pick"
                 subtitle='A success tap, then "Got it"'
-                icon={<Ionicons name="checkmark-circle-outline" size={29} color="#34C759" />}
+                icon={<Ionicons name="checkmark-circle-outline" size={29} color={glyph} />}
                 loading={speaking === 'confirm'}
                 disabled={!available || speaking !== null}
                 showChevron={false}
@@ -471,6 +571,7 @@ function AudioSection() {
 // ---- push -----------------------------------------------------------------
 
 function PushSection() {
+    const glyph = useGlyphColour();
     const machines = useAllMachines();
     const [chosen, setChosen] = React.useState<string | null>(null);
     const machineId = chosen ?? (machines.length === 1 ? machines[0].id : null);
@@ -530,7 +631,7 @@ function PushSection() {
                 icon={<Ionicons
                     name={state.phase === 'done' ? (state.ok ? 'checkmark-circle-outline' : 'warning-outline') : 'notifications-outline'}
                     size={29}
-                    color={state.phase === 'done' && !state.ok ? '#FF9500' : '#007AFF'}
+                    color={glyph}
                 />}
                 loading={state.phase === 'countdown' || state.phase === 'sending'}
                 disabled={Platform.OS === 'web' || !machineId || (state.phase !== 'idle' && state.phase !== 'done')}
@@ -580,6 +681,7 @@ function settle(card: DemoCard, answer: DemoAnswer | undefined): ToolCall {
 }
 
 function CardsSection() {
+    const glyph = useGlyphColour();
     const [cards, setCards] = React.useState<DemoCard[]>(() => demoTranscriptCards());
     const [inbox, setInbox] = React.useState<DroverGateEntry[]>(() => demoInboxEntries());
     const [answered, setAnswered] = React.useState<Record<string, DemoAnswer>>({});
@@ -620,7 +722,7 @@ function CardsSection() {
                     subtitle={Object.keys(answered).length === 0
                         ? 'Nothing answered yet'
                         : `${Object.keys(answered).length} answered, none sent`}
-                    icon={<Ionicons name="refresh-outline" size={29} color="#FF9500" />}
+                    icon={<Ionicons name="refresh-outline" size={29} color={glyph} />}
                     showChevron={false}
                     onPress={reset}
                 />
@@ -645,7 +747,7 @@ function CardsSection() {
                 <Item
                     title={inbox.length === 0 ? 'All answered' : `${inbox.length} in the demo inbox`}
                     subtitle={inbox.length === 0 ? 'Reset above to bring them back' : 'Oldest first, like the real one'}
-                    icon={<Ionicons name="mail-unread-outline" size={29} color="#007AFF" />}
+                    icon={<Ionicons name="mail-unread-outline" size={29} color={glyph} />}
                     showChevron={false}
                 />
             </ItemGroup>
