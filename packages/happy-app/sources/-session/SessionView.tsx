@@ -1068,7 +1068,16 @@ export function SessionViewLoaded({
         text: sessionStatus.statusText,
         dotColor: sessionStatus.statusDotColor,
         isPulsing: sessionStatus.isPulsing,
-    }), [sessionStatus.statusText, sessionStatus.statusDotColor, sessionStatus.isPulsing]);
+        // The STATE, not just a colour (DROVE-231). The strip's dot has to tell
+        // "just dropped" from "gone a while" and "waiting on you" from "idle",
+        // and a hex string cannot say either.
+        state: sessionStatus.state,
+    }), [
+        sessionStatus.statusText,
+        sessionStatus.statusDotColor,
+        sessionStatus.isPulsing,
+        sessionStatus.state,
+    ]);
 
     const usageData = React.useMemo(() => {
         const source = sessionUsage ?? session.latestUsage;

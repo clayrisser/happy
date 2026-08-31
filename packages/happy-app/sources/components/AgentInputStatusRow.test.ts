@@ -27,6 +27,10 @@ const { host, sessions, machines, pushed, screen } = vi.hoisted(() => ({
     sessions: {} as Record<string, {
         metadata: { liveStatus?: LiveStatus | null; machineId?: string };
         todos?: { content: string; status: 'pending' | 'in_progress' | 'completed' }[];
+        // `'online'`, or the timestamp it was last seen at (DROVE-231): the
+        // dot's yellow-to-red threshold measures off that number.
+        presence?: 'online' | number;
+        activeAt?: number;
     }>,
     // The machines the sessions above run on, for the add row (DROVE-208).
     machines: {} as Record<string, { metadata?: { displayName?: string; host?: string } }>,
@@ -117,7 +121,9 @@ vi.mock('@/text', async () => {
 
 import { AgentInputStatusRow, type StatusRowProps } from './AgentInputStatusRow';
 import { resolveUsageStrip } from './agentInputUsage';
-import { statusRowLiveCap, statusRowShrink, statusRowUsableWidth } from './statusRowLayout';
+import { statusRowShrink } from './statusRowLayout';
+import { statusDotColors } from './statusDotState';
+import { statusStripAccountCap } from './statusStripLayout';
 import { confirmDroverSwitch } from '@/utils/droverAccountSwitch';
 
 const originalConsoleError = console.error;
@@ -156,6 +162,13 @@ const paneUsage: DroverUsageLike = {
 
 const online = { text: 'online', dotColor: 'green' };
 
+/**
+ * 84k of a 200k window: the two numbers the phone actually has (DROVE-231).
+ * `contextSize` is assembled in the reducer from the API's own usage block and
+ * `contextWindow` rides beside it, so no CLI change is behind this reading.
+ */
+const context = { contextSize: 84_000, contextWindow: 200_000 };
+
 function mount(element: React.ReactElement) {
     let renderer: ReturnType<typeof create>;
     act(() => {
@@ -178,7 +191,7 @@ function row(overrides: Partial<StatusRowProps> = {}) {
     return mount(React.createElement(AgentInputStatusRow, {
         sessionId: 'idle',
         connectionStatus: online,
-        contextStatus: null,
+        contextUsage: null,
         weekPercent: strip.weekPercent,
         usageBarGroups: strip.usageBarGroups,
         showDetails: true,
@@ -321,7 +334,9 @@ describe('AgentInputStatusRow on an idle pane session', () => {
     it('carries the connection colour on the dot and has nothing left that truncates from the left', () => {
         const renderer = row();
         const dot = renderer.root.findByType('StatusDot' as any);
-        expect(dot.props.color).toBe('green');
+        // The dot's own table paints it now, not the colour the connection
+        // carried (DROVE-231): one place decides the state and paints it.
+        expect(dot.props.color).toBe(statusDotColors.connected);
         const texts = renderer.root.findAllByType('Text' as any);
         expect(texts.some((node: any) => node.props.ellipsizeMode === 'head')).toBe(false);
         expect(renderer.root.findAllByType('Octicons' as any)).toHaveLength(0);
@@ -329,9 +344,11 @@ describe('AgentInputStatusRow on an idle pane session', () => {
         expect(percent.props.ellipsizeMode).toBeUndefined();
     });
 
-    it('says the connection in words on the dot, since the screen no longer does', () => {
+    it('says the state in words on the dot, since the screen no longer does', () => {
         const renderer = row();
-        expect(segment(renderer, 'online')).toBeTruthy();
+        // Every state the dot can be in has a spoken name now, because the dot
+        // is the only thing saying it (DROVE-231).
+        expect(segment(renderer, 'Connected')).toBeTruthy();
         expect(renderer.root.findByType('StatusDot' as any).props.size).toBe(7);
     });
 
@@ -339,7 +356,7 @@ describe('AgentInputStatusRow on an idle pane session', () => {
         const onSessionInfoPress = vi.fn();
         const renderer = row({ onSessionInfoPress });
         act(() => {
-            segment(renderer, 'online').props.onPress();
+            segment(renderer, 'Connected').props.onPress();
         });
         expect(onSessionInfoPress).toHaveBeenCalledTimes(1);
     });
@@ -402,16 +419,17 @@ describe('AgentInputStatusRow on an idle pane session', () => {
     });
 
     it('draws the context gauge as the ring alone once the account is on the row (DROVE-138)', () => {
-        const renderer = row({ contextStatus: { percent: 42, detailText: '84k / 200k context', color: 'ok' } });
-        // The ring fills with the same number the text was printing, so the
-        // text is the cheapest thing on a full row to lose.
-        expect(line(renderer)).toEqual(['jamrizzi', '23%', '·']);
+        const renderer = row({ contextUsage: context });
+        // The ring fills toward the next COMPACTION, so the text is the
+        // cheapest thing on a full row to lose.
+        expect(line(renderer)).toEqual(['jamrizzi', '23%']);
         expect(renderer.root.findAllByType('Svg' as any)).toHaveLength(1);
-        // And the tap still prints the exact figure.
+        // And the tap prints the sentence WITH ITS SOURCE in it (DROVE-231):
+        // both real numbers and where the compaction point sits.
         act(() => {
             segment(renderer, 'Context').props.onPress();
         });
-        expect(line(renderer)).toContain('84k / 200k context');
+        expect(line(renderer)).toContain('84.0k of 200.0k context, compacts near 184.0k');
     });
 
     it('keeps the context percent printed on an idle session with no account taking the width', () => {
@@ -422,9 +440,11 @@ describe('AgentInputStatusRow on an idle pane session', () => {
         const renderer = row({
             weekPercent: strip.weekPercent,
             usageBarGroups: strip.usageBarGroups,
-            contextStatus: { percent: 42, detailText: '84k / 200k context', color: 'ok' },
+            contextUsage: context,
         });
-        expect(line(renderer)).toEqual(['77% week', '·', '42% context']);
+        // 46% of the way to the compaction point, not 42% of the window: the
+        // number agrees with the ring beside it (DROVE-231).
+        expect(line(renderer)).toEqual(['46% context', '77% week']);
     });
 
     it('fades with the rest of the composer detail while the chat is scrolled up', () => {
@@ -440,11 +460,16 @@ describe('AgentInputStatusRow on an idle pane session', () => {
             hideAccount: true,
             weekPercent: strip.weekPercent,
             usageBarGroups: strip.usageBarGroups,
-            contextStatus: { percent: 42, detailText: '84k / 200k context', color: 'ok' },
+            contextUsage: context,
         });
         // The window keeps its word with no account to head it, and the
         // context percent stays printed, since nothing is taking its width.
-        expect(line(renderer)).toEqual(['23% week', '·', '42% context']);
+        //
+        // 23, not 77: the fixture's weekly_all is 23 percent USED, and the
+        // strip prints used since DROVE-230. This expectation was written on a
+        // base where `weekPercent` was still headroom, which is exactly the
+        // split brain that lane existed to remove.
+        expect(line(renderer)).toEqual(['46% context', '23% week']);
         // The account is hidden, not forgotten: the sheet still opens on it
         // and a switch still says which account it is leaving (DROVE-160).
         const sheet = () => renderer.root.findByType('UsageAccountBarsSheet' as any);
@@ -472,8 +497,15 @@ describe('AgentInputStatusRow while the session is working', () => {
             const renderer = row({ sessionId: 'busy' });
             // The main thread first, then the agents as a bare count: the two
             // never share a number (DROVE-155).
-            expect(line(renderer)).toEqual(['working', '1m 2s 251.2k', '1', '·', 'jamrizzi', '23%']);
-            expect(renderer.root.findByType('StatusDot' as any).props.color).toBe('#007AFF');
+            // NO WORKING WORD. Clay: "Don't show text working." The dot is
+            // blinking blue instead, which is the whole of DROVE-231's table.
+            // Left: the clock and the workers. Centre: the tally. Right: the
+            // account and its percentage.
+            expect(line(renderer)).toEqual(['1m 2s', '1', '251.2k', 'jamrizzi', '23%']);
+            expect(line(renderer)).not.toContain('working');
+            const dot = renderer.root.findByType('StatusDot' as any);
+            expect(dot.props.color).toBe(statusDotColors.working);
+            expect(dot.props.isPulsing).toBe(true);
         } finally {
             vi.useRealTimers();
         }
@@ -487,7 +519,7 @@ describe('AgentInputStatusRow while the session is working', () => {
             act(() => {
                 vi.advanceTimersByTime(3_000);
             });
-            expect(line(renderer)[1]).toBe('1m 5s 251.2k');
+            expect(line(renderer)[0]).toBe('1m 5s');
         } finally {
             vi.useRealTimers();
         }
@@ -508,7 +540,9 @@ describe('AgentInputStatusRow while the session is working', () => {
                 },
             };
             const renderer = row({ sessionId: 'tooling' });
-            expect(line(renderer)).toEqual(['Bash', '1m 2s 1.5M', '·', 'jamrizzi', '23%']);
+            // The label slot only ever holds a TOOL now, so `Bash` is the one
+            // word the strip prints about what the main thread is doing.
+            expect(line(renderer)).toEqual(['Bash', '1m 2s', '1.5M', 'jamrizzi', '23%']);
         } finally {
             vi.useRealTimers();
         }
@@ -525,8 +559,10 @@ describe('AgentInputStatusRow while the session is working', () => {
             // quota number are not among them.
             const shrinking = renderer.root.findAllByType('Text' as any)
                 .filter((node: any) => node.props.numberOfLines === 1);
+            // Only the account, now the working word is gone: nothing else on
+            // the strip may be cut mid-string.
             expect(shrinking.map((node: any) => node.props.children))
-                .toEqual(['working', 'jamrizzi']);
+                .toEqual(['jamrizzi']);
         } finally {
             vi.useRealTimers();
         }
@@ -542,7 +578,7 @@ describe('AgentInputStatusRow while the session is working', () => {
             // button row the same row draws entire on the narrowest phone
             // there is, which is the width DROVE-178 bought back.
             expect(line(row({ sessionId: 'busy' })))
-                .toEqual(['working', '1m 2s 251.2k', '1', '·', 'jamrizzi', '23%']);
+                .toEqual(['1m 2s', '1', '251.2k', 'jamrizzi', '23%']);
         } finally {
             screen.width = 390;
             vi.useRealTimers();
@@ -564,21 +600,25 @@ describe('AgentInputStatusRow while the session is working', () => {
                 },
             };
             const renderer = row({ sessionId: 'mcp' });
+            // A 36-character MCP name cannot squeeze the account, and it is
+            // the ZONE that stops it now, not a cap on the segment. The left
+            // zone gets half of what the centre leaves and the name folds
+            // inside it; the account lives in the other zone entirely.
+            expect(line(renderer)).not.toContain('mcp__chrome_devtools__take_screenshot');
+            expect(line(renderer)).toContain('jamrizzi');
             const live = renderer.root.findAllByType('Pressable' as any)
                 .find((node: any) => String(node.props.accessibilityLabel).startsWith('Main thread:'));
             const style = live.props.style({ pressed: false });
-            // The last of the two that shrink, behind the account, and held to
-            // what the rest of the line does not need. It was a flat `45%` of
-            // the row, which is a share of the WHOLE row and so does not move
-            // when the row empties (DROVE-223); this is measured off the
-            // account and the separators actually on it.
             expect(style.flexShrink).toBe(statusRowShrink.live);
-            expect(typeof style.maxWidth).toBe('number');
-            expect(style.maxWidth).toBeLessThan(statusRowUsableWidth(screen.width));
-            expect(style.maxWidth).toBeGreaterThan(0.45 * statusRowUsableWidth(screen.width));
+            // No `maxWidth` anywhere on it. DROVE-223's `45%` was a share of
+            // the WHOLE row that no layout function could see; the zone's
+            // share is measured, and this segment carries no cap at all.
+            expect(style.maxWidth).toBeUndefined();
             const account = renderer.root.findAllByType('Text' as any)
                 .find((node: any) => node.props.children === 'jamrizzi');
             expect(account.props.style.flexShrink).toBe(statusRowShrink.account);
+            // The account's own cap IS a measured number, off the right zone.
+            expect(typeof account.props.style.maxWidth).toBe('number');
             expect(statusRowShrink.live).toBeLessThan(statusRowShrink.account);
         } finally {
             vi.useRealTimers();
@@ -586,28 +626,29 @@ describe('AgentInputStatusRow while the session is working', () => {
     });
 
     /**
-     * DROVE-223. Clay photographed `● wor… 4m 20s 51.6k ⛄6 ˄ · main 8% ˄`: the
-     * working word cut to three letters on a row with two thirds of the line
-     * empty beside it. The cut came from a `45%` cap in this file that no
-     * budget knew about, over a segment whose only shrinkable child is the
-     * label, and with no tool running the label IS the working word.
+     * DROVE-223's row, and DROVE-231's answer to it.
+     *
+     * Clay photographed `● wor… 4m 20s 51.6k ⛄6 ˄ · main 8% ˄`: the working
+     * word cut to three letters on a row two thirds empty. 223 fixed the cap
+     * that cut it. 231 removes the word: Clay asked for it to go and gave the
+     * state to the dot, so there is no longer anything for a cap to cut.
      */
-    it('draws the working word whole at 320, 375 and 393, and never caps it', () => {
+    it('never prints the working word at any width, and blinks blue instead', () => {
         vi.useFakeTimers();
         vi.setSystemTime(now + 1_000);
         try {
             for (const width of [320, 375, 393]) {
                 screen.width = width;
                 const renderer = row({ sessionId: 'photographed' });
-                // Whole, not `wor…`. The assertion is the STRING, because a
-                // truncated one is what the ticket is about.
-                expect(line(renderer), `width ${width}`).toContain('working');
-                expect(line(renderer).join(' '), `width ${width}`).toContain('4m 20s 51.6k');
+                expect(line(renderer), `width ${width}`).not.toContain('working');
+                expect(line(renderer).join(' '), `width ${width}`).not.toContain('wor…');
+                const dot = renderer.root.findByType('StatusDot' as any);
+                expect(dot.props.color, `width ${width}`).toBe(statusDotColors.working);
+                expect(dot.props.isPulsing, `width ${width}`).toBe(true);
                 const live = renderer.root.findAllByType('Pressable' as any)
                     .find((node: any) => String(node.props.accessibilityLabel).startsWith('Main thread:'));
-                // No cap at all over the segment carrying it: the working word
-                // is last in STATUS_ROW_GIVE_WAY, so nothing above it may
-                // clamp the box it lives in.
+                // And still no cap over the live segment. The zone's share is
+                // what holds it, measured rather than assumed to be 45%.
                 expect(live.props.style({ pressed: false }).maxWidth, `width ${width}`).toBeUndefined();
             }
         } finally {
@@ -616,23 +657,24 @@ describe('AgentInputStatusRow while the session is working', () => {
         }
     });
 
-    it('gives up the token count and then the clock before it gives up the word', () => {
+    it('gives up the clock and then the task badge, and never the tally', () => {
         vi.useFakeTimers();
         vi.setSystemTime(now + 1_000);
-        screen.width = 393;
         try {
-            // The widest a working-word row gets: the agents, a task list, the
-            // account and the gauge. Two facts have to go and the order says
-            // which two. The word is not one of them.
-            const renderer = row({
-                sessionId: 'photographedWithTasks',
-                contextStatus: { percent: 42, detailText: '84k / 200k context', color: 'ok' },
-            });
-            const text = line(renderer);
-            expect(text).toContain('working');
-            expect(text).toContain('1/3 tasks');
-            expect(text.join(' ')).not.toContain('51.6k');
-            expect(text.join(' ')).not.toContain('4m 20s');
+            // The widest row there is: six workers, a task list, the account
+            // and the ring. The give-way order says what goes, in what order,
+            // and the tally Clay centred is last of everything.
+            screen.width = 393;
+            const wide = line(row({ sessionId: 'photographedWithTasks', contextUsage: context }));
+            expect(wide).toContain('1/3 tasks');
+            expect(wide).toContain('51.6k');
+            expect(wide.join(' ')).not.toContain('4m 20s');
+
+            screen.width = 320;
+            const narrow = line(row({ sessionId: 'photographedWithTasks', contextUsage: context }));
+            expect(narrow.join(' ')).not.toContain('1/3 tasks');
+            expect(narrow).toContain('51.6k');
+            expect(narrow).toContain('jamrizzi');
         } finally {
             screen.width = 390;
             vi.useRealTimers();
@@ -643,7 +685,6 @@ describe('AgentInputStatusRow while the session is working', () => {
         vi.useFakeTimers();
         vi.setSystemTime(now + 1_000);
         try {
-            const contextStatus = { percent: 42, detailText: '84k / 200k context', color: 'ok' };
             // Idle with no account taking the width, the percent is on the
             // row as before (DROVE-138 folds it when there is one).
             const idle = resolveUsageStrip({
@@ -651,19 +692,19 @@ describe('AgentInputStatusRow while the session is working', () => {
                 droverUsage: null,
             });
             expect(line(row({
-                contextStatus,
+                contextUsage: context,
                 weekPercent: idle.weekPercent,
                 usageBarGroups: idle.usageBarGroups,
-            }))).toContain('42% context');
+            }))).toContain('46% context');
             // Working, the ring carries it alone: the live token count is the
             // cost readout at that moment, and the row has to fit.
-            const renderer = row({ sessionId: 'busy', contextStatus });
-            expect(line(renderer)).not.toContain('42% context');
+            const renderer = row({ sessionId: 'busy', contextUsage: context });
+            expect(line(renderer)).not.toContain('46% context');
             expect(renderer.root.findAllByType('Svg' as any)).toHaveLength(1);
             act(() => {
                 segment(renderer, 'Context').props.onPress();
             });
-            expect(line(renderer)).toContain('84k / 200k context');
+            expect(line(renderer)).toContain('84.0k of 200.0k context, compacts near 184.0k');
         } finally {
             vi.useRealTimers();
         }
@@ -743,7 +784,7 @@ describe('the token tally on the strip (DROVE-184)', () => {
         vi.setSystemTime(now + 1_000);
         try {
             const text = line(row({ sessionId: 'tallied' })).join(' ');
-            expect(text).toContain('4m 20s 1.9M');
+            expect(text).toContain('1.9M');
             // The main-only number is no longer what the row says.
             expect(text).not.toContain('51.6k');
         } finally {
@@ -758,10 +799,11 @@ describe('the token tally on the strip (DROVE-184)', () => {
             for (const width of [320, 375, 393]) {
                 screen.width = width;
                 const text = line(row({ sessionId: 'tallied' }));
-                // DROVE-223's rule holds unchanged: the working word is last
-                // to give way and nothing above it has been crowded out.
-                expect(text, `width ${width}`).toContain('working');
-                expect(text.join(' '), `width ${width}`).toContain('4m 20s 1.9M');
+                // The tally is the CENTRE zone now and last on the give-way
+                // order, so it survives every width; nothing has crowded it
+                // out and the strip has gained no term (DROVE-184).
+                expect(text, `width ${width}`).toContain('1.9M');
+                expect(text, `width ${width}`).toContain('9');
             }
         } finally {
             screen.width = 390;
@@ -781,7 +823,8 @@ describe('the token tally on the strip (DROVE-184)', () => {
             // looking at when he asked where it was.
             expect(text.join(' ')).toContain('1.8M');
             expect(text).not.toContain('working');
-            expect(renderer.root.findByType('StatusDot' as any).props.color).toBe('green');
+            expect(renderer.root.findByType('StatusDot' as any).props.color)
+                .toBe(statusDotColors.connected);
         } finally {
             vi.useRealTimers();
         }
@@ -803,7 +846,9 @@ describe('the token tally on the strip (DROVE-184)', () => {
         vi.useFakeTimers();
         vi.setSystemTime(now + 1_000);
         try {
-            expect(line(row({ sessionId: 'photographed' })).join(' ')).toContain('4m 20s 51.6k');
+            const text = line(row({ sessionId: 'photographed' })).join(' ');
+            expect(text).toContain('4m 20s');
+            expect(text).toContain('51.6k');
         } finally {
             vi.useRealTimers();
         }
@@ -828,17 +873,85 @@ describe('AgentInputStatusRow dot rule', () => {
         try {
             const renderer = row({ sessionId: 'agentsOnly' });
             const dot = renderer.root.findByType('StatusDot' as any);
-            expect(dot.props.color).toBe('green');
-            expect(dot.props.isPulsing).toBeUndefined();
+            expect(dot.props.color).toBe(statusDotColors.connected);
+            expect(dot.props.isPulsing).toBe(false);
             // The agents still say how many they are, and nothing else.
-            expect(line(renderer)).toEqual(['2', '·', 'jamrizzi', '23%']);
+            expect(line(renderer)).toEqual(['2', 'jamrizzi', '23%']);
         } finally {
             vi.useRealTimers();
         }
     });
 
     it('is the connection colour on an idle session', () => {
-        expect(row().root.findByType('StatusDot' as any).props.color).toBe('green');
+        expect(row().root.findByType('StatusDot' as any).props.color)
+            .toBe(statusDotColors.connected);
+    });
+
+    /**
+     * DROVE-231's table, on the mounted row. `statusDotState.spec.ts` proves
+     * the thresholds; this proves the strip actually paints them.
+     */
+    it('goes yellow the moment the session drops, and red once it has been gone', () => {
+        vi.useFakeTimers();
+        try {
+            sessions.dropped = { metadata: { liveStatus: null }, presence: now, activeAt: now };
+            vi.setSystemTime(now + 30_000);
+            expect(row({
+                sessionId: 'dropped',
+                connectionStatus: { text: 'last seen 30s ago', dotColor: '#999', state: 'disconnected' },
+            }).root.findByType('StatusDot' as any).props.color)
+                .toBe(statusDotColors.recentlyDisconnected);
+            vi.setSystemTime(now + 300_000);
+            expect(row({
+                sessionId: 'dropped',
+                connectionStatus: { text: 'last seen 5m ago', dotColor: '#999', state: 'disconnected' },
+            }).root.findByType('StatusDot' as any).props.color)
+                .toBe(statusDotColors.disconnected);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('goes purple and blinks while the context is at the compaction point', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(now + 1_000);
+        try {
+            // The main thread working, no tool under it, and the context at
+            // the point the compaction pass fires. All three, or it is not
+            // called compacting (statusDotState.ts).
+            const dot = row({
+                sessionId: 'photographed',
+                contextUsage: { contextSize: 190_000, contextWindow: 200_000 },
+            }).root.findByType('StatusDot' as any);
+            expect(dot.props.color).toBe(statusDotColors.compacting);
+            expect(dot.props.isPulsing).toBe(true);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('stays blue, not purple, when a TOOL is what is running at the same context', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(now + 1_000);
+        try {
+            sessions.toolingFull = {
+                metadata: {
+                    liveStatus: {
+                        at: now,
+                        turnStartedAt: now - 61_000,
+                        main: { startedAt: now - 61_000, tokens: 251_200 },
+                        tool: { id: 't1', name: 'Bash', startedAt: now - 5_000 },
+                    },
+                },
+            };
+            expect(row({
+                sessionId: 'toolingFull',
+                contextUsage: { contextSize: 190_000, contextWindow: 200_000 },
+            }).root.findByType('StatusDot' as any).props.color)
+                .toBe(statusDotColors.working);
+        } finally {
+            vi.useRealTimers();
+        }
     });
 });
 
@@ -857,14 +970,15 @@ describe('AgentInputStatusRow going idle', () => {
                 },
             };
             const renderer = row({ sessionId: 'turning' });
-            expect(line(renderer)).toEqual(['working', '1m 2s 251.2k', '·', 'jamrizzi', '23%']);
+            expect(line(renderer)).toEqual(['1m 2s', '251.2k', 'jamrizzi', '23%']);
             // The CLI writes an explicit null the moment the turn ends.
             sessions.turning.metadata.liveStatus = null;
             act(() => {
                 vi.advanceTimersByTime(1_000);
             });
             expect(line(renderer)).toEqual(['jamrizzi', '23%']);
-            expect(renderer.root.findByType('StatusDot' as any).props.color).toBe('green');
+            expect(renderer.root.findByType('StatusDot' as any).props.color)
+                .toBe(statusDotColors.connected);
         } finally {
             vi.useRealTimers();
         }
@@ -876,7 +990,8 @@ describe('AgentInputStatusRow going idle', () => {
         try {
             const renderer = row({ sessionId: 'busy' });
             expect(line(renderer)).toEqual(['jamrizzi', '23%']);
-            expect(renderer.root.findByType('StatusDot' as any).props.color).toBe('green');
+            expect(renderer.root.findByType('StatusDot' as any).props.color)
+                .toBe(statusDotColors.connected);
         } finally {
             vi.useRealTimers();
         }
@@ -958,7 +1073,7 @@ describe('AgentInputStatusRow with nothing to show', () => {
             usageBarGroups: strip.usageBarGroups,
         });
         expect(line(renderer)).toEqual(['60% week']);
-        expect(segment(renderer, 'online')).toBeTruthy();
+        expect(segment(renderer, 'Connected')).toBeTruthy();
     });
 
     it('names the account even before anything has measured a window', () => {
@@ -1024,10 +1139,7 @@ describe('AgentInputStatusRow never draws an empty strip', () => {
                 ['the task list', { ...empty, sessionId: 'oneTask' }, '1/3 tasks'],
                 ['the account and quota', {}, 'jamrizzi'],
                 ['the account alone', { weekPercent: null }, 'jamrizzi'],
-                ['the context gauge', {
-                    ...empty,
-                    contextStatus: { percent: 42, detailText: '84k / 200k context', color: 'ok' },
-                }, '42% context'],
+                ['the context gauge', { ...empty, contextUsage: context }, '46% context'],
             ];
             for (const [what, props, expected] of only) {
                 const renderer = row(props);
@@ -1044,7 +1156,7 @@ describe('AgentInputStatusRow never draws an empty strip', () => {
             connectionStatus: undefined,
             weekPercent: null,
             usageBarGroups: [],
-            contextStatus: null,
+            contextUsage: null,
         });
         expect(renderer.toJSON()).toBeNull();
     });
@@ -1068,7 +1180,7 @@ describe('AgentInputStatusRow tasks', () => {
         const renderer = row({ sessionId: 'withTasks' });
         // DROVE-138 took `online` off the row (the dot's colour says it) and
         // put the model on, with the account heading the quota.
-        expect(line(renderer)).toEqual(['1/3 tasks', '·', 'jamrizzi', '23%']);
+        expect(line(renderer)).toEqual(['1/3 tasks', 'jamrizzi', '23%']);
 
         const sheet = () => renderer.root.findByType('SessionTasksSheet' as any);
         expect(sheet().props.open).toBe(false);
@@ -1083,7 +1195,7 @@ describe('AgentInputStatusRow tasks', () => {
         expect(line(renderer)).toEqual(['jamrizzi', '23%']);
     });
 
-    it('counts against the width, and the numbers give way before the word (DROVE-223)', () => {
+    it('counts against the width, and the badge outlives the clock (DROVE-167, DROVE-231)', () => {
         vi.useFakeTimers();
         vi.setSystemTime(now + 1_000);
         try {
@@ -1095,31 +1207,28 @@ describe('AgentInputStatusRow tasks', () => {
                     { content: 'Wire the wrist', status: 'pending' },
                 ],
             };
-            // The badge is what the estimate used to be missing (DROVE-167),
-            // and counting it cost the tool name AND the model whole at 393.
-            // The model is off the row now (DROVE-178), so the same working
-            // session with a list draws entire from 430 up.
+            // Wide enough for everything: the clock and the workers on the
+            // left with the badge, the tally centred, the account right.
             for (const width of [430, 500]) {
                 screen.width = width;
                 expect(line(row({ sessionId: 'busyWithTasks' })), String(width))
-                    .toEqual(['working', '1m 2s 251.2k', '1', '·', '1/3 tasks', '·', 'jamrizzi', '23%']);
+                    .toEqual(['1m 2s', '1', '1/3 tasks', '251.2k', 'jamrizzi', '23%']);
             }
-            // THIS IS THE ROW THE TICKET IS ABOUT. `busy` has no tool, so the
-            // label is the WORKING WORD, and the fold that used to fire here
-            // took it out first of everything on the line. It cannot any more:
-            // the token count goes instead, which is the next step down
-            // STATUS_ROW_GIVE_WAY. 349 against 339 at 393 and 321 at 375.
+            // THE LEFT ZONE IS A HALF OF WHAT THE CENTRE LEAVES, not the whole
+            // line, so the clock goes first on a phone. The badge stays: Clay
+            // has asked for the task list by name three times and the badge is
+            // the only tap that opens it (STATUS_ROW_GIVE_WAY).
             for (const width of [393, 375]) {
                 screen.width = width;
                 expect(line(row({ sessionId: 'busyWithTasks' })), String(width))
-                    .toEqual(['working', '1m 2s', '1', '·', '1/3 tasks', '·', 'jamrizzi', '23%']);
+                    .toEqual(['1', '1/3 tasks', '251.2k', 'jamrizzi', '23%']);
             }
-            // At 320, below the supported floor, the clock goes as well and
-            // the account starts to shrink around what is left. The word is
-            // still there, because there is no step below it.
+            // At 320 the badge goes too, and what is left is exactly the three
+            // zones Clay named: the dot and the workers, the tally, the
+            // account and its percentage.
             screen.width = 320;
             expect(line(row({ sessionId: 'busyWithTasks' })))
-                .toEqual(['working', '1', '·', '1/3 tasks', '·', 'jamrizzi', '23%']);
+                .toEqual(['1', '251.2k', 'jamrizzi', '23%']);
         } finally {
             screen.width = 390;
             vi.useRealTimers();

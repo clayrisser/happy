@@ -28,14 +28,29 @@ import { sessionTasksBadge } from '@/utils/sessionTasks';
 import { StatusDot } from './StatusDot';
 import {
     showsContextPercent,
-    statusRowFolds,
-    statusRowLiveCap,
+    STATUS_ROW_GIVE_WAY,
     statusRowMetrics,
     statusRowQuotaText,
     statusRowShrink,
-    type StatusRowParts,
 } from './statusRowLayout';
+import {
+    resolveStatusStrip,
+    statusStripAccountCap,
+    statusStripMetrics,
+    statusStripQuotaText,
+    type StatusStripContent,
+} from './statusStripLayout';
+import {
+    statusDotBlinks,
+    statusDotColors,
+    statusDotLabels,
+    statusDotState,
+} from './statusDotState';
+import { contextCompactionPercent, contextReading } from './contextCompaction';
+import { usageToneColor } from './usageTone';
+import type { UsageBarTone } from './agentInputUsage';
 import { useTickingNow } from './useTickingNow';
+import type { SessionState } from '@/sync/sessionState';
 
 /**
  * The one status line under the composer (DROVE-82).
@@ -145,8 +160,47 @@ import { useTickingNow } from './useTickingNow';
  * without the composer around it.
  */
 
-/** The working colour, the same blue the thinking dot and the old strip used. */
-const workingColor = '#007AFF';
+/**
+ * AND DROVE-231 MADE IT THREE ZONES AND GAVE THE DOT THE WHOLE STATE.
+ *
+ * Clay, handing over the entire strip at once because pieces of it kept being
+ * re-derived one ticket at a time: "Token count is centered. The dot is green
+ * for connected, blinking blue when working and yellow when recently
+ * disconnected and red if disconnected for a while. Don't show text working.
+ * The number of workers is next to the green dot. Account is right aligned
+ * with the percentage and changes color as it fills up. Also should show
+ * something for context or something so we know when compaction happens next.
+ * Also when compacting the dot turns purple and blinks."
+ *
+ * Four changes, and the first is the shape of the line:
+ *
+ *   1. THREE ZONES. Left the dot and the workers, centre the tally, right the
+ *      account and its percentage. Built as a flexbox tree in
+ *      statusStripLayout.ts and resolved by DROVE-214's `flexFrames`, so the
+ *      centre is centred by the layout system and not by an offset anybody
+ *      computed. Clay, about the composer and now about this: "why don't you
+ *      use layout system for these things?"
+ *   2. THE WORD `working` IS GONE, and the dot carries every state instead:
+ *      green idle, blinking blue working, amber waiting on you, yellow just
+ *      dropped, red gone a while, blinking purple compacting. The thresholds
+ *      and the blink period are named constants in statusDotState.ts with the
+ *      reasoning next to them. The blink means BUSY and nothing else, so the
+ *      two blinking states are told apart by hue, which is the only thing that
+ *      can tell them apart.
+ *   3. THE PERCENTAGE COLOURS BY THE QUOTA SHEET'S OWN RAMP. `usageBarTone` on
+ *      the same window the sheet reads, carried out of `resolveUsageStrip` as
+ *      `weekTone` and painted by usageTone.ts, which the bars now call too.
+ *      One rule, two surfaces (DROVE-230).
+ *   4. THE CONTEXT RING IS A COUNTDOWN TO THE NEXT COMPACTION. It fills toward
+ *      the compaction point rather than the raw window, so full means compact
+ *      now; contextCompaction.ts says what it is measured from and what it
+ *      refuses to claim.
+ *
+ * The give-way order moved with the layout and is still one list
+ * (`STATUS_ROW_GIVE_WAY`). The working word left it because it left the strip;
+ * the tally and the clock swapped, because Clay has just put the tally on the
+ * centre of the line and the clock is not one of the three zones.
+ */
 
 /**
  * Touch area around each segment's 11pt text.
@@ -178,15 +232,24 @@ const segmentHitSlop = {
     right: 10,
 } as const;
 
-// Grayscale ring that fills and darkens with context usage. Reads at a
-// glance without colour, sized to sit beside the 11pt status text.
-function ContextGaugeIcon(props: { percent: number }) {
+/**
+ * The ring, filling toward the NEXT COMPACTION (DROVE-231).
+ *
+ * `fraction` is used against the compaction point, not against the raw window,
+ * so a full ring means the compaction pass is about to run rather than "the
+ * window is full", which is a state that never occurs because the agent
+ * compacts first. contextCompaction.ts derives it and says what from.
+ *
+ * Grayscale on purpose: it reads at a glance without colour, and colour on
+ * this strip belongs to the dot and to the quota percentage.
+ */
+function ContextGaugeIcon(props: { fraction: number }) {
     const { theme } = useUnistyles();
-    const size = 14;
+    const size = statusStripMetrics.gauge;
     const strokeWidth = 2.5;
     const radius = (size - strokeWidth) / 2;
     const circumference = 2 * Math.PI * radius;
-    const progress = Math.min(100, Math.max(0, props.percent));
+    const progress = Math.min(100, Math.max(0, props.fraction * 100));
     const intensity = 0.35 + 0.65 * (progress / 100);
     const color = theme.dark
         ? `rgba(255, 255, 255, ${intensity})`
@@ -221,8 +284,24 @@ function ContextGaugeIcon(props: { percent: number }) {
 
 export type StatusRowConnection = {
     text: string;
+    /**
+     * The colour the CONNECTION would paint on its own.
+     *
+     * The dot no longer takes it (DROVE-231): `statusDotState` decides the
+     * state and `statusDotColors` paints it, so that one table is the whole
+     * answer instead of a colour arriving from one place and a pulse from
+     * another. Kept because the field is what tells the row a connection
+     * exists at all, which is the guard that decides whether a dot is drawn.
+     */
     dotColor: string;
     isPulsing?: boolean;
+    /**
+     * The session's state, so the dot can tell "just dropped" from "gone a
+     * while" and "waiting on you" from "idle" (DROVE-231). Absent on a caller
+     * that has no session behind it; the row then falls back to the session
+     * store, and to `connected` when there is neither.
+     */
+    state?: SessionState;
     cliStatus?: {
         claude: boolean | null;
         codex: boolean | null;
@@ -234,8 +313,26 @@ export type StatusRowProps = {
     /** Absent on a preview with no session behind it; the working segment needs one. */
     sessionId?: string;
     connectionStatus?: StatusRowConnection;
-    contextStatus: { percent: number; detailText: string; color: string } | null;
+    /**
+     * The two numbers the context reading is made of, raw (DROVE-231).
+     *
+     * It used to arrive pre-derived as `{ percent, detailText, color }`, built
+     * by `getContextStatus` in AgentInput, which also decided the gauge was
+     * only worth drawing within 10% of the window. That rule was written when
+     * the row had no width to spare; the centre zone does, and a gauge that
+     * appears at 90% cannot answer "when does compaction happen next". So the
+     * row takes the numbers and contextCompaction.ts does the deriving.
+     */
+    contextUsage: { contextSize: number; contextWindow?: number } | null;
+    /** The setting that prints the context figure as text, not just the ring. */
+    alwaysShowContext?: boolean;
     weekPercent: number | null;
+    /**
+     * The quota's colour band, from the sheet's own `usageBarTone` (DROVE-230,
+     * DROVE-231). Carried from `resolveUsageStrip` rather than recomputed, so
+     * the strip and the bars cannot disagree about whether an account is warm.
+     */
+    weekTone?: UsageBarTone;
     /**
      * The week popup's bar rows: this account's session, week and family
      * windows, then every other drover account folded under a second heading
@@ -311,14 +408,10 @@ function accessibilityLabelFor(
     return parts.join(', ');
 }
 
-function Separator() {
-    const { theme } = useUnistyles();
-    return (
-        <Text style={{ fontSize: 11, color: theme.colors.textSecondary, marginHorizontal: 6, ...Typography.default() }}>
-            ·
-        </Text>
-    );
-}
+// The middot separator is gone (DROVE-231). Three zones separate the facts
+// spatially, and inside a zone two tappable clusters are held apart by
+// `statusStripMetrics.clusterGap`, the same 16pt the middot and its margins
+// cost, spent as space the layout can see rather than as a glyph it cannot.
 
 function CliCheck(props: { name: string; ok: boolean | null }) {
     const { theme } = useUnistyles();
@@ -384,196 +477,297 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
 
     const canExpand = !!summary && summary.rows.length > 0;
     const canOpenUsage = p.usageBarGroups.length > 0;
-    const segments: React.ReactNode[] = [];
 
     const main = summary?.main ?? null;
+    /**
+     * Agents plus workflows, and there is no second count anywhere (DROVE-155,
+     * DROVE-185, DROVE-209). Clay asked for "the number of workers next to the
+     * green dot" and this is that number; the Morse heartbeat reads the same
+     * field, which is what stopped the wrist saying two while the screen said
+     * three whenever a workflow was running.
+     */
     const sideCount = summary?.sideCount ?? 0;
-
-    // The quota's text, and the account that heads it. Both are read off the
-    // same `usageBarGroups` the sheet draws, so the row's name, the sheet's
-    // heading and the `from` a switch sends are one value (DROVE-129,
-    // DROVE-160).
-    const quotaText = statusRowQuotaText(
-        shownAccount,
-        p.weekPercent,
-        p.weekPercent == null
-            ? ''
-            : t('agentInput.context.percentWeek', { percent: Math.round(p.weekPercent) }),
-    );
-
-    // Which folds the row needs, asked of its real content rather than taken
-    // from a width constant (DROVE-155, DROVE-138). The width the tool name
-    // folds at depends on how long this tool, this account and the task badge
-    // happen to be, so a constant could only ever be right for one of them.
-    // With no model on the row (DROVE-178) `statusRowFolds` returns
-    // `model: false` and nothing else moves.
-    // The live segment goes down in pieces as well as whole (DROVE-223). The
-    // token count and the clock are folds of their own now, below the account
-    // and above the working word in STATUS_ROW_GIVE_WAY, and a fold cannot
-    // take a number out of the middle of a finished string.
-    // The tally when the MAIN thread is not the thing running (DROVE-184). A
-    // fan-out outlives the turn that launched it, so `main` is null while nine
-    // agents burn — the state Clay was actually looking at — and the row would
-    // otherwise show a bare agent count and no spend. It takes the SAME slot
-    // and the SAME `tokens` rank on STATUS_ROW_GIVE_WAY, so the strip gains no
-    // term: at most it swaps a label and a clock it is not drawing for a
-    // number it is.
     const sideTokens = summary?.sideTokens ?? null;
-    const liveNumbers = main ? (main.tokens ? `${main.elapsed} ${main.tokens}` : main.elapsed) : null;
-    const rowParts: StatusRowParts = {
-        live: main ? `${main.label} ${liveNumbers}` : sideTokens,
-        liveWithoutName: liveNumbers,
-        liveLabel: main?.label ?? null,
-        liveElapsed: main?.elapsed ?? null,
-        liveTokens: main?.tokens ?? sideTokens,
-        // Whether the label is a TOOL or the working word, read off the
-        // summary rather than compared to a string, so the row and
-        // liveStatus.ts cannot disagree about which one it is.
-        workingWord: !!main?.working,
-        agentCount: sideCount,
+    // The main thread is working, and whether it is blocked on a TOOL. The two
+    // are different facts now: the dot says working, so the label slot only
+    // ever holds a tool's name (DROVE-231).
+    const mainWorking = main !== null;
+    const toolRunning = !!main && !main.working;
+
+    // How much room until the next compaction, from the transcript's own
+    // context against the model's window. Null until the session reports a
+    // window, because a percentage against a guess corrects itself upward
+    // later and a gauge that goes DOWN reads as the context refilling.
+    const context = contextReading(p.contextUsage?.contextSize, p.contextUsage?.contextWindow);
+
+    // A connection with no state on it is a CONNECTION, not a missing one.
+    // SessionView always sends the state; a preview or a harness that only
+    // hands over a colour must not read as disconnected because of what it
+    // left out. `presence` is `'online'` or the timestamp it was last seen at,
+    // so a NUMBER there is the offline case and also the answer to when.
+    const lastSeenAt = typeof session?.presence === 'number'
+        ? session.presence
+        : session?.activeAt ?? null;
+    const offline = p.connectionStatus?.state
+        ? p.connectionStatus.state === 'disconnected'
+        : typeof session?.presence === 'number';
+    // A clock only while the session is OFFLINE, and a slow one. The dot's
+    // yellow turns red on a threshold rather than on an event, so something
+    // has to re-read the time. Five seconds is far finer than the two-minute
+    // window needs and costs a live session nothing, since the interval is not
+    // started at all while it is up.
+    const now = useTickingNow(offline, 5000);
+
+    const dotState = statusDotState({
+        online: !offline,
+        lastSeenAt,
+        mainWorking,
+        toolRunning,
+        atCompaction: context?.atCompaction ?? false,
+        waiting: p.connectionStatus?.state === 'permission_required'
+            || p.connectionStatus?.state === 'input_required',
+        now,
+    });
+    // A dot is drawn whenever there is a connection to speak for. The COLOUR
+    // is `statusDotColors`', never the one the connection carried: one table
+    // decides the state and paints it, so a colour and a pulse can no longer
+    // arrive from two places and disagree (DROVE-231).
+    const hasDot = !!p.connectionStatus?.dotColor;
+    const dotColor: string | null = hasDot ? statusDotColors[dotState] : null;
+
+    // The quota's two halves. The account heads it because the quota IS this
+    // account's and the sheet behind the tap is the list to switch to
+    // (DROVE-160); both are read off `usageBarGroups`, so the row's name, the
+    // sheet's heading and the `from` a switch sends are one value (DROVE-129).
+    const quotaPercentText = p.weekPercent == null ? null : `${Math.round(p.weekPercent)}%`;
+    const quotaWindowText = shownAccount
+        ? null
+        : statusRowQuotaText(
+            null,
+            p.weekPercent,
+            p.weekPercent == null
+                ? ''
+                : t('agentInput.context.percentWeek', { percent: Math.round(p.weekPercent) }),
+        );
+    // The percentage's colour, from the quota sheet's own ramp on the same
+    // window (DROVE-230). Never a second ramp: Clay asked for one behaviour
+    // and two surfaces have to answer it the same way.
+    const quotaColor = p.weekTone
+        ? usageToneColor(p.weekTone, theme)
+        : theme.colors.textSecondary;
+
+    const showContextPercentText = !!context
+        && showsContextPercent(shownAccount, showPreciseContext, mainWorking);
+    const contextPercentText = context
+        ? (showPreciseContext
+            ? context.detail
+            : t('agentInput.context.percentContext', { percent: contextCompactionPercent(context) }))
+        : null;
+
+    /**
+     * WHAT THE STRIP WANTS TO SAY, before the line decides what it can afford.
+     *
+     * The working word is not among it. Clay: "Don't show text working." The
+     * dot beside it is blinking blue at that moment, which is the whole reason
+     * the dot's table exists, so the label is null unless a TOOL is running.
+     */
+    const content: StatusStripContent = {
+        dot: hasDot,
+        toolName: toolRunning ? main!.label : null,
+        elapsed: main?.elapsed ?? null,
+        tokens: main?.tokens ?? sideTokens,
+        workers: sideCount,
         liveExpands: canExpand,
         tasks: p.sessionId ? tasksBadge : null,
-        quota: quotaText ?? shownAccount,
+        account: shownAccount,
+        quotaPercent: quotaPercentText,
+        quotaWindow: quotaWindowText,
         quotaExpands: canOpenUsage,
-        contextGauge: !!p.contextStatus,
+        contextGauge: !!context,
+        contextPercent: showContextPercentText ? contextPercentText : null,
     };
-    const folds = statusRowFolds(rowParts, width);
-    // What is left of the line for the live segment, in points. It was a flat
-    // `45%` of the row, which cut the working word on a row that was two
-    // thirds empty (DROVE-223), and it is null entirely while the label IS the
-    // working word: nothing above it in the order may clamp it.
-    const liveCap = statusRowLiveCap(rowParts, width);
-    const showLabel = !folds.toolName;
-    const shownNumbers = main
-        ? [folds.elapsed ? null : main.elapsed, folds.tokens ? null : main.tokens]
-            .filter((part): part is string => !!part)
-            .join(' ')
-        : '';
-    const shownSideTokens = !main && !folds.tokens ? sideTokens : null;
-    if (summary && (main || sideCount > 0)) {
-        segments.push(
-            <Pressable
-                key="live"
-                onPress={canExpand
-                    ? () => setOpenSheet((open) => (open === 'agents' ? null : 'agents'))
-                    : undefined}
-                hitSlop={segmentHitSlop}
-                accessibilityRole={canExpand ? 'button' : undefined}
-                accessibilityState={canExpand ? { expanded: openSheet === 'agents' } : undefined}
-                accessibilityLabel={accessibilityLabelFor(main, sideCount, sideTokens)}
-                style={({ pressed }) => ({
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    gap: 3,
-                    // The last of the segments that shrink, after the account
-                    // (statusRowShrink). The cap still keeps a 30-character
-                    // MCP name from squeezing the account before it has given
-                    // way itself, but it is now what the rest of the line does
-                    // not need rather than a flat 45% of the row: the flat one
-                    // cut the working word at 393 with 176pt of line still
-                    // empty beside it (DROVE-223). No cap at all while the
-                    // label is the working word, which is the last thing on
-                    // this row to give way.
-                    flexShrink: statusRowShrink.live,
-                    ...(liveCap == null ? null : { maxWidth: liveCap }),
-                    opacity: pressed && canExpand ? 0.6 : 1,
-                })}
-            >
-                {main ? (
-                    <>
-                        {/* A TOOL's name is the first text on the row to
-                            fold. The WORKING WORD is the last thing on the row
-                            to give way at all (DROVE-223): the token count and
-                            then the clock go before it, so `wor…` beside an
-                            intact `4m 20s 51.6k` is a row that has its order
-                            backwards. */}
-                        {showLabel ? (
-                            <Text
-                                numberOfLines={1}
-                                style={{ fontSize: 11, color: theme.colors.text, flexShrink: 1, ...Typography.default() }}
-                            >
-                                {main.label}
-                            </Text>
-                        ) : null}
-                        {shownNumbers ? (
-                            <Text style={{ fontSize: 11, color: theme.colors.text, ...Typography.default() }}>
-                                {shownNumbers}
-                            </Text>
-                        ) : null}
-                    </>
-                ) : null}
-                {shownSideTokens ? (
-                    <Text style={{ fontSize: 11, color: theme.colors.text, ...Typography.default() }}>
-                        {shownSideTokens}
-                    </Text>
-                ) : null}
-                {sideCount > 0 ? (
-                    <>
-                        {/* The agents, and the whole of what the row says
-                            about them: a glyph and a number, in the secondary
-                            colour so they never read as the main thread's own.
-                            The word and every name are behind the fold. */}
-                        <Ionicons name="people" size={11} color={theme.colors.textSecondary} />
-                        <Text style={{ fontSize: 11, color: theme.colors.textSecondary, ...Typography.default() }}>
-                            {sideCount}
-                        </Text>
-                    </>
-                ) : null}
-                {canExpand ? (
-                    <Ionicons
-                        name={openSheet === 'agents' ? 'chevron-down' : 'chevron-up'}
-                        size={10}
-                        color={theme.colors.textSecondary}
-                    />
-                ) : null}
-            </Pressable>,
-        );
-    }
+    // The zones, the folds and the geometry, all from the one flexbox tree
+    // (DROVE-214's resolver, DROVE-231's zones). Nothing here is an offset.
+    const { drawn } = resolveStatusStrip(content, width, STATUS_ROW_GIVE_WAY);
+    // What the ACCOUNT may take before it truncates: what the right zone's
+    // share leaves once the percentage and the chevron have theirs. A number,
+    // measured off this row, and never a fraction of the whole line. That was
+    // DROVE-223's `45%`, and it cut the most important word on the strip.
+    const accountCap = statusStripAccountCap(drawn, width);
+    const quotaText = statusStripQuotaText(drawn);
 
-    // What the session is working THROUGH, one tap from the strip (DROVE-167).
-    // Clay, three times: "why does this not let me see my fucking tasks". The
-    // list was already in the store the whole time, drawn once in the
-    // transcript and then scrolled away by the next twenty tool calls. Absent
-    // when the session never kept a list, because `0/0 tasks` is furniture.
-    if (tasksBadge && p.sessionId) {
-        segments.push(
-            <Pressable
-                key="tasks"
-                onPress={() => setOpenSheet((open) => (open === 'tasks' ? null : 'tasks'))}
-                accessibilityRole="button"
-                accessibilityLabel={tasks.headline}
-                accessibilityState={{ expanded: openSheet === 'tasks' }}
-                hitSlop={segmentHitSlop}
-                style={({ pressed }) => ({
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    gap: 3,
-                    opacity: pressed ? 0.6 : 1,
-                })}
-            >
-                <Text style={{ fontSize: 11, color: theme.colors.textSecondary, ...Typography.default() }}>
-                    {tasksBadge}
+    const dotNode = dotColor ? (
+        <Pressable
+            key="dot"
+            onPress={p.onSessionInfoPress}
+            disabled={!p.onSessionInfoPress}
+            // Wider on the left than a segment, because the dot is 7pt of
+            // target at the very start of the row.
+            hitSlop={{ ...segmentHitSlop, left: 16, right: 10 }}
+            accessibilityRole={p.onSessionInfoPress ? 'button' : undefined}
+            // The word beside the dot is gone, so this is the only place the
+            // state is said in words (DROVE-138, DROVE-231).
+            accessibilityLabel={statusDotLabels[dotState]}
+            style={({ pressed }) => ({
+                flexDirection: 'row',
+                alignItems: 'center',
+                opacity: pressed && p.onSessionInfoPress ? 0.6 : 1,
+            })}
+        >
+            <StatusDot
+                color={dotColor}
+                // Exactly the two states that are burning tokens, at one
+                // shared period, so the blink says BUSY and the hue says which
+                // kind of busy (statusDotState.ts).
+                isPulsing={statusDotBlinks(dotState)}
+                size={statusRowMetrics.dot}
+                style={{ marginTop: 1 }}
+            />
+            {p.connectionStatus?.cliStatus ? (
+                <>
+                    <CliCheck name="claude" ok={p.connectionStatus.cliStatus.claude} />
+                    <CliCheck name="codex" ok={p.connectionStatus.cliStatus.codex} />
+                    {p.connectionStatus.cliStatus.gemini !== undefined ? (
+                        <CliCheck name="gemini" ok={p.connectionStatus.cliStatus.gemini} />
+                    ) : null}
+                </>
+            ) : null}
+        </Pressable>
+    ) : null;
+
+    const hasLive = !!(drawn.toolName || drawn.elapsed || sideCount > 0);
+    const liveNode = hasLive ? (
+        <Pressable
+            key="live"
+            onPress={canExpand
+                ? () => setOpenSheet((open) => (open === 'agents' ? null : 'agents'))
+                : undefined}
+            hitSlop={segmentHitSlop}
+            accessibilityRole={canExpand ? 'button' : undefined}
+            accessibilityState={canExpand ? { expanded: openSheet === 'agents' } : undefined}
+            accessibilityLabel={accessibilityLabelFor(main, sideCount, sideTokens)}
+            style={({ pressed }) => ({
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: statusStripMetrics.gap,
+                minWidth: 0,
+                flexShrink: statusRowShrink.live,
+                opacity: pressed && canExpand ? 0.6 : 1,
+            })}
+        >
+            {drawn.toolName ? (
+                <Text
+                    numberOfLines={1}
+                    style={{ fontSize: 11, color: theme.colors.text, flexShrink: 1, ...Typography.default() }}
+                >
+                    {drawn.toolName}
                 </Text>
+            ) : null}
+            {drawn.elapsed ? (
+                <Text style={{ fontSize: 11, color: theme.colors.text, ...Typography.default() }}>
+                    {drawn.elapsed}
+                </Text>
+            ) : null}
+            {sideCount > 0 ? (
+                <>
+                    {/* The workers, beside the dot exactly as Clay asked, and
+                        the whole of what the strip says about them: a glyph
+                        and a number, in the secondary colour so they never
+                        read as the main thread's own. */}
+                    <Ionicons name="people" size={11} color={theme.colors.textSecondary} />
+                    <Text style={{ fontSize: 11, color: theme.colors.textSecondary, ...Typography.default() }}>
+                        {sideCount}
+                    </Text>
+                </>
+            ) : null}
+            {canExpand ? (
                 <Ionicons
-                    name={openSheet === 'tasks' ? 'chevron-down' : 'chevron-up'}
+                    name={openSheet === 'agents' ? 'chevron-down' : 'chevron-up'}
                     size={10}
                     color={theme.colors.textSecondary}
                 />
-            </Pressable>,
-        );
-    }
+            ) : null}
+        </Pressable>
+    ) : null;
 
-    // The account heads the quota, because the quota IS this account's and the
-    // sheet behind the tap is the list of accounts to switch to (DROVE-160).
-    // The word `week` folds away when it does: `jamrizzi 23%` is one fact
-    // about one account and the sheet spells the window out. With no account
-    // there is nothing to head it, so the window keeps its name.
-    if (shownAccount || quotaText != null) {
-        const quotaBody = shownAccount ? (
-            <>
-                {/* The account is the only thing in this segment allowed to
-                    give way, and it gives way first of everything on the row:
-                    a cut name is still recognisable, a cut number is not. */}
+    // What the session is working THROUGH, one tap from the strip (DROVE-167).
+    const tasksNode = drawn.tasks && p.sessionId ? (
+        <Pressable
+            key="tasks"
+            onPress={() => setOpenSheet((open) => (open === 'tasks' ? null : 'tasks'))}
+            accessibilityRole="button"
+            accessibilityLabel={tasks.headline}
+            accessibilityState={{ expanded: openSheet === 'tasks' }}
+            hitSlop={segmentHitSlop}
+            style={({ pressed }) => ({
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: statusStripMetrics.gap,
+                opacity: pressed ? 0.6 : 1,
+            })}
+        >
+            <Text style={{ fontSize: 11, color: theme.colors.textSecondary, ...Typography.default() }}>
+                {drawn.tasks}
+            </Text>
+            <Ionicons
+                name={openSheet === 'tasks' ? 'chevron-down' : 'chevron-up'}
+                size={10}
+                color={theme.colors.textSecondary}
+            />
+        </Pressable>
+    ) : null;
+
+    // THE CENTRE: the tally, on the line's true centre, and the ring counting
+    // down to the next compaction beside it. The tap opens the tree, where
+    // DROVE-184's breakdown of main against fan-out lives.
+    const centreNode = drawn.tokens || context ? (
+        <View
+            key="centre"
+            style={{ flexDirection: 'row', alignItems: 'center', gap: statusStripMetrics.gap }}
+        >
+            {drawn.tokens ? (
+                <Pressable
+                    onPress={canExpand
+                        ? () => setOpenSheet((open) => (open === 'agents' ? null : 'agents'))
+                        : undefined}
+                    hitSlop={segmentHitSlop}
+                    accessibilityRole={canExpand ? 'button' : undefined}
+                    accessibilityLabel={accessibilityLabelFor(main, sideCount, sideTokens)}
+                    style={({ pressed }) => ({ opacity: pressed && canExpand ? 0.6 : 1 })}
+                >
+                    <Text style={{ fontSize: 11, color: theme.colors.text, ...Typography.default() }}>
+                        {drawn.tokens}
+                    </Text>
+                </Pressable>
+            ) : null}
+            {context ? (
+                <Pressable
+                    onPress={() => setShowPreciseContext((current) => !current)}
+                    hitSlop={segmentHitSlop}
+                    accessibilityRole="button"
+                    accessibilityLabel="Context"
+                    // The sentence with its source in it, so a screen reader
+                    // hears what the ring is measured against (DROVE-231).
+                    accessibilityValue={{ text: context.detail }}
+                    style={{ flexDirection: 'row', alignItems: 'center', gap: statusStripMetrics.gap }}
+                >
+                    {drawn.contextPercent ? (
+                        <Text style={{ fontSize: 11, color: theme.colors.textSecondary, ...Typography.default() }}>
+                            {drawn.contextPercent}
+                        </Text>
+                    ) : null}
+                    <ContextGaugeIcon fraction={context.fraction} />
+                </Pressable>
+            ) : null}
+        </View>
+    ) : null;
+
+    // THE RIGHT: the account, hard against the far inset, with the percentage
+    // it colours by. The quota opens a sheet that slides up (DROVE-117): a
+    // native menu row is a string, so it can hold a sentence but never a bar.
+    const quotaBody = (
+        <>
+            {drawn.account ? (
                 <Text
                     numberOfLines={1}
                     ellipsizeMode="tail"
@@ -582,133 +776,65 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
                         color: theme.colors.textSecondary,
                         flexShrink: statusRowShrink.account,
                         minWidth: 0,
+                        ...(accountCap == null ? null : { maxWidth: accountCap }),
                         ...Typography.default(),
                     }}
                 >
-                    {shownAccount}
+                    {drawn.account}
                 </Text>
-                {/* The number, when there IS one. An account whose windows
-                    have not been read yet still names itself (DROVE-194):
-                    before this the account was drawn only inside a quota
-                    segment that a missing week figure deleted, so a remote
-                    session lost the account and the quota together and the
-                    strip went blank. */}
-                {p.weekPercent != null ? (
-                    <Text style={{
-                        fontSize: statusRowMetrics.fontSize,
-                        color: theme.colors.textSecondary,
-                        flexShrink: statusRowShrink.quota,
-                        ...Typography.default(),
-                    }}>
-                        {`${Math.round(p.weekPercent)}%`}
-                    </Text>
-                ) : null}
-            </>
-        ) : (
-            <Text style={{
-                fontSize: statusRowMetrics.fontSize,
-                color: theme.colors.textSecondary,
-                ...Typography.default(),
-            }}>
-                {quotaText}
-            </Text>
-        );
-        // The quota opens a sheet that slides up (DROVE-117), not a native
-        // menu: a UIMenu row is a string, so it can hold a sentence but never
-        // a bar. DROVE-107 unfolded the rows in place instead; a sheet gives
-        // the account list room to scroll and a known width to align in.
-        segments.push(
-            canOpenUsage ? (
-                <Pressable
-                    key="week"
-                    onPress={() => setOpenSheet((open) => (open === 'usage' ? null : 'usage'))}
-                    accessibilityRole="button"
-                    accessibilityLabel={shownAccount ? `Quota, ${quotaText ?? shownAccount}` : undefined}
-                    accessibilityState={{ expanded: openSheet === 'usage' }}
-                    hitSlop={segmentHitSlop}
-                    style={({ pressed }) => ({
-                        flexDirection: 'row',
-                        alignItems: 'center',
-                        gap: 3,
-                        flexShrink: shownAccount ? 1 : 0,
-                        minWidth: 0,
-                        opacity: pressed ? 0.6 : 1,
-                    })}
-                >
-                    {quotaBody}
-                    <Ionicons
-                        name={openSheet === 'usage' ? 'chevron-down' : 'chevron-up'}
-                        size={10}
-                        color={theme.colors.textSecondary}
-                    />
-                </Pressable>
-            ) : (
-                <View key="week" style={{ flexDirection: 'row', alignItems: 'center', gap: 3, minWidth: 0 }}>
-                    {quotaBody}
-                </View>
-            ),
-        );
-    }
-
-    if (p.contextStatus) {
-        const context = p.contextStatus;
-        // The ring alone while the main thread works (DROVE-155: the live token
-        // count is the cost readout at that moment) and equally once the
-        // account is on the row (DROVE-138). Either way the ring fills with the
-        // same number the text was printing, and the tap still opens the exact
-        // figure, so it is the cheapest thing on a full row to lose.
-        const showPercent = showsContextPercent(shownAccount, showPreciseContext, main !== null);
-        segments.push(
+            ) : null}
+            {quotaText ? (
+                <Text style={{
+                    fontSize: statusRowMetrics.fontSize,
+                    // The one coloured number on the strip, and it warms by
+                    // the sheet's ramp (DROVE-230).
+                    color: quotaColor,
+                    flexShrink: statusRowShrink.quota,
+                    ...Typography.default(),
+                }}>
+                    {quotaText}
+                </Text>
+            ) : null}
+        </>
+    );
+    const hasQuota = !!(drawn.account || quotaText);
+    const rightNode = hasQuota ? (
+        canOpenUsage ? (
             <Pressable
-                key="context"
-                onPress={() => setShowPreciseContext((current) => !current)}
-                hitSlop={{ ...segmentHitSlop, right: 14 }}
+                key="week"
+                onPress={() => setOpenSheet((open) => (open === 'usage' ? null : 'usage'))}
                 accessibilityRole="button"
-                accessibilityLabel="Context"
-                accessibilityValue={{ text: context.detailText }}
-                style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}
+                accessibilityLabel={drawn.account ? `Quota, ${drawn.account} ${quotaText ?? ''}`.trim() : undefined}
+                accessibilityState={{ expanded: openSheet === 'usage' }}
+                hitSlop={{ ...segmentHitSlop, right: 16 }}
+                style={({ pressed }) => ({
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: statusStripMetrics.gap,
+                    minWidth: 0,
+                    opacity: pressed ? 0.6 : 1,
+                })}
             >
-                {showPercent ? (
-                    <Text style={{ fontSize: 11, color: context.color, ...Typography.default() }}>
-                        {showPreciseContext
-                            ? context.detailText
-                            : t('agentInput.context.percentContext', { percent: context.percent })}
-                    </Text>
-                ) : null}
-                <ContextGaugeIcon percent={context.percent} />
-            </Pressable>,
-        );
-    }
+                {quotaBody}
+                <Ionicons
+                    name={openSheet === 'usage' ? 'chevron-down' : 'chevron-up'}
+                    size={10}
+                    color={theme.colors.textSecondary}
+                />
+            </Pressable>
+        ) : (
+            <View key="week" style={{ flexDirection: 'row', alignItems: 'center', gap: statusStripMetrics.gap, minWidth: 0 }}>
+                {quotaBody}
+            </View>
+        )
+    ) : null;
 
-    // THE DOT IS THE MAIN THREAD (DROVE-155). See the rule at the top of this
-    // file. Blue and pulsing exactly while the MAIN thread is working;
-    // otherwise whatever the connection says (green online, grey gone, orange
-    // waiting on you). It was `summary ? ...` — any live snapshot at all — and
-    // that is what made it blue for a session whose only activity was a
-    // background fan-out.
-    const mainWorking = main !== null;
-    const dotColor = mainWorking ? workingColor : p.connectionStatus?.dotColor;
-    // The word `online` is gone, so the dot inherits everything it carried:
-    // the tap into session info, and the state IN WORDS for a screen reader
-    // (DROVE-138). The screen says it in colour; this says it out loud. The
-    // two states never contradict: the blue is the MAIN thread (DROVE-155) and
-    // the colour under it is the connection, so both are named.
-    const dotLabel = [
-        mainWorking ? 'Working' : null,
-        p.connectionStatus?.text,
-    ].filter((part): part is string => !!part).join(', ');
-
-    // THE GUARD IS ASKED OF THE ROW, NOT OF THE PROPS (DROVE-194).
-    //
-    // It used to read `!summary && !connectionStatus && !hasUsage &&
-    // !tasksBadge`, which is a different question: whether anything COULD be
-    // on the row, not whether anything IS. `connectionStatus` is an object
-    // literal SessionView rebuilds every render, so that term was always true
-    // on a session screen and the guard could never fire there. What it hid
-    // was the opposite failure: a row that passes the guard and then draws
-    // nothing but the 7pt dot, which is what Clay photographed. Counting the
-    // segments that were built cannot drift from what is painted.
-    if (segments.length === 0 && !dotColor) {
+    // THE GUARD IS ASKED OF THE ROW, NOT OF THE PROPS (DROVE-194). Counting
+    // what was built cannot drift from what is painted; asking whether
+    // anything COULD be on the row could never fire, because
+    // `connectionStatus` is an object SessionView rebuilds every render.
+    const drawsSomething = !!(liveNode || tasksNode || centreNode || rightNode);
+    if (!drawsSomething && !dotColor) {
         return null;
     }
 
@@ -718,66 +844,46 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
                 flexDirection: 'row',
                 alignItems: 'center',
                 // The composer's glyph column, 19 from the screen edge: where
-                // the `+`'s ink starts, so the row lines up with it. It is
-                // read off the composer rather than rebuilt here (DROVE-206),
-                // because the `+` has been three different sizes in three
-                // arrangements and this alignment has to follow it.
+                // the `+`'s ink starts, so the row lines up with it. Read off
+                // the composer rather than rebuilt here (DROVE-206).
                 paddingHorizontal: MOBILE_COMPOSER_LAYOUT.textInset,
-                // The strip's box, shared with the recording banner that sits
-                // over it (DROVE-157), so the two cannot drift and a mic
-                // cannot resize the dock. It is now ONE object rather than two
-                // constants spelled out at each end (DROVE-221): the row wrote
-                // `minHeight: 18` over its own 6pt of padding and the banner's
-                // wrapper wrote `minHeight: 24`, and a 4pt jump lived in the
-                // difference.
+                // The strip's box, shared with the recording banner over it
+                // (DROVE-157, DROVE-221), so a mic cannot resize the dock.
                 ...COMPOSER_STRIP_BOX,
             }}>
-                {dotColor ? (
-                    <Pressable
-                        onPress={p.onSessionInfoPress}
-                        disabled={!p.onSessionInfoPress}
-                        // Wider on the left than a segment, because the dot is
-                        // 7pt of target at the very start of the row. The
-                        // vertical stays the strip's, which is the one target
-                        // under the 44pt floor and is argued for in
-                        // agentDockLayout and glassChrome.test.ts.
-                        hitSlop={{ ...segmentHitSlop, left: 16, right: 10 }}
-                        accessibilityRole={p.onSessionInfoPress ? 'button' : undefined}
-                        accessibilityLabel={dotLabel || undefined}
-                        style={({ pressed }) => ({
-                            flexDirection: 'row',
-                            alignItems: 'center',
-                            opacity: pressed && p.onSessionInfoPress ? 0.6 : 1,
-                        })}
-                    >
-                        <StatusDot
-                            color={dotColor}
-                            isPulsing={mainWorking ? true : p.connectionStatus?.isPulsing}
-                            // A point bigger than DROVE-82's 6, now that it is
-                            // the only thing saying which state the connection
-                            // is in: grey and orange have to be told apart at
-                            // this size with no word beside them.
-                            size={statusRowMetrics.dot}
-                            // Optically centres the dot against the 11pt text baseline.
-                            style={{ marginTop: 1, marginRight: statusRowMetrics.dotMarginRight }}
-                        />
-                        {p.connectionStatus?.cliStatus ? (
-                            <>
-                                <CliCheck name="claude" ok={p.connectionStatus.cliStatus.claude} />
-                                <CliCheck name="codex" ok={p.connectionStatus.cliStatus.codex} />
-                                {p.connectionStatus.cliStatus.gemini !== undefined ? (
-                                    <CliCheck name="gemini" ok={p.connectionStatus.cliStatus.gemini} />
-                                ) : null}
-                            </>
+                {/* LEFT ZONE. `flex: 1`, with the spacer on its inner side, so
+                    its content sits hard against the inset and it takes half
+                    of whatever the centre leaves. That halving is what puts
+                    the centre on the true middle. No offset computes it. */}
+                <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, minWidth: 0 }}>
+                    <View style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        gap: statusStripMetrics.dotGap,
+                        minWidth: 0,
+                    }}>
+                        {dotNode}
+                        {liveNode || tasksNode ? (
+                            <View style={{
+                                flexDirection: 'row',
+                                alignItems: 'center',
+                                gap: statusStripMetrics.clusterGap,
+                                minWidth: 0,
+                            }}>
+                                {liveNode}
+                                {tasksNode}
+                            </View>
                         ) : null}
-                    </Pressable>
-                ) : null}
-                {segments.map((segment, index) => (
-                    <React.Fragment key={(segment as React.ReactElement).key ?? index}>
-                        {index > 0 ? <Separator /> : null}
-                        {segment}
-                    </React.Fragment>
-                ))}
+                    </View>
+                    <View style={{ flex: 1 }} />
+                </View>
+                {centreNode}
+                {/* RIGHT ZONE. The mirror of the left: spacer first, so the
+                    account and its percentage end on the far inset. */}
+                <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, minWidth: 0 }}>
+                    <View style={{ flex: 1 }} />
+                    {rightNode}
+                </View>
             </View>
             {canOpenUsage ? (
                 <UsageAccountBarsSheet

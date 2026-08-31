@@ -171,6 +171,17 @@ export type UsageBarGroup = {
 export type UsageStrip = {
     /** The number on the strip, already flipped for the "% left" setting; null hides it. */
     weekPercent: number | null;
+    /**
+     * The strip percentage's COLOUR band, from `usageBarTone` (DROVE-231).
+     *
+     * Clay: "Account is right aligned with the percentage and changes color as
+     * it fills up." The band is the sheet's own function on the sheet's own
+     * window, carried out here rather than recomputed on the strip, so the two
+     * surfaces cannot disagree about whether this account is warm. It takes
+     * headroom LEFT, like every other caller, so the display direction setting
+     * cannot change what colour an account is.
+     */
+    weekTone: UsageBarTone;
     /** Nothing from the SDK; the snapshot is what the strip is reading. */
     usageFromDrover: boolean;
     /**
@@ -828,6 +839,12 @@ export function resolveUsageStrip(input: UsageStripInput): UsageStrip {
     const weekPercent = week?.utilization != null
         ? usageFill(100 - week.utilization).percentUsed
         : null;
+    // The strip's colour, from the sheet's own ramp on the same window
+    // (DROVE-231). `usageBarTone` takes headroom left, so the utilization is
+    // turned back into headroom here rather than the ramp growing a direction.
+    const weekTone = week?.utilization != null
+        ? usageBarTone(100 - week.utilization)
+        : usageBarTone(null);
 
     // Every account, current first, each its own block (DROVE-148). Before
     // this the current account got three rows and the rest got one bar apiece,
@@ -874,6 +891,7 @@ export function resolveUsageStrip(input: UsageStripInput): UsageStrip {
     }));
     return {
         weekPercent,
+        weekTone,
         usageFromDrover,
         usageBarGroups: groups,
         usageBarCapturedAt: input.droverUsage?.capturedAt ?? null,

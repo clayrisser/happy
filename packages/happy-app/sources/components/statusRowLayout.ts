@@ -181,18 +181,39 @@ export const STATUS_ROW_MODEL_TRUNCATION = {
  *      account says whose number it is; the sheet spells the window out.
  *   3. `toolName`, a TOOL's name. `Bash` is recoverable from the tree behind
  *      the fold, and the clock and the count under it are the fact.
- *   4. `account`, truncated at the tail rather than dropped. A cut name is
+ *   4. `elapsed`, the turn's clock.
+ *   5. `tasks`, the `1/3 tasks` badge (DROVE-167).
+ *   6. `account`, truncated at the tail rather than dropped. A cut name is
  *      still recognisable; the first thing that gives way as TEXT.
- *   5. `tokens`, the live token count. A number, and one tap away.
- *   6. `elapsed`, the turn's clock. The same.
- *   7. `workingWord`. LAST. It is the answer to "what is happening", and
- *      Clay's own reading of it: "the working word goes last... the token
- *      count or the elapsed timer can shorten or drop before it". 5 and 6
- *      moved BELOW 4 and above 7 for exactly that.
+ *   7. `tokens`, the tally. LAST.
  *
  * THE RULE, and the next fact added to this line inherits it: nothing later on
  * this list gives way while anything earlier is still on the row. A new fact
  * takes a place on this list before it takes a place on the line.
+ *
+ * AND DROVE-231 REBUILT THE LINE AS THREE ZONES, so the order had to move with
+ * it. Two changes, both consequences of Clay's spec rather than second
+ * thoughts about 223:
+ *
+ *   - `workingWord` is GONE from the list, because it is gone from the strip.
+ *     Clay: "Don't show text working." The dot blinks blue instead, and the
+ *     dot is the one thing on the line that never gives way, so the rule 223
+ *     wrote — the working word goes last — is now kept by construction rather
+ *     than by a rank. What is left in the label slot is only ever a TOOL's
+ *     name, which is what `toolName` already meant.
+ *   - `tokens` and `elapsed` SWAPPED. 223 had the token count give way before
+ *     the clock; Clay has since put the token count on the centre of the line
+ *     and named it as one of the three zones, and the clock is not one of
+ *     them. So the tally is now the last text on the strip and the clock goes
+ *     before it. Every other pair 223 fixed is untouched: the tool name still
+ *     folds before the account, and the account still truncates before the
+ *     number beside it.
+ *
+ * `tasks` is NEW on the list and takes DROVE-167's own position: that ticket
+ * ruled the tool name folds to pay for the badge, so the badge is the more
+ * protected of the two. It sits under the clock because Clay has asked for the
+ * task list by name three times and has never asked for the clock, and because
+ * the badge is the only tap on the strip that opens the list at all.
  *
  * `model` is not on the list. It left the row in DROVE-178 and the fold is
  * kept only for a caller that still passes one; where it fires it fires with
@@ -202,10 +223,10 @@ export const STATUS_ROW_GIVE_WAY = [
     'contextPercent',
     'quotaWindow',
     'toolName',
+    'elapsed',
+    'tasks',
     'account',
     'tokens',
-    'elapsed',
-    'workingWord',
 ] as const;
 
 export type StatusRowGiveWay = (typeof STATUS_ROW_GIVE_WAY)[number];

@@ -637,47 +637,12 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     },
 }));
 
-const formatTokenCount = (tokens: number): string => {
-    if (tokens < 1000) {
-        return `${Math.max(0, Math.round(tokens))}`;
-    }
-    if (tokens < 999500) {
-        return `${Math.round(tokens / 1000)}k`;
-    }
-    const millions = tokens / 1000000;
-    return `${millions >= 10 ? Math.round(millions) : Math.round(millions * 10) / 10}M`;
-};
 
-const getContextStatus = (contextSize: number, alwaysShow: boolean = false, theme: Theme, contextWindow: number | undefined) => {
-    // Until the session reports its window there is no honest denominator, so
-    // nothing is shown rather than dividing by a guess — a percentage that
-    // later corrects itself upward reads as the context refilling.
-    if (typeof contextWindow !== 'number' || !Number.isFinite(contextWindow) || contextWindow <= 0) {
-        return null;
-    }
-    const percentageUsed = Math.max(0, Math.min(100, (contextSize / contextWindow) * 100));
-    const percentageRemaining = 100 - percentageUsed;
-
-    let color: string;
-    if (percentageRemaining <= 5) {
-        color = theme.colors.warningCritical;
-    } else if (percentageRemaining <= 10) {
-        color = theme.colors.warning;
-    } else if (alwaysShow) {
-        color = theme.colors.textSecondary;
-    } else {
-        return null; // No display needed
-    }
-
-    return {
-        percent: Math.round(percentageUsed),
-        detailText: t('agentInput.context.detailContext', {
-            used: formatTokenCount(contextSize),
-            total: formatTokenCount(contextWindow),
-        }),
-        color,
-    };
-};
+// `getContextStatus` lived here and derived the strip's percent, its detail
+// text and its colour, and gated the gauge to the last 10% of the window. All
+// four moved to contextCompaction.ts (DROVE-231): the ring is a countdown to
+// the next COMPACTION now, which is what Clay asked to see, and a gauge that
+// only appears at 90% cannot answer when the next one is.
 
 // Stable sub-trees extracted from AgentInput so they don't reconcile when
 // the input's keystroke-derived state (hasText / inputState) flips. Their
@@ -845,12 +810,29 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     }, [isSandboxEnabled]);
 
     // Usage row under the card: week quota + context gauge
-    const contextStatus = props.usageData?.contextSize
-        ? getContextStatus(props.usageData.contextSize, props.alwaysShowContextSize ?? false, theme, props.usageData.contextWindow)
-        : null;
+    /**
+     * The two raw numbers, straight down (DROVE-231).
+     *
+     * `getContextStatus` used to derive the strip's percent, its detail text
+     * and its colour here, and also decided the gauge was only worth drawing
+     * within 10% of the window. The strip owns all of that now: it fills the
+     * ring toward the next COMPACTION rather than the window, which is the
+     * question Clay asked, and a gauge that only appears at 90% cannot answer
+     * it.
+     */
+    const contextUsage = React.useMemo(() => (
+        props.usageData?.contextSize
+            ? {
+                contextSize: props.usageData.contextSize,
+                ...(props.usageData.contextWindow ? { contextWindow: props.usageData.contextWindow } : {}),
+            }
+            : null
+    ), [props.usageData?.contextSize, props.usageData?.contextWindow]);
     // The week figure and its popup, from agent state or, on a pane session,
     // from drover's snapshot (DROVE-47); resolveUsageStrip says which.
-    const { weekPercent, usageBarGroups, usageBarFooter, usageBarCapturedAt } = React.useMemo(() => resolveUsageStrip({
+    // `usageBarCapturedAt` is DROVE-230's: the strip says how old the reading
+    // is, and the direction setting it replaced is deleted, not re-read here.
+    const { weekPercent, weekTone, usageBarGroups, usageBarFooter, usageBarCapturedAt } = React.useMemo(() => resolveUsageStrip({
         usageLimits: props.sessionStatusUsageLimits ?? null,
         droverUsage: props.sessionStatusDroverUsage,
         droverAccount: props.sessionStatusDroverAccount,
@@ -2869,8 +2851,10 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     <AgentInputStatusRow
                         sessionId={props.sessionId}
                         connectionStatus={props.connectionStatus}
-                        contextStatus={contextStatus}
+                        contextUsage={contextUsage}
+                        alwaysShowContext={props.alwaysShowContextSize ?? false}
                         weekPercent={weekPercent}
+                        weekTone={weekTone}
                         usageBarGroups={usageBarGroups}
                         usageBarFooter={usageBarFooter}
                         usageBarCapturedAt={usageBarCapturedAt}

@@ -123,12 +123,46 @@ function measureHeight(node: FlexNode, width: number): number {
     return clampHeight(node.style, stacked + gap * Math.max(0, children.length - 1) + pad.top + pad.bottom);
 }
 
-/** The width a node takes inside `available`. */
+/**
+ * The width a node takes inside `available`.
+ *
+ * A container with neither a width nor a `flex` sizes to its CONTENT, which is
+ * what Yoga does for a flex item whose width is `auto` (DROVE-231). It used to
+ * return `available` for that case, which was never exercised: every node in
+ * DROVE-214's composer tree carries a width or a flex, so the branch could not
+ * fire and the pinned frames are unchanged. The status strip's zones do need
+ * it. A zone that is a row of text and glyphs has no width of its own and must
+ * not swallow the line.
+ *
+ * A LEAF with no width still takes `available`. That is the text case, and a
+ * leaf's intrinsic width is not something this resolver can measure; the strip
+ * hands every text leaf an estimated width instead.
+ *
+ * The content width is NOT clamped to what is available, because React
+ * Native's `flexShrink` defaults to 0 and a row of fixed children therefore
+ * OVERFLOWS its parent rather than squeezing into it. Clamping here would say
+ * every zone fits at every width, which is the failure mode this resolver
+ * exists to catch: the strip's give-way order is driven by exactly this
+ * measurement.
+ */
 function measureWidth(node: FlexNode, available: number): number {
     if (typeof node.style.width === 'number') return node.style.width;
     if (node.style.width === '100%') return available;
     if (node.style.flex !== undefined) return available;
-    return available;
+    const children = node.children ?? [];
+    if (children.length === 0) return available;
+    const pad = padding(node.style);
+    const inner = available - pad.left - pad.right;
+    if (node.style.flexDirection === 'row') {
+        const gap = node.style.gap ?? 0;
+        const content = children.reduce(
+            (sum, child) => sum + (child.style.flex !== undefined ? 0 : measureWidth(child, inner)),
+            0,
+        ) + gap * Math.max(0, children.length - 1);
+        return content + pad.left + pad.right;
+    }
+    const widest = Math.max(...children.map((child) => measureWidth(child, inner)));
+    return widest + pad.left + pad.right;
 }
 
 /**
