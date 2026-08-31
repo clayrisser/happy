@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 
-import { createPaneCommandQueue, paneCommandsForSelection, paneSlashCommand, parseRemoteControlRequest, remoteControlCommand } from './paneModelSync'
+import { createPaneCommandQueue, paneCommandArgument, paneCommandsForSelection, paneModelAsRequest, paneSlashCommand, parseRemoteControlRequest, remoteControlCommand } from './paneModelSync'
 
 beforeEach(() => {
     // Never let a unit test reach the real drover bus.
@@ -368,5 +368,34 @@ describe('the queue can drop a command that stopped being right', () => {
         })
         queue.cancel('/remote-control')
         expect(queue.pending()).toEqual([])
+    })
+})
+
+describe('paneCommandArgument', () => {
+    it('gives back the id the command carried, which is what metadata speaks', () => {
+        expect(paneCommandArgument('/model claude-opus-5[1m]')).toBe('claude-opus-5[1m]')
+        expect(paneCommandArgument('/effort ultracode')).toBe('ultracode')
+    })
+
+    it('reads the two reset spellings as no pick at all', () => {
+        expect(paneCommandArgument('/model default')).toBeNull()
+        expect(paneCommandArgument('/effort auto')).toBeNull()
+        expect(paneCommandArgument('/remote-control')).toBeNull()
+    })
+})
+
+describe('paneModelAsRequest', () => {
+    it('follows the pane', () => {
+        expect(paneModelAsRequest('claude-sonnet-5', 'claude-opus-5[1m]')).toBe('claude-sonnet-5')
+        expect(paneModelAsRequest('claude-opus-5', undefined)).toBe('claude-opus-5')
+        expect(paneModelAsRequest(null, 'claude-opus-5')).toBeNull()
+    })
+
+    it('keeps a bracket variant the transcript cannot contradict, so nothing retypes', () => {
+        // The whole reason there is no model reconcile: the transcript reports
+        // `claude-opus-5` for the 1M variant as well, so taking it literally
+        // would drop the bracket and disagree with the app forever.
+        expect(paneModelAsRequest('claude-opus-5', 'claude-opus-5[1m]')).toBe('claude-opus-5[1m]')
+        expect(paneModelAsRequest('claude-opus-5', 'claude-opus-5')).toBe('claude-opus-5')
     })
 })

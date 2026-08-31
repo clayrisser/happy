@@ -180,6 +180,25 @@ describe('paneCommandOutcome', () => {
         expect(paneCommandOutcome(idle, applied, 'model'))
             .toEqual({ state: 'applied', value: 'Set model to Fable 5'.slice('Set model to '.length) })
     })
+
+    it('stops at the model, not at the end of the sentence (DROVE-191)', () => {
+        // A pick that lands at an IDLE prompt is also saved as the machine's
+        // global default, and Claude Code says so on the same line. The regex
+        // ran to the end of it, so `paneModel` held the whole clause and the
+        // app drew a menu row and a pill named "Sonnet 5 and saved as your
+        // default for new sessions".
+        const applied = screen(
+            '  \u23bf  Set model to Sonnet 5 and saved as your default for new sessions',
+            rule, '\u276f ', rule,
+        )
+        expect(paneCommandOutcome(idle, applied, 'model')).toEqual({ state: 'applied', value: 'Sonnet 5' })
+    })
+
+    it('marks a model the pane KEPT, which is the model we were leaving', () => {
+        const kept = screen('  \u23bf  Kept model as Opus 5', rule, '\u276f ', rule)
+        expect(paneCommandOutcome(idle, kept, 'model'))
+            .toEqual({ state: 'applied', value: 'Opus 5', kept: true })
+    })
 })
 
 describe('paneCommandKind', () => {

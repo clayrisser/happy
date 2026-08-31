@@ -1030,6 +1030,113 @@ describe('claudeLocalLauncher in a tmux pane', () => {
             await launcher;
         });
 
+        /**
+         * DROVE-191. `paneModel`/`paneEffort` tracked the terminal, `modelMode`
+         * did not, and both the app's "did this change?" test and this
+         * launcher's delta ran against `modelMode`. So the moment the pane
+         * moved on its own the picker went dead: the row showed Sonnet 5 and
+         * tapping Opus 5 [1M] matched a stale request and sent nothing.
+         */
+        describe('when the pane moves under the app', () => {
+            it('mirrors the pane back into the request, so the next pick is a change again', async () => {
+                const runs = trackRuns();
+                let scannerOptions: ScannerOptions | undefined;
+                mockCreateSessionScanner.mockImplementation(async (opts: ScannerOptions) => {
+                    scannerOptions = opts;
+                    return { onNewSession: vi.fn(), cleanup: vi.fn(async () => {}) };
+                });
+                const { session, emitMetadata, readMetadata } = paneSession({ modelMode: 'claude-opus-5[1m]' });
+                const rule = '\u2500'.repeat(40);
+                const applied = ['  \u23bf  Set model to Opus 5 [1M]', rule, '\u276f ', rule].join('\n');
+                let typed = false;
+                mockCapturePane.mockImplementation(async () => (typed ? applied : [rule, '\u276f ', rule].join('\n')));
+                mockInjectIntoPane.mockImplementation(async () => { typed = true; return true; });
+
+                const launcher = claudeLocalLauncher(session as any);
+                await vi.waitFor(() => expect(runs).toHaveLength(1));
+                await vi.waitFor(() => expect(scannerOptions?.onRunObserved).toBeTypeOf('function'));
+
+                // Clay typed `/model claude-sonnet-5` at his own keyboard.
+                scannerOptions!.onRunObserved!({ model: 'claude-sonnet-5', effort: null });
+                await vi.waitFor(() => expect(readMetadata().paneModel).toBe('claude-sonnet-5'), { timeout: 5000 });
+                // The request follows it. Before this, it stayed on opus[1m].
+                await vi.waitFor(() => expect(readMetadata().modelMode).toBe('claude-sonnet-5'), { timeout: 5000 });
+
+                // And now tapping Opus 5 [1M] reaches the prompt.
+                emitMetadata({ modelMode: 'claude-opus-5[1m]' });
+                await vi.waitFor(
+                    () => expect(mockInjectIntoPane).toHaveBeenCalledWith(
+                        expect.anything(),
+                        '/model claude-opus-5[1m]',
+                        expect.anything(),
+                    ),
+                    { timeout: 5000 },
+                );
+                // The id, not "Opus 5 [1M] and saved as your default…".
+                await vi.waitFor(() => expect(readMetadata().paneModel).toBe('claude-opus-5[1m]'), { timeout: 5000 });
+
+                mockCapturePane.mockResolvedValue(null);
+                mockInjectIntoPane.mockResolvedValue(true);
+                runs[0].run.resolve();
+                await launcher;
+            });
+
+            it('keeps a [1m] request the transcript cannot contradict, and types nothing', async () => {
+                // The retype loop this ticket must not reintroduce. The
+                // transcript reports `claude-opus-5` for the 1M variant too, so
+                // mirroring it literally would drop the bracket and every
+                // observation after would disagree with the app forever.
+                const runs = trackRuns();
+                let scannerOptions: ScannerOptions | undefined;
+                mockCreateSessionScanner.mockImplementation(async (opts: ScannerOptions) => {
+                    scannerOptions = opts;
+                    return { onNewSession: vi.fn(), cleanup: vi.fn(async () => {}) };
+                });
+                const { session, readMetadata } = paneSession({ modelMode: 'claude-opus-5[1m]' });
+                mockInjectIntoPane.mockResolvedValue(true);
+
+                const launcher = claudeLocalLauncher(session as any);
+                await vi.waitFor(() => expect(runs).toHaveLength(1));
+                await vi.waitFor(() => expect(scannerOptions?.onRunObserved).toBeTypeOf('function'));
+
+                scannerOptions!.onRunObserved!({ model: 'claude-opus-5', effort: null });
+                await vi.waitFor(() => expect(readMetadata().paneModel).toBe('claude-opus-5'), { timeout: 5000 });
+                scannerOptions!.onRunObserved!({ model: 'claude-opus-5', effort: null });
+                await new Promise((r) => setTimeout(r, 100));
+
+                expect(readMetadata().modelMode).toBe('claude-opus-5[1m]');
+                expect(mockInjectIntoPane).not.toHaveBeenCalled();
+
+                runs[0].run.resolve();
+                await launcher;
+            });
+
+            it('stops asking for an effort the pane refused', async () => {
+                // DROVE-191(3): the rollback moved `paneEffort` and left
+                // `effortLevel: "turbo"` standing on the server, so the request
+                // field said something that had never happened.
+                const runs = trackRuns();
+                const { session, emitMetadata, readMetadata } = paneSession({ effortLevel: 'high' });
+                const rule = '\u2500'.repeat(40);
+                const refusal = ["  \u23bf  Invalid argument: 'turbo' is not an effort level", rule, '\u276f ', rule].join('\n');
+                let typed = false;
+                mockCapturePane.mockImplementation(async () => (typed ? refusal : [rule, '\u276f ', rule].join('\n')));
+                mockInjectIntoPane.mockImplementation(async () => { typed = true; return true; });
+
+                const launcher = claudeLocalLauncher(session as any);
+                await vi.waitFor(() => expect(runs).toHaveLength(1));
+
+                emitMetadata({ effortLevel: 'turbo' });
+                await vi.waitFor(() => expect(readMetadata().effortLevel).toBe(null), { timeout: 5000 });
+                expect(readMetadata().paneEffort).toBe(null);
+
+                mockCapturePane.mockResolvedValue(null);
+                mockInjectIntoPane.mockResolvedValue(true);
+                runs[0].run.resolve();
+                await launcher;
+            });
+        });
+
         it('reports ultracode as ultracode, not as the xhigh the transcript records', async () => {
             // Claude Code runs ultracode as xhigh with dynamic workflows beside
             // it, and the transcript carries no field that tells them apart —

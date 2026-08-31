@@ -10,6 +10,7 @@ import { describeDemoInput, isDroverDemoId, recordDemoAnswer } from './droverDem
 import type { AgentQuestionAnswer, MachineMetadata, SessionAgentModesPatch } from './storageTypes';
 import type { SessionInventoryPayload } from './sessionInventory';
 import { markAgentModePushPending, clearAgentModePushPending, type AgentModeField } from './agentModesPending';
+import { resolvePaneModelKey } from '@/components/modelModeOptions';
 import {
     isRigMetadata,
     rigCanAbort,
@@ -803,14 +804,28 @@ export function sessionSetAgentModes(sessionId: string, patch: SessionAgentModes
         const meta = metaRaw === undefined ? null : (metaRaw ?? null);
         return value !== mirror || value !== meta;
     };
+    // DROVE-191: for a pane session the stored pick is not the last word on
+    // what is running — `/model` typed at the keyboard, a flip, or a limit
+    // downgrade moves the pane and leaves `modelMode` behind. Tapping the row
+    // the app shows then matched the stale request and sent nothing, so the
+    // picker was dead from the phone. A pick the PANE disagrees with is always
+    // a change, whatever the mirror says.
+    const paneDisagrees = (value: string | null, field: 'modelMode' | 'effortLevel'): boolean => {
+        if (field === 'modelMode') {
+            const paneModel = session?.metadata?.paneModel;
+            return !!paneModel && resolvePaneModelKey(paneModel, value) !== value;
+        }
+        const paneEffort = session?.metadata?.paneEffort;
+        return !!paneEffort && paneEffort !== value;
+    };
     const changed: SessionAgentModesPatch = {};
     if (patch.permissionMode !== undefined && isChanged(patch.permissionMode, 'permissionMode')) {
         changed.permissionMode = patch.permissionMode;
     }
-    if (patch.modelMode !== undefined && isChanged(patch.modelMode, 'modelMode')) {
+    if (patch.modelMode !== undefined && (isChanged(patch.modelMode, 'modelMode') || paneDisagrees(patch.modelMode, 'modelMode'))) {
         changed.modelMode = patch.modelMode;
     }
-    if (patch.effortLevel !== undefined && isChanged(patch.effortLevel, 'effortLevel')) {
+    if (patch.effortLevel !== undefined && (isChanged(patch.effortLevel, 'effortLevel') || paneDisagrees(patch.effortLevel, 'effortLevel'))) {
         changed.effortLevel = patch.effortLevel;
     }
     if (patch.remoteControl !== undefined && isChanged(patch.remoteControl, 'remoteControl')) {

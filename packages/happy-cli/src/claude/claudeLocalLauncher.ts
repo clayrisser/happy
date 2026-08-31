@@ -8,7 +8,7 @@ import { ambientDataDir } from "@/drover/flip/accounts";
 import { parseFlipCommand } from "@/drover/flip/controller";
 import { capturePane, injectIntoPane, interruptPane, paneAcceptsCommand, paneIsIdle, pressPaneKey } from "./utils/paneInject";
 import { paneCommandKind, paneCommandOutcome, paneUltracodeActive } from "./utils/paneCommandOutcome";
-import { createPaneCommandQueue, paneCommandsForSelection, paneSlashCommand, parseRemoteControlRequest, remoteControlCommand, type PaneModelSelection } from "./utils/paneModelSync";
+import { createPaneCommandQueue, paneCommandArgument, paneCommandsForSelection, paneModelAsRequest, paneSlashCommand, parseRemoteControlRequest, remoteControlCommand, type PaneModelSelection } from "./utils/paneModelSync";
 import { cyclePaneMode, pressCycleKey, readPaneMode, type PaneMode } from "./utils/panePermissionSync";
 import { isPermissionMode, mapToClaudeMode } from "./utils/permissionMode";
 import { findInbox, sendToInbox, wrapForPane } from "./utils/inboxSocket";
@@ -165,6 +165,11 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
                         paneEffort: effort,
                     }));
                     reconcilePaneEffort();
+                    // After the reconcile, never before it: the reconcile is
+                    // the one place the app's standing request is allowed to
+                    // beat the pane (DROVE-164), and mirroring first would
+                    // erase the very difference it exists to apply.
+                    mirrorPaneIntoRequest();
                 })();
             }
             : undefined,
@@ -532,11 +537,29 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
                     message: `Cattle Drover: the terminal would not take ${command} — ${outcome.message}`,
                 });
                 await reportPaneRun();
+                // DROVE-191: and stop ASKING for it. Rolling back `paneSelection`
+                // alone left `effortLevel: "turbo"` standing on the server after
+                // the pane had said no, so the request field was a lie the app
+                // showed nowhere and the next metadata event would have retyped.
+                mirrorPaneIntoRequest(kind);
                 return true;
             }
             if (outcome.state === 'applied') {
+                if (outcome.kept) {
+                    // "Kept model as X" is the pane saying the switch did NOT
+                    // happen, so the word in it names the model we were trying
+                    // to leave. Treated as a refusal without the shouting.
+                    logger.debug(`[local]: the pane kept its model instead of taking ${command}`);
+                    rollBackPaneSelection(kind);
+                    mirrorPaneIntoRequest(kind);
+                    return true;
+                }
                 logger.debug(`[local]: the pane took ${command} (${outcome.value})`);
-                await reportPaneRun(kind, outcome.value);
+                // The ARGUMENT, not the pane's answer, for a model (DROVE-191).
+                // Claude Code answers in display names and everything else in
+                // this system speaks model ids; see paneCommandArgument.
+                await reportPaneRun(kind, kind === 'model' ? paneCommandArgument(command) : outcome.value);
+                mirrorPaneIntoRequest(kind);
                 return true;
             }
         }
@@ -687,9 +710,11 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
      * only thing that ever applies effort is a metadata DELTA. Remote Control
      * has had a start-up reconcile since DROVE-63; this is the same one.
      *
-     * Effort only. The transcript reports a model as `claude-opus-5` whether or
-     * not the pane is on the `[1m]` variant, so reconciling the model against
-     * it would retype `/model` on every launch forever.
+     * Effort only, still. The transcript reports a model as `claude-opus-5`
+     * whether or not the pane is on the `[1m]` variant, so reconciling the
+     * model against it would retype `/model` on every launch forever. DROVE-191
+     * does not change that: it fixes the model by mirroring the pane INTO the
+     * request (mirrorPaneIntoRequest), which is the direction that terminates.
      */
     let effortReconciled = false;
     function reconcilePaneEffort(): void {
@@ -703,6 +728,55 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
         paneSelection = { ...paneSelection, effortLevel: wanted };
         paneCommands.request([`/effort ${wanted}`], { allowWhileBusy: true });
         pumpPaneCommands();
+    }
+
+    /**
+     * Make the app's stored REQUEST agree with what the pane is running
+     * (DROVE-191).
+     *
+     * `paneModel` and `paneEffort` have tracked the terminal since DROVE-45,
+     * and the app renders those, so the pill was right. `modelMode` was not:
+     * it stayed on whatever the app last picked, and both the app's "did this
+     * change?" test and this launcher's own delta ran against it. Clay typed
+     * `/model claude-sonnet-5` at his keyboard, metadata read
+     * `{"modelMode":"claude-opus-5[1m]","paneModel":"claude-sonnet-5"}`, the
+     * row correctly showed Sonnet 5, and tapping Opus 5 [1M] wrote nothing and
+     * emitted no frame, because the app already believed it was on Opus.
+     *
+     * Mirroring the pane INTO the request is the direction that does not loop.
+     * Reconciling the other way — retyping `/model` because the transcript
+     * disagrees — is what `claudeLocalLauncher` has always refused to do, since
+     * the transcript cannot tell `claude-opus-5` from `claude-opus-5[1m]` and
+     * every launch would retype forever. Here the same ambiguity costs nothing:
+     * `paneModelAsRequest` keeps a bracket variant the pane cannot contradict,
+     * and everything else follows the pane.
+     *
+     * `applying` names the command being carried out right now, whose queue
+     * entry has not been shifted off yet. Any OTHER queued command is a pick
+     * still on its way to the prompt, and mirroring over it would cancel the
+     * very thing that is waiting.
+     */
+    function mirrorPaneIntoRequest(applying?: 'effort' | 'model'): void {
+        if (!tmuxPane) return;
+        const queued = paneCommands.pending();
+        const waitingFor = (kind: 'effort' | 'model') =>
+            kind !== applying && queued.some((c) => c.startsWith(`/${kind} `));
+        const metadata = session.client.getMetadata();
+        const patch: { modelMode?: string | null; effortLevel?: string | null } = {};
+        if (observedRun.model !== undefined && !waitingFor('model')) {
+            const wanted = paneModelAsRequest(observedRun.model ?? null, metadata?.modelMode);
+            if (wanted !== (metadata?.modelMode ?? null)) patch.modelMode = wanted;
+        }
+        if (observedRun.effort !== undefined && !waitingFor('effort')) {
+            const wanted = observedRun.effort ?? null;
+            if (wanted !== (metadata?.effortLevel ?? null)) patch.effortLevel = wanted;
+        }
+        if (Object.keys(patch).length === 0) return;
+        // Kept in step with the write, or the next metadata event would read
+        // its own mirror as a fresh pick and type it back at the prompt.
+        paneSelection = { ...paneSelection, ...patch };
+        logger.debug(`[local]: the pane moved under the app's request — mirroring ${JSON.stringify(patch)}`);
+        session.client.updateMetadata((m) => ({ ...m, ...patch }));
     }
 
     const onMetadataChanged = (metadata: { modelMode?: string | null, effortLevel?: string | null, permissionMode?: string | null, remoteControl?: unknown } | null) => {
@@ -727,13 +801,32 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
         // commit also fixes kept the idle gate from ever letting them through.
         // Compared against the OBSERVED run, not the previous request, and a
         // command already waiting for that value is withdrawn too.
-        if (next.modelMode !== undefined && next.modelMode === (observedRun.model ?? null)) {
-            paneCommands.cancel('/model');
-            next.modelMode = paneSelection.modelMode;
+        //
+        // DROVE-191 turns the same comparison the other way up. `paneSelection`
+        // remembers the last value the app asked for, and `commandFor` types
+        // nothing when the new pick equals it — so a pick that matches a stale
+        // request but NOT the pane sent no command at all. That is the "model
+        // switching does nothing" path: `/model` typed at the keyboard, a flip,
+        // or DROVE-187's limit downgrade moves the pane, the app still holds
+        // the old request, and tapping the model it holds is a no-op twice
+        // over. So the OBSERVED run decides both ways: matching it withdraws
+        // the command, and differing from it forces one out even when the
+        // request has not moved.
+        if (next.modelMode !== undefined && observedRun.model !== undefined) {
+            if (paneModelAsRequest(observedRun.model ?? null, next.modelMode) === next.modelMode) {
+                paneCommands.cancel('/model');
+                next.modelMode = paneSelection.modelMode;
+            } else {
+                paneSelection = { ...paneSelection, modelMode: undefined };
+            }
         }
-        if (next.effortLevel !== undefined && next.effortLevel === (observedRun.effort ?? null)) {
-            paneCommands.cancel('/effort');
-            next.effortLevel = paneSelection.effortLevel;
+        if (next.effortLevel !== undefined && observedRun.effort !== undefined) {
+            if (next.effortLevel === (observedRun.effort ?? null)) {
+                paneCommands.cancel('/effort');
+                next.effortLevel = paneSelection.effortLevel;
+            } else {
+                paneSelection = { ...paneSelection, effortLevel: undefined };
+            }
         }
         const commands = paneCommandsForSelection(paneSelection, next);
         if (commands.length === 0) return;

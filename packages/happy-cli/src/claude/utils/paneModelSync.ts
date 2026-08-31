@@ -113,6 +113,62 @@ function commandFor(
 }
 
 /**
+ * The argument of a `/model` or `/effort` we typed, as the metadata value it
+ * stands for (DROVE-191).
+ *
+ * The pane answers a `/model` in DISPLAY names — "Set model to Sonnet 5" — and
+ * everything downstream of it (the transcript scanner, resolvePaneModelKey in
+ * the app, this file's own comparisons) speaks model IDs. Two vocabularies for
+ * one field is how `paneModel` ended up holding "Sonnet 5 and saved as your
+ * default for new sessions". So when the pane says it took the command, what
+ * gets written down is the argument we gave it, not the words it answered in.
+ *
+ * `default` / `auto` are the reset spellings and mean "no pick", which is null.
+ * A phone-typed `/model opus` (DROVE-49) rides the same path and writes the
+ * alias, since that is genuinely what was asked for; the scanner replaces it
+ * with the full id at the end of the turn.
+ */
+export function paneCommandArgument(command: string): string | null {
+    const space = command.indexOf(' ')
+    if (space === -1) return null
+    const argument = command.slice(space + 1).trim()
+    if (argument === '' || argument === 'default' || argument === 'auto') return null
+    return argument
+}
+
+/**
+ * What the app should be storing as its model REQUEST, given what the pane is
+ * observed to be running and what it currently asks for (DROVE-191).
+ *
+ * The twin of `resolvePaneModelKey` in the app, which decides the same thing
+ * for the pill, and it has to stay the twin: this is what the launcher mirrors
+ * into `modelMode` so the app's stored pick stops drifting away from the pane.
+ *
+ * The bracket variant is the whole subtlety. `claude-opus-5[1m]` is a real
+ * model id that Claude Code accepts, but the transcript reports it as plain
+ * `claude-opus-5` — the bracket picks the 1M-context variant, not a different
+ * model. Taking the pane literally there would rewrite the request to
+ * `claude-opus-5` on the first observation, and the next metadata event would
+ * see request and pane disagree and retype `/model` — forever. So a request
+ * that is the pane's own model plus a bracket suffix is LEFT ALONE: it does not
+ * contradict the pane, it says more than the pane can say.
+ *
+ * The cost, stated rather than assumed away: `/model claude-opus-5` typed at
+ * the keyboard while the app holds `claude-opus-5[1m]` is indistinguishable
+ * from the 1M variant and the app keeps showing [1M]. That is the same blind
+ * spot the pill has had since DROVE-45, and it is the price of not retyping.
+ */
+export function paneModelAsRequest(
+    observed: string | null,
+    requested: string | null | undefined,
+): string | null {
+    if (observed !== null && requested && requested.startsWith(`${observed}[`) && requested.endsWith(']')) {
+        return requested
+    }
+    return observed
+}
+
+/**
  * The pane commands that turn `previous` into `next`, in the order they must
  * be carried out.
  *
