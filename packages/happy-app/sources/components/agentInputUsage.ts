@@ -57,12 +57,6 @@ export type UsageStripInput = {
     droverAccount?: string | null;
     /** The "% left" setting; utilization is always percent USED on the wire. */
     showRemaining: boolean;
-    /**
-     * The strip's own rule for the week figure: it shows when the context
-     * gauge does, or when the user asked for it always. A drover-fed session
-     * ignores this, see resolveUsageStrip.
-     */
-    contextShown: boolean;
 };
 
 /**
@@ -536,10 +530,22 @@ export function resolveUsageStrip(input: UsageStripInput): UsageStrip {
     // (nimbus_quill and friends) stay out of the popup.
     const rows = getUsageLimitRows(usageLimits ?? null);
     const week = rows.find((row) => row.id === 'seven_day') ?? null;
-    // A session with the snapshot and no stream shows the strip regardless of
-    // the context setting: the number is the reason Clay opens the popup, not
-    // a near-limit warning that happens to be on.
-    const weekPercent = week?.utilization != null && (input.contextShown || usageFromDrover)
+    // A week reading is shown because there IS one (DROVE-194). It used to be
+    // withheld unless the context gauge was already on the row, on the theory
+    // that the quota was a companion to it; a drover-fed session was exempt,
+    // which is why the pane sessions kept theirs and nobody noticed.
+    //
+    // What made that gate fatal is what the row lost since. The account is
+    // drawn INSIDE this segment (DROVE-138), the word `online` went to the dot
+    // in the same change, and DROVE-178 took the model back off. So on a remote
+    // session, whose windows come from `agentState.usageLimits` rather than the
+    // snapshot, withholding the week figure withheld the account with it and
+    // left the whole strip empty but for a 7pt dot. Clay: "why isn't it showing
+    // my accounts and limits at the bottom like it used to."
+    //
+    // The context gauge has its own rule (`getContextStatus`, near-limit or the
+    // always-show setting) and it is not this one.
+    const weekPercent = week?.utilization != null
         ? getUsageLimitDisplayPercentage(week.utilization, input.showRemaining)
         : null;
 

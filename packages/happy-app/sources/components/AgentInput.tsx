@@ -724,14 +724,11 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         droverUsage: props.sessionStatusDroverUsage,
         droverAccount: props.sessionStatusDroverAccount,
         showRemaining: usageLimitShowRemaining,
-        contextShown: !!props.alwaysShowContextSize || contextStatus != null,
     }), [
         props.sessionStatusUsageLimits,
         props.sessionStatusDroverUsage,
         props.sessionStatusDroverAccount,
-        props.alwaysShowContextSize,
         usageLimitShowRemaining,
-        contextStatus != null,
     ]);
 
     const agentInputEnterToSend = useSetting('agentInputEnterToSend');

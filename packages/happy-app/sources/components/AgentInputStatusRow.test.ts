@@ -164,7 +164,6 @@ function paneStrip(showRemaining = false) {
         droverUsage: paneUsage,
         droverAccount: 'jamrizzi',
         showRemaining,
-        contextShown: false,
     });
 }
 
@@ -241,7 +240,6 @@ describe('AgentInputStatusRow on an idle pane session', () => {
             usageLimits: { capturedAt: 1, windows: [{ id: 'seven_day', utilization: 77, resetsAt: sep5 }] },
             droverUsage: null,
             showRemaining: false,
-            contextShown: true,
         });
         expect(line(row({ weekPercent: strip.weekPercent, usageBarGroups: strip.usageBarGroups })))
             .toEqual(['77% week']);
@@ -341,7 +339,6 @@ describe('AgentInputStatusRow on an idle pane session', () => {
             usageLimits: { capturedAt: 1, windows: [{ id: 'seven_day', utilization: 77, resetsAt: sep5 }] },
             droverUsage: null,
             showRemaining: false,
-            contextShown: true,
         });
         const renderer = row({
             weekPercent: strip.weekPercent,
@@ -515,8 +512,7 @@ describe('AgentInputStatusRow while the session is working', () => {
                 usageLimits: { capturedAt: 1, windows: [{ id: 'seven_day', utilization: 77, resetsAt: sep5 }] },
                 droverUsage: null,
                 showRemaining: false,
-                contextShown: true,
-            });
+                });
             expect(line(row({
                 contextStatus,
                 weekPercent: idle.weekPercent,
@@ -719,7 +715,7 @@ describe('switching account from the quota sheet (DROVE-160)', () => {
 
 describe('AgentInputStatusRow with nothing to show', () => {
     it('renders nothing for a session with no connection, no stream, no snapshot and no context', () => {
-        const strip = resolveUsageStrip({ usageLimits: null, droverUsage: null, showRemaining: false, contextShown: false });
+        const strip = resolveUsageStrip({ usageLimits: null, droverUsage: null, showRemaining: false });
         const renderer = row({
             connectionStatus: undefined,
             weekPercent: strip.weekPercent,
@@ -728,20 +724,114 @@ describe('AgentInputStatusRow with nothing to show', () => {
         expect(renderer.toJSON()).toBeNull();
     });
 
-    it('still hides a remote session\'s week figure until the context gauge shows, as before', () => {
+    it('puts a remote session\'s week figure on the row with no context gauge (DROVE-194)', () => {
+        // THE REGRESSION, and the spec that used to pin it the other way up.
+        // A remote session's windows come from `agentState.usageLimits`, and
+        // the week figure was withheld unless the context gauge was already
+        // drawn. Since DROVE-138 the ACCOUNT is drawn inside the quota
+        // segment, DROVE-138 also took the word `online` off the row and
+        // DROVE-178 took the model off, so withholding the figure left the
+        // strip with nothing in it but a 7pt dot. That was written down here
+        // as the expected result, which is why three green suites shipped it.
         const strip = resolveUsageStrip({
             usageLimits: { capturedAt: 1, windows: [{ id: 'seven_day', utilization: 60, resetsAt: sep5 }] },
             droverUsage: null,
             showRemaining: false,
-            contextShown: false,
         });
         const renderer = row({
             weekPercent: strip.weekPercent,
             usageBarGroups: strip.usageBarGroups,
         });
-        // The dot alone, with the connection in its label and nothing in text.
-        expect(line(renderer)).toEqual([]);
+        expect(line(renderer)).toEqual(['60% week']);
         expect(segment(renderer, 'online')).toBeTruthy();
+    });
+
+    it('names the account even before anything has measured a window', () => {
+        // The other half of the same coupling: an account with no week
+        // reading still says which account the session is spending.
+        const renderer = row({ weekPercent: null });
+        expect(line(renderer)).toEqual(['jamrizzi']);
+    });
+});
+
+/**
+ * The row Clay photographed on DROVE-194: composer in place, new colours, the
+ * model back on the button row, and 34pt of black under it. It was not
+ * off-screen and it was not clipped. It was in the strip, drawing nothing.
+ */
+describe('AgentInputStatusRow never draws an empty strip', () => {
+    /** The three widths statusRowLayout pins: the narrow phone, Clay's, and the harness default. */
+    const pinnedWidths = [320, 375, 393];
+    sessions.oneTask = {
+        metadata: { liveStatus: null },
+        todos: [
+            { content: 'Read the reducer', status: 'completed' },
+            { content: 'Write the sheet', status: 'in_progress' },
+            { content: 'Wire the wrist', status: 'pending' },
+        ],
+    };
+
+    it('has the account and the quota on it at every pinned width, live session and all', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(now + 1_000);
+        try {
+            for (const width of pinnedWidths) {
+                screen.width = width;
+                const renderer = row({ sessionId: 'busy' });
+                const text = line(renderer);
+                expect(text, `width ${width}`).toContain('jamrizzi');
+                expect(text, `width ${width}`).toContain('23%');
+                // The live segment is on it too, whichever way the tool name folded.
+                expect(text.some((part) => part.includes('1m 2s')), `width ${width}`).toBe(true);
+                // And it is visible, not a box with nothing painted in it.
+                expect(renderer.root.findByType('AnimatedFade' as any).props.visible, `width ${width}`)
+                    .toBe(true);
+                // The dot is the main thread's blue while it works; what
+                // matters here is that one is painted at all.
+                expect(renderer.root.findByType('StatusDot' as any).props.color, `width ${width}`)
+                    .toBeTruthy();
+            }
+        } finally {
+            screen.width = 390;
+            vi.useRealTimers();
+        }
+    });
+
+    it('keeps every segment that has content, asked one segment at a time', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(now + 1_000);
+        try {
+            const empty = { weekPercent: null, usageBarGroups: [] } as Partial<StatusRowProps>;
+            // Each row below carries exactly ONE thing. None may come back null,
+            // and none may come back as a strip with no text on it.
+            const only: [string, Partial<StatusRowProps>, string][] = [
+                ['the live turn', { ...empty, sessionId: 'busy' }, '1m 2s'],
+                ['the task list', { ...empty, sessionId: 'oneTask' }, '1/3 tasks'],
+                ['the account and quota', {}, 'jamrizzi'],
+                ['the account alone', { weekPercent: null }, 'jamrizzi'],
+                ['the context gauge', {
+                    ...empty,
+                    contextStatus: { percent: 42, detailText: '84k / 200k context', color: 'ok' },
+                }, '42% context'],
+            ];
+            for (const [what, props, expected] of only) {
+                const renderer = row(props);
+                expect(renderer.toJSON(), what).not.toBeNull();
+                expect(line(renderer).join(' '), what).toContain(expected);
+            }
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('collapses only when the row really has nothing, dot included', () => {
+        const renderer = row({
+            connectionStatus: undefined,
+            weekPercent: null,
+            usageBarGroups: [],
+            contextStatus: null,
+        });
+        expect(renderer.toJSON()).toBeNull();
     });
 });
 

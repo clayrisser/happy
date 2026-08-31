@@ -10,7 +10,14 @@ import {
     resolveComposerStripHeight,
     resolveComposerStripOccupant,
 } from './composerStripLayout';
-import { resolveDockInset } from './agentDockLayout';
+import {
+    DOCK_CONTENT_BOTTOM_PADDING,
+    HOME_INDICATOR_KEEP_OUT,
+    resolveDockBottomOffset,
+    resolveDockInset,
+    resolveStatusRowBottomGap,
+    resolveStatusRowTapFloor,
+} from './agentDockLayout';
 
 /** One line of typing, no attachments: the card Clay is looking at. */
 const cardHeight = resolveMobileComposerHeight(MOBILE_COMPOSER_METRICS.inputLineHeight);
@@ -80,4 +87,49 @@ describe('where the recording banner lives', () => {
         expect(COMPOSER_STRIP_HEIGHT).toBe(COMPOSER_STRIP_PADDING_TOP + COMPOSER_STRIP_MIN_HEIGHT);
         expect(COMPOSER_STRIP_HEIGHT).toBe(24);
     });
+});
+
+/**
+ * Where the strip actually LANDS, measured from the screen edge up (DROVE-194).
+ *
+ * Clay photographed the composer with 34pt of black under it and asked why his
+ * accounts and limits were gone. They were not off-screen and not clipped.
+ * The strip was exactly here, drawing nothing. But "is it off the bottom" is
+ * the first question anyone asks about a missing bottom row, and until this
+ * spec existed the only way to answer it was to count pixels in a screenshot.
+ *
+ * The dock is an absolutely positioned overlay at `bottom: dockBottomOffset`
+ * that grows UPWARD, so the strip cannot be pushed off the edge by anything
+ * above it. What this pins is the other direction: that the whole strip is
+ * inside the box the chat list reserves, and that its text stops above the
+ * home indicator on a phone that has one.
+ */
+describe('the strip sits inside the dock, above the safe area', () => {
+    /** With an indicator, and with a home button, which is the case the cap must not break. */
+    for (const safeAreaBottom of [34, 0]) {
+        const box = dockHeight(false) + DOCK_CONTENT_BOTTOM_PADDING;
+        const inset = resolveDockInset({ dockHeight: box, safeAreaBottom, floatingDock: true });
+        /** Screen edge to the bottom of the status row's text. */
+        const stripBottom = resolveStatusRowBottomGap(safeAreaBottom);
+        /** Screen edge to the top of the strip's box, which is the card's bottom edge. */
+        const stripTop = stripBottom + COMPOSER_STRIP_HEIGHT;
+
+        it(`keeps the whole strip on screen at safeArea.bottom ${safeAreaBottom}`, () => {
+            expect(stripBottom).toBeGreaterThan(0);
+            expect(stripTop).toBeGreaterThan(stripBottom);
+            // Inside the band the inverted list holds clear, so nothing the
+            // chat draws can land on top of the row.
+            expect(inset).toBeGreaterThanOrEqual(stripTop);
+            // And inside the dock's own measured box: the strip is a child of
+            // it, not something hanging below its frame.
+            expect(box - resolveDockBottomOffset(safeAreaBottom, true))
+                .toBeGreaterThanOrEqual(COMPOSER_STRIP_HEIGHT);
+        });
+
+        it(`keeps the row's taps off the home indicator at safeArea.bottom ${safeAreaBottom}`, () => {
+            const floor = resolveStatusRowTapFloor(safeAreaBottom);
+            expect(floor).toBeGreaterThanOrEqual(safeAreaBottom > 0 ? HOME_INDICATOR_KEEP_OUT : 0);
+            expect(floor).toBeLessThan(stripBottom);
+        });
+    }
 });

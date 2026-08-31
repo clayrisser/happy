@@ -89,7 +89,7 @@ const sdkLimits: UsageLimitsLike = {
     ],
 };
 
-const pane = { usageLimits: null, droverUsage: paneUsage, droverAccount: 'jamrizzi', showRemaining: false, contextShown: false };
+const pane = { usageLimits: null, droverUsage: paneUsage, droverAccount: 'jamrizzi', showRemaining: false };
 
 describe('resolveUsageStrip on a pane session', () => {
     it('shows the week figure from the snapshot with no SDK stream and no context gauge', () => {
@@ -276,23 +276,32 @@ describe('resolveUsageStrip on a pane session', () => {
 });
 
 describe('resolveUsageStrip on a remote session', () => {
-    it('prefers the SDK stream and keeps the week figure behind the context gate', () => {
-        const hidden = resolveUsageStrip({ ...pane, usageLimits: sdkLimits });
-        expect(hidden.usageFromDrover).toBe(false);
-        expect(hidden.weekPercent).toBeNull();
-
-        const shown = resolveUsageStrip({ ...pane, usageLimits: sdkLimits, contextShown: true });
+    it('prefers the SDK stream and prints its week figure with no context gauge (DROVE-194)', () => {
+        const strip = resolveUsageStrip({ ...pane, usageLimits: sdkLimits });
+        expect(strip.usageFromDrover).toBe(false);
+        // The regression: this used to be null unless the context gauge was
+        // already drawn, and the account rides in the same segment, so a
+        // remote session lost its account and its quota together.
+        expect(strip.weekPercent).toBe(60);
         // 60 from the SDK, not 23 from the snapshot.
-        expect(shown.weekPercent).toBe(60);
-        expect(shown.usageBarGroups[0].rows.map((r) => `${r.name} ${r.percentText}`)).toEqual([
+        expect(strip.usageBarGroups[0].rows.map((r) => `${r.name} ${r.percentText}`)).toEqual([
             'Session 10%',
             'Week 60%',
             'Fable week 39%',
         ]);
     });
 
+    it('still hides the figure when nothing measured a week, gauge or no gauge', () => {
+        const strip = resolveUsageStrip({
+            ...pane,
+            usageLimits: { capturedAt: 1, windows: [{ id: 'five_hour', utilization: 10, resetsAt: sep5 }] },
+            droverUsage: null,
+        });
+        expect(strip.weekPercent).toBeNull();
+    });
+
     it('still lists the other accounts, at three bars each, beside the SDK figures', () => {
-        const strip = resolveUsageStrip({ ...pane, usageLimits: sdkLimits, contextShown: true });
+        const strip = resolveUsageStrip({ ...pane, usageLimits: sdkLimits });
         expect(strip.usageBarGroups.map((g) => g.key))
             .toEqual(['account:jamrizzi', 'account:main', 'account:bitspur.com', 'account:spare']);
         // The live stream overrides only the account it belongs to; the rest
@@ -303,7 +312,7 @@ describe('resolveUsageStrip on a remote session', () => {
 
 describe('resolveUsageStrip with nothing to show', () => {
     it('hides the figure and offers no popup', () => {
-        const strip = resolveUsageStrip({ usageLimits: null, droverUsage: null, showRemaining: false, contextShown: true });
+        const strip = resolveUsageStrip({ usageLimits: null, droverUsage: null, showRemaining: false });
         expect(strip).toMatchObject({ weekPercent: null, usageFromDrover: false, usageBarGroups: [] });
     });
 
@@ -311,7 +320,7 @@ describe('resolveUsageStrip with nothing to show', () => {
         // The session is on an account the registry does not know: nothing
         // is current, nothing is stamped, so no figure and no heading for it,
         // but the others are still reachable.
-        const strip = resolveUsageStrip({ usageLimits: null, droverUsage: { capturedAt: 1, accounts: paneUsage!.accounts.map((a) => ({ ...a, current: false })) }, droverAccount: null, showRemaining: false, contextShown: false });
+        const strip = resolveUsageStrip({ usageLimits: null, droverUsage: { capturedAt: 1, accounts: paneUsage!.accounts.map((a) => ({ ...a, current: false })) }, droverAccount: null, showRemaining: false });
         expect(strip.weekPercent).toBeNull();
         // Every account is listed and none is marked as this session's.
         expect(strip.usageBarGroups).toHaveLength(4);

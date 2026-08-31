@@ -115,9 +115,13 @@ import { useTickingNow } from './useTickingNow';
  *     fold left, and it is enough at 375 and 393 even with a task list on the
  *     row, which is the case that used to cost the model as well.
  *
- * Renders nothing at all when there is nothing to say, so an empty session
- * does not gain a blank strip. Its own module so a test can mount it without
- * the composer around it.
+ * Renders nothing at all when there is nothing to say, and the test for that
+ * is the ROW rather than the props it was handed (DROVE-194): the segments are
+ * built first and a row with no segments and no dot is the one that collapses.
+ * The props-shaped version of that question could not fire on a session screen,
+ * because `connectionStatus` is always an object there, so the strip kept its
+ * 24pt for a row that drew nothing. Its own module so a test can mount it
+ * without the composer around it.
  */
 
 /** The working colour, the same blue the thinking dot and the old strip used. */
@@ -323,11 +327,6 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
         confirmDroverSwitch({ sessionId, account, from: currentAccount, always: true });
     }, [currentAccount, sessionId]);
 
-    const hasUsage = p.weekPercent != null || p.contextStatus != null;
-    if (!summary && !p.connectionStatus && !hasUsage && !tasksBadge) {
-        return null;
-    }
-
     const canExpand = !!summary && summary.rows.length > 0;
     const canOpenUsage = p.usageBarGroups.length > 0;
     const segments: React.ReactNode[] = [];
@@ -360,7 +359,7 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
         agentCount: sideCount,
         liveExpands: canExpand,
         tasks: p.sessionId ? tasksBadge : null,
-        quota: quotaText,
+        quota: quotaText ?? shownAccount,
         quotaExpands: canOpenUsage,
         contextGauge: !!p.contextStatus,
     }, width);
@@ -472,7 +471,7 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
     // The word `week` folds away when it does: `jamrizzi 23%` is one fact
     // about one account and the sheet spells the window out. With no account
     // there is nothing to head it, so the window keeps its name.
-    if (quotaText != null) {
+    if (shownAccount || quotaText != null) {
         const quotaBody = shownAccount ? (
             <>
                 {/* The account is the only thing in this segment allowed to
@@ -491,14 +490,22 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
                 >
                     {shownAccount}
                 </Text>
-                <Text style={{
-                    fontSize: statusRowMetrics.fontSize,
-                    color: theme.colors.textSecondary,
-                    flexShrink: statusRowShrink.quota,
-                    ...Typography.default(),
-                }}>
-                    {`${Math.round(p.weekPercent!)}%`}
-                </Text>
+                {/* The number, when there IS one. An account whose windows
+                    have not been read yet still names itself (DROVE-194):
+                    before this the account was drawn only inside a quota
+                    segment that a missing week figure deleted, so a remote
+                    session lost the account and the quota together and the
+                    strip went blank. */}
+                {p.weekPercent != null ? (
+                    <Text style={{
+                        fontSize: statusRowMetrics.fontSize,
+                        color: theme.colors.textSecondary,
+                        flexShrink: statusRowShrink.quota,
+                        ...Typography.default(),
+                    }}>
+                        {`${Math.round(p.weekPercent)}%`}
+                    </Text>
+                ) : null}
             </>
         ) : (
             <Text style={{
@@ -519,7 +526,7 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
                     key="week"
                     onPress={() => setOpenSheet((open) => (open === 'usage' ? null : 'usage'))}
                     accessibilityRole="button"
-                    accessibilityLabel={shownAccount ? `Quota, ${quotaText}` : undefined}
+                    accessibilityLabel={shownAccount ? `Quota, ${quotaText ?? shownAccount}` : undefined}
                     accessibilityState={{ expanded: openSheet === 'usage' }}
                     hitSlop={segmentHitSlop}
                     style={({ pressed }) => ({
@@ -593,6 +600,20 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
         mainWorking ? 'Working' : null,
         p.connectionStatus?.text,
     ].filter((part): part is string => !!part).join(', ');
+
+    // THE GUARD IS ASKED OF THE ROW, NOT OF THE PROPS (DROVE-194).
+    //
+    // It used to read `!summary && !connectionStatus && !hasUsage &&
+    // !tasksBadge`, which is a different question: whether anything COULD be
+    // on the row, not whether anything IS. `connectionStatus` is an object
+    // literal SessionView rebuilds every render, so that term was always true
+    // on a session screen and the guard could never fire there. What it hid
+    // was the opposite failure: a row that passes the guard and then draws
+    // nothing but the 7pt dot, which is what Clay photographed. Counting the
+    // segments that were built cannot drift from what is painted.
+    if (segments.length === 0 && !dotColor) {
+        return null;
+    }
 
     return (
         <AnimatedFade visible={p.showDetails || summary !== null}>
