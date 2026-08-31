@@ -78,7 +78,7 @@ private struct SessionRow: View {
                         .foregroundStyle(.orange)
                 }
                 if flipping {
-                    Text("flipping…")
+                    Text("switching…")
                         .font(.system(size: 9))
                         .foregroundStyle(.secondary)
                 }
@@ -275,7 +275,7 @@ struct SessionDetailView: View {
                 LiveStatusLine(status: status, since: session.statusSince, size: 11)
             }
             if flipping {
-                Text("flipping…")
+                Text("switching…")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }

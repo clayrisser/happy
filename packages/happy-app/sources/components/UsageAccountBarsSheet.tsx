@@ -24,13 +24,15 @@ export function UsageAccountBarsSheet(props: {
     groups: UsageBarGroup[];
     open: boolean;
     onClose: () => void;
+    /** Tapping an account block switches the session onto it (DROVE-160). */
+    onSwitchAccount?: (account: string) => void;
 }) {
     return (
         <ComposerSheet
             open={props.open}
             onClose={props.onClose}
         >
-            <UsageAccountBars groups={props.groups} />
+            <UsageAccountBars groups={props.groups} onSwitchAccount={props.onSwitchAccount} />
         </ComposerSheet>
     );
 }

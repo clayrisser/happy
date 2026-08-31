@@ -203,13 +203,13 @@ describe('the sentences', () => {
 
     it('names the target, the count and every session', () => {
         const text = flipRiskWarning(rows, 'jamrizzi')!;
-        expect(text).toContain('Moving to jamrizzi');
+        expect(text).toContain('Switching to jamrizzi');
         expect(text).toContain('2 other live sessions');
         expect(text).toContain('employees (main), lookout (jamrizzi)');
     });
 
     it('says "another account" when the CLI is picking', () => {
-        expect(flipRiskWarning(rows, null)).toContain('Moving to another account');
+        expect(flipRiskWarning(rows, null)).toContain('Switching to another account');
     });
 
     it('agrees in number for one session', () => {
@@ -221,6 +221,6 @@ describe('the sentences', () => {
 
     it('lists the names under the section so the cost is legible without a tap', () => {
         expect(flipRiskNames(rows)).toBe('employees (main), lookout (jamrizzi)');
-        expect(flipRiskFooter(rows)).toBe('A flip drops Remote Control for employees (main), lookout (jamrizzi).');
+        expect(flipRiskFooter(rows)).toBe('Switching accounts drops Remote Control for employees (main), lookout (jamrizzi).');
     });
 });

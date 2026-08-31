@@ -73,6 +73,10 @@ vi.mock('./AnimatedOverlay', () => ({ AnimatedFade: host('AnimatedFade') }));
 // which vitest can transform. What the row owes them is the open flag and the
 // content; UsageAccountBars.test.ts renders the real bars.
 vi.mock('./UsageAccountBarsSheet', () => ({ UsageAccountBarsSheet: host('UsageAccountBarsSheet') }));
+
+// The switch itself is the `/flip` message every other surface sends; what
+// the row owes it is the target and the account it is leaving (DROVE-160).
+vi.mock('@/utils/droverAccountSwitch', () => ({ confirmDroverSwitch: vi.fn() }));
 vi.mock('./SessionAgentsSheet', () => ({ SessionAgentsSheet: host('SessionAgentsSheet') }));
 
 // The session store, reduced to the one session the row reads. `storage` is
@@ -97,6 +101,7 @@ vi.mock('@/text', async () => {
 
 import { AgentInputStatusRow, type StatusRowProps } from './AgentInputStatusRow';
 import { resolveUsageStrip } from './agentInputUsage';
+import { confirmDroverSwitch } from '@/utils/droverAccountSwitch';
 
 const originalConsoleError = console.error;
 
@@ -519,6 +524,52 @@ describe('AgentInputStatusRow going idle', () => {
         } finally {
             vi.useRealTimers();
         }
+    });
+});
+
+/**
+ * The sheet as the place the move happens (DROVE-160).
+ *
+ * The row owns the sheet, so it owns what a tap on a block does: close the
+ * sheet, then confirm. The confirm is unconditional here even though the menu
+ * path only asks when Remote Control is at risk, because this tap is one of
+ * five in a column being read for numbers.
+ */
+describe('switching account from the quota sheet (DROVE-160)', () => {
+    it('closes the sheet and confirms, sending the account it came from', () => {
+        vi.mocked(confirmDroverSwitch).mockClear();
+        const strip = paneStrip(true);
+        const renderer = row({
+            sessionId: 'busy',
+            weekPercent: strip.weekPercent,
+            usageBarGroups: strip.usageBarGroups,
+        });
+        const sheet = () => renderer.root.findByType('UsageAccountBarsSheet' as any);
+        act(() => {
+            renderer.root.findAllByType('Pressable' as any)[1].props.onPress();
+        });
+        expect(sheet().props.open).toBe(true);
+        act(() => {
+            sheet().props.onSwitchAccount('main');
+        });
+        expect(sheet().props.open).toBe(false);
+        expect(confirmDroverSwitch).toHaveBeenCalledWith({
+            sessionId: 'busy',
+            account: 'main',
+            from: 'jamrizzi',
+            always: true,
+        });
+    });
+
+    it('offers no switch on a preview with no session behind it', () => {
+        const strip = paneStrip(true);
+        const renderer = row({
+            sessionId: undefined,
+            weekPercent: strip.weekPercent,
+            usageBarGroups: strip.usageBarGroups,
+        });
+        expect(renderer.root.findByType('UsageAccountBarsSheet' as any).props.onSwitchAccount)
+            .toBeUndefined();
     });
 });
 

@@ -558,14 +558,14 @@ function SessionInfoContent({ session }: { session: Session }) {
                         {canFlipAccount && (
                             <Item
                                 title="Switch account"
-                                subtitle={flipRiskSubtitle(flipRisk) ?? 'Move this session to another account'}
+                                subtitle={flipRiskSubtitle(flipRisk) ?? 'Switch this session to another account'}
                                 icon={<Ionicons name="swap-horizontal-outline" size={29} color="#FF9500" />}
                                 onPress={flipAccount}
                             />
                         )}
                         {session.metadata?.droverPolicy && (
                             <Item
-                                title="Flip policy"
+                                title="Account switching"
                                 subtitle={droverPolicySubtitle}
                                 subtitleLines={0}
                                 icon={<Ionicons name="swap-horizontal-outline" size={29} color="#FF9500" />}
