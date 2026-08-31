@@ -7,6 +7,10 @@ import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 import type { DictationCaptureState } from '@/voice/dictationCapture';
 import { micOutcome } from '@/voice/micButton';
+import {
+    RECORDING_BANNER_FRAME,
+    RECORDING_BANNER_HEIGHT,
+} from './composerStripLayout';
 
 /**
  * The indicator a live microphone cannot be without (DROVE-30, DROVE-74,
@@ -53,6 +57,16 @@ import { micOutcome } from '@/voice/micButton';
  *
  * The words survive for anyone who cannot see any of that: the accessibility
  * label still says the state and the pending action in full.
+ *
+ * WHERE IT SITS (DROVE-157). Under the composer card, pinned over the status
+ * row, not above the text field inside the card. It used to be a child of the
+ * card, so opening the mic grew the card, grew the dock and shoved the
+ * transcript up; Clay lost his place in the chat every time he spoke. The
+ * frame comes from `composerStripLayout` and is absolute, so the banner
+ * contributes no height at all and the composer cannot move. That also put it
+ * on a 20pt budget instead of 38, hence the smaller dot, clock and level
+ * strip here. None of DROVE-142's signalling was dropped to fit: the colour,
+ * the mark and the trailing glyph are all still on the bar.
  */
 interface LiveMicBannerProps {
     talk: DictationCaptureState;
@@ -132,35 +146,38 @@ export const LiveMicBanner = React.memo(({
             <View style={styles.mark}>
                 {cancelArmed
                     ? (
-                        <Ionicons name="close" size={13} color="#FFFFFF" />
+                        <Ionicons name="close" size={12} color="#FFFFFF" />
                     )
                     : (
-                        <StatusDot color="#FFFFFF" isPulsing size={10} />
+                        <StatusDot color="#FFFFFF" isPulsing size={8} />
                     )}
             </View>
             <Text style={styles.elapsed} numberOfLines={1}>{formatElapsed(talk.since, now)}</Text>
             <View style={styles.wave}>
-                <MicWaveform active={talk.active} color="#FFFFFF" height={22} />
+                <MicWaveform active={talk.active} color="#FFFFFF" height={12} />
             </View>
             {/* The slot is always there so nothing shifts when the glyph
                 appears half a second into a press. */}
             <View style={styles.outcome}>
-                {glyph !== null && <Ionicons name={glyph} size={18} color="#FFFFFF" />}
+                {glyph !== null && <Ionicons name={glyph} size={16} color="#FFFFFF" />}
             </View>
         </View>
     );
 });
 
 const styles = StyleSheet.create({
+    /**
+     * The strip under the card, not a row inside it (DROVE-157). The frame is
+     * absolute and comes from one place, so the guarantee that a recording
+     * never resizes the composer is a layout rule rather than an agreement
+     * between two numbers.
+     */
     banner: {
+        ...RECORDING_BANNER_FRAME,
         flexDirection: 'row',
         alignItems: 'center',
-        marginHorizontal: 10,
-        marginTop: 8,
-        marginBottom: 2,
-        paddingVertical: 8,
-        paddingHorizontal: 12,
-        borderRadius: 14,
+        paddingHorizontal: 10,
+        borderRadius: RECORDING_BANNER_HEIGHT / 2,
         backgroundColor: red,
         gap: 8,
     },
@@ -168,7 +185,7 @@ const styles = StyleSheet.create({
         backgroundColor: graphite,
     },
     mark: {
-        width: 14,
+        width: 12,
         alignItems: 'center',
     },
     /**
@@ -179,8 +196,8 @@ const styles = StyleSheet.create({
      */
     elapsed: {
         color: '#FFFFFF',
-        fontSize: 13,
-        minWidth: 34,
+        fontSize: 12,
+        minWidth: 32,
         fontVariant: ['tabular-nums'],
         ...Typography.default('semiBold'),
     },
@@ -192,7 +209,7 @@ const styles = StyleSheet.create({
         overflow: 'hidden',
     },
     outcome: {
-        width: 18,
+        width: 16,
         alignItems: 'center',
     },
 });

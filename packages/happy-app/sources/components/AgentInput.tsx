@@ -49,6 +49,7 @@ import {
     resolveMobileComposerActionGeometry,
     resolveMobileComposerActionRowGeometry,
 } from './agentInputLayout';
+import { COMPOSER_STRIP_HEIGHT } from './composerStripLayout';
 import { shouldUseExpoNativeSettingsMenu } from './glassInteractionPolicy';
 import { LiveMicBanner } from './LiveMicBanner';
 import { TalkButton } from './TalkButton';
@@ -2124,15 +2125,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                             onRemove={props.onRemoveImage ?? (() => {})}
                         />
                     )}
-                    {/* The mic is open: red, pulsing, level moving (DROVE-74).
-                        The words land in the input below as they are heard. */}
-                    {compactMobileComposer && props.talk?.active && (
-                        <LiveMicBanner
-                            talk={props.talk}
-                            cancelArmed={props.talkCancelArmed}
-                            sendArmed={props.talkSendArmed}
-                        />
-                    )}
                     {/* Input field */}
                     <View style={[
                         styles.inputContainer,
@@ -2279,20 +2271,43 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     </View>
                 </Shaker>
 
-                {/* Every status fact on one line under the card (DROVE-82):
-                    working state and timer, connection, quota. Clay, seeing it
-                    in place: "this is great, keep that shit down there." It
-                    owns its own two sheets (DROVE-117, DROVE-111), so nothing
-                    here has to route them. */}
-                <AgentInputStatusRow
-                    sessionId={props.sessionId}
-                    connectionStatus={props.connectionStatus}
-                    contextStatus={contextStatus}
-                    weekPercent={weekPercent}
-                    usageBarGroups={usageBarGroups}
-                    onSessionInfoPress={props.onSessionInfoPress}
-                    showDetails={props.showStatusDetails !== false}
-                />
+                {/* The strip under the card, and both things that live in it.
+                    Every status fact on one line (DROVE-82): working state and
+                    timer, connection, quota. Clay, seeing it in place: "this is
+                    great, keep that shit down there." It owns its own two
+                    sheets (DROVE-117, DROVE-111), so nothing here has to route
+                    them.
+
+                    The live-mic banner sits over it while dictation runs
+                    (DROVE-157). It was a child of the card, above the text
+                    field, so starting to talk grew the composer and shoved the
+                    transcript up. Here it is absolutely positioned, so it adds
+                    no height and the dock cannot move; the status row stays
+                    mounted underneath, covered rather than unmounted, so its
+                    timer and its sheets survive the recording. The mic button
+                    on the action row is still the only control that stops or
+                    sends (DROVE-105) and it has not moved. */}
+                <View style={compactMobileComposer && props.talk?.active
+                    ? { minHeight: COMPOSER_STRIP_HEIGHT }
+                    : undefined}
+                >
+                    <AgentInputStatusRow
+                        sessionId={props.sessionId}
+                        connectionStatus={props.connectionStatus}
+                        contextStatus={contextStatus}
+                        weekPercent={weekPercent}
+                        usageBarGroups={usageBarGroups}
+                        onSessionInfoPress={props.onSessionInfoPress}
+                        showDetails={props.showStatusDetails !== false}
+                    />
+                    {compactMobileComposer && props.talk?.active && (
+                        <LiveMicBanner
+                            talk={props.talk}
+                            cancelArmed={props.talkCancelArmed}
+                            sendArmed={props.talkSendArmed}
+                        />
+                    )}
+                </View>
             </View>
         </View>
     );
