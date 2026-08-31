@@ -83,7 +83,6 @@ describe('the gate table (DROVE-179)', () => {
         // changing this line, which means saying so on the ticket.
         expect([...speechStoppingReasons].sort()).toEqual([
             'call-started',
-            'headphones-unplugged',
             'mic',
             'preview',
             'switched-session',
@@ -95,6 +94,15 @@ describe('the gate table (DROVE-179)', () => {
         for (const reason of ['typed', 'sent', 'left-session', 'backgrounded', 'disconnected'] satisfies ReadAloudInterruption[]) {
             expect(stopsSpeech(reason)).toBe(false);
         }
+    });
+
+    /**
+     * DROVE-189 moved this row, and it is the one row Clay asked for by name:
+     * "read-aloud must not be disabled when headphones are removed."
+     * DROVE-119 put it on the stopping side and he has lived with it since.
+     */
+    it('does not stop the voice when the headphones come out', () => {
+        expect(stopsSpeech('headphones-unplugged')).toBe(false);
     });
 });
 
@@ -212,8 +220,8 @@ describe('a session of him doing things (DROVE-179)', () => {
         expect(reader.isEnabled).toBe(false);
     });
 
-    it('still stops when the headphones come out, and when a call takes the route', async () => {
-        for (const reason of ['headphones-unplugged', 'call-started', 'preview'] satisfies ReadAloudInterruption[]) {
+    it('still stops when a call takes the route, and for a settings preview', async () => {
+        for (const reason of ['call-started', 'preview'] satisfies ReadAloudInterruption[]) {
             const engine = new FakeEngine();
             const reader = new ReadAloudReader(engine);
             reader.setEnabled(true);

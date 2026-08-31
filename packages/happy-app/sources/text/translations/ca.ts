@@ -460,7 +460,7 @@ export const ca: TranslationStructure = {
             on: 'Llegint les respostes en veu alta',
             off: 'No es llegeixen les respostes',
             onHint: "Llegint les respostes en veu alta. Toca una frase per llegir des d'allà",
-            headphonesOff: 'Lectura en veu alta desactivada, auriculars desconnectats',
+            headphonesOff: 'Auriculars desconnectats, ara per l\'altaveu',
         },
         dictate: {
             label: 'Mantén premut per parlar, toca per fixar',

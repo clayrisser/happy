@@ -460,7 +460,7 @@ export const zhHant: TranslationStructure = {
             on: '正在朗讀回覆',
             off: '不朗讀回覆',
             onHint: '正在朗讀回覆。點按某句話即可從該處開始朗讀',
-            headphonesOff: '朗讀已關閉，耳機已中斷連線',
+            headphonesOff: '耳機已中斷連線，改用喇叭播放',
         },
         dictate: {
             label: '按住說話，輕點鎖定',

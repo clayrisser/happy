@@ -23,9 +23,6 @@
  *   - he turned the button off;
  *   - the microphone needs the route (DROVE-143), which pauses and resumes
  *     from the same place;
- *   - the headphones came out to the built-in speaker (DROVE-119), which
- *     deliberately turns reading off so a private reply is not played to the
- *     room;
  *   - a boss-mode call took the route;
  *   - a voice preview in settings wants the speaker for a moment.
  *
@@ -131,11 +128,22 @@ export const readAloudStopsSpeech = {
     /** A boss-mode call owns the audio route for its duration. */
     'call-started': true,
     /**
-     * DROVE-119. The headphones came out to the built-in speaker while he was
-     * on the phone in company. This one deliberately turns reading OFF, not
-     * merely quiet.
+     * DROVE-189 REVERSED DROVE-119, because Clay asked for it in as many
+     * words: read-aloud must not be disabled when headphones are removed.
+     *
+     * DROVE-119 turned reading OFF when AirPods came out to the built-in
+     * speaker, on the theory that a private reply should not be played to the
+     * room. The theory was mine to begin with and the cost is his: an AirPod
+     * that drops for a second, a case that opens in a pocket, and the voice is
+     * not paused but SWITCHED OFF, needing a deliberate press to come back.
+     * That fires far more often than the room it was protecting.
+     *
+     * So the route change is now ANNOUNCED and nothing else: the toast still
+     * says the sound moved to the speaker, and he decides. The captures are
+     * still told, because a latched mic on the built-in microphone is a
+     * different question and DROVE-119's guard was never wrong about that.
      */
-    'headphones-unplugged': true,
+    'headphones-unplugged': false,
     /** A settings preview wants the speaker for a second. */
     preview: true,
     /**
@@ -143,6 +151,12 @@ export const readAloudStopsSpeech = {
      * the app constantly: to read a push, to check the watch, to answer a
      * message. Coming back to silence is the complaint. Nothing here takes the
      * route away, so nothing here stops the voice.
+     *
+     * DROVE-189 confirmed this row is right and found the silence elsewhere.
+     * Backgrounding was never what stopped the voice; a rejected utterance
+     * was, and it looked identical from the outside. This row staying `false`
+     * is what makes the reader's stall-and-retry reachable at all, because a
+     * reader that had stopped would have nothing left to retry.
      */
     backgrounded: false,
     /**

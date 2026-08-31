@@ -156,13 +156,26 @@ import { stopsSpeech, type ReadAloudInterruption } from './readAloudGate';
  * so "finish this sentence, then say the gate" falls out of where the check
  * sits. `cancelUrgent` un-says a gate answered before its line was reached.
  *
- * DROVE-189 stopped the reader silencing itself in the background. `rest`
- * releases the audio session when the queue drains, which is right in the
- * foreground (ducked music comes back up) and fatal behind the lock screen: an
- * app with the audio background mode stays alive only while its session is
- * ACTIVE, so a drained queue let iOS suspend the process and the next reply
- * arrived at an app that was not running. `setBackgrounded` is the whole fix
- * on the JS side, and it needs no new build.
+ * DROVE-189 stopped the reader silencing itself in the background, in two
+ * passes, and the second one is the one that mattered.
+ *
+ * The first: `rest` releases the audio session when the queue drains, which is
+ * right in the foreground (ducked music comes back up) and fatal behind the
+ * lock screen, because an app with the audio background mode stays alive only
+ * while its session is ACTIVE. A drained queue let iOS suspend the process and
+ * the next reply arrived at an app that was not running. `setBackgrounded`
+ * fixes that, and it needs no new build.
+ *
+ * The second, after Clay reported the same thing a third time: keeping the app
+ * ALIVE was necessary and not sufficient. `engine.speak` REJECTS when the
+ * audio session refuses the utterance, which is what an unfinished
+ * interruption looks like from JS, and `speakNow` swallowed the rejection and
+ * pumped the next sentence, which was refused too, marking each one `spoken`
+ * as it went. One refusing second consumed the entire reply and left nothing
+ * to read when the session came back. `refused`, `isStalled` and
+ * `audioSessionRecovered` are that fix: a REJECTED utterance never made a
+ * sound, so it is put back and the queue waits, while a RESOLVED one stays
+ * spoken however short it was, which is what keeps DROVE-126 true.
  */
 
 /**
@@ -254,6 +267,13 @@ export interface ReadAloudOptions {
      * whose last sentence has no full stop.
      */
     holdMs?: number;
+    /**
+     * How long to wait before offering a refused utterance to the audio
+     * session again (DROVE-189). The refusal is almost always an interruption
+     * that has not ended yet, so this is a poll for "may I speak now", and it
+     * only ever runs while a sentence is owed.
+     */
+    retryDelayMs?: number;
     /**
      * Speaking rate used to turn a word count into seconds of audio. A rough
      * constant on purpose: it decides when the queue is "too long", and the
@@ -361,6 +381,18 @@ export const defaultMaxRateScale = 1.5;
 const defaultHoldMs = 1500;
 
 /**
+ * How long a refused utterance waits before it is offered again (DROVE-189).
+ *
+ * Two seconds because the thing being waited on is an audio-session
+ * interruption: a call, Siri, a notification sound. Those are measured in
+ * seconds. Short enough that he does not notice the gap when it clears,
+ * long enough that a session which will refuse for a minute costs thirty
+ * wake-ups rather than thirty thousand. While the app is suspended the timer
+ * does not fire at all, so the idle cost is zero.
+ */
+export const defaultSpeechRetryDelayMs = 2000;
+
+/**
  * The catch-up multiplier for a backlog, as a pure function so the shape can
  * be checked with the real numbers (DROVE-177).
  *
@@ -455,6 +487,7 @@ export class ReadAloudReader {
     private readonly jumpBacklogSeconds: () => number;
     private readonly skipMarker: string;
     private readonly holdMs: number;
+    private readonly retryDelayMs: number;
     private readonly wordsPerMinute: number;
     private readonly arrivalWindowMs: number;
     private readonly maxRateScale: () => number;
@@ -498,6 +531,19 @@ export class ReadAloudReader {
     /** Each message's unfinished tail, waiting for more text. */
     private pendingTails = new Map<string, HeldTail>();
     private holdTimer: ReturnType<typeof setTimeout> | null = null;
+    /**
+     * The audio session refused the last utterance, so nothing was said
+     * (DROVE-189).
+     *
+     * Not the same state as silence. A refusal means the sentence never
+     * reached a speaker, so it is still owed; while this is set the queue
+     * stops handing sentences over rather than burning them one per
+     * rejection. `retryTimer` is the only thing that clears it on its own.
+     */
+    private stalled = false;
+    private retryTimer: ReturnType<typeof setTimeout> | null = null;
+    /** Consecutive refusals; for the tests and for logs. */
+    private refusals = 0;
     private latestCreatedAt = 0;
     /** How many times the backlog was dropped; for the tests and for logs. */
     private skips = 0;
@@ -578,6 +624,7 @@ export class ReadAloudReader {
         this.jumpBacklogSeconds = options.jumpBacklogSeconds ?? (() => this.maxBacklogSeconds() * 2);
         this.skipMarker = options.skipMarker ?? defaultSkipMarker;
         this.holdMs = options.holdMs ?? defaultHoldMs;
+        this.retryDelayMs = options.retryDelayMs ?? defaultSpeechRetryDelayMs;
         this.wordsPerMinute = options.wordsPerMinute ?? defaultWordsPerMinute;
         this.arrivalWindowMs = options.arrivalWindowMs ?? defaultArrivalWindowMs;
         this.maxRateScale = options.maxRateScale ?? (() => defaultMaxRateScale);
@@ -602,6 +649,22 @@ export class ReadAloudReader {
 
     get isEnabled(): boolean {
         return this.enabled;
+    }
+
+    /**
+     * Is the voice waiting on an audio session it was refused (DROVE-189)?
+     *
+     * True between a rejected utterance and the retry that succeeds. Nothing
+     * has been lost while it is true; the sentence that was refused is still
+     * at the front of the queue.
+     */
+    get isStalled(): boolean {
+        return this.stalled;
+    }
+
+    /** How many utterances the session has refused in a row. For the tests. */
+    get refusalCount(): number {
+        return this.refusals;
     }
 
     get focusedSessionId(): string | null {
@@ -630,7 +693,13 @@ export class ReadAloudReader {
     setEnabled(enabled: boolean): void {
         if (this.enabled === enabled) return;
         this.enabled = enabled;
-        if (!enabled) this.interrupt('toggled-off');
+        if (!enabled) {
+            this.interrupt('toggled-off');
+            return;
+        }
+        // Switched back on with a sentence still owed to a session that
+        // refused it (DROVE-189). Ask again now rather than on the timer.
+        this.audioSessionRecovered();
     }
 
     get isMicHeld(): boolean {
@@ -665,9 +734,13 @@ export class ReadAloudReader {
     setBackgrounded(backgrounded: boolean): void {
         if (this.backgrounded === backgrounded) return;
         this.backgrounded = backgrounded;
+        if (backgrounded) return;
         // Coming back to the foreground with nothing to say hands the session
-        // over at the first opportunity rather than holding it all day.
-        if (!backgrounded && !this.speaking) this.pump();
+        // over at the first opportunity rather than holding it all day. And
+        // if a sentence is owed because the session refused it in his pocket,
+        // this is the moment it will be taken (DROVE-189).
+        this.audioSessionRecovered();
+        if (!this.speaking) this.pump();
     }
 
     /**
@@ -787,6 +860,9 @@ export class ReadAloudReader {
             this.rest();
             return;
         }
+        // The route is free again, which is also the commonest reason an
+        // utterance was refused in the first place (DROVE-189).
+        this.audioSessionRecovered();
         this.pump();
     }
 
@@ -1055,6 +1131,11 @@ export class ReadAloudReader {
         // So does a transcript borrowed from one of its screens (DROVE-195).
         this.detour = [];
         this.clearHold();
+        // Nothing is owed to a queue the user threw away, so the refusal
+        // stall and its retry go with it (DROVE-189).
+        this.clearRetry();
+        this.stalled = false;
+        this.refusals = 0;
         this.speaking = false;
         this.speakingTurn = null;
         this.setPlayhead(null);
@@ -1357,6 +1438,10 @@ export class ReadAloudReader {
         // The microphone has the audio session. Everything queued stays
         // queued; setMicHeld(false) pumps again (DROVE-143).
         if (this.micHeld) return;
+        // The session refused the last utterance and the retry has not come
+        // round yet (DROVE-189). Everything queued stays queued, including the
+        // sentence that was refused; pumping here is what burned the reply.
+        if (this.stalled) return;
 
         // A gate waiting on him outranks the transcript (DROVE-188). Checked
         // HERE, at the top of a pump that only ever runs with the synthesiser
@@ -1365,7 +1450,9 @@ export class ReadAloudReader {
         const urgent = this.urgent.shift();
         if (urgent !== undefined) {
             this.setPlayhead(null);
-            this.speakNow(urgent.text, this.turn, 1, null);
+            // A refused gate line goes back to the FRONT: it is still the
+            // thing he is being waited on for (DROVE-188, DROVE-189).
+            this.speakNow(urgent.text, this.turn, 1, null, () => { this.urgent.unshift(urgent); });
             return;
         }
 
@@ -1377,7 +1464,7 @@ export class ReadAloudReader {
         // behind a session that is still writing, which this is not.
         const detour = this.detour.shift();
         if (detour !== undefined) {
-            this.speakNow(detour.text, this.turn, 1, detour);
+            this.speakNow(detour.text, this.turn, 1, detour, () => { this.detour.unshift(detour); });
             return;
         }
 
@@ -1425,7 +1512,13 @@ export class ReadAloudReader {
             this.onSkip?.();
             if (this.skipMarker.length > 0) {
                 this.setPlayhead(null);
-                this.speakNow(this.skipMarker, this.timeline[this.cursor]?.turn ?? this.turn, 1, null);
+                this.speakNow(
+                    this.skipMarker,
+                    this.timeline[this.cursor]?.turn ?? this.turn,
+                    1,
+                    null,
+                    () => { this.markerDue = true; },
+                );
                 return;
             }
         }
@@ -1438,11 +1531,49 @@ export class ReadAloudReader {
             this.rest();
             return;
         }
+        const index = this.cursor;
         this.cursor += 1;
-        this.speakNow(next.text, next.turn, arriving ? this.catchUpRate(backlog, speedUp, jump) : 1, next);
+        // A refused sentence is still owed, so the cursor goes back to it and
+        // `spoken` is taken off in `refused` (DROVE-189). `Math.min` because a
+        // seek or a fresh turn may have moved the cursor BACK meanwhile, and
+        // that position is his, not this one's.
+        this.speakNow(
+            next.text,
+            next.turn,
+            arriving ? this.catchUpRate(backlog, speedUp, jump) : 1,
+            next,
+            () => { this.cursor = Math.min(this.cursor, index); },
+        );
     }
 
-    private speakNow(text: string, turn: number, rateScale: number, at: QueuedSentence | null): void {
+    /**
+     * Hand one utterance to the engine.
+     *
+     * `putBack` is what to do if the engine REFUSES it (DROVE-189). A refusal
+     * is not a short utterance, it is no utterance: on iOS `speak` rejects
+     * when `activatePlayback` throws, which is what an unfinished audio-session
+     * interruption looks like from JS. Before this ticket the rejection was
+     * swallowed and the reader pumped straight on, so a session that was
+     * refusing consumed the entire reply in a tight loop, marked every
+     * sentence spoken, and left NOTHING to read when the session came back.
+     * That is the "it went quiet in my pocket and stayed quiet" Clay has
+     * reported three times; the earlier fixes kept the app ALIVE, which was
+     * necessary and not sufficient, because a live app still burned the reply.
+     *
+     * So a refused utterance is put back exactly as it was and the queue
+     * stalls until the session will take it. Marking `spoken` at the START is
+     * kept, because DROVE-126 needs a sentence cut mid-word to stay spoken and
+     * never repeat; the distinction that makes both true is REJECTED (never
+     * made a sound, still owed) against RESOLVED (made a sound, however
+     * little, and is finished with).
+     */
+    private speakNow(
+        text: string,
+        turn: number,
+        rateScale: number,
+        at: QueuedSentence | null,
+        putBack: (() => void) | null = null,
+    ): void {
         this.speaking = true;
         this.speakingTurn = turn;
         this.started = true;
@@ -1462,15 +1593,91 @@ export class ReadAloudReader {
                 aside: at?.aside === true,
                 thinking: at?.thinking === true,
             }))
-            .catch(() => {
-                // One utterance failing must not wedge every later one. The
-                // reply keeps being read from the next sentence on.
-            })
-            .then(() => {
+            .then(() => true, () => false)
+            .then((spoke) => {
                 if (generation !== this.generation) return;
                 this.speaking = false;
                 this.speakingTurn = null;
+                if (!spoke) {
+                    this.refused(at, putBack);
+                    return;
+                }
+                this.refusals = 0;
                 this.pump();
             });
+    }
+
+    /**
+     * The engine would not take that utterance (DROVE-189).
+     *
+     * Put the material back where it came from, then STOP handing sentences
+     * over. Pumping straight on is what burned the reply: every later sentence
+     * would be refused by the same session and marked spoken on the way.
+     */
+    private refused(at: QueuedSentence | null, putBack: (() => void) | null): void {
+        this.refusals += 1;
+        if (at !== null) at.spoken = false;
+        this.setPlayhead(null);
+        try {
+            putBack?.();
+        } catch {
+            // Losing one line is better than wedging the reader.
+        }
+        this.stalled = true;
+        this.armRetry();
+    }
+
+    /**
+     * Offer the refused utterance again in a moment (DROVE-189).
+     *
+     * A poll rather than an event because the event does not exist on every
+     * binary: `onSpeechInterruption` arrives only from a build that handles
+     * interruptions, and the builds that do not are exactly the ones where a
+     * refusal is permanent without this. One timer at a time, and none once
+     * read-aloud is off.
+     */
+    private armRetry(): void {
+        if (this.retryTimer !== null) return;
+        if (!this.enabled) return;
+        this.retryTimer = setTimeout(() => {
+            this.retryTimer = null;
+            this.retryAfterRefusal();
+        }, this.retryDelayMs);
+    }
+
+    private clearRetry(): void {
+        if (this.retryTimer === null) return;
+        clearTimeout(this.retryTimer);
+        this.retryTimer = null;
+    }
+
+    private retryAfterRefusal(): void {
+        if (!this.stalled) return;
+        if (!this.enabled) {
+            this.stalled = false;
+            return;
+        }
+        this.stalled = false;
+        this.pump();
+        // A pump that found nothing to say, or was refused again, has already
+        // said so; only a still-stalled reader needs the next timer.
+        if (this.stalled) this.armRetry();
+    }
+
+    /**
+     * The audio session is probably back, so try the owed sentence NOW
+     * (DROVE-189).
+     *
+     * Called when something says the refusal is over: he came back to the
+     * foreground, the microphone let go, or a build that reports interruptions
+     * said one ended. Safe to call when nothing is owed, which is why every
+     * caller may call it blind.
+     */
+    audioSessionRecovered(): void {
+        if (!this.stalled) return;
+        this.clearRetry();
+        this.stalled = false;
+        this.pump();
+        if (this.stalled) this.armRetry();
     }
 }

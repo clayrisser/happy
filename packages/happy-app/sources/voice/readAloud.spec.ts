@@ -216,23 +216,46 @@ describe('ReadAloudReader', () => {
         expect(engine.stops).toBe(1);
     });
 
-    it('keeps going when one utterance fails', async () => {
-        const flaky: SpeechEngine = {
-            spoken: [] as string[],
-            speak(text: string) {
-                (this as any).spoken.push(text);
-                return (this as any).spoken.length === 1
-                    ? Promise.reject(new Error('voice unavailable'))
-                    : Promise.resolve();
-            },
-            stop() {},
-        } as unknown as SpeechEngine;
-        const other = new ReadAloudReader(flaky);
-        other.setEnabled(true);
-        other.focus('s1');
-        other.onMessages('s1', [agentText('m1', 'One. Two.')]);
-        await settle();
-        expect((flaky as any).spoken).toEqual(['One.', 'Two.']);
+    /**
+     * DROVE-189 corrected this. It used to assert that a failed utterance was
+     * SKIPPED and the reply carried on from the next sentence, which reads as
+     * robustness and is a sentence silently thrown away: the engine rejects
+     * when the audio session refuses it, so nothing was said and the sentence
+     * was still owed. The reader now puts it back and asks again.
+     */
+    it('retries the sentence the engine refused rather than losing it', async () => {
+        vi.useFakeTimers();
+        try {
+            let refuse = true;
+            const attempted: string[] = [];
+            const said: string[] = [];
+            const flaky: SpeechEngine = {
+                speak(text: string) {
+                    attempted.push(text);
+                    if (refuse) return Promise.reject(new Error('voice unavailable'));
+                    said.push(text);
+                    return Promise.resolve();
+                },
+                stop() { },
+            } as unknown as SpeechEngine;
+            const other = new ReadAloudReader(flaky, { retryDelayMs: 10 });
+            other.setEnabled(true);
+            other.focus('s1');
+            other.onMessages('s1', [agentText('m1', 'One. Two.')]);
+            await vi.advanceTimersByTimeAsync(1);
+
+            // One refusal, and the queue stops rather than burning 'Two.' too.
+            expect(attempted).toEqual(['One.']);
+            expect(said).toEqual([]);
+            expect(other.isStalled).toBe(true);
+
+            refuse = false;
+            await vi.advanceTimersByTimeAsync(20);
+            expect(said).toEqual(['One.', 'Two.']);
+            expect(other.isStalled).toBe(false);
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     describe('whole sentences only (DROVE-97)', () => {
