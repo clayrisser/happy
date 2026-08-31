@@ -6,8 +6,10 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Typography } from '@/constants/Typography';
 import { useSessionGates, type DroverGateEntry } from '@/hooks/usePendingGates';
 import { sessionAllow, sessionDeny } from '@/sync/ops';
-import { describePendingGates } from './pendingGatesSummary';
+import { describePendingGates, type PendingGatesKind } from './pendingGatesSummary';
 import { sessionGateAction, sessionGateReadOnlyHint } from './sessionGateAction';
+import { droverTodoCard } from './tools/views/droverTodoCard';
+import { DroverTodoBody } from './tools/views/DroverTodoView';
 import {
     providerAnswersFor,
     questionCards,
@@ -24,8 +26,8 @@ import {
  * Clay, watching a session work: "I was kinda hoping that I wouldn't have to
  * navigate away to see notifications that are popping up. Whatever the active
  * session I'm in, shouldn't it just, like, boom, pop up on it?" It did not. The
- * delivery path was healthy the whole time — the same question rendered on the
- * watch and was answered there — but the phone showed it only on the home
+ * delivery path was healthy the whole time, the same question rendered on the
+ * watch and was answered there, but the phone showed it only on the home
  * screen and the gates list, so watching a session live meant leaving the
  * session to find out it had stopped.
  *
@@ -37,6 +39,15 @@ import {
  * exact Claude session uuid; a prompt from one of the other four sessions
  * running right now must never take this screen, so there is no cwd match and
  * no "closest" match anywhere in the path.
+ *
+ * Each card is drawn BY TOOL (DROVE-89). A to-do gets the same body the
+ * transcript's DroverTodoView draws, a question gets its own options, and only
+ * a real permission gets Deny / Allow. Before this every non-question fell
+ * through to the permission footer, so a `drover needs` to-do read as
+ * "1 permission waiting" with Allow under it, and the bridge refused all eight
+ * Allows Clay pressed because a to-do is answered only by naming Done or Drop
+ * it. The title reads by kind for the same reason: "1 to-do for you" is not a
+ * permission and must not be dressed as one.
  */
 export function SessionGateBanner({ sessionId }: { sessionId: string }) {
     const { theme } = useUnistyles();
@@ -61,7 +72,7 @@ export function SessionGateBanner({ sessionId }: { sessionId: string }) {
                 accessibilityRole="button"
                 accessibilityLabel={collapsed ? `Show ${summary.title}` : `Hide ${summary.title}`}
             >
-                <Ionicons name="hand-left-outline" size={18} color={theme.colors.box.warning.text} />
+                <Ionicons name={bannerIcon(summary.kind)} size={18} color={theme.colors.box.warning.text} />
                 <View style={styles.headerText}>
                     <Text style={styles.headerTitle} numberOfLines={1}>{summary.title}</Text>
                     {collapsed && (
@@ -95,6 +106,14 @@ export function SessionGateBanner({ sessionId }: { sessionId: string }) {
     );
 }
 
+/**
+ * A checklist for a set that is only to-dos, which block nothing; a hand for
+ * anything that is holding a session up. The same pair the inbox headings use.
+ */
+function bannerIcon(kind: PendingGatesKind): 'hand-left-outline' | 'checkbox-outline' {
+    return kind === 'todo' ? 'checkbox-outline' : 'hand-left-outline';
+}
+
 const SessionGateCard = React.memo(({ entry }: { entry: DroverGateEntry }) => {
     const { theme } = useUnistyles();
     // `entry.sessionId` is who HOLDS the card, which for a drover gate is the
@@ -105,7 +124,19 @@ const SessionGateCard = React.memo(({ entry }: { entry: DroverGateEntry }) => {
 
     const cards = React.useMemo(() => questionCards(entry.args), [entry.args]);
     const questions = React.useMemo(() => toInlineQuestions(cards), [cards]);
-    const action = sessionGateAction(gate.kind, entry.args);
+    const action = sessionGateAction(gate.kind, entry.args, entry.tool);
+    const todo = React.useMemo(
+        () => (action === 'todo' ? droverTodoCard(entry.args) : null),
+        [action, entry.args],
+    );
+
+    // Close a to-do by naming the button that was pressed. The same call
+    // DroverTodoView and the inbox make: the bridge's busResolutionFor takes a
+    // to-do answer only when it carries one of the card's option ids, so this
+    // is the one shape that actually resolves it on the bus.
+    const closeTodo = React.useCallback(async (optionId: string) => {
+        await sessionAllow(sessionId, requestId, undefined, undefined, 'approved', { optionId });
+    }, [requestId, sessionId]);
 
     const submitAnswer = React.useCallback(async (answers: InlineQuestionAnswers) => {
         await sessionAllow(
@@ -133,6 +164,18 @@ const SessionGateCard = React.memo(({ entry }: { entry: DroverGateEntry }) => {
             setBusy(null);
         }
     }, [busy, requestId, sessionId]);
+
+    if (action === 'todo') {
+        // A to-do with no title is not renderable; droverTodoCard says so by
+        // returning null, and drawing two buttons over nothing would close a
+        // record the screen could not describe.
+        if (!todo) return null;
+        return (
+            <View style={[styles.card, styles.todoCard]}>
+                <DroverTodoBody card={todo} canInteract={true} onClose={closeTodo} chip={false} />
+            </View>
+        );
+    }
 
     if (action === 'answer-question') {
         return (
@@ -227,6 +270,11 @@ const styles = StyleSheet.create((theme) => ({
         // InlineQuestionForm's own ToolSectionView carries a bottom margin, so
         // the gap between stacked cards lives on the card, not on the list.
         marginBottom: 4,
+    },
+    todoCard: {
+        // DroverTodoBody brings no section wrapper of its own, so it takes the
+        // margin the form's ToolSectionView would have carried.
+        marginBottom: 12,
     },
     cardTitle: {
         ...Typography.default('semiBold'),

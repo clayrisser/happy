@@ -20,6 +20,19 @@ describe('sessionGateAction', () => {
 
     it('gives a permission Allow and Deny', () => {
         expect(sessionGateAction('permission', { command: 'rm -rf build' })).toBe('allow-deny');
+        expect(sessionGateAction('permission', { command: 'rm -rf build' }, 'Bash')).toBe('allow-deny');
+    });
+
+    // DROVE-89. The bridge takes a to-do answer only when it names Done or
+    // Drop it, so Allow on one travels the whole way and is refused; Clay
+    // pressed it eight times on todo 19fddae5 and the card never left.
+    it('gives a to-do its own buttons, never Allow and Deny', () => {
+        const args = { title: 'Archive build 8', reason: 'Swift never ships OTA', options: [] };
+        expect(sessionGateAction('todo', args)).toBe('todo');
+        expect(sessionGateAction('todo', args, 'DroverTodo')).toBe('todo');
+        // The tool alone is enough: a gate whose kind was derived by an older
+        // reader still carries the tool name.
+        expect(sessionGateAction('permission', args, 'DroverTodo')).toBe('todo');
     });
 
     // Denying a question resolves it for every other surface with no answer to

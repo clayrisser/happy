@@ -8,17 +8,27 @@
 
 import { hasAnswerableOptions, questionCards } from './tools/views/askUserQuestionAnswers';
 
-export type SessionGateAction = 'answer-question' | 'allow-deny' | 'read-only';
+export type SessionGateAction = 'todo' | 'answer-question' | 'allow-deny' | 'read-only';
 
 /**
- * A question offers its own options; a permission offers Allow and Deny.
+ * A to-do offers its own buttons; a question offers its own options; a
+ * permission offers Allow and Deny.
  *
- * A question is never given Allow/Deny. Denying one resolves it for every
- * other surface with no answer to hand back — the bus refuses a bare allow on
- * a question for the same reason — so a question that arrived without options
- * is readable here and answered where it was raised.
+ * A to-do is never given Allow/Deny (DROVE-89). The bridge takes a to-do
+ * answer only when it names one of the card's options (Done / Drop it), so a
+ * bare Allow travels the whole way and is refused: Clay pressed it eight times
+ * on todo 19fddae5 and the card never left. The kind is read off the gate,
+ * which droverGates derives from the tool (`DroverTodo`) or the bus event, and
+ * the tool is checked too so a card that carries one without the other still
+ * gets the right buttons.
+ *
+ * A question is never given Allow/Deny either. Denying one resolves it for
+ * every other surface with no answer to hand back, and the bus refuses a bare
+ * allow on a question for the same reason, so a question that arrived without
+ * options is readable here and answered where it was raised.
  */
-export function sessionGateAction(kind: string, args: unknown): SessionGateAction {
+export function sessionGateAction(kind: string, args: unknown, tool?: string): SessionGateAction {
+    if (kind === 'todo' || tool === 'DroverTodo') return 'todo';
     if (kind !== 'question') return 'allow-deny';
     return hasAnswerableOptions(questionCards(args)) ? 'answer-question' : 'read-only';
 }
@@ -31,4 +41,4 @@ export function sessionGateAction(kind: string, args: unknown): SessionGateActio
  * you send someone hunting for a screen they are standing on, which is the
  * whole complaint this banner answers.
  */
-export const sessionGateReadOnlyHint = 'Answer this one in the terminal — it arrived without options.';
+export const sessionGateReadOnlyHint = 'Answer this one in the terminal. It arrived without options.';
