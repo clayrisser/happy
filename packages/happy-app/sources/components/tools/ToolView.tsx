@@ -21,6 +21,7 @@ import {
     shouldUseCompactToolRow,
 } from '@/utils/toolDisplay';
 import { useSetting } from '@/sync/storage';
+import { getToolRowRoute } from '@/utils/toolRowRoute';
 
 interface ToolViewProps {
     metadata: Metadata | null;
@@ -37,24 +38,21 @@ export const ToolView = React.memo<ToolViewProps>((props) => {
     const { theme } = useUnistyles();
     const compactToolCalls = useSetting('compactToolCalls');
 
-    // For file-editing tools, navigate to file route instead of message detail
-    const fileEditTools = ['Edit', 'MultiEdit', 'Write'];
-    const isFileEditTool = fileEditTools.includes(tool.name);
-    const filePath = isFileEditTool && typeof tool.input?.file_path === 'string' ? tool.input.file_path : null;
+    // A card and a row inside a consolidated group open the same detail, so
+    // both ask the same function where that is (DROVE-152).
+    const route = getToolRowRoute({ sessionId, messageId, tool });
 
-    // Create default onPress handler for navigation
     const handlePress = React.useCallback(() => {
         if (onPress) {
             onPress();
-        } else if (sessionId && filePath) {
-            router.push(`/session/${sessionId}/file?path=${btoa(filePath)}`);
-        } else if (sessionId && messageId) {
-            router.push(`/session/${sessionId}/message/${messageId}`);
+            return;
         }
-    }, [onPress, sessionId, messageId, filePath, router]);
+        if (route) {
+            router.push(route);
+        }
+    }, [onPress, route, router]);
 
-    // Enable pressable if either onPress is provided or we have navigation params
-    const isPressable = !!(onPress || (sessionId && filePath) || (sessionId && messageId));
+    const isPressable = !!(onPress || route);
 
     let knownTool = knownTools[tool.name as keyof typeof knownTools] as any;
 
