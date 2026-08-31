@@ -57,7 +57,7 @@ export const GeminiExecuteView = React.memo<ToolViewProps>(({ tool }) => {
     return (
         <>
             <ToolSectionView fullWidth>
-                <CodeView code={command} />
+                <CodeView code={command} shell />
             </ToolSectionView>
             {(description || cwd) && (
                 <View style={styles.infoContainer}>
