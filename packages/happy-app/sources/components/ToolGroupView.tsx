@@ -18,6 +18,7 @@ import { t } from '@/text';
 import { Message, ToolCallMessage } from '@/sync/typesMessage';
 import { getToolActivityLabel, getToolSummaryCategory, ToolSummaryCategory } from '@/utils/toolDisplay';
 import { toolRunLabel } from '@/utils/toolRunGroups';
+import { getToolRowRoute } from '@/utils/toolRowRoute';
 import { useRouter } from 'expo-router';
 
 interface ToolGroupViewProps {
@@ -71,33 +72,27 @@ export const ToolGroupView = React.memo<ToolGroupViewProps>((props) => {
             onToggle();
             return;
         }
-        const filePath = isFileEditTool(singleToolMessage.tool.name) && typeof singleToolMessage.tool.input?.file_path === 'string'
-            ? singleToolMessage.tool.input.file_path
-            : null;
-        if (filePath) {
-            router.push(`/session/${sessionId}/file?path=${btoa(filePath)}`);
-            return;
+        const route = getToolRowRoute({
+            sessionId,
+            messageId: singleToolMessage.id,
+            tool: singleToolMessage.tool,
+        });
+        if (route) {
+            router.push(route);
         }
-        router.push(`/session/${sessionId}/message/${singleToolMessage.id}`);
     }, [onToggle, router, sessionId, singleToolMessage]);
     const handleAnchoredToggle = useAnchoredToggle(expanded, onToggle, onAnchorLayoutChange);
+    // Every consolidated group draws the same openable row, a same-tool run
+    // included. Folding a run saved vertical space; it never meant the command
+    // and its output stopped being reachable (DROVE-152).
     const renderGroupMessage = React.useCallback((msg: Message) => (
-        runCategory ? (
-            <MessageView
-                key={msg.id}
-                message={msg}
-                metadata={metadata}
-                sessionId={sessionId}
-            />
-        ) : (
-            <ToolGroupMessageRow
-                key={msg.id}
-                message={msg}
-                metadata={metadata}
-                sessionId={sessionId}
-            />
-        )
-    ), [metadata, runCategory, sessionId]);
+        <ToolGroupMessageRow
+            key={msg.id}
+            message={msg}
+            metadata={metadata}
+            sessionId={sessionId}
+        />
+    ), [metadata, sessionId]);
 
     const body = (
         <View style={nested ? styles.nestedInnerContainer : styles.innerContainer}>
@@ -400,17 +395,20 @@ function ToolSummaryRow(props: {
     const { tool } = props.message;
     const category = getToolSummaryCategory(tool.name);
     const label = getToolActivityLabel(tool);
-    const filePath = isFileEditTool(tool.name) && typeof tool.input?.file_path === 'string'
-        ? tool.input.file_path
-        : null;
-    const isPressable = Boolean(props.sessionId);
+    const route = getToolRowRoute({
+        sessionId: props.sessionId,
+        messageId: props.message.id,
+        tool,
+    });
+    const isRunning = tool.state === 'running';
+    const isError = tool.state === 'error'
+        && tool.permission?.status !== 'denied'
+        && tool.permission?.status !== 'canceled';
     const handlePress = React.useCallback(() => {
-        if (filePath) {
-            router.push(`/session/${props.sessionId}/file?path=${btoa(filePath)}`);
-            return;
+        if (route) {
+            router.push(route);
         }
-        router.push(`/session/${props.sessionId}/message/${props.message.id}`);
-    }, [filePath, props.message.id, props.sessionId, router]);
+    }, [route, router]);
 
     const content = (
         <>
@@ -425,10 +423,23 @@ function ToolSummaryRow(props: {
             <Text style={styles.toolSummaryLabel} numberOfLines={1}>
                 {label}
             </Text>
+            {isRunning ? (
+                <ActivityIndicator
+                    size="small"
+                    color={theme.colors.textSecondary}
+                    style={{ transform: [{ scaleX: 0.7 }, { scaleY: 0.7 }] }}
+                />
+            ) : null}
+            {isError ? (
+                <Ionicons name="alert-circle-outline" size={15} color={theme.colors.warning} />
+            ) : null}
+            {route ? (
+                <Ionicons name="chevron-forward" size={13} color={theme.colors.textSecondary} />
+            ) : null}
         </>
     );
 
-    if (!isPressable) {
+    if (!route) {
         return (
             <View style={styles.toolSummaryRow}>
                 {content}
@@ -438,6 +449,8 @@ function ToolSummaryRow(props: {
 
     return (
         <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={label}
             onPress={handlePress}
             style={({ pressed }) => [
                 styles.toolSummaryRow,
@@ -488,10 +501,6 @@ function getGroupSummaryCategory(messages: Message[]): ToolSummaryCategory | nul
         return categories.values().next().value ?? null;
     }
     return categories.size > 1 ? 'other' : null;
-}
-
-function isFileEditTool(toolName: string): boolean {
-    return toolName === 'Edit' || toolName === 'MultiEdit' || toolName === 'Write';
 }
 
 const styles = StyleSheet.create((theme) => ({
@@ -561,8 +570,10 @@ const styles = StyleSheet.create((theme) => ({
         borderRadius: 4,
         overflow: 'hidden',
     },
+    // The row is a way in, not a label, so it dims and tints under a finger.
     toolSummaryRowPressed: {
         opacity: 0.65,
+        backgroundColor: theme.colors.surfaceHigh,
     },
     toolSummaryIcon: {
         width: 20,
