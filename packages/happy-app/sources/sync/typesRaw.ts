@@ -81,6 +81,11 @@ const sessionToolCallStartEventSchema = z.object({
 const sessionToolCallEndEventSchema = z.object({
     t: z.literal('tool-call-end'),
     call: z.string(),
+    // What the tool returned (DROVE-95). Older CLIs send only `call`, and the
+    // card then honestly says the call completed with no output. Mirrors
+    // happy-wire's sessionToolCallEndEventSchema.
+    result: z.unknown().optional(),
+    isError: z.boolean().optional(),
 });
 
 const sessionFileEventSchema = z.object({
@@ -755,8 +760,13 @@ function normalizeSessionEnvelope(
             content: [{
                 type: 'tool-result',
                 tool_use_id: envelope.ev.call,
-                content: null,
-                is_error: false,
+                // Folded the same way the transcript path folds it: an array
+                // of text blocks becomes one string, everything else passes
+                // whole for the tool's view to read (DROVE-95).
+                content: envelope.ev.result === undefined || envelope.ev.result === null
+                    ? null
+                    : toolResultContent(envelope.ev.result),
+                is_error: envelope.ev.isError === true,
                 uuid: contentUUID,
                 parentUUID
             }],

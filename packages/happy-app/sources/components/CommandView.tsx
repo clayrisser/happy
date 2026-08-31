@@ -1,6 +1,8 @@
 import * as React from 'react';
 import { Text, View, StyleSheet, Platform } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
+import { DoubleTap, WrapGlyph } from './CodeWrapToggle';
+import { useCodeWrap } from './useCodeWrap';
 
 interface CommandViewProps {
     command: string;
@@ -27,6 +29,11 @@ export const CommandView = React.memo<CommandViewProps>(({
     hideEmptyOutput,
 }) => {
     const { theme } = useUnistyles();
+    // Double-tap flips soft wrap for every terminal card (DROVE-95). With
+    // wrap on, the text shrinks to the card and long tokens break at any
+    // character; with it off the card lays out as it always did, and the
+    // full view puts it in a horizontal ScrollView.
+    const [wrap, toggleWrap] = useCodeWrap('terminal');
     // Use legacy output if new props aren't provided
     const hasNewProps = stdout !== undefined || stderr !== undefined || error !== undefined;
 
@@ -43,6 +50,12 @@ export const CommandView = React.memo<CommandViewProps>(({
             alignItems: 'baseline',
             flexDirection: 'row',
             flexWrap: 'wrap',
+            // Keeps the first line clear of the wrap glyph in the corner.
+            paddingRight: 20,
+        },
+        wrapped: {
+            flexShrink: 1,
+            alignSelf: 'stretch',
         },
         promptText: {
             fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace' }),
@@ -89,47 +102,53 @@ export const CommandView = React.memo<CommandViewProps>(({
         },
     });
 
+    const wrapped = wrap ? styles.wrapped : undefined;
+
     return (
-        <View style={[
-            styles.container, 
-            maxHeight ? { maxHeight } : undefined,
-            fullWidth ? { width: '100%' } : undefined
-        ]}>
-            {/* Command Line */}
-            <View style={styles.line}>
-                <Text style={styles.promptText}>{prompt} </Text>
-                <Text style={styles.commandText}>{command}</Text>
+        <DoubleTap onDoubleTap={toggleWrap} style={fullWidth ? { width: '100%' } : undefined}>
+            <View style={[
+                styles.container, 
+                maxHeight ? { maxHeight } : undefined,
+                fullWidth ? { width: '100%' } : undefined
+            ]}>
+                {/* Command Line */}
+                <View style={[styles.line, wrapped]}>
+                    <Text style={styles.promptText}>{prompt} </Text>
+                    <Text style={[styles.commandText, wrapped]}>{command}</Text>
+                </View>
+
+                {hasNewProps ? (
+                    <>
+                        {/* Standard Output */}
+                        {stdout && stdout.trim() && (
+                            <Text style={[styles.stdout, wrapped]}>{stdout}</Text>
+                        )}
+
+                        {/* Standard Error */}
+                        {stderr && stderr.trim() && (
+                            <Text style={[styles.stderr, wrapped]}>{stderr}</Text>
+                        )}
+
+                        {/* Error Message */}
+                        {error && (
+                            <Text style={[styles.error, wrapped]}>{error}</Text>
+                        )}
+
+                        {/* Empty output indicator */}
+                        {!stdout && !stderr && !error && !hideEmptyOutput && (
+                            <Text style={styles.emptyOutput}>[Command completed with no output]</Text>
+                        )}
+                    </>
+                ) : (
+                    /* Legacy output format */
+                    output && (
+                        <Text style={[styles.commandText, wrapped]}>{'\n---\n' + output}</Text>
+                    )
+                )}
+
+                <WrapGlyph on={wrap} color={theme.colors.terminal.prompt} />
             </View>
-
-            {hasNewProps ? (
-                <>
-                    {/* Standard Output */}
-                    {stdout && stdout.trim() && (
-                        <Text style={styles.stdout}>{stdout}</Text>
-                    )}
-
-                    {/* Standard Error */}
-                    {stderr && stderr.trim() && (
-                        <Text style={styles.stderr}>{stderr}</Text>
-                    )}
-
-                    {/* Error Message */}
-                    {error && (
-                        <Text style={styles.error}>{error}</Text>
-                    )}
-
-                    {/* Empty output indicator */}
-                    {!stdout && !stderr && !error && !hideEmptyOutput && (
-                        <Text style={styles.emptyOutput}>[Command completed with no output]</Text>
-                    )}
-                </>
-            ) : (
-                /* Legacy output format */
-                output && (
-                    <Text style={styles.commandText}>{'\n---\n' + output}</Text>
-                )
-            )}
-        </View>
+        </DoubleTap>
     );
 });
 

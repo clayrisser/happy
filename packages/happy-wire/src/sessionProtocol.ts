@@ -54,6 +54,14 @@ export const sessionToolCallStartEventSchema = z.object({
 export const sessionToolCallEndEventSchema = z.object({
   t: z.literal('tool-call-end'),
   call: z.string(),
+  // What the tool returned (DROVE-95). Absent on producers that predate the
+  // field; the app then shows the call as completed with no output, which is
+  // what every Claude tool result looked like on the phone before this: the
+  // transcript's tool_result never left the CLI. Claude's structured
+  // `toolUseResult` when the record carries one (Bash: {stdout, stderr, ...}),
+  // else the tool_result content, a string or an array of content blocks.
+  result: z.unknown().optional(),
+  isError: z.boolean().optional(),
 });
 
 export const sessionFileEventSchema = z.object({

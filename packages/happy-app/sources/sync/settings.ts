@@ -15,6 +15,19 @@ export const SUPPORTED_SCHEMA_VERSION = 2;
 export const SESSION_LIST_GROUPING_MODES = ['flat', 'project'] as const;
 export type SessionListGrouping = typeof SESSION_LIST_GROUPING_MODES[number];
 
+// Soft wrap for monospace cards (DROVE-95): terminal cards (CommandView) and
+// fenced code blocks, each toggled by a double-tap on the card. One preference
+// with two targets, so one nested value rather than two flat keys. Both fields
+// optional: a partial object from another app version merges instead of
+// failing the whole settings parse. Default off, the horizontal scroll.
+export const CODE_WRAP_KINDS = ['terminal', 'code'] as const;
+export type CodeWrapKind = typeof CODE_WRAP_KINDS[number];
+export const CodeWrapSchema = z.object({
+    terminal: z.boolean().optional(),
+    code: z.boolean().optional(),
+});
+export type CodeWrap = z.infer<typeof CodeWrapSchema>;
+
 export const SettingsSchema = z.object({
     // Schema version for compatibility detection
     schemaVersion: z.number().default(SUPPORTED_SCHEMA_VERSION).describe('Settings schema version for compatibility checks'),
@@ -46,6 +59,7 @@ export const SettingsSchema = z.object({
     showHarnessIconInSessionHeader: z.boolean().describe('Whether to show the harness icon in the session header'),
     userMessageBubbleColor: z.string().describe('User message bubble color preset'),
     usageLimitShowRemaining: z.boolean().describe('Show plan rate limits as quota remaining instead of quota used'),
+    codeWrap: CodeWrapSchema.describe('Soft-wrap monospace text in terminal cards and code blocks, toggled by double-tap'),
 
     // Drives the archive-visibility toggle: it hides archived sessions, not
     // merely disconnected ones. The key keeps its original name because these
@@ -130,6 +144,7 @@ export const settingsDefaults: Settings = {
     showHarnessIconInSessionHeader: true,
     userMessageBubbleColor: DEFAULT_USER_MESSAGE_BUBBLE_COLOR,
     usageLimitShowRemaining: false,
+    codeWrap: { terminal: false, code: false },
 
     hideInactiveSessions: true,
     sortSessionsByActivity: true,
@@ -219,4 +234,22 @@ export function settingsToSyncPayload(settings: Settings): Partial<Settings> {
         result.agentDefaultOverrides = compactAgentOverrides;
     }
     return result;
+}
+
+//
+// Code wrap (DROVE-95)
+//
+
+export function isCodeWrapOn(settings: Pick<Settings, 'codeWrap'>, kind: CodeWrapKind): boolean {
+    return settings.codeWrap?.[kind] === true;
+}
+
+/** The delta that flips one kind and leaves the other as it was. */
+export function toggleCodeWrap(settings: Pick<Settings, 'codeWrap'>, kind: CodeWrapKind): Pick<Settings, 'codeWrap'> {
+    return {
+        codeWrap: {
+            ...(settings.codeWrap ?? {}),
+            [kind]: !isCodeWrapOn(settings, kind),
+        },
+    };
 }

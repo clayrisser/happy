@@ -2,9 +2,10 @@ import * as React from 'react';
 import { View, ScrollView, StyleSheet } from 'react-native';
 import { ToolCall } from '@/sync/typesMessage';
 import { Metadata } from '@/sync/storageTypes';
-import { knownTools } from '@/components/tools/knownTools';
-import { toolFullViewStyles } from '../ToolFullView';
 import { CommandView } from '@/components/CommandView';
+import { useSetting } from '@/sync/storage';
+import { isCodeWrapOn } from '@/sync/settings';
+import { readBashResult } from './bashResult';
 
 interface BashViewFullProps {
     tool: ToolCall;
@@ -12,49 +13,40 @@ interface BashViewFullProps {
 }
 
 export const BashViewFull = React.memo<BashViewFullProps>(({ tool, metadata }) => {
-    const { input, result, state } = tool;
+    const { input } = tool;
+    // One reader shared with the compact card (DROVE-95): stdout renders
+    // whenever the result has any, whatever shape it arrived in.
+    const { stdout, stderr, error } = readBashResult(tool);
+    // With wrap on there is no horizontal ScrollView: the card is as wide as
+    // the screen and the text breaks inside it. The double-tap that flips
+    // this lives in CommandView.
+    const codeWrap = useSetting('codeWrap');
+    const wrap = isCodeWrapOn({ codeWrap }, 'terminal');
 
-    // Parse the result
-    let parsedResult: { stdout?: string; stderr?: string } | null = null;
-    let unparsedOutput: string | null = null;
-    let error: string | null = null;
-
-    if (state === 'completed' && result) {
-        if (typeof result === 'string') {
-            // Handle unparsed string result
-            unparsedOutput = result;
-        } else {
-            // Try to parse as structured result
-            const parsed = knownTools.Bash.result.safeParse(result);
-            if (parsed.success) {
-                parsedResult = parsed.data;
-            } else {
-                // If parsing fails but it's not a string, stringify it
-                unparsedOutput = JSON.stringify(result);
-            }
-        }
-    } else if (state === 'error' && typeof result === 'string') {
-        error = result;
-    }
+    const card = (
+        <View style={wrap ? styles.wrappedCommand : styles.commandWrapper}>
+            <CommandView
+                command={input.command}
+                stdout={stdout}
+                stderr={stderr}
+                error={error}
+                fullWidth
+            />
+        </View>
+    );
 
     return (
         <View style={styles.container}>
             <View style={styles.terminalContainer}>
-                <ScrollView 
-                    horizontal
-                    showsHorizontalScrollIndicator={true}
-                    contentContainerStyle={styles.scrollContent}
-                >
-                    <View style={styles.commandWrapper}>
-                        <CommandView
-                            command={input.command}
-                            stdout={parsedResult?.stdout || unparsedOutput}
-                            stderr={parsedResult?.stderr}
-                            error={error}
-                            fullWidth
-                        />
-                    </View>
-                </ScrollView>
+                {wrap ? card : (
+                    <ScrollView 
+                        horizontal
+                        showsHorizontalScrollIndicator={true}
+                        contentContainerStyle={styles.scrollContent}
+                    >
+                        {card}
+                    </ScrollView>
+                )}
             </View>
         </View>
     );
@@ -77,5 +69,8 @@ const styles = StyleSheet.create({
     commandWrapper: {
         flex: 1,
         minWidth: '100%',
+    },
+    wrappedCommand: {
+        width: '100%',
     },
 });

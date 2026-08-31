@@ -3,7 +3,9 @@ import * as React from 'react';
 import { Image, Pressable, View, Platform } from 'react-native';
 import { HorizontalScrollView } from '../HorizontalScrollView';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import { StyleSheet } from 'react-native-unistyles';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { DoubleTap, WrapGlyph } from '../CodeWrapToggle';
+import { useCodeWrap } from '../useCodeWrap';
 import { Text } from '../StyledText';
 import { Typography } from '@/constants/Typography';
 import { SimpleSyntaxHighlighter } from '../SimpleSyntaxHighlighter';
@@ -168,6 +170,10 @@ function RenderNumberedListBlock(props: { items: { number: number, depth: number
 
 function RenderCodeBlock(props: { content: string, language: string | null, first: boolean, last: boolean, selectable: boolean }) {
     const [isHovered, setIsHovered] = React.useState(false);
+    // Double-tap flips soft wrap for every code block (DROVE-95): the
+    // horizontal ScrollView goes away and the text breaks inside the block.
+    const [wrap, toggleWrap] = useCodeWrap('code');
+    const { theme } = useUnistyles();
 
     const copyCode = React.useCallback(async () => {
         try {
@@ -187,16 +193,29 @@ function RenderCodeBlock(props: { content: string, language: string | null, firs
             // @ts-ignore - Web only events
             onMouseLeave={() => setIsHovered(false)}
         >
-            {props.language && <Text selectable={props.selectable} style={style.codeLanguage}>{props.language}</Text>}
-            <HorizontalScrollView
-                contentContainerStyle={{ paddingHorizontal: 16, paddingVertical: 16 }}
-            >
-                <SimpleSyntaxHighlighter
-                    code={props.content}
-                    language={props.language}
-                    selectable={props.selectable}
-                />
-            </HorizontalScrollView>
+            <DoubleTap onDoubleTap={toggleWrap}>
+                {props.language && <Text selectable={props.selectable} style={style.codeLanguage}>{props.language}</Text>}
+                {wrap ? (
+                    <View style={style.codeWrapped}>
+                        <SimpleSyntaxHighlighter
+                            code={props.content}
+                            language={props.language}
+                            selectable={props.selectable}
+                        />
+                    </View>
+                ) : (
+                    <HorizontalScrollView
+                        contentContainerStyle={{ paddingHorizontal: 16, paddingVertical: 16 }}
+                    >
+                        <SimpleSyntaxHighlighter
+                            code={props.content}
+                            language={props.language}
+                            selectable={props.selectable}
+                        />
+                    </HorizontalScrollView>
+                )}
+                <WrapGlyph on={wrap} color={theme.colors.textSecondary} style={style.codeWrapGlyph} />
+            </DoubleTap>
             <View
                 style={[style.copyButtonWrapper, isHovered && style.copyButtonWrapperVisible]}
                 {...(Platform.OS === 'web' ? ({ className: 'copy-button-wrapper' } as any) : {})}
@@ -522,6 +541,16 @@ const style = StyleSheet.create((theme) => ({
         marginTop: 8,
         paddingHorizontal: 16,
         marginBottom: 0,
+    },
+    codeWrapped: {
+        paddingHorizontal: 16,
+        paddingVertical: 16,
+        width: '100%',
+    },
+    codeWrapGlyph: {
+        top: undefined,
+        bottom: 6,
+        right: 8,
     },
     codeText: {
         ...Typography.mono(),

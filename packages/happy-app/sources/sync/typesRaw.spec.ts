@@ -1816,6 +1816,70 @@ describe('Zod Transform - WOLOG Content Normalization', () => {
             }
         });
 
+        it('carries the tool result off tool-call-end, the measured Bash shape (DROVE-95)', () => {
+            // What the CLI now sends for session 19c2f0a8's Bash
+            // toolu_0173G9EJ…: Claude's structured toolUseResult, stdout
+            // non-empty, and the card used to say "completed with no output".
+            const stdout = 'DROVE-94 https://projects.corp.bitspur.com/tracker/DROVE-94';
+            const end = normalizeRawMessage('db-95', null, 1, {
+                ...base,
+                content: {
+                    type: 'session',
+                    data: {
+                        id: 'env-95',
+                        time: 1,
+                        role: 'agent',
+                        turn: 'turn-1',
+                        ev: {
+                            t: 'tool-call-end',
+                            call: 'toolu_0173G9EJxTKJCchyHz71xYs8',
+                            result: { stdout, stderr: '', interrupted: false, isImage: false, noOutputExpected: false },
+                            isError: false,
+                        }
+                    }
+                }
+            });
+            expect(end).toBeTruthy();
+            if (end && end.role === 'agent') {
+                expect(end.content[0]).toMatchObject({
+                    type: 'tool-result',
+                    tool_use_id: 'toolu_0173G9EJxTKJCchyHz71xYs8',
+                    content: { stdout, stderr: '' },
+                    is_error: false
+                });
+            }
+        });
+
+        it('folds a tool-call-end result of text blocks to one string, and keeps isError (DROVE-95)', () => {
+            const end = normalizeRawMessage('db-96', null, 1, {
+                ...base,
+                content: {
+                    type: 'session',
+                    data: {
+                        id: 'env-96',
+                        time: 1,
+                        role: 'agent',
+                        turn: 'turn-1',
+                        ev: {
+                            t: 'tool-call-end',
+                            call: 'call-96',
+                            result: [{ type: 'text', text: 'line one' }, { type: 'text', text: 'line two' }],
+                            isError: true,
+                        }
+                    }
+                }
+            });
+            expect(end).toBeTruthy();
+            if (end && end.role === 'agent') {
+                expect(end.content[0]).toMatchObject({
+                    type: 'tool-result',
+                    tool_use_id: 'call-96',
+                    content: 'line one\nline two',
+                    is_error: true
+                });
+            }
+        });
+
         it('maps turn-end to ready event and drops turn-start', () => {
             const turnStart = normalizeRawMessage('db-5', null, 1, {
                 ...base,
