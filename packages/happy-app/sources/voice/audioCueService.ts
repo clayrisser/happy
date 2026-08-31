@@ -274,17 +274,24 @@ class AudioCueService {
     /**
      * How many subagents are running, for the heartbeat's rhythm (DROVE-182).
      *
-     * The SAME derivation the status row draws from — `summarizeLiveStatus`'s
-     * agent rows (DROVE-155) — rather than a second count off the raw status,
-     * because a heartbeat that says four while the screen says three is worse
-     * than a heartbeat that says nothing. Stale live status counts as zero:
-     * the thump alone then means "working, and I cannot see the fan-out",
-     * which is honest, where ticks from a minute-old snapshot would not be.
+     * `sideCount` — the very field the status row prints (DROVE-155) — because
+     * a heartbeat that says four while the screen says three is worse than a
+     * heartbeat that says nothing. Stale live status counts as zero: the thump
+     * alone then means "working, and I cannot see the fan-out", which is
+     * honest, where ticks from a minute-old snapshot would not be.
+     *
+     * This used to filter `rows` for `kind === 'agent'` and call that the same
+     * derivation. It was not. `sideCount` is agents PLUS workflows, so the
+     * wrist beat two while the row showed three for as long as a workflow ran,
+     * and DROVE-209's spec never put a workflow in its fixture to catch it.
+     * Reading the field instead of re-deriving from `rows` also makes the
+     * count immune to how the rows are shaped, which is what DROVE-185 needed:
+     * nested agents fold into their parent on screen and must keep beating.
      */
     private agentCount(live: LiveStatus | null | undefined, fresh: boolean, at: number): number {
         if (!fresh || !live) return 0;
         try {
-            return summarizeLiveStatus(live, at).rows.filter((row) => row.kind === 'agent').length;
+            return summarizeLiveStatus(live, at).sideCount;
         } catch {
             return 0;
         }

@@ -95,6 +95,25 @@ export interface LiveStatusRow {
     toolId?: string;
     /** Claude Code's agent id, so a tap can open the agent's own transcript (DROVE-93). */
     agentId?: string;
+    /**
+     * How deep under a top-level agent this row sits (DROVE-185). 0 for
+     * everything the pane launched itself, and for tools and workflows.
+     *
+     * Rows stay FLAT: a nested agent is a row in this same array, just after
+     * its parent and carrying a depth. The tree is an ordering and a set of
+     * labels over the flat list, never a nested structure, because every count
+     * in the app is taken off this array and a child hidden inside its parent
+     * is a child that stops being counted.
+     */
+    depth: number;
+    /** The agent row this one sits under, absent at depth 0 (DROVE-185). */
+    parentId?: string;
+    /**
+     * Direct children present in this same snapshot (DROVE-185). Absent when
+     * there are none, so a row with no `childCount` draws exactly as it did
+     * before nesting existed.
+     */
+    childCount?: number;
 }
 
 /**
@@ -151,13 +170,35 @@ export interface LiveStatusSummary {
      */
     main: LiveStatusMain | null;
     /**
-     * Background agents plus workflows: the number beside the fold, and the
-     * only thing on the row that speaks for the agents.
+     * Background agents plus workflows: the number beside the fold, the only
+     * thing on the row that speaks for the agents, and THE ONE DERIVATION any
+     * surface that counts agents reads (DROVE-155, DROVE-209, DROVE-185).
+     *
+     * The Morse heartbeat reads this field. It used to re-count by filtering
+     * `rows` for `kind === 'agent'`, which is agents WITHOUT workflows, so the
+     * wrist said two while the screen said three for as long as a workflow was
+     * running — the exact disagreement DROVE-209 set out to remove, surviving
+     * because its spec never put a workflow in the fixture. A workflow's own
+     * agents are not in `agents` at all (the CLI collapses them into
+     * done/total), so the workflow row IS those agents on this row; dropping
+     * it undercounts the fan-out rather than tidying it.
+     *
+     * NESTED AGENTS COUNT, and they always did (DROVE-185). Every agent at
+     * every depth is one entry in `agents`, so this number is unchanged by the
+     * tree: a session that showed nine before shows nine now, folded. That is
+     * the whole reason the rows stayed flat. They are also real work in
+     * flight, and the question this number answers is how much is out.
      */
     sideCount: number;
 }
 
-function agentRow(agent: LiveStatusAgent, now: number): LiveStatusRow {
+function agentRow(
+    agent: LiveStatusAgent,
+    now: number,
+    depth: number,
+    parentId: string | undefined,
+    childCount: number,
+): LiveStatusRow {
     return {
         kind: 'agent',
         key: `agent:${agent.id}`,
@@ -168,7 +209,81 @@ function agentRow(agent: LiveStatusAgent, now: number): LiveStatusRow {
             : {}),
         ...(agent.toolId ? { toolId: agent.toolId } : {}),
         agentId: agent.id,
+        depth,
+        ...(parentId ? { parentId } : {}),
+        ...(childCount > 0 ? { childCount } : {}),
     };
+}
+
+/**
+ * The agents, ordered parent-then-children and stamped with a depth
+ * (DROVE-185).
+ *
+ * Clay: "what if a subagent has lanes in it? Can we visualize that?" A
+ * subagent can spawn its own subagents, and every one of them lands in the
+ * session's single flat `subagents/` directory, so the sheet was already
+ * listing them — indistinguishable from the nine top-level agents around
+ * them. The CLI now publishes `parentId` and this is what turns it into a
+ * shape.
+ *
+ * EVERY AGENT COMES BACK, exactly once. This reorders and labels; it never
+ * drops. That is load-bearing: `sideCount` is taken off the same agent array
+ * and the heartbeat reads `sideCount`, so an agent that vanished here would go
+ * quiet on the wrist as well as off the screen.
+ *
+ * A parent that is NOT in the snapshot promotes its children to top level
+ * rather than hiding them. A parent finishes while its child runs on — that is
+ * the normal end of a fan-out, not an error — and a running agent filed under
+ * an absent parent would be a row nothing could ever reveal. Same treatment
+ * for a parent chain that loops: unreachable roots are promoted, so a
+ * malformed meta.json costs a wrong indent, never a lost row or a hang.
+ */
+export function orderAgentRows(agents: LiveStatusAgent[], now: number): LiveStatusRow[] {
+    const byId = new Map<string, LiveStatusAgent>();
+    for (const agent of agents) byId.set(agent.id, agent);
+
+    // The parent each agent actually renders under: its own when that agent is
+    // in this snapshot and the link does not close a loop, else none.
+    const parentOf = new Map<string, string | undefined>();
+    for (const agent of agents) {
+        let parent = agent.parentId;
+        if (parent === agent.id || (parent !== undefined && !byId.has(parent))) parent = undefined;
+        if (parent !== undefined) {
+            // Walk up. A cycle, or a chain longer than the snapshot, means
+            // there is no root above this agent, so it becomes one.
+            const seen = new Set<string>([agent.id]);
+            let cursor: string | undefined = parent;
+            while (cursor !== undefined && !seen.has(cursor)) {
+                seen.add(cursor);
+                cursor = byId.get(cursor)?.parentId;
+                if (cursor !== undefined && !byId.has(cursor)) cursor = undefined;
+            }
+            if (cursor !== undefined) parent = undefined;
+        }
+        parentOf.set(agent.id, parent);
+    }
+
+    const children = new Map<string, LiveStatusAgent[]>();
+    const roots: LiveStatusAgent[] = [];
+    for (const agent of agents) {
+        const parent = parentOf.get(agent.id);
+        if (parent === undefined) {
+            roots.push(agent);
+            continue;
+        }
+        const list = children.get(parent);
+        if (list) list.push(agent);
+        else children.set(parent, [agent]);
+    }
+
+    const rows: LiveStatusRow[] = [];
+    const emit = (agent: LiveStatusAgent, depth: number, parentId: string | undefined) => {
+        const kids = children.get(agent.id) ?? [];
+        rows.push(agentRow(agent, now, depth, parentId, kids.length));
+        for (const kid of kids) emit(kid, depth + 1, agent.id);
+    };
+    for (const root of roots) emit(root, 0, undefined);
+    return rows;
 }
 
 function workflowRow(workflow: LiveStatusWorkflow, now: number): LiveStatusRow {
@@ -185,12 +300,81 @@ function workflowRow(workflow: LiveStatusWorkflow, now: number): LiveStatusRow {
         ...(typeof workflow.tokens === 'number' && workflow.tokens > 0
             ? { tokens: formatTokens(workflow.tokens) }
             : {}),
+        depth: 0,
     };
 }
 
 function countPhrase(count: number, one: string, many: string): string | null {
     if (count <= 0) return null;
     return `${count} ${count === 1 ? one : many}`;
+}
+
+/**
+ * The rows to actually draw, given which parents are unfolded (DROVE-185).
+ *
+ * Collapsed is the default, and that is the whole design. Clay runs nine or
+ * more agents at once and some of those spawn their own; a permanently nested
+ * tree would push the ninth off the screen to show the second one's children,
+ * which is a worse sheet than the flat list it replaced. So the top level
+ * stays exactly as it was, a parent carries a count of its children, and the
+ * count is what unfolds them in place. Nothing is hidden that was not
+ * previously invisible anyway: before this, a nested agent sat in the flat
+ * list wearing no sign of whose it was.
+ *
+ * Folding is a DRAWING decision and touches no number. `sideCount` still
+ * counts every agent at every depth, so the row and the wrist say the same
+ * thing whether a parent is open or shut.
+ *
+ * A child of a collapsed parent is hidden along with its own children, so
+ * unfolding one level reveals one level.
+ */
+export function visibleRows(rows: LiveStatusRow[], expanded: ReadonlySet<string>): LiveStatusRow[] {
+    const out: LiveStatusRow[] = [];
+    const hidden = new Set<string>();
+    for (const row of rows) {
+        const parent = row.parentId;
+        if (parent !== undefined && (hidden.has(parent) || !expanded.has(parent))) {
+            if (row.agentId) hidden.add(row.agentId);
+            continue;
+        }
+        out.push(row);
+    }
+    return out;
+}
+
+/**
+ * One agent's descendants, re-based so its own children sit at depth 0
+ * (DROVE-185).
+ *
+ * The agent screen asks the same question of an agent that the status row asks
+ * of the session — what have you got out — and gets it answered by the same
+ * rows, off the session's one snapshot. There is no second fetch and no second
+ * derivation: an agent's children are already in `status.agents`, because
+ * every agent in the session lands in one flat directory whatever its depth.
+ *
+ * Re-based, not sliced, so the sheet on an agent screen indents from its own
+ * left edge rather than carrying its parent's offset across.
+ */
+export function agentSubtreeRows(rows: LiveStatusRow[], agentId: string): LiveStatusRow[] {
+    const root = rows.find((row) => row.agentId === agentId);
+    if (!root) return [];
+    const base = root.depth + 1;
+    const inside = new Set<string>([agentId]);
+    const out: LiveStatusRow[] = [];
+    for (const row of rows) {
+        if (row.agentId === agentId) continue;
+        if (row.parentId === undefined || !inside.has(row.parentId)) continue;
+        if (row.agentId) inside.add(row.agentId);
+        const { parentId: _dropped, ...rest } = row;
+        out.push({
+            ...rest,
+            depth: row.depth - base,
+            // A direct child of this agent has no parent INSIDE this view, so
+            // it is a root here and folds like one.
+            ...(row.parentId !== agentId ? { parentId: row.parentId } : {}),
+        });
+    }
+    return out;
 }
 
 export function summarizeLiveStatus(status: LiveStatus, now: number): LiveStatusSummary {
@@ -206,10 +390,13 @@ export function summarizeLiveStatus(status: LiveStatus, now: number): LiveStatus
             ...(status.tool.arg ? { detail: status.tool.arg } : {}),
             elapsed: formatElapsed(now - status.tool.startedAt),
             toolId: status.tool.id,
+            depth: 0,
         });
     }
     for (const workflow of workflows) rows.push(workflowRow(workflow, now));
-    for (const agent of agents) rows.push(agentRow(agent, now));
+    // Ordered parent-then-child and stamped with a depth (DROVE-185). Same
+    // rows, same number of them, in an order that can be drawn as a tree.
+    for (const row of orderAgentRows(agents, now)) rows.push(row);
 
     // The headline is what Clay sees without expanding anything, so it names
     // the most specific thing running. A tool beats a fan-out because the tool

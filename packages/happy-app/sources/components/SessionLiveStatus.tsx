@@ -7,7 +7,7 @@ import { useShallow } from 'zustand/react/shallow';
 
 import { Typography } from '@/constants/Typography';
 import { storage } from '@/sync/storage';
-import type { LiveStatusRow } from '@/utils/liveStatus';
+import { visibleRows, type LiveStatusRow } from '@/utils/liveStatus';
 import { useComposerSheetNavigate } from './composerSheetNavigation';
 
 /**
@@ -48,7 +48,13 @@ const rowIcon: Record<LiveStatusRow['kind'], React.ComponentProps<typeof Octicon
     workflow: 'workflow',
 };
 
-function LiveStatusTreeRow(props: { sessionId: string, row: LiveStatusRow }) {
+function LiveStatusTreeRow(props: {
+    sessionId: string,
+    row: LiveStatusRow,
+    /** Whether this row's own children are showing, when it has any. */
+    expanded?: boolean,
+    onToggle?: () => void,
+}) {
     const { theme } = useUnistyles();
     const router = useRouter();
     // Both rows below go through the sheet, not straight to the router
@@ -65,7 +71,10 @@ function LiveStatusTreeRow(props: { sessionId: string, row: LiveStatusRow }) {
             alignItems: 'center',
             gap: 8,
             paddingVertical: 5,
-            paddingHorizontal: 18,
+            paddingRight: 18,
+            // One step per level, off the same 18 the flat list always used,
+            // so a session with no nesting is pixel-for-pixel what it was.
+            paddingLeft: 18 + row.depth * 14,
         }}>
             <Octicons name={rowIcon[row.kind]} size={12} color={theme.colors.textSecondary} />
             <Text
@@ -74,6 +83,38 @@ function LiveStatusTreeRow(props: { sessionId: string, row: LiveStatusRow }) {
             >
                 {row.title}
             </Text>
+            {row.childCount && props.onToggle ? (
+                // Its OWN hit target, not the row's (DROVE-185). Tapping the
+                // row still opens the agent, which is what it has always done
+                // and what Clay reaches for most; unfolding is the second
+                // action and gets the second target.
+                <Pressable
+                    onPress={props.onToggle}
+                    hitSlop={8}
+                    accessibilityRole="button"
+                    accessibilityState={{ expanded: !!props.expanded }}
+                    accessibilityLabel={`${props.expanded ? 'Hide' : 'Show'} ${row.childCount} nested ${row.childCount === 1 ? 'agent' : 'agents'}`}
+                    style={({ pressed }) => ({
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        gap: 2,
+                        paddingHorizontal: 5,
+                        paddingVertical: 1,
+                        borderRadius: 8,
+                        backgroundColor: theme.colors.surfaceHigh,
+                        opacity: pressed ? 0.6 : 1,
+                    })}
+                >
+                    <Octicons
+                        name={props.expanded ? 'chevron-down' : 'chevron-right'}
+                        size={10}
+                        color={theme.colors.textSecondary}
+                    />
+                    <Text style={{ fontSize: 10, color: theme.colors.textSecondary, ...Typography.mono() }}>
+                        {row.childCount}
+                    </Text>
+                </Pressable>
+            ) : null}
             {row.detail ? (
                 <Text
                     numberOfLines={1}
@@ -142,6 +183,20 @@ export const SessionLiveStatusTree = React.memo(function SessionLiveStatusTree(p
     maxHeight?: number | null;
 }) {
     const capped = props.maxHeight !== null;
+    // Which parents are unfolded. Collapsed is the default (DROVE-185): the
+    // top level stays the readable list it has always been, and a parent's
+    // child count is the thing that opens it. Held here rather than in the
+    // sheet so it survives the once-a-second republish that reconciles the
+    // rows underneath it.
+    const [expanded, setExpanded] = React.useState<ReadonlySet<string>>(() => new Set());
+    const toggle = React.useCallback((agentId: string) => {
+        setExpanded((current) => {
+            const next = new Set(current);
+            if (!next.delete(agentId)) next.add(agentId);
+            return next;
+        });
+    }, []);
+    const drawn = React.useMemo(() => visibleRows(props.rows, expanded), [props.rows, expanded]);
     return (
         <ScrollView
             // Capped rather than unbounded where nothing else bounds it: Clay
@@ -154,8 +209,14 @@ export const SessionLiveStatusTree = React.memo(function SessionLiveStatusTree(p
             scrollEnabled={capped && Platform.OS !== 'web'}
         >
             <View style={{ paddingBottom: 4 }}>
-                {props.rows.map((row) => (
-                    <LiveStatusTreeRow key={row.key} sessionId={props.sessionId} row={row} />
+                {drawn.map((row) => (
+                    <LiveStatusTreeRow
+                        key={row.key}
+                        sessionId={props.sessionId}
+                        row={row}
+                        expanded={row.agentId ? expanded.has(row.agentId) : false}
+                        onToggle={row.agentId && row.childCount ? () => toggle(row.agentId!) : undefined}
+                    />
                 ))}
             </View>
         </ScrollView>

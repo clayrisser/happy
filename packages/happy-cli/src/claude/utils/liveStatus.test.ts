@@ -397,6 +397,69 @@ describe('createLiveStatusReader', () => {
         const status = createLiveStatusReader({ projectDir, sessionId }).read(now)
         expect(status?.tool).toBeUndefined()
     })
+
+    /**
+     * Agents that spawn agents (DROVE-185).
+     *
+     * Clay: "what if a subagent has lanes in it? Can we visualize that?"
+     *
+     * The nesting was never a reporting gap: Claude Code files EVERY agent, at
+     * every depth, in the one flat `subagents/` directory, so a grandchild was
+     * always in this list. What was missing is which of them belongs to which,
+     * and that is on disk too — `parentAgentId` in the sidecar, written from
+     * spawnDepth 2 down and absent at depth 1. These fixtures are that layout:
+     * a1 launched by the pane, a2 launched by a1, a3 launched by a2.
+     */
+    describe('nesting', () => {
+        const writeAgent = (id: string, now: number, meta: Record<string, unknown>) => {
+            writeFileSync(join(subagents, `agent-${id}.meta.json`), JSON.stringify(meta))
+            writeFileSync(join(subagents, `agent-${id}.jsonl`), `${agentRecord(now - 60_000)}\n`)
+            touch(join(subagents, `agent-${id}.jsonl`), now - 5_000)
+        }
+
+        const readAgents = (now: number) => {
+            writeFileSync(transcript, `${promptRecord(now - 120_000, 'go')}\n`)
+            const status = createLiveStatusReader({ projectDir, sessionId }).read(now)
+            return status?.agents ?? []
+        }
+
+        it('publishes the parent link two levels down, and none at the top', () => {
+            const now = Date.now()
+            writeAgent('a1', now, { description: 'Top', toolUseId: 'toolu_1', spawnDepth: 1 })
+            writeAgent('a2', now, { description: 'Child', toolUseId: 'toolu_2', spawnDepth: 2, parentAgentId: 'a1' })
+            writeAgent('a3', now, { description: 'Grandchild', toolUseId: 'toolu_3', spawnDepth: 3, parentAgentId: 'a2' })
+
+            const byId = new Map(readAgents(now).map((agent) => [agent.id, agent]))
+            expect(byId.size).toBe(3)
+            // Absence IS "the pane launched it". There is no depth on the wire.
+            expect(byId.get('a1')!.parentId).toBeUndefined()
+            expect(byId.get('a2')!.parentId).toBe('a1')
+            expect(byId.get('a3')!.parentId).toBe('a2')
+        })
+
+        it('still reports a nested agent, which is what it always did', () => {
+            const now = Date.now()
+            writeAgent('a1', now, { description: 'Top', spawnDepth: 1 })
+            writeAgent('a2', now, { description: 'Child', spawnDepth: 2, parentAgentId: 'a1' })
+            // The count is the point: nesting must not shrink the fan-out the
+            // status row and the wrist are both reading off this array.
+            expect(readAgents(now)).toHaveLength(2)
+        })
+
+        it('drops a parent link that names the agent itself', () => {
+            const now = Date.now()
+            writeAgent('a1', now, { description: 'Top', spawnDepth: 2, parentAgentId: 'a1' })
+            expect(readAgents(now)[0].parentId).toBeUndefined()
+        })
+
+        it('sends no parent link when the sidecar has none', () => {
+            const now = Date.now()
+            writeAgent('a1', now, { description: 'Top', toolUseId: 'toolu_1' })
+            const agent = readAgents(now)[0]
+            expect(agent.parentId).toBeUndefined()
+            expect(agent.label).toBe('Top')
+        })
+    })
 })
 
 describe('LiveStatusPublisher', () => {
