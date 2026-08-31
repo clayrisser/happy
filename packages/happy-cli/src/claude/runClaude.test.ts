@@ -317,6 +317,20 @@ describe('runClaude remote JSONL scanner', () => {
         originalListeners.clear();
     });
 
+    it('seeds the account config dir into the session env, so every reader finds the right sessions/ (DROVE-77)', async () => {
+        // Seven readers take CLAUDE_CONFIG_DIR from session.claudeEnvVars and
+        // fall back to ~/.claude when it is missing. A flip wrote it and every
+        // fresh start used to be ambient, so nobody noticed it was never
+        // seeded — until DROVE-21 stamped the first fresh start with jamrizzi,
+        // claude announced its socket under jamrizzi/sessions/, and findInbox
+        // read ~/.claude/sessions/: five phone messages in two minutes came
+        // back "did NOT reach the terminal".
+        const { loopOptions, finish } = await startRemoteRunClaudeHarness();
+        expect(loopOptions.claudeEnvVars?.CLAUDE_CONFIG_DIR).toBe(process.env.CLAUDE_CONFIG_DIR);
+        expect(loopOptions.claudeEnvVars?.CLAUDE_CONFIG_DIR).toBe(join(titleRoot, 'config'));
+        await finish();
+    });
+
     it('does not forward terminal JSONL messages while local mode owns the transcript', async () => {
         const sentMessages: unknown[] = [];
         const sessionClient = {
