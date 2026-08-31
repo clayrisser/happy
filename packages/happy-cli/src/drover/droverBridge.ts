@@ -63,6 +63,17 @@ export interface DroverEvent {
         sessionId?: string | null
         cwd?: string | null
         account?: string | null
+        /**
+         * The tmux pane the prompt is ON, when there is one.
+         *
+         * On the wire since the first gate adapter and typed here only now, so
+         * it silently vanished from every event this file touched. It matters
+         * from DROVE-198 on: a terminal approval is answered by pressing a key
+         * into that exact pane, and the pane is the binding that makes it this
+         * session's prompt rather than whichever one a surface happened to
+         * name.
+         */
+        surface?: string | null
     }
     /**
      * Which channels ANNOUNCE this event and which may ANSWER it (DROVE-72).
