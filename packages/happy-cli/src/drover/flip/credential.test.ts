@@ -22,7 +22,7 @@ import {
     noteCredentialProbe,
     type DroverAccount,
 } from './accounts';
-import { probeCredential, readLoggedIn, refreshCredentialState } from './credential';
+import { credentialProbeEnv, probeCredential, readLoggedIn, refreshCredentialState } from './credential';
 
 function account(name: string, configDir = '/tmp/drove238/' + name): DroverAccount {
     return { name, configDir, ambient: false } as DroverAccount;
@@ -130,5 +130,41 @@ describe('refreshCredentialState', () => {
             probe: async () => { throw new Error('spawn EACCES'); },
         })).resolves.toBeUndefined();
         expect(credentialDeniedRecently(alt)).toBe(false);
+    });
+});
+
+describe('credentialProbeEnv', () => {
+    it('drops an ambient key, which would sign off on every phantom account', () => {
+        // Measured 2026-08-31 against a config dir with no credential at all:
+        // `claude auth status` answers {"loggedIn": true, "authMethod":
+        // "api_key"} whenever ANTHROPIC_API_KEY is set, and "oauth_token" for
+        // ANTHROPIC_AUTH_TOKEN. Leave either in and the probe agrees with the
+        // file it was written to disbelieve.
+        const env = credentialProbeEnv(account('alt'), {
+            HOME: '/Users/clay',
+            ANTHROPIC_API_KEY: 'sk-ant-x',
+            ANTHROPIC_AUTH_TOKEN: 'tok',
+        });
+        expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+        expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+    });
+
+    it('still points Claude Code at the account being asked about', () => {
+        expect(credentialProbeEnv(account('alt'), { HOME: '/Users/clay' }).CLAUDE_CONFIG_DIR)
+            .toBe('/tmp/drove238/alt');
+    });
+
+    it('reaches the ambient account by UNSETTING the config dir, never by naming it', () => {
+        // Pointing CLAUDE_CONFIG_DIR at ~/.claude probes a different account:
+        // the ambient config file is ~/.claude.json at the root of $HOME.
+        const ambient = { name: 'main', configDir: 'default', ambient: true } as DroverAccount;
+        const env = credentialProbeEnv(ambient, { HOME: '/Users/clay', CLAUDE_CONFIG_DIR: '/x' });
+        expect(env.CLAUDE_CONFIG_DIR).toBeUndefined();
+    });
+
+    it('does not mutate the environment it was handed', () => {
+        const base = { HOME: '/Users/clay', ANTHROPIC_API_KEY: 'sk-ant-x' };
+        credentialProbeEnv(account('alt'), base);
+        expect(base.ANTHROPIC_API_KEY).toBe('sk-ant-x');
     });
 });

@@ -78,12 +78,38 @@ export function readLoggedIn(stdout: string): CredentialState {
     }
 }
 
+/**
+ * The environment for a probe: the account's, with any ambient key REMOVED.
+ *
+ * Without this the check is worthless. `claude auth status` reports `loggedIn`
+ * true when either variable is in the environment, whatever the config dir
+ * holds — measured 2026-08-31 against a dir with no credential at all:
+ *
+ *     (nothing set)            {"loggedIn": false, "authMethod": "none"}
+ *     ANTHROPIC_API_KEY=…      {"loggedIn": true,  "authMethod": "api_key"}
+ *     ANTHROPIC_AUTH_TOKEN=…   {"loggedIn": true,  "authMethod": "oauth_token"}
+ *
+ * A key inherited from the daemon's environment would sign off on every
+ * phantom account and put the bug back exactly as it was. `usageRefreshEnv`
+ * does not clear them because a usage refresh has no reason to care; this
+ * does, so it clears them here rather than changing what that means.
+ */
+export function credentialProbeEnv(
+    a: DroverAccount,
+    base: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+    const env = usageRefreshEnv(a, base)
+    delete env.ANTHROPIC_API_KEY
+    delete env.ANTHROPIC_AUTH_TOKEN
+    return env
+}
+
 function runAuthStatus(a: DroverAccount): Promise<string> {
     return new Promise((resolve, reject) => {
         let child: ReturnType<typeof spawn>
         try {
             child = spawn(claudeBinary(), ['auth', 'status'], {
-                env: usageRefreshEnv(a),
+                env: credentialProbeEnv(a),
                 stdio: ['ignore', 'pipe', 'ignore'],
             })
         } catch (err) {
