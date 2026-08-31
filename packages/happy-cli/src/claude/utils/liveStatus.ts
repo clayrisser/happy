@@ -19,8 +19,15 @@
  *       one per background agent, appended to as it works. Its first record is
  *       when it started; its `message.usage` blocks are the tokens.
  *   <projectDir>/<session>/subagents/agent-<id>.meta.json
- *       `{agentType, description, toolUseId}` — the label the TUI shows, and
- *       the tool_use id that ties the agent back to its card in the app.
+ *       `{agentType, description, toolUseId, spawnDepth, parentAgentId}` — the
+ *       label the TUI shows, the tool_use id that ties the agent back to its
+ *       card in the app, and WHO SPAWNED IT (DROVE-185). An agent the pane
+ *       launched itself has no `parentAgentId`; one launched by another agent
+ *       names it. Every agent in a session lands in this ONE flat directory
+ *       whatever its depth, so nested agents were always reported — they were
+ *       just indistinguishable from top-level ones without this field.
+ *       Measured on a real session: 236 files at spawnDepth 1, 23 at 2, 4 at
+ *       3, and `parentAgentId` present on exactly the 27 deeper than 1.
  *   <projectDir>/<session>/subagents/workflows/wf_<id>/journal.jsonl
  *       one `started` per agent the workflow launched and one `result` per
  *       agent that finished, which is the "3/5 agents done" the TUI draws.
@@ -76,6 +83,16 @@ export interface LiveStatusAgent {
     tokens?: number
     /** The `tool_use` that launched it, from the agent's meta.json. */
     toolId?: string
+    /**
+     * The agent that spawned this one, absent when the pane spawned it
+     * (DROVE-185).
+     *
+     * Absence IS "top level" — there is no separate depth field on the wire
+     * and none is wanted. Claude Code writes `parentAgentId` only from
+     * spawnDepth 2 down, so the two facts are the same fact and carrying both
+     * invites them to disagree. The app rebuilds depth by walking these links.
+     */
+    parentId?: string
 }
 
 /** One workflow run, from its journal. */
@@ -344,6 +361,8 @@ interface AgentState {
     tokens: number
     label?: string
     toolId?: string
+    /** The agent that spawned it, read once off meta.json (DROVE-185). */
+    parentId?: string
     /** mtime of the last stat, so a file nothing writes drops out. */
     mtimeMs: number
 }
@@ -481,15 +500,24 @@ export function createLiveStatusReader(opts: {
         }
     }
 
-    /** Read one agent's meta.json — the label and the tool_use that spawned it. */
-    const readAgentMeta = (path: string): { label?: string, toolId?: string } => {
+    /**
+     * Read one agent's meta.json — the label, the tool_use that spawned it,
+     * and the agent that spawned it (DROVE-185).
+     *
+     * `parentAgentId` is trimmed and dropped when empty, and dropped when it
+     * names the agent itself, so a malformed file cannot hand the app a row
+     * that is its own parent.
+     */
+    const readAgentMeta = (path: string, id: string): { label?: string, toolId?: string, parentId?: string } => {
         try {
             const meta = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
             const description = typeof meta.description === 'string' ? meta.description.trim() : ''
             const agentType = typeof meta.agentType === 'string' ? meta.agentType.trim() : ''
+            const parent = typeof meta.parentAgentId === 'string' ? meta.parentAgentId.trim() : ''
             return {
                 label: description || agentType || undefined,
                 toolId: typeof meta.toolUseId === 'string' ? meta.toolUseId : undefined,
+                ...(parent && parent !== id ? { parentId: parent } : {}),
             }
         } catch {
             return {}
@@ -532,7 +560,7 @@ export function createLiveStatusReader(opts: {
             }
             let state = agents.get(path)
             if (!state) {
-                const meta = readAgentMeta(join(dir, `agent-${id}.meta.json`))
+                const meta = readAgentMeta(join(dir, `agent-${id}.meta.json`), id)
                 state = { tail: { offset: 0, carry: '' }, startedAt: 0, tokens: 0, mtimeMs, ...meta }
                 agents.set(path, state)
             }
@@ -561,6 +589,7 @@ export function createLiveStatusReader(opts: {
                 startedAt: state.startedAt || mtimeMs,
                 ...(state.tokens > 0 ? { tokens: state.tokens } : {}),
                 ...(state.toolId ? { toolId: state.toolId } : {}),
+                ...(state.parentId ? { parentId: state.parentId } : {}),
             })
         }
         return out

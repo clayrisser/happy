@@ -4,12 +4,15 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+    agentSubtreeRows,
     formatElapsed,
     formatTokens,
     isLiveStatusFresh,
     liveStatusSince,
     liveStatusWatchLine,
+    orderAgentRows,
     summarizeLiveStatus,
+    visibleRows,
     type LiveStatus,
 } from './liveStatus';
 
@@ -84,6 +87,7 @@ describe('summarizeLiveStatus', () => {
                 elapsed: '4m 40s',
                 tokens: '274.6k',
                 toolId: 'toolu_a',
+                depth: 0,
             },
             {
                 kind: 'agent',
@@ -91,6 +95,7 @@ describe('summarizeLiveStatus', () => {
                 agentId: 'a2',
                 title: 'Sweep the backlog',
                 elapsed: '1m 4s',
+                depth: 0,
             },
         ]);
     });
@@ -105,6 +110,7 @@ describe('summarizeLiveStatus', () => {
             progress: '3/5 agents',
             elapsed: '28m 15s',
             tokens: '851.9k',
+            depth: 0,
         });
     });
 
@@ -213,5 +219,160 @@ describe('liveStatusWatchLine', () => {
         expect(liveStatusWatchLine(null, now)).toBeUndefined();
         expect(liveStatusWatchLine(busy, now + 300_000)).toBeUndefined();
         expect(liveStatusSince(null, now)).toBeUndefined();
+    });
+});
+
+/**
+ * Agents that spawn agents (DROVE-185).
+ *
+ * Clay: "what if a subagent has lanes in it? Can we visualize that?" He runs
+ * nine or more at once and some of those spawn their own, and every one of
+ * them arrives in the same flat `agents` array because Claude Code files them
+ * all in one directory. Two levels here, plus a workflow, because the workflow
+ * is what caught the count disagreement below.
+ */
+const nested: LiveStatus = {
+    at: now,
+    agents: [
+        { id: 'a1', label: 'Top one', startedAt: now - 300_000 },
+        { id: 'a1b', label: 'Child of one', startedAt: now - 200_000, parentId: 'a1' },
+        { id: 'a1c', label: 'Grandchild', startedAt: now - 100_000, parentId: 'a1b' },
+        { id: 'a2', label: 'Top two', startedAt: now - 90_000 },
+        { id: 'a2b', label: 'Child of two', startedAt: now - 40_000, parentId: 'a2' },
+    ],
+    workflows: [
+        { id: 'wf_1', name: 'drover-relaunch', done: 1, total: 4, startedAt: now - 500_000 },
+    ],
+};
+
+describe('orderAgentRows', () => {
+    const rowsOf = (status: LiveStatus) => orderAgentRows(status.agents ?? [], now);
+
+    it('puts each child straight after its parent, one indent deeper', () => {
+        expect(rowsOf(nested).map((row) => [row.agentId, row.depth])).toEqual([
+            ['a1', 0],
+            ['a1b', 1],
+            ['a1c', 2],
+            ['a2', 0],
+            ['a2b', 1],
+        ]);
+    });
+
+    it('names the parent on the child and counts DIRECT children on the parent', () => {
+        const byId = new Map(rowsOf(nested).map((row) => [row.agentId, row]));
+        expect(byId.get('a1')!.childCount).toBe(1);
+        expect(byId.get('a1')!.parentId).toBeUndefined();
+        expect(byId.get('a1b')!.parentId).toBe('a1');
+        // One, not two: the chip says what unfolding this row reveals, and
+        // unfolding a1 reveals a1b and not yet a1c.
+        expect(byId.get('a1b')!.childCount).toBe(1);
+        expect(byId.get('a1c')!.childCount).toBeUndefined();
+    });
+
+    it('returns every agent exactly once, whatever the shape', () => {
+        // The load-bearing property. sideCount is taken off the same array the
+        // rows come from, so an agent dropped here goes quiet on the wrist.
+        const ids = rowsOf(nested).map((row) => row.agentId);
+        expect(ids).toHaveLength(nested.agents!.length);
+        expect(new Set(ids).size).toBe(nested.agents!.length);
+    });
+
+    it('promotes a child whose parent has already finished', () => {
+        // The normal end of a fan-out: the parent stops, the child runs on.
+        // Filing it under an absent parent would hide a running agent behind a
+        // row that no longer exists to unfold.
+        const orphan: LiveStatus = {
+            at: now,
+            agents: [{ id: 'b1', label: 'Left behind', startedAt: now - 10_000, parentId: 'gone' }],
+        };
+        const [row] = orderAgentRows(orphan.agents ?? [], now);
+        expect(row.depth).toBe(0);
+        expect(row.parentId).toBeUndefined();
+    });
+
+    it('promotes a parent chain that loops instead of hanging on it', () => {
+        const cycle: LiveStatus = {
+            at: now,
+            agents: [
+                { id: 'c1', label: 'One', startedAt: now - 10_000, parentId: 'c2' },
+                { id: 'c2', label: 'Two', startedAt: now - 10_000, parentId: 'c1' },
+            ],
+        };
+        const rows = orderAgentRows(cycle.agents ?? [], now);
+        expect(rows.map((row) => row.agentId).sort()).toEqual(['c1', 'c2']);
+        expect(rows.every((row) => row.depth === 0)).toBe(true);
+    });
+
+    it('leaves a session with no nesting exactly as it was', () => {
+        const rows = summarizeLiveStatus(busy, now).rows.filter((row) => row.kind === 'agent');
+        expect(rows.map((row) => row.agentId)).toEqual(['a1', 'a2']);
+        expect(rows.every((row) => row.depth === 0)).toBe(true);
+        expect(rows.every((row) => row.childCount === undefined)).toBe(true);
+    });
+});
+
+describe('visibleRows', () => {
+    const rows = summarizeLiveStatus(nested, now).rows;
+
+    it('shows only the top level until something is unfolded', () => {
+        // The whole design decision. Nine top-level agents each with children
+        // is a lot of rows on a phone, so the default view is the list Clay
+        // already reads and a child count is what opens it.
+        expect(visibleRows(rows, new Set()).map((row) => row.agentId ?? row.key))
+            .toEqual(['workflow:wf_1', 'a1', 'a2']);
+    });
+
+    it('unfolds one level at a time', () => {
+        expect(visibleRows(rows, new Set(['a1'])).map((row) => row.agentId ?? row.key))
+            .toEqual(['workflow:wf_1', 'a1', 'a1b', 'a2']);
+        expect(visibleRows(rows, new Set(['a1', 'a1b'])).map((row) => row.agentId ?? row.key))
+            .toEqual(['workflow:wf_1', 'a1', 'a1b', 'a1c', 'a2']);
+    });
+
+    it('keeps a grandchild hidden while its parent is folded, even if it is itself unfolded', () => {
+        expect(visibleRows(rows, new Set(['a1b'])).map((row) => row.agentId ?? row.key))
+            .toEqual(['workflow:wf_1', 'a1', 'a2']);
+    });
+});
+
+describe('agentSubtreeRows', () => {
+    const rows = summarizeLiveStatus(nested, now).rows;
+
+    it('gives an agent screen its own children, re-based to its own left edge', () => {
+        expect(agentSubtreeRows(rows, 'a1').map((row) => [row.agentId, row.depth, row.parentId]))
+            .toEqual([
+                ['a1b', 0, undefined],
+                ['a1c', 1, 'a1b'],
+            ]);
+    });
+
+    it('is empty for an agent with nothing out, and for one not in the snapshot', () => {
+        expect(agentSubtreeRows(rows, 'a1c')).toEqual([]);
+        expect(agentSubtreeRows(rows, 'nope')).toEqual([]);
+    });
+});
+
+/**
+ * ONE number, on the screen and on the wrist (DROVE-155, DROVE-209, DROVE-185).
+ *
+ * DROVE-209 removed a deliberate +1 so the heartbeat would say exactly what
+ * the status row says. It did not land: the row prints `sideCount` (agents AND
+ * workflows) while the heartbeat re-counted `rows` filtered to agents, so the
+ * two disagreed for as long as any workflow was running and no fixture had a
+ * workflow in it to notice. Both read the one field now.
+ */
+describe('the count the row shows and the wrist beats', () => {
+    it('counts nested agents, so folding a parent changes nothing', () => {
+        const summary = summarizeLiveStatus(nested, now);
+        // 5 agents at three depths + 1 workflow.
+        expect(summary.sideCount).toBe(6);
+        expect(visibleRows(summary.rows, new Set()).length).toBeLessThan(summary.rows.length);
+        expect(summarizeLiveStatus(nested, now).sideCount).toBe(6);
+    });
+
+    it('counts the workflow, whose own agents are nowhere else on the wire', () => {
+        // The CLI collapses a workflow's agents into done/total and keeps them
+        // out of `agents` entirely, so the workflow row IS that fan-out here.
+        expect(summarizeLiveStatus(busy, now).sideCount).toBe(3);
     });
 });
