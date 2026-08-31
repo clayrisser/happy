@@ -43,9 +43,11 @@ import {
     MOBILE_COMPOSER_METRICS,
     resolveMobileComposerActionGeometry,
     resolveMobileComposerActionRowGeometry,
-    resolveMobileComposerMenuGeometry,
 } from './agentInputLayout';
 import { shouldUseExpoNativeSettingsMenu } from './glassInteractionPolicy';
+import { ComposerSessionPill } from './ComposerSessionPill';
+import { ComposerSheetRow } from './ComposerSheetRow';
+import { buildSessionPillLabel, buildSessionSheetRows, type SessionSheetRowKey } from './sessionPillLabel';
 
 interface AgentInputProps {
     // `initialValue` seeds the uncontrolled textarea once; keystrokes never
@@ -156,9 +158,6 @@ function permissionKindIcon(kind: string | null | undefined): React.ComponentPro
     return 'folder-open-outline';
 }
 
-const MOBILE_MODEL_MENU_GEOMETRY = resolveMobileComposerMenuGeometry('model');
-const MOBILE_EFFORT_MENU_GEOMETRY = resolveMobileComposerMenuGeometry('effort');
-const MOBILE_PERMISSION_MENU_GEOMETRY = resolveMobileComposerMenuGeometry('permission');
 const MOBILE_ACTION_ROW_GEOMETRY = resolveMobileComposerActionRowGeometry();
 const MOBILE_ICON_ACTION_GEOMETRY = resolveMobileComposerActionGeometry('icon');
 const MOBILE_PRIMARY_ACTION_GEOMETRY = resolveMobileComposerActionGeometry('primary');
@@ -364,53 +363,6 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     },
     mobileActionButtonsContainer: MOBILE_ACTION_ROW_GEOMETRY,
     mobileIconButton: MOBILE_ICON_ACTION_GEOMETRY,
-    mobileModelMenuFrame: MOBILE_MODEL_MENU_GEOMETRY.frame,
-    mobileModelMenuContent: MOBILE_MODEL_MENU_GEOMETRY.content,
-    mobileEffortMenuFrame: MOBILE_EFFORT_MENU_GEOMETRY.frame,
-    mobileEffortMenuContent: MOBILE_EFFORT_MENU_GEOMETRY.content,
-    mobilePermissionMenuFrame: MOBILE_PERMISSION_MENU_GEOMETRY.frame,
-    mobilePermissionMenuContent: MOBILE_PERMISSION_MENU_GEOMETRY.content,
-    mobilePermissionButton: {
-        ...MOBILE_PERMISSION_MENU_GEOMETRY.content,
-        flexShrink: 0,
-    },
-    mobileModeButton: {
-        flex: 1,
-        minWidth: 0,
-        height: MOBILE_COMPOSER_METRICS.secondaryActionHeight,
-        borderRadius: MOBILE_COMPOSER_METRICS.secondaryActionHeight / 2,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'flex-end',
-        paddingHorizontal: 8,
-        paddingRight: 0,
-        gap: 7,
-    },
-    mobileEffortButton: {
-        width: MOBILE_COMPOSER_METRICS.effortWidth,
-        flexShrink: 0,
-        height: MOBILE_COMPOSER_METRICS.secondaryActionHeight,
-        borderRadius: MOBILE_COMPOSER_METRICS.secondaryActionHeight / 2,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'flex-start',
-        paddingLeft: 2,
-        paddingRight: 0,
-        gap: 4,
-    },
-    mobileModeText: {
-        flexShrink: 1,
-        minWidth: 0,
-        fontSize: 14,
-        color: theme.colors.text,
-        ...Typography.default(),
-    },
-    mobileModeSeparator: {
-        flexShrink: 0,
-        color: theme.colors.textSecondary,
-        fontSize: 14,
-        ...Typography.default(),
-    },
     actionButtonsLeft: {
         flexDirection: 'row',
         gap: 8,
@@ -652,8 +604,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     const availableEffortLevels = props.availableEffortLevels ?? [];
     const modelLabel = props.modelMode?.name ?? t('agentInput.model.title');
     const effortLabel = props.effortLevel?.name;
-    const canOpenModelPicker = availableModels.length > 0 && !!props.onModelModeChange;
-    const canOpenEffortPicker = availableEffortLevels.length > 0 && !!props.onEffortLevelChange;
     const isSandboxEnabled = React.useMemo(() => {
         const sandbox = props.metadata?.sandbox as unknown;
         if (!sandbox) {
@@ -894,10 +844,12 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         hapticsLight();
     }, [suggestions, inputState, props.autocompletePrefixes]);
 
-    // The compact composer has separate controls for permission, model, and
-    // effort. Keep a single popup state so only one selection surface is ever
-    // visible, including while we dismiss the keyboard on mobile.
-    type ComposerPicker = 'permission' | 'model' | 'effort';
+    // The compact composer's popups: the session sheet and the channel sheet
+    // (DROVE-83), and the permission, model and effort pickers the session
+    // sheet's rows open. Keep a single popup state so only one selection
+    // surface is ever visible, including while we dismiss the keyboard on
+    // mobile.
+    type ComposerPicker = 'session' | 'channels' | 'permission' | 'model' | 'effort';
     const [openPicker, setOpenPicker] = React.useState<ComposerPicker | null>(null);
     const pickerOpeningRef = React.useRef<ComposerPicker | null>(null);
     const pickerKeyboardSubscriptionRef = React.useRef<ReturnType<typeof Keyboard.addListener> | null>(null);
@@ -951,15 +903,25 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         handlePickerPress('permission');
     }, [handlePickerPress]);
 
-    const handleModelPress = React.useCallback(() => {
-        if (!canOpenModelPicker) return;
-        handlePickerPress('model');
-    }, [canOpenModelPicker, handlePickerPress]);
+    // The session pill opens one sheet (DROVE-83); its rows open the
+    // permission, model and effort pickers that used to be chips on the row.
+    const handleSessionPillPress = React.useCallback(() => {
+        handlePickerPress('session');
+    }, [handlePickerPress]);
 
-    const handleEffortPress = React.useCallback(() => {
-        if (!canOpenEffortPicker) return;
-        handlePickerPress('effort');
-    }, [canOpenEffortPicker, handlePickerPress]);
+    // The keyboard was already put away when the sheet opened, so a row
+    // swaps the popup content directly rather than going through the dance.
+    const handleSessionRowPress = React.useCallback((row: SessionSheetRowKey) => {
+        hapticsLight();
+        setOpenPicker(row);
+    }, []);
+
+    // Long-press on the primary button opens the channel sheet, where the
+    // audio channel (read aloud) lives now that its icon is off the composer.
+    const handleChannelsLongPress = React.useCallback(() => {
+        if (!props.onReadAloudToggle) return;
+        handlePickerPress('channels');
+    }, [handlePickerPress, props.onReadAloudToggle]);
 
     // Handle settings selection
     const handleSettingsSelect = React.useCallback((mode: PermissionMode) => {
@@ -1114,28 +1076,52 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     const modelSettingsGroup = modelSettingsGroups.find((group) => group.key === 'model');
     const effortSettingsGroup = modelSettingsGroups.find((group) => group.key === 'effort');
 
-    const renderModelValue = () => (
-        <Text style={styles.mobileModeText} numberOfLines={1}>
-            {modelLabel}
-        </Text>
-    );
+    const permissionTitle = isCodex
+        ? t('agentInput.codexPermissionMode.title')
+        : isGemini
+            ? t('agentInput.geminiPermissionMode.title')
+            : t('agentInput.permissionMode.title');
 
-    const renderEffortValue = () => (
-        <Text style={styles.mobileModeText} numberOfLines={1}>
-            {effortLabel ?? t('agentInput.effort.title')}
-        </Text>
-    );
-
-    // A session started in a mode this build no longer offers resolves to no
-    // mode at all. Falling back to the shield keeps the picker reachable rather
-    // than inventing a word for a state we cannot name.
-    const renderPermissionValue = () => (permissionShortLabel ? (
-        <Text style={styles.mobileModeText} numberOfLines={1}>
-            {permissionShortLabel}
-        </Text>
-    ) : (
-        <Ionicons name="shield-outline" size={18} color={theme.colors.text} />
-    ));
+    // What the session pill reads and what its sheet lists (DROVE-83). A
+    // session started in a mode this build no longer offers has no mode word;
+    // the pill drops that segment and the sheet row shows the picker instead
+    // of inventing a word for a state we cannot name.
+    const sessionPillLabel = React.useMemo(() => buildSessionPillLabel({
+        modeLabel: permissionShortLabel,
+        model: props.modelMode,
+        effortLabel,
+    }), [effortLabel, permissionShortLabel, props.modelMode]);
+    const sessionSheetRows = React.useMemo(() => buildSessionSheetRows({
+        permission: {
+            title: t('agentInput.session.permission'),
+            value: permissionShortLabel ?? '',
+            available: permissionSettingsGroups.length > 0,
+        },
+        model: {
+            title: t('agentInput.session.model'),
+            value: sessionPillLabel.model ?? modelLabel,
+            available: !!modelSettingsGroup,
+        },
+        effort: {
+            title: t('agentInput.session.effort'),
+            value: effortLabel ?? t('agentInput.effort.title'),
+            available: !!effortSettingsGroup,
+        },
+    }), [effortLabel, effortSettingsGroup, modelLabel, modelSettingsGroup, permissionSettingsGroups.length, permissionShortLabel, sessionPillLabel.model]);
+    const sessionSheetGroups: Partial<Record<SessionSheetRowKey, NativeSettingsMenuGroup>> = {
+        permission: permissionSettingsGroups[0],
+        model: modelSettingsGroup,
+        effort: effortSettingsGroup,
+    };
+    // On iOS the sheet rows are native menu triggers, so the sheet has to
+    // close itself once a choice lands; the chips never had to.
+    const closeAfterSelect = (group: NativeSettingsMenuGroup): NativeSettingsMenuGroup => ({
+        ...group,
+        onSelect: (key) => {
+            group.onSelect(key);
+            closePicker();
+        },
+    });
 
     // Handle keyboard navigation
     const handleKeyPress = React.useCallback((event: KeyPressEvent): boolean => {
@@ -1574,9 +1560,11 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
 
                 {desktopSettingsOverlay}
 
-                {/* Permission, model, and effort pickers open independently
-                    from their matching controls in the compact composer action row. */}
-                {compactMobileComposer && !useNativeSettingsMenus && openPicker && (
+                {/* The session sheet and the channel sheet (DROVE-83), and on
+                    Android the permission, model and effort pickers a session
+                    row opens. On iOS those three are native menus anchored to
+                    the rows, so only the two sheets ever render here. */}
+                {compactMobileComposer && openPicker && (
                     <>
                         <AnimatedClickAwayBackdrop
                             onPress={closePicker}
@@ -1587,10 +1575,64 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                             { paddingHorizontal: screenWidth > 700 ? 0 : 16 }
                         ]}>
                             <FloatingOverlay maxHeight={400} keyboardShouldPersistTaps="always">
-                                {openPicker === 'permission' ? (
+                                {openPicker === 'session' ? (
                                     <View style={styles.overlaySection}>
                                         <Text style={styles.overlaySectionTitle}>
-                                            {isCodex ? t('agentInput.codexPermissionMode.title') : isGemini ? t('agentInput.geminiPermissionMode.title') : t('agentInput.permissionMode.title')}
+                                            {t('agentInput.session.title')}
+                                        </Text>
+                                        {sessionSheetRows.map((row) => {
+                                            const group = sessionSheetGroups[row.key];
+                                            const icon = row.key === 'permission' ? 'shield-outline'
+                                                : row.key === 'model' ? 'cube-outline'
+                                                    : 'flash-outline';
+                                            if (useNativeSettingsMenus && group) {
+                                                return (
+                                                    <NativeSettingsMenu
+                                                        key={row.key}
+                                                        accessibilityLabel={row.title}
+                                                        groups={[closeAfterSelect(group)]}
+                                                    >
+                                                        <ComposerSheetRow
+                                                            kind="picker"
+                                                            icon={icon}
+                                                            title={row.title}
+                                                            value={row.value}
+                                                        />
+                                                    </NativeSettingsMenu>
+                                                );
+                                            }
+                                            return (
+                                                <ComposerSheetRow
+                                                    key={row.key}
+                                                    kind="picker"
+                                                    icon={icon}
+                                                    title={row.title}
+                                                    value={row.value}
+                                                    onPress={() => handleSessionRowPress(row.key)}
+                                                />
+                                            );
+                                        })}
+                                    </View>
+                                ) : openPicker === 'channels' ? (
+                                    <View style={styles.overlaySection}>
+                                        <Text style={styles.overlaySectionTitle}>
+                                            {t('agentInput.channels.title')}
+                                        </Text>
+                                        <ComposerSheetRow
+                                            kind="toggle"
+                                            icon={props.readAloudEnabled ? 'volume-high-outline' : 'volume-mute-outline'}
+                                            title={t('agentInput.channels.audio')}
+                                            value={!!props.readAloudEnabled}
+                                            onValueChange={() => {
+                                                hapticsLight();
+                                                props.onReadAloudToggle?.();
+                                            }}
+                                        />
+                                    </View>
+                                ) : openPicker === 'permission' ? (
+                                    <View style={styles.overlaySection}>
+                                        <Text style={styles.overlaySectionTitle}>
+                                            {permissionTitle}
                                         </Text>
                                         {availableModes.map((mode) => {
                                             const isSelected = permissionModeKey === mode.key;
@@ -1894,8 +1936,18 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     </View>
 
                     {compactMobileComposer ? (
-                    /* The action order mirrors the expanded Home composer:
-                        photo, permissions, model/effort, voice, then send/stop. */
+                    /* Two rows under the input (DROVE-83): the session pill
+                        alone on the first, then add on the left and the voice
+                        cluster (talk, then send/voice/stop) on the right. */
+                    <>
+                        {!props.zenMode && (
+                            <ComposerSessionPill
+                                label={sessionPillLabel}
+                                onPress={sessionSheetRows.length > 0 ? handleSessionPillPress : undefined}
+                                open={openPicker === 'session'}
+                                accessibilityLabel={t('agentInput.session.label')}
+                            />
+                        )}
                     <View style={[
                         styles.actionButtonsContainer,
                         styles.mobileActionButtonsContainer,
@@ -1918,157 +1970,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                             </BubblePressable>
                         )}
 
-                        {/* Named in words rather than hidden behind a gear: the
-                            permission mode is the one control here that changes
-                            what the agent may do to the machine. Matches the
-                            same chip in the Home composer. */}
-                        {!props.zenMode && permissionSettingsGroups.length > 0 && (
-                            useNativeSettingsMenus ? (
-                                <NativeSettingsMenu
-                                    accessibilityLabel={permissionSettingsGroups[0]?.label}
-                                    groups={permissionSettingsGroups}
-                                    flat
-                                    triggerLabel={permissionShortLabel ?? undefined}
-                                    triggerSystemImage={permissionShortLabel ? undefined : 'shield'}
-                                    // Centered to agree with the React Native
-                                    // chip underneath, which sizes the frame.
-                                    triggerAlignment="center"
-                                    style={styles.mobilePermissionMenuFrame}
-                                >
-                                    <View style={styles.mobilePermissionMenuContent}>
-                                        {renderPermissionValue()}
-                                    </View>
-                                </NativeSettingsMenu>
-                            ) : (
-                                <BubblePressable
-                                    onPress={handleSettingsPress}
-                                    hitSlop={6}
-                                    style={styles.mobilePermissionButton}
-                                    accessibilityRole="button"
-                                    accessibilityLabel={isCodex
-                                        ? t('agentInput.codexPermissionMode.title')
-                                        : t('agentInput.permissionMode.title')}
-                                >
-                                    {renderPermissionValue()}
-                                </BubblePressable>
-                            )
-                        )}
-
-                        {!props.zenMode ? (
-                            <>
-                                {/* Pushes model/effort right, so the effort chip
-                                    sits against the send button and the pair does
-                                    not drift when either label changes width. */}
-                                <View style={{ flex: 1 }} />
-                                {useNativeSettingsMenus && modelSettingsGroup ? (
-                                    <NativeSettingsMenu
-                                        accessibilityLabel={t('agentInput.model.title')}
-                                        groups={[modelSettingsGroup]}
-                                        flat
-                                        triggerLabel={modelLabel}
-                                        triggerAlignment="trailing"
-                                        style={styles.mobileModelMenuFrame}
-                                    >
-                                        <View style={styles.mobileModelMenuContent}>
-                                            {renderModelValue()}
-                                        </View>
-                                    </NativeSettingsMenu>
-                                ) : (
-                                    <BubblePressable
-                                        onPress={handleModelPress}
-                                        disabled={!canOpenModelPicker}
-                                        hitSlop={6}
-                                        style={(p) => [
-                                            styles.mobileModeButton,
-                                            { opacity: p.pressed && canOpenModelPicker ? 0.7 : canOpenModelPicker ? 1 : 0.58 },
-                                        ]}
-                                        accessibilityRole="button"
-                                        accessibilityLabel={t('agentInput.model.title')}
-                                    >
-                                        {renderModelValue()}
-                                    </BubblePressable>
-                                )}
-
-                                {/* The separator lives between the two chips rather
-                                    than inside the effort label, which would wrap
-                                    it onto its own line in a narrow trigger. */}
-                                {effortSettingsGroup && (
-                                    <Text style={styles.mobileModeSeparator}>·</Text>
-                                )}
-
-                                {effortSettingsGroup && (
-                                    useNativeSettingsMenus ? (
-                                        <NativeSettingsMenu
-                                            accessibilityLabel={t('agentInput.effort.title')}
-                                            groups={[effortSettingsGroup]}
-                                            flat
-                                            triggerLabel={effortLabel ?? t('agentInput.effort.title')}
-                                            triggerAlignment="leading"
-                                            style={styles.mobileEffortMenuFrame}
-                                        >
-                                            <View style={styles.mobileEffortMenuContent}>
-                                                {renderEffortValue()}
-                                            </View>
-                                        </NativeSettingsMenu>
-                                    ) : (
-                                        <BubblePressable
-                                            onPress={handleEffortPress}
-                                            disabled={!canOpenEffortPicker}
-                                            hitSlop={6}
-                                            style={(p) => [
-                                                styles.mobileEffortButton,
-                                                { opacity: p.pressed && canOpenEffortPicker ? 0.7 : canOpenEffortPicker ? 1 : 0.58 },
-                                            ]}
-                                            accessibilityRole="button"
-                                            accessibilityLabel={t('agentInput.effort.title')}
-                                        >
-                                            {renderEffortValue()}
-                                        </BubblePressable>
-                                    )
-                                )}
-                            </>
-                        ) : <View style={{ flex: 1 }} />}
-
-                        {!compactMobileComposer && props.agentType && props.onAgentClick && (
-                            <BubblePressable
-                                onPress={() => {
-                                    hapticsLight();
-                                    props.onAgentClick?.();
-                                }}
-                                hitSlop={6}
-                                style={styles.mobileIconButton}
-                                accessibilityRole="button"
-                                accessibilityLabel={props.agentType}
-                            >
-                                <Octicons name="cpu" size={14} color={theme.colors.text} />
-                            </BubblePressable>
-                        )}
-
-                        {!compactMobileComposer && (
-                            <GitStatusButton sessionId={props.sessionId} onPress={props.onFileViewerPress} />
-                        )}
-
-                        {props.onReadAloudToggle && (
-                            <BubblePressable
-                                onPress={() => {
-                                    hapticsLight();
-                                    props.onReadAloudToggle?.();
-                                }}
-                                hitSlop={6}
-                                style={styles.mobileIconButton}
-                                accessibilityRole="button"
-                                accessibilityState={{ selected: !!props.readAloudEnabled }}
-                                accessibilityLabel={t('agentInput.readAloud.label')}
-                            >
-                                <Ionicons
-                                    name={props.readAloudEnabled ? 'volume-high' : 'volume-mute-outline'}
-                                    size={16}
-                                    color={props.readAloudEnabled
-                                        ? theme.colors.radio.active
-                                        : theme.colors.text}
-                                />
-                            </BubblePressable>
-                        )}
+                        <View style={{ flex: 1 }} />
 
                         {props.onTalkStart && (
                             <BubblePressable
@@ -2123,6 +2025,8 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                     })}
                                     hitSlop={6}
                                     onPress={handleMobilePrimaryPress}
+                                    // Long-press: the channel sheet (DROVE-83).
+                                    onLongPress={handleChannelsLongPress}
                                     disabled={!canPressSendButton}
                                     accessibilityRole="button"
                                     accessibilityLabel={shouldShowStopButton ? 'Stop'
@@ -2179,6 +2083,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                             </View>
                         </Shaker>
                     </View>
+                    </>
                     ) : desktopActionControls}
                         </MobileGlassSurface>
                     </View>
