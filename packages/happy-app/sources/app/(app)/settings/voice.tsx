@@ -310,8 +310,10 @@ export default React.memo(function VoiceSettingsScreen() {
                 title={t('settingsVoice.languageTitle')}
                 footer={t('settingsVoice.languageDescription')}
             >
+                {/* "Preferred Language" beside the language name overflows a
+                    375pt row; the group title already says which language. */}
                 <Item
-                    title={t('settingsVoice.preferredLanguage')}
+                    title={t('settingsVoice.languageTitle')}
                     subtitle={t('settingsVoice.preferredLanguageSubtitle')}
                     icon={<Ionicons name="language-outline" size={29} color="#007AFF" />}
                     detail={getLanguageDisplayName(currentLanguage)}

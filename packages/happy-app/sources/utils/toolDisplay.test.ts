@@ -5,6 +5,7 @@ import {
     getTerminalToolCommand,
     getToolSummaryCategory,
     getToolSummaryDetail,
+    isGateToolName,
     isTerminalToolName,
     shouldRenderToolCardHeader,
     shouldUseCompactToolRow,
@@ -148,5 +149,24 @@ describe('terminal tool display helpers', () => {
         expect(shouldUseCompactToolRow(pendingPlan, true)).toBe(false);
         pendingPlan.permission.status = 'approved';
         expect(shouldUseCompactToolRow(pendingPlan, true)).toBe(true);
+    });
+
+    // The Compact Tool Calls switch (DROVE-175). ToolView already draws
+    // terminal calls and minimal tools as one line whatever the switch says;
+    // what the switch decides is whether the tools that have a card fold too,
+    // and which cards are gates that never do.
+    it('folds edit diffs and agent cards with the switch on, and none with it off', () => {
+        for (const name of ['Edit', 'Write', 'Task', 'SendMessage']) {
+            expect(shouldUseCompactToolRow(tool(name, {}), true)).toBe(true);
+            expect(shouldUseCompactToolRow(tool(name, {}), false)).toBe(false);
+        }
+    });
+
+    it('keeps a gate card expanded under compact, whether or not it is waiting', () => {
+        for (const name of ['DroverAccountLogin', 'DroverTodo', 'TodoWrite']) {
+            expect(shouldUseCompactToolRow(tool(name, {}), true)).toBe(false);
+        }
+        expect(['TodoWrite', 'DroverTodo', 'DroverAccountLogin', 'ExitPlanMode', 'exit_plan_mode'].every(isGateToolName)).toBe(true);
+        expect(isGateToolName('Bash')).toBe(false);
     });
 });

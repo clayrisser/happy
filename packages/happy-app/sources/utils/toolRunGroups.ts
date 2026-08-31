@@ -1,6 +1,6 @@
 import { Message, ToolCallMessage } from '@/sync/typesMessage';
 import type { DisplayItem, ToolGroupItem } from '@/hooks/useGroupedMessages';
-import { getToolSummaryCategory, isInteractiveQuestionToolName, ToolSummaryCategory } from '@/utils/toolDisplay';
+import { getToolSummaryCategory, isGateToolName, isInteractiveQuestionToolName, ToolSummaryCategory } from '@/utils/toolDisplay';
 import { isInvisibleMessage, isUserAttachment } from '@/utils/messageVisibility';
 import { t } from '@/text';
 
@@ -54,20 +54,12 @@ export function groupSameToolRuns(messages: Message[]): DisplayItem[] {
 
 const FOLDABLE_CATEGORIES = new Set<ToolSummaryCategory>(['terminal', 'read', 'search', 'edit', 'web']);
 
-/** Tools whose card is a gate the user acts on; they never fold into a run. */
-const GATE_TOOL_NAMES = new Set([
-    'TodoWrite',
-    'DroverTodo',
-    'DroverAccountLogin',
-    'ExitPlanMode',
-    'exit_plan_mode',
-]);
-
+/** A card that is a gate the user acts on never folds into a run. */
 export function isGateCard(msg: Message): boolean {
     if (msg.kind !== 'tool-call') return false;
     if (msg.tool.permission?.status === 'pending') return true;
     if (isInteractiveQuestionToolName(msg.tool.name)) return true;
-    return GATE_TOOL_NAMES.has(msg.tool.name);
+    return isGateToolName(msg.tool.name);
 }
 
 /** The family a call folds under, or null when it always stands on its own. */
