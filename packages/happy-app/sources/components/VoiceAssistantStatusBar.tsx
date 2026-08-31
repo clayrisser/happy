@@ -8,7 +8,7 @@ import { stopRealtimeSession, getCurrentVoiceSessionDurationSeconds } from '@/re
 import { useUnistyles } from 'react-native-unistyles';
 import { VoiceBars } from './VoiceBars';
 import { ShimmerView } from './ShimmerView';
-import { MobileGlassSurface } from './MobileGlass';
+import { GlassChromeSurface } from './GlassChromeControl';
 import { MOBILE_GLASS_CONTROL_SIZE, MOBILE_GLASS_CONTROL_RADIUS } from './navigation/headerMetrics';
 import { t } from '@/text';
 
@@ -79,30 +79,38 @@ export const VoiceAssistantStatusBar = React.memo(({ variant = 'full', style }: 
             : realtimeStatus === 'error'
                 ? t('voiceStatusBar.error')
                 : duration ?? '0:00';
+        // The sweep is the glyph's own colour at half strength, so the
+        // highlight reads on either theme rather than only on the dark one.
+        const micShimmer: [string, string, string] = theme.dark
+            ? ['rgba(255, 255, 255, 0.45)', '#FFFFFF', 'rgba(255, 255, 255, 0.45)']
+            : ['rgba(24, 23, 28, 0.45)', '#18171C', 'rgba(24, 23, 28, 0.45)'];
         return (
             <View style={styles.pillWrapper}>
                 {/* The whole pill ends the call; "tap to end" is just the hint. */}
                 <Pressable onPress={handleEnd} style={({ pressed }) => pressed ? { opacity: 0.7 } : undefined}>
-                    <MobileGlassSurface
-                        enabled={Platform.OS === 'ios'}
-                        nativeEffect
-                        material="static"
-                        intensity={76}
-                        style={[
-                            styles.pillGlass,
-                            Platform.OS !== 'ios' && { backgroundColor: theme.colors.surfaceHighest },
-                            theme.dark
-                                ? { borderColor: 'rgba(255, 255, 255, 0.18)' }
-                                : { borderColor: '#FFFFFF' },
-                        ]}
+                    {/* The live-call pill floats over the list, so it is the
+                        same material as the header controls it sits under
+                        (DROVE-161). It was on the `static` blur, which over a
+                        dark list is a flat grey capsule. The fill and the rim
+                        belong to GlassChromeSurface now, which is also what
+                        keeps it visible on a phone without the material. */}
+                    <GlassChromeSurface
+                        radius={MOBILE_GLASS_CONTROL_RADIUS}
+                        style={styles.pillGlass}
                     >
                         <View style={styles.pillContent}>
                             <View style={styles.micSlot}>
+                                {/* Off the theme, not hardcoded white
+                                    (DROVE-161). A white mic with no plate under
+                                    it was 1.06:1 on the light theme's surface,
+                                    which the flat static blur hid as well as
+                                    the material would have. It is the same
+                                    colour as the duration text beside it now. */}
                                 <ShimmerView
-                                    shimmerColors={['rgba(255, 255, 255, 0.45)', '#FFFFFF', 'rgba(255, 255, 255, 0.45)']}
+                                    shimmerColors={micShimmer}
                                     duration={1800}
                                 >
-                                    <Ionicons name="mic" size={24} color="#FFFFFF" />
+                                    <Ionicons name="mic" size={24} color={theme.colors.header.tint} />
                                 </ShimmerView>
                             </View>
 
@@ -118,7 +126,7 @@ export const VoiceAssistantStatusBar = React.memo(({ variant = 'full', style }: 
                                 </Text>
                             </View>
                         </View>
-                    </MobileGlassSurface>
+                    </GlassChromeSurface>
                 </Pressable>
             </View>
         );
@@ -204,7 +212,6 @@ const styles = StyleSheet.create({
         height: MOBILE_GLASS_CONTROL_SIZE,
         borderRadius: MOBILE_GLASS_CONTROL_RADIUS,
         overflow: 'hidden',
-        borderWidth: Platform.select({ ios: 1, default: 0 }),
         shadowColor: '#000000',
         shadowOffset: { width: 0, height: 4 },
         shadowOpacity: Platform.select({ ios: 0.06, default: 0 }),

@@ -8,7 +8,7 @@ import { isRunningOnMac } from '@/utils/platform';
 import { useHeaderHeight, useIsTablet } from '@/utils/responsive';
 import { Typography } from '@/constants/Typography';
 import { StyleSheet } from 'react-native-unistyles';
-import { MobileGlassSurface } from '../MobileGlass';
+import { GlassChromeButton, GlassChromeSurface } from '../GlassChromeControl';
 import {
     MobileHeaderScrim,
     MOBILE_HOME_SCRIM_OVERLAY_OPACITY,
@@ -22,6 +22,28 @@ import {
     MOBILE_GLASS_HEADER_HEIGHT,
 } from './headerMetrics';
 
+/**
+ * The header every screen that is not the session gets, drawn in the same
+ * material as the session's (DROVE-161).
+ *
+ * Clay, with the session header and the agent header side by side: "See how
+ * some places are using Liquid Glass and others aren't". The session header
+ * had been converted by DROVE-153; this one had not, so its back button was a
+ * flat grey disc and its title sat as bare text.
+ *
+ * TWO THINGS WERE WRONG, and only one of them was here. The controls were on
+ * `MobileGlassSurface material="static"`, which is expo-blur with a flat
+ * colour painted over it rather than `UIGlassEffect`, and a blur of a black
+ * chat is black. They are `GlassChromeSurface` / `GlassChromeButton` now, the
+ * same two objects the session header uses, so the material, the `regular`
+ * style, the forced `colorScheme` and the fallback all come from one place.
+ *
+ * The other half was reach: `(app)/_layout.tsx` handed iPhones to UIKit's own
+ * navigation bar, so most screens never rendered this component at all. That
+ * is where the agent screen's header came from. The layout now routes every
+ * phone here, and the iPad keeps UIKit because this header hides its back
+ * button on a tablet.
+ */
 interface HeaderProps {
     title?: React.ReactNode;
     subtitle?: string;
@@ -137,7 +159,16 @@ export const Header = React.memo((props: HeaderProps) => {
         headerShadowVisible && styles.shadow,
         headerStyle,
         isAndroidHeader && (headerBackdropVisible ? styles.containerAndroidScrolled : styles.containerNormal),
-        glassControlsEnabled && styles.containerTransparent,
+        // Transparent because the screen ASKED to be, not because the phone is
+        // an iPhone (DROVE-161). It used to be unconditional, which was
+        // harmless while the only iPhone screens reaching this component were
+        // the five that set `headerTransparent` anyway. Now that every phone
+        // screen renders here, an unconditional override would strip the
+        // agent screen's own tinted bar and leave a tone break across the top
+        // of it. `headerStyle` above already carries `transparent` from the
+        // navigator's screenOptions, so screens that said nothing are
+        // unchanged.
+        glassControlsEnabled && headerTransparent && styles.containerTransparent,
     ];
 
     const subtitleStyle = [
@@ -180,17 +211,14 @@ export const Header = React.memo((props: HeaderProps) => {
                 ]}>
                     <View style={styles.leftContainer}>
                         {headerLeft && headerLeftUsesGlass && (
-                            <MobileGlassSurface
-                                enabled={glassControlsEnabled}
-                                interactive
-                                material="static"
-                                intensity={76}
+                            <GlassChromeSurface
+                                radius={MOBILE_GLASS_CONTROL_RADIUS}
                                 style={styles.leftControlGlass}
                             >
                                 <View style={styles.leftControlContent}>
                                     {headerLeft()}
                                 </View>
-                            </MobileGlassSurface>
+                            </GlassChromeSurface>
                         )}
                         {headerLeft && !headerLeftUsesGlass && (
                             isAndroidHeader
@@ -204,35 +232,26 @@ export const Header = React.memo((props: HeaderProps) => {
                         isDesktop && styles.desktopCenterContainer,
                         centerMobileTitle && styles.mobileCenteredTitleContainer,
                     ]}>
-                        {glassControlsEnabled && mobileTitleSurface === 'glass' ? (
-                            <MobileGlassSurface
-                                enabled={glassControlsEnabled}
-                                nativeEffect
-                                material="static"
-                                intensity={76}
+                        {glassControlsEnabled && mobileTitleSurface === 'glass' && title ? (
+                            <GlassChromeSurface
+                                radius={MOBILE_GLASS_CONTROL_RADIUS}
                                 style={styles.mobileTitlePill}
                             >
                                 {titleContent}
-                            </MobileGlassSurface>
+                            </GlassChromeSurface>
                         ) : titleContent}
                     </View>
 
                     <View style={styles.rightContainer}>
                         {headerRight && headerRightUsesGlass && (
-                            // `interactive`, not `nativeEffect`: it puts this on
-                            // the exact same surface path as the left control,
-                            // press feedback included.
-                            <MobileGlassSurface
-                                enabled={glassControlsEnabled}
-                                interactive
-                                material="static"
-                                intensity={76}
+                            <GlassChromeSurface
+                                radius={MOBILE_GLASS_CONTROL_RADIUS}
                                 style={styles.rightControlGlass}
                             >
                                 <View style={styles.rightControlContent}>
                                     {headerRight()}
                                 </View>
-                            </MobileGlassSurface>
+                            </GlassChromeSurface>
                         )}
                         {headerRight && !headerRightUsesGlass && (
                             isAndroidHeader
@@ -275,25 +294,20 @@ const DefaultBackButton: React.FC<{ tintColor?: string; onPress: () => void }> =
         );
     }
 
+    // Drawn and tapped on the same 44pt disc, in the real material
+    // (DROVE-161). The Pressable used to sit OUTSIDE the surface with 10pt of
+    // hitSlop; GlassChromeButton puts it inside and fills it, so what is drawn
+    // and what answers a touch are one rectangle.
     return (
-        <Pressable
+        <GlassChromeButton
             onPress={onPress}
-            hitSlop={10}
-            style={({ pressed }) => [styles.backButton, pressed && styles.controlPressed]}
+            size={MOBILE_GLASS_CONTROL_SIZE}
+            accessibilityRole="button"
+            accessibilityLabel="Back"
+            style={styles.backButton}
         >
-            <MobileGlassSurface
-                interactive
-                material="static"
-                intensity={76}
-                style={styles.backButtonGlass}
-            >
-                <Ionicons
-                    name={Platform.OS === 'ios' ? 'chevron-back' : 'arrow-back'}
-                    size={24}
-                    color={tintColor}
-                />
-            </MobileGlassSurface>
-        </Pressable>
+            <Ionicons name="chevron-back" size={24} color={tintColor} />
+        </GlassChromeButton>
     );
 };
 
@@ -486,6 +500,12 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         paddingHorizontal: 12,
         minWidth: undefined,
     },
+    // No backgroundColor and no hand-drawn rim (DROVE-161). Both belong to
+    // GlassChromeSurface now: on the material UIGlassEffect draws its own
+    // specular edge, and off it the surface paints an opaque fill with a
+    // hairline. A `backgroundColor: transparent` here used to win over that
+    // fallback, which is how an iOS without the material got an invisible
+    // control instead of a plain one.
     mobileTitlePill: {
         maxWidth: '100%',
         height: MOBILE_GLASS_CONTROL_SIZE,
@@ -495,8 +515,6 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         paddingHorizontal: 14,
         borderRadius: MOBILE_GLASS_CONTROL_RADIUS,
         overflow: 'hidden',
-        borderWidth: 1,
-        borderColor: theme.dark ? 'rgba(255, 255, 255, 0.18)' : '#FFFFFF',
         shadowColor: '#000000',
         shadowOffset: { width: 0, height: 4 },
         shadowOpacity: theme.dark ? 0.24 : 0.06,
@@ -514,14 +532,6 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         alignItems: 'center',
         justifyContent: 'center',
         overflow: 'hidden',
-        backgroundColor: Platform.select({
-            web: 'transparent',
-            ios: 'transparent',
-            android: theme.colors.glass.backgroundStrong,
-            default: 'transparent',
-        }),
-        borderWidth: Platform.select({ ios: 1, default: 0 }),
-        borderColor: theme.dark ? 'rgba(255, 255, 255, 0.18)' : '#FFFFFF',
         shadowColor: '#000000',
         shadowOffset: { width: 0, height: 4 },
         shadowOpacity: Platform.select({ ios: theme.dark ? 0.24 : 0.06, default: 0 }),
@@ -535,14 +545,6 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         alignItems: 'center',
         justifyContent: 'center',
         overflow: 'hidden',
-        backgroundColor: Platform.select({
-            web: 'transparent',
-            ios: 'transparent',
-            android: theme.colors.glass.backgroundStrong,
-            default: 'transparent',
-        }),
-        borderWidth: Platform.select({ ios: 1, default: 0 }),
-        borderColor: theme.dark ? 'rgba(255, 255, 255, 0.18)' : '#FFFFFF',
         shadowColor: '#000000',
         shadowOffset: { width: 0, height: 4 },
         shadowOpacity: Platform.select({ ios: theme.dark ? 0.24 : 0.06, default: 0 }),
@@ -597,36 +599,17 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         boxShadow: '0 1px 3px rgba(0, 0, 0, 0.15)',
     },
     backButton: {
-        width: Platform.select({ web: 36, default: MOBILE_GLASS_CONTROL_SIZE }),
-        height: Platform.select({ web: 36, default: MOBILE_GLASS_CONTROL_SIZE }),
         borderRadius: MOBILE_GLASS_CONTROL_RADIUS,
+        shadowColor: '#000000',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: theme.dark ? 0.24 : 0.06,
+        shadowRadius: 20,
     },
     androidBackButton: {
         width: 48,
         height: 48,
         alignItems: 'center',
         justifyContent: 'center',
-    },
-    backButtonGlass: {
-        width: '100%',
-        height: '100%',
-        borderRadius: MOBILE_GLASS_CONTROL_RADIUS,
-        alignItems: 'center',
-        justifyContent: 'center',
-        overflow: 'hidden',
-        backgroundColor: Platform.select({
-            web: 'transparent',
-            ios: 'transparent',
-            android: theme.colors.glass.backgroundStrong,
-            default: 'transparent',
-        }),
-        borderWidth: Platform.select({ ios: 1, default: 0 }),
-        borderColor: theme.dark ? 'rgba(255, 255, 255, 0.18)' : '#FFFFFF',
-        shadowColor: '#000000',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: Platform.select({ ios: theme.dark ? 0.24 : 0.06, default: 0 }),
-        shadowRadius: 20,
-        elevation: 0,
     },
     controlPressed: {
         opacity: 0.68,

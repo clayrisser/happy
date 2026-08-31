@@ -5,6 +5,7 @@ import { Typography } from '@/constants/Typography';
 import { createHeader, createPlainHeader } from '@/components/navigation/Header';
 import { Platform, TouchableOpacity, Text, View, Image } from 'react-native';
 import { isRunningOnMac } from '@/utils/platform';
+import { useIsTablet } from '@/utils/responsive';
 import { useUnistyles } from 'react-native-unistyles';
 import { t } from '@/text';
 import { MobileGlassBackdrop } from '@/components/MobileGlass';
@@ -23,9 +24,17 @@ export default function RootLayout() {
     // the card's `delivery` and this phone's switches; never a Mac's.
     React.useEffect(() => startDroverAnnounce(), []);
 
-    // Keep UIKit in charge of most iPhone/iPad headers. Screens that belong to
-    // the floating-glass family opt into createHeader below.
-    const shouldUseCustomHeader = Platform.OS === 'android' || isRunningOnMac() || Platform.OS === 'web';
+    // Every phone gets the app's own header (DROVE-161). It used to be
+    // Android, Mac and web only, with iPhones left on UIKit's navigation bar,
+    // and that is why the agent screen Clay photographed had a flat grey back
+    // disc and a bare text title while the session header beside it was in the
+    // material: the converted header was never the one being drawn.
+    //
+    // The iPad still gets UIKit. This header hides its back button on a tablet
+    // because the sidebar navigates there, so a pushed screen on an iPad would
+    // have no way back out of it.
+    const isTablet = useIsTablet();
+    const shouldUseCustomHeader = Platform.OS !== 'ios' || isRunningOnMac() || !isTablet;
     const isDesktop = Platform.OS === 'web' || isRunningOnMac();
     const { theme } = useUnistyles();
 
@@ -288,7 +297,14 @@ export default function RootLayout() {
                             onPress={() => navigation.navigate('friends/search' as never)}
                             style={{ paddingHorizontal: 16 }}
                         >
-                            <Text style={{ color: theme.colors.button.primary.tint, fontSize: 16 }}>
+                            {/* `header.tint`, not `button.primary.tint`
+                                (DROVE-161). The primary tint is #FFFFFF on
+                                BOTH themes, because it is the colour of text
+                                on a black filled button; in a header capsule
+                                on the light theme it is white on near-white,
+                                which measures 1.06:1. It was invisible in
+                                UIKit's white bar before this too. */}
+                            <Text style={{ color: theme.colors.header.tint, fontSize: 16 }}>
                                 {t('friends.addFriend')}
                             </Text>
                         </TouchableOpacity>
