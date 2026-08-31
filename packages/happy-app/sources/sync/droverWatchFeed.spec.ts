@@ -1,8 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { DroverGate, DroverSession, DroverSnapshot } from 'drover-watch';
+import type { DroverGate, DroverSession, DroverSnapshot, DroverTranscriptDelta } from 'drover-watch';
 
 const mocks = vi.hoisted(() => ({
     sessions: {} as Record<string, unknown>,
+    /** The store's per-session message lists, only what the feed reads (DROVE-91). */
+    sessionMessages: {} as Record<string, { messages: unknown[] }>,
+    /** Deltas sent by sendMessage while the watch is reachable (DROVE-91). */
+    transcripts: [] as DroverTranscriptDelta[],
+    visible: vi.fn(),
     allow: vi.fn(),
     deny: vi.fn(),
     sendMessage: vi.fn(),
@@ -17,6 +22,7 @@ const mocks = vi.hoisted(() => ({
         ((event: { id: string; allow: boolean; optionId?: string; text?: string }) => void) | null,
     onFlip: null as ((event: { sessionId: string; account?: string }) => void) | null,
     onRefresh: null as (() => void) | null,
+    onOpened: null as ((event: { sessionId?: string }) => void) | null,
     onStorage: null as (() => void) | null,
 }));
 
@@ -24,7 +30,7 @@ const mocks = vi.hoisted(() => ({
 // client, so each is stubbed down to the surface the feed actually touches.
 vi.mock('./storage', () => ({
     storage: {
-        getState: () => ({ sessions: mocks.sessions }),
+        getState: () => ({ sessions: mocks.sessions, sessionMessages: mocks.sessionMessages }),
         subscribe: (listener: () => void) => {
             mocks.onStorage = listener;
             return () => { mocks.onStorage = null; };
@@ -33,7 +39,17 @@ vi.mock('./storage', () => ({
 }));
 
 vi.mock('./sync', () => ({
-    sync: { sendMessage: (...args: unknown[]) => mocks.sendMessage(...args) },
+    sync: {
+        sendMessage: (...args: unknown[]) => mocks.sendMessage(...args),
+        loadSessionMessages: (id: string) => mocks.visible(id),
+    },
+}));
+
+// The row builder folds tool runs through the phone's own labels, which read
+// the locale off React Native; neither exists under vitest (DROVE-91).
+vi.mock('@/components/tools/knownTools', () => ({ knownTools: {} }));
+vi.mock('@/text', () => ({
+    t: (key: string, params?: { count?: number }) => `${key}:${params?.count ?? ''}`,
 }));
 
 vi.mock('./ops', () => ({
@@ -68,6 +84,15 @@ vi.mock('drover-watch', () => ({
     addDroverRefreshListener: (listener: typeof mocks.onRefresh) => {
         mocks.onRefresh = listener;
         return { remove: () => { mocks.onRefresh = null; } };
+    },
+    addDroverOpenedListener: (listener: typeof mocks.onOpened) => {
+        mocks.onOpened = listener;
+        return { remove: () => { mocks.onOpened = null; } };
+    },
+    sendDroverTranscript: (delta: DroverTranscriptDelta) => {
+        if (!mocks.reachable) return Promise.resolve(false);
+        mocks.transcripts.push(delta);
+        return Promise.resolve(true);
     },
 }));
 
@@ -136,6 +161,10 @@ function start() {
 
 beforeEach(() => {
     mocks.sessions = {};
+    mocks.sessionMessages = {};
+    mocks.transcripts = [];
+    mocks.visible.mockReset();
+    mocks.onOpened = null;
     mocks.published = [];
     mocks.woken = [];
     mocks.reachable = true;
@@ -897,5 +926,170 @@ describe('waking the wrist', () => {
         } finally {
             log.mockRestore();
         }
+    });
+});
+
+describe('the open session\'s transcript (DROVE-91)', () => {
+    function userMessage(id: string, text: string, createdAt: number) {
+        return { kind: 'user-text', id, localId: null, createdAt, text };
+    }
+    function agentMessage(id: string, text: string, createdAt: number) {
+        return { kind: 'agent-text', id, localId: null, createdAt, text };
+    }
+    /** Newest first, as the store holds them. */
+    function messages(...chronological: unknown[]) {
+        return { messages: [...chronological].reverse() };
+    }
+    const flush = async () => {
+        await vi.advanceTimersByTimeAsync(250);
+    };
+
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => vi.useRealTimers());
+
+    it('sends nothing until the watch says which session it opened', async () => {
+        mocks.sessions = { s1: session({ path: '/a' }) };
+        mocks.sessionMessages = { s1: messages(userMessage('u1', 'hi', 1)) };
+        start();
+        mocks.onStorage!();
+        await flush();
+        expect(mocks.transcripts).toHaveLength(0);
+        expect(mocks.published[0].transcript).toBeUndefined();
+    });
+
+    it('on open, loads the session on the phone and sends every row', async () => {
+        mocks.sessions = { s1: session({ path: '/a' }) };
+        mocks.sessionMessages = { s1: messages(userMessage('u1', 'hi', 1), agentMessage('a1', 'hello', 2)) };
+        start();
+        mocks.onOpened!({ sessionId: 's1' });
+        expect(mocks.visible).toHaveBeenCalledWith('s1');
+        await flush();
+        expect(mocks.transcripts).toHaveLength(1);
+        const delta = mocks.transcripts[0];
+        expect(delta.kind).toBe('transcript');
+        expect(delta.sessionId).toBe('s1');
+        expect(delta.ids).toEqual(['u1', 'a1']);
+        expect(delta.rows.map((r) => [r.kind, r.text])).toEqual([['user', 'hi'], ['assistant', 'hello']]);
+        expect(delta.streaming).toBe(false);
+    });
+
+    it('a burst of store changes is one delta carrying the latest rows', async () => {
+        mocks.sessions = { s1: session({ path: '/a' }) };
+        mocks.sessionMessages = { s1: messages(userMessage('u1', 'hi', 1)) };
+        start();
+        mocks.onOpened!({ sessionId: 's1' });
+        // Thirty changes over 300ms: one send lands inside the burst, at the
+        // 250ms mark, and one more after it settles. Never thirty.
+        for (let i = 0; i < 30; i++) {
+            mocks.sessionMessages = { s1: messages(userMessage('u1', 'hi', 1), agentMessage('a1', 'x'.repeat(i + 1), 2)) };
+            mocks.onStorage!();
+            await vi.advanceTimersByTimeAsync(10);
+        }
+        expect(mocks.transcripts).toHaveLength(1);
+        await flush();
+        expect(mocks.transcripts).toHaveLength(2);
+        const last = mocks.transcripts[1];
+        expect(last.rows.map((r) => r.id)).toEqual(['a1']);
+        expect(last.rows[0].text).toBe('x'.repeat(30));
+    });
+
+    it('a delta after the first carries only what changed', async () => {
+        mocks.sessions = { s1: session({ path: '/a' }) };
+        mocks.sessionMessages = { s1: messages(userMessage('u1', 'hi', 1), agentMessage('a1', 'hello', 2)) };
+        start();
+        mocks.onOpened!({ sessionId: 's1' });
+        await flush();
+        mocks.sessionMessages = {
+            s1: messages(userMessage('u1', 'hi', 1), agentMessage('a1', 'hello', 2), agentMessage('a2', 'and more', 3)),
+        };
+        mocks.onStorage!();
+        await flush();
+        expect(mocks.transcripts).toHaveLength(2);
+        expect(mocks.transcripts[1].ids).toEqual(['u1', 'a1', 'a2']);
+        expect(mocks.transcripts[1].rows.map((r) => r.id)).toEqual(['a2']);
+    });
+
+    it('marks the newest assistant row and the transcript streaming while the turn runs', async () => {
+        mocks.sessions = { s1: session({ path: '/a', thinking: true }) };
+        mocks.sessionMessages = { s1: messages(userMessage('u1', 'hi', 1), agentMessage('a1', 'hello', 2)) };
+        start();
+        mocks.onOpened!({ sessionId: 's1' });
+        await flush();
+        const delta = mocks.transcripts[0];
+        expect(delta.streaming).toBe(true);
+        expect(delta.rows[1].streaming).toBe(true);
+        expect(delta.rows[0].streaming).toBeUndefined();
+        // The turn ending is a delta of its own, with no rows to carry.
+        mocks.sessions = { s1: session({ path: '/a', thinking: false }) };
+        mocks.onStorage!();
+        await flush();
+        expect(mocks.transcripts[1].streaming).toBe(false);
+        expect(mocks.transcripts[1].rows.map((r) => r.id)).toEqual(['a1']);
+    });
+
+    it('trims a long reply to 500 characters with the phone tail', async () => {
+        mocks.sessions = { s1: session({ path: '/a' }) };
+        mocks.sessionMessages = { s1: messages(agentMessage('a1', 'z'.repeat(3000), 1)) };
+        start();
+        mocks.onOpened!({ sessionId: 's1' });
+        await flush();
+        const text = mocks.transcripts[0].rows[0].text;
+        expect(text.startsWith('z'.repeat(500))).toBe(true);
+        expect(text.endsWith('more on the phone')).toBe(true);
+        expect(text.length).toBeLessThan(540);
+    });
+
+    it('an unreachable watch is not sent a delta, and gets everything once it is back', async () => {
+        mocks.reachable = false;
+        mocks.sessions = { s1: session({ path: '/a' }) };
+        mocks.sessionMessages = { s1: messages(userMessage('u1', 'hi', 1)) };
+        start();
+        mocks.onOpened!({ sessionId: 's1' });
+        await flush();
+        expect(mocks.transcripts).toHaveLength(0);
+        mocks.reachable = true;
+        mocks.sessionMessages = { s1: messages(userMessage('u1', 'hi', 1), agentMessage('a1', 'hello', 2)) };
+        mocks.onStorage!();
+        await flush();
+        expect(mocks.transcripts).toHaveLength(1);
+        expect(mocks.transcripts[0].rows.map((r) => r.id)).toEqual(['u1', 'a1']);
+    });
+
+    it('the published snapshot carries the open session\'s rows for a watch launched later', async () => {
+        mocks.sessions = { s1: session({ path: '/a' }) };
+        mocks.sessionMessages = { s1: messages(userMessage('u1', 'hi', 1)) };
+        start();
+        mocks.onOpened!({ sessionId: 's1' });
+        mocks.onRefresh!();
+        const snapshot = mocks.published[mocks.published.length - 1];
+        expect(snapshot.transcript?.sessionId).toBe('s1');
+        expect(snapshot.transcript?.rows.map((r) => r.id)).toEqual(['u1']);
+    });
+
+    it('a change in another session builds nothing', async () => {
+        mocks.sessions = { s1: session({ path: '/a' }), s2: session({ path: '/b' }) };
+        mocks.sessionMessages = { s1: messages(userMessage('u1', 'hi', 1)), s2: messages(userMessage('x', 'other', 1)) };
+        start();
+        mocks.onOpened!({ sessionId: 's1' });
+        await flush();
+        mocks.sessionMessages = { ...mocks.sessionMessages, s2: messages(userMessage('x', 'other', 1), userMessage('y', 'more', 2)) };
+        mocks.onStorage!();
+        await flush();
+        expect(mocks.transcripts).toHaveLength(1);
+    });
+
+    it('closing the transcript stops the rows, and the next snapshot drops them', async () => {
+        mocks.sessions = { s1: session({ path: '/a' }) };
+        mocks.sessionMessages = { s1: messages(userMessage('u1', 'hi', 1)) };
+        start();
+        mocks.onOpened!({ sessionId: 's1' });
+        await flush();
+        mocks.onOpened!({});
+        mocks.sessionMessages = { s1: messages(userMessage('u1', 'hi', 1), agentMessage('a1', 'hello', 2)) };
+        mocks.onStorage!();
+        await flush();
+        expect(mocks.transcripts).toHaveLength(1);
+        mocks.onRefresh!();
+        expect(mocks.published[mocks.published.length - 1].transcript).toBeUndefined();
     });
 });

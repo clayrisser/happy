@@ -22,16 +22,21 @@ import { liveStatusSince, liveStatusWatchLine } from '@/utils/liveStatus';
 import {
     addDroverAnswerListener,
     addDroverFlipListener,
+    addDroverOpenedListener,
     addDroverRefreshListener,
     describeDroverWakeBudget,
     getDroverWatchStatus,
     isDroverWatchAvailable,
     publishDroverSnapshot,
+    sendDroverTranscript,
     type DroverAccountRow,
     wakeDroverWatch,
     type DroverGate,
     type DroverSession,
+    type DroverTranscript,
 } from 'drover-watch';
+import { buildWristRows, createWristCoalescer, rowKey, transcriptDelta } from './droverWatchTranscript';
+import type { Message } from './typesMessage';
 
 /**
  * Gate collection lives in droverGates, not here. A SCREEN needs the same list,
@@ -270,6 +275,43 @@ let lastAccountRows: DroverAccountRow[] = [];
 let publishedOnce = false;
 
 /**
+ * The session the watch says it has open, and the rows last built for it
+ * (DROVE-91). One session, never all of them: the watch names it by sending
+ * `opened`, and the feed builds and sends rows for that one alone.
+ */
+let watchedSessionId: string | null = null;
+let lastTranscript: DroverTranscript | null = null;
+/**
+ * What the last build read, by identity. The store publishes on every change
+ * anywhere, and folding thirty rows on each of them is work the phone would
+ * do for every session's keystroke; the message array and the thinking flag
+ * only move when this session did.
+ */
+let lastTranscriptSource: { messages: Message[] | undefined; thinking: boolean } = { messages: undefined, thinking: false };
+/** Row versions a reachable watch has been sent, so a delta carries only news. */
+let sentRows = new Map<string, string>();
+let sentStreaming: boolean | null = null;
+
+/**
+ * The rows for the session the watch is showing, off the store (DROVE-91).
+ *
+ * Null with no session open. A session whose messages the phone has not
+ * loaded yields an empty transcript rather than none, so the watch draws a
+ * waiting state instead of the previous session's rows.
+ */
+export function collectTranscript(sessionId: string | null = watchedSessionId): DroverTranscript | null {
+    if (!sessionId) return null;
+    const state = storage.getState();
+    const messages = state.sessionMessages?.[sessionId]?.messages ?? [];
+    const thinking = !!state.sessions?.[sessionId]?.thinking;
+    return {
+        sessionId,
+        rows: buildWristRows(messages, { sessionId, thinking }),
+        streaming: thinking,
+    };
+}
+
+/**
  * Start the feed. Idempotent, and a no-op where the native module is absent
  * (Android, web, any build without the watch graft).
  */
@@ -313,6 +355,13 @@ export function startDroverWatchFeed(): () => void {
             // a TestFlight binary and cannot be updated OTA, so a build that
             // does not know this key has to keep working off the names alone.
             ...(accountRows.length ? { accountRows } : {}),
+            // The open session's rows ride every publish, so the application
+            // context, which is what a watch launched later reads, carries the
+            // conversation it last saw (DROVE-91). Not in the change guard
+            // above: a transcript change goes out as a delta by sendMessage,
+            // rationed below, and republishing the whole context per token is
+            // what that rationing exists to avoid.
+            ...(lastTranscript ? { transcript: lastTranscript } : {}),
             updatedAt: new Date().toISOString(),
             // "connected" is WatchConnectivity pairing state and nothing more:
             // this phone is activated, a watch is paired, and it has the app.
@@ -350,6 +399,57 @@ export function startDroverWatchFeed(): () => void {
             });
         }
     };
+
+    // Rebuild the open session's rows when THAT session moved, and hand them
+    // to the coalescer, which sends at most four deltas a second (DROVE-91).
+    const pushTranscript = () => {
+        if (!watchedSessionId) return;
+        const state = storage.getState();
+        const messages = state.sessionMessages?.[watchedSessionId]?.messages;
+        const thinking = !!state.sessions?.[watchedSessionId]?.thinking;
+        if (messages === lastTranscriptSource.messages && thinking === lastTranscriptSource.thinking) return;
+        lastTranscriptSource = { messages, thinking };
+        lastTranscript = collectTranscript(watchedSessionId);
+        coalescer.schedule(watchedSessionId);
+    };
+
+    const coalescer = createWristCoalescer((sessionId) => {
+        const transcript = lastTranscript;
+        if (!transcript || transcript.sessionId !== sessionId || sessionId !== watchedSessionId) return;
+        const delta = transcriptDelta(sessionId, transcript.rows, transcript.streaming, sentRows, sentStreaming);
+        if (!delta) return;
+        void sendDroverTranscript(delta).then((sent) => {
+            // Unreachable means unsent, and unsent means the next reachable
+            // delta still carries it. The application context covers the
+            // watch meanwhile, on the next publish.
+            if (!sent || watchedSessionId !== sessionId) return;
+            sentRows = new Map(transcript.rows.map((row) => [row.id, rowKey(row)]));
+            sentStreaming = transcript.streaming;
+        });
+    });
+
+    // The watch opened a session, or left the one it had (DROVE-91). Every
+    // row goes again on an open, even of the same session: the watch that
+    // says so may have just launched and hold nothing.
+    const opened = addDroverOpenedListener((event) => {
+        watchedSessionId = event.sessionId || null;
+        sentRows = new Map();
+        sentStreaming = null;
+        lastTranscriptSource = { messages: undefined, thinking: false };
+        if (!watchedSessionId) {
+            lastTranscript = null;
+            return;
+        }
+        // The phone loads a session's messages when a screen shows it; the
+        // wrist showing it counts. The rows only, not a screen's git status
+        // or the voice assistant's focus.
+        try {
+            sync.loadSessionMessages(watchedSessionId);
+        } catch {
+            // A session the phone does not hold yet: the rows come when it does.
+        }
+        pushTranscript();
+    });
 
     const answers = addDroverAnswerListener((event) => {
         const split = event.id.indexOf(':');
@@ -420,7 +520,10 @@ export function startDroverWatchFeed(): () => void {
     // this publish lands.
     const refreshes = addDroverRefreshListener(() => push(true));
 
-    const unsubscribe = storage.subscribe(() => push());
+    const unsubscribe = storage.subscribe(() => {
+        push();
+        pushTranscript();
+    });
     // Forced, so an unchanged snapshot still restamps updatedAt. That restamp
     // is the whole signal: see HEARTBEAT_MS.
     const heartbeat = setInterval(() => push(true), HEARTBEAT_MS);
@@ -434,6 +537,13 @@ export function startDroverWatchFeed(): () => void {
         answers.remove();
         flips.remove();
         refreshes.remove();
+        opened.remove();
+        coalescer.stop();
+        watchedSessionId = null;
+        lastTranscript = null;
+        lastTranscriptSource = { messages: undefined, thinking: false };
+        sentRows = new Map();
+        sentStreaming = null;
         clearInterval(heartbeat);
         unsubscribe();
     };

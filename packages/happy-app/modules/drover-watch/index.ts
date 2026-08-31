@@ -150,6 +150,70 @@ export interface DroverAccountRow {
     backAt?: string;
 }
 
+/**
+ * One row of a session's transcript, sized for a wrist (DROVE-91).
+ *
+ * The phone folds the session's message list into these: a user message, an
+ * assistant reply, a run of tool calls collapsed to one line the way the
+ * phone's own list folds them (DROVE-84, `Ran 4 shell commands`), or a gate
+ * where it happened in the conversation. `text` is already trimmed to
+ * `droverWristTextLimit` with a "more on the phone" tail, so the watch never
+ * has to decide what to cut.
+ */
+export interface DroverTranscriptRow {
+    id: string;
+    kind: 'user' | 'assistant' | 'tools' | 'gate';
+    text: string;
+    /**
+     * Still being written: the turn is running and this is its newest row, or
+     * a tool in the run has not finished. Omitted when false, so an older
+     * watch build decodes the row unchanged.
+     */
+    streaming?: boolean;
+    /** ISO-8601; when the row was created on the session. */
+    at: string;
+    /**
+     * For a `gate` row, the id in `DroverSnapshot.gates` it belongs to, so
+     * the wrist can open the same GateDetailView the wall opens. Absent once
+     * the gate has been answered.
+     */
+    gateId?: string;
+}
+
+/**
+ * The last rows of ONE session, the one the watch says it is looking at.
+ *
+ * Carried on the snapshot so a watch launched later, or looking at a stale
+ * snapshot with the phone out of reach, still has the conversation it last
+ * saw. Rows are OLDEST FIRST, so the watch appends and reads the bottom as
+ * newest.
+ */
+export interface DroverTranscript {
+    sessionId: string;
+    rows: DroverTranscriptRow[];
+    /** The turn is running: the wrist shows a streaming row at the bottom. */
+    streaming: boolean;
+}
+
+/**
+ * What the phone sends by `sendMessage` while the watch is reachable, instead
+ * of republishing the whole snapshot for every token (DROVE-91).
+ *
+ * `ids` is the whole window in order, so the watch can drop rows that fell
+ * off the top; `rows` carries only the rows that changed since the last delta
+ * the watch acknowledged by being reachable. A watch that finds an id it has
+ * no row for asks for a snapshot, which carries the full transcript.
+ */
+export interface DroverTranscriptDelta {
+    kind: 'transcript';
+    sessionId: string;
+    streaming: boolean;
+    ids: string[];
+    rows: DroverTranscriptRow[];
+    /** ISO-8601, stamped at send; the watch restamps its freshness off it. */
+    updatedAt: string;
+}
+
 export interface DroverSnapshot {
     gates: DroverGate[];
     /**
@@ -183,6 +247,12 @@ export interface DroverSnapshot {
      * to, which is why both are sent.
      */
     accountRows?: DroverAccountRow[];
+    /**
+     * The transcript of the session the watch is showing, when it has said
+     * which (DROVE-91). Absent until it does, and absent on a phone that
+     * predates the key; the watch treats both as "nothing to show yet".
+     */
+    transcript?: DroverTranscript;
 }
 
 /**
@@ -198,6 +268,17 @@ export interface DroverSnapshot {
  * wall read fresh.
  */
 export interface DroverRefreshEvent {}
+
+/**
+ * The wrist saying which session it has OPEN (DROVE-91), or that it closed the
+ * one it had. The phone feeds the transcript of exactly that session and no
+ * other: thirty rows of every session in the application context would be
+ * most of the WatchConnectivity budget spent on screens nobody is looking at.
+ */
+export interface DroverOpenedEvent {
+    /** Omitted when the watch left the transcript screen. */
+    sessionId?: string;
+}
 
 /** The wrist asking for an account flip (BASED-98). */
 export interface DroverFlipEvent {
@@ -220,10 +301,17 @@ type DroverWatchModuleType = {
      * which is what they did before this existed.
      */
     wake?: (json: string) => Promise<boolean>;
+    /**
+     * Optional for the same reason: builds up to 10 have no such function.
+     * Sends a transcript delta by `sendMessage` while the watch is reachable
+     * and resolves false, doing nothing, when it is not (DROVE-91).
+     */
+    sendTranscript?: (json: string) => Promise<boolean>;
     addListener: {
         (eventName: 'onAnswer', listener: (event: DroverAnswerEvent) => void): EventSubscription;
         (eventName: 'onFlip', listener: (event: DroverFlipEvent) => void): EventSubscription;
         (eventName: 'onRefresh', listener: (event: DroverRefreshEvent) => void): EventSubscription;
+        (eventName: 'onOpened', listener: (event: DroverOpenedEvent) => void): EventSubscription;
     };
 };
 
@@ -324,6 +412,37 @@ export function addDroverRefreshListener(listener: (event: DroverRefreshEvent) =
         // Subscribing to an event a module never declared must therefore cost
         // nothing: the wrist on that build simply never asks, which is exactly
         // what it did before DROVE-22.
+        return { remove: () => {} };
+    }
+}
+
+/**
+ * Send a transcript delta straight to a reachable watch (DROVE-91).
+ *
+ * Resolves false when the watch is not reachable, and sends nothing then: an
+ * unreachable watch is not looking, and the next snapshot publish carries the
+ * full transcript in the application context anyway. False is also what a
+ * native module without the function returns, so an OTA carrying this file
+ * still runs on builds 9 and 10 and simply never sends a delta.
+ */
+export async function sendDroverTranscript(delta: DroverTranscriptDelta): Promise<boolean> {
+    if (!native || typeof native.sendTranscript !== 'function') return false;
+    try {
+        return await native.sendTranscript(JSON.stringify(delta));
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * The wrist saying which session it is showing (DROVE-91). Same guard as
+ * onRefresh: a binary that never declared the event must cost nothing.
+ */
+export function addDroverOpenedListener(listener: (event: DroverOpenedEvent) => void) {
+    if (!native) return { remove: () => {} };
+    try {
+        return native.addListener('onOpened', listener);
+    } catch {
         return { remove: () => {} };
     }
 }

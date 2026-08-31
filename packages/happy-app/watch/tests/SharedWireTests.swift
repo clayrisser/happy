@@ -30,6 +30,131 @@ struct SharedWireTests {
         return dict
     }
 
+    /// The open session's rows (DROVE-91): four kinds, the streaming mark,
+    /// and the gate link, all through the same ISO-8601 decoder as the rest.
+    static func aTranscriptSurvivesTheWire() {
+        let payload = """
+        {"gates":[],"updatedAt":"2026-08-31T01:00:00Z","connected":true,
+        "transcript":{"sessionId":"s1","streaming":true,"rows":[
+        {"id":"u1","kind":"user","text":"fix the build","at":"2026-08-31T00:59:00Z"},
+        {"id":"group-t1","kind":"tools","text":"Ran 4 shell commands","at":"2026-08-31T00:59:10Z"},
+        {"id":"q1","kind":"gate","text":"Which?\\nWhich branch?","at":"2026-08-31T00:59:20Z","gateId":"s1:r1"},
+        {"id":"a1","kind":"assistant","text":"On it","streaming":true,"at":"2026-08-31T00:59:30Z"},
+        {"id":"x1","kind":"hologram","text":"?","at":"2026-08-31T00:59:40Z"}]}}
+        """
+        guard let snapshot = try? DroverSnapshot.decoder.decode(
+            DroverSnapshot.self, from: Data(payload.utf8)
+        ), let transcript = snapshot.transcript else {
+            check(false, "a snapshot with a transcript decodes")
+            return
+        }
+        check(transcript.sessionId == "s1", "the transcript names its session")
+        check(transcript.streaming, "the transcript carries the streaming flag")
+        check(transcript.rows.count == 5, "every row decodes, including a kind from the future")
+        check(transcript.rows[0].classification == .user, "a user row is a user row")
+        check(transcript.rows[1].classification == .tools, "a folded run is a tools row")
+        check(transcript.rows[2].classification == .gate && transcript.rows[2].gateId == "s1:r1", "a gate row links to its gate")
+        check(transcript.rows[3].classification == .assistant && transcript.rows[3].isStreaming, "the streaming row is marked")
+        check(!transcript.rows[0].isStreaming, "an absent streaming key reads as not streaming")
+        check(transcript.rows[4].classification == .unknown, "a kind from the future is unknown, not a throw")
+        // And back out, for the app group copy the widget and a relaunch read.
+        guard let data = try? DroverSnapshot.encoder.encode(snapshot),
+              let again = try? DroverSnapshot.decoder.decode(DroverSnapshot.self, from: data) else {
+            check(false, "a transcript round-trips through the app group")
+            return
+        }
+        check(again.transcript == transcript, "a transcript round-trips through the app group")
+    }
+
+    /// A phone that predates the key, and the background republish, send no
+    /// transcript. That is "nothing to say", never a failed decode.
+    static func aSnapshotWithoutATranscriptStillDecodes() {
+        let payload = """
+        {"gates":[],"updatedAt":"2026-08-31T01:00:00Z","connected":true,"sessions":[]}
+        """
+        guard let snapshot = try? DroverSnapshot.decoder.decode(
+            DroverSnapshot.self, from: Data(payload.utf8)
+        ) else {
+            check(false, "a snapshot with no transcript key decodes")
+            return
+        }
+        check(snapshot.transcript == nil, "a missing transcript is absent, not a throw")
+    }
+
+    static func delta(_ payload: String) -> DroverTranscriptDelta? {
+        try? DroverSnapshot.decoder.decode(DroverTranscriptDelta.self, from: Data(payload.utf8))
+    }
+
+    static func row(_ id: String, _ text: String, kind: String = "assistant") -> DroverTranscriptRow {
+        DroverTranscriptRow(id: id, kind: kind, text: text, streaming: nil, at: Date(timeIntervalSince1970: 0), gateId: nil)
+    }
+
+    /// A delta carries only what changed and the whole id list; the merge
+    /// keeps the rows it already had, takes the new versions, and orders by
+    /// the list.
+    static func aDeltaMergesIntoWhatTheWristHolds() {
+        let held = DroverTranscript(sessionId: "s1", rows: [row("u1", "hi"), row("a1", "hel")], streaming: true)
+        guard let delta = delta("""
+        {"kind":"transcript","sessionId":"s1","streaming":false,"ids":["u1","a1","a2"],
+        "rows":[{"id":"a1","kind":"assistant","text":"hello","at":"2026-08-31T00:59:30Z"},
+        {"id":"a2","kind":"assistant","text":"and done","at":"2026-08-31T00:59:40Z"}],
+        "updatedAt":"2026-08-31T01:00:00Z"}
+        """) else {
+            check(false, "a transcript delta decodes")
+            return
+        }
+        check(delta.isTranscript, "a delta is told apart by its kind")
+        let merged = DroverTranscript.applying(delta, to: held)
+        check(merged.missing.isEmpty, "nothing is missing when the delta and the wrist agree")
+        check(merged.transcript.rows.map(\.id) == ["u1", "a1", "a2"], "rows follow the delta's id list")
+        check(merged.transcript.rows[0].text == "hi", "a row the delta did not carry is kept")
+        check(merged.transcript.rows[1].text == "hello", "a row the delta carried is replaced")
+        check(!merged.transcript.streaming, "the streaming flag is the delta's")
+    }
+
+    /// A delta for another session never merges with the rows of this one.
+    static func aDeltaForAnotherSessionReplacesTheTranscript() {
+        let held = DroverTranscript(sessionId: "s1", rows: [row("u1", "hi")], streaming: false)
+        guard let delta = delta("""
+        {"kind":"transcript","sessionId":"s2","streaming":false,"ids":["x1"],
+        "rows":[{"id":"x1","kind":"user","text":"other","at":"2026-08-31T00:59:30Z"}],
+        "updatedAt":"2026-08-31T01:00:00Z"}
+        """) else {
+            check(false, "a delta for another session decodes")
+            return
+        }
+        let merged = DroverTranscript.applying(delta, to: held)
+        check(merged.transcript.sessionId == "s2", "the transcript becomes the delta's session")
+        check(merged.transcript.rows.map(\.id) == ["x1"], "the old session's rows do not leak in")
+        check(merged.missing.isEmpty, "nothing is missing")
+    }
+
+    /// A row the phone assumes the wrist has, and it does not, is reported so
+    /// the store can ask for a snapshot. The rows it does have are still drawn.
+    static func aRowTheWristNeverGotIsReportedMissing() {
+        guard let delta = delta("""
+        {"kind":"transcript","sessionId":"s1","streaming":false,"ids":["u1","a1"],
+        "rows":[{"id":"a1","kind":"assistant","text":"hello","at":"2026-08-31T00:59:30Z"}],
+        "updatedAt":"2026-08-31T01:00:00Z"}
+        """) else {
+            check(false, "a delta with an unknown id decodes")
+            return
+        }
+        let merged = DroverTranscript.applying(delta, to: nil)
+        check(merged.missing == ["u1"], "the id the wrist has no row for is reported")
+        check(merged.transcript.rows.map(\.id) == ["a1"], "the rows it does have are kept")
+    }
+
+    /// The wrist's "opened" is told apart from an answer and a flip by `kind`,
+    /// and a closed transcript sends no session at all rather than null.
+    static func anOpenedMessageCarriesItsKind() {
+        let opened = json(DroverOpened(sessionId: "s1"))
+        check(opened["kind"] as? String == "opened", "an opened message says what it is")
+        check(opened["sessionId"] as? String == "s1", "an opened message names the session")
+        let closed = json(DroverOpened(sessionId: nil))
+        check(closed["sessionId"] == nil, "a closed transcript omits the session rather than sending null")
+    }
+
     static func main() {
         answerOmitsWhatItDoesNotCarry()
         answerCarriesTypedText()
@@ -54,6 +179,12 @@ struct SharedWireTests {
         anUnknownKindStillBuzzes()
         everyCueFeelsDifferent()
         onlyABlockedSessionBreaksThroughFocus()
+        aTranscriptSurvivesTheWire()
+        aSnapshotWithoutATranscriptStillDecodes()
+        aDeltaMergesIntoWhatTheWristHolds()
+        aDeltaForAnotherSessionReplacesTheTranscript()
+        aRowTheWristNeverGotIsReportedMissing()
+        anOpenedMessageCarriesItsKind()
 
         if failures.isEmpty {
             print("\nall wire checks passed")

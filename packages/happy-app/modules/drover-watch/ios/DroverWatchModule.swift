@@ -29,6 +29,9 @@ final class DroverWatchDelegate: NSObject, WCSessionDelegate {
     var onFlip: (([String: Any]) -> Void)?
     /// Called when the wrist asks for a fresh snapshot (DROVE-22).
     var onRefresh: (() -> Void)?
+    /// Called when the wrist opens a session's transcript, or leaves it
+    /// (DROVE-91). The event carries `sessionId` only while one is open.
+    var onOpened: (([String: Any]) -> Void)?
 
     /// How long the wrist may be kept waiting before it is answered with
     /// whatever this phone last published.
@@ -135,6 +138,15 @@ final class DroverWatchDelegate: NSObject, WCSessionDelegate {
             onFlip?(event)
             return
         }
+        // Which session the wrist is looking at (DROVE-91). No `sessionId`
+        // means it left the transcript. Above the answer guard for the same
+        // reason as the two before it.
+        if payload["kind"] as? String == "opened" {
+            var event: [String: Any] = [:]
+            if let sessionId = payload["sessionId"] as? String { event["sessionId"] = sessionId }
+            onOpened?(event)
+            return
+        }
         guard let id = payload["id"] as? String,
               let allow = payload["allow"] as? Bool else { return }
         var event: [String: Any] = ["id": id, "allow": allow]
@@ -183,7 +195,7 @@ public final class DroverWatchModule: Module {
     public func definition() -> ModuleDefinition {
         Name("DroverWatch")
 
-        Events("onAnswer", "onFlip", "onRefresh")
+        Events("onAnswer", "onFlip", "onRefresh", "onOpened")
 
         OnCreate {
             self.watchDelegate.onAnswer = { [weak self] event in
@@ -195,6 +207,9 @@ public final class DroverWatchModule: Module {
             self.watchDelegate.onRefresh = { [weak self] in
                 // No body: there is one thing to ask for.
                 self?.sendEvent("onRefresh")
+            }
+            self.watchDelegate.onOpened = { [weak self] event in
+                self?.sendEvent("onOpened", event)
             }
             guard WCSession.isSupported() else { return }
             let session = WCSession.default
@@ -256,6 +271,29 @@ public final class DroverWatchModule: Module {
             // every publish, not only an asked-for one, so the deadline always
             // has a real snapshot to fall back to.
             self.watchDelegate.settle(with: dict)
+            return true
+        }
+
+        /// Send a transcript delta to a REACHABLE watch, and nothing to one
+        /// that is not (DROVE-91).
+        ///
+        /// `sendMessage` only: the application context is for the whole
+        /// snapshot and is written by `publish` on its own cadence, and a
+        /// reply streaming in as forty store updates a second must not
+        /// rewrite it forty times. Unreachable means the watch app is not
+        /// frontmost, so nobody is reading the transcript; the next publish
+        /// carries the full one in the context for when they are. Resolves
+        /// whether it was sent, so JS knows what the watch has been told.
+        AsyncFunction("sendTranscript") { (json: String) -> Bool in
+            guard WCSession.isSupported() else { return false }
+            let session = WCSession.default
+            guard session.activationState == .activated, session.isReachable else { return false }
+            guard let data = json.data(using: .utf8),
+                  let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let dict = plistSanitized(raw) as? [String: Any] else {
+                throw Exception(name: "DroverWatch", description: "transcript was not a JSON object")
+            }
+            session.sendMessage(dict, replyHandler: nil, errorHandler: nil)
             return true
         }
 
