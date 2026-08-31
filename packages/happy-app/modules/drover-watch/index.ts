@@ -207,6 +207,42 @@ export interface DroverAccountRow {
      * A band a watch build has never heard of reads as `unknown` there.
      */
     tone?: 'ample' | 'low' | 'critical' | 'unknown';
+    /**
+     * How much of the track the wrist's bar FILLS, as a whole percent 0..100 —
+     * percent USED, the direction every bar in the product now runs
+     * (DROVE-230).
+     *
+     * The wrist does not compute this. It is `usageBarFraction`, the single
+     * function every bar on the phone runs through, evaluated here and sent,
+     * for exactly the reason `tone` and `limit` are sent: two implementations
+     * of one rule in two languages is two rules (DROVE-129). Reversing the
+     * direction then means editing one TypeScript function, and the wrist
+     * follows without a rebuild.
+     *
+     * It is also the figure the wrist PRINTS. `headroom` is still on the wire
+     * and still counts the other way, and it survives in exactly one place on
+     * each surface: the phone's account heading and the wrist's current-account
+     * line, both of which spell the word "left" and name the window. Nothing
+     * else on either surface counts down.
+     *
+     * Omitted when nothing was measured, never zero: zero is now a real and
+     * common reading — a fresh session window — and it must not share a
+     * spelling with "no reading at all".
+     */
+    used?: number;
+    /**
+     * At least one of this account's windows had already RESET when the CLI
+     * read the cache (DROVE-204), so `headroom` and `tone` describe a window
+     * that no longer exists.
+     *
+     * Decided here rather than on the wrist for the reason `tone` is: the
+     * verdict needs the clock that was in the room when the cache was read,
+     * and the watch has only its own (DROVE-129). The wrist draws an empty
+     * track and no percentage on it, which is what the phone's own rows do
+     * with the same reading. Omitted, never false, so an older watch binary
+     * decodes the row unchanged and simply keeps the behaviour it had.
+     */
+    expired?: boolean;
 }
 
 /**

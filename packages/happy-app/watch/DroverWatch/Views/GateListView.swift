@@ -47,6 +47,13 @@ struct GateListView: View {
                 let freshness = store.freshness(at: context.date)
                 Group {
                     if store.gates.isEmpty {
+                        // SCROLLS (DROVE-228). The empty state is a glyph, a
+                        // headline, up to three explanatory lines, the quota
+                        // capsule, the tasks door and the Playground door. On
+                        // a 45mm that fits; on a 41mm it did not, and a plain
+                        // VStack clips rather than scrolls, so the Playground
+                        // was simply off the bottom of the smallest watch.
+                        ScrollView {
                         EmptyStateView(
                             connected: store.snapshot.connected,
                             freshness: freshness,
@@ -63,6 +70,7 @@ struct GateListView: View {
                                 ? nil
                                 : store.snapshot.taskDoorLabel
                         )
+                        }
                     } else {
                         List {
                             if let message = store.lastError {
@@ -115,7 +123,19 @@ struct GateListView: View {
                     store.askIfSnapshotIsAging(at: now)
                 }
             }
-            .navigationTitle("Drover")
+            // NO TITLE ON THE ROOT (DROVE-228). watchOS draws the navigation
+            // title under the clock and lets the content sit beneath it, and
+            // this screen's content is a centred VStack, so the status glyph
+            // was drawn straight through the word "Drover" on Clay's Ultra.
+            // Two elements in one place, and one of them had to go.
+            //
+            // The title is the one that goes, rather than nudging the glyph
+            // down a few points: an app's own name on its own root screen tells
+            // nobody anything they did not know when they tapped the icon, and
+            // a few points of clearance is a number that holds on one watch
+            // size and not the next. The tick and "Nothing waiting" are the
+            // header. Every PUSHED screen keeps its title, because there the
+            // title says where you are.
             // Authorization for the watch-local alert has to be asked from the
             // foreground — watchOS will not prompt from a background launch,
             // and without it the background buzz is accepted and dropped
@@ -165,6 +185,15 @@ struct GateListView: View {
                     NavigationLink(value: DroverRoute.sessions) {
                         Label("Sessions", systemImage: "terminal")
                     }
+                    // A door, not an event, so no colour of its own
+                    // (DROVE-228). NO `.tint` HERE, deliberately: a toolbar
+                    // item's tint paints the DISC behind the glyph, not the
+                    // glyph, so `.tint(.primary)` turned the button into a
+                    // white puck that outshouted the quota it sits above —
+                    // louder than the lavender it replaced. watchOS's own
+                    // default is already the rule this ticket is applying: a
+                    // neutral dark disc with a foreground glyph on it.
+                    .accessibilityLabel("Sessions")
                 }
             }
         }
@@ -189,11 +218,31 @@ private struct EmptyStateView: View {
 
     private var clear: Bool { connected && freshness == .fresh }
 
+    /// The wrist is in no position to say what it is saying: the phone is not
+    /// feeding it, or it asked and got nothing newer. The one thing on this
+    /// screen worth a second look, so the one thing that gets a colour.
+    /// `asking` is not a fault, it is a second of waiting.
+    private var signal: WristGlyph.Signal? {
+        if !connected { return .unreachable }
+        if case .stale = freshness { return .unreachable }
+        return nil
+    }
+
     var body: some View {
         VStack(spacing: 6) {
             Image(systemName: symbol)
                 .font(.title2)
-                .foregroundStyle(clear ? .green : .secondary)
+                // FOREGROUND UNLESS THE WRIST CANNOT ANSWER (DROVE-228,
+                // applying DROVE-215). The tick used to be green whenever the
+                // wall was clear, which is most of the day, and a colour that
+                // is always on carries nothing. It also spent the screen's
+                // only accent on the state where nothing is wrong, so the
+                // states where something IS wrong were the grey ones.
+                //
+                // Nothing is lost by taking it: the headline under this says
+                // "Nothing waiting" in words, and the glyph is a different
+                // shape in all four states. Colour was never the carrier.
+                .foregroundStyle(WristGlyph.colour(signal))
             Text(headline)
                 .font(.headline)
                 .multilineTextAlignment(.center)
@@ -280,13 +329,22 @@ private struct EmptyStateView: View {
 /// The door to the Playground (DROVE-75), at the foot of the wall and under
 /// the empty state. A value link like every other push in this stack
 /// (DROVE-10). Quiet on purpose: it is not a gate and must not read as one.
+///
+/// It was not quiet. Outside a `List` watchOS gives a `NavigationLink` the
+/// filled accent capsule, so the caption-sized secondary label above sat on a
+/// lavender slab the width of the screen, identical to the quota row's, and a
+/// debug surface carried exactly the weight of the one fact Clay came to read
+/// (DROVE-228). `.buttonStyle(.plain)` is what the "quiet on purpose" in the
+/// line above always meant; it just was not enforced anywhere.
 private struct PlaygroundRow: View {
     var body: some View {
         NavigationLink(value: DroverRoute.demo) {
             Label("Playground", systemImage: "waveform.path")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
         }
+        .buttonStyle(.plain)
     }
 }
 
@@ -302,7 +360,10 @@ struct StaleRow: View {
         VStack(alignment: .leading, spacing: 1) {
             Label("May be out of date", systemImage: "clock.badge.exclamationmark")
                 .font(.caption2)
-                .foregroundStyle(.yellow)
+                // The same condition the empty state's glyph marks, so the
+                // same colour (DROVE-228). Two renderings of one fault in two
+                // hues is the second vocabulary this ticket is about.
+                .foregroundStyle(WristGlyph.colour(.unreachable))
             UpdatedAgo(updatedAt: updatedAt)
             if let reason {
                 Text(reason)
