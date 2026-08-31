@@ -18,6 +18,10 @@ import {
     getDefaultEffortKey,
     getDefaultModelKey,
     getEffortLevelsForModel,
+    getEffortLevelsForPicker,
+    getClaudeEffortLevelsForModel,
+    getHighestReachableEffortKey,
+    getUnreachableClaudeEffortLevels,
     getDefaultPermissionModeKey,
     includeConfiguredModel,
     getOpenClawPermissionModes,
@@ -165,15 +169,60 @@ describe('modelModeOptions', () => {
         expect(keys).toEqual(['low', 'medium', 'high', 'xhigh']);
     });
 
-    it('offers claude the SDK effort union for every model', () => {
-        // Claude's scale belongs to the SDK, not the model: an unreachable level
-        // is silently downgraded, so all three models get the same list.
-        for (const model of ['claude-fable-5', 'claude-opus-5', 'claude-sonnet-5']) {
+    it('trims the claude scale to what each model can reach', () => {
+        // The scale belongs to the SDK; the ceiling belongs to the model.
+        // `ultracode` needs an xhigh-capable model with workflows, which Opus 5
+        // is not, in either variant.
+        for (const model of ['claude-opus-5', 'claude-opus-5[1m]']) {
             const keys = getEffortLevelsForModel('claude', model).map((level) => level.key);
-            expect(keys).toEqual(['low', 'medium', 'high', 'xhigh', 'max', 'ultracode']);
+            expect(keys).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
+            expect(keys).not.toContain('ultracode');
             // Claude's floor is `low`; there is no off.
             expect(keys).not.toContain('off');
         }
+        for (const model of ['claude-fable-5', 'claude-sonnet-5', 'claude-opus-4-8']) {
+            const keys = getEffortLevelsForModel('claude', model).map((level) => level.key);
+            expect(keys).toEqual(['low', 'medium', 'high', 'xhigh', 'max', 'ultracode']);
+        }
+    });
+
+    it('keeps the whole claude scale for a model the table has not heard of', () => {
+        // A stale table must not cripple a model that shipped after it.
+        for (const model of ['claude-opus-6', 'default', 'some-workspace-claude']) {
+            expect(getClaudeEffortLevelsForModel(model).map((level) => level.key))
+                .toEqual(['low', 'medium', 'high', 'xhigh', 'max', 'ultracode']);
+        }
+        expect(getClaudeEffortLevelsForModel(null).map((level) => level.key))
+            .toEqual(['low', 'medium', 'high', 'xhigh', 'max', 'ultracode']);
+    });
+
+    it('names the supporting models on the level a model cannot reach', () => {
+        const unreachable = getUnreachableClaudeEffortLevels('claude-opus-5');
+        expect(unreachable.map((level) => level.key)).toEqual(['ultracode']);
+        expect(unreachable[0].disabled).toBe(true);
+        expect(unreachable[0].description).toBe('needs Fable 5, Sonnet 5 or Opus 4.8');
+        expect(getUnreachableClaudeEffortLevels('claude-fable-5')).toEqual([]);
+    });
+
+    it('lists the unreachable level last in the picker, disabled', () => {
+        const picker = getEffortLevelsForPicker('claude', 'claude-opus-5');
+        expect(picker.map((level) => level.key))
+            .toEqual(['low', 'medium', 'high', 'xhigh', 'max', 'ultracode']);
+        expect(picker.filter((level) => level.disabled).map((level) => level.key))
+            .toEqual(['ultracode']);
+        // Nothing to add where every level is already reachable.
+        expect(getEffortLevelsForPicker('claude', 'claude-sonnet-5').some((level) => level.disabled))
+            .toBe(false);
+        // Codex asks its own registry and gains no disabled rows.
+        expect(getEffortLevelsForPicker('codex', 'gpt-5.6-luna').map((level) => level.key))
+            .toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
+    });
+
+    it('falls back to the highest level the model reaches', () => {
+        expect(getHighestReachableEffortKey('claude', 'claude-opus-5')).toBe('max');
+        expect(getHighestReachableEffortKey('claude', 'claude-fable-5')).toBe('ultracode');
+        expect(getHighestReachableEffortKey('codex', 'gpt-5.6-luna')).toBe('max');
+        expect(getHighestReachableEffortKey('gemini', 'gemini-2.5-pro')).toBeNull();
     });
 
     it('uses code defaults for agent defaults', () => {

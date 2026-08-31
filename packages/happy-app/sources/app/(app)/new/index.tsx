@@ -61,6 +61,7 @@ import {
     getHardcodedPermissionModes,
     getHardcodedModelModes,
     getEffortLevelsForModel,
+    getEffortLevelsForPicker,
     getSupportsWorktree,
     includeConfiguredModel,
     type PermissionMode,
@@ -119,7 +120,7 @@ const ALL_AGENTS: { key: AgentKey; label: string }[] = [
     { key: 'rig', label: 'drover' },
 ];
 
-type PickerItem = { key: string; label: string; subtitle?: string; dimmed?: boolean };
+type PickerItem = { key: string; label: string; subtitle?: string; dimmed?: boolean; disabled?: boolean };
 
 type PickerType = 'machine' | 'path' | 'worktree' | 'agent' | 'model' | 'effort' | 'permission' | 'settings';
 
@@ -319,13 +320,19 @@ function PickerContent({
             <BubblePressable
                 key={item.key}
                 scaleFeedback={false}
+                disabled={item.disabled}
                 style={(p) => [
                     pickerStyles.option,
                     embedded && pickerStyles.embeddedOption,
-                    p.pressed && pickerStyles.optionPressed,
-                    item.dimmed && { opacity: 0.45 },
+                    p.pressed && !item.disabled && pickerStyles.optionPressed,
+                    (item.dimmed || item.disabled) && { opacity: 0.45 },
                 ]}
-                onPress={() => onSelect(item.key)}
+                onPress={() => {
+                    // A disabled row is there to say why the level is out of
+                    // reach on this model, not to be picked (DROVE-101).
+                    if (item.disabled) return;
+                    onSelect(item.key);
+                }}
             >
                 <Octicons
                     name={isSelected ? 'check-circle-fill' : 'circle'}
@@ -1056,6 +1063,15 @@ function NewSessionScreen() {
             : getEffortLevelsForModel(selectedAgent, currentModelKey),
         [selectedAgent, currentModelKey, rigCreation],
     );
+    // The picker lists one row more than the session can run: a level this
+    // model cannot reach, shown disabled with the models that do support it
+    // (DROVE-101). Selection stays on effortLevels above.
+    const effortPickerLevels = React.useMemo<EffortLevel[]>(
+        () => rigCreation
+            ? effortLevels
+            : getEffortLevelsForPicker(selectedAgent, currentModelKey),
+        [selectedAgent, currentModelKey, rigCreation, effortLevels],
+    );
     const effectiveEffortDefault = rigCreation?.defaultEffortForModel(currentModelKey)
         ?? effectiveAgentDefaults.effortLevel;
     const showModel = modelModes.length > 1;
@@ -1099,11 +1115,27 @@ function NewSessionScreen() {
             setEffortIndex(0);
             return;
         }
+        // A pick this flavor has but this MODEL cannot reach does not stick and
+        // does not fall to the bottom of the scale: it lands on the top of what
+        // this model does reach, the nearest thing to what was asked for
+        // (DROVE-101). The draft moves with it, so the session starts on a
+        // level the model will actually run. A key that is not a level of this
+        // flavor at all, which is what switching agents does, takes the
+        // ordinary default path.
+        const stranded = !!draft.effortLevel
+            && !effortLevels.some((level) => level.key === draft.effortLevel)
+            && effortPickerLevels.some((level) => level.key === draft.effortLevel);
+        if (stranded) {
+            const highest = effortLevels[effortLevels.length - 1].key;
+            setEffortIndex(effortLevels.length - 1);
+            draft.setEffortLevel(highest);
+            return;
+        }
         setEffortIndex(findPreferredModeIndex(effortLevels, [
             draft.effortLevel,
             effectiveEffortDefault,
         ]));
-    }, [draft.effortLevel, effectiveEffortDefault, currentModelKey, effortLevels]);
+    }, [draft.effortLevel, draft.setEffortLevel, effectiveEffortDefault, currentModelKey, effortLevels, effortPickerLevels]);
 
     // The reference keeps the context controls visible while the keyboard is
     // open. Preserve that on mobile and let users collapse them explicitly.
@@ -1240,7 +1272,7 @@ function NewSessionScreen() {
             case 'model':
                 return { title: 'Model', items: getModePickerItems(modelModes), selectedKey: currentModelKey, searchPlaceholder: 'search models...' };
             case 'effort':
-                return { title: 'Effort', items: getModePickerItems(effortLevels), selectedKey: currentEffort?.key ?? null, searchPlaceholder: 'search efforts...' };
+                return { title: 'Effort', items: getModePickerItems(effortPickerLevels), selectedKey: currentEffort?.key ?? null, searchPlaceholder: 'search efforts...' };
             case 'permission':
                 return { title: 'Permissions', items: getModePickerItems(permissionModes), selectedKey: currentPermission?.key ?? null, searchPlaceholder: 'search permissions...' };
             default:
@@ -1252,7 +1284,7 @@ function NewSessionScreen() {
         currentEffort?.key,
         currentModelKey,
         currentPermission?.key,
-        effortLevels,
+        effortPickerLevels,
         machineItems,
         selectedMachineKey,
         modelModes,
@@ -1276,7 +1308,7 @@ function NewSessionScreen() {
             case 'effort':
                 return {
                     title: t('agentInput.effort.title'),
-                    items: getModePickerItems(effortLevels),
+                    items: getModePickerItems(effortPickerLevels),
                     selectedKey: currentEffort?.key ?? null,
                 };
             case 'permission':
@@ -1290,7 +1322,7 @@ function NewSessionScreen() {
             default:
                 return null;
         }
-    }, [composerSettingsPage, currentEffort?.key, currentModelKey, currentPermission?.key, effortLevels, modelModes, permissionModes, selectedAgent]);
+    }, [composerSettingsPage, currentEffort?.key, currentModelKey, currentPermission?.key, effortPickerLevels, modelModes, permissionModes, selectedAgent]);
 
     const handlePickerSelect = React.useCallback((key: string) => {
         switch (activePicker) {

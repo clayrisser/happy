@@ -496,6 +496,49 @@ function effortLevels(keys: readonly string[]): EffortLevel[] {
 // `max` on a model without it. There is no `off`: Claude's floor is `low`.
 const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max', 'ultracode'] as const;
 
+// The scale above is per SDK. The CEILING is per model, and this is the one
+// place that fact lives (DROVE-101).
+//
+// Source: Claude Code's model-config documentation, which gates `ultracode` on
+// an xhigh-capable model with workflows and names Fable 5, Sonnet 5, Opus 4.8,
+// Opus 4.7 and Opus 4.6. Opus 5 is not one of them, in any variant. Offering it
+// there is worse than it sounds: Claude Code downgrades instead of erroring, so
+// the pane runs xhigh, DROVE-77's pane-wins echo snaps the pill back, and it
+// reads as the app refusing the pick.
+//
+// One entry per model whose ceiling is known. A model that is NOT listed keeps
+// the whole scale: a table that has gone stale should not cripple a model that
+// shipped after it.
+const CLAUDE_ULTRACODE_BY_MODEL: Record<string, boolean> = {
+    'claude-fable-5': true,
+    'claude-sonnet-5': true,
+    'claude-opus-4-8': true,
+    'claude-opus-4-7': true,
+    'claude-opus-4-6': true,
+    'claude-opus-5': false,
+};
+
+// Why a level is out of reach, for the disabled row that says so. Keyed by
+// effort so a second gated level gets its own line rather than this one.
+const CLAUDE_EFFORT_REQUIREMENT: Record<string, string> = {
+    ultracode: 'needs Fable 5, Sonnet 5 or Opus 4.8',
+};
+
+// `claude-opus-5[1m]` is the 1M-context variant of `claude-opus-5`, not a
+// different model, so the bracket comes off before the table is asked.
+function claudeModelBaseKey(modelKey: string | null | undefined): string {
+    if (!modelKey) return '';
+    const bracket = modelKey.indexOf('[');
+    return bracket > 0 ? modelKey.slice(0, bracket) : modelKey;
+}
+
+function claudeEffortKeysForModel(modelKey?: string | null): readonly string[] {
+    if (CLAUDE_ULTRACODE_BY_MODEL[claudeModelBaseKey(modelKey)] === false) {
+        return CLAUDE_EFFORTS.filter((key) => key !== 'ultracode');
+    }
+    return CLAUDE_EFFORTS;
+}
+
 // Exactly what each model publishes in Codex's own registry, in its order
 // (codex-rs/models-manager/models.json, min client 0.144). This really is
 // per-model: sol and terra reach `ultra`, luna stops at `max`. `ultra` is
@@ -511,6 +554,36 @@ const CODEX_EFFORTS_FALLBACK = ['low', 'medium', 'high', 'xhigh'] as const;
 
 export function getClaudeEffortLevels(): EffortLevel[] {
     return effortLevels(CLAUDE_EFFORTS);
+}
+
+/**
+ * The Claude effort levels one model can actually reach.
+ *
+ * Pure: a model key in, its levels out, no metadata and no session. An unknown
+ * or unrecognised key keeps the full scale rather than being trimmed by a table
+ * that has not heard of it yet.
+ */
+export function getClaudeEffortLevelsForModel(modelKey?: string | null): EffortLevel[] {
+    return effortLevels(claudeEffortKeysForModel(modelKey));
+}
+
+/**
+ * The levels this model cannot reach, as disabled rows carrying the reason.
+ *
+ * A picker that can render a disabled row appends these, so `ultracode` on
+ * Opus 5 is visibly out of reach with the models that do support it named,
+ * rather than quietly missing from a list that had it a moment ago.
+ */
+export function getUnreachableClaudeEffortLevels(modelKey?: string | null): EffortLevel[] {
+    const reachable = new Set(claudeEffortKeysForModel(modelKey));
+    return CLAUDE_EFFORTS
+        .filter((key) => !reachable.has(key))
+        .map((key) => ({
+            key,
+            name: effortDisplayName(key),
+            description: CLAUDE_EFFORT_REQUIREMENT[key] ?? 'not available on this model',
+            disabled: true,
+        }));
 }
 
 /**
@@ -546,18 +619,52 @@ export function getEffortLevelsForModel(
             name: effortDisplayName(level),
         }));
     }
-    // Claude's effort scale is a property of the SDK rather than of the model:
-    // one union for every model, and a level the chosen model cannot reach is
-    // silently downgraded rather than rejected (sdk.d.ts:174). Codex is the
-    // opposite — each model publishes its own supported levels — so it is asked
-    // per model.
+    // Claude's effort SCALE is a property of the SDK: one union for every
+    // model, and a level inside a model's range that it does not run is
+    // silently downgraded rather than rejected (sdk.d.ts:174). The CEILING is
+    // a property of the model, so the scale is trimmed to what this one can
+    // reach (CLAUDE_ULTRACODE_BY_MODEL). Codex publishes its levels per model
+    // too, so it is asked the same way.
     if (flavor === 'claude') {
-        return getClaudeEffortLevels();
+        return getClaudeEffortLevelsForModel(modelKey);
     }
     if (flavor === 'codex') {
         return getCodexEffortLevels(modelKey);
     }
     return [];
+}
+
+/**
+ * What an effort picker lists: the reachable levels, then any level this model
+ * cannot reach as a disabled row with its reason. Selection paths keep using
+ * getEffortLevelsForModel, so a disabled row is never resolved to or defaulted
+ * onto.
+ */
+export function getEffortLevelsForPicker(
+    flavor: AgentFlavor,
+    modelKey: string,
+    metadata?: Metadata | null,
+): EffortLevel[] {
+    const reachable = getEffortLevelsForModel(flavor, modelKey, metadata);
+    if (flavor !== 'claude' || isRigMetadataV1(metadata) || reachable.length === 0) {
+        return reachable;
+    }
+    return [...reachable, ...getUnreachableClaudeEffortLevels(modelKey)];
+}
+
+/**
+ * The top of what this model can run. Where an effort stops being reachable
+ * because the model changed, this is where it lands: the nearest thing to what
+ * was asked for, rather than sticking at an impossible value or dropping to the
+ * bottom of the scale.
+ */
+export function getHighestReachableEffortKey(
+    flavor: AgentFlavor,
+    modelKey: string,
+    metadata?: Metadata | null,
+): string | null {
+    const levels = getEffortLevelsForModel(flavor, modelKey, metadata);
+    return levels.length > 0 ? levels[levels.length - 1].key : null;
 }
 
 /**

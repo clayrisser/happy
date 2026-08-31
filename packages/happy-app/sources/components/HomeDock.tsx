@@ -44,6 +44,7 @@ import {
 import type { Session } from '@/sync/storageTypes';
 import {
     getEffortLevelsForModel,
+    getEffortLevelsForPicker,
     getHardcodedModelModes,
     getHardcodedPermissionModes,
     filterPermissionModesForCli,
@@ -926,6 +927,15 @@ export const HomeDock = React.memo(({
             : getEffortLevelsForModel(agentType, currentModel?.key ?? 'default'),
         [agentType, currentModel?.key, rigCreation],
     );
+    // The sheet lists one row more than the model can run: a level out of reach
+    // on this model stays, disabled, with the models that do support it
+    // (DROVE-101). Selection below stays on effortOptions.
+    const effortPickerOptions = React.useMemo(
+        () => rigCreation
+            ? effortOptions
+            : getEffortLevelsForPicker(agentType, currentModel?.key ?? 'default'),
+        [agentType, currentModel?.key, rigCreation, effortOptions],
+    );
     const currentEffortDefault = rigCreation?.defaultEffortForModel(currentModel?.key)
         ?? defaults.effortLevel;
     const currentEffort = resolveOption(effortOptions, [effortLevel, currentEffortDefault]);
@@ -1287,7 +1297,15 @@ export const HomeDock = React.memo(({
         if (setting === 'permission') {
             return { title: t('agentInput.permissionMode.title'), options: permissionOptions, selectedKey: currentPermission?.key, onSelect: setPermissionMode };
         }
-        return { title: t('agentInput.effort.title'), options: effortOptions, selectedKey: currentEffort?.key, onSelect: setEffortLevel };
+        return {
+            title: t('agentInput.effort.title'),
+            options: effortPickerOptions,
+            selectedKey: currentEffort?.key,
+            onSelect: (key: string) => {
+                if (!effortOptions.some((option) => option.key === key)) return;
+                setEffortLevel(key);
+            },
+        };
     };
 
     const agentSettingsGroups: NativeSettingsMenuGroup[] = agentRows.map((row) => {
