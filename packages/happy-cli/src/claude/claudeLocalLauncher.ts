@@ -136,11 +136,14 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
         // reads. Only for a pane session — a paneless local run has no
         // terminal for anyone to type `/model` into.
         onRunObserved: process.env.TMUX_PANE
-            ? (run) => session.client.updateMetadata((metadata) => ({
-                ...metadata,
-                paneModel: run.model,
-                paneEffort: run.effort,
-            }))
+            ? (run) => {
+                observedRun = { model: run.model, effort: run.effort };
+                session.client.updateMetadata((metadata) => ({
+                    ...metadata,
+                    paneModel: run.model,
+                    paneEffort: run.effort,
+                }));
+            }
             : undefined,
         // DROVE-36: the same half, for the permission mode. Clay had Yolo
         // selected in the composer while the pane asked for permission on
@@ -406,11 +409,13 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
         if (gap === -1) return;
         const value = command.slice(gap + 1);
         if (command.startsWith('/model ')) {
+            observedRun = { ...observedRun, model: value === 'default' ? null : value };
             session.client.updateMetadata((metadata) => ({
                 ...metadata,
                 paneModel: value === 'default' ? null : value,
             }));
         } else if (command.startsWith('/effort ')) {
+            observedRun = { ...observedRun, effort: value === 'auto' ? null : value };
             session.client.updateMetadata((metadata) => ({
                 ...metadata,
                 paneEffort: value === 'auto' ? null : value,
@@ -486,6 +491,9 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
      * toggle has no memory: what matters is where the pane is now, not what was
      * asked for last time.
      */
+    /** What the pane is observed to be running, from the transcript or a slash command it took (DROVE-77). */
+    let observedRun: { model?: string | null; effort?: string | null } = {};
+
     let requestedRemoteControl: boolean | null = tmuxPane
         ? parseRemoteControlRequest(session.client.getMetadata()?.remoteControl)
         : null;
@@ -518,6 +526,23 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
         // toggle leaves `commands` empty and must still be acted on.
         requestedRemoteControl = parseRemoteControlRequest(metadata.remoteControl);
         reconcileRemoteControl();
+        // DROVE-77: a pick that names what the pane is ALREADY running is not
+        // a change, it is Clay's own terminal command coming back. He typed
+        // /model and /effort at the keyboard, the scanner reported the run,
+        // the app wrote the same values into modelMode/effortLevel, and the
+        // metadata event queued `/model claude-fable-5` and `/effort ultracode`
+        // to be typed back into his prompt. Only the config-dir bug this
+        // commit also fixes kept the idle gate from ever letting them through.
+        // Compared against the OBSERVED run, not the previous request, and a
+        // command already waiting for that value is withdrawn too.
+        if (next.modelMode !== undefined && next.modelMode === (observedRun.model ?? null)) {
+            paneCommands.cancel('/model');
+            next.modelMode = paneSelection.modelMode;
+        }
+        if (next.effortLevel !== undefined && next.effortLevel === (observedRun.effort ?? null)) {
+            paneCommands.cancel('/effort');
+            next.effortLevel = paneSelection.effortLevel;
+        }
         const commands = paneCommandsForSelection(paneSelection, next);
         if (commands.length === 0) return;
         // Record the intent even if the pane is busy. The queue owns the

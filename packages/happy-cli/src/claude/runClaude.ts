@@ -1233,6 +1233,22 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
         // `drover sessions` can say a paneless row is a session started from
         // the phone rather than one whose pane simply could not be resolved.
         claudeEnvVars: {
+            // CLAUDE_CONFIG_DIR (DROVE-77): seven readers take the account's
+            // config dir from THIS record and fall back to ~/.claude when it is
+            // absent — findInbox, the pane idle gate, the scanner, apply.ts.
+            // A flip writes it (apply.ts), so a flipped session was fine, and
+            // until DROVE-21 every fresh start was ambient, so the miss was
+            // invisible. DROVE-21 now stamps every start with the account it
+            // was last on, and the first stamped start showed the hole at
+            // once: claude announced its socket under jamrizzi/sessions/,
+            // findInbox read ~/.claude/sessions/, and five phone messages in
+            // two minutes came back "did NOT reach the terminal". Seeded from
+            // the process env, which is what claude itself was launched with.
+            // Unset stays unset — that is the ambient spelling every reader
+            // already understands — never coerced to '' or to ~/.claude.
+            ...(process.env.CLAUDE_CONFIG_DIR !== undefined
+                ? { CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR }
+                : {}),
             ...(options.claudeEnvVars ?? {}),
             DROVER_WRAPPER_PID: String(process.pid),
             DROVER_ORIGIN: options.startedBy === 'daemon' ? 'daemon' : 'terminal',

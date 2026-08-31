@@ -718,6 +718,74 @@ describe('claudeLocalLauncher in a tmux pane', () => {
             await launcher;
         });
 
+        it('does not type a pick the pane is already running back into the pane (DROVE-77)', async () => {
+            // Clay typed /model and /effort at the keyboard. The scanner
+            // reported the run, the app wrote the same values into
+            // modelMode/effortLevel, and the metadata event came back round
+            // and queued `/model claude-fable-5` and `/effort ultracode` to be
+            // typed into his prompt. The pick equals the OBSERVED run, so it
+            // is not a change and nothing may reach the pane.
+            const runs = trackRuns();
+            let scannerOptions: ScannerOptions | undefined;
+            mockCreateSessionScanner.mockImplementation(async (opts: ScannerOptions) => {
+                scannerOptions = opts;
+                return { onNewSession: vi.fn(), cleanup: vi.fn(async () => {}) };
+            });
+            const { session, emitMetadata } = paneSession({});
+            mockInjectIntoPane.mockResolvedValue(true);
+            mockPaneIsIdle.mockResolvedValue(true);
+
+            const launcher = claudeLocalLauncher(session as any);
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+            await vi.waitFor(() => expect(scannerOptions?.onRunObserved).toBeTypeOf('function'));
+
+            scannerOptions!.onRunObserved!({ model: 'claude-fable-5', effort: 'ultracode' });
+            emitMetadata({ modelMode: 'claude-fable-5', effortLevel: 'ultracode' });
+            await new Promise((r) => setTimeout(r, 80));
+            expect(mockInjectIntoPane).not.toHaveBeenCalled();
+
+            // A REAL change still goes through, so the guard is not a mute.
+            emitMetadata({ modelMode: 'claude-sonnet-5' });
+            await vi.waitFor(() => expect(mockInjectIntoPane).toHaveBeenCalledWith(
+                pane, '/model claude-sonnet-5', { submit: true },
+            ));
+
+            runs[0].run.resolve();
+            await launcher;
+        });
+
+        it('withdraws a held command once the pane is seen running that value (DROVE-77)', async () => {
+            // Held while the pane is busy, then Clay types the same /model
+            // himself. When the prompt opens, the stale command must not be
+            // typed on top of what he just did.
+            const runs = trackRuns();
+            let scannerOptions: ScannerOptions | undefined;
+            mockCreateSessionScanner.mockImplementation(async (opts: ScannerOptions) => {
+                scannerOptions = opts;
+                return { onNewSession: vi.fn(), cleanup: vi.fn(async () => {}) };
+            });
+            const { session, emitMetadata } = paneSession({});
+            mockInjectIntoPane.mockResolvedValue(true);
+            mockPaneIsIdle.mockResolvedValue(false);
+
+            const launcher = claudeLocalLauncher(session as any);
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+            await vi.waitFor(() => expect(scannerOptions?.onRunObserved).toBeTypeOf('function'));
+
+            emitMetadata({ modelMode: 'claude-sonnet-5' });
+            await new Promise((r) => setTimeout(r, 50));
+            expect(mockInjectIntoPane).not.toHaveBeenCalled();
+
+            scannerOptions!.onRunObserved!({ model: 'claude-sonnet-5', effort: null });
+            emitMetadata({ modelMode: 'claude-sonnet-5' });
+            mockPaneIsIdle.mockResolvedValue(true);
+            await new Promise((r) => setTimeout(r, 300));
+            expect(mockInjectIntoPane).not.toHaveBeenCalled();
+
+            runs[0].run.resolve();
+            await launcher;
+        });
+
         it('types nothing when the metadata write did not change the pick', async () => {
             const runs = trackRuns();
             const { session, emitMetadata } = paneSession({ modelMode: 'claude-opus-5' });
