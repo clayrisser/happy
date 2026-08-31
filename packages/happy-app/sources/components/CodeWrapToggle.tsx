@@ -2,6 +2,22 @@ import * as React from 'react';
 import { Platform, StyleProp, StyleSheet, View, ViewStyle } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { Ionicons } from '@expo/vector-icons';
+import { type DoubleTapState, doubleTapWindowMs, pressDoubleTap } from './doubleTapPress';
+
+/**
+ * Two presses on anything that only has a single-press callback: the web's
+ * onClick here, and a sentence run's `Text.onPress` in MarkdownView
+ * (DROVE-235). One pending tap per element, so two taps on two different
+ * sentences are two first taps and neither fires.
+ */
+export function useDoubleTapPress(onDoubleTap: () => void): () => void {
+    const pendingSince = React.useRef<DoubleTapState>(null);
+    return React.useCallback(() => {
+        const next = pressDoubleTap(pendingSince.current, Date.now());
+        pendingSince.current = next.pendingSince;
+        if (next.fired) onDoubleTap();
+    }, [onDoubleTap]);
+}
 
 /**
  * Double-tap to toggle soft wrap on a monospace card (DROVE-95, wrapping by
@@ -13,8 +29,6 @@ import { Ionicons } from '@expo/vector-icons';
  * because react-native-web drops onDoubleClick and MarkdownView already keeps
  * gesture-handler off the web path for text selection's sake.
  */
-const doubleClickWindowMs = 350;
-
 interface DoubleTapProps {
     onDoubleTap: () => void;
     style?: StyleProp<ViewStyle>;
@@ -23,25 +37,16 @@ interface DoubleTapProps {
 
 export function DoubleTap(props: DoubleTapProps) {
     const { onDoubleTap } = props;
-    const lastClickAt = React.useRef(0);
+    const onClick = useDoubleTapPress(onDoubleTap);
     const gesture = React.useMemo(() => Gesture.Tap()
         .numberOfTaps(2)
-        .maxDelay(doubleClickWindowMs)
+        .maxDelay(doubleTapWindowMs)
         .onStart(() => {
             onDoubleTap();
         })
         .runOnJS(true), [onDoubleTap]);
 
     if (Platform.OS === 'web') {
-        const onClick = () => {
-            const now = Date.now();
-            if (now - lastClickAt.current < doubleClickWindowMs) {
-                lastClickAt.current = 0;
-                onDoubleTap();
-            } else {
-                lastClickAt.current = now;
-            }
-        };
         return (
             <View style={props.style} {...({ onClick } as any)}>
                 {props.children}

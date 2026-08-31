@@ -217,13 +217,12 @@ function AgentTextBlock(props: {
   // changes, and read above the early return below because hooks are hooks.
   const spokenSentence = useSpokenSentence(props.message.id);
 
-  // Tap a sentence and reading starts there (DROVE-146, DROVE-163). The one
-  // way the voice is steered now that scrolling does not touch it, and it
-  // resolves to the sentence under the finger rather than to the top of this
-  // block. A SINGLE tap: a single tap on prose meant nothing before, the
-  // gestures around it are separated by target rather than by tap count, and
-  // hitting the same sentence twice inside the double-tap window is harder
-  // than hitting it once. The reasoning is written out in readAloudTap.ts.
+  // Double tap a sentence and reading starts there (DROVE-146, DROVE-163,
+  // DROVE-235). The one way the voice is steered now that scrolling does not
+  // touch it, and it resolves to the sentence under the finger rather than to
+  // the top of this block. TWO taps, because one is what a finger does by
+  // accident on body text. The reasoning is written out in readAloudTap.ts,
+  // the counting in doubleTapPress.ts.
   //
   // On a SUBAGENT screen the same tap means the same thing and cannot take
   // the same route (DROVE-195). Every row there carries the session's id, so
@@ -280,12 +279,15 @@ function AgentTextBlock(props: {
 
   // The tap sits on the PROSE itself, one sentence at a time, and never on the
   // code and terminal cards, which keep their own double tap for wrapping
-  // (DROVE-95, DROVE-149) and are rendered by their own components. So the two
-  // gestures are told apart by what was touched rather than by how many times.
+  // (DROVE-95, DROVE-149) and are rendered by their own components. Both are
+  // two taps now, and they still cannot race: MarkdownView hands a code block
+  // no sentence press, so a fence holds no sentence run for a finger to land
+  // on. The two are told apart by what was touched, not by how many times.
   //
   // DROVE-146's block-level double tap is gone rather than kept alongside
-  // this: two taps on a sentence would have seeked to it and then been undone
-  // by a third seek to the top of the block.
+  // this, which is what leaves exactly one route to the playhead: two taps on
+  // a sentence would have seeked to it and then been undone by a third seek to
+  // the top of the block.
   return (
     <View style={styles.agentMessageContainer}>
       {copyText !== null ? (
