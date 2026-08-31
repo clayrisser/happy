@@ -141,6 +141,65 @@ struct DroverSession: Codable, Identifiable, Equatable, Hashable {
     /// elapsed time baked in by the phone would be up to a minute wrong. The
     /// wrist counts up from this itself with `Text(_:style:.timer)`.
     let statusSince: Date?
+    /// The phone's own resolved session state (DROVE-129).
+    ///
+    /// Optional twice over: a phone that predates the key sends nothing, and a
+    /// synthesized decoder forgives a missing key only for an Optional. Nil
+    /// falls back to `active`, which is what this screen read before.
+    ///
+    /// The wrist does not RESOLVE this. `resolveSessionState` on the phone
+    /// decides it — permission before question before thinking — and the wrist
+    /// draws the answer, so the dot on a wrist and the dot in the phone's list
+    /// cannot disagree about the same session. `SessionState` below is the only
+    /// place the words and colours live; sessionStateWire.spec.ts pins it to
+    /// the phone's union so a new state cannot land on one side alone.
+    let state: String?
+
+    var resolvedState: SessionState { SessionState(rawValue: state ?? "") ?? (active ? .thinking : .disconnected) }
+}
+
+/// What the phone says a session is doing, in the phone's own words
+/// (DROVE-129).
+///
+/// The raw values are `SessionState` in sources/sync/sessionState.ts and the
+/// labels are the phone's own status strings, so the wrist is the phone folded
+/// smaller rather than a second vocabulary. `thinking` is "working" because
+/// that is what the phone's live-status line calls a busy turn it cannot name;
+/// the phone's chat header picks a random word from a list instead, and a word
+/// that changes every publish is not something to put on a wire.
+enum SessionState: String, CaseIterable {
+    case disconnected
+    case waiting
+    case thinking
+    case permissionRequired = "permission_required"
+    case inputRequired = "input_required"
+
+    /// The phone's own string for this state. Kept identical on purpose.
+    var label: String {
+        switch self {
+        case .disconnected: return "offline"
+        case .waiting: return "online"
+        case .thinking: return "working"
+        case .permissionRequired: return "permission required"
+        case .inputRequired: return "waiting for your answer"
+        }
+    }
+
+    /// The phone's dot colour, as a hex string so this file stays SwiftUI-free
+    /// and `watch/scripts/test-shared.sh` can still compile it on the Mac.
+    /// Values are useSessionStatus's, character for character.
+    var tintHex: String {
+        switch self {
+        case .disconnected: return "999999"
+        case .waiting: return "34C759"
+        case .thinking: return "007AFF"
+        case .permissionRequired, .inputRequired: return "FF9500"
+        }
+    }
+
+    /// Whether this state means the session is waiting on a HUMAN. The wrist
+    /// leads with those, the same way the phone's list does.
+    var needsYou: Bool { self == .permissionRequired || self == .inputRequired }
 }
 
 /// What the wrist's last attempt to get a current snapshot did (DROVE-22).

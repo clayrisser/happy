@@ -21,6 +21,9 @@ import { newGateEntries, togglesFromSettings, wakeDeserved } from './droverChann
 import { demoLog, isDroverDemoId } from './droverDemo';
 import { isSessionArchived } from './sessionArchive';
 import { liveStatusSince, liveStatusWatchLine } from '@/utils/liveStatus';
+import { sessionDisplayTitle } from '@/utils/sessionTitle';
+import { currentDroverAccountRow } from '@/utils/droverUsage';
+import { resolveSessionState } from './sessionState';
 import {
     addDroverAnswerListener,
     addDroverFlipListener,
@@ -164,11 +167,33 @@ export function collectSessions(): DroverSession[] {
         // sat among the live ones.
         if (isSessionArchived(session)) continue;
         const path = metadata.path ?? '';
-        const title = path.split('/').filter(Boolean).pop() || 'session';
-        const account = metadata.droverAccount;
+        // The name the session was GIVEN, through the phone's own derivation
+        // (DROVE-127). This line used to be `path.split('/').pop()`, which is
+        // why Clay's wrist said `cattle-drover` while the phone header said
+        // `DROVER` for the same session. sessionTitle.ts owns the rule and
+        // still falls back to the basename when a session has no name, so the
+        // wrist loses nothing and the two cannot answer differently.
+        const title = sessionDisplayTitle(session);
+        // The account the PHONE says this session is on (DROVE-127). Not the
+        // `droverAccount` stamp alone: the CLI marks the live account
+        // `current` on metadata.droverUsage, and the info screen and the
+        // composer popup both resolve through this, so a wrist reading the
+        // older stamp printed the account the session used to be on.
+        const account = currentDroverAccountRow(metadata.droverUsage, metadata.droverAccount)?.name;
         // Running, not total: total counts the ones already finished, and the
         // wrist question is "how much is out right now".
         const subagents = metadata.activity?.subagents?.running;
+        // The phone's own state precedence, resolved here and SENT, because
+        // the wrist cannot import it (DROVE-129). The watch used to answer
+        // "running"/"idle" off `active` alone, which is whether the process is
+        // alive — a different question from the one the phone's list answers
+        // with its dot, and one that says nothing about a session sitting on a
+        // permission prompt.
+        const state = resolveSessionState({
+            agentState: session.agentState,
+            thinking: !!session.thinking,
+            isOnline: session.presence === 'online',
+        });
         // What it is DOING, not just that it is on (DROVE-54). Absent while
         // the session is idle, and absent again once the snapshot goes stale,
         // so the wrist never shows a timer for a turn that ended.
@@ -184,6 +209,7 @@ export function collectSessions(): DroverSession[] {
             ...(typeof subagents === 'number' ? { subagents } : {}),
             ...(status ? { status } : {}),
             ...(statusSince ? { statusSince } : {}),
+            state,
         });
     }
     return out;
@@ -233,7 +259,8 @@ function sameSessionSet(a: DroverSession[], b: DroverSession[]): boolean {
     // dressed as a live one. Neither carries an elapsed time, so
     // they change on a transition and not on a tick.
     const key = (s: DroverSession) =>
-        `${s.id}|${s.account ?? ''}|${s.active}|${s.subagents ?? ''}|${s.status ?? ''}|${s.statusSince ?? ''}`;
+        `${s.id}|${s.title}|${s.account ?? ''}|${s.active}|${s.state ?? ''}`
+        + `|${s.subagents ?? ''}|${s.status ?? ''}|${s.statusSince ?? ''}`;
     const keys = new Set(a.map(key));
     return b.every((s) => keys.has(key(s)));
 }

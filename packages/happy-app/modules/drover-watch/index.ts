@@ -130,6 +130,20 @@ export interface DroverSession {
     status?: string;
     /** ISO-8601 start of the turn `status` describes. */
     statusSince?: string;
+    /**
+     * The phone's own resolved session state (DROVE-129), one of
+     * SessionState's five words: `disconnected`, `waiting`, `thinking`,
+     * `permission_required`, `input_required`.
+     *
+     * Sent because the wrist cannot import `resolveSessionState`. The watch
+     * used to answer "running"/"idle" off `active` alone, which is whether the
+     * PROCESS is alive — a different question from the one the phone's list
+     * answers with its dot, and one that says nothing about a session sitting
+     * on a permission prompt. `active` still rides along for a watch binary
+     * that predates this key; the two are never in conflict because both come
+     * off the same publish.
+     */
+    state?: string;
 }
 
 /**
