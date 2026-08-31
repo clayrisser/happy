@@ -75,8 +75,13 @@ describe('a burst of tool calls', () => {
         // At the burst clock (50ms) and a 28ms tick, twenty land almost
         // back to back. What matters is that they are all out well before the
         // staleness rule would start eating them.
+        //
+        // The heartbeat is filtered out rather than asserted about: it is the
+        // other kind of sound and it keeps its own cadence right through a
+        // burst (DROVE-197). This test is about the earcons.
         drain(1_500);
-        expect(played).toEqual(Array.from({ length: 20 }, () => 'toolCall'));
+        expect(played.filter((id) => id === 'toolCall'))
+            .toEqual(Array.from({ length: 20 }, () => 'toolCall'));
         expect(mixer.dropped).toBe(0);
         expect(cueDurationMs(cueSpec('toolCall'))).toBeLessThan(50);
     });
