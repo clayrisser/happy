@@ -1255,6 +1255,7 @@ export function SessionViewLoaded({
                 onTalkPressIn={voiceComposer.onTalkPressIn}
                 onTalkPressOut={voiceComposer.onTalkPressOut}
                 onTalkSlide={voiceComposer.onTalkSlide}
+                onTalkTap={voiceComposer.onTalkTap}
                 onTalkCancel={voiceComposer.onTalkCancel}
                 talkState={voiceComposer.talkState}
                 talkCancelArmed={voiceComposer.talkCancelArmed}

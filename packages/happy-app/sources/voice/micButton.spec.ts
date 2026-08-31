@@ -198,6 +198,99 @@ describe('reduceMicGesture', () => {
         });
     });
 
+    /**
+     * DROVE-210. DROVE-140's fix was correct and shipped, and it still did not
+     * reach the phone, because the composer called the handlers through an
+     * arrow that took no arguments and so never forwarded `touchAt`. Nothing
+     * in the reducer can notice that: it simply sees a press with no touch
+     * clock and falls back to the wall clock, which is the JS-thread interval
+     * DROVE-140 exists to stop measuring.
+     *
+     * These two cases are the same finger. They differ only in whether the
+     * timestamp survived the trip, and they end in opposite places, which is
+     * the whole argument for talkButtonWiring.ts passing the handlers by
+     * reference rather than wrapping them.
+     */
+    describe('the touch clock has to reach the reducer', () => {
+        // 150 ms of finger. 620 ms of JS thread, because press-in interrupts
+        // read-aloud, starts the recogniser and mounts the banner.
+        const fingerDownAt = 5000;
+        const fingerUpAt = 5150;
+        const handlerRanAt = 1000;
+        const liftHandlerRanAt = 1620;
+
+        it('latches when the timestamps are forwarded', () => {
+            const run = drive([
+                { type: 'pressIn', at: handlerRanAt, touchAt: fingerDownAt },
+                { type: 'pressOut', at: liftHandlerRanAt, touchAt: fingerUpAt },
+            ]);
+            expect(run.gesture.state).toBe('latched');
+            expect(outcome(run.effects)).toEqual(['open', 'latch']);
+        });
+
+        it('sends and closes the mic when they are dropped on the way', () => {
+            // The same tap, with the arrow that forgot the argument. This is
+            // what Clay was holding: one press, mic shut on the lift, words
+            // gone to the agent.
+            const run = drive([
+                { type: 'pressIn', at: handlerRanAt },
+                { type: 'pressOut', at: liftHandlerRanAt },
+            ]);
+            expect(run.gesture.state).toBe('idle');
+            expect(outcome(run.effects)).toEqual(['open', 'send']);
+        });
+
+        it('the hold timer is the second route, not the only one', () => {
+            // A jammed thread can swallow the timer as easily as the lift
+            // handler, so the touch clock still has to be right. With it, a
+            // tap that never got a holdConfirm latches.
+            const run = drive([
+                { type: 'pressIn', at: handlerRanAt, touchAt: fingerDownAt },
+                { type: 'pressOut', at: liftHandlerRanAt, touchAt: fingerUpAt },
+            ]);
+            expect(run.effects).not.toContain('send');
+        });
+    });
+
+    /**
+     * The composer's PRIMARY button (DROVE-210). It is a plain `onPress`: one
+     * callback, on the lift, with no press-in, no duration and no
+     * coordinates. So a tap on it is fed here as a press and a lift at the
+     * same instant, and the reducer needs no new event type to handle it.
+     *
+     * That is also why the two controls are not identical and cannot be: zero
+     * elapsed can only ever latch, so push-to-talk and slide-to-cancel stay on
+     * the capsule's TalkButton, which owns the whole touch stream.
+     */
+    describe('one tap on a control with no touch stream', () => {
+        it('latches the mic open', () => {
+            const run = drive([press(9000), lift(9000)]);
+            expect(run.gesture.state).toBe('latched');
+            expect(outcome(run.effects)).toEqual(['open', 'latch']);
+        });
+
+        it('a second one stops it with the words unsent', () => {
+            const run = drive([press(9000), lift(9000), press(9600), lift(9600)]);
+            expect(run.gesture.state).toBe('idle');
+            expect(outcome(run.effects)).toEqual(['open', 'latch', 'stop']);
+            expect(run.effects).not.toContain('send');
+        });
+
+        it('can never send, however long the finger was actually down', () => {
+            // The button reports nothing about duration, so there is no
+            // elapsed time for a hold to be read out of.
+            const run = drive([press(9000), lift(9000)]);
+            expect(run.effects).not.toContain('send');
+            expect(run.gesture.confirmed).toBe(false);
+        });
+
+        it('stops a latch the capsule opened, because it is one capture', () => {
+            const run = drive([press(0), lift(120), press(9000), lift(9000)]);
+            expect(run.states).toEqual(['held', 'latched', 'latched', 'idle']);
+            expect(outcome(run.effects)).toEqual(['open', 'latch', 'stop']);
+        });
+    });
+
     describe('slide off to cancel', () => {
         it('arms the cancel while the finger is off, and ticks on each crossing', () => {
             const off = drive([press(0), slideOff]);
