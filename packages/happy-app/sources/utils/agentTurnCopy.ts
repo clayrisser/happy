@@ -45,3 +45,23 @@ export function buildAgentTurnCopyTextByMessageId(
 
     return result;
 }
+
+/**
+ * What a long press on one assistant block copies (DROVE-121).
+ *
+ * The copy glyph that used to sit under every reply is gone: it cost a line
+ * on every message and duplicated the hold gesture the rest of the transcript
+ * already uses. The capability moved onto that gesture, and it copies the
+ * same thing the glyph did wherever the glyph existed, which is the whole
+ * turn on its final block. Every other block, including one in a turn still
+ * being written, copies itself rather than nothing.
+ */
+export function agentLongPressCopyText(
+    turnCopyText: string | undefined,
+    messageText: string,
+): string | null {
+    const turn = turnCopyText?.trim();
+    if (turn) return turn;
+    const own = messageText.trim();
+    return own ? own : null;
+}

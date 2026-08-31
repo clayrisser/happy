@@ -528,6 +528,84 @@ describe('ReadAloudReader', () => {
             expect(talk.skipCount).toBe(1);
         });
     });
+
+    /**
+     * Sending a message must not open a hole (DROVE-122). DROVE-108's cut is
+     * right, it just used to fire a model's worth of latency too early: at the
+     * moment the user's text lands there is nothing of the answer to move to.
+     */
+    describe('no silent gap when a message is sent (DROVE-122)', () => {
+        it('keeps reading the old reply while the new turn has nothing to say yet', async () => {
+            reader.onMessages('s1', [agentText('m1', sentences('Old', 4).join(' '))]);
+            await settle();
+            expect(engine.spoken).toEqual(['Old sentence 1.']);
+
+            // Send, then the user's own message lands in the transcript and
+            // opens the turn. Neither is a reason to stop talking.
+            reader.userSent();
+            reader.onMessages('s1', [userText('u1', 5)]);
+            await settle();
+            expect(engine.stops).toBe(0);
+            expect(engine.spoken).toEqual(['Old sentence 1.']);
+
+            engine.finishOne();
+            await settle();
+            expect(engine.spoken).toEqual(['Old sentence 1.', 'Old sentence 2.']);
+            expect(reader.skipCount).toBe(0);
+        });
+
+        it('cuts on the new turn\'s first speakable sentence, with one marker', async () => {
+            reader.onMessages('s1', [agentText('m1', sentences('Old', 4).join(' '))]);
+            await settle();
+            reader.userSent();
+            reader.onMessages('s1', [userText('u1', 5)]);
+            await settle();
+            expect(engine.spoken).toEqual(['Old sentence 1.']);
+
+            reader.onMessages('s1', [agentText('m2', 'New sentence 1. New sentence 2.', 6)]);
+            await settle();
+            // Cut mid-word, and the marker said exactly once.
+            expect(engine.stops).toBe(1);
+            expect(engine.spoken).toEqual(['Old sentence 1.', 'Skipping ahead.']);
+
+            engine.finishOne();
+            await settle();
+            engine.finishOne();
+            await settle();
+            expect(engine.spoken).toEqual([
+                'Old sentence 1.', 'Skipping ahead.',
+                'New sentence 1.', 'New sentence 2.',
+            ]);
+            expect(engine.spoken).not.toContain('Old sentence 2.');
+            expect(reader.skipCount).toBe(1);
+        });
+
+        it('rests rather than reading anything stale when the old reply drains first', async () => {
+            reader.onMessages('s1', [agentText('m1', 'Old sentence 1.')]);
+            await settle();
+            engine.finishOne();
+            await settle();
+            expect(engine.spoken).toEqual(['Old sentence 1.']);
+
+            reader.userSent();
+            reader.onMessages('s1', [userText('u1', 5)]);
+            await settle();
+            // Nothing left to say, so nothing is said, and no marker is owed.
+            expect(engine.spoken).toEqual(['Old sentence 1.']);
+
+            reader.onMessages('s1', [agentText('m2', 'New sentence 1.', 6)]);
+            await settle();
+            expect(engine.spoken).toEqual(['Old sentence 1.', 'New sentence 1.']);
+            expect(reader.skipCount).toBe(0);
+        });
+
+        it('still tells every capture that the message was sent', () => {
+            const heard: string[] = [];
+            reader.addInterruptListener((reason) => heard.push(reason));
+            reader.userSent();
+            expect(heard).toEqual(['sent']);
+        });
+    });
 });
 
 /**

@@ -32,6 +32,23 @@ import { stripToSpeakableProse } from './speakable';
  * And rather than cut at the first opportunity, a voice that is behind reads
  * a little faster; a cut loses information, a faster read does not.
  *
+ * DROVE-122 moved WHEN that last rule fires. Sending a message used to call
+ * interrupt('sent'), which stopped the voice dead at the moment the user's
+ * text landed. Nothing of the answer exists yet at that moment, so the phone
+ * went quiet for as long as the model took to start writing. `userSent()`
+ * replaces it: every capture still stops, because the dictation that produced
+ * the message is over, but reading carries on. The cut then happens where it
+ * already did, in `abandonTurnsBefore` off the back of `enqueue`, which is by
+ * construction the new turn's FIRST SPEAKABLE SENTENCE. One marker, as
+ * before. If the old reply drains first, the reader simply rests: there is
+ * nothing left to say and silence is then correct.
+ *
+ * Nothing new bounds how long that stale tail may run, on purpose. The
+ * backlog rules above already do it: past the threshold of unspoken audio the
+ * voice reads faster, and past twice it the tail is dropped outright (the
+ * numbers being too timid is DROVE-116, not a third rule). And the window is
+ * only ever as long as the model takes to produce one sentence.
+ *
  * DROVE-114 turned the private cursor into a PLAYHEAD. The queue is no longer
  * a queue that forgets what it said: every sentence stays in `timeline` and
  * `cursor` is a position in it, so reading can be moved backwards as well as
@@ -478,6 +495,26 @@ export class ReadAloudReader {
             this.started = false;
             void this.engine.stop();
         }
+        this.notifyInterrupted(reason);
+    }
+
+    /**
+     * The user sent a message (DROVE-122).
+     *
+     * Every capture stops, exactly as interrupt('sent') made it: the
+     * dictation that produced the message is over. Reading does NOT stop.
+     * At this instant the reply being asked for does not exist, so cutting
+     * here buys a silence as long as the model takes to start writing. The
+     * old reply keeps being read until the new turn's first speakable
+     * sentence arrives, and `abandonTurnsBefore` cuts it there with the one
+     * marker DROVE-108 established. If the old reply runs out first, the
+     * reader rests, which is the right kind of silence.
+     */
+    userSent(): void {
+        this.notifyInterrupted('sent');
+    }
+
+    private notifyInterrupted(reason: ReadAloudInterruption): void {
         for (const listener of this.interruptListeners) {
             try {
                 listener(reason);
