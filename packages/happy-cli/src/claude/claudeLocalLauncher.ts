@@ -209,6 +209,13 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
         }
     });
     
+    // DROVE-93: the agent screen on the phone asks for a subagent's transcript
+    // over the session RPC channel and polls with the cursor it got back. This
+    // scanner is the one that follows a flip, so it answers rather than the
+    // remote-mode scanner runClaude registered at startup.
+    session.client.rpcHandlerManager.registerHandler('subagentTranscript', async (params: unknown) =>
+        scanner.readSubagentTranscript((params ?? {}) as Parameters<typeof scanner.readSubagentTranscript>[0]));
+
     // Register callback to notify scanner when session ID is found via hook
     // This is important for --continue/--resume where session ID is not known upfront
     //

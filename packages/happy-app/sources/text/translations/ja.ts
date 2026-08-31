@@ -958,6 +958,17 @@ export const ja: TranslationStructure = {
         agentFinished: ({ duration }: { duration: string }) => `エージェント完了 · ${duration}`,
     },
 
+    subagent: {
+        running: '実行中',
+        done: '完了',
+        failed: '失敗',
+        quiet: ({ duration }: { duration: string }) => `${duration} 間出力なし`,
+        loading: 'トランスクリプトを読み込み中…',
+        unavailable: 'トランスクリプトを取得できません',
+        result: '結果',
+        title: 'エージェント',
+    },
+
     codex: {
         // Codex permission dialog buttons
         permissions: {

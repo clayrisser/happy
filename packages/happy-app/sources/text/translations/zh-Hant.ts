@@ -957,6 +957,17 @@ export const zhHant: TranslationStructure = {
         agentFinished: ({ duration }: { duration: string }) => `代理已完成 · ${duration}`,
     },
 
+    subagent: {
+        running: '執行中',
+        done: '已完成',
+        failed: '失敗',
+        quiet: ({ duration }: { duration: string }) => `已靜默 ${duration}`,
+        loading: '正在載入記錄…',
+        unavailable: '無法取得記錄',
+        result: '結果',
+        title: '代理',
+    },
+
     codex: {
         // Codex permission dialog buttons
         permissions: {

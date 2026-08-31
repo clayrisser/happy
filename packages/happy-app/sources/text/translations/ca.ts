@@ -957,6 +957,17 @@ export const ca: TranslationStructure = {
         agentFinished: ({ duration }: { duration: string }) => `Agent finalitzat · ${duration}`,
     },
 
+    subagent: {
+        running: 'En execució',
+        done: 'Fet',
+        failed: 'Ha fallat',
+        quiet: ({ duration }: { duration: string }) => `en silenci des de fa ${duration}`,
+        loading: 'Carregant la transcripció…',
+        unavailable: 'Transcripció no disponible',
+        result: 'Resultat',
+        title: 'Agent',
+    },
+
     codex: {
         // Codex permission dialog buttons
         permissions: {

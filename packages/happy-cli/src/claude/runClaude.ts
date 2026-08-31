@@ -621,6 +621,11 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
         onTranscriptEvent: updateClaudeGoalState,
     });
 
+    // DROVE-93: the subagent transcript RPC, answered off the remote-mode
+    // scanner until a local launch registers its own (which follows a flip).
+    session.rpcHandlerManager.registerHandler('subagentTranscript', async (params: unknown) =>
+        remoteScanner.readSubagentTranscript((params ?? {}) as Parameters<typeof remoteScanner.readSubagentTranscript>[0]));
+
     // Start Happy MCP server
     const happyServer = await startHappyServer(session);
     logger.debug(`[START] Happy MCP server started at ${happyServer.url}`);
