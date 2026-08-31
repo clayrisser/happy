@@ -977,8 +977,12 @@ describe('collectAccountRows', () => {
                 ]),
             }),
         })).toEqual([
-            { name: 'jamrizzi', headroom: 65, loggedIn: true },
-            { name: 'main', headroom: 4, loggedIn: true },
+            // `headroom` is the number to READ and `used` the number to DRAW,
+            // and both come out of the phone's single `usageFill` so the
+            // wrist's bar cannot run the other way from the sheet's
+            // (DROVE-230, DROVE-228).
+            { name: 'jamrizzi', headroom: 65, used: 35, loggedIn: true },
+            { name: 'main', headroom: 4, used: 96, loggedIn: true },
         ]);
     });
 
@@ -1079,7 +1083,17 @@ describe('collectAccountRows', () => {
         const [row] = collectAccountRows({
             s1: session({ droverUsage: usage(10, [{ name: 'spare', headroom: 40, loggedIn: true }]) }),
         });
-        expect(row).toEqual({ name: 'spare', headroom: 40, loggedIn: true });
+        expect(row).toEqual({ name: 'spare', headroom: 40, used: 60, loggedIn: true });
+    });
+
+    it('omits `used` for an account nobody measured, rather than sending a zero', () => {
+        // A bar with no reading must draw as unmeasured on the wrist too. Zero
+        // used is a FRESH window, which is the opposite fact (DROVE-230).
+        const [row] = collectAccountRows({
+            s1: session({ droverUsage: usage(10, [{ name: 'spare', loggedIn: true }]) }),
+        });
+        expect('used' in row).toBe(false);
+        expect('headroom' in row).toBe(false);
     });
 
     it('is empty when no session has ever carried the registry', () => {

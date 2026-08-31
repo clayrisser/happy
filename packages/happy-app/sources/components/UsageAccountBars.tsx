@@ -7,12 +7,22 @@
  * wrapping onto a third - so five accounts filled the phone and the percentage
  * was buried in a sentence.
  *
- * One row per account now: name, a track filled to the headroom left, the
- * number, and the reset or back-at time trailing behind it, truncated rather
- * than wrapped. Every row is the same height, current account included, so the
- * whole popup reads as a column of bars. The fill is coloured by headroom, not
- * by account, which is what makes 43% and 0% comparable down the column, and a
- * 0% row still draws its empty track so it is not an invisible row.
+ * One row per account now: a mark slot, the name, a track, the number, and the
+ * reset or back-at time trailing behind it, truncated rather than wrapped.
+ * Every row is the same height, current account included, so the whole popup
+ * reads as a column of bars. The fill is coloured by headroom, not by account,
+ * which is what makes 43% and 0% comparable down the column.
+ *
+ * DROVE-230 turned the bars round and gave the track three states instead of
+ * one. They used to EMPTY as usage was consumed, and Clay, who specified them,
+ * read a verified-correct sheet and asked "Oh so 0% means nothing left?". His
+ * call: "They should fill up instead so it's consistent." So the fill grows
+ * with usage, and the empty end of the track now has to hold two facts that
+ * used to sit at opposite ends. A window MEASURED at zero keeps a sliver of
+ * fill on a solid track; a window nobody read draws a hollow, outlined track
+ * with no fill at all. The mark slot at the head of the row carries the dot for
+ * the window the account's heading was read off, tinted with that row's own
+ * tone so it is not mistaken for the heading's current-account dot.
  *
  * DROVE-117 made the columns hold their width. The first cut let the track
  * take whatever the trailing text did not use, so `jamrizzi` with no reset
@@ -51,10 +61,12 @@ import { Ionicons } from '@expo/vector-icons';
 import { useUnistyles } from 'react-native-unistyles';
 import { Typography } from '@/constants/Typography';
 import { useComposerSheetNavigate } from './composerSheetNavigation';
+import { t } from '@/text';
 import {
     usageBarColumns,
     usageBarPercentLabel,
     usageBarTrackWidth,
+    usageSnapshotAgeText,
     type UsageBarGroup,
     type UsageBarRow,
     type UsageBarTone,
@@ -92,19 +104,45 @@ function toneColor(tone: UsageBarTone, theme: ReturnType<typeof useUnistyles>['t
     }
 }
 
+/**
+ * What a row says out loud (DROVE-230).
+ *
+ * The fill is the only thing on a sighted row that carries the DIRECTION, and
+ * a screen reader never sees a fill. So the word goes in: `percentSpoken` is
+ * "99% used", not the bare "99%" the column prints, and the binding row says
+ * that it is the one the heading quoted.
+ */
+export function usageRowSpokenLabel(row: UsageBarRow): string {
+    return [
+        row.fullName,
+        row.percentSpoken ?? '',
+        row.binding ? bindingSpoken() : '',
+        row.trailing,
+    ].filter(Boolean).join(', ');
+}
+
+function bindingSpoken(): string {
+    return t('agentInput.usagePopup.bindingRow');
+}
+
 export function UsageAccountBarRow(props: { row: UsageBarRow; trackWidth?: number }) {
     const { theme } = useUnistyles();
     const row = props.row;
     const fill = toneColor(row.tone, theme);
     const trackWidth = props.trackWidth ?? usageBarTrackWidth(usageBarFallbackWidth);
+    // A measured ZERO keeps a visible sliver, and an unmeasured row keeps
+    // none (DROVE-230). Filling as usage is consumed put the exhausted case at
+    // the FULL end of the track, which left the empty end holding two opposite
+    // facts: a window nobody read, and a window read as barely touched. One
+    // dot of fill apart, and the track itself outlined rather than solid when
+    // there is no reading, is what tells them apart before any word is read.
+    const fillWidth = row.measured
+        ? Math.max(trackHeight, Math.round(row.fraction * trackWidth))
+        : 0;
     return (
         <View
             accessible
-            accessibilityLabel={[
-                row.fullName,
-                row.percentText,
-                row.trailing,
-            ].filter(Boolean).join(', ')}
+            accessibilityLabel={usageRowSpokenLabel(row)}
             style={{
                 flexDirection: 'row',
                 alignItems: 'center',
@@ -113,6 +151,15 @@ export function UsageAccountBarRow(props: { row: UsageBarRow; trackWidth?: numbe
                 opacity: row.disabled ? 0.5 : 1,
             }}
         >
+            {/* The mark for the row the account heading was read off. Tinted
+                with the row's own tone rather than filled white, so it is not
+                mistaken for the heading's current-account dot one line up. */}
+            <View style={{
+                width: usageBarColumns.mark,
+                height: usageBarColumns.mark,
+                borderRadius: usageBarColumns.mark / 2,
+                backgroundColor: row.binding ? fill : 'transparent',
+            }} />
             <Text
                 numberOfLines={1}
                 style={{
@@ -126,20 +173,27 @@ export function UsageAccountBarRow(props: { row: UsageBarRow; trackWidth?: numbe
             </Text>
             {/* The track is always drawn, so a 0% account is still a row you
                 can see and count, not a gap in the column. Fixed width, never
-                flex: a row with no trailing text must not get a longer bar. */}
+                flex: a row with no trailing text must not get a longer bar.
+                Solid when there is a reading, hollow when there is not: an
+                outlined track is the shape of "nobody looked", and it can no
+                longer be confused with a measured window sitting at zero. */}
             <View style={{
                 width: trackWidth,
                 height: trackHeight,
                 borderRadius: trackHeight / 2,
-                backgroundColor: theme.colors.divider,
+                backgroundColor: row.measured ? theme.colors.divider : 'transparent',
+                borderWidth: row.measured ? 0 : StyleSheet.hairlineWidth,
+                borderColor: theme.colors.divider,
                 overflow: 'hidden',
             }}>
-                <View style={{
-                    width: `${Math.round(row.fraction * 100)}%`,
-                    height: '100%',
-                    borderRadius: trackHeight / 2,
-                    backgroundColor: fill,
-                }} />
+                {row.measured ? (
+                    <View style={{
+                        width: fillWidth,
+                        height: '100%',
+                        borderRadius: trackHeight / 2,
+                        backgroundColor: fill,
+                    }} />
+                ) : null}
             </View>
             {/* Always rendered. An unmeasured account shows a dash and keeps
                 the column, rather than sliding the row's tail leftward. */}
@@ -250,7 +304,7 @@ function UsageAccountBlock(props: {
     const label = [
         `Switch to ${account}`,
         group.title,
-        ...group.rows.map((row) => [row.fullName, row.percentText, row.trailing].filter(Boolean).join(', ')),
+        ...group.rows.map(usageRowSpokenLabel),
     ].filter(Boolean).join('. ');
     return (
         <Pressable
@@ -350,11 +404,30 @@ export function UsageAccountBars(props: {
     groups: UsageBarGroup[];
     width?: number;
     /**
-     * "Times in BST · headroom for Opus" (DROVE-173). One caption under every
-     * block, because both facts apply to all of them and neither fits in an
-     * 88pt trailing column.
+     * "Read 3m ago · Times in CDT · Fable week not counted for Opus"
+     * (DROVE-230). One caption under every block, because every fact on it
+     * applies to all of them and none fits in an 88pt trailing column.
+     *
+     * Nothing here is needed to READ a bar any more. The line used to open
+     * with `Bars show left`, which is where the sheet's only statement of its
+     * own direction lived, and a rule in small print at the bottom of a scroll
+     * is a rule nobody has read. The mark carries the direction now and the
+     * caption carries only what a mark cannot.
      */
     footer?: string;
+    /**
+     * When the snapshot was taken (DROVE-230), so the caption can say how old
+     * the reading is.
+     *
+     * The age is worded HERE rather than upstream because it is the one fact
+     * on the caption that changes while nothing else does. `resolveUsageStrip`
+     * runs in a memo keyed on the snapshot, so a string built there would
+     * still read "Read just now" an hour after the sweep stopped, which is a
+     * lie on the exact axis Clay stopped trusting these numbers over. This
+     * component holds a minute clock instead, and it only ticks while the
+     * caption is on screen.
+     */
+    capturedAt?: number | null;
     /** Tapping a block moves the session onto that account (DROVE-160). */
     onSwitchAccount?: (account: string) => void;
     /**
@@ -371,6 +444,20 @@ export function UsageAccountBars(props: {
         setMeasured((current) => (current === width ? current : width));
     }, []);
     const trackWidth = usageBarTrackWidth(props.width ?? measured ?? usageBarFallbackWidth);
+    // A minute is the resolution the wording has, so a minute is how often it
+    // is worth waking for. Only while there is a stamp to age.
+    const capturedAt = props.capturedAt ?? null;
+    const [now, setNow] = React.useState(() => Date.now());
+    React.useEffect(() => {
+        if (capturedAt == null) return;
+        setNow(Date.now());
+        const id = setInterval(() => setNow(Date.now()), 60_000);
+        return () => clearInterval(id);
+    }, [capturedAt]);
+    const caption = [
+        capturedAt == null ? '' : usageSnapshotAgeText(capturedAt, now),
+        props.footer ?? '',
+    ].filter(Boolean).join(' \u00b7 ');
     return (
         <View
             onLayout={props.width == null ? onLayout : undefined}
@@ -389,7 +476,7 @@ export function UsageAccountBars(props: {
                     />
                 </View>
             ))}
-            {props.footer ? (
+            {caption ? (
                 <Text
                     numberOfLines={1}
                     style={{
@@ -399,7 +486,7 @@ export function UsageAccountBars(props: {
                         ...Typography.default(),
                     }}
                 >
-                    {props.footer}
+                    {caption}
                 </Text>
             ) : null}
             {/* After the caption, because the caption explains the NUMBERS and

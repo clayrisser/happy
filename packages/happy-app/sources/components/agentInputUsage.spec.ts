@@ -40,6 +40,9 @@ import {
     usageBarFooterText,
     usageBarNameLimit,
     usageBarTone,
+    usageFill,
+    usageSkippedFamilyWindows,
+    usageSnapshotAgeText,
 } from './agentInputUsage';
 
 // What the CLI stamps for Clay's registry as measured 2026-08-30: on jamrizzi,
@@ -89,7 +92,7 @@ const sdkLimits: UsageLimitsLike = {
     ],
 };
 
-const pane = { usageLimits: null, droverUsage: paneUsage, droverAccount: 'jamrizzi', showRemaining: false };
+const pane = { usageLimits: null, droverUsage: paneUsage, droverAccount: 'jamrizzi' };
 
 describe('resolveUsageStrip on a pane session', () => {
     it('shows the week figure from the snapshot with no SDK stream and no context gauge', () => {
@@ -99,41 +102,79 @@ describe('resolveUsageStrip on a pane session', () => {
         expect(strip.weekPercent).toBe(23);
     });
 
-    it('flips the figure for the "% left" setting', () => {
-        expect(resolveUsageStrip({ ...pane, showRemaining: true }).weekPercent).toBe(77);
+    it('has no setting that could flip the figure the other way', () => {
+        // DROVE-230. `showRemaining` used to reverse this and the bars with
+        // it. A preference that reverses a mark is a preference that makes the
+        // mark unreadable, and the input no longer carries one.
+        expect(resolveUsageStrip({ ...pane, ...({ showRemaining: true } as object) }).weekPercent).toBe(23);
     });
 
     it('heads the current account\'s block with the picker\'s own number and lists session, week and the Fable row', () => {
-        const [mine] = resolveUsageStrip({ ...pane, showRemaining: true }).usageBarGroups;
+        const [mine] = resolveUsageStrip(pane).usageBarGroups;
         expect(mine.key).toBe('account:jamrizzi');
         // The block the session is on comes first and says so, which is the
         // only thing that tells it apart now the row shape is shared.
         expect(mine.active).toBe(true);
-        expect(mine.title).toBe('jamrizzi · 51% left');
+        // The heading counts DOWN and says the word, and names the window it
+        // came off (DROVE-230). Session at 49% used is the fullest of
+        // jamrizzi's three, so 51% left is about Session.
+        expect(mine.title).toBe('jamrizzi \u00b7 51% left on Session');
         expect(mine.rows.map((r) => [r.name, r.percentText, r.trailing])).toEqual([
-            ['Session', '51%', `Resets ${formatUsageLimitResetTime(sessionReset)}`],
-            ['Week', '77%', `Resets ${formatUsageLimitResetTime(sep5)}`],
-            ['Fable week', '61%', `Resets ${formatUsageLimitResetTime(sep5)}`],
+            ['Session', '49%', `Resets ${formatUsageLimitResetTime(sessionReset)}`],
+            ['Week', '23%', `Resets ${formatUsageLimitResetTime(sep5)}`],
+            ['Fable week', '39%', `Resets ${formatUsageLimitResetTime(sep5)}`],
         ]);
+        // Exactly one row is marked as the one the heading quoted, so the
+        // heading and the bars stop reading as a contradiction (DROVE-230).
+        expect(mine.rows.filter((r) => r.binding).map((r) => r.name)).toEqual(['Session']);
         // One line each: nothing in a row may carry the newline that used to
         // stack the reset time under the name.
         expect(mine.rows.every((r) => !`${r.name}${r.percentText}${r.trailing}`.includes('\n'))).toBe(true);
     });
 
-    // DROVE-173. Clay, with the sheet beside Claude Code's /usage: a session
-    // 1% used drew a nearly full green bar, because the fill was the headroom
-    // LEFT whatever the printed number said. Claude Code fills with USED, and
-    // that is the default now: bar and figure say the same thing.
-    it('fills every bar in the direction the number is printed in, used by default', () => {
-        const used = resolveUsageStrip(pane).usageBarGroups[0];
-        const left = resolveUsageStrip({ ...pane, showRemaining: true }).usageBarGroups[0];
-        expect(used.rows.map((r) => r.fraction)).toEqual([0.49, 0.23, 0.39]);
-        expect(used.rows.map((r) => r.percentText)).toEqual(['49%', '23%', '39%']);
-        expect(left.rows.map((r) => r.fraction)).toEqual([0.51, 0.77, 0.61]);
-        expect(left.rows.map((r) => r.percentText)).toEqual(['51%', '77%', '61%']);
-        // The colour is still read off what is LEFT either way: it is what
-        // "close to the wall" means, and it must not flip with the setting.
-        expect(used.rows.map((r) => r.tone)).toEqual(left.rows.map((r) => r.tone));
+    // DROVE-230. Clay, who owns this app and specified these bars, read a
+    // verified-correct sheet and asked "Oh so 0% means nothing left?". They
+    // EMPTIED as usage was consumed, against every other progress bar he
+    // meets. He decided it: "They should fill up instead so it's consistent."
+    it('fills every bar as usage is consumed, and the number says the same', () => {
+        const mine = resolveUsageStrip(pane).usageBarGroups[0];
+        expect(mine.rows.map((r) => r.fraction)).toEqual([0.49, 0.23, 0.39]);
+        expect(mine.rows.map((r) => r.percentText)).toEqual(['49%', '23%', '39%']);
+        // Nothing in the input turns it round any more.
+        const flipped = resolveUsageStrip({ ...pane, ...({ showRemaining: true } as object) }).usageBarGroups[0];
+        expect(flipped.rows.map((r) => r.fraction)).toEqual([0.49, 0.23, 0.39]);
+        // The colour is still read off what is LEFT, so the fill WARMS as it
+        // grows: a spent window is a full red bar and needs no number read.
+        expect(mine.rows.map((r) => r.tone)).toEqual(['ample', 'ample', 'ample']);
+    });
+
+    // The row Clay screenshotted, and the proof the direction is the fix.
+    // Under the old convention risserproperties read `Session 100%` beside
+    // `Week 0%` - correct, and nonsense. Filled as used it reads `Session 0%`
+    // beside `Week 100%`, which is exactly what it is.
+    it('reads risserproperties as a fresh session window on a spent week', () => {
+        const rp: DroverUsageLike = {
+            capturedAt: 1_000,
+            accounts: [{
+                name: 'risserproperties', current: true, loggedIn: true, fetchedAt: 950,
+                headroom: 0, cooling: null,
+                limits: [
+                    { kind: 'session', percent: 0, resetsAt: sessionReset, scope: null, family: null },
+                    { kind: 'weekly_all', percent: 100, resetsAt: sep5, scope: null, family: null },
+                ],
+            }],
+        };
+        const [block] = resolveUsageStrip({ ...pane, droverUsage: rp, droverAccount: 'risserproperties' })
+            .usageBarGroups;
+        expect(block.rows.map((r) => [r.name, r.percentText])).toEqual([
+            ['Session', '0%'],
+            ['Week', '100%'],
+        ]);
+        expect(block.rows.map((r) => r.fraction)).toEqual([0, 1]);
+        // Both are MEASURED. A 0% session is a reading, not a blank, and the
+        // flag is what stops it drawing as the bare track of a row nobody read.
+        expect(block.rows.every((r) => r.measured)).toBe(true);
+        expect(block.title).toBe('risserproperties \u00b7 0% left on Week');
     });
 
     it('gives every other account the same three measures, headed by its own name', () => {
@@ -142,10 +183,10 @@ describe('resolveUsageStrip on a pane session', () => {
         // (DROVE-148). No heading over the LIST (DROVE-117): each block is
         // headed by the account, which is the name being chosen between.
         expect(groups.map((g) => [g.key, g.title, g.active === true])).toEqual([
-            ['account:jamrizzi', 'jamrizzi · 49% used', true],
-            ['account:main', 'main · 100% used', false],
-            ['account:bitspur.com', 'bitspur.com · 100% used', false],
-            ['account:spare', 'spare · no login', false],
+            ['account:jamrizzi', 'jamrizzi \u00b7 51% left on Session', true],
+            ['account:main', 'main \u00b7 0% left on Week', false],
+            ['account:bitspur.com', 'bitspur.com \u00b7 0% left on Fable week', false],
+            ['account:spare', 'spare \u00b7 no login', false],
         ]);
         // main: burnt for the week, barely touched on the session. That split
         // is the whole reason for three bars instead of one headroom figure.
@@ -224,11 +265,12 @@ describe('resolveUsageStrip on a pane session', () => {
         const groups = resolveUsageStrip({ ...pane, droverUsage: cooling }).usageBarGroups;
         // Cooling with nothing measured: the return time is the only fact
         // there is, so it goes on the name rather than nowhere.
+        // No limit rows at all, so no window to name the headroom against.
         expect(groups.find((g) => g.key === 'account:cooling')!.title)
-            .toBe(`cooling · 100% used · Fable back ${formatUsageLimitResetTime(sep4)}`);
+            .toBe(`cooling \u00b7 0% left \u00b7 Fable back ${formatUsageLimitResetTime(sep4)}`);
         // main is back Sep 3 too, but its Week row already prints that, so it
         // is not said twice.
-        expect(groups.find((g) => g.key === 'account:main')!.title).toBe('main · 100% used');
+        expect(groups.find((g) => g.key === 'account:main')!.title).toBe('main \u00b7 0% left on Week');
     });
 
     it('keeps a long account name on its heading and off the bars', () => {
@@ -239,12 +281,14 @@ describe('resolveUsageStrip on a pane session', () => {
                 { name: 'promanagerdevteam@gmail.com', current: false, loggedIn: true, fetchedAt: 900, headroom: 43, cooling: null, limits: [] },
             ],
         };
-        const group = resolveUsageStrip({ ...pane, droverUsage: long, showRemaining: true }).usageBarGroups
+        const group = resolveUsageStrip({ ...pane, droverUsage: long }).usageBarGroups
             .find((g) => g.title.startsWith('promanagerdevteam'))!;
         // The name heads the block now instead of sitting in the name column,
         // so it stays whole and the row names are the measures, which always
         // fit. The heading is one line in the component; nothing wraps it.
-        expect(group.title).toBe('promanagerdevteam@gmail.com · 43% left');
+        // No limit rows, so no window to name the headroom against: the
+        // heading keeps its bare `left` rather than inventing one.
+        expect(group.title).toBe('promanagerdevteam@gmail.com \u00b7 43% left');
         expect(group.rows.every((r) => !r.nameTruncated)).toBe(true);
         expect(group.rows.every((r) => r.name.length <= usageBarNameLimit)).toBe(true);
     });
@@ -255,7 +299,7 @@ describe('resolveUsageStrip on a pane session', () => {
         };
         const strip = resolveUsageStrip({ ...pane, droverUsage: unmarked });
         expect(strip.weekPercent).toBe(23);
-        expect(strip.usageBarGroups[0].title).toBe('jamrizzi · 49% used');
+        expect(strip.usageBarGroups[0].title).toBe('jamrizzi \u00b7 51% left on Session');
         expect(strip.usageBarGroups.map((g) => g.key))
             .toEqual(['account:jamrizzi', 'account:main', 'account:bitspur.com', 'account:spare']);
     });
@@ -312,7 +356,7 @@ describe('resolveUsageStrip on a remote session', () => {
 
 describe('resolveUsageStrip with nothing to show', () => {
     it('hides the figure and offers no popup', () => {
-        const strip = resolveUsageStrip({ usageLimits: null, droverUsage: null, showRemaining: false });
+        const strip = resolveUsageStrip({ usageLimits: null, droverUsage: null });
         expect(strip).toMatchObject({ weekPercent: null, usageFromDrover: false, usageBarGroups: [] });
     });
 
@@ -320,7 +364,7 @@ describe('resolveUsageStrip with nothing to show', () => {
         // The session is on an account the registry does not know: nothing
         // is current, nothing is stamped, so no figure and no heading for it,
         // but the others are still reachable.
-        const strip = resolveUsageStrip({ usageLimits: null, droverUsage: { capturedAt: 1, accounts: paneUsage!.accounts.map((a) => ({ ...a, current: false })) }, droverAccount: null, showRemaining: false });
+        const strip = resolveUsageStrip({ usageLimits: null, droverUsage: { capturedAt: 1, accounts: paneUsage!.accounts.map((a) => ({ ...a, current: false })) }, droverAccount: null });
         expect(strip.weekPercent).toBeNull();
         // Every account is listed and none is marked as this session's.
         expect(strip.usageBarGroups).toHaveLength(4);
@@ -444,36 +488,70 @@ describe('droverBindingLimit', () => {
 });
 
 describe('the bar model', () => {
-    // The argument is percent LEFT; the fill is percent USED unless the
-    // setting asks otherwise (DROVE-173).
+    // The argument is percent LEFT because that is what the CLI's `headroom`
+    // is; the fill is percent USED, one direction, no parameter (DROVE-230).
     it('turns a percentage into a track fraction and clamps what is out of range', () => {
         expect(usageBarFraction(43)).toBeCloseTo(0.57);
-        expect(usageBarFraction(43, true)).toBeCloseTo(0.43);
         expect(usageBarFraction(100)).toBe(0);
-        expect(usageBarFraction(100, true)).toBe(1);
-        expect(usageBarFraction(140, true)).toBe(1);
-        expect(usageBarFraction(-5, true)).toBe(0);
         expect(usageBarFraction(140)).toBe(0);
         expect(usageBarFraction(-5)).toBe(1);
     });
 
     it('draws a full track at zero left, and an empty one when nothing is used', () => {
         expect(usageBarFraction(0)).toBe(1);
-        expect(usageBarFraction(0, true)).toBe(0);
+        expect(usageBarFraction(100)).toBe(0);
         expect(usageBarTone(0)).toBe('critical');
     });
 
     it('reads a not-measured figure as empty and grey, never as full', () => {
-        // Empty in BOTH directions: no figure must never look like a full
-        // tank and must never look like a spent one either.
+        // Empty rather than full: no figure must never look like a spent
+        // window, which under a filling bar is the alarming end.
         expect(usageBarFraction(null)).toBe(0);
         expect(usageBarFraction(undefined)).toBe(0);
         expect(usageBarFraction(Number.NaN)).toBe(0);
-        expect(usageBarFraction(null, true)).toBe(0);
         expect(usageBarTone(null)).toBe('unknown');
         expect(usageBarTone(Number.NaN)).toBe('unknown');
     });
 
+    // DROVE-230. The one derivation every quota mark in the product runs
+    // through: the sheet's bars, the composer strip (DROVE-231) and the
+    // wrist's rows (DROVE-228). Three surfaces, one direction, one ramp.
+    describe('usageFill', () => {
+        it('turns headroom into a fill, a figure and a spoken figure at once', () => {
+            expect(usageFill(51)).toEqual({
+                measured: true,
+                percentUsed: 49,
+                fraction: 0.49,
+                percentText: '49%',
+                percentSpoken: '49% used',
+                tone: 'ample',
+            });
+        });
+
+        it('keeps a measured ZERO apart from nothing measured', () => {
+            // The distinction the sheet could not draw. Filling as used, a
+            // window read at 0% used and a window nobody read both sit at the
+            // empty end of the track, and they are opposite facts: one is a
+            // fresh window, the other is no reading at all.
+            expect(usageFill(100)).toMatchObject({ measured: true, percentUsed: 0, fraction: 0 });
+            expect(usageFill(null)).toMatchObject({ measured: false, percentUsed: null, fraction: 0 });
+            expect(usageFill(Number.NaN)).toMatchObject({ measured: false, percentText: null });
+            expect(usageFill(null).percentSpoken).toBeNull();
+        });
+
+        it('says the direction out loud, because a screen reader never sees a fill', () => {
+            expect(usageFill(0).percentSpoken).toBe('100% used');
+            expect(usageFill(0).percentText).toBe('100%');
+        });
+    });
+
+    // The ramp, and DROVE-231 and DROVE-228 read it off this same function
+    // rather than each picking bands. Reading it off what is LEFT means the
+    // colour warms as the bar fills, which is the second carrier of the one
+    // fact the sheet exists to show. No new hue: the three bands are the
+    // theme's existing success / amber / warningCritical. DROVE-215's
+    // white-unless-active rule governs the composer's control GLYPHS and
+    // DROVE-176's palette is that row's vocabulary; a data mark is neither.
     it('colours by headroom left, in three bands', () => {
         expect(usageBarTone(9)).toBe('critical');
         expect(usageBarTone(10)).toBe('low');
@@ -491,37 +569,100 @@ describe('the bar model', () => {
 });
 
 /**
- * The caption under the bars (DROVE-173).
+ * The caption under the bars, and it is NO LONGER LOAD-BEARING (DROVE-230).
  *
- * Two facts were invisible and both made the sheet read as wrong. Clay saw
- * "Resets 7:49 AM" beside /usage's "Resets 1:49pm (Europe/London)" and they
- * are the SAME minute — his phone was five hours behind the Mac — and the
- * same instant printed "Sep 2" here and "Sep 3" there. Naming the zone is the
- * fix; converting to the Mac's would print a clock the phone never shows.
- * The model goes on the same line because headroom now ignores windows the
- * session is not in, and a number that ignores something has to say what.
+ * It used to open with `Bars show left`. That was the sheet's only statement
+ * of its own direction, in small secondary text at the bottom of something you
+ * scroll, which is where a rule goes to be missed - and it was missed by the
+ * person who specified the bars. A caption cannot repair a backwards
+ * affordance, so the mark carries the direction now and the caption carries
+ * only what a mark cannot.
+ *
+ * What it does carry: the timezone, because Clay saw "Resets 7:49 AM" beside
+ * /usage's "Resets 1:49pm (Europe/London)" and they are the SAME minute; how
+ * old the reading is; and which measured window the headroom skipped.
  */
 describe('usageBarFooterText', () => {
-    it('names the direction, the zone and the model the headroom is for', () => {
-        expect(usageBarFooterText('opus'))
-            .toMatch(/^Bars show used \u00b7 Times in \S+ \u00b7 headroom for Opus$/);
+    it('says nothing about how to read a bar', () => {
+        const line = usageBarFooterText({ modelFamily: 'opus' });
+        expect(line).not.toMatch(/Bars show/);
+        expect(line).toMatch(/^Times in \S+$/);
     });
 
-    // The measure rows print a bare "99%" in a 34pt column, so the direction
-    // has to be said somewhere; it is the fact that made a session 1% used
-    // read as nearly gone.
-    it('follows the setting when it is turned the other way', () => {
-        expect(usageBarFooterText('opus', true)).toMatch(/^Bars show left \u00b7 /);
+    it('names the window the headroom SKIPPED, not a model the API returns nothing for', () => {
+        // `headroom for Opus` promised a number the data does not contain:
+        // seven_day_opus and seven_day_sonnet both come back null and the only
+        // model-scoped window the API returns is Fable's. What is true is the
+        // opposite, and it is now what the line says.
+        expect(usageBarFooterText({ modelFamily: 'opus', skipped: ['Fable week'] }))
+            .toMatch(/Fable week not counted for Opus$/);
     });
 
-    it('says the direction and the zone when the model is unknown', () => {
-        expect(usageBarFooterText(null)).toMatch(/^Bars show used \u00b7 Times in \S+$/);
-        expect(usageBarFooterText(undefined)).toMatch(/^Bars show used \u00b7 Times in \S+$/);
+    it('drops the clause when there is no model, rather than guessing one', () => {
+        expect(usageBarFooterText({ modelFamily: null, skipped: ['Fable week'] }))
+            .toMatch(/^Times in \S+$/);
+        expect(usageBarFooterText({})).toMatch(/^Times in \S+$/);
     });
 
-    it('rides the strip so the sheet gets it', () => {
-        expect(resolveUsageStrip({ ...pane, droverUsage: { ...paneUsage!, modelFamily: 'opus' } }).usageBarFooter)
-            .toMatch(/headroom for Opus$/);
+    it('rides the strip so the sheet gets it, with the capture stamp beside it', () => {
+        const strip = resolveUsageStrip({ ...pane, droverUsage: { ...paneUsage!, modelFamily: 'opus' } });
+        expect(strip.usageBarFooter).toMatch(/^Times in \S+ \u00b7 Fable week not counted for Opus$/);
+        // The AGE is not in the string. It changes while nothing else on this
+        // object does, so a memo built here would still read "just now" an
+        // hour after the sweep stopped; the component holds the clock instead.
+        expect(strip.usageBarFooter).not.toMatch(/Read /);
+        expect(strip.usageBarCapturedAt).toBe(1_000);
+    });
+
+    it('has no capture stamp when there is no snapshot behind the bars', () => {
+        expect(resolveUsageStrip({ usageLimits: null, droverUsage: null }).usageBarCapturedAt).toBeNull();
+    });
+});
+
+/**
+ * How old the reading is, said out loud (DROVE-230).
+ *
+ * Clay: "When are you going to fix these to make them accurate?" They were
+ * accurate. The CLI sweeps every ten minutes with a five-minute floor, so
+ * minutes-old is the NORMAL case, and it has to be legible rather than hidden.
+ */
+describe('usageSnapshotAgeText', () => {
+    const at = 1_700_000_000_000;
+
+    it('words the age at every scale', () => {
+        expect(usageSnapshotAgeText(at, at)).toBe('Read just now');
+        expect(usageSnapshotAgeText(at, at + 3 * 60_000)).toBe('Read 3m ago');
+        expect(usageSnapshotAgeText(at, at + 90 * 60_000)).toBe('Read 1h ago, overdue');
+        expect(usageSnapshotAgeText(at, at + 50 * 3600_000)).toBe('Read 2d ago, overdue');
+    });
+
+    it('says overdue once the sweep that should have refreshed it has not', () => {
+        expect(usageSnapshotAgeText(at, at + 9 * 60_000)).toBe('Read 9m ago');
+        expect(usageSnapshotAgeText(at, at + 10 * 60_000)).toBe('Read 10m ago, overdue');
+    });
+
+    it('reads a clock disagreement as just now rather than a negative age', () => {
+        expect(usageSnapshotAgeText(at, at - 60_000)).toBe('Read just now');
+    });
+
+    it('says nothing at all when there is no snapshot to age', () => {
+        expect(usageSnapshotAgeText(null, at)).toBe('');
+        expect(usageSnapshotAgeText(undefined, at)).toBe('');
+    });
+});
+
+describe('usageSkippedFamilyWindows', () => {
+    it('names the measured family window the headroom left out', () => {
+        expect(usageSkippedFamilyWindows({ ...paneUsage!, modelFamily: 'opus' })).toEqual(['Fable week']);
+    });
+
+    it('names nothing when the window DOES bind the session', () => {
+        expect(usageSkippedFamilyWindows({ ...paneUsage!, modelFamily: 'fable' })).toEqual([]);
+    });
+
+    it('names nothing when the model is unknown, because then everything binds', () => {
+        expect(usageSkippedFamilyWindows(paneUsage)).toEqual([]);
+        expect(usageSkippedFamilyWindows(null)).toEqual([]);
     });
 });
 
@@ -550,12 +691,23 @@ describe('a stale account block', () => {
     it('marks the heading rather than passing the numbers off as current', () => {
         const [block] = resolveUsageStrip({ ...pane, droverUsage: stale, droverAccount: 'risserproperties' })
             .usageBarGroups;
-        expect(block.title).toBe('risserproperties · 89% used · stale');
+        // The one applying window has already reset, so there IS no binding
+        // limit and the heading has nothing honest to quote. Under a filling
+        // bar that matters more than it did: a window whose reading describes
+        // something that no longer exists must not draw as 0% used, because
+        // 0% used is what a brand new window looks like (DROVE-230).
+        expect(block.title).toBe('risserproperties \u00b7 headroom unknown \u00b7 stale');
+        // The CLI stamped headroom 11 on this account. The one window it was
+        // read from had already reset, so the sheet refuses to quote it: a
+        // number over a bar with no reading is the "correct but broken" the
+        // whole ticket is about.
+        expect(block.rows[0].measured).toBe(false);
+        expect(block.rows[0].trailing).toBe('window reset');
     });
 
     it('leaves a fresh account heading alone', () => {
         const [block] = resolveUsageStrip(pane).usageBarGroups;
-        expect(block.title).toBe('jamrizzi · 49% used');
+        expect(block.title).toBe('jamrizzi \u00b7 51% left on Session');
     });
 });
 
@@ -588,28 +740,28 @@ describe('an expired window on the sheet', () => {
         }],
     };
 
-    it('draws the row with an empty track, no figure, and the reason', () => {
-        const strip = resolveUsageStrip({
-            usageLimits: null,
-            droverUsage: expired,
-            showRemaining: false,
-        });
+    it('draws the row with a bare track, no figure, and the reason', () => {
+        const strip = resolveUsageStrip({ usageLimits: null, droverUsage: expired });
         const [session, week] = strip.usageBarGroups[0].rows;
         // 99% left on a window that reset is the screenshot. Now: nothing.
         expect(session.percentText).toBeNull();
         expect(session.fraction).toBe(0);
         expect(session.tone).toBe('unknown');
         expect(session.trailing).toBe('window reset');
-        // The window that is still open keeps its bar and its number.
+        // And UNMEASURED, which is what stops the component drawing it as a
+        // fresh window (DROVE-230). Fill-as-used put "nothing used" and
+        // "nothing known" at the same end of the track; this flag is the only
+        // thing between them, so an expired row must never claim to be
+        // measured.
+        expect(session.measured).toBe(false);
+        expect(session.percentSpoken).toBeNull();
+        // The window that is still open keeps its bar, its number and its flag.
         expect(week.percentText).toBe('58%');
+        expect(week.measured).toBe(true);
     });
 
     it('heads the account with headroom unknown, not with "not measured"', () => {
-        const strip = resolveUsageStrip({
-            usageLimits: null,
-            droverUsage: expired,
-            showRemaining: false,
-        });
+        const strip = resolveUsageStrip({ usageLimits: null, droverUsage: expired });
         // Two different nothings. "not measured" means nobody ever asked.
         expect(strip.usageBarGroups[0].title).toContain('headroom unknown');
         expect(strip.usageBarGroups[0].title).not.toContain('not measured');
@@ -627,8 +779,7 @@ describe('an expired window on the sheet', () => {
                 ],
             }],
         };
-        expect(resolveUsageStrip({ usageLimits: null, droverUsage: stale, showRemaining: false }).weekPercent)
-            .toBeNull();
+        expect(resolveUsageStrip({ usageLimits: null, droverUsage: stale }).weekPercent).toBeNull();
     });
 
     it('gives the wrist no binding limit at all, because it has room for only one', () => {

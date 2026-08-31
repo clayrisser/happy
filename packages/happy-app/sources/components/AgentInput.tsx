@@ -845,22 +845,19 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     }, [isSandboxEnabled]);
 
     // Usage row under the card: week quota + context gauge
-    const usageLimitShowRemaining = useSetting('usageLimitShowRemaining');
     const contextStatus = props.usageData?.contextSize
         ? getContextStatus(props.usageData.contextSize, props.alwaysShowContextSize ?? false, theme, props.usageData.contextWindow)
         : null;
     // The week figure and its popup, from agent state or, on a pane session,
     // from drover's snapshot (DROVE-47); resolveUsageStrip says which.
-    const { weekPercent, usageBarGroups, usageBarFooter } = React.useMemo(() => resolveUsageStrip({
+    const { weekPercent, usageBarGroups, usageBarFooter, usageBarCapturedAt } = React.useMemo(() => resolveUsageStrip({
         usageLimits: props.sessionStatusUsageLimits ?? null,
         droverUsage: props.sessionStatusDroverUsage,
         droverAccount: props.sessionStatusDroverAccount,
-        showRemaining: usageLimitShowRemaining,
     }), [
         props.sessionStatusUsageLimits,
         props.sessionStatusDroverUsage,
         props.sessionStatusDroverAccount,
-        usageLimitShowRemaining,
     ]);
 
     const agentInputEnterToSend = useSetting('agentInputEnterToSend');
@@ -2734,6 +2731,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         weekPercent={weekPercent}
                         usageBarGroups={usageBarGroups}
                         usageBarFooter={usageBarFooter}
+                        usageBarCapturedAt={usageBarCapturedAt}
                         // Zen mode strips the account's name off the quota,
                         // as it strips the whole session capsule above; the
                         // groups still go down whole, because the sheet and

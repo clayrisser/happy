@@ -207,6 +207,20 @@ export interface DroverAccountRow {
      * A band a watch build has never heard of reads as `unknown` there.
      */
     tone?: 'ample' | 'low' | 'critical' | 'unknown';
+    /**
+     * Percent USED on that same binding window, which is what a BAR on the
+     * wrist draws (DROVE-230, DROVE-228).
+     *
+     * `headroom` is the number to READ ("4% left") and this is the number to
+     * DRAW, and they are the two ends of one figure. It is sent rather than
+     * derived on the wrist for the reason `tone` is: Swift doing its own
+     * `100 - headroom` is a second place the direction lives, and a direction
+     * with two homes is how the phone's bars ran backwards for a release.
+     * Both come out of the phone's single `usageFill`. Omitted, never null,
+     * when the account was never measured — a bar with no reading must draw as
+     * unmeasured on the wrist too, not as a window sitting at zero.
+     */
+    used?: number;
 }
 
 /**

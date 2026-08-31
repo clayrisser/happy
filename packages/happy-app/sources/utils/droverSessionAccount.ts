@@ -25,8 +25,13 @@
  * phone already knows, so the warning can be read BEFORE the tap instead of
  * being an explanation for a chat that already went quiet.
  */
-import { droverAccountHeadroomLabel, usageAccountBarRow, type UsageBarRow } from '@/components/agentInputUsage';
-import { currentDroverAccountRow, type DroverUsageLike } from './droverUsage';
+import {
+    droverAccountHeadroomLabel,
+    droverBindingLimit,
+    usageAccountBarRow,
+    type UsageBarRow,
+} from '@/components/agentInputUsage';
+import { currentDroverAccountRow, currentDroverUsageAccount, type DroverUsageLike } from './droverUsage';
 
 /** The account line, its headroom, and the bar that draws it. */
 export interface SessionAccountView {
@@ -34,7 +39,7 @@ export interface SessionAccountView {
     name: string | null;
     /** Percent LEFT on its fullest limit; null when never measured. */
     headroom: number | null;
-    /** "jamrizzi · 51% left", or just the name, or empty. */
+    /** "jamrizzi · 51% left on Week", or just the name, or empty. */
     label: string;
     /** The DROVE-117 bar row, or null when there is no account to draw. */
     row: UsageBarRow | null;
@@ -43,19 +48,25 @@ export interface SessionAccountView {
 export function resolveSessionAccount(input: {
     droverUsage: DroverUsageLike;
     droverAccount?: string | null;
-    /** The "% left" setting; utilization is percent USED on the wire. */
-    showRemaining: boolean;
 }): SessionAccountView {
     const account = currentDroverAccountRow(input.droverUsage, input.droverAccount);
     // An empty name is the same as no account: `name` is rendered directly in
     // JSX, and an empty string there is a bare text node in a View, which
     // React Native throws on rather than skipping.
     if (!account || !account.name) return { name: null, headroom: null, label: '', row: null };
+    // Which window the headroom is about, named on the line rather than left
+    // to be worked out (DROVE-230). Same call the popup's heading makes, over
+    // the same rows, so this screen and that sheet cannot name two windows.
+    const binding = droverBindingLimit(
+        currentDroverUsageAccount(input.droverUsage, input.droverAccount),
+        input.droverUsage?.modelFamily ?? null,
+        input.droverUsage?.capturedAt ?? Number.NaN,
+    );
     return {
         name: account.name,
         headroom: account.headroom,
-        label: droverAccountHeadroomLabel(account, input.showRemaining),
-        row: usageAccountBarRow(account, input.showRemaining),
+        label: droverAccountHeadroomLabel(account, binding?.label ?? null),
+        row: usageAccountBarRow(account),
     };
 }
 

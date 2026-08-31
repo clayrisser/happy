@@ -14,10 +14,41 @@
  * The sheet's rows are BARS, not sentences (DROVE-107). Each account used to
  * cost three text lines - "bitspur.com · 0% left", then "Fable back Sep 2",
  * and a long name wrapped again - so five accounts filled the screen and the
- * one number Clay scans for was buried in prose. A row is now a name, a track
- * filled to the headroom LEFT, the number, and the reset time trailing behind
- * it, all on one line. The fill is coloured by how much headroom is left, never
- * by which account it is, so 43% and 0% compare down the column at a glance.
+ * one number Clay scans for was buried in prose. A row is now a name, a track,
+ * the number, and the reset time trailing behind it, all on one line. The fill
+ * is coloured by how close the window is to its limit, never by which account
+ * it is, so 43% and 0% compare down the column at a glance.
+ *
+ * EVERY BAR FILLS AS USAGE IS CONSUMED, AND NOTHING MAY REVERSE IT (DROVE-230).
+ *
+ * The bars used to EMPTY as usage was consumed, with one line of small print
+ * at the bottom of a scrolling sheet saying so. Clay, who owns this app and
+ * specified these bars, read a verified-correct sheet and asked "Oh so 0%
+ * means nothing left?" — he could not tell which way his own bars ran. That is
+ * not an accuracy bug and no amount of correctness fixes it: a caption cannot
+ * repair a backwards affordance, because the affordance is read first and the
+ * caption is read never.
+ *
+ * So the direction is now carried by the MARK. A download fills, a battery
+ * drains toward empty, a loading bar fills; a bar that grows means the thing
+ * it measures is accumulating, and what accumulates here is usage. `Clay: they
+ * should fill up instead so it's consistent.` The bare percentages follow the
+ * fill for the same reason — a track filled to 99% beside a figure reading 2%
+ * is the identical contradiction one level down — so a row's number is always
+ * percent USED.
+ *
+ * Headroom is still the fact Clay needs to pick an account, and it survives in
+ * exactly one place: the account heading, which says `main · 2% left on Week`.
+ * That is allowed to count the other way ONLY because it spells the word and
+ * names its window, so it cannot be read backwards on its own. Nothing else on
+ * this sheet may count down. There is no setting for this: a preference that
+ * reverses a mark is a preference that makes the mark unreadable, which is the
+ * bug this fixed.
+ *
+ * The proof it works is `risserproperties`, which under the old convention
+ * read `Session 100%` beside `Week 0%` — correct, and nonsense. Filling as
+ * used it reads `Session 0%` beside `Week 100%`: a fresh session window on an
+ * account whose week is spent, which is exactly what it is.
  *
  * Every account gets all of them (DROVE-148). The current account had Session,
  * Week and Fable week; every other account had one bar for its fullest limit.
@@ -33,6 +64,8 @@ import {
     droverFamilyLabel,
     droverRowApplies,
     droverRowUsable,
+    droverSnapshotAgeMs,
+    droverSnapshotOverdue,
     droverWindowId,
     usageLimitsFromDroverUsage,
     type DroverAccountUsageRow,
@@ -42,7 +75,6 @@ import {
 } from '@/utils/droverUsage';
 import {
     formatUsageLimitResetTime,
-    getUsageLimitDisplayPercentage,
     getUsageLimitRows,
     usageLimitZoneLabel,
     type UsageLimitsLike,
@@ -56,8 +88,6 @@ export type UsageStripInput = {
     droverUsage: DroverUsageLike;
     /** The older per-account stamp, the fallback when the snapshot marks nothing current. */
     droverAccount?: string | null;
-    /** The "% left" setting; utilization is always percent USED on the wire. */
-    showRemaining: boolean;
 };
 
 /**
@@ -76,18 +106,39 @@ export type UsageBarRow = {
     /** True when `name` is shorter than `fullName`. */
     nameTruncated: boolean;
     /**
-     * How much of the track the fill covers, 0..1.
-     *
-     * Percent USED by default, which is Claude Code's own convention
-     * (DROVE-173). It used to be the headroom LEFT whatever the setting said,
-     * so a session 1% used drew a nearly full green bar and Clay read it as
-     * nearly gone. The fill now follows the same direction as the printed
-     * number, so bar and figure say one thing; the colour still comes from how
-     * much is LEFT, which is what "close to the wall" means either way.
+     * How much of the track the fill covers, 0..1: percent USED, always
+     * (DROVE-230). No caller and no setting can reverse it.
      */
     fraction: number;
-    /** The number the setting asks for, "43%"; null when nothing was measured. */
+    /** Percent USED, "43%"; null when nothing was measured. */
     percentText: string | null;
+    /**
+     * The same figure with its direction spelled out, "43% used", for the
+     * accessibility label (DROVE-230). A screen reader never sees the fill, so
+     * the one carrier of direction the sighted row has does not exist for it
+     * and the word has to be said instead. Null when nothing was measured.
+     */
+    percentSpoken: string | null;
+    /**
+     * Something WAS measured here, even if it came out at zero (DROVE-230).
+     *
+     * The distinction the sheet could not draw: under the old convention a
+     * window measured at 0% left and a window nobody had measured both drew an
+     * empty track, which is why five identical Fable zeroes read as a parse
+     * failure. Filling as used moves the exhausted case to a FULL bar, and this
+     * flag covers the other end — a window measured at 0% USED keeps a visible
+     * sliver of fill, so it cannot be mistaken for the bare track of a row with
+     * no reading at all.
+     */
+    measured: boolean;
+    /**
+     * The window the account's headroom came from (DROVE-230): the fullest of
+     * the windows that bind this session's model, and therefore the one that
+     * stops work first. `main · 2% left on Week` sitting over a session row
+     * reading 37% used to look like a contradiction, because nothing said the
+     * heading was about a different row.
+     */
+    binding?: boolean;
     /** "Resets 6 PM", "Fable back Sep 4", "no login". Empty when there is none. */
     trailing: string;
     tone: UsageBarTone;
@@ -128,43 +179,119 @@ export type UsageStrip = {
      */
     usageBarGroups: UsageBarGroup[];
     /**
-     * One caption under the bars (DROVE-173): which zone every time on this
-     * sheet is in, and which model the headroom figures are for.
+     * One caption under the bars, and it is no longer LOAD-BEARING
+     * (DROVE-230).
      *
-     * Both facts were invisible and both made the sheet read as wrong. The
-     * times are the phone's, /usage's are the Mac's, and the same instant
-     * printed 7:49 AM here and 1:49pm there. The headroom now ignores windows
-     * the session's model is not in, and a number that ignores something has
-     * to say what.
+     * It used to open with `Bars show left`, which is where the only statement
+     * of the sheet's direction lived: small, secondary, at the bottom of
+     * something you scroll. The mark carries the direction now, so the caption
+     * carries only what a mark cannot — the timezone every time on this sheet
+     * is in (the phone's, where /usage prints the Mac's, and the same instant
+     * read 7:49 AM here and 1:49pm there), how old the reading is, and which
+     * measured window the headroom figures leave out. Nothing here is needed
+     * to read a bar.
      */
     usageBarFooter: string;
+    /**
+     * When the snapshot behind these bars was taken (DROVE-230); null when
+     * there is no snapshot. Handed to the component rather than worded here,
+     * because how OLD a reading is changes while nothing else on this object
+     * does — see usageBarFooterText.
+     */
+    usageBarCapturedAt: number | null;
 };
 
 /**
- * "Bars show used · Times in BST · headroom for Opus" (DROVE-173).
+ * "Times in CDT · Fable week not counted for Opus" (DROVE-230), which the
+ * component prefixes with the age of the reading.
  *
- * The measure rows print a bare "99%" in a 34pt column, so which direction it
- * counts in has to be said somewhere, and it is said once here rather than
- * three times a block. It is the fact that made Clay read a session 1% used as
- * nearly gone.
+ * Two facts, and neither is how to read a bar. The direction clause is gone:
+ * it was the whole caption's reason to exist and the reason the sheet was
+ * unreadable, since a rule stated once in small print at the bottom of a
+ * scroll is a rule nobody has read.
+ *
+ * The AGE is deliberately NOT composed here. It is the one part of the line
+ * that changes while nothing else does, and a string built in a memo keyed on
+ * the snapshot would still read "Read just now" an hour after the sweep
+ * stopped — a lie on the exact axis this ticket is about. The component holds
+ * a clock and prepends it (`usageSnapshotAgeText`, same function).
+ *
+ * `headroom for Opus` is gone with it. The only model-scoped window the API
+ * returns is Fable's — `seven_day_opus` and `seven_day_sonnet` both come back
+ * null — so a caption promising a number FOR Opus promised something the data
+ * does not contain. What is true is the opposite and is now what it says: an
+ * Opus session's headroom skips Fable's week, and the window it skipped is
+ * named because that window is the one that was actually measured.
  */
-export function usageBarFooterText(
-    modelFamily: string | null | undefined,
-    showRemaining = false,
-): string {
-    const parts: string[] = [t('agentInput.usagePopup.barsShow', {
-        direction: showRemaining
-            ? t('agentInput.usagePopup.left', { percent: 0 }).replace(/^0%\s*/, '')
-            : t('agentInput.usagePopup.used', { percent: 0 }).replace(/^0%\s*/, ''),
-    })];
+export function usageBarFooterText(input: {
+    /** The model the session is running; null when the snapshot never said. */
+    modelFamily?: string | null;
+    /** Family windows that exist in the data and do NOT bind this session. */
+    skipped?: string[];
+}): string {
+    const parts: string[] = [];
     const zone = usageLimitZoneLabel();
     if (zone) parts.push(t('agentInput.usagePopup.zoneNote', { zone }));
-    if (modelFamily) {
-        parts.push(t('agentInput.usagePopup.forModel', {
-            family: modelFamily.charAt(0).toUpperCase() + modelFamily.slice(1),
+    const skipped = input.skipped ?? [];
+    if (skipped.length > 0 && input.modelFamily) {
+        parts.push(t('agentInput.usagePopup.familyNotCounted', {
+            windows: skipped.join(', '),
+            family: input.modelFamily.charAt(0).toUpperCase() + input.modelFamily.slice(1),
         }));
     }
     return parts.join(' \u00b7 ');
+}
+
+/**
+ * "just now", "3m ago", "2h ago", and the word for a reading the sweep should
+ * have refreshed and has not (DROVE-230).
+ *
+ * Clay: "When are you going to fix these to make them accurate?" They were
+ * accurate. `main` read 66/99/100 used against a sheet showing 37/2/0 left,
+ * and every point of that gap was the reading aging while nothing on the sheet
+ * admitted a reading has an age at all. The CLI sweeps every ten minutes with
+ * a five-minute floor, so minutes-old is the NORMAL case and has to be legible
+ * rather than hidden.
+ */
+export function usageSnapshotAgeText(capturedAt: number | null | undefined, now: number): string {
+    const ms = droverSnapshotAgeMs(capturedAt, now);
+    if (ms == null) return '';
+    const minutes = Math.floor(ms / 60_000);
+    const age = minutes < 1
+        ? t('agentInput.usagePopup.ageJustNow')
+        : minutes < 60
+            ? t('agentInput.usagePopup.ageMinutes', { minutes })
+            : minutes < 60 * 24
+                ? t('agentInput.usagePopup.ageHours', { hours: Math.floor(minutes / 60) })
+                : t('agentInput.usagePopup.ageDays', { days: Math.floor(minutes / (60 * 24)) });
+    return droverSnapshotOverdue(ms)
+        ? t('agentInput.usagePopup.capturedOverdue', { age })
+        : t('agentInput.usagePopup.captured', { age });
+}
+
+/**
+ * The family windows in this snapshot that do NOT bind the session's model, in
+ * the popup's own words ("Fable week").
+ *
+ * This is the honest half of what the caption used to claim. `headroom` is
+ * computed over the windows that apply (`droverRowApplies`), so on an Opus
+ * session Fable's exhausted week is measured, present on the sheet, and
+ * deliberately not counted — and until now nothing said so.
+ */
+export function usageSkippedFamilyWindows(usage: DroverUsageLike): string[] {
+    const family = usage?.modelFamily ?? null;
+    if (!usage || !family || !Array.isArray(usage.accounts)) return [];
+    const out: string[] = [];
+    for (const account of usage.accounts) {
+        for (const row of Array.isArray(account?.limits) ? account.limits : []) {
+            if (!row || droverRowApplies(row, family)) continue;
+            const label = droverFamilyLabel(row);
+            if (!label) continue;
+            const worded = t('agentInput.usagePopup.familyWeek', { family: label });
+            if (!out.includes(worded)) out.push(worded);
+        }
+    }
+    return out;
 }
 
 /** How wide the name column is, in characters, before a name is cut. */
@@ -187,21 +314,29 @@ export const usageBarColumns = {
     /** Inset on each side of the row, matching the status line above it. */
     horizontalPadding: 16,
     name: 80,
-    /** Between each pair of columns; three of them on a row. */
+    /** Between each pair of columns; four of them on a row. */
     gap: 8,
     percent: 34,
     trailing: 88,
+    /**
+     * The dot marking the BINDING row (DROVE-230), and the slot it always
+     * keeps so the names line up whether or not a row has one. Same width as
+     * the heading's current-account dot and set left of the name for the same
+     * reason, so a block reads as one column of marks rather than two.
+     */
+    mark: 5,
     /** The track never shrinks past this, however narrow the container is. */
     minTrack: 40,
 } as const;
 
-/** Everything on a row that is not the track: paddings, three columns, three gaps. */
+/** Everything on a row that is not the track: paddings, four columns, four gaps. */
 export const usageBarFixedWidth =
     usageBarColumns.horizontalPadding * 2
+    + usageBarColumns.mark
     + usageBarColumns.name
     + usageBarColumns.percent
     + usageBarColumns.trailing
-    + usageBarColumns.gap * 3;
+    + usageBarColumns.gap * 4;
 
 /**
  * How wide the track is inside a container of this width. One number for the
@@ -222,23 +357,40 @@ export function usageBarPercentLabel(percentText: string | null | undefined): st
 }
 
 /**
- * Percent left to a track fraction, in the direction the setting asks for
- * (DROVE-173). Nothing measured reads as an empty track rather than a full
- * one: a row with no figure must not look healthy.
+ * Percent left to a track fraction. ONE direction, no parameter: the track
+ * fills as usage is consumed (DROVE-230).
+ *
+ * The single function every bar in the product runs through, phone and wrist
+ * alike — `collectAccountRows` sends the wrist the number this returns rather
+ * than letting Swift do its own arithmetic, so the two surfaces cannot end up
+ * running opposite ways (DROVE-129's rule, applied to a direction instead of a
+ * figure). It takes percent LEFT because that is what the CLI's `headroom` is
+ * and what the callers hold; it returns the fill, which is the other one.
+ *
+ * Nothing measured reads as an empty track rather than a full one: a row with
+ * no figure must not look healthy. The row's `measured` flag is what tells
+ * that empty apart from a window genuinely at 0% used.
  */
-export function usageBarFraction(
-    percentLeft: number | null | undefined,
-    showRemaining = false,
-): number {
+export function usageBarFraction(percentLeft: number | null | undefined): number {
     if (typeof percentLeft !== 'number' || !Number.isFinite(percentLeft)) return 0;
     const left = Math.min(100, Math.max(0, percentLeft));
-    return (showRemaining ? left : 100 - left) / 100;
+    return (100 - left) / 100;
 }
 
 /**
  * The fill colour, by headroom left and nothing else. Deliberately not per
  * account: the point of the column is that two accounts at the same percent
  * look the same.
+ *
+ * Reading it off what is LEFT means the colour WARMS as the bar fills, which
+ * is the convention a filling bar already carries everywhere else (a disk, a
+ * battery charging into its last tenth) and a second carrier for the one fact
+ * the sheet exists to show: an exhausted window is a full red bar and needs no
+ * number read (DROVE-230). No new hue was spent on this. The three bands are
+ * the theme's existing success / amber / warningCritical, which the bars have
+ * always used; DROVE-215's white-unless-active rule governs the composer's
+ * control GLYPHS, and DROVE-176's palette is that row's vocabulary, neither of
+ * which a data mark is drawn from.
  */
 export function usageBarTone(percentLeft: number | null | undefined): UsageBarTone {
     if (typeof percentLeft !== 'number' || !Number.isFinite(percentLeft)) return 'unknown';
@@ -258,48 +410,120 @@ export function truncateUsageName(name: string, limit = usageBarNameLimit): { na
     return { name: `${name.slice(0, Math.max(1, limit - 1))}\u2026`, truncated: true };
 }
 
+/**
+ * ONE window's headroom, turned into everything a mark needs to show it
+ * (DROVE-230).
+ *
+ * The single derivation. Every quota mark in the product is drawn from what
+ * this returns and none of them does the arithmetic itself: the sheet's bars
+ * (`usageBarRowFrom`), the composer strip's account figure
+ * (`resolveUsageStrip`, worn by DROVE-231) and the wrist's rows
+ * (`collectAccountRows` -> `DroverAccountRow.used`, worn by DROVE-228) all
+ * call it. That is DROVE-129's rule applied to a DIRECTION: the reason the
+ * bars could run backwards for a release is that each surface converted
+ * headroom into a mark on its own, so there was no one place a direction could
+ * be stated. Now there is, and reversing it is one edit that moves all three.
+ *
+ * It takes percent LEFT because that is what the CLI's `headroom` is and what
+ * every caller holds. It returns the fill, which is the other one.
+ */
+export type UsageFill = {
+    /**
+     * Something WAS measured, even if it came out at zero. False is the bare
+     * track: nothing was ever read, or what was read describes a window that
+     * has since reset.
+     */
+    measured: boolean;
+    /** Percent USED, 0-100, rounded; null when nothing was measured. */
+    percentUsed: number | null;
+    /** How much of the track the fill covers, 0..1. Zero when unmeasured. */
+    fraction: number;
+    /** The bare figure for a column, "43%"; null when nothing was measured. */
+    percentText: string | null;
+    /** The same figure with its direction said, "43% used", for a screen reader. */
+    percentSpoken: string | null;
+    tone: UsageBarTone;
+};
+
+export function usageFill(percentLeft: number | null | undefined): UsageFill {
+    const measured = typeof percentLeft === 'number' && Number.isFinite(percentLeft);
+    const percentUsed = measured
+        ? Math.round(100 - Math.min(100, Math.max(0, percentLeft as number)))
+        : null;
+    return {
+        measured,
+        percentUsed,
+        fraction: usageBarFraction(percentLeft),
+        percentText: percentUsed == null ? null : `${percentUsed}%`,
+        percentSpoken: percentUsed == null
+            ? null
+            : t('agentInput.usagePopup.used', { percent: percentUsed }),
+        tone: usageBarTone(percentLeft),
+    };
+}
+
 export function usageBarRowFrom(input: {
     key: string;
     name: string;
     percentLeft: number | null;
-    percentText: string | null;
     trailing: string;
     disabled?: boolean;
-    /** Fill with what is LEFT instead of what is USED; the setting's direction. */
-    showRemaining?: boolean;
+    /** The window the account's headroom was read off (DROVE-230). */
+    binding?: boolean;
 }): UsageBarRow {
     const cut = truncateUsageName(input.name);
+    // The number is DERIVED from the same figure the fill is, rather than
+    // passed in beside it (DROVE-230). A caller that could hand in a percent
+    // of its own is a caller that could hand in "2%" over a bar filled to 98%,
+    // which is the contradiction this ticket exists to remove.
+    const fill = usageFill(input.percentLeft);
     return {
         key: input.key,
         name: cut.name,
         fullName: input.name,
         nameTruncated: cut.truncated,
-        fraction: usageBarFraction(input.percentLeft, input.showRemaining === true),
-        percentText: input.percentText,
+        fraction: fill.fraction,
+        percentText: fill.percentText,
+        percentSpoken: fill.percentSpoken,
+        measured: fill.measured,
         trailing: input.trailing,
-        tone: usageBarTone(input.percentLeft),
+        tone: fill.tone,
         disabled: input.disabled === true,
+        ...(input.binding ? { binding: true } : {}),
     };
 }
 
 /**
- * "jamrizzi · 51% left", or just the name when nothing was measured.
+ * "jamrizzi · 51% left on Session", or just the name when nothing was measured.
  *
  * The composer popup's heading and the session info screen's account line
  * (DROVE-137) are the same sentence and have to stay that way, so it is built
  * once here rather than spelled out on both screens (DROVE-129).
+ *
+ * The ONE figure on this sheet that counts DOWN (DROVE-230), and it earns the
+ * exception twice over. It says `left` out loud, so it cannot be read as the
+ * bars are read; and headroom, not usage, is the fact that answers the
+ * question the sheet is opened for, which is which account to move onto.
+ *
+ * It also NAMES its window, which is the other half of the same bug. The
+ * heading is the BINDING window — the fullest of the ones that bind this
+ * session's model, the one that stops work first — so `main · 2% left` sat
+ * over a session row reading 37% and read as a contradiction. `main · 2% left
+ * on Week` is the same two numbers with the arithmetic removed.
  */
 export function droverAccountHeadroomLabel(
     account: { name: string; headroom?: number | null } | null | undefined,
-    showRemaining: boolean,
+    /** The binding window's own word, "Week"; null when none could be picked. */
+    bindingLabel?: string | null,
 ): string {
     const name = account?.name;
     if (!name) return '';
     const headroom = account?.headroom;
     if (typeof headroom !== 'number' || !Number.isFinite(headroom)) return name;
-    return `${name} · ${showRemaining
-        ? t('agentInput.usagePopup.left', { percent: Math.round(headroom) })
-        : t('agentInput.usagePopup.used', { percent: Math.round(100 - headroom) })}`;
+    const percent = Math.round(headroom);
+    return `${name} · ${bindingLabel
+        ? t('agentInput.usagePopup.leftOn', { percent, window: bindingLabel })
+        : t('agentInput.usagePopup.left', { percent })}`;
 }
 
 /**
@@ -319,41 +543,42 @@ export function usageAccountBackLabel(a: Pick<DroverOtherAccountRow, 'back' | 'f
         : t('agentInput.usagePopup.back', { time: formatUsageLimitResetTime(a.back) });
 }
 
-export function usageAccountBarRow(a: DroverOtherAccountRow, showRemaining: boolean): UsageBarRow {
+export function usageAccountBarRow(a: DroverOtherAccountRow): UsageBarRow {
     // An account that is out says WHEN it is back; that is the fact worth the
     // trailing slot. With no figure at all the trailing text is the reason
-    // there is none, so the empty track is explained.
+    // there is none, so the bare track is explained.
     const back = usageAccountBackLabel(a);
     if (!a.loggedIn) {
         return usageBarRowFrom({
             key: `account:${a.name}`,
             name: a.name,
             percentLeft: null,
-            percentText: null,
             trailing: t('agentInput.usagePopup.noLogin'),
             disabled: true,
         });
     }
     if (a.headroom == null) {
+        // Both nothings land here and both come out UNMEASURED, which is the
+        // point (DROVE-230). Filling as used, a window nobody read and a
+        // window read at 0% used would otherwise draw the identical empty
+        // track, and the second one is a FRESH window — the most misleading
+        // thing this sheet could say. `measured: false` is what keeps them
+        // apart in the mark; the trailing word says which nothing it is.
         return usageBarRowFrom({
             key: `account:${a.name}`,
             name: a.name,
             percentLeft: null,
-            percentText: null,
             trailing: back
                 || (a.expired
                     ? t('agentInput.usagePopup.windowReset')
                     : t('agentInput.usagePopup.unmeasured')),
         });
     }
-    const percent = showRemaining ? a.headroom : 100 - a.headroom;
     return usageBarRowFrom({
         key: `account:${a.name}`,
         name: a.name,
         percentLeft: a.headroom,
-        percentText: `${percent}%`,
         trailing: back,
-        showRemaining,
     });
 }
 
@@ -385,8 +610,8 @@ export function usageMeasures(accounts: DroverAccountUsageRow[]): UsageMeasure[]
     return measures;
 }
 
-/** "jamrizzi · 51% left", or the reason there is no figure. */
-export function usageAccountGroupTitle(a: DroverOtherAccountRow, showRemaining: boolean): string {
+/** "jamrizzi · 51% left on Week", or the reason there is no figure. */
+export function usageAccountGroupTitle(a: DroverOtherAccountRow, bindingLabel?: string | null): string {
     if (!a.name) return '';
     if (!a.loggedIn) return `${a.name} · ${t('agentInput.usagePopup.noLogin')}`;
     // Two different nothings, and saying the wrong one is the bug (DROVE-204).
@@ -395,7 +620,15 @@ export function usageAccountGroupTitle(a: DroverOtherAccountRow, showRemaining: 
     // spent, and the heading must not imply either.
     if (a.headroom == null && a.expired) return `${a.name} · ${t('agentInput.usagePopup.headroomUnknown')}`;
     if (a.headroom == null) return `${a.name} · ${t('agentInput.usagePopup.unmeasured')}`;
-    return droverAccountHeadroomLabel(a, showRemaining);
+    // A headroom whose window has already reset is the same nothing wearing a
+    // number (DROVE-230). `droverBindingLimit` refuses to name a window here
+    // for the reason DROVE-204 gave: the one nobody re-read is exactly the one
+    // that could be full. The heading was still printing the CLI's stamped
+    // figure over a row drawn with no bar at all, which is a claim the sheet
+    // cannot back. An account with no limit ROWS is untouched by this — there
+    // is no expired window there, just a headroom with no windows to name.
+    if (a.expired && !bindingLabel) return `${a.name} · ${t('agentInput.usagePopup.headroomUnknown')}`;
+    return droverAccountHeadroomLabel(a, bindingLabel);
 }
 
 /**
@@ -410,9 +643,22 @@ export function usageAccountGroupTitle(a: DroverOtherAccountRow, showRemaining: 
 export function usageAccountBarGroup(
     account: DroverAccountUsageRow,
     measures: UsageMeasure[],
-    showRemaining: boolean,
-    override?: UsageLimitsLike,
+    options?: {
+        /**
+         * The window this account's `headroom` was read off (DROVE-230), from
+         * `droverBindingLimit` over the same rows the CLI computed it from.
+         * Marks its row and names itself in the heading, so `main · 2% left on
+         * Week` over a session row reading 37% stops looking like a
+         * contradiction. Null when no window binds, which is also when the
+         * heading has no figure to explain.
+         */
+        binding?: DroverBindingLimit | null;
+        /** The SDK's live windows for the current account. */
+        override?: UsageLimitsLike;
+    },
 ): UsageBarGroup {
+    const binding = options?.binding ?? null;
+    const override = options?.override;
     const byId = new Map<string, { utilization: number | null; resetsAt: number | null; usable: boolean }>();
     for (const window of account.windows) {
         byId.set(window.id, { utilization: window.utilization, resetsAt: window.resetsAt, usable: window.usable });
@@ -428,30 +674,34 @@ export function usageAccountBarGroup(
         // right instinct and not enough: a bar and a percentage next to the
         // word `stale` still reads as data. The trailing text is the reason
         // there is nothing to read.
+        // An expired window loses its figures and therefore its fill
+        // (DROVE-204). Under fill-as-used that matters more than it did: a
+        // window whose reading describes something that no longer exists must
+        // NOT draw as 0% used, because 0% used is what a brand new window
+        // looks like and the two are opposite facts. `percentLeft: null` makes
+        // the row unmeasured, which is a bare track rather than an empty fill.
         const expired = window != null && !window.usable;
         const utilization = expired ? null : window?.utilization ?? null;
-        // `utilization` is percent USED on the wire; the track fills with what
-        // is left of it either way, only the printed number follows the setting.
-        const percent = utilization == null ? null : getUsageLimitDisplayPercentage(utilization, showRemaining);
         return usageBarRowFrom({
             key: `${account.name}:${measure.id}`,
             name: measure.label,
             percentLeft: utilization == null ? null : 100 - utilization,
-            percentText: percent == null ? null : `${Math.round(percent)}%`,
             trailing: expired
                 ? t('agentInput.usagePopup.windowReset')
                 : window?.resetsAt != null
                     ? t('agentInput.usagePopup.resets', { time: formatUsageLimitResetTime(window.resetsAt) })
                     : '',
             disabled: !account.loggedIn,
-            showRemaining,
+            // Marked, never re-ranked here: the heading's number and this flag
+            // have to come off one decision or they can point at two rows.
+            binding: binding != null && binding.id === measure.id,
         });
     });
     // The cooling time is normally the reset on one of the rows above, so it
     // is not repeated. When the account has no windows at all it is the only
     // thing there is to say, and it goes on the title rather than nowhere.
     const back = rows.some((row) => row.trailing) ? '' : usageAccountBackLabel(account);
-    const base = usageAccountGroupTitle(account, showRemaining);
+    const base = usageAccountGroupTitle(account, binding?.label ?? null);
     // A reading nobody has refreshed says so rather than passing as current
     // (DROVE-173). The five-hour session window means a snapshot one window
     // old prints LAST window's reset time, which is what read as a wrong
@@ -571,8 +821,12 @@ export function resolveUsageStrip(input: UsageStripInput): UsageStrip {
     //
     // The context gauge has its own rule (`getContextStatus`, near-limit or the
     // always-show setting) and it is not this one.
+    // Percent USED, always, like every mark on the sheet below it
+    // (DROVE-230). Run through `usageFill` rather than inverted here, so the
+    // strip's figure and the sheet's bars cannot end up on opposite
+    // conventions again; DROVE-231 owns how the strip words it.
     const weekPercent = week?.utilization != null
-        ? getUsageLimitDisplayPercentage(week.utilization, input.showRemaining)
+        ? usageFill(100 - week.utilization).percentUsed
         : null;
 
     // Every account, current first, each its own block (DROVE-148). Before
@@ -597,22 +851,35 @@ export function resolveUsageStrip(input: UsageStripInput): UsageStrip {
         });
     }
     const measures = usageMeasures(accounts);
+    // Which window each account's `headroom` came off, decided ONCE per
+    // account and handed to the block (DROVE-230). Ranked over the snapshot's
+    // raw rows rather than the mapped windows, because that is the set the CLI
+    // computed `headroom` from — a heading whose number and whose named window
+    // came from different sets would be the bug it is meant to fix.
+    const bindings = new Map<string, DroverBindingLimit | null>();
+    const capturedAt = input.droverUsage?.capturedAt ?? Number.NaN;
+    for (const raw of input.droverUsage?.accounts ?? []) {
+        if (!raw || typeof raw.name !== 'string' || !raw.name) continue;
+        bindings.set(raw.name, droverBindingLimit(raw, input.droverUsage?.modelFamily ?? null, capturedAt));
+    }
     // No heading over the LIST (DROVE-117). Clay: "Don't say other accounts.
     // Have each one listed." Each block is headed by its own account, which is
     // the name he is choosing between; a label over the whole list told nobody
     // anything.
-    const groups = accounts.map((account) => usageAccountBarGroup(
-        account,
-        measures,
-        input.showRemaining,
+    const groups = accounts.map((account) => usageAccountBarGroup(account, measures, {
+        binding: bindings.get(account.name) ?? null,
         // The SDK stream is live and belongs to the session's own account; the
         // snapshot is the only reading there is for every other one.
-        account.current ? input.usageLimits : null,
-    ));
+        override: account.current ? input.usageLimits : null,
+    }));
     return {
         weekPercent,
         usageFromDrover,
         usageBarGroups: groups,
-        usageBarFooter: usageBarFooterText(input.droverUsage?.modelFamily ?? null, input.showRemaining),
+        usageBarCapturedAt: input.droverUsage?.capturedAt ?? null,
+        usageBarFooter: usageBarFooterText({
+            modelFamily: input.droverUsage?.modelFamily ?? null,
+            skipped: usageSkippedFamilyWindows(input.droverUsage),
+        }),
     };
 }

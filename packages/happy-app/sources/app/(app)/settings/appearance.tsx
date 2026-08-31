@@ -222,7 +222,6 @@ export default function AppearanceSettingsScreen() {
     const [showHarnessIconInSessionHeader, setShowHarnessIconInSessionHeader] = useSettingMutable('showHarnessIconInSessionHeader');
     const [compactToolCalls, setCompactToolCalls] = useSettingMutable('compactToolCalls');
     const [userMessageBubbleColor, setUserMessageBubbleColor] = useSettingMutable('userMessageBubbleColor');
-    const [usageLimitShowRemaining, setUsageLimitShowRemaining] = useSettingMutable('usageLimitShowRemaining');
     const [themePreference, setThemePreference] = useLocalSettingMutable('themePreference');
     const [preferredLanguage] = useSettingMutable('preferredLanguage');
     const [avatarStyleSetting, setAvatarStyle] = useSettingMutable('avatarStyle');
@@ -313,17 +312,6 @@ export default function AppearanceSettingsScreen() {
             </ItemGroup>
 
             <ItemGroup title={t('settingsAppearance.chat')} footer={t('settingsAppearance.chatDescription')}>
-                <Item
-                    title={t('settingsAppearance.usageLimitShowRemaining')}
-                    subtitle={t('settingsAppearance.usageLimitShowRemainingDescription')}
-                    icon={<Ionicons name="speedometer-outline" size={29} color={theme.colors.status.connecting} />}
-                    rightElement={
-                        <Switch
-                            value={usageLimitShowRemaining}
-                            onValueChange={setUsageLimitShowRemaining}
-                        />
-                    }
-                />
                 <Item
                     title={t('settingsAppearance.userMessageBubbleColor')}
                     titleLines={2}

@@ -52,32 +52,52 @@ describe('resolveSessionAccount', () => {
                 { name: 'main', headroom: 4, limits: [] },
             ]),
             droverAccount: 'jamrizzi',
-            showRemaining: true,
         });
         expect(view.name).toBe('jamrizzi');
         expect(view.headroom).toBe(51);
+        // No window to name it against: the account carries no limit rows, so
+        // the heading keeps its bare `left` (DROVE-230).
         expect(view.label).toBe('jamrizzi · 51% left');
-        expect(view.row?.percentText).toBe('51%');
-        // The track fills in the direction the number is printed (DROVE-173).
-        expect(view.row?.fraction).toBeCloseTo(0.51);
+        // The ROW counts up while the heading counts down, and that is the
+        // whole design: the heading says the word `left`, the row is a bar.
+        expect(view.row?.percentText).toBe('49%');
+        expect(view.row?.percentSpoken).toBe('49% used');
+        expect(view.row?.fraction).toBeCloseTo(0.49);
     });
 
-    it('prints used rather than left by default, and fills the same way', () => {
+    it('names the binding window on the account line, so the bar under it is not a contradiction', () => {
+        // `main · 2% left` over a session bar at 37% used is the pair Clay
+        // read as broken (DROVE-230). It is the WEEK that binds, and now the
+        // line says so.
+        const view = resolveSessionAccount({
+            droverUsage: usage([{
+                name: 'main',
+                current: true,
+                headroom: 1,
+                limits: [
+                    { kind: 'session', percent: 66, usable: true },
+                    { kind: 'weekly_all', percent: 99, usable: true },
+                ],
+            }]),
+            droverAccount: 'main',
+        });
+        expect(view.label).toBe('main · 1% left on Week');
+    });
+
+    it('fills as usage is consumed, never the other way', () => {
         const view = resolveSessionAccount({
             droverUsage: usage([{ name: 'jamrizzi', current: true, headroom: 51, limits: [] }]),
             droverAccount: 'jamrizzi',
-            showRemaining: false,
         });
-        expect(view.label).toBe('jamrizzi · 49% used');
         expect(view.row?.percentText).toBe('49%');
         expect(view.row?.fraction).toBeCloseTo(0.49);
+        expect(view.row?.measured).toBe(true);
     });
 
     it('falls back to the stamp when the snapshot marks nothing current', () => {
         const view = resolveSessionAccount({
             droverUsage: usage([{ name: 'bitspur.com', headroom: 12, limits: [] }]),
             droverAccount: 'bitspur.com',
-            showRemaining: true,
         });
         expect(view.name).toBe('bitspur.com');
         expect(view.label).toBe('bitspur.com · 12% left');
@@ -90,17 +110,20 @@ describe('resolveSessionAccount', () => {
         const view = resolveSessionAccount({
             droverUsage: null,
             droverAccount: 'main',
-            showRemaining: true,
         });
         expect(view.name).toBe('main');
         expect(view.headroom).toBeNull();
         expect(view.label).toBe('main');
         expect(view.row?.percentText).toBeNull();
         expect(view.row?.fraction).toBe(0);
+        // The bar it draws is UNMEASURED, not a window sitting at zero used
+        // (DROVE-230). Under a fill that grows with usage those are the same
+        // empty track until this flag tells them apart.
+        expect(view.row?.measured).toBe(false);
     });
 
     it('says nothing when nothing knows the account', () => {
-        const view = resolveSessionAccount({ droverUsage: null, droverAccount: null, showRemaining: true });
+        const view = resolveSessionAccount({ droverUsage: null, droverAccount: null });
         expect(view.name).toBeNull();
         expect(view.label).toBe('');
         expect(view.row).toBeNull();
@@ -110,7 +133,6 @@ describe('resolveSessionAccount', () => {
         const view = resolveSessionAccount({
             droverUsage: usage([{ name: '', current: true, headroom: 30, limits: [] }]),
             droverAccount: null,
-            showRemaining: true,
         });
         expect(view.name).toBeNull();
         expect(view.row).toBeNull();
@@ -120,7 +142,6 @@ describe('resolveSessionAccount', () => {
         const view = resolveSessionAccount({
             droverUsage: usage([{ name: 'risserproperties', current: true, loggedIn: false, limits: [] }]),
             droverAccount: 'risserproperties',
-            showRemaining: true,
         });
         expect(view.row?.disabled).toBe(true);
         expect(view.row?.trailing).toBeTruthy();

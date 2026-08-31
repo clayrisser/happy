@@ -165,12 +165,11 @@ function mount(element: React.ReactElement) {
 }
 
 /** What SessionView hands AgentInput for a pane session: metadata, no agent-state windows, no context yet. */
-function paneStrip(showRemaining = false) {
+function paneStrip() {
     return resolveUsageStrip({
         usageLimits: null,
         droverUsage: paneUsage,
         droverAccount: 'jamrizzi',
-        showRemaining,
     });
 }
 
@@ -314,7 +313,6 @@ describe('AgentInputStatusRow on an idle pane session', () => {
         const strip = resolveUsageStrip({
             usageLimits: { capturedAt: 1, windows: [{ id: 'seven_day', utilization: 77, resetsAt: sep5 }] },
             droverUsage: null,
-            showRemaining: false,
         });
         expect(line(row({ weekPercent: strip.weekPercent, usageBarGroups: strip.usageBarGroups })))
             .toEqual(['77% week']);
@@ -360,13 +358,13 @@ describe('AgentInputStatusRow on an idle pane session', () => {
     });
 
     it('opens the quota sheet from the week figure with every window for every account (DROVE-148)', () => {
-        const strip = paneStrip(true);
+        const strip = paneStrip();
         const renderer = row({ weekPercent: strip.weekPercent, usageBarGroups: strip.usageBarGroups });
         const sheet = () => renderer.root.findByType('UsageAccountBarsSheet' as any);
         // Closed by default: the row is still one line until it is asked for.
         expect(sheet().props.open).toBe(false);
         act(() => {
-            segment(renderer, 'Quota, jamrizzi 77%').props.onPress();
+            segment(renderer, 'Quota, jamrizzi 23%').props.onPress();
         });
         expect(sheet().props.open).toBe(true);
         // Both accounts carry the same three measures, so the sheet answers
@@ -376,18 +374,25 @@ describe('AgentInputStatusRow on an idle pane session', () => {
             ['account:main', false],
         ]);
         const rows = sheet().props.groups.flatMap((group: any) => group.rows);
+        // Percent USED, every row, and nothing on the sheet can reverse it
+        // (DROVE-230).
         expect(rows.map((r: any) => [r.name, r.percentText])).toEqual([
-            ['Session', '51%'],
-            ['Week', '77%'],
-            ['Fable week', '61%'],
+            ['Session', '49%'],
+            ['Week', '23%'],
+            ['Fable week', '39%'],
             ['Session', null],
-            ['Week', '0%'],
+            ['Week', '100%'],
             ['Fable week', null],
         ]);
-        // The track is drawn even for the account at zero.
-        expect(rows[4].fraction).toBe(0);
+        // main's week is spent, so its track is FULL and red: the fill grows
+        // with usage and the colour warms with it (DROVE-230).
+        expect(rows[4].fraction).toBe(1);
         expect(rows[4].tone).toBe('critical');
-        expect(line(renderer)).toEqual(['jamrizzi', '77%']);
+        expect(rows[4].measured).toBe(true);
+        // And the row with no reading at all is unmeasured, which is a bare
+        // track rather than a window sitting at zero.
+        expect(rows[5].measured).toBe(false);
+        expect(line(renderer)).toEqual(['jamrizzi', '23%']);
         // And the sheet closes itself, which is what the backdrop and the
         // grabber both call.
         act(() => {
@@ -413,7 +418,6 @@ describe('AgentInputStatusRow on an idle pane session', () => {
         const strip = resolveUsageStrip({
             usageLimits: { capturedAt: 1, windows: [{ id: 'seven_day', utilization: 77, resetsAt: sep5 }] },
             droverUsage: null,
-            showRemaining: false,
         });
         const renderer = row({
             weekPercent: strip.weekPercent,
@@ -430,7 +434,7 @@ describe('AgentInputStatusRow on an idle pane session', () => {
 
     it('drops the account\'s name in zen mode, and with it the folds the name paid for', () => {
         vi.mocked(confirmDroverSwitch).mockClear();
-        const strip = paneStrip(true);
+        const strip = paneStrip();
         const renderer = row({
             sessionId: 'busy',
             hideAccount: true,
@@ -440,7 +444,7 @@ describe('AgentInputStatusRow on an idle pane session', () => {
         });
         // The window keeps its word with no account to head it, and the
         // context percent stays printed, since nothing is taking its width.
-        expect(line(renderer)).toEqual(['77% week', '·', '42% context']);
+        expect(line(renderer)).toEqual(['23% week', '·', '42% context']);
         // The account is hidden, not forgotten: the sheet still opens on it
         // and a switch still says which account it is leaving (DROVE-160).
         const sheet = () => renderer.root.findByType('UsageAccountBarsSheet' as any);
@@ -645,8 +649,7 @@ describe('AgentInputStatusRow while the session is working', () => {
             const idle = resolveUsageStrip({
                 usageLimits: { capturedAt: 1, windows: [{ id: 'seven_day', utilization: 77, resetsAt: sep5 }] },
                 droverUsage: null,
-                showRemaining: false,
-                });
+            });
             expect(line(row({
                 contextStatus,
                 weekPercent: idle.weekPercent,
@@ -699,7 +702,7 @@ describe('AgentInputStatusRow while the session is working', () => {
         vi.useFakeTimers();
         vi.setSystemTime(now + 1_000);
         try {
-            const strip = paneStrip(true);
+            const strip = paneStrip();
             const renderer = row({
                 sessionId: 'busy',
                 weekPercent: strip.weekPercent,
@@ -712,7 +715,7 @@ describe('AgentInputStatusRow while the session is working', () => {
             });
             expect([agents().props.open, usage().props.open]).toEqual([true, false]);
             act(() => {
-                segment(renderer, 'Quota, jamrizzi 77%').props.onPress();
+                segment(renderer, 'Quota, jamrizzi 23%').props.onPress();
             });
             expect([agents().props.open, usage().props.open]).toEqual([false, true]);
         } finally {
@@ -891,7 +894,7 @@ describe('AgentInputStatusRow going idle', () => {
 describe('switching account from the quota sheet (DROVE-160)', () => {
     it('closes the sheet and confirms, sending the account it came from', () => {
         vi.mocked(confirmDroverSwitch).mockClear();
-        const strip = paneStrip(true);
+        const strip = paneStrip();
         const renderer = row({
             sessionId: 'busy',
             weekPercent: strip.weekPercent,
@@ -899,7 +902,7 @@ describe('switching account from the quota sheet (DROVE-160)', () => {
         });
         const sheet = () => renderer.root.findByType('UsageAccountBarsSheet' as any);
         act(() => {
-            segment(renderer, 'Quota, jamrizzi 77%').props.onPress();
+            segment(renderer, 'Quota, jamrizzi 23%').props.onPress();
         });
         expect(sheet().props.open).toBe(true);
         act(() => {
@@ -915,7 +918,7 @@ describe('switching account from the quota sheet (DROVE-160)', () => {
     });
 
     it('offers no switch on a preview with no session behind it', () => {
-        const strip = paneStrip(true);
+        const strip = paneStrip();
         const renderer = row({
             sessionId: undefined,
             weekPercent: strip.weekPercent,
@@ -928,7 +931,7 @@ describe('switching account from the quota sheet (DROVE-160)', () => {
 
 describe('AgentInputStatusRow with nothing to show', () => {
     it('renders nothing for a session with no connection, no stream, no snapshot and no context', () => {
-        const strip = resolveUsageStrip({ usageLimits: null, droverUsage: null, showRemaining: false });
+        const strip = resolveUsageStrip({ usageLimits: null, droverUsage: null });
         const renderer = row({
             connectionStatus: undefined,
             weekPercent: strip.weekPercent,
@@ -949,7 +952,6 @@ describe('AgentInputStatusRow with nothing to show', () => {
         const strip = resolveUsageStrip({
             usageLimits: { capturedAt: 1, windows: [{ id: 'seven_day', utilization: 60, resetsAt: sep5 }] },
             droverUsage: null,
-            showRemaining: false,
         });
         const renderer = row({
             weekPercent: strip.weekPercent,
@@ -1158,7 +1160,7 @@ describe('AgentInputStatusRow tasks', () => {
  * not a guess, and that a session with no machine gets no row.
  */
 describe('adding an account from the quota sheet (DROVE-208)', () => {
-    const strip = () => paneStrip(true);
+    const strip = () => paneStrip();
 
     it('targets the machine the session runs on, and names it', () => {
         pushed.length = 0;

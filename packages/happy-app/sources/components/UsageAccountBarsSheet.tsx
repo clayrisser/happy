@@ -26,8 +26,10 @@ import type { UsageBarGroup } from './agentInputUsage';
 
 export function UsageAccountBarsSheet(props: {
     groups: UsageBarGroup[];
-    /** The zone and the model the numbers are for (DROVE-173). */
+    /** The zone and the window the numbers skipped (DROVE-230). */
     footer?: string;
+    /** When the snapshot was taken, so the caption can age it (DROVE-230). */
+    capturedAt?: number | null;
     open: boolean;
     onClose: () => void;
     /** Tapping an account block switches the session onto it (DROVE-160). */
@@ -43,6 +45,7 @@ export function UsageAccountBarsSheet(props: {
             <UsageAccountBars
                 groups={props.groups}
                 footer={props.footer}
+                capturedAt={props.capturedAt}
                 onSwitchAccount={props.onSwitchAccount}
                 addAccount={props.addAccount}
             />
