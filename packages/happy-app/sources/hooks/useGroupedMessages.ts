@@ -1,8 +1,8 @@
 import * as React from 'react';
 import { Message } from '@/sync/typesMessage';
-import { knownTools } from '@/components/tools/knownTools';
-import { getToolSummaryCategory, isInteractiveQuestionToolName } from '@/utils/toolDisplay';
-import { isEmptyThinking } from '@/utils/thinkingText';
+import { getToolSummaryCategory, isInteractiveQuestionToolName, ToolSummaryCategory } from '@/utils/toolDisplay';
+import { isInvisibleMessage, isUserAttachment } from '@/utils/messageVisibility';
+import { groupSameToolRuns, hasFailedToolCall, hasRunningToolCall } from '@/utils/toolRunGroups';
 import { t } from '@/text';
 
 // Display item types for the grouped message list
@@ -17,7 +17,13 @@ export type ToolGroupItem = {
     id: string;
     messages: Message[];
     hasRunning: boolean;
+    hasError: boolean;
     hasPendingPermission: boolean;
+    /**
+     * Set when every member is the same tool family (DROVE-84). The row then
+     * reads `Ran N shell commands` and opens onto the full per-call rows.
+     */
+    runCategory?: ToolSummaryCategory;
 };
 
 export type AgentWorkGroupItem = {
@@ -58,13 +64,13 @@ export function groupMessagesForDisplay(
     options: { collapseCurrentTurn?: boolean } = {},
 ): DisplayItem[] {
     if (!enabled) {
-        // Grouping off is the default (`groupToolCalls: false`), and this path
-        // used to hand every message to the list untouched — which is how the
+        // Grouping off is the default (`groupToolCalls: false`). This path
+        // used to hand every message to the list untouched, which is how the
         // empty thinking blocks Claude Code stores each drew their own
-        // "Thought process" row opening onto nothing (DROVE-46).
-        return messages
-            .filter((msg) => !isInvisibleMessage(msg))
-            .map((msg) => ({ type: 'message', id: msg.id, message: msg } as TextItem));
+        // "Thought process" row opening onto nothing (DROVE-46). It still
+        // folds a run of same-tool calls into one row, the way the terminal
+        // draws `Ran 4 shell commands` (DROVE-84).
+        return groupSameToolRuns(messages);
     }
 
     const collapseCurrentTurn = options.collapseCurrentTurn ?? true;
@@ -122,19 +128,13 @@ export function groupMessagesForDisplay(
         if (msg.kind === 'tool-call') {
             const info = toolRuns.get(i);
             if (info && info.msgs.length > 1 && i === info.oldestIdx) {
-                let hasRunning = false;
-                for (const m of info.msgs) {
-                    if (m.kind === 'tool-call' && m.tool.state === 'running') {
-                        hasRunning = true;
-                        break;
-                    }
-                }
                 const chronologicalMessages = [...info.msgs].reverse();
                 result.push({
                     type: 'tool-group',
                     id: `group-${chronologicalMessages[0].id}`,
                     messages: chronologicalMessages,
-                    hasRunning,
+                    hasRunning: hasRunningToolCall(info.msgs),
+                    hasError: hasFailedToolCall(info.msgs),
                     hasPendingPermission: hasPendingPermission(info.msgs),
                 });
             }
@@ -185,19 +185,13 @@ export function groupToolCallsForDisplay(
             const info = toolRuns.get(i);
             const shouldGroupRun = info && (info.msgs.length > 1 || groupSingleToolCalls);
             if (shouldGroupRun && i === info.oldestIdx) {
-                let hasRunning = false;
-                for (const m of info.msgs) {
-                    if (m.kind === 'tool-call' && m.tool.state === 'running') {
-                        hasRunning = true;
-                        break;
-                    }
-                }
                 const chronologicalMessages = [...info.msgs].reverse();
                 result.push({
                     type: 'tool-group',
                     id: `group-${chronologicalMessages[0].id}`,
                     messages: chronologicalMessages,
-                    hasRunning,
+                    hasRunning: hasRunningToolCall(info.msgs),
+                    hasError: hasFailedToolCall(info.msgs),
                     hasPendingPermission: hasPendingPermission(info.msgs),
                 });
             }
@@ -327,27 +321,6 @@ function collectAgentWorkGroups(messages: Message[], turnOf: number[], collapseC
     }
 
     return groups;
-}
-
-/** Returns true for messages that render as null and should be excluded entirely */
-function isInvisibleMessage(msg: Message): boolean {
-    // Hidden tools (ToolSearch, CodexReasoning, etc.)
-    if (msg.kind === 'tool-call') {
-        const known = knownTools[msg.tool.name as keyof typeof knownTools] as any;
-        return known?.hidden === true;
-    }
-    // Thinking is kept — it draws as a collapsed "Thought process" row. Only an
-    // empty block has nothing to show.
-    if (msg.kind === 'agent-text') {
-        if (msg.isThinking) return isEmptyThinking(msg.text);
-        if (msg.text.trim().length === 0) return true;
-    }
-    return false;
-}
-
-/** User-sent file/image attachments should never be collapsed into a group */
-function isUserAttachment(msg: Message): boolean {
-    return msg.kind === 'tool-call' && msg.tool.name === 'file';
 }
 
 function hasPendingPermission(messages: Message[]): boolean {

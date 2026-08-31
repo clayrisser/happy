@@ -600,6 +600,7 @@ export const zhHant: TranslationStructure = {
         editedFiles: ({ count }: { count: number }) => `編輯了 ${count} 個檔案`,
         readFiles: ({ count }: { count: number }) => `讀取了 ${count} 個檔案`,
         ranCommands: ({ count }: { count: number }) => `執行了 ${count} 個指令`,
+        ranShellCommands: ({ count }: { count: number }) => `執行了 ${count} 個 shell 指令`,
         searched: ({ count }: { count: number }) => `搜尋了 ${count} 次`,
         fetchedUrls: ({ count }: { count: number }) => `取得了 ${count} 個 URL`,
         ranTasks: ({ count }: { count: number }) => `執行了 ${count} 個任務`,

@@ -601,6 +601,7 @@ export const ja: TranslationStructure = {
         editedFiles: ({ count }: { count: number }) => `${count}個のファイルを編集`,
         readFiles: ({ count }: { count: number }) => `${count}個のファイルを読み取り`,
         ranCommands: ({ count }: { count: number }) => `${count}個のコマンドを実行`,
+        ranShellCommands: ({ count }: { count: number }) => `${count}個のシェルコマンドを実行`,
         searched: ({ count }: { count: number }) => `${count}回検索`,
         fetchedUrls: ({ count }: { count: number }) => `${count}個のURLを取得`,
         ranTasks: ({ count }: { count: number }) => `${count}個のタスクを実行`,
