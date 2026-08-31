@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { ActivityIndicator, Text, View } from 'react-native';
 import { Stack, useLocalSearchParams } from 'expo-router';
-import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { ScopedTheme, StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { ChatListInternal } from '@/components/ChatList';
 import { useTickingNow } from '@/components/useTickingNow';
@@ -17,6 +17,7 @@ import {
 import { fetchSubagentTranscript } from '@/sync/subagentTranscriptRpc';
 import { t } from '@/text';
 import { formatElapsed, formatTokens } from '@/utils/liveStatus';
+import { type SubagentTintPalette, subagentThemeName, subagentTintPaletteFor } from '@/utils/subagentTint';
 
 /**
  * A subagent's own transcript (DROVE-93).
@@ -28,9 +29,21 @@ import { formatElapsed, formatTokens } from '@/utils/liveStatus';
  * bottom. While the agent runs the CLI is polled every two seconds with the
  * cursor it handed back, so only new rows travel. Once it stops the screen
  * stays as it is, readable for as long as the session lives.
+ *
+ * The whole surface is tinted towards the running-agent accent (DROVE-109) so
+ * it is obvious at a glance that this is an agent and not the session. The
+ * tint is a THEME OVERRIDE, not a fork: <ScopedTheme> swaps in the tinted
+ * counterpart of the live theme for this subtree only, so ChatListInternal and
+ * every card, tool view and row under it pick it up without a prop, and the
+ * session screen is untouched by construction. A left edge rail with notches
+ * repeated down it carries the tint past the header when the list is scrolled.
  */
 
 const POLL_MS = 2_000;
+const RAIL_WIDTH = 4;
+const RAIL_GAP = 6;
+/** Notches spread evenly down the rail. A fixed count avoids measuring the viewport. */
+const RAIL_MARKER_COUNT = 16;
 
 const stylesheet = StyleSheet.create((theme) => ({
     center: {
@@ -92,7 +105,47 @@ const stylesheet = StyleSheet.create((theme) => ({
         fontSize: 12,
         ...Typography.mono(),
     },
+    rail: {
+        position: 'absolute',
+        left: 0,
+        top: 0,
+        bottom: 0,
+        width: RAIL_WIDTH,
+    },
+    railMarkers: {
+        flex: 1,
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingVertical: 10,
+    },
+    railMarker: {
+        width: RAIL_WIDTH,
+        height: RAIL_WIDTH,
+        borderRadius: RAIL_WIDTH / 2,
+    },
 }));
+
+/**
+ * The left edge rail. It is painted over the list rather than inside it, so it
+ * stays put while the transcript scrolls and keeps saying "agent" long after
+ * the header has been forgotten. The notches are evenly spread by flexbox, so
+ * no viewport measurement is needed.
+ */
+const SubagentRail = React.memo((props: { palette: SubagentTintPalette }) => {
+    const markers = React.useMemo(
+        () => Array.from({ length: RAIL_MARKER_COUNT }, (_, index) => index),
+        [],
+    );
+    return (
+        <View pointerEvents="none" style={[stylesheet.rail, { backgroundColor: props.palette.rail }]}>
+            <View style={stylesheet.railMarkers}>
+                {markers.map((index) => (
+                    <View key={index} style={[stylesheet.railMarker, { backgroundColor: props.palette.railMarker }]} />
+                ))}
+            </View>
+        </View>
+    );
+});
 
 function stateWord(state: 'running' | 'done' | 'failed'): string {
     if (state === 'done') return t('subagent.done');
@@ -102,8 +155,14 @@ function stateWord(state: 'running' | 'done' | 'failed'): string {
 
 export default React.memo(() => {
     const { id: sessionId, agentId, label } = useLocalSearchParams<{ id: string; agentId: string; label?: string }>();
-    const { theme } = useUnistyles();
+    const { theme, rt } = useUnistyles();
     const styles = stylesheet;
+    // Derived from the LIVE theme, outside the scope, so it follows a
+    // light/dark switch. The header and the rail are drawn by the navigator
+    // and by an absolute overlay, neither of which sits under <ScopedTheme>,
+    // so they take their colours from the palette directly.
+    const tintName = subagentThemeName(rt.themeName);
+    const tint = React.useMemo(() => subagentTintPaletteFor(theme), [theme]);
     const session = useSession(sessionId!);
 
     const [transcript, setTranscript] = React.useState<SubagentTranscriptState>(() => createSubagentTranscriptState());
@@ -213,6 +272,10 @@ export default React.memo(() => {
         );
     }
 
+    // Stays on screen while the transcript scrolls, so the word "agent" is
+    // still there once the header is gone.
+    const footerLine = `${t('subagent.title')} · ${reason && state === 'running' ? `${subtitle} · ${reason}` : subtitle}`;
+
     return (
         <>
             <Stack.Screen
@@ -225,19 +288,24 @@ export default React.memo(() => {
                     ),
                     headerTintColor: theme.colors.header.tint,
                     headerShadowVisible: false,
+                    headerStyle: { backgroundColor: tint.header },
+                    contentStyle: { backgroundColor: tint.ground },
                 }}
             />
-            <View style={{ flex: 1 }}>
-                {body}
-                {hasRows ? (
-                    <View style={styles.footer}>
-                        {state === 'running' ? <ActivityIndicator size="small" color={theme.colors.textSecondary} /> : null}
-                        <Text style={styles.footerText}>
-                            {reason && state === 'running' ? `${subtitle} · ${reason}` : subtitle}
-                        </Text>
+            <ScopedTheme name={tintName}>
+                <View style={{ flex: 1, backgroundColor: tint.ground }}>
+                    <View style={{ flex: 1, marginLeft: RAIL_WIDTH + RAIL_GAP }}>
+                        {body}
+                        {hasRows ? (
+                            <View style={styles.footer}>
+                                {state === 'running' ? <ActivityIndicator size="small" color={theme.colors.textSecondary} /> : null}
+                                <Text style={styles.footerText}>{footerLine}</Text>
+                            </View>
+                        ) : null}
                     </View>
-                ) : null}
-            </View>
+                    <SubagentRail palette={tint} />
+                </View>
+            </ScopedTheme>
         </>
     );
 });
