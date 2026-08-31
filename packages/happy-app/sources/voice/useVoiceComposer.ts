@@ -19,6 +19,7 @@ import { canReadAloud } from './speechEngine';
 import { DictationCapture, type DictationCaptureState } from './dictationCapture';
 import { dictationComposerEvents } from './dictationComposer';
 import {
+    HOLD_MIN_MS,
     idleMicGesture,
     reduceMicGesture,
     type MicButtonState,
@@ -63,10 +64,14 @@ export interface VoiceComposerOptions {
 export interface VoiceComposerState {
     readAloudEnabled?: boolean;
     onReadAloudToggle?: () => void;
-    /** Finger down on the talk button. Absent when there is no button. */
-    onTalkPressIn?: () => void;
-    /** Finger up. Inside the tap window this latches; after it, it sends. */
-    onTalkPressOut?: () => void;
+    /**
+     * Finger down on the talk button. `touchAt` is the OS's touch clock, which
+     * is what the tap-versus-hold split is measured on (DROVE-140). Absent
+     * when there is no button.
+     */
+    onTalkPressIn?: (touchAt?: number) => void;
+    /** Finger up. Released before the hold is recognised this latches; after it, it sends. */
+    onTalkPressOut?: (touchAt?: number) => void;
     /** The finger crossed the button's edge while still down. */
     onTalkSlide?: (inside: boolean) => void;
     /** Drop the recording without transcribing. */
@@ -78,6 +83,13 @@ export interface VoiceComposerState {
      * banner says so before it happens (DROVE-105).
      */
     talkCancelArmed?: boolean;
+    /**
+     * The press has been recognised as a HOLD while the finger is still down,
+     * so the lift will SEND (DROVE-140). Before this the press is still a tap
+     * and lifting would latch, which is a different promise and has to look
+     * different on the banner (DROVE-142).
+     */
+    talkSendArmed?: boolean;
     /** Everything the live indicator draws from. */
     talk?: DictationCaptureState;
 }
@@ -98,6 +110,7 @@ export function useVoiceComposer(options: VoiceComposerOptions): VoiceComposerSt
     const [talk, setTalk] = React.useState<DictationCaptureState>(idleTalk);
     const [talkState, setTalkState] = React.useState<MicButtonState>('idle');
     const [talkCancelArmed, setTalkCancelArmed] = React.useState(false);
+    const [talkSendArmed, setTalkSendArmed] = React.useState(false);
     const [dictationSupported, setDictationSupported] = React.useState(false);
 
     // The callbacks change identity with the screen; the capture does not.
@@ -110,6 +123,12 @@ export function useVoiceComposer(options: VoiceComposerOptions): VoiceComposerSt
     // way (dictationDraft.ts).
     const baseRef = React.useRef('');
     const gestureRef = React.useRef<MicGesture>(idleMicGesture);
+    /**
+     * The timer that turns a press into a hold while the finger is still down
+     * (DROVE-140). Cleared by every lift and every ending, so a timer never
+     * outlives the press that started it.
+     */
+    const holdTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const captureRef = React.useRef<DictationCapture | null>(null);
     if (captureRef.current === null) {
@@ -172,23 +191,54 @@ export function useVoiceComposer(options: VoiceComposerOptions): VoiceComposerSt
         return startAudioRouteGuard();
     }, [active, readAloudEnabled, voiceCallActive]);
 
+    /**
+     * The dispatcher, reachable from the hold timer without making `dispatch`
+     * depend on itself.
+     */
+    const dispatchRef = React.useRef<(event: MicGestureEvent) => void>(() => { });
+
+    const clearHoldTimer = React.useCallback(() => {
+        if (holdTimerRef.current === null) return;
+        clearTimeout(holdTimerRef.current);
+        holdTimerRef.current = null;
+    }, []);
+
     /** Feed the gesture reducer and carry out what it asks for. */
     const dispatch = React.useCallback((event: MicGestureEvent) => {
+        // No timer outlives its press: a lift or an ending settles the gesture
+        // and a late holdConfirm would be about a finger that is already up.
+        if (event.type === 'pressOut' || event.type === 'ended') clearHoldTimer();
         const step = reduceMicGesture(gestureRef.current, event);
         gestureRef.current = step.next;
         setTalkState(step.next.state);
         setTalkCancelArmed(step.next.outside);
+        setTalkSendArmed(step.next.state === 'held' && step.next.confirmed);
         for (const effect of step.effects) {
             switch (effect) {
                 case 'open':
                     // The phone cannot listen and speak at once, and being
-                    // read at while talking is unusable besides. Nothing is
-                    // recording yet, so the interrupt listener has nothing
-                    // to cut.
+                    // read at while talking is unusable besides. The mic holds
+                    // the session for the WHOLE capture, so the reader is
+                    // gated rather than merely cut: a reply still streaming in
+                    // would otherwise queue another sentence a moment later
+                    // and take the audio category back under the recogniser
+                    // (DROVE-143). Nothing is recording yet, so the interrupt
+                    // listener has nothing to cut.
+                    readAloud.setMicHeld(true);
                     readAloud.interrupt('mic');
                     baseRef.current = callbacks.current.getComposerText();
                     capture.begin('hold');
                     hapticsLight();
+                    break;
+                case 'watchHold':
+                    // The tap-versus-hold split is decided HERE, under the
+                    // finger, and the tick it fires is how the boundary is
+                    // felt rather than guessed (DROVE-140).
+                    clearHoldTimer();
+                    holdTimerRef.current = setTimeout(() => {
+                        holdTimerRef.current = null;
+                        dispatchRef.current({ type: 'holdConfirm' });
+                    }, HOLD_MIN_MS);
                     break;
                 case 'latch':
                     capture.latch();
@@ -209,7 +259,9 @@ export function useVoiceComposer(options: VoiceComposerOptions): VoiceComposerSt
                     break;
             }
         }
-    }, [capture]);
+    }, [capture, clearHoldTimer]);
+
+    dispatchRef.current = dispatch;
 
     // The capture ending for any reason other than the gesture (idle stop,
     // interrupt, the recogniser giving up, a start that failed) lets the
@@ -226,8 +278,11 @@ export function useVoiceComposer(options: VoiceComposerOptions): VoiceComposerSt
 
     // What the recogniser hears, and whether it gave up on its own.
     React.useEffect(() => {
-        const partials = addDictationPartialListener((text) => capture.partial(text));
-        const ended = addDictationEndedListener((text) => capture.recogniserEnded(text));
+        // The task id is what makes a pause continue rather than overwrite
+        // (DROVE-140); it is undefined on a build that cannot restart a task,
+        // where every partial replaces exactly as it always did.
+        const partials = addDictationPartialListener((text, task) => capture.partial(text, task));
+        const ended = addDictationEndedListener((text, _reason, task) => capture.recogniserEnded(text, task));
         return () => {
             partials.remove();
             ended.remove();
@@ -243,14 +298,28 @@ export function useVoiceComposer(options: VoiceComposerOptions): VoiceComposerSt
         return () => clearInterval(interval);
     }, [wantsClock, capture]);
 
-    // Nothing is left recording when the screen goes away.
-    React.useEffect(() => () => { capture.discard('left-session'); }, [capture]);
+    // The reader gets the audio session back only once the native side has
+    // finished with it. `settling` is part of that window: the recogniser is
+    // still resolving the last stop and has not released the category yet
+    // (DROVE-143).
+    React.useEffect(() => {
+        if (talk.active || talk.settling) return;
+        readAloud.setMicHeld(false);
+    }, [talk.active, talk.settling]);
+
+    // Nothing is left recording when the screen goes away, and nothing is left
+    // holding the reader silent either.
+    React.useEffect(() => () => {
+        capture.discard('left-session');
+        readAloud.setMicHeld(false);
+        clearHoldTimer();
+    }, [capture, clearHoldTimer]);
 
     const onReadAloudToggle = React.useCallback(() => {
         setReadAloudEnabled(!readAloudEnabled);
     }, [readAloudEnabled, setReadAloudEnabled]);
 
-    const onTalkPressIn = React.useCallback(() => {
+    const onTalkPressIn = React.useCallback((touchAt?: number) => {
         // The recogniser is still settling the last stop: a press now would
         // open nothing and leave the button claiming otherwise.
         if (capture.current.settling) return;
@@ -268,10 +337,10 @@ export function useVoiceComposer(options: VoiceComposerOptions): VoiceComposerSt
                 : t('agentInput.dictate.needsNewerBuild', { build: block.build ?? unknownBuild }));
             return;
         }
-        dispatch({ type: 'pressIn', at: Date.now() });
+        dispatch({ type: 'pressIn', at: Date.now(), touchAt });
     }, [capture, dispatch]);
-    const onTalkPressOut = React.useCallback(() => {
-        dispatch({ type: 'pressOut', at: Date.now() });
+    const onTalkPressOut = React.useCallback((touchAt?: number) => {
+        dispatch({ type: 'pressOut', at: Date.now(), touchAt });
     }, [dispatch]);
     const onTalkSlide = React.useCallback((inside: boolean) => {
         dispatch({ type: 'slide', inside });
@@ -292,6 +361,7 @@ export function useVoiceComposer(options: VoiceComposerOptions): VoiceComposerSt
         onTalkCancel: offersDictation ? onTalkCancel : undefined,
         talkState: offersDictation ? talkState : undefined,
         talkCancelArmed: offersDictation ? talkCancelArmed : undefined,
+        talkSendArmed: offersDictation ? talkSendArmed : undefined,
         talk: offersDictation ? talk : undefined,
     };
 }

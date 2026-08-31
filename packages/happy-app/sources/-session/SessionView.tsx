@@ -1198,6 +1198,7 @@ export function SessionViewLoaded({
                 onTalkCancel={voiceComposer.onTalkCancel}
                 talkState={voiceComposer.talkState}
                 talkCancelArmed={voiceComposer.talkCancelArmed}
+                talkSendArmed={voiceComposer.talkSendArmed}
                 talk={voiceComposer.talk}
                 onAbort={isDisconnected || !rigCanAbort(session.metadata) ? undefined : handleAbort}
                 showAbortButton={rigCanAbort(session.metadata) && (

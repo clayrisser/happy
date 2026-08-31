@@ -239,6 +239,12 @@ export class ReadAloudReader {
     private readonly interruptListeners = new Set<ReadAloudInterruptListener>();
     private readonly playheadListeners = new Set<ReadAloudPlayheadListener>();
     private enabled = false;
+    /**
+     * The microphone holds the audio session, so the reader says nothing
+     * (DROVE-143). Not the same as disabled: the timeline keeps filling and
+     * reading picks up from where it stood as soon as the mic lets go.
+     */
+    private micHeld = false;
     private focused: string | null = null;
     /**
      * Every sentence this session has produced, in order, spoken or not. It is
@@ -362,6 +368,40 @@ export class ReadAloudReader {
         if (this.enabled === enabled) return;
         this.enabled = enabled;
         if (!enabled) this.interrupt('toggled-off');
+    }
+
+    get isMicHeld(): boolean {
+        return this.micHeld;
+    }
+
+    /**
+     * The microphone has the audio session, or has given it back (DROVE-143).
+     *
+     * `interrupt('mic')` cuts the sentence in flight, but cutting once is not
+     * enough: the reader is a QUEUE, and a reply still streaming in enqueues
+     * another sentence a moment later, which pumps, which speaks, and every
+     * `speak` sets the session to `.playback`. The recogniser then reads its
+     * input format in the wrong category, gets 0 Hz / 0 channels, and the
+     * native guard refuses the capture. From outside that is a mic press that
+     * pops an alert and a button that does not stay open.
+     *
+     * So the reader is silent for the WHOLE capture, not merely at the start
+     * of it. Nothing is thrown away: sentences that arrive meanwhile sit in
+     * the timeline and reading carries on from the same position when the mic
+     * lets go. The pause in the native module is the belt under this.
+     */
+    setMicHeld(held: boolean): void {
+        if (this.micHeld === held) return;
+        this.micHeld = held;
+        if (held) {
+            // Stop what is in flight AND hand the session back. A paused
+            // utterance still owns the category, which is the fight itself.
+            this.speaking = false;
+            this.speakingTurn = null;
+            this.rest();
+            return;
+        }
+        this.pump();
     }
 
     /**
@@ -749,6 +789,9 @@ export class ReadAloudReader {
 
     private pump(): void {
         if (this.speaking) return;
+        // The microphone has the audio session. Everything queued stays
+        // queued; setMicHeld(false) pumps again (DROVE-143).
+        if (this.micHeld) return;
 
         // Nothing already said is ever a candidate, so every measure below
         // this line is about unread material only (DROVE-126).
