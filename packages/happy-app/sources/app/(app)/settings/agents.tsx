@@ -6,6 +6,7 @@ import { ItemGroup } from '@/components/ItemGroup';
 import { ItemList } from '@/components/ItemList';
 import {
     getEffortLevelsForModel,
+    getEffortLevelsForPicker,
     getHardcodedModelModes,
     getHardcodedPermissionModes,
     type ModeOption,
@@ -77,7 +78,20 @@ export default function AgentsSettingsScreen() {
         field: AgentDefaultField,
         value: string | null,
     ) => {
-        setAgentDefaultOverrides(setAgentDefaultOverride(agentDefaultOverrides, agent, field, value));
+        let next = setAgentDefaultOverride(agentDefaultOverrides, agent, field, value);
+        if (field === 'modelMode') {
+            // The effort ceiling is per model (DROVE-101). A new model default
+            // can strand the effort default above it, so move it to the top of
+            // what the new model reaches rather than leaving a value the pane
+            // will silently downgrade.
+            const resolved = resolveAgentDefaultConfig(next, agent);
+            const levels = getEffortLevelsForModel(agent, resolved.modelMode);
+            const effort = resolved.effortLevel;
+            if (levels.length > 0 && effort && !levels.some((level) => level.key === effort)) {
+                next = setAgentDefaultOverride(next, agent, 'effortLevel', levels[levels.length - 1].key);
+            }
+        }
+        setAgentDefaultOverrides(next);
     }, [agentDefaultOverrides, setAgentDefaultOverrides]);
 
     const editCustomCodexModel = React.useCallback(async (currentValue?: string) => {
@@ -103,12 +117,16 @@ export default function AgentsSettingsScreen() {
         subtitle: string | undefined,
         selected: boolean,
         value: string | null,
+        // Out of reach on the model this agent defaults to: the row stays, with
+        // its reason, so the level is visibly gated rather than missing.
+        disabled?: boolean,
     ) => (
         <Item
             key={`${agent}-${field}-${value ?? 'default'}`}
             title={title}
             subtitle={subtitle}
-            onPress={() => updateOverride(agent, field, value)}
+            onPress={disabled ? undefined : () => updateOverride(agent, field, value)}
+            disabled={disabled}
             showChevron={false}
             rightElement={selected ? (
                 <Ionicons name="checkmark" size={20} color={theme.colors.header.tint} />
@@ -156,6 +174,7 @@ export default function AgentsSettingsScreen() {
                             option.description ?? undefined,
                             hasOverride && overrideValue === option.key,
                             option.key,
+                            option.disabled,
                         ))}
                         {agent === 'codex' && config.field === 'modelMode' && (
                             <Item
@@ -236,7 +255,7 @@ export default function AgentsSettingsScreen() {
                 const effectiveDefaults = resolveAgentDefaultConfig(agentDefaultOverrides, agent);
                 const permissionOptions = getHardcodedPermissionModes(agent, t);
                 const modelOptions = getHardcodedModelModes(agent, t).filter((option) => option.key !== 'default');
-                const effortOptions = getEffortLevelsForModel(agent, effectiveDefaults.modelMode);
+                const effortOptions = getEffortLevelsForPicker(agent, effectiveDefaults.modelMode);
                 const fields: FieldConfig[] = [
                     {
                         field: 'permissionMode',

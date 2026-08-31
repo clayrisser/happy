@@ -1137,7 +1137,9 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 selectedKey: props.effortLevel?.key,
                 onSelect: (key) => {
                     const level = availableEffortLevels.find((candidate) => candidate.key === key);
-                    if (!level) return;
+                    // A disabled row says why the level is out of reach; it is
+                    // not a pick (DROVE-101).
+                    if (!level || level.disabled) return;
                     hapticsLight();
                     props.onEffortLevelChange?.(level);
                 },
@@ -1452,16 +1454,19 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         label: string,
         description: string | null | undefined,
         onPress: () => void,
+        disabled?: boolean,
     ) => (
         <Pressable
             key={key}
-            onPress={onPress}
+            onPress={disabled ? undefined : onPress}
+            disabled={disabled}
             style={({ pressed }) => ({
                 flexDirection: 'row',
                 alignItems: 'flex-start',
                 paddingHorizontal: 16,
                 paddingVertical: 8,
-                backgroundColor: pressed ? theme.colors.surfacePressed : 'transparent',
+                opacity: disabled ? 0.45 : 1,
+                backgroundColor: pressed && !disabled ? theme.colors.surfacePressed : 'transparent',
             })}
         >
             <View style={{
@@ -1591,6 +1596,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                             props.onEffortLevelChange?.(level);
                                             closePicker();
                                         },
+                                        level.disabled,
                                     ))}
                                 </View>
                             </>
@@ -1873,10 +1879,16 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                                     </Text>
                                                     {availableEffortLevels.map((level) => {
                                                         const isSelected = props.effortLevel?.key === level.key;
+                                                        // Out of reach on this model: the row
+                                                        // stays, with its reason, but it is not
+                                                        // a pick (DROVE-101).
+                                                        const isDisabled = !!level.disabled;
                                                         return (
                                                             <BubblePressable
                                                                 key={level.key}
+                                                                disabled={isDisabled}
                                                                 onPress={() => {
+                                                                    if (isDisabled) return;
                                                                     hapticsLight();
                                                                     props.onEffortLevelChange?.(level);
                                                                     closePicker();
@@ -1888,7 +1900,8 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                                                     paddingVertical: 8,
                                                                     marginHorizontal: 8,
                                                                     borderRadius: 14,
-                                                                    backgroundColor: pressed
+                                                                    opacity: isDisabled ? 0.45 : 1,
+                                                                    backgroundColor: pressed && !isDisabled
                                                                         ? theme.colors.surfacePressedOverlay
                                                                         : isSelected
                                                                             ? theme.colors.glass.backgroundSubtle

@@ -14,6 +14,8 @@ import {
     getAvailableModels,
     getAvailablePermissionModes,
     getEffortLevelsForModel,
+    getEffortLevelsForPicker,
+    getHighestReachableEffortKey,
     includePaneModel,
     includePanePermissionMode,
     resolvePaneModelKey,
@@ -825,6 +827,13 @@ export function SessionViewLoaded({
     const availableEffortLevels = React.useMemo<EffortLevel[]>(() => (
         getEffortLevelsForModel(flavor, modelKey, session.metadata)
     ), [flavor, modelKey, session.metadata]);
+    // The sheet lists one row more than the session can run: a level this model
+    // cannot reach is shown disabled with the models that do support it, so it
+    // is visibly out of reach rather than quietly gone (DROVE-101). Resolution
+    // and defaults stay on the reachable list above.
+    const pickerEffortLevels = React.useMemo<EffortLevel[]>(() => (
+        getEffortLevelsForPicker(flavor, modelKey, session.metadata)
+    ), [flavor, modelKey, session.metadata]);
     // Same rule for effort, from the same transcript field. `ultracode` is the
     // one pick the pane can never confirm: Claude Code records it as the xhigh
     // it runs at, so a session set to Ultracode reports `xhigh` and the chip
@@ -887,9 +896,13 @@ export function SessionViewLoaded({
         const currentEffortSupported = session.effortLevel
             ? nextEffortLevels.some((level) => level.key === session.effortLevel)
             : true;
+        // An effort the new model cannot reach lands on the top of what it can
+        // reach, not on null and not on the bottom of the scale (DROVE-101).
+        const fallbackEffort = mode.defaultThinkingLevel
+            ?? getHighestReachableEffortKey(flavor, mode.key, session.metadata);
         sessionSetAgentModes(sessionId, {
             modelMode: mode.key,
-            ...(!currentEffortSupported ? { effortLevel: mode.defaultThinkingLevel ?? null } : {}),
+            ...(!currentEffortSupported ? { effortLevel: fallbackEffort } : {}),
         });
     }, [sessionId, flavor, session.metadata, session.effortLevel]);
 
@@ -1154,7 +1167,7 @@ export function SessionViewLoaded({
                 availableModels={availableModels}
                 onModelModeChange={isRigModelSelectionEnabled(session.metadata) ? updateModelMode : undefined}
                 effortLevel={effortLevel}
-                availableEffortLevels={availableEffortLevels}
+                availableEffortLevels={pickerEffortLevels}
                 onEffortLevelChange={isRigReasoningSelectionEnabled(session.metadata) ? updateEffortLevel : undefined}
                 metadata={session.metadata}
                 connectionStatus={connectionStatus}
