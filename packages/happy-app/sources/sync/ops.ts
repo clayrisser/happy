@@ -913,7 +913,15 @@ export async function sessionDeny(sessionId: string, id: string, mode?: 'default
 }
 
 /**
- * Request mode change for a session
+ * Request mode change for a session.
+ *
+ * Nothing in this app calls it, and nothing should start: Cattle Drover has
+ * ONE mode. A session lives in a tmux pane, the pane is the session, and the
+ * CLI no longer registers a `switch` RPC for one (DROVE-79), so this resolves
+ * "Method not found" against every pane session, which is the only kind the
+ * daemon spawns. Wiring a control to it would offer a takeover that ends the
+ * terminal instead of switching it. Kept only for the paneless sessions
+ * upstream still has.
  */
 export async function sessionSwitch(sessionId: string, to: 'remote' | 'local'): Promise<boolean> {
     const request: SessionModeChangeRequest = { to };

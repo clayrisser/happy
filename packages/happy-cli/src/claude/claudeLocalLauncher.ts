@@ -763,9 +763,31 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
         // and nothing else; for a paneless one it still stops the child and
         // switches to remote mode. See doAbort (DROVE-13).
         session.client.rpcHandlerManager.registerHandler('abort', doAbort);
-        // The user pressing "switch to remote": explicit, so a second press
-        // inside 30s overrides the subagent hold above.
-        session.client.rpcHandlerManager.registerHandler('switch', () => doSwitch(true));
+        /**
+         * DROVE-79: a pane session exposes NO `switch` RPC at all.
+         *
+         * Cattle Drover has one mode for a pane. The terminal IS the session,
+         * so there is nothing to switch TO, and exitReasonAfterChild says so by
+         * returning `exit` for every pane child whatever is on the queue. That
+         * left this handler unable to do the one thing its name promises: it
+         * aborted the child, the child died, and the launcher exited. A button
+         * the app calls "switch to remote" would have ended the terminal Clay
+         * is watching.
+         *
+         * Absent rather than a refusal, so the app can read the capability as
+         * gone: with no handler the method is never announced to the server and
+         * `sessionSwitch` comes back "Method not found", which a client can
+         * render as "this session has one mode" instead of offering a control
+         * that destroys the session. Nothing else registers `switch` on this
+         * path either. Only claudeRemoteLauncher does, and a pane session
+         * never reaches remote mode, so skipping the register is enough to
+         * leave the method unregistered for the life of the process.
+         */
+        if (!tmuxPane) {
+            // The user pressing "switch to remote": explicit, so a second press
+            // inside 30s overrides the subagent hold above.
+            session.client.rpcHandlerManager.registerHandler('switch', () => doSwitch(true));
+        }
 
         // A flip stops the child the same way a switch does — the difference
         // is what happens next, and that is decided below rather than here.
@@ -1206,7 +1228,12 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
 
         // Set handlers to no-op
         session.client.rpcHandlerManager.registerHandler('abort', async () => { });
-        session.client.rpcHandlerManager.registerHandler('switch', async () => { });
+        // DROVE-79: still absent for a pane session, not a no-op. A registered
+        // method is a capability the app can see and call, and this session
+        // has nowhere to switch to whether a launcher owns it or not.
+        if (!tmuxPane) {
+            session.client.rpcHandlerManager.registerHandler('switch', async () => { });
+        }
         session.queue.setOnMessage(null);
         // The tracker dies with this launcher call; the controller outlives it.
         session.flip?.setInFlightProbe(null);
