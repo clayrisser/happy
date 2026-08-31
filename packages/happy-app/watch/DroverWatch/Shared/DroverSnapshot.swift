@@ -86,7 +86,9 @@ struct DroverGateOption: Codable, Identifiable, Equatable, Hashable {
         case label
         case detail = "description"
     }
+}
 
+extension DroverGateOption {
     /// `id` falls back to the label instead of being required. Claude's own
     /// AskUserQuestion options carry {label, description} and NO id, while the
     /// bus's carry one, and the wrist sees gates from both — requiring the key
@@ -94,6 +96,10 @@ struct DroverGateOption: Codable, Identifiable, Equatable, Hashable {
     /// fallback: happy-cli matches an answer with `o.id === candidate ||
     /// o.label === candidate` (src/drover/droverBridge.ts), so a label sent as
     /// the id still resolves to the right option.
+    ///
+    /// In an extension, like DroverSnapshot's, so the memberwise init survives
+    /// for the demo fixtures (DROVE-75); an init written in the body would
+    /// have replaced it.
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let label = try container.decode(String.self, forKey: .label)

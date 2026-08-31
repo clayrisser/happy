@@ -16,6 +16,9 @@ enum DroverRoute: Hashable {
     /// toolbar (DROVE-91). A tap on a session row opens the conversation;
     /// this is the rest of what the row used to open.
     case detail(DroverSession)
+    /// The Playground: every buzz and every card on demand, local to this
+    /// wrist (DROVE-75).
+    case demo
 }
 
 /// The wall: every gate waiting on a human, newest first (BASED-98).
@@ -73,6 +76,7 @@ struct GateListView: View {
                                 // is merely slow.
                                 .disabled(store.isAnswering(gate))
                             }
+                            PlaygroundRow()
                         }
                         .listStyle(.carousel)
                     }
@@ -97,6 +101,7 @@ struct GateListView: View {
                 switch route {
                 case .sessions: SessionListView()
                 case let .detail(session): SessionDetailView(session: session)
+                case .demo: DemoView()
                 }
             }
             // A session row opens the CONVERSATION (DROVE-91): the transcript
@@ -183,6 +188,11 @@ private struct EmptyStateView: View {
                     .foregroundStyle(.red)
                     .multilineTextAlignment(.center)
             }
+            // The wall is empty most of the day, and the Playground is how
+            // the buzzes get felt without waiting for it not to be
+            // (DROVE-75). Same door as the row at the foot of the list.
+            PlaygroundRow()
+                .padding(.top, 6)
         }
         .padding()
     }
@@ -213,6 +223,19 @@ private struct EmptyStateView: View {
         // that second is the accusation this whole ticket is about.
         case .asking: return "Asking your phone"
         case .stale: return "Out of date"
+        }
+    }
+}
+
+/// The door to the Playground (DROVE-75), at the foot of the wall and under
+/// the empty state. A value link like every other push in this stack
+/// (DROVE-10). Quiet on purpose: it is not a gate and must not read as one.
+private struct PlaygroundRow: View {
+    var body: some View {
+        NavigationLink(value: DroverRoute.demo) {
+            Label("Playground", systemImage: "waveform.path")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
         }
     }
 }

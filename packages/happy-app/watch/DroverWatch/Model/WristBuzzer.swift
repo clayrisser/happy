@@ -86,6 +86,13 @@ final class WristBuzzer {
         let fresh = events.filter { !played.contains($0.id) }
         guard let loudest = fresh.max(by: { $0.cue.rank < $1.cue.rank }) else { return }
         remember(fresh.map(\.id))
+        // The phone's "Buzz the watch" row publishes a `demo:` gate so the
+        // real pattern plays by the real path (DROVE-75). It buzzes like any
+        // gate; it is only LOGGED apart, so a demo in the console is never
+        // read as a missed real one.
+        if DroverDemo.isDemoId(loudest.id) {
+            DroverDemo.log("snapshot gate \(loudest.id) plays \(loudest.cue.rawValue) by the real path")
+        }
         if WKApplication.shared().applicationState == .active {
             play(loudest.cue)
         } else {
@@ -102,6 +109,22 @@ final class WristBuzzer {
     func replyStarted() {
         guard WKApplication.shared().applicationState == .active else { return }
         WKInterfaceDevice.current().play(.start)
+    }
+
+    /// Play one pattern now, for the Playground (DROVE-75).
+    ///
+    /// Straight to the Taptic Engine and nowhere else: not through `buzz`, so
+    /// nothing is remembered as played, nothing is ranked against anything,
+    /// and no notification is posted. Frontmost only, which `play` is anyway,
+    /// and the Playground is a screen, so it is. Every call is logged as a
+    /// demo before it plays, so a demo buzz reads as one in the console.
+    func demo(_ cue: WristCue) {
+        DroverDemo.log("buzz \(cue.rawValue): \(cue.beats.map(\.rawValue).joined(separator: " "))")
+        guard WKApplication.shared().applicationState == .active else {
+            DroverDemo.log("app not frontmost, \(cue.rawValue) cannot play")
+            return
+        }
+        play(cue)
     }
 
     /// The per-kind pattern, beat by beat.
@@ -125,7 +148,9 @@ final class WristBuzzer {
     private func alert(_ event: WristCueEvent) {
         guard let center else { return }
         let content = UNMutableNotificationContent()
-        content.title = event.cue.headline
+        // A demo gate says so on the lock screen too, like the phone's demo
+        // push does (DROVE-75).
+        content.title = DroverDemo.isDemoId(event.id) ? "Demo · \(event.cue.headline)" : event.cue.headline
         content.body = event.detail
         content.sound = .default
         // Time-sensitive is what gets a blocked session through a Focus. A

@@ -38,6 +38,11 @@ final class GateStore: NSObject, ObservableObject {
     /// The session whose transcript is on screen, told to the phone so it
     /// feeds that one (DROVE-91). Nil between transcript screens.
     @Published private(set) var openedSessionId: String?
+    /// The Playground cue playing right now, so its row can say so (DROVE-75).
+    /// Nil between patterns.
+    @Published private(set) var demoPlaying: WristCue?
+    /// The play-all run in flight, cancelled by any other demo tap.
+    private var demoTask: Task<Void, Never>?
 
     private var session: WCSession?
     /// When the ask in flight was made. Used to drop the reply of an ask that
@@ -155,6 +160,48 @@ final class GateStore: NSObject, ObservableObject {
     /// which is the only place watchOS will show the prompt (DROVE-62).
     func prepareBuzzer() {
         buzzer.requestAuthorization()
+    }
+
+    /// Play one cue's pattern from the Playground (DROVE-75). Local to this
+    /// wrist: nothing is sent, nothing is remembered as played, and no
+    /// snapshot is involved. `demoPlaying` holds the cue for as long as the
+    /// pattern takes plus the gap, so the row lights while it can be felt.
+    func demoBuzz(_ cue: WristCue) {
+        demoTask?.cancel()
+        demoPlaying = cue
+        buzzer.demo(cue)
+        demoTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(DroverDemo.gapAfter(cue) * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            self?.demoPlaying = nil
+        }
+    }
+
+    /// Every cue back to back, most urgent first, with a pause after each so
+    /// the last beat of one is not felt as the first of the next (DROVE-75).
+    /// This is the comparison AC 1 asks for: the patterns have to be told
+    /// apart without looking, and that can only be judged side by side.
+    func demoBuzzAll() {
+        demoTask?.cancel()
+        let cues = DroverDemo.cues
+        DroverDemo.log("play all: \(cues.map(\.rawValue).joined(separator: ", "))")
+        demoTask = Task { @MainActor [weak self] in
+            for cue in cues {
+                guard let self, !Task.isCancelled else { return }
+                self.demoPlaying = cue
+                self.buzzer.demo(cue)
+                try? await Task.sleep(nanoseconds: UInt64(DroverDemo.gapAfter(cue) * 1_000_000_000))
+            }
+            guard !Task.isCancelled else { return }
+            self?.demoPlaying = nil
+        }
+    }
+
+    /// Stop a play-all, when the Playground is left mid-run.
+    func stopDemo() {
+        demoTask?.cancel()
+        demoTask = nil
+        demoPlaying = nil
     }
 
     /// Every gate the phone lists, newest first.
@@ -293,6 +340,22 @@ final class GateStore: NSObject, ObservableObject {
         optionIds: [String]? = nil,
         forSession: Bool = false
     ) -> Bool {
+        // A demo card is never answered on the wire (DROVE-75). Refused
+        // before anything is encoded, so no button on GateDetailView can put
+        // a `demo:` id on the channel: the fixtures in DroverDemo and the
+        // phone's own "Buzz the watch" gate both carry the prefix. The phone
+        // and the Mac refuse the same prefix again, but this is the wall the
+        // wrist owns. Logged as a demo, and said on screen, because a button
+        // that does nothing with no word is the failure the banner exists for.
+        if DroverDemo.isDemoId(gate.id) {
+            DroverDemo.log(
+                "answer refused for \(gate.id): \(allow ? "allow" : "deny")"
+                    + " option=\(optionId ?? optionIds?.joined(separator: "+") ?? "none")"
+                    + " text=\(text == nil ? "none" : "typed"); nothing sent"
+            )
+            lastError = "Demo card, nothing was sent"
+            return false
+        }
         // Whitespace is not an answer. The bus refuses a blank one outright
         // (server.js rejects it 400) and an older bus takes it and records
         // nothing, which dismisses every surface and leaves the waiting hook

@@ -185,6 +185,11 @@ struct SharedWireTests {
         aDeltaForAnotherSessionReplacesTheTranscript()
         aRowTheWristNeverGotIsReportedMissing()
         anOpenedMessageCarriesItsKind()
+        everyDemoFixtureIsADemo()
+        theDemoFixturesCoverEveryShapeTheWristDraws()
+        theDemoPlaysEveryCueLoudestFirst()
+        aDemoGapOutlastsThePattern()
+        thePhonesBuzzGateIsADemoAndStillBuzzes()
 
         if failures.isEmpty {
             print("\nall wire checks passed")
@@ -192,6 +197,99 @@ struct SharedWireTests {
         }
         print("\n\(failures.count) failed")
         exit(1)
+    }
+
+    // MARK: DROVE-75, the Playground
+
+    /// The wall the wrist owns: `GateStore.answer` refuses the `demo:` prefix
+    /// before encoding anything, so every fixture has to carry it. One
+    /// fixture without it would be a card whose Allow button sends.
+    static func everyDemoFixtureIsADemo() {
+        let gates = DroverDemo.gates()
+        check(!gates.isEmpty, "the demo has fixtures")
+        check(gates.allSatisfy { DroverDemo.isDemoId($0.id) }, "every demo fixture id starts with demo:")
+        check(gates.allSatisfy { $0.account == "demo" }, "every demo fixture is on the demo account")
+        check(Set(gates.map(\.id)).count == gates.count, "demo fixture ids are distinct")
+        check(DroverDemo.idPrefix == "demo:", "the prefix is the phone's DEMO_ID_PREFIX")
+        check(!DroverDemo.isDemoId("s1:r1"), "a real gate id is not a demo")
+        check(!DroverDemo.isDemoId("demo"), "the bare word is not the prefix")
+    }
+
+    /// The layouts are compared side by side, so every shape GateDetailView
+    /// draws has to be on the list: allow/deny, pick one, typed, pick
+    /// several, done/drop, and an acknowledge.
+    static func theDemoFixturesCoverEveryShapeTheWristDraws() {
+        let gates = DroverDemo.gates()
+        let kinds = Set(gates.map(\.classification))
+        check(kinds.contains(.permission), "a permission card is on the demo")
+        check(kinds.contains(.question), "a question card is on the demo")
+        check(kinds.contains(.todo), "a needs-you card is on the demo")
+        check(kinds.contains(.expiry), "an account-limit card is on the demo")
+        check(!kinds.contains(.unknown), "no fixture has a kind the wrist does not know")
+        let questions = gates.filter(\.isQuestion)
+        check(questions.contains { !$0.answerableOptions.isEmpty && !$0.allowsMultipleAnswers }, "a pick-one question is on the demo")
+        check(questions.contains { $0.answerableOptions.isEmpty }, "a typed question is on the demo")
+        check(questions.contains { $0.allowsMultipleAnswers }, "a pick-several question is on the demo")
+        // The fixtures are built with the memberwise init, which the
+        // hand-written decoder in an extension has to leave standing; and
+        // they round-trip, so a fixture is a gate the wire could carry. On a
+        // whole second, because ISO-8601 carries none of the fraction.
+        let stamped = DroverDemo.gates(now: Date(timeIntervalSince1970: 1_756_600_000))
+        guard let data = try? DroverSnapshot.encoder.encode(stamped),
+              let again = try? DroverSnapshot.decoder.decode([DroverGate].self, from: data) else {
+            check(false, "the demo fixtures round-trip through the wire coders")
+            return
+        }
+        check(again == stamped, "the demo fixtures round-trip through the wire coders")
+    }
+
+    /// Back to back, most urgent first, and none missing: a cue the enum
+    /// grows must show up on the Playground without anyone remembering to
+    /// add it.
+    static func theDemoPlaysEveryCueLoudestFirst() {
+        let cues = DroverDemo.cues
+        check(cues.count == WristCue.allCases.count, "the demo plays every cue")
+        check(Set(cues).count == cues.count, "the demo plays each cue once")
+        check(cues.first == .needsYou && cues.last == .finished, "the demo plays loudest first")
+        check(zip(cues, cues.dropFirst()).allSatisfy { $0.rank > $1.rank }, "the demo order is the wrist's rank")
+        check(DroverDemo.describe(.needsYou) == "3 beats · tap, thud, thud", "a pattern reads as its beats")
+        check(DroverDemo.describe(.permission) == "1 beat · tap", "one beat is singular")
+    }
+
+    /// The pause after each pattern has to be longer than the pattern, or
+    /// the last beat of one is the first of the next and the comparison is
+    /// worthless.
+    static func aDemoGapOutlastsThePattern() {
+        for cue in WristCue.allCases {
+            let pattern = Double(max(0, cue.beats.count - 1)) * cue.beatGap
+            check(DroverDemo.gapAfter(cue) > pattern + 0.5, "the gap after \(cue.rawValue) outlasts its pattern")
+        }
+    }
+
+    /// What the phone's "Buzz the watch" row publishes (sources/utils/
+    /// wristCues.ts demoBuzzGate): a `demo:buzz-<cue>-<stamp>` gate of the
+    /// cue's wire kind, in an otherwise normal snapshot. It has to decode, be
+    /// a demo, and still earn the cue, because the real pattern by the real
+    /// path is the whole reason the phone sends it.
+    static func thePhonesBuzzGateIsADemoAndStillBuzzes() {
+        let now = Date()
+        let iso = ISO8601DateFormatter().string(from: now)
+        let payload = """
+        {"gates":[{"id":"demo:buzz-needsYou-1756600000000","title":"Demo · Do something",
+        "reason":"the phone's channel demo","preview":"3 beats: An agent asked you to do something. Three taps.",
+        "kind":"todo","createdAt":"\(iso)","account":"demo"}],
+        "updatedAt":"\(iso)","connected":true}
+        """
+        guard let snapshot = try? DroverSnapshot.decoder.decode(DroverSnapshot.self, from: Data(payload.utf8)),
+              let gate = snapshot.gates.first else {
+            check(false, "the phone's buzz gate decodes")
+            return
+        }
+        check(DroverDemo.isDemoId(gate.id), "the phone's buzz gate is a demo")
+        check(gate.classification == .todo, "the phone's buzz gate keeps its wire kind")
+        let cues = WristCueDiff.cues(from: .empty, to: snapshot, now: now)
+        check(cues.map(\.cue) == [.needsYou], "the phone's buzz gate earns the cue it was sent for")
+        check(cues.first.map { DroverDemo.isDemoId($0.id) } == true, "the cue it earns is a demo by id, for the log")
     }
 
     /// Absent, never null. WatchConnectivity payloads take property-list types
