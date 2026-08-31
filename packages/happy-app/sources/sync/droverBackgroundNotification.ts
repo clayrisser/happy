@@ -40,6 +40,7 @@ import * as Notifications from 'expo-notifications';
 import * as TaskManager from 'expo-task-manager';
 import { Platform } from 'react-native';
 import {
+    describeDroverWakeBudget,
     getDroverWatchStatus,
     isDroverWatchAvailable,
     publishDroverSnapshot,
@@ -47,6 +48,15 @@ import {
 } from 'drover-watch';
 import { collectAccounts, collectGates, collectSessions } from './droverWatchFeed';
 import { storage } from './storage';
+import {
+    claimWristCues,
+    noteWristRelay,
+    releaseWristCues,
+    rememberWristRelayState,
+    wristCueIds,
+    wristRelayState,
+    wristRefusal,
+} from './droverWristRelay';
 
 export const DROVER_BG_TASK = 'drover-background-wake';
 
@@ -63,8 +73,14 @@ export const DROVER_BG_TASK = 'drover-background-wake';
  * state, and this path must publish unconditionally — the wrist is stale by
  * definition or the wake would not have been sent. Collapse the two the day
  * droverWatchFeed exports a republish of its own.
+ *
+ * The PUBLISH is unconditional; the WAKE is not, since DROVE-224. The two
+ * paths are two carriers of the same cue and the ledger in droverWristRelay is
+ * what stops them both from spending — a cue the foreground feed carried as
+ * Clay put the phone down is claimed, so this publishes and stays quiet, and
+ * a `gate-resolved` wake carries nothing at all.
  */
-async function republishWatchSnapshot(): Promise<boolean> {
+export async function republishWatchSnapshot(): Promise<boolean> {
     if (!isDroverWatchAvailable()) return false;
 
     // An empty store means "not hydrated yet", not "nothing is pending". The
@@ -87,18 +103,39 @@ async function republishWatchSnapshot(): Promise<boolean> {
         connected: !!status.activated && status.paired && status.installed,
     };
     const published = await publishDroverSnapshot(snapshot);
-    // Wake the wrist too, unconditionally, because reaching this task at all
-    // means a gate changed — that is the entire content of the wake that
-    // brought us here — and the phone app being in the background is exactly
-    // the case where a publish alone reaches the watch app only "on next
-    // launch", which is whenever Clay next opens it (DROVE-62).
+    if (!published) return false;
+
+    // A publish alone reaches a sleeping watch app only "on next launch",
+    // which is whenever Clay next opens it, so a wake is what makes this
+    // arrival a buzz (DROVE-62).
     //
-    // No change detection here, unlike the foreground feed: this path has no
-    // previous snapshot to diff against, and Apple's own budget for the push
-    // that triggers it is two or three an hour, so it cannot drain the
-    // background-launch allowance on its own.
-    if (published) void wakeDroverWatch(snapshot);
-    return published;
+    // It is no longer unconditional (DROVE-224). This task and the foreground
+    // feed are two carriers of the same cue, and the ledger is what stops both
+    // from spending: a gate the feed already carried a second ago, as Clay put
+    // the phone down, is claimed, so the wake that follows publishes and stays
+    // quiet. The other half is worth as much — a `gate-resolved` wake carries
+    // nothing at all, and used to spend a background launch anyway.
+    //
+    // The `before` is the shared record rather than a second one of this
+    // task's own: a headless launch has no memory, and giving it one would be
+    // a second answer to "what has the wrist already seen".
+    const cues = wristCueIds(wristRelayState(), snapshot);
+    const mine = claimWristCues(cues);
+    if (mine.length === 0) {
+        rememberWristRelayState(snapshot);
+        return true;
+    }
+
+    const spent = await wakeDroverWatch(snapshot);
+    if (!spent) {
+        // Nobody felt it, so it stays carryable for the next path. The state
+        // is left alone for the same reason.
+        releaseWristCues(mine);
+        noteWristRelay(wristRefusal(mine, 'mirror', describeDroverWakeBudget(status)));
+        return true;
+    }
+    rememberWristRelayState(snapshot);
+    return true;
 }
 
 // iOS only. drover-watch is a watchOS bridge with no counterpart on Android or

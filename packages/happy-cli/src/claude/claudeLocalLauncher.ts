@@ -1348,7 +1348,22 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
             abortChild: () => {
                 if (!processAbortController.signal.aborted) processAbortController.abort();
             },
-            announce: announceRelaunch,
+            /**
+             * Both surfaces, and the phone is the one that counts (DROVE-220).
+             *
+             * The tmux status line is on a Mac Clay is not looking at. On
+             * 2026-08-31 his session ran an eight-hour-old bundle through
+             * three shipped CLI fixes and every word about it went to that
+             * status line and a debug log, so he reported all three as still
+             * broken and three more lanes were sent after bugs that were
+             * already fixed. The conversation is where he is, so that is where
+             * the notice goes -- the same channel a held prompt uses to say it
+             * is waiting.
+             */
+            announce: (line) => announceRelaunch(
+                line,
+                (message) => session.client.sendSessionEvent({ type: 'message', message })
+            ),
         });
 
         // Messages this launcher accepted but could not hand over yet. They

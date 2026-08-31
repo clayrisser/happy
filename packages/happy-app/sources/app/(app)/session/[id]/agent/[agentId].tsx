@@ -1,5 +1,6 @@
 import * as React from 'react';
-import { ActivityIndicator, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, Text, View } from 'react-native';
+import { Octicons } from '@expo/vector-icons';
 import { Stack, useLocalSearchParams } from 'expo-router';
 import { ScopedTheme, StyleSheet, useUnistyles } from 'react-native-unistyles';
 
@@ -26,6 +27,8 @@ import {
 import { fetchSubagentTranscript } from '@/sync/subagentTranscriptRpc';
 import { t } from '@/text';
 import { type AgentRunState } from '@/utils/agentCard';
+import { SessionAgentsSheet } from '@/components/SessionAgentsSheet';
+import { useAgentChildRows } from '@/components/useAgentChildRows';
 import { formatElapsed, formatTokens } from '@/utils/liveStatus';
 import { subagentThemeName, subagentTintPaletteFor } from '@/utils/subagentTint';
 
@@ -114,6 +117,15 @@ const stylesheet = StyleSheet.create((theme) => ({
         color: theme.colors.textSecondary,
         fontSize: 12,
         ...Typography.mono(),
+    },
+    footerCount: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+        paddingHorizontal: 7,
+        paddingVertical: 2,
+        borderRadius: 9,
+        backgroundColor: theme.colors.surfaceHigh,
     },
 }));
 
@@ -257,6 +269,29 @@ export default React.memo(() => {
 
     const hasRows = transcript.messages.length > 0;
 
+    // What THIS agent has out (DROVE-185). Off the session's own live status,
+    // the same snapshot the status row reads, so an agent screen answers the
+    // question the session screen answers and never disagrees with it.
+    const childRows = useAgentChildRows(sessionId ?? null, agentId ?? null);
+    const [childrenOpen, setChildrenOpen] = React.useState(false);
+    const closeChildren = React.useCallback(() => setChildrenOpen(false), []);
+    const childSummary = React.useMemo(() => (
+        childRows.length > 0
+            ? {
+                headline: title,
+                rows: childRows,
+                main: null,
+                sideCount: childRows.length,
+                // This screen is scoped to ONE agent, so it has no session
+                // total to show (DROVE-184). The sheet draws no tally line
+                // when there is none, which is the same path a CLI too old
+                // to publish one takes.
+                tally: null,
+                sideTokens: null,
+            }
+            : null
+    ), [childRows, title]);
+
     let body: React.ReactNode;
     if (!loaded) {
         body = (
@@ -337,7 +372,31 @@ export default React.memo(() => {
                             <View style={styles.footer}>
                                 {live || trouble ? <ActivityIndicator size="small" color={theme.colors.textSecondary} /> : null}
                                 <Text style={styles.footerText}>{footerLine}</Text>
+                                {childSummary ? (
+                                    // The agent's own status-row count, in the
+                                    // one place on this screen that stays put
+                                    // while the transcript scrolls. Same
+                                    // number, same sheet as the session's.
+                                    <Pressable
+                                        onPress={() => setChildrenOpen(true)}
+                                        hitSlop={8}
+                                        accessibilityRole="button"
+                                        accessibilityLabel={`${childSummary.sideCount} nested ${childSummary.sideCount === 1 ? 'agent' : 'agents'}`}
+                                        style={({ pressed }) => [styles.footerCount, { opacity: pressed ? 0.6 : 1 }]}
+                                    >
+                                        <Octicons name="dependabot" size={11} color={theme.colors.textSecondary} />
+                                        <Text style={styles.footerText}>{childSummary.sideCount}</Text>
+                                    </Pressable>
+                                ) : null}
                             </View>
+                        ) : null}
+                        {childSummary ? (
+                            <SessionAgentsSheet
+                                sessionId={sessionId!}
+                                summary={childSummary}
+                                open={childrenOpen}
+                                onClose={closeChildren}
+                            />
                         ) : null}
                     </View>
                 </SubagentScopeContext.Provider>

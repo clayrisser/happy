@@ -70,7 +70,7 @@ vi.mock('./NativeSettingsMenu', () => ({ NativeSettingsMenu: host('NativeSetting
 vi.mock('./EffortSliderPopover', () => ({ EffortSliderPopover: host('EffortSliderPopover') }));
 
 const { ComposerSessionControls } = await import('./ComposerSessionControls');
-const { COMPOSER_CONTROL_PALETTE } = await import('./composerControlColour');
+const { COMPOSER_CONTROL_PALETTE, composerGaugeTrack } = await import('./composerControlColour');
 
 const palette = COMPOSER_CONTROL_PALETTE.dark;
 
@@ -189,6 +189,23 @@ describe('the colour each glyph is drawn in (DROVE-176, DROVE-215)', () => {
         }
     });
 
+    it('draws the dial’s arc under the needle at every level, not in the list divider', () => {
+        // DROVE-227. The needle was already the foreground; the TRACK was
+        // `theme.colors.divider`, which measures 1.05:1 on this glass, so the
+        // gauge read as a lone diagonal. composerControlColour.spec.ts holds
+        // the two contrast floors; this is the half only a render can show,
+        // that the call site actually passes the token.
+        const arc = (index: number) => mount({ effortIndex: index }).root
+            .findByType('Path' as any).props.stroke;
+        for (let level = 0; level < 6; level += 1) {
+            expect(arc(level), `level ${level}`).toBe(composerGaugeTrack(true));
+            expect(arc(level), `level ${level}`).not.toBe('divider');
+            // And it is not the needle's own colour, which is the other way
+            // this breaks: one solid shape with no mark in it.
+            expect(arc(level), `level ${level}`).not.toBe(palette.foreground);
+        }
+    });
+
     it('leaves the model on the foreground too, because a name is not a state', () => {
         // The style is an ARRAY since DROVE-217: the base style, then the
         // pending colour when a pick is in flight. Flattened, so this keeps
@@ -211,8 +228,13 @@ describe('the colour each glyph is drawn in (DROVE-176, DROVE-215)', () => {
                     .toBe(light.foreground);
             }
             for (let level = 0; level < 6; level += 1) {
-                expect(mount({ effortIndex: level }).root.findByType('Line' as any).props.stroke, `level ${level}`)
+                const gauge = mount({ effortIndex: level }).root;
+                expect(gauge.findByType('Line' as any).props.stroke, `level ${level}`)
                     .toBe(light.foreground);
+                // The arc follows the theme too, at the light theme's own
+                // alpha over its own glass (DROVE-227).
+                expect(gauge.findByType('Path' as any).props.stroke, `level ${level}`)
+                    .toBe(composerGaugeTrack(false));
             }
         } finally {
             themeState.dark = true;

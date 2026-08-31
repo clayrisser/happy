@@ -24,6 +24,7 @@ export type LiveStatus = NonNullable<NonNullable<Metadata['liveStatus']>>;
 export type LiveStatusTool = NonNullable<LiveStatus['tool']>;
 export type LiveStatusAgent = NonNullable<LiveStatus['agents']>[number];
 export type LiveStatusWorkflow = NonNullable<LiveStatus['workflows']>[number];
+export type LiveStatusTokens = NonNullable<LiveStatus['tokens']>;
 
 /**
  * How long a snapshot may sit before we stop drawing timers off it.
@@ -35,6 +36,16 @@ export type LiveStatusWorkflow = NonNullable<LiveStatus['workflows']>[number];
  * argument as the wrist's own staleness check.
  */
 export const LIVE_STATUS_STALE_MS = 120_000;
+
+/**
+ * What the main thread is called when no tool names it.
+ *
+ * One constant rather than three literals, because the status strip now has to
+ * RECOGNISE it: the working word is the last thing on the row to give way
+ * (DROVE-223), so the row has to be able to tell it apart from a tool's name,
+ * and a second spelling of it here would quietly turn that rule off.
+ */
+export const LIVE_STATUS_WORKING_WORD = 'working';
 
 export function isLiveStatusFresh(status: LiveStatus | null | undefined, now: number): boolean {
     if (!status) return false;
@@ -85,6 +96,25 @@ export interface LiveStatusRow {
     toolId?: string;
     /** Claude Code's agent id, so a tap can open the agent's own transcript (DROVE-93). */
     agentId?: string;
+    /**
+     * How deep under a top-level agent this row sits (DROVE-185). 0 for
+     * everything the pane launched itself, and for tools and workflows.
+     *
+     * Rows stay FLAT: a nested agent is a row in this same array, just after
+     * its parent and carrying a depth. The tree is an ordering and a set of
+     * labels over the flat list, never a nested structure, because every count
+     * in the app is taken off this array and a child hidden inside its parent
+     * is a child that stops being counted.
+     */
+    depth: number;
+    /** The agent row this one sits under, absent at depth 0 (DROVE-185). */
+    parentId?: string;
+    /**
+     * Direct children present in this same snapshot (DROVE-185). Absent when
+     * there are none, so a row with no `childCount` draws exactly as it did
+     * before nesting existed.
+     */
+    childCount?: number;
 }
 
 /**
@@ -102,10 +132,75 @@ export interface LiveStatusRow {
 export interface LiveStatusMain {
     /** What the main thread is blocked on: the tool's name, or `working`. */
     label: string;
+    /**
+     * True when the label is the WORKING WORD rather than a tool's name
+     * (DROVE-223).
+     *
+     * The two look the same on the row and give way in opposite orders: a tool
+     * name folds first of the text on the strip, the working word folds last
+     * of anything on it. The strip reads this rather than comparing the label
+     * to a string, so the rule cannot drift from what `mainReadout` decided.
+     */
+    working: boolean;
     /** The turn's clock, ticking on this device. */
     elapsed: string;
-    /** `251.2k`, absent until the turn has spent anything. */
+    /**
+     * `251.2k` — the TALLY, main plus every subagent this turn (DROVE-184),
+     * not the main thread's share. It lives in this slot because the row must
+     * not grow a term; `tally.turnMain` is the main-only number, and the sheet
+     * behind the tap draws both.
+     */
     tokens?: string;
+}
+
+/**
+ * The tally: main thread plus every subagent, formatted (DROVE-184).
+ *
+ * Clay: "where's my damn token counter showing tally of all tokens used across
+ * main agent and all subagents". The strip's number was `main.tokens`, the
+ * MAIN transcript alone. Nine subagents at 200k each did not appear in it, so
+ * the row understated the night by an order of magnitude.
+ *
+ * Nothing here ADDS anything up. The CLI does the summing where the
+ * transcripts are, at the same `countTokens` calls that make the cards, and
+ * publishes four numbers; this only formats them. Adding up `status.agents`
+ * on the phone would give a different answer the moment an agent finished,
+ * because a finished agent leaves that array 90s later and takes its spend
+ * with it.
+ */
+export interface LiveStatusTally {
+    /** Main plus every subagent since the last prompt. What the row draws. */
+    turn: string;
+    /** The main thread's share of the turn, so main can be told from the fan-out. */
+    turnMain: string;
+    /** Main plus every subagent for the whole session, finished agents included. */
+    session: string;
+    /** The main thread's share of the session. */
+    sessionMain: string;
+    /** The subagents' share of the session, which is `session` less `sessionMain`. */
+    sessionAgents: string;
+    /** The numbers behind the strings, for anything that needs to compare them. */
+    raw: { turn: number; turnMain: number; session: number; sessionMain: number };
+}
+
+/** The published tally, or null on a CLI too old to publish one. */
+export function liveStatusTally(status: LiveStatus): LiveStatusTally | null {
+    const tokens = status.tokens;
+    if (!tokens) return null;
+    const raw = {
+        turn: tokens.turn,
+        turnMain: tokens.turnMain,
+        session: tokens.session,
+        sessionMain: tokens.sessionMain,
+    };
+    return {
+        turn: formatTokens(raw.turn),
+        turnMain: formatTokens(raw.turnMain),
+        session: formatTokens(raw.session),
+        sessionMain: formatTokens(raw.sessionMain),
+        sessionAgents: formatTokens(Math.max(0, raw.session - raw.sessionMain)),
+        raw,
+    };
 }
 
 export interface LiveStatusSummary {
@@ -131,13 +226,49 @@ export interface LiveStatusSummary {
      */
     main: LiveStatusMain | null;
     /**
-     * Background agents plus workflows: the number beside the fold, and the
-     * only thing on the row that speaks for the agents.
+     * Background agents plus workflows: the number beside the fold, the only
+     * thing on the row that speaks for the agents, and THE ONE DERIVATION any
+     * surface that counts agents reads (DROVE-155, DROVE-209, DROVE-185).
+     *
+     * The Morse heartbeat reads this field. It used to re-count by filtering
+     * `rows` for `kind === 'agent'`, which is agents WITHOUT workflows, so the
+     * wrist said two while the screen said three for as long as a workflow was
+     * running — the exact disagreement DROVE-209 set out to remove, surviving
+     * because its spec never put a workflow in the fixture. A workflow's own
+     * agents are not in `agents` at all (the CLI collapses them into
+     * done/total), so the workflow row IS those agents on this row; dropping
+     * it undercounts the fan-out rather than tidying it.
+     *
+     * NESTED AGENTS COUNT, and they always did (DROVE-185). Every agent at
+     * every depth is one entry in `agents`, so this number is unchanged by the
+     * tree: a session that showed nine before shows nine now, folded. That is
+     * the whole reason the rows stayed flat. They are also real work in
+     * flight, and the question this number answers is how much is out.
      */
     sideCount: number;
+    /**
+     * Main plus every subagent (DROVE-184). Null on a CLI too old to publish
+     * it, and the row falls back to the main thread's own count there.
+     */
+    tally: LiveStatusTally | null;
+    /**
+     * The token text the row draws when the MAIN thread is not what is running.
+     *
+     * A fan-out outlives the turn that launched it, so `main` is null while
+     * nine agents burn — the exact state Clay was looking at. Without this the
+     * row shows a bare agent count and no spend at all. Null when there is
+     * nothing to say, so the row is never given furniture.
+     */
+    sideTokens: string | null;
 }
 
-function agentRow(agent: LiveStatusAgent, now: number): LiveStatusRow {
+function agentRow(
+    agent: LiveStatusAgent,
+    now: number,
+    depth: number,
+    parentId: string | undefined,
+    childCount: number,
+): LiveStatusRow {
     return {
         kind: 'agent',
         key: `agent:${agent.id}`,
@@ -148,7 +279,81 @@ function agentRow(agent: LiveStatusAgent, now: number): LiveStatusRow {
             : {}),
         ...(agent.toolId ? { toolId: agent.toolId } : {}),
         agentId: agent.id,
+        depth,
+        ...(parentId ? { parentId } : {}),
+        ...(childCount > 0 ? { childCount } : {}),
     };
+}
+
+/**
+ * The agents, ordered parent-then-children and stamped with a depth
+ * (DROVE-185).
+ *
+ * Clay: "what if a subagent has lanes in it? Can we visualize that?" A
+ * subagent can spawn its own subagents, and every one of them lands in the
+ * session's single flat `subagents/` directory, so the sheet was already
+ * listing them — indistinguishable from the nine top-level agents around
+ * them. The CLI now publishes `parentId` and this is what turns it into a
+ * shape.
+ *
+ * EVERY AGENT COMES BACK, exactly once. This reorders and labels; it never
+ * drops. That is load-bearing: `sideCount` is taken off the same agent array
+ * and the heartbeat reads `sideCount`, so an agent that vanished here would go
+ * quiet on the wrist as well as off the screen.
+ *
+ * A parent that is NOT in the snapshot promotes its children to top level
+ * rather than hiding them. A parent finishes while its child runs on — that is
+ * the normal end of a fan-out, not an error — and a running agent filed under
+ * an absent parent would be a row nothing could ever reveal. Same treatment
+ * for a parent chain that loops: unreachable roots are promoted, so a
+ * malformed meta.json costs a wrong indent, never a lost row or a hang.
+ */
+export function orderAgentRows(agents: LiveStatusAgent[], now: number): LiveStatusRow[] {
+    const byId = new Map<string, LiveStatusAgent>();
+    for (const agent of agents) byId.set(agent.id, agent);
+
+    // The parent each agent actually renders under: its own when that agent is
+    // in this snapshot and the link does not close a loop, else none.
+    const parentOf = new Map<string, string | undefined>();
+    for (const agent of agents) {
+        let parent = agent.parentId;
+        if (parent === agent.id || (parent !== undefined && !byId.has(parent))) parent = undefined;
+        if (parent !== undefined) {
+            // Walk up. A cycle, or a chain longer than the snapshot, means
+            // there is no root above this agent, so it becomes one.
+            const seen = new Set<string>([agent.id]);
+            let cursor: string | undefined = parent;
+            while (cursor !== undefined && !seen.has(cursor)) {
+                seen.add(cursor);
+                cursor = byId.get(cursor)?.parentId;
+                if (cursor !== undefined && !byId.has(cursor)) cursor = undefined;
+            }
+            if (cursor !== undefined) parent = undefined;
+        }
+        parentOf.set(agent.id, parent);
+    }
+
+    const children = new Map<string, LiveStatusAgent[]>();
+    const roots: LiveStatusAgent[] = [];
+    for (const agent of agents) {
+        const parent = parentOf.get(agent.id);
+        if (parent === undefined) {
+            roots.push(agent);
+            continue;
+        }
+        const list = children.get(parent);
+        if (list) list.push(agent);
+        else children.set(parent, [agent]);
+    }
+
+    const rows: LiveStatusRow[] = [];
+    const emit = (agent: LiveStatusAgent, depth: number, parentId: string | undefined) => {
+        const kids = children.get(agent.id) ?? [];
+        rows.push(agentRow(agent, now, depth, parentId, kids.length));
+        for (const kid of kids) emit(kid, depth + 1, agent.id);
+    };
+    for (const root of roots) emit(root, 0, undefined);
+    return rows;
 }
 
 function workflowRow(workflow: LiveStatusWorkflow, now: number): LiveStatusRow {
@@ -165,12 +370,81 @@ function workflowRow(workflow: LiveStatusWorkflow, now: number): LiveStatusRow {
         ...(typeof workflow.tokens === 'number' && workflow.tokens > 0
             ? { tokens: formatTokens(workflow.tokens) }
             : {}),
+        depth: 0,
     };
 }
 
 function countPhrase(count: number, one: string, many: string): string | null {
     if (count <= 0) return null;
     return `${count} ${count === 1 ? one : many}`;
+}
+
+/**
+ * The rows to actually draw, given which parents are unfolded (DROVE-185).
+ *
+ * Collapsed is the default, and that is the whole design. Clay runs nine or
+ * more agents at once and some of those spawn their own; a permanently nested
+ * tree would push the ninth off the screen to show the second one's children,
+ * which is a worse sheet than the flat list it replaced. So the top level
+ * stays exactly as it was, a parent carries a count of its children, and the
+ * count is what unfolds them in place. Nothing is hidden that was not
+ * previously invisible anyway: before this, a nested agent sat in the flat
+ * list wearing no sign of whose it was.
+ *
+ * Folding is a DRAWING decision and touches no number. `sideCount` still
+ * counts every agent at every depth, so the row and the wrist say the same
+ * thing whether a parent is open or shut.
+ *
+ * A child of a collapsed parent is hidden along with its own children, so
+ * unfolding one level reveals one level.
+ */
+export function visibleRows(rows: LiveStatusRow[], expanded: ReadonlySet<string>): LiveStatusRow[] {
+    const out: LiveStatusRow[] = [];
+    const hidden = new Set<string>();
+    for (const row of rows) {
+        const parent = row.parentId;
+        if (parent !== undefined && (hidden.has(parent) || !expanded.has(parent))) {
+            if (row.agentId) hidden.add(row.agentId);
+            continue;
+        }
+        out.push(row);
+    }
+    return out;
+}
+
+/**
+ * One agent's descendants, re-based so its own children sit at depth 0
+ * (DROVE-185).
+ *
+ * The agent screen asks the same question of an agent that the status row asks
+ * of the session — what have you got out — and gets it answered by the same
+ * rows, off the session's one snapshot. There is no second fetch and no second
+ * derivation: an agent's children are already in `status.agents`, because
+ * every agent in the session lands in one flat directory whatever its depth.
+ *
+ * Re-based, not sliced, so the sheet on an agent screen indents from its own
+ * left edge rather than carrying its parent's offset across.
+ */
+export function agentSubtreeRows(rows: LiveStatusRow[], agentId: string): LiveStatusRow[] {
+    const root = rows.find((row) => row.agentId === agentId);
+    if (!root) return [];
+    const base = root.depth + 1;
+    const inside = new Set<string>([agentId]);
+    const out: LiveStatusRow[] = [];
+    for (const row of rows) {
+        if (row.agentId === agentId) continue;
+        if (row.parentId === undefined || !inside.has(row.parentId)) continue;
+        if (row.agentId) inside.add(row.agentId);
+        const { parentId: _dropped, ...rest } = row;
+        out.push({
+            ...rest,
+            depth: row.depth - base,
+            // A direct child of this agent has no parent INSIDE this view, so
+            // it is a root here and folds like one.
+            ...(row.parentId !== agentId ? { parentId: row.parentId } : {}),
+        });
+    }
+    return out;
 }
 
 export function summarizeLiveStatus(status: LiveStatus, now: number): LiveStatusSummary {
@@ -186,10 +460,13 @@ export function summarizeLiveStatus(status: LiveStatus, now: number): LiveStatus
             ...(status.tool.arg ? { detail: status.tool.arg } : {}),
             elapsed: formatElapsed(now - status.tool.startedAt),
             toolId: status.tool.id,
+            depth: 0,
         });
     }
     for (const workflow of workflows) rows.push(workflowRow(workflow, now));
-    for (const agent of agents) rows.push(agentRow(agent, now));
+    // Ordered parent-then-child and stamped with a depth (DROVE-185). Same
+    // rows, same number of them, in an order that can be drawn as a tree.
+    for (const row of orderAgentRows(agents, now)) rows.push(row);
 
     // The headline is what Clay sees without expanding anything, so it names
     // the most specific thing running. A tool beats a fan-out because the tool
@@ -210,7 +487,7 @@ export function summarizeLiveStatus(status: LiveStatus, now: number): LiveStatus
         // reply, which writes nothing until it is done. This is the
         // "Sketching… 17m 13s" state, and saying "working" is the honest
         // version of it.
-        headline = 'working';
+        headline = LIVE_STATUS_WORKING_WORD;
     }
 
     const parts = [
@@ -218,13 +495,21 @@ export function summarizeLiveStatus(status: LiveStatus, now: number): LiveStatus
         countPhrase(workflows.length, 'workflow', 'workflows'),
     ].filter((part): part is string => part !== null);
 
+    const tally = liveStatusTally(status);
+    const main = mainReadout(status, now, tally);
+    const sideCount = agents.length + workflows.length;
+
     return {
         headline,
         ...(status.turnStartedAt ? { turnElapsed: formatElapsed(now - status.turnStartedAt) } : {}),
         rows,
         ...(parts.length > 0 ? { subtitle: parts.join(' · ') } : {}),
-        main: mainReadout(status, now),
-        sideCount: agents.length + workflows.length,
+        main,
+        sideCount,
+        tally,
+        // Only when the main thread is NOT carrying the number itself, so the
+        // row never shows the tally twice.
+        sideTokens: !main && sideCount > 0 && tally && tally.raw.turn > 0 ? tally.turn : null,
     };
 }
 
@@ -244,23 +529,32 @@ export function summarizeLiveStatus(status: LiveStatus, now: number): LiveStatus
  * A snapshot that is only background agents stays null rather than guessing,
  * which is the one case where the old CLI shows less than the new one.
  */
-function mainReadout(status: LiveStatus, now: number): LiveStatusMain | null {
-    const label = status.tool ? status.tool.name : 'working';
+function mainReadout(status: LiveStatus, now: number, tally: LiveStatusTally | null): LiveStatusMain | null {
+    const label = status.tool ? status.tool.name : LIVE_STATUS_WORKING_WORD;
+    const working = !status.tool;
+    // THE ROW'S NUMBER IS THE TALLY (DROVE-184). It sits in the slot the
+    // main-only count used to hold, so the strip gains no term and the width
+    // budget is untouched — `tokens` is already a rank on
+    // STATUS_ROW_GIVE_WAY (DROVE-223) and this inherits it whole. Falls back
+    // to the main thread's own count on a CLI too old to publish a tally,
+    // which is the old behaviour exactly.
+    const rowTokens = tally ? tally.raw.turn : status.main?.tokens;
     const tokensOf = (tokens: unknown): { tokens?: string } => (
         typeof tokens === 'number' && tokens > 0 ? { tokens: formatTokens(tokens) } : {}
     );
     if (status.main) {
         return {
             label,
+            working,
             elapsed: formatElapsed(now - status.main.startedAt),
-            ...tokensOf(status.main.tokens),
+            ...tokensOf(rowTokens),
         };
     }
     const sideRunning = (status.agents?.length ?? 0) + (status.workflows?.length ?? 0) > 0;
     if (!status.tool && sideRunning) return null;
     const startedAt = status.turnStartedAt ?? status.tool?.startedAt;
     if (!startedAt) return null;
-    return { label, elapsed: formatElapsed(now - startedAt) };
+    return { label, working, elapsed: formatElapsed(now - startedAt), ...tokensOf(rowTokens) };
 }
 
 /**
@@ -290,7 +584,7 @@ export function liveStatusWatchLine(status: LiveStatus | null | undefined, now: 
     const agents = live.agents ?? [];
     const agentPhrase = countPhrase(agents.length, 'agent', 'agents');
     if (agentPhrase) parts.push(agentPhrase);
-    if (parts.length === 0) parts.push('working');
+    if (parts.length === 0) parts.push(LIVE_STATUS_WORKING_WORD);
     return parts.join(' · ');
 }
 

@@ -459,7 +459,7 @@ export const pt: TranslationStructure = {
             on: 'A ler as respostas em voz alta',
             off: 'Respostas não lidas em voz alta',
             onHint: 'Lendo as respostas em voz alta. Toque numa frase para ler a partir dali',
-            headphonesOff: 'Leitura em voz alta desativada, fones desconectados',
+            headphonesOff: 'Fones desconectados, agora no alto-falante',
         },
         dictate: {
             label: 'Segure para falar, toque para fixar',

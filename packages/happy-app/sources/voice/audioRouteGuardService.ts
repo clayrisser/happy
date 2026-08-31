@@ -90,7 +90,6 @@ const guard = new AudioRouteGuard({
     isEnabled: () => readAloud.isEnabled && storage.getState().localSettings.readAloudEnabled,
     speaker: () => resolveSpeaker(),
     interrupt: () => readAloud.interrupt('headphones-unplugged'),
-    disable: () => storage.getState().applyLocalSettings({ readAloudEnabled: false }),
     announce,
 });
 

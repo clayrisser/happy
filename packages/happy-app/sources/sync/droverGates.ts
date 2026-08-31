@@ -29,6 +29,9 @@ interface QuestionCard {
     multiSelect?: boolean;
 }
 
+/** The account-login card's own reader, so the title and preview read it once. */
+import { accountLoginCard } from '@/components/tools/views/droverAccountLogin';
+
 /** The first question on an AskUserQuestion card, drover-mirrored or Claude's own. */
 function firstQuestion(args: unknown): QuestionCard | null {
     const questions = (args as { questions?: unknown } | undefined)?.questions;
@@ -48,6 +51,13 @@ export function previewFor(tool: string, args: unknown): string {
         const text = command || title;
         return text.length > PREVIEW_LIMIT ? `${text.slice(0, PREVIEW_LIMIT)}…` : text;
     }
+    // A login card's body is its LINK (DROVE-212). It carries no `command` and
+    // no `questions[]`, so it fell all the way to the JSON.stringify below and
+    // Clay's phone showed him the literal string `{"url":"https://…"}` — text
+    // he could not tap, on a card he could not answer. The URL is the one thing
+    // on it worth reading at any size, wrist included.
+    const login = tool === 'DroverAccountLogin' ? accountLoginCard(args) : null;
+    if (login) return login.url;
     // A question card carries no `command`: its body lives in
     // questions[0].question. Without this the wrist showed the raw JSON of the
     // whole card, which is unreadable at that size and buries the actual ask.
@@ -155,6 +165,11 @@ export function titleFor(tool: string, args: unknown): string {
         const title = (args as { title?: unknown } | undefined)?.title;
         return typeof title === 'string' && title.trim() ? title : 'Needs you';
     }
+    // "Run DroverAccountLogin" is not a thing anyone can act on, and it is what
+    // Clay's phone actually said (DROVE-212). The card's own header names the
+    // account it is adding — "Log in to Claude for ~/.claude-accounts/account-1".
+    const login = tool === 'DroverAccountLogin' ? accountLoginCard(args) : null;
+    if (login) return login.header;
     if (tool !== 'AskUserQuestion') return `Run ${tool}`;
     const header = firstQuestion(args)?.header;
     return typeof header === 'string' && header.trim() ? header : 'Question';
@@ -316,7 +331,15 @@ export function collectGateEntries(
                     // since DROVE-53 and never saw the kind, because this line
                     // read the TOOL name and every drover card that was not a
                     // question came through as a permission.
-                    kind: todo ? 'todo' : tool === 'AskUserQuestion' ? 'question' : 'permission',
+                    // A login is a QUESTION — its answer is the code typed
+                    // back, not a yes or a no. Left as 'permission' it got
+                    // Allow and Deny, and a bare allow reaches the bus with no
+                    // code in it (DROVE-212).
+                    kind: todo
+                        ? 'todo'
+                        : tool === 'AskUserQuestion' || tool === 'DroverAccountLogin'
+                            ? 'question'
+                            : 'permission',
                     createdAt: new Date(createdAt).toISOString(),
                     // Omitted, never null: WatchConnectivity payloads take
                     // property-list types only and JSON null becomes NSNull,

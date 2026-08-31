@@ -18,9 +18,15 @@ import {
     COMPOSER_BUBBLE_MATERIAL,
     COMPOSER_DISC_SEPARATION_FLOOR,
     COMPOSER_DISC_STEP_FLOOR,
+    COMPOSER_GAUGE_NEEDLE_FLOOR,
+    COMPOSER_GAUGE_TRACK_ALPHA,
+    COMPOSER_GAUGE_TRACK_FLOOR,
     COMPOSER_IN_FIELD_DISC,
     COMPOSER_IN_FIELD_DISC_OPEN,
     composerControlPalette,
+    composerGaugeContrast,
+    composerGaugeMaterials,
+    composerGaugeTrack,
     composerGlyphColour,
     pendingOrSettled,
     composerGlyphLayers,
@@ -30,8 +36,14 @@ import {
 import {
     CHROME_BACKDROP_EXTREMES,
     CHROME_CONTRAST_FLOOR,
+    colorAlpha,
+    compositeOver,
+    compositeSurface,
+    contrastRatio,
     glyphContrast,
+    parseColor,
 } from './glassChrome';
+import { effortGaugeAngle } from './sessionControlGlyphs';
 import { colorDistance } from '../utils/subagentTint';
 import { permissionModeGlyph } from './sessionControlGlyphs';
 
@@ -351,3 +363,153 @@ describe('a pick the pane has not confirmed yet', () => {
     });
 });
 
+
+/**
+ * THE EFFORT GAUGE'S DIAL (DROVE-227).
+ *
+ * Clay, with the effort control cropped: "This icon isn't contrasting." The
+ * needle was fine. The ARC it sweeps was `theme.colors.divider`, which is a
+ * list hairline and measures 1.05:1 on the dark glass, so the control was a
+ * white diagonal with nothing round it.
+ *
+ * The test is two-sided on purpose, because either side alone has a wrong
+ * answer that passes it. Lighten only against the capsule and the track
+ * eventually reaches the needle's own colour, and the needle vanishes into the
+ * ring. Hold it only under the needle and `divider` was already fine. Both
+ * floors, on both themes, on all three materials the gauge is drawn on.
+ */
+describe.each(themes)('the effort gauge on the $name theme is two marks, not one', ({ dark }) => {
+    const materials = Object.entries(composerGaugeMaterials(dark));
+
+    /** The worst of the two chat extremes, which is the shape the rest of this file measures in. */
+    function gauge(layers: readonly string[]): { track: number; needle: number } {
+        const readings = CHROME_BACKDROP_EXTREMES.map((backdrop) => composerGaugeContrast(dark, layers, backdrop));
+        return {
+            track: Math.min(...readings.map((reading) => reading.track)),
+            needle: Math.min(...readings.map((reading) => reading.needle)),
+        };
+    }
+
+    it.each(materials)('separates the arc from the %s the gauge sits on', (_name, layers) => {
+        expect(gauge(layers).track).toBeGreaterThanOrEqual(COMPOSER_GAUGE_TRACK_FLOOR);
+    });
+
+    it.each(materials)('keeps the needle above the arc on the %s', (_name, layers) => {
+        expect(gauge(layers).needle).toBeGreaterThanOrEqual(COMPOSER_GAUGE_NEEDLE_FLOOR);
+    });
+
+    /**
+     * The ranking, as an assertion rather than a paragraph. The needle is the
+     * value and the arc is the scale it is read against, so the gap above the
+     * arc has to beat the gap below it. This is what stops the next pass
+     * fixing "not contrasting" by walking the track up to white.
+     */
+    it('ranks the two marks: the needle stands off the arc harder than the arc stands off the capsule', () => {
+        expect(COMPOSER_GAUGE_NEEDLE_FLOOR).toBeGreaterThan(COMPOSER_GAUGE_TRACK_FLOOR);
+        for (const [name, layers] of materials) {
+            const { track, needle } = gauge(layers);
+            expect(needle, name).toBeGreaterThan(track);
+        }
+    });
+
+    /**
+     * The value that shipped, failing. `theme.colors.divider` is not a bad
+     * colour, it is a colour for a different job: two list rows meeting on an
+     * opaque background. On the composer's glass it is the capsule again.
+     */
+    it('fails the floor for the divider the track used to be drawn in', () => {
+        const wasTrack = dark ? '#2A2A2A' : '#eaeaea';
+        const bed = compositeSurface('#000000', composerGaugeMaterials(dark).glass);
+        expect(contrastRatio(parseColor(wasTrack), bed)).toBeLessThan(COMPOSER_GAUGE_TRACK_FLOOR);
+        // And it passed the OTHER side comfortably, which is why one-sided
+        // testing would have called the shipped gauge fine.
+        expect(contrastRatio(parseColor(composerControlPalette(dark).foreground), parseColor(wasTrack)))
+            .toBeGreaterThan(COMPOSER_GAUGE_NEEDLE_FLOOR);
+    });
+
+    /**
+     * And the obvious over-correction, failing the other way. A track at the
+     * needle's own colour is the brightest arc available and the worst gauge:
+     * one solid shape with no mark in it.
+     */
+    it('fails the floor for a track drawn in the needle’s own colour', () => {
+        const palette = composerControlPalette(dark);
+        const bed = compositeSurface('#000000', composerGaugeMaterials(dark).glass);
+        const needle = parseColor(palette.foreground);
+        expect(contrastRatio(needle, bed)).toBeGreaterThan(COMPOSER_GAUGE_TRACK_FLOOR);
+        expect(contrastRatio(needle, needle)).toBeLessThan(COMPOSER_GAUGE_NEEDLE_FLOOR);
+    });
+
+    /**
+     * The decision, pinned: the foreground at an opacity, not a grey of its
+     * own. Written as a test because it is the part a later edit is most
+     * likely to undo by "simplifying" the rgba into a hex, and the hex is what
+     * drifts when the material under it moves (see the open wash above).
+     */
+    it('draws the track as the foreground at a reduced opacity, so it can never become a hue', () => {
+        const track = composerGaugeTrack(dark);
+        const alpha = dark ? COMPOSER_GAUGE_TRACK_ALPHA.dark : COMPOSER_GAUGE_TRACK_ALPHA.light;
+        expect(colorAlpha(track)).toBeCloseTo(alpha, 5);
+        expect(alpha).toBeGreaterThan(0);
+        expect(alpha).toBeLessThan(1);
+        // Opaque, it IS the foreground: same channels, all of the way.
+        const opaque = compositeOver(track.replace(/[\d.]+\)$/, '1)'), parseColor('#808080'));
+        expect(opaque).toEqual(parseColor(composerControlPalette(dark).foreground));
+    });
+
+    /**
+     * Every LEVEL, because the needle sweeps and the ticket asked. The needle
+     * is radial and stops 3pt short of a track 2pt wide, so the gap between
+     * the two marks is the same at every angle: there is no level where they
+     * overlap and none where the pair is measured differently. Asserting the
+     * geometry is what lets the two contrast numbers above stand for all six.
+     */
+    it('puts the needle the same distance off the arc at every level', () => {
+        const size = 20;
+        const strokeWidth = 2;
+        const trackRadius = (size - strokeWidth) / 2;
+        for (const count of [4, 5, 6]) {
+            for (let level = 0; level < count; level += 1) {
+                const angle = effortGaugeAngle(level, count);
+                expect(Math.abs(angle), `level ${level} of ${count}`).toBeLessThanOrEqual(130);
+            }
+        }
+        // The needle's tip, plus its round cap, still clears the arc's inner edge.
+        const needleReach = trackRadius - 3 + 2.25 / 2;
+        expect(needleReach).toBeLessThan(trackRadius - strokeWidth / 2);
+    });
+});
+
+/**
+ * The numbers this landed on, quoted once so a reader does not have to run the
+ * suite to know what "clears the floor" bought (DROVE-227).
+ *
+ * Both themes split roughly 15:1 of available room the same way, which is the
+ * point of the two per-theme alphas: 0.28 over a near-black capsule and 0.37
+ * over a near-white one are the same arc.
+ */
+describe('what the gauge measures, written down', () => {
+    it.each([
+        ['dark', true, 2.51, 6.01],
+        ['light', false, 2.50, 6.16],
+    ] as const)('%s: the arc is %s:1 off the capsule and the needle %s:1 off the arc', (_n, dark, track, needle) => {
+        const glass = composerGaugeMaterials(dark).glass;
+        const measured = composerGaugeContrast(dark, glass, '#000000');
+        expect(measured.track).toBeCloseTo(track, 2);
+        expect(measured.needle).toBeCloseTo(needle, 2);
+    });
+
+    it('leaves the needle the whole of the room it had off the capsule', () => {
+        // The arc splits this; it does not add to it. Quoted so the two
+        // numbers above are visibly a split of one budget rather than free.
+        for (const dark of [true, false]) {
+            const glass = composerGaugeMaterials(dark).glass;
+            const bed = compositeSurface('#000000', glass);
+            const needle = parseColor(composerControlPalette(dark).foreground);
+            const room = contrastRatio(needle, bed);
+            const measured = composerGaugeContrast(dark, glass, '#000000');
+            expect(room).toBeGreaterThan(15);
+            expect(measured.track * measured.needle).toBeCloseTo(room, 4);
+        }
+    });
+});

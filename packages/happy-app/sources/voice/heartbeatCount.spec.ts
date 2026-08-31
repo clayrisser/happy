@@ -3,6 +3,7 @@ import { AudioCueMixer } from './audioCueMixer';
 import { cueDurationMs, cueSpec, workingCueFor } from './audioCues';
 import { ambientCue } from './audioCueState';
 import { audioCuesDefaults, type AudioCues } from '@/sync/settings';
+import { summarizeLiveStatus, type LiveStatus } from '@/utils/liveStatus';
 
 /**
  * The heartbeat says how many SUBAGENTS are running, in Morse (DROVE-182,
@@ -127,5 +128,57 @@ describe('the counting heartbeat', () => {
         mixer.setState({ reading: false, working: true, pendingKinds: [], agents: 8 });
         run(30_000);
         expect(played).toEqual([]);
+    });
+});
+
+/**
+ * The wrist and the screen read ONE number (DROVE-209, DROVE-185).
+ *
+ * DROVE-209's point was that the heartbeat and the status row must not carry
+ * two numbers that differ for no visible reason. The service used to re-count
+ * by filtering `summarizeLiveStatus`'s rows to `kind === 'agent'` while the
+ * row printed `sideCount`, which also counts workflows — so the wrist beat one
+ * short for as long as any workflow ran. Nothing caught it because no fixture
+ * here or in `liveStatus.spec.ts` had a workflow and a heartbeat in the same
+ * test. This is that fixture.
+ *
+ * Nesting is in it too (DROVE-185): a subagent's own subagents are ordinary
+ * entries in the same array, they count, and folding them away on screen is a
+ * drawing decision that must not reach this number.
+ */
+describe('the number the row prints is the number the wrist beats', () => {
+    const at = 1_700_000_000_000;
+    const live: LiveStatus = {
+        at,
+        agents: [
+            { id: 'a1', label: 'Top', startedAt: at - 300_000 },
+            { id: 'a1b', label: 'Child', startedAt: at - 200_000, parentId: 'a1' },
+            { id: 'a1c', label: 'Grandchild', startedAt: at - 100_000, parentId: 'a1b' },
+        ],
+        workflows: [
+            { id: 'wf_1', name: 'drover-relaunch', done: 1, total: 4, startedAt: at - 400_000 },
+        ],
+    };
+
+    it('is the same value on both surfaces, workflow and nesting included', () => {
+        const summary = summarizeLiveStatus(live, at);
+        // Three agents across three depths, plus the workflow.
+        expect(summary.sideCount).toBe(4);
+        // What the service feeds the mixer is this field, not a re-count of
+        // the rows, so the two cannot drift apart again.
+        expect(ambientCue({ reading: true, working: true, pendingKinds: [], agents: summary.sideCount, speaking: false }))
+            .toBe(workingCueFor(summary.sideCount));
+    });
+
+    it('does not change when a parent is folded on screen', () => {
+        // The rows a collapsed sheet draws are fewer than the rows that exist.
+        // The count comes off neither: it comes off `sideCount`.
+        const summary = summarizeLiveStatus(live, at);
+        const agentRows = summary.rows.filter((row) => row.kind === 'agent');
+        expect(agentRows).toHaveLength(3);
+        expect(summary.sideCount).toBe(4);
+        // The old expression, kept here as the thing that must never come
+        // back: it is one short of what the row shows.
+        expect(agentRows.length).not.toBe(summary.sideCount);
     });
 });

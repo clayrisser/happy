@@ -29,9 +29,11 @@ import { StatusDot } from './StatusDot';
 import {
     showsContextPercent,
     statusRowFolds,
+    statusRowLiveCap,
     statusRowMetrics,
     statusRowQuotaText,
     statusRowShrink,
+    type StatusRowParts,
 } from './statusRowLayout';
 import { useTickingNow } from './useTickingNow';
 
@@ -109,13 +111,30 @@ import { useTickingNow } from './useTickingNow';
  *   - the context gauge drops its percent text while the main thread works, or
  *     whenever the account is on the row: the ring beside it fills with the
  *     same number and a tap still opens the exact figure.
- *   - the tool NAME goes and the numbers stay whenever the row would not
+ *   - a TOOL's name goes and the numbers stay whenever the row would not
  *     otherwise fit. That was a 360pt constant before the account was here; it
  *     is now asked of statusRowLayout's estimator with the row's real content,
  *     because the width it fires at depends on how long this tool and this
- *     account happen to be. With the model gone (DROVE-178) it is the only
- *     fold left, and it is enough at 375 and 393 even with a task list on the
- *     row, which is the case that used to cost the model as well.
+ *     account happen to be. NEVER the working word (DROVE-223): it is the same
+ *     string slot and it folds last of anything on the row, not third.
+ *
+ * AND THE ORDER THEY GIVE WAY IN IS WRITTEN DOWN NOW (DROVE-223). Clay
+ * photographed `● wor… 4m 20s 51.6k ⛄6 ˄ · main 8% ˄`: the working word, the
+ * leftmost and most important fact on the line, cut to three letters while the
+ * account beside it drew whole and a hundred points of row sat empty. Nothing
+ * was over budget. The live segment carried `maxWidth: '45%'` here, a share of
+ * the WHOLE row that no budget in statusRowLayout could see, and the only
+ * child under it that can shrink is the label. With no tool running the label
+ * IS the working word.
+ *
+ * So the cap is measured off the rest of the line now, and it is dropped
+ * entirely while the label is the working word, because that word is LAST in
+ * `STATUS_ROW_GIVE_WAY`, the order this row now gives way in and the rule the
+ * next fact added to the line inherits. Ahead of it, in order: the context
+ * percent, the word `week`, a TOOL's name, the account truncating, the token
+ * count, the clock. Clay's own reading: "the working word goes last, because
+ * it answers what is happening, and the token count or the elapsed timer can
+ * shorten or drop before it."
  *
  * Renders nothing at all when there is nothing to say, and the test for that
  * is the ROW rather than the props it was handed (DROVE-194): the segments are
@@ -271,13 +290,22 @@ function useLiveStatusSummary(sessionId: string | undefined): LiveStatusSummary 
  * thread's state and numbers first, then the agents as a count with the word
  * the row folded away.
  */
-function accessibilityLabelFor(main: LiveStatusMain | null, sideCount: number): string {
+function accessibilityLabelFor(
+    main: LiveStatusMain | null,
+    sideCount: number,
+    sideTokens: string | null,
+): string {
     const parts: string[] = [];
     if (main) {
         parts.push(`Main thread: ${main.label} ${main.elapsed}`);
-        if (main.tokens) parts.push(`${main.tokens} tokens`);
+        // Spelled out as a total, because the glance version is a bare number
+        // and DROVE-184 changed what that number MEANS. A screen reader saying
+        // "251.2k tokens" beside "Main thread" would still describe the old,
+        // main-only reading.
+        if (main.tokens) parts.push(`${main.tokens} tokens across main and agents`);
     }
     if (sideCount > 0) parts.push(`${sideCount} ${sideCount === 1 ? 'agent' : 'agents'}`);
+    if (!main && sideTokens) parts.push(`${sideTokens} tokens across main and agents`);
     return parts.join(', ');
 }
 
@@ -377,18 +405,49 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
     // happen to be, so a constant could only ever be right for one of them.
     // With no model on the row (DROVE-178) `statusRowFolds` returns
     // `model: false` and nothing else moves.
+    // The live segment goes down in pieces as well as whole (DROVE-223). The
+    // token count and the clock are folds of their own now, below the account
+    // and above the working word in STATUS_ROW_GIVE_WAY, and a fold cannot
+    // take a number out of the middle of a finished string.
+    // The tally when the MAIN thread is not the thing running (DROVE-184). A
+    // fan-out outlives the turn that launched it, so `main` is null while nine
+    // agents burn — the state Clay was actually looking at — and the row would
+    // otherwise show a bare agent count and no spend. It takes the SAME slot
+    // and the SAME `tokens` rank on STATUS_ROW_GIVE_WAY, so the strip gains no
+    // term: at most it swaps a label and a clock it is not drawing for a
+    // number it is.
+    const sideTokens = summary?.sideTokens ?? null;
     const liveNumbers = main ? (main.tokens ? `${main.elapsed} ${main.tokens}` : main.elapsed) : null;
-    const folds = statusRowFolds({
-        live: main ? `${main.label} ${liveNumbers}` : null,
+    const rowParts: StatusRowParts = {
+        live: main ? `${main.label} ${liveNumbers}` : sideTokens,
         liveWithoutName: liveNumbers,
+        liveLabel: main?.label ?? null,
+        liveElapsed: main?.elapsed ?? null,
+        liveTokens: main?.tokens ?? sideTokens,
+        // Whether the label is a TOOL or the working word, read off the
+        // summary rather than compared to a string, so the row and
+        // liveStatus.ts cannot disagree about which one it is.
+        workingWord: !!main?.working,
         agentCount: sideCount,
         liveExpands: canExpand,
         tasks: p.sessionId ? tasksBadge : null,
         quota: quotaText ?? shownAccount,
         quotaExpands: canOpenUsage,
         contextGauge: !!p.contextStatus,
-    }, width);
+    };
+    const folds = statusRowFolds(rowParts, width);
+    // What is left of the line for the live segment, in points. It was a flat
+    // `45%` of the row, which cut the working word on a row that was two
+    // thirds empty (DROVE-223), and it is null entirely while the label IS the
+    // working word: nothing above it in the order may clamp it.
+    const liveCap = statusRowLiveCap(rowParts, width);
     const showLabel = !folds.toolName;
+    const shownNumbers = main
+        ? [folds.elapsed ? null : main.elapsed, folds.tokens ? null : main.tokens]
+            .filter((part): part is string => !!part)
+            .join(' ')
+        : '';
+    const shownSideTokens = !main && !folds.tokens ? sideTokens : null;
     if (summary && (main || sideCount > 0)) {
         segments.push(
             <Pressable
@@ -399,29 +458,33 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
                 hitSlop={segmentHitSlop}
                 accessibilityRole={canExpand ? 'button' : undefined}
                 accessibilityState={canExpand ? { expanded: openSheet === 'agents' } : undefined}
-                accessibilityLabel={accessibilityLabelFor(main, sideCount)}
+                accessibilityLabel={accessibilityLabelFor(main, sideCount, sideTokens)}
                 style={({ pressed }) => ({
                     flexDirection: 'row',
                     alignItems: 'center',
                     gap: 3,
-                    // The last of the two that shrink, after the account: a
-                    // long tool name must not push the quota off the line, but
-                    // the numbers beside it are what Clay is watching
-                    // (statusRowShrink). The cap is what keeps a 30-character
+                    // The last of the segments that shrink, after the account
+                    // (statusRowShrink). The cap still keeps a 30-character
                     // MCP name from squeezing the account before it has given
-                    // way itself.
+                    // way itself, but it is now what the rest of the line does
+                    // not need rather than a flat 45% of the row: the flat one
+                    // cut the working word at 393 with 176pt of line still
+                    // empty beside it (DROVE-223). No cap at all while the
+                    // label is the working word, which is the last thing on
+                    // this row to give way.
                     flexShrink: statusRowShrink.live,
-                    maxWidth: '45%',
+                    ...(liveCap == null ? null : { maxWidth: liveCap }),
                     opacity: pressed && canExpand ? 0.6 : 1,
                 })}
             >
                 {main ? (
                     <>
-                        {/* The only text on the row allowed to shrink, and the
-                            first thing to fold on a narrow phone. A
-                            30-character MCP tool name gives way; the clock and
-                            the token count never do, because they are what
-                            Clay is watching. */}
+                        {/* A TOOL's name is the first text on the row to
+                            fold. The WORKING WORD is the last thing on the row
+                            to give way at all (DROVE-223): the token count and
+                            then the clock go before it, so `wor…` beside an
+                            intact `4m 20s 51.6k` is a row that has its order
+                            backwards. */}
                         {showLabel ? (
                             <Text
                                 numberOfLines={1}
@@ -430,10 +493,17 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
                                 {main.label}
                             </Text>
                         ) : null}
-                        <Text style={{ fontSize: 11, color: theme.colors.text, ...Typography.default() }}>
-                            {main.tokens ? `${main.elapsed} ${main.tokens}` : main.elapsed}
-                        </Text>
+                        {shownNumbers ? (
+                            <Text style={{ fontSize: 11, color: theme.colors.text, ...Typography.default() }}>
+                                {shownNumbers}
+                            </Text>
+                        ) : null}
                     </>
+                ) : null}
+                {shownSideTokens ? (
+                    <Text style={{ fontSize: 11, color: theme.colors.text, ...Typography.default() }}>
+                        {shownSideTokens}
+                    </Text>
                 ) : null}
                 {sideCount > 0 ? (
                     <>

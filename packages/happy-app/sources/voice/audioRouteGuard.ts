@@ -2,19 +2,24 @@ import { routeHasHeadphones } from 'drover-speech';
 import type { Speaker } from './speaker';
 
 /**
- * Headphones coming out stops read-aloud and turns it off (DROVE-119).
+ * Headphones coming out SAYS SO, and nothing else (DROVE-119, reversed by
+ * DROVE-189).
  *
- * Clay: "if headphones disconnect, make sure by default you mute, or you
- * disable the reading things back." It is the rule iOS already has for
- * music, and for the same reason: a route vanishing means the listener's
- * assumption about who can hear just changed. With read-aloud on, a pulled
- * AirPod turns a private reply into the phone announcing it to the room,
- * mid-sentence.
+ * DROVE-119 read Clay's "if headphones disconnect, make sure by default you
+ * mute, or you disable the reading things back" as a shutdown, and shipped
+ * one: a pulled AirPod cut the sentence and switched read-aloud off. He has
+ * since asked for the opposite in as many words, and he is right. An AirPod
+ * drops, a case lids in a pocket, a car stereo hands back. None of those is
+ * him asking for silence, and the recovery was a deliberate press of a button
+ * he could not see. The room it was protecting is rarer than the pocket.
  *
- * This watches the route and calls read-aloud's existing `interrupt`, rather
- * than reaching into its queue, so it stays independent of the reader's
- * internals. Three things narrow it, and each one is a case where stopping
- * would be wrong:
+ * What is left is the ANNOUNCEMENT: the toast says the sound moved to the
+ * speaker, and he turns it off himself if he is in company. The interrupt is
+ * still raised, because the gate still uses it to stop a latched mic; it
+ * simply no longer stops the voice.
+ *
+ * Three things narrow what counts as a move worth announcing, and each one is
+ * a case where saying anything would be noise:
  *
  *   - Only a move TO the built-in speaker. Headphones to CarPlay, or AirPods
  *     to a Bluetooth speaker the user chose, is not a leak; stopping there
@@ -22,11 +27,7 @@ import type { Speaker } from './speaker';
  *   - Only while the PHONE is the speaker. When the watch is reading
  *     (DROVE-92), the phone's route says nothing about who can hear.
  *   - Only while something is actually being spoken. A route change between
- *     replies has nothing to leak, so it takes nothing away.
- *
- * Reconnecting does not undo it. Turning read-aloud back on stays a
- * deliberate press of the speaker button, which is what "disable" rather
- * than "pause" means.
+ *     replies has nothing to leak, so there is nothing to say about it.
  */
 
 /** What a route means for who can hear. */
@@ -83,11 +84,12 @@ export interface AudioRouteGuardDeps {
     isEnabled: () => boolean;
     /** Which device the next sentence would go to. */
     speaker: () => Speaker;
-    /** Cut the utterance in flight, mid-word. */
+    /**
+     * Name the route change. The gate decides what it means, and since
+     * DROVE-189 it means the captures stop and the voice carries on.
+     */
     interrupt: () => void;
-    /** Turn read-aloud off, so the next reply does not start speaking either. */
-    disable: () => void;
-    /** One line saying why it stopped. */
+    /** One line saying where the sound went. */
     announce: () => void;
 }
 
@@ -102,7 +104,7 @@ export interface AudioRouteGuardDeps {
 export class AudioRouteGuard {
     private readonly deps: AudioRouteGuardDeps;
     private previous: RouteKind | null = null;
-    /** How many times it has stopped a reply; for the tests and for logs. */
+    /** How many times it has announced a move to the speaker; for the tests. */
     private stopped = 0;
 
     constructor(deps: AudioRouteGuardDeps) {
@@ -140,11 +142,9 @@ export class AudioRouteGuard {
         };
         if (!leaksToTheRoom(change)) return;
         this.stopped += 1;
-        // Cut first, then turn it off. The order is the whole point: the
-        // setting flipping unmounts the guard and eventually quiets the
-        // reader through React, and "eventually" is a sentence out loud.
+        // Read-aloud stays ON (DROVE-189). The interrupt is for the captures;
+        // the toast is for him.
         this.deps.interrupt();
-        this.deps.disable();
         this.deps.announce();
     }
 }

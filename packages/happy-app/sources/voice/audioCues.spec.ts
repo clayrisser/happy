@@ -24,9 +24,34 @@ describe('the cue table', () => {
         const ids: AudioCueId[] = [
             'working', 'waitingPermission', 'waitingQuestion', 'waitingNeedsYou', 'waitingExpiry',
             'agentStart', 'agentDone', 'agentFailed', 'toolCall', 'reply', 'skipAhead',
+            'micOpen', 'micClosed', 'micRefused',
         ];
         for (const id of ids) expect(cueSpec(id).id).toBe(id);
         expect(audioCues).toHaveLength(ids.length);
+    });
+
+    it('answers a press louder than it reports on an agent (DROVE-225)', () => {
+        // The mic cues are the only ones that are a reply to CLAY rather than
+        // news about the agent, and an acknowledgement he cannot hear is the
+        // failure the ticket exists to prevent. They are the loudest rows in
+        // the table, and by a margin over the tool tick that is meant to sit
+        // under a sentence.
+        const mic: AudioCueId[] = ['micOpen', 'micClosed', 'micRefused'];
+        for (const id of mic) {
+            expect(cueSpec(id).gain, id).toBeGreaterThanOrEqual(cueSpec('waitingNeedsYou').gain);
+            expect(cueSpec(id).gain, id).toBeGreaterThan(cueSpec('toolCall').gain);
+        }
+    });
+
+    it('tells the three mic answers apart by shape (DROVE-225)', () => {
+        // Rising, falling, and the same note twice going nowhere. Pitch is
+        // the polish; a pocket flattens it and the shape survives.
+        const open = cueSpec('micOpen');
+        const closed = cueSpec('micClosed');
+        const refused = cueSpec('micRefused');
+        expect(open.beats[1].hz).toBeGreaterThan(open.beats[0].hz);
+        expect(closed.beats[1].hz).toBeLessThan(closed.beats[0].hz);
+        expect(refused.beats[1].hz).toBe(refused.beats[0].hz);
     });
 
     it('tells working from waiting by rhythm, not pitch alone', () => {

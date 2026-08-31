@@ -19,6 +19,16 @@ export interface DictationSupport {
     reason?: string;
 }
 
+/**
+ * A press on the lock screen or on the headphones, as iOS classes it.
+ *
+ * `play` and `pause` are the lock screen's two buttons; a headphone sends
+ * `toggle` for one press and `next` for two (DROVE-225). What each one MEANS
+ * is decided in sources/voice/headphonePress.ts, not here: this module
+ * reports, it does not interpret.
+ */
+export type RemoteCommandName = 'play' | 'pause' | 'toggle' | 'next' | 'previous';
+
 /** How good a voice sounds, in the order iOS ranks them (DROVE-97). */
 export type SpeechVoiceQuality = 'default' | 'enhanced' | 'premium';
 
@@ -78,6 +88,13 @@ type DroverSpeechModuleType = {
      * the old behaviour rather than claiming a protection it does not have.
      */
     handlesInterruptions?: () => boolean;
+    /**
+     * Optional: its presence is the build stamp for the DOUBLE PRESS arriving
+     * as `next` on `onRemoteCommand` (DROVE-225). Build 13 has
+     * `handlesInterruptions` and still disables `nextTrackCommand`, so the two
+     * stamps are genuinely different builds and cannot share one.
+     */
+    handlesMicCommand?: () => boolean;
     /** Keep the audio session while nothing is speaking. See DROVE-189. */
     holdSession?: (hold: boolean) => Promise<void>;
     dictationSupport: (localeTag: string | null) => Promise<DictationSupport>;
@@ -99,7 +116,13 @@ type DroverSpeechModuleType = {
         /** The output route moved: the new output port types, and why (DROVE-119). Build 13 and later. */
         (eventName: 'onAudioRouteChange', listener: (event: { outputs: string[]; reason: string }) => void): EventSubscription;
         (eventName: 'onSpeechInterruption', listener: (event: { state: 'began' | 'ended'; resumed?: boolean }) => void): EventSubscription;
-        (eventName: 'onRemoteCommand', listener: (event: { command: 'play' | 'pause' | 'toggle' }) => void): EventSubscription;
+        /**
+         * A press on the lock screen or on the headphones. iOS counts the
+         * presses: single is `toggle`, double is `next` (DROVE-225), triple
+         * would be `previous` and is not enabled. `next` arrives only on a
+         * build with `handlesMicCommand`.
+         */
+        (eventName: 'onRemoteCommand', listener: (event: { command: RemoteCommandName }) => void): EventSubscription;
     };
 };
 
@@ -267,8 +290,21 @@ export function addSpeechInterruptionListener(
     }
 }
 
-/** Lock-screen or AirPod play/pause. Nothing arrives on an older build. */
-export function addRemoteCommandListener(listener: (command: 'play' | 'pause' | 'toggle') => void) {
+/**
+ * Whether the double press reaches this app at all (DROVE-225).
+ *
+ * Build 13 sets `nextTrackCommand.isEnabled = false`, so on the binary
+ * currently on Clay's phone a double press goes to whatever else is playing
+ * and no JS can hear it. Its own stamp rather than `speechInterruptionsHandled`,
+ * which build 13 already answers true to.
+ */
+export function remoteMicCommandAvailable(): boolean {
+    if (!native) return false;
+    return typeof native.handlesMicCommand === 'function';
+}
+
+/** Lock-screen or AirPod press. Nothing arrives on an older build. */
+export function addRemoteCommandListener(listener: (command: RemoteCommandName) => void) {
     if (!native) return { remove: () => {} };
     try {
         return native.addListener('onRemoteCommand', (event) => listener(event.command));

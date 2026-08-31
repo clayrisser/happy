@@ -149,6 +149,19 @@ export type AddAccountEvent =
     | { type: 'startFailed'; reason: string }
     | { type: 'link'; ready: boolean }
     | { type: 'accounts'; at: number; names: string[] }
+    /**
+     * Wall clock, and nothing else (DROVE-212).
+     *
+     * The two deadlines below used to ride on `accounts`, which is dispatched
+     * only when a `drover-accounts` round trip SUCCEEDS. So the clock stopped
+     * whenever the read did: a backgrounded phone, a socket still
+     * reconnecting, a machine that stopped answering — `machineRPC` throws
+     * "Not connected to the server" and `machineDroverAccounts` hands back
+     * `{ ok: false }`, no event is dispatched, and the sixty-second sentence
+     * never arrives. That is a spinner with no upper bound, which is what Clay
+     * was looking at well past the minute it was supposed to give up at.
+     */
+    | { type: 'tick'; at: number }
     | { type: 'dismiss' };
 
 /**
@@ -174,6 +187,26 @@ export const addAccountWatchMs = 30 * 60_000;
 export const addAccountLinkWaitMs = 60_000;
 
 export const addAccountIdle: AddAccountPhase = { kind: 'idle' };
+
+/**
+ * The two deadlines, on time alone.
+ *
+ * Shared by `accounts` and `tick` so there is one place that decides when the
+ * screen stops saying "waiting" — the bug this splits out of was two clocks
+ * where one of them only ran on a successful read.
+ */
+function elapsed(
+    phase: Extract<AddAccountPhase, { kind: 'waiting' }>,
+    at: number,
+    watchMs: number,
+    linkWaitMs: number,
+): AddAccountPhase {
+    if (at - phase.startedAt >= watchMs) return { kind: 'stoppedWatching' };
+    if (!phase.linkReady && !phase.linkLate && at - phase.startedAt >= linkWaitMs) {
+        return { ...phase, linkLate: true };
+    }
+    return phase;
+}
 
 /**
  * One transition. Pure, so the flow can be tested without a machine, a bus or
@@ -225,12 +258,12 @@ export function advanceAddAccount(
             // the code being typed, from the card closing, or from time passing.
             const added = event.names.find((name) => !phase.before.includes(name));
             if (added !== undefined) return { kind: 'added', name: added };
-            if (event.at - phase.startedAt >= watchMs) return { kind: 'stoppedWatching' };
-            if (!phase.linkReady && !phase.linkLate && event.at - phase.startedAt >= linkWaitMs) {
-                return { ...phase, linkLate: true };
-            }
-            return phase;
+            return elapsed(phase, event.at, watchMs, linkWaitMs);
         }
+
+        case 'tick':
+            if (phase.kind !== 'waiting') return phase;
+            return elapsed(phase, event.at, watchMs, linkWaitMs);
 
         case 'dismiss':
             return { kind: 'idle' };

@@ -341,6 +341,110 @@ describe('createLiveStatusReader', () => {
         expect(status!.main).toEqual({ startedAt: now - 60_000, tokens: 100 })
     })
 
+    it('adds the main thread and both subagents into one tally (DROVE-184)', () => {
+        const now = Date.now()
+        writeFixture(now)
+        // A main-transcript response ahead of the fixture's running tool, so
+        // the tally has all three sources in it and the Bash call stays open.
+        writeFileSync(transcript, [
+            promptRecord(now - 300_000, 'go and do the thing'),
+            toolUseRecord(now - 280_000, 'toolu_agent_a', 'Agent', { description: 'Un-drop thinking' }),
+            toolResultRecord(now - 279_000, 'toolu_agent_a'),
+            toolUseRecord(now - 275_000, 'toolu_agent_b', 'Agent', { description: 'Sweep the backlog' }),
+            toolResultRecord(now - 274_000, 'toolu_agent_b'),
+            assistantUsageRecord(now - 70_000, {
+                input_tokens: 100,
+                output_tokens: 400,
+                cache_creation_input_tokens: 1500,
+                cache_read_input_tokens: 900_000,
+            }),
+            toolUseRecord(now - 65_000, 'toolu_bash', 'Bash', { description: 'Run the unit suite' }),
+            '',
+        ].join('\n'))
+        const status = createLiveStatusReader({ projectDir, sessionId }).read(now)!
+        // 2000 and 1000 are the agents' own card numbers, unchanged.
+        expect(status.agents!.map((agent) => agent.tokens)).toEqual([2000, 1000])
+        expect(status.main!.tokens).toBe(2000)
+        expect(status.tokens).toEqual({
+            turn: 5000,
+            turnMain: 2000,
+            session: 5000,
+            sessionMain: 2000,
+        })
+        // The tally IS the parts added up, not a second reading of them.
+        const parts = status.main!.tokens! + status.agents!.reduce((sum, a) => sum + a.tokens!, 0)
+        expect(status.tokens!.turn).toBe(parts)
+    })
+
+    it('keeps a finished subagent in the tally after its card is gone (DROVE-184)', () => {
+        const now = Date.now()
+        writeFixture(now)
+        const reader = createLiveStatusReader({ projectDir, sessionId })
+        expect(reader.read(now)!.tokens!.session).toBe(3000)
+
+        // Both agents stop writing. 90s later they drop out of `agents[]` and
+        // their cards go with them. What they SPENT does not: the question is
+        // what the session has cost, and a finished agent's tokens are spent.
+        touch(join(subagents, 'agent-a1.jsonl'), now - 200_000)
+        touch(join(subagents, 'agent-a2.jsonl'), now - 200_000)
+        const after = reader.read(now)!
+        expect(after.agents).toBeUndefined()
+        expect(after.tokens).toEqual({
+            turn: 3000,
+            turnMain: 0,
+            session: 3000,
+            sessionMain: 0,
+        })
+    })
+
+    it('starts the turn tally over at a prompt and never the session one (DROVE-184)', () => {
+        const now = Date.now()
+        writeFileSync(transcript, [
+            promptRecord(now - 600_000, 'first'),
+            toolUseRecord(now - 590_000, 'toolu_agent_a', 'Agent', { description: 'Sweep' }),
+            toolResultRecord(now - 589_000, 'toolu_agent_a'),
+            assistantUsageRecord(now - 580_000, { input_tokens: 500_000, output_tokens: 0 }),
+            '',
+        ].join('\n'))
+        writeFileSync(join(subagents, 'agent-a1.meta.json'), JSON.stringify({ description: 'Sweep' }))
+        writeFileSync(join(subagents, 'agent-a1.jsonl'), [
+            agentRecord(now - 585_000),
+            agentRecord(now - 570_000, { input_tokens: 1000, output_tokens: 1000 }),
+            '',
+        ].join('\n'))
+        touch(join(subagents, 'agent-a1.jsonl'), now - 5_000)
+
+        const reader = createLiveStatusReader({ projectDir, sessionId })
+        expect(reader.read(now)!.tokens).toEqual({
+            turn: 502_000,
+            turnMain: 500_000,
+            session: 502_000,
+            sessionMain: 500_000,
+        })
+
+        // A new prompt, and the agent launched by the LAST turn keeps writing.
+        appendFileSync(transcript, [
+            promptRecord(now - 60_000, 'second'),
+            assistantUsageRecord(now - 4_000, { input_tokens: 40, output_tokens: 60 }),
+            '',
+        ].join('\n'))
+        appendFileSync(join(subagents, 'agent-a1.jsonl'), `${agentRecord(now - 3_000, {
+            input_tokens: 200,
+            output_tokens: 300,
+        })}\n`)
+        touch(join(subagents, 'agent-a1.jsonl'), now - 1_000)
+
+        // The turn holds only what has been spent SINCE the prompt, main and
+        // fan-out alike, so the row's number goes back down with its clock.
+        // The session total is the one that only ever rises.
+        expect(reader.read(now)!.tokens).toEqual({
+            turn: 600,
+            turnMain: 100,
+            session: 502_600,
+            sessionMain: 500_100,
+        })
+    })
+
     it('leaves the main block out while only background agents are out (DROVE-155)', () => {
         const now = Date.now()
         // The turn ended long ago: no open tool, nothing thinking, the
@@ -396,6 +500,69 @@ describe('createLiveStatusReader', () => {
         ].join('\n'))
         const status = createLiveStatusReader({ projectDir, sessionId }).read(now)
         expect(status?.tool).toBeUndefined()
+    })
+
+    /**
+     * Agents that spawn agents (DROVE-185).
+     *
+     * Clay: "what if a subagent has lanes in it? Can we visualize that?"
+     *
+     * The nesting was never a reporting gap: Claude Code files EVERY agent, at
+     * every depth, in the one flat `subagents/` directory, so a grandchild was
+     * always in this list. What was missing is which of them belongs to which,
+     * and that is on disk too — `parentAgentId` in the sidecar, written from
+     * spawnDepth 2 down and absent at depth 1. These fixtures are that layout:
+     * a1 launched by the pane, a2 launched by a1, a3 launched by a2.
+     */
+    describe('nesting', () => {
+        const writeAgent = (id: string, now: number, meta: Record<string, unknown>) => {
+            writeFileSync(join(subagents, `agent-${id}.meta.json`), JSON.stringify(meta))
+            writeFileSync(join(subagents, `agent-${id}.jsonl`), `${agentRecord(now - 60_000)}\n`)
+            touch(join(subagents, `agent-${id}.jsonl`), now - 5_000)
+        }
+
+        const readAgents = (now: number) => {
+            writeFileSync(transcript, `${promptRecord(now - 120_000, 'go')}\n`)
+            const status = createLiveStatusReader({ projectDir, sessionId }).read(now)
+            return status?.agents ?? []
+        }
+
+        it('publishes the parent link two levels down, and none at the top', () => {
+            const now = Date.now()
+            writeAgent('a1', now, { description: 'Top', toolUseId: 'toolu_1', spawnDepth: 1 })
+            writeAgent('a2', now, { description: 'Child', toolUseId: 'toolu_2', spawnDepth: 2, parentAgentId: 'a1' })
+            writeAgent('a3', now, { description: 'Grandchild', toolUseId: 'toolu_3', spawnDepth: 3, parentAgentId: 'a2' })
+
+            const byId = new Map(readAgents(now).map((agent) => [agent.id, agent]))
+            expect(byId.size).toBe(3)
+            // Absence IS "the pane launched it". There is no depth on the wire.
+            expect(byId.get('a1')!.parentId).toBeUndefined()
+            expect(byId.get('a2')!.parentId).toBe('a1')
+            expect(byId.get('a3')!.parentId).toBe('a2')
+        })
+
+        it('still reports a nested agent, which is what it always did', () => {
+            const now = Date.now()
+            writeAgent('a1', now, { description: 'Top', spawnDepth: 1 })
+            writeAgent('a2', now, { description: 'Child', spawnDepth: 2, parentAgentId: 'a1' })
+            // The count is the point: nesting must not shrink the fan-out the
+            // status row and the wrist are both reading off this array.
+            expect(readAgents(now)).toHaveLength(2)
+        })
+
+        it('drops a parent link that names the agent itself', () => {
+            const now = Date.now()
+            writeAgent('a1', now, { description: 'Top', spawnDepth: 2, parentAgentId: 'a1' })
+            expect(readAgents(now)[0].parentId).toBeUndefined()
+        })
+
+        it('sends no parent link when the sidecar has none', () => {
+            const now = Date.now()
+            writeAgent('a1', now, { description: 'Top', toolUseId: 'toolu_1' })
+            const agent = readAgents(now)[0]
+            expect(agent.parentId).toBeUndefined()
+            expect(agent.label).toBe('Top')
+        })
     })
 })
 

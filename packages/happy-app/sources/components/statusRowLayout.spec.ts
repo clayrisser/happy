@@ -15,6 +15,14 @@
  * now needs only DROVE-155's tool-name fold at 375 and needs NOTHING at 393.
  * With the model on it, the same row folded the name AND the model whole at
  * both, and was still over at 320.
+ *
+ * AND DROVE-223 RE-MEASURED THE ROW'S OWN WIDTH, which every number below sat
+ * on. The strip is inside AgentInput's 8pt gutter as well as its own 19pt
+ * inset, so a phone gives it `screenWidth - 54` and this file was pinning
+ * `screenWidth - 38`. 16pt of width that does not exist, which is what the
+ * renderer's `45%` cap was spending when it cut `working` to `wor…` on a row
+ * two thirds empty. Everything under `the row's real width` measures that, and
+ * the fold cases are re-pinned against it.
  */
 import { describe, expect, it } from 'vitest';
 import { MOBILE_COMPOSER_LAYOUT, MOBILE_COMPOSER_METRICS } from './agentInputLayout';
@@ -23,12 +31,20 @@ import {
     showsContextPercent,
     statusRowFits,
     statusRowFolds,
+    statusRowGiveWayRank,
+    statusRowLiveCap,
     statusRowMetrics,
     statusRowQuotaText,
+    statusRowChromeWidth,
+    statusRowSegments,
     statusRowShrink,
     statusRowUsableWidth,
+    STATUS_ROW_GIVE_WAY,
     STATUS_ROW_MODEL_TRUNCATION,
 } from './statusRowLayout';
+
+/** No fold fired. Four of them now: the two numbers joined the name and the model. */
+const noFolds = { toolName: false, model: false, tokens: false, elapsed: false } as const;
 
 /** A working session on Clay's phone: a tool running, an account, a context reading. */
 const workingRow = {
@@ -50,7 +66,29 @@ const mainThreadRow = {
     ...workingRow,
     live: 'Bash 1m 2s 251.2k',
     liveWithoutName: '1m 2s 251.2k',
+    // The pieces, so the token and clock folds have something to take apart
+    // (DROVE-223). `live` is still what is drawn and what the estimate reads.
+    liveLabel: 'Bash',
+    liveElapsed: '1m 2s',
+    liveTokens: '251.2k',
     agentCount: 3,
+} as const;
+
+/**
+ * The row Clay photographed for DROVE-223: no tool, so the label is the
+ * WORKING WORD, six agents out, and an account called `main`.
+ */
+const workingWordRow = {
+    live: 'working 4m 20s 51.6k',
+    liveWithoutName: '4m 20s 51.6k',
+    liveLabel: 'working',
+    liveElapsed: '4m 20s',
+    liveTokens: '51.6k',
+    workingWord: true,
+    agentCount: 6,
+    liveExpands: true,
+    quota: 'main 8%',
+    quotaExpands: true,
 } as const;
 
 /** DROVE-155's own fold: the tool name goes and the numbers stay. */
@@ -69,7 +107,7 @@ const mainThreadRowWithTasksAndModel = { ...mainThreadRowWithModel, tasks: '1/3 
 
 describe('the row at 375pt, the narrowest phone still supported', () => {
     it('draws the whole of it, with the account on and the model gone', () => {
-        expect(statusRowUsableWidth(375)).toBe(337);
+        expect(statusRowUsableWidth(375)).toBe(321);
         expect(estimateStatusRowWidth(workingRow)).toBe(221);
         expect(statusRowFits(workingRow, 375)).toBe(true);
     });
@@ -113,11 +151,16 @@ describe('the row once the main thread reports its own numbers (DROVE-155)', () 
     it('draws whole at 375 now the model has gone, where it used to need the name folded', () => {
         expect(estimateStatusRowWidth(mainThreadRow)).toBe(283);
         expect(statusRowFits(mainThreadRow, 375)).toBe(true);
-        expect(statusRowFolds(mainThreadRow, 375)).toEqual({ toolName: false, model: false });
+        expect(statusRowFolds(mainThreadRow, 375)).toEqual(noFolds);
         // What the same row did with the model on it, which is why the fold
         // exists at all.
         expect(statusRowFits(mainThreadRowWithModel, 375)).toBe(false);
-        expect(statusRowFits(foldedToolNameWithModel, 375)).toBe(true);
+        // 323 against the 321 the phone really has. It read as fitting under
+        // the 16pt of width DROVE-223 took out of the budget; with the real
+        // number the name alone no longer saves that row and the model has to
+        // go with it. Nothing on the phone draws a model, so this is history.
+        expect(estimateStatusRowWidth(foldedToolNameWithModel)).toBe(323);
+        expect(statusRowFits(foldedToolNameWithModel, 375)).toBe(false);
     });
 
     it('would still not fit with the word `week` back on the quota, at 320', () => {
@@ -127,12 +170,11 @@ describe('the row once the main thread reports its own numbers (DROVE-155)', () 
     it('keeps the tool name at 393 and 375, and gives it up at 320 by a single point', () => {
         for (const width of [393, 375]) {
             expect(statusRowFits(mainThreadRow, width), String(width)).toBe(true);
-            expect(statusRowFolds(mainThreadRow, width), String(width))
-                .toEqual({ toolName: false, model: false });
+            expect(statusRowFolds(mainThreadRow, width), String(width)).toEqual(noFolds);
         }
         // 283 against 282 usable. Under the model it went at 375 as well.
-        expect(statusRowUsableWidth(320)).toBe(282);
-        expect(statusRowFolds(mainThreadRow, 320)).toEqual({ toolName: true, model: false });
+        expect(statusRowUsableWidth(320)).toBe(266);
+        expect(statusRowFolds(mainThreadRow, 320)).toEqual({ ...noFolds, toolName: true });
     });
 });
 
@@ -152,33 +194,46 @@ describe('the row with a task list on it (DROVE-167)', () => {
         expect(estimateStatusRowWidth({ ...mainThreadRowWithTasks, tasks: '10/12 tasks' })).toBe(378);
     });
 
-    it('needs only the tool name at 393 and 375, and fits once it goes', () => {
-        // This is the whole of DROVE-178's effect on the fold order. The same
-        // row used to lose the name AND the model whole at both widths, and
-        // was still over at 320 with both gone. Now one fold covers 393 and
-        // 375, which are the two widths the app supports.
-        for (const width of [393, 375]) {
-            expect(statusRowFits(mainThreadRowWithTasks, width), String(width)).toBe(false);
-            expect(statusRowFolds(mainThreadRowWithTasks, width), String(width))
-                .toEqual({ toolName: true, model: false });
-            expect(statusRowFits({ ...mainThreadRowWithTasks, live: '1m 2s 251.2k' }, width), String(width))
-                .toBe(true);
-        }
+    it('needs the tool name at 393, and the token count as well at 375', () => {
+        // The name alone still covers 393: 336 against the 339 the phone
+        // really has. At 375 it leaves the row 15pt over, so the next step in
+        // STATUS_ROW_GIVE_WAY fires and the live TOKEN count goes. Not the
+        // working word, which is not a step at all (DROVE-223). Under the old
+        // budget this row read as fitting at 375 by a single point.
+        expect(statusRowFolds(mainThreadRowWithTasks, 393)).toEqual({ ...noFolds, toolName: true });
+        expect(estimateStatusRowWidth({ ...mainThreadRowWithTasks, live: '1m 2s 251.2k' })).toBe(336);
+        expect(statusRowFits({ ...mainThreadRowWithTasks, live: '1m 2s 251.2k' }, 393)).toBe(true);
+
+        expect(statusRowFolds(mainThreadRowWithTasks, 375))
+            .toEqual({ ...noFolds, toolName: true, tokens: true });
+        expect(estimateStatusRowWidth({ ...mainThreadRowWithTasks, live: '1m 2s' })).toBe(294);
+        expect(statusRowFits({ ...mainThreadRowWithTasks, live: '1m 2s' }, 375)).toBe(true);
     });
 
-    it('is still over at 320 with the name gone, where the shrinking starts', () => {
-        // 336 against 282 usable. There is no second fold left to fire, so
-        // the row gives way in `statusRowShrink`'s order: the account first,
-        // then the tool name's own segment. 320 is below the supported floor.
+    it('is still over at 320 with the name and the tokens gone, where the shrinking starts', () => {
+        // 294 against 266 usable, with the name and the token count already
+        // folded. The clock cannot go too, because that would leave the live
+        // segment with nothing in it, so the row gives way in
+        // `statusRowShrink`'s order instead and the ACCOUNT is what is cut.
+        // The working word is never among the candidates. 320 is below the
+        // supported floor.
+        expect(estimateStatusRowWidth({ ...mainThreadRowWithTasks, live: '1m 2s' })).toBe(294);
         expect(estimateStatusRowWidth({ ...mainThreadRowWithTasks, live: '1m 2s 251.2k' })).toBe(336);
-        expect(statusRowFolds(mainThreadRowWithTasks, 320)).toEqual({ toolName: true, model: false });
+        expect(statusRowFolds(mainThreadRowWithTasks, 320))
+            .toEqual({ ...noFolds, toolName: true, tokens: true });
         expect(statusRowFits({ ...mainThreadRowWithTasks, live: '1m 2s 251.2k' }, 320)).toBe(false);
     });
 
     it('folds nothing on a row that fits, and never a part that is not there', () => {
-        expect(statusRowFolds(mainThreadRowWithTasks, 500)).toEqual({ toolName: false, model: false });
-        expect(statusRowFolds({ ...mainThreadRowWithTasks, live: null, liveWithoutName: null }, 320))
-            .toEqual({ toolName: false, model: false });
+        expect(statusRowFolds(mainThreadRowWithTasks, 500)).toEqual(noFolds);
+        expect(statusRowFolds({
+            ...mainThreadRowWithTasks,
+            live: null,
+            liveWithoutName: null,
+            liveLabel: null,
+            liveElapsed: null,
+            liveTokens: null,
+        }, 320)).toEqual(noFolds);
     });
 });
 
@@ -195,30 +250,32 @@ describe('the row with a task list on it (DROVE-167)', () => {
 describe('what the row cost with the model on it', () => {
     it('was 436pt at its widest, 70 over the 366 it is now', () => {
         expect(estimateStatusRowWidth(mainThreadRowWithTasksAndModel)).toBe(436);
-        expect(statusRowUsableWidth(393)).toBe(355);
+        expect(statusRowUsableWidth(393)).toBe(339);
     });
 
-    it('folded the name AND the model whole at 393 and 375, and was still over at 320', () => {
-        for (const width of [393, 375]) {
+    it('folded the name AND the model whole at 393, and the tokens too at 375', () => {
+        expect(statusRowFolds(mainThreadRowWithTasksAndModel, 393))
+            .toEqual({ ...noFolds, toolName: true, model: true });
+        expect(statusRowFits(
+            { ...mainThreadRowWithTasksAndModel, live: '1m 2s 251.2k', model: null },
+            393,
+        )).toBe(true);
+        // 336 against 321 at 375, so the token count goes after the model.
+        for (const width of [375, 320]) {
             expect(statusRowFolds(mainThreadRowWithTasksAndModel, width), String(width))
-                .toEqual({ toolName: true, model: true });
+                .toEqual({ ...noFolds, toolName: true, model: true, tokens: true });
             expect(statusRowFits(
                 { ...mainThreadRowWithTasksAndModel, live: '1m 2s 251.2k', model: null },
                 width,
-            ), String(width)).toBe(true);
+            ), String(width)).toBe(false);
         }
-        expect(statusRowFolds(mainThreadRowWithTasksAndModel, 320)).toEqual({ toolName: true, model: true });
-        expect(statusRowFits(
-            { ...mainThreadRowWithTasksAndModel, live: '1m 2s 251.2k', model: null },
-            320,
-        )).toBe(false);
     });
 
     it('still folds a model for a caller that passes one, so the branch is not dead code', () => {
         const idle = { tasks: '1/3 tasks', model: 'Opus 5 1M', quota: 'jamrizzi 23%', quotaExpands: true, contextGauge: true };
         expect(estimateStatusRowWidth(idle)).toBe(285);
-        expect(statusRowFolds(idle, 393)).toEqual({ toolName: false, model: false });
-        expect(statusRowFolds(idle, 320)).toEqual({ toolName: false, model: true });
+        expect(statusRowFolds(idle, 393)).toEqual(noFolds);
+        expect(statusRowFolds(idle, 320)).toEqual({ ...noFolds, model: true });
     });
 });
 
@@ -226,7 +283,7 @@ describe('the row at 393pt, the handset Clay is on', () => {
     it('has room to spare, so nothing is near its edge in normal use', () => {
         expect(statusRowFits(workingRow, 393)).toBe(true);
         // Was over 60 with the model on the row; the model's 70pt is on top.
-        expect(statusRowUsableWidth(393) - estimateStatusRowWidth(workingRow)).toBeGreaterThan(130);
+        expect(statusRowUsableWidth(393) - estimateStatusRowWidth(workingRow)).toBe(118);
     });
 
     it('carries an idle session whole, without the live segment', () => {
@@ -256,6 +313,146 @@ describe('when it does not fit', () => {
     it('fits at 320pt now, where it used to be over budget and shrinking', () => {
         expect(statusRowFits(workingRow, 320)).toBe(true);
         expect(statusRowFits(workingRowWithModel, 320)).toBe(false);
+    });
+});
+
+/**
+ * DROVE-223: the row's REAL width, and the word that was cut on it.
+ *
+ * Clay's photograph is `● wor… 4m 20s 51.6k ⛄6 ˄ · main 8% ˄` on a 393pt
+ * phone. The working state, the leftmost and most important fact on the line,
+ * cut to three letters while the account beside it drew whole and the right
+ * two thirds of the row were empty. Two terms were wrong and neither of them
+ * was the strip being narrow.
+ */
+describe("the row's real width (DROVE-223)", () => {
+    it('takes AgentInput\'s gutter off as well as its own inset, which is 16pt a phone', () => {
+        // 8 + 19 = the 27pt from the screen edge to the dot in the photograph.
+        // The budget was taking only the 19.
+        expect(statusRowMetrics.outerGutter).toBe(MOBILE_COMPOSER_METRICS.shellGutter);
+        expect(statusRowMetrics.outerGutter + statusRowMetrics.paddingHorizontal).toBe(27);
+        expect(statusRowUsableWidth(393)).toBe(339);
+        expect(statusRowUsableWidth(375)).toBe(321);
+        expect(statusRowUsableWidth(320)).toBe(266);
+        for (const width of [320, 375, 393]) {
+            expect(statusRowUsableWidth(width), String(width)).toBe(width - 54);
+        }
+    });
+
+    it('adds its terms up to the row it draws, with nothing left over', () => {
+        // The whole budget, spelled out: the dot and its margin, one separator
+        // between each pair of segments, and the segments themselves. The
+        // photographed row is 236 by this estimate and measures 244 on the
+        // phone, which is `glyphWidth` running about 3% lean in IBM Plex Sans.
+        const segments = statusRowSegments(workingWordRow);
+        expect(segments).toEqual([
+            { key: 'live', width: 153 },
+            { key: 'quota', width: 55 },
+        ]);
+        expect(statusRowChromeWidth(segments.length))
+            .toBe(statusRowMetrics.dot + statusRowMetrics.dotMarginRight + statusRowMetrics.separator);
+        expect(estimateStatusRowWidth(workingWordRow))
+            .toBe(statusRowChromeWidth(2) + 153 + 55);
+        expect(estimateStatusRowWidth(workingWordRow)).toBe(236);
+    });
+
+    it('shows the working word whole at 320, 375 and 393, which is the ticket', () => {
+        for (const width of [320, 375, 393]) {
+            expect(statusRowFits(workingWordRow, width), String(width)).toBe(true);
+            expect(statusRowFolds(workingWordRow, width), String(width)).toEqual(noFolds);
+            // And no cap over the segment carrying it, so nothing inside it
+            // is asked to shrink while the row has room.
+            expect(statusRowLiveCap(workingWordRow, width), String(width)).toBeNull();
+        }
+        // 236 of 339 at 393: a hundred points of line still empty beside the
+        // word that was being cut.
+        expect(statusRowUsableWidth(393) - estimateStatusRowWidth(workingWordRow)).toBe(103);
+    });
+
+    it('is the 45% cap that cut it, and the arithmetic of how', () => {
+        // The cap was a share of the WHOLE row, so it did not move when the
+        // row emptied. At 393 it is 152.55 against a live segment of 153 by
+        // this estimate, and about 163 in the font the row really draws, so
+        // the only child under it that can shrink took the whole overage. That
+        // child is the label, and with no tool running the label is the
+        // working word.
+        const live = statusRowSegments(workingWordRow).find((segment) => segment.key === 'live');
+        expect(live!.width).toBe(153);
+        expect(0.45 * statusRowUsableWidth(393)).toBeLessThan(live!.width);
+    });
+
+    it('caps a tool name off what the rest of the line does not need, not off 45%', () => {
+        // The reason the cap existed is still met: a 30-character MCP name is
+        // held to its share and cannot squeeze the account.
+        const mcp = {
+            ...workingWordRow,
+            workingWord: false,
+            liveLabel: 'mcp__chrome_devtools__take_screenshot',
+            live: 'mcp__chrome_devtools__take_screenshot 4m 20s 51.6k',
+        };
+        expect(statusRowLiveCap(mcp, 393)).toBe(statusRowUsableWidth(393) - statusRowChromeWidth(2) - 55);
+        expect(statusRowLiveCap(mcp, 393)).toBe(256);
+        expect(statusRowLiveCap(mcp, 375)).toBe(238);
+        // And it never bites a row that fits: the cap is what is left, so it
+        // is at least the segment's own width whenever the row is inside its
+        // budget.
+        expect(statusRowLiveCap(mainThreadRow, 393)!).toBeGreaterThanOrEqual(
+            statusRowSegments(mainThreadRow).find((segment) => segment.key === 'live')!.width,
+        );
+    });
+
+    it('drops the tokens and then the clock before the working word, never the word', () => {
+        // The widest a working-word row gets: six agents out, a task list, an
+        // account and the gauge. 384 against 339 at 393, so two facts have to
+        // go, and STATUS_ROW_GIVE_WAY says which two.
+        const worst = {
+            ...workingWordRow,
+            tasks: '1/3 tasks',
+            quota: 'jamrizzi 23%',
+            contextGauge: true,
+        };
+        expect(estimateStatusRowWidth(worst)).toBe(384);
+        for (const width of [320, 375, 393]) {
+            const folds = statusRowFolds(worst, width);
+            expect(folds, String(width)).toEqual({ ...noFolds, tokens: true, elapsed: true });
+            expect(folds.toolName, String(width)).toBe(false);
+        }
+        // What is left is the word and the agents: 306, inside 339 and 321.
+        const folded = { ...worst, live: 'working' };
+        expect(estimateStatusRowWidth(folded)).toBe(306);
+        expect(statusRowFits(folded, 393)).toBe(true);
+        expect(statusRowFits(folded, 375)).toBe(true);
+        // At 320, below the supported floor, the ACCOUNT is what gives next.
+        // Still not the word: it has no step left below it.
+        expect(statusRowFits(folded, 320)).toBe(false);
+        expect(statusRowShrink.account).toBeGreaterThan(statusRowShrink.live);
+    });
+});
+
+/**
+ * The order itself, as a rule the next fact added to the line inherits.
+ */
+describe('the order the row gives way in (DROVE-223)', () => {
+    it('puts the working word last, behind both of the numbers beside it', () => {
+        expect(STATUS_ROW_GIVE_WAY[STATUS_ROW_GIVE_WAY.length - 1]).toBe('workingWord');
+        for (const earlier of ['contextPercent', 'quotaWindow', 'toolName', 'account', 'tokens', 'elapsed'] as const) {
+            expect(statusRowGiveWayRank(earlier), earlier)
+                .toBeLessThan(statusRowGiveWayRank('workingWord'));
+        }
+    });
+
+    it('puts a tool name ahead of the account, and both numbers behind it', () => {
+        expect(statusRowGiveWayRank('toolName')).toBeLessThan(statusRowGiveWayRank('account'));
+        expect(statusRowGiveWayRank('account')).toBeLessThan(statusRowGiveWayRank('tokens'));
+        expect(statusRowGiveWayRank('tokens')).toBeLessThan(statusRowGiveWayRank('elapsed'));
+    });
+
+    it('is the same order the flex weights say, so the two cannot disagree', () => {
+        // A bigger weight gives more, so the weights run against the ranks.
+        expect(statusRowShrink.account).toBeGreaterThan(statusRowShrink.live);
+        expect(statusRowGiveWayRank('account')).toBeLessThan(statusRowGiveWayRank('elapsed'));
+        expect(statusRowShrink.quota).toBe(0);
+        expect(statusRowShrink.context).toBe(0);
     });
 });
 
@@ -315,6 +512,8 @@ describe('the estimate itself', () => {
         expect(statusRowMetrics.paddingHorizontal).toBe(19);
         expect(MOBILE_COMPOSER_LAYOUT.textInset)
             .toBe(MOBILE_COMPOSER_METRICS.shellInset + MOBILE_COMPOSER_METRICS.bubbleInset);
-        expect(statusRowUsableWidth(393)).toBe(355);
+        // DROVE-223's own gutter is outside this and unchanged, so the row's
+        // width does not move either.
+        expect(statusRowUsableWidth(393)).toBe(339);
     });
 });

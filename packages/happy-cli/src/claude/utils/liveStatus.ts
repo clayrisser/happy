@@ -19,8 +19,15 @@
  *       one per background agent, appended to as it works. Its first record is
  *       when it started; its `message.usage` blocks are the tokens.
  *   <projectDir>/<session>/subagents/agent-<id>.meta.json
- *       `{agentType, description, toolUseId}` — the label the TUI shows, and
- *       the tool_use id that ties the agent back to its card in the app.
+ *       `{agentType, description, toolUseId, spawnDepth, parentAgentId}` — the
+ *       label the TUI shows, the tool_use id that ties the agent back to its
+ *       card in the app, and WHO SPAWNED IT (DROVE-185). An agent the pane
+ *       launched itself has no `parentAgentId`; one launched by another agent
+ *       names it. Every agent in a session lands in this ONE flat directory
+ *       whatever its depth, so nested agents were always reported — they were
+ *       just indistinguishable from top-level ones without this field.
+ *       Measured on a real session: 236 files at spawnDepth 1, 23 at 2, 4 at
+ *       3, and `parentAgentId` present on exactly the 27 deeper than 1.
  *   <projectDir>/<session>/subagents/workflows/wf_<id>/journal.jsonl
  *       one `started` per agent the workflow launched and one `result` per
  *       agent that finished, which is the "3/5 agents done" the TUI draws.
@@ -76,6 +83,16 @@ export interface LiveStatusAgent {
     tokens?: number
     /** The `tool_use` that launched it, from the agent's meta.json. */
     toolId?: string
+    /**
+     * The agent that spawned this one, absent when the pane spawned it
+     * (DROVE-185).
+     *
+     * Absence IS "top level" — there is no separate depth field on the wire
+     * and none is wanted. Claude Code writes `parentAgentId` only from
+     * spawnDepth 2 down, so the two facts are the same fact and carrying both
+     * invites them to disagree. The app rebuilds depth by walking these links.
+     */
+    parentId?: string
 }
 
 /** One workflow run, from its journal. */
@@ -115,6 +132,40 @@ export interface LiveStatusMain {
 }
 
 /**
+ * What the SESSION has spent, main thread and every subagent together (DROVE-184).
+ *
+ * Clay: "where's my damn token counter showing tally of all tokens used across
+ * main agent and all subagents". The row carried `main.tokens`, which is the
+ * MAIN transcript alone, and every agent card carried its own. Nothing added
+ * them up, so a night with nine agents out at 200k each read as 50k.
+ *
+ * Summed HERE, on the CLI, at the two places `countTokens(usageOf(record))` is
+ * already called — once per main-transcript record, once per agent-transcript
+ * record. It is the same addition the card and the main readout are made of,
+ * folded into a second bucket as it happens, so the tally cannot disagree with
+ * the numbers beside it: there is one derivation and no second accounting.
+ *
+ * FINISHED SUBAGENTS COUNT. The question is "what has this cost me", and a
+ * finished agent's tokens are spent. `agents[]` drops an agent 90s after its
+ * last write and the card goes with it, but the tokens it had already reported
+ * stay in these totals, because they were added when the record was READ and
+ * nothing here re-derives from the live set. The one thing missing is an agent
+ * that had already gone quiet before this reader first saw the directory: its
+ * transcript is never opened, so its spend is invisible. That is a floor, not
+ * a drift.
+ */
+export interface LiveStatusTokens {
+    /** Main plus every subagent since the last prompt. The row's one number. */
+    turn: number
+    /** The main thread's share of `turn`; the same number as `main.tokens`. */
+    turnMain: number
+    /** Main plus every subagent since this reader picked the session up. */
+    session: number
+    /** The main thread's share of `session`. */
+    sessionMain: number
+}
+
+/**
  * One compact snapshot, published over the metadata channel the droverAccount
  * and paneModel stamps already ride (DROVE-45, DROVE-47).
  *
@@ -130,6 +181,8 @@ export interface LiveStatus {
     turnStartedAt?: number
     /** The main thread's own clock and tokens, absent while only agents are out. */
     main?: LiveStatusMain
+    /** Main plus every subagent, this turn and this session (DROVE-184). */
+    tokens?: LiveStatusTokens
     tool?: LiveStatusTool
     agents?: LiveStatusAgent[]
     workflows?: LiveStatusWorkflow[]
@@ -344,6 +397,8 @@ interface AgentState {
     tokens: number
     label?: string
     toolId?: string
+    /** The agent that spawned it, read once off meta.json (DROVE-185). */
+    parentId?: string
     /** mtime of the last stat, so a file nothing writes drops out. */
     mtimeMs: number
 }
@@ -378,6 +433,11 @@ export function createLiveStatusReader(opts: {
     let turnStartedAt = 0
     /** Tokens the MAIN transcript has spent since that prompt (DROVE-155). */
     let turnTokens = 0
+    /** The same for every subagent that has written since that prompt (DROVE-184). */
+    let turnAgentTokens = 0
+    /** Both again for the whole session. No prompt resets these. */
+    let sessionMainTokens = 0
+    let sessionAgentTokens = 0
     let lastRecordAt = 0
     let lastKind: RecordKind = 'other'
     let agents = new Map<string, AgentState>()
@@ -387,6 +447,9 @@ export function createLiveStatusReader(opts: {
         openTools = new Map()
         turnStartedAt = 0
         turnTokens = 0
+        turnAgentTokens = 0
+        sessionMainTokens = 0
+        sessionAgentTokens = 0
         lastRecordAt = 0
         lastKind = 'other'
         agents = new Map()
@@ -422,13 +485,21 @@ export function createLiveStatusReader(opts: {
                 // go back down, which is the stale reading the app refuses to
                 // draw on an idle session.
                 turnTokens = 0
+                // The agents' share of the turn goes with it (DROVE-184). A
+                // fan-out that outlives the turn keeps spending, and what it
+                // spends AFTER the prompt lands on the new turn, which is the
+                // reading that matches the clock beside it. The session totals
+                // below are the ones that never go back down.
+                turnAgentTokens = 0
             }
             // The same three fields, through the same countTokens, that give an
             // agent card its "251.2k tokens" (DROVE-155) — the difference is
             // only which transcript they are read from. Sidechain records were
             // dropped above, so this is the main thread and nothing else.
             if (record.type === 'assistant') {
-                turnTokens += countTokens(usageOf(record))
+                const spent = countTokens(usageOf(record))
+                turnTokens += spent
+                sessionMainTokens += spent
             }
 
             const message = record.message
@@ -481,15 +552,24 @@ export function createLiveStatusReader(opts: {
         }
     }
 
-    /** Read one agent's meta.json — the label and the tool_use that spawned it. */
-    const readAgentMeta = (path: string): { label?: string, toolId?: string } => {
+    /**
+     * Read one agent's meta.json — the label, the tool_use that spawned it,
+     * and the agent that spawned it (DROVE-185).
+     *
+     * `parentAgentId` is trimmed and dropped when empty, and dropped when it
+     * names the agent itself, so a malformed file cannot hand the app a row
+     * that is its own parent.
+     */
+    const readAgentMeta = (path: string, id: string): { label?: string, toolId?: string, parentId?: string } => {
         try {
             const meta = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
             const description = typeof meta.description === 'string' ? meta.description.trim() : ''
             const agentType = typeof meta.agentType === 'string' ? meta.agentType.trim() : ''
+            const parent = typeof meta.parentAgentId === 'string' ? meta.parentAgentId.trim() : ''
             return {
                 label: description || agentType || undefined,
                 toolId: typeof meta.toolUseId === 'string' ? meta.toolUseId : undefined,
+                ...(parent && parent !== id ? { parentId: parent } : {}),
             }
         } catch {
             return {}
@@ -532,7 +612,7 @@ export function createLiveStatusReader(opts: {
             }
             let state = agents.get(path)
             if (!state) {
-                const meta = readAgentMeta(join(dir, `agent-${id}.meta.json`))
+                const meta = readAgentMeta(join(dir, `agent-${id}.meta.json`), id)
                 state = { tail: { offset: 0, carry: '' }, startedAt: 0, tokens: 0, mtimeMs, ...meta }
                 agents.set(path, state)
             }
@@ -552,7 +632,14 @@ export function createLiveStatusReader(opts: {
                     if (state.startedAt === 0) {
                         state.startedAt = parseTimestamp(record.timestamp)
                     }
-                    state.tokens += countTokens(usageOf(record))
+                    // One addition, three buckets (DROVE-184). The card's
+                    // cumulative count and the two tallies are made of the
+                    // SAME `countTokens` call on the SAME record, so no sum on
+                    // any surface can drift from another.
+                    const spent = countTokens(usageOf(record))
+                    state.tokens += spent
+                    turnAgentTokens += spent
+                    sessionAgentTokens += spent
                 }
             }
             out.push({
@@ -561,6 +648,7 @@ export function createLiveStatusReader(opts: {
                 startedAt: state.startedAt || mtimeMs,
                 ...(state.tokens > 0 ? { tokens: state.tokens } : {}),
                 ...(state.toolId ? { toolId: state.toolId } : {}),
+                ...(state.parentId ? { parentId: state.parentId } : {}),
             })
         }
         return out
@@ -694,9 +782,22 @@ export function createLiveStatusReader(opts: {
                 ? turnStartedAt
                 : (tool?.startedAt ?? lastRecordAt)
 
+            // The tally, published whether or not the MAIN thread is the thing
+            // working (DROVE-184). A fan-out that outlives its turn leaves
+            // `main` absent and nine agents burning, which is exactly the state
+            // Clay was looking at when he asked where the number was, so the
+            // block is keyed off the spend and not off `mainWorking`.
+            const tokens: LiveStatusTokens = {
+                turn: turnTokens + turnAgentTokens,
+                turnMain: turnTokens,
+                session: sessionMainTokens + sessionAgentTokens,
+                sessionMain: sessionMainTokens,
+            }
+
             return {
                 at: now,
                 ...(turnStartedAt > 0 ? { turnStartedAt } : {}),
+                ...(tokens.session > 0 ? { tokens } : {}),
                 ...(mainWorking && mainStartedAt > 0
                     ? {
                         main: {
@@ -793,6 +894,10 @@ export class LiveStatusPublisher {
         return JSON.stringify({
             ...status,
             at: 0,
+            // The tally moves on every response of every agent, so leaving it
+            // in here would pin the FAST lane for a whole fan-out and undo the
+            // slow lane this class exists for (DROVE-184).
+            tokens: undefined,
             main: status.main ? { ...status.main, tokens: 0 } : undefined,
             agents: status.agents?.map((agent) => ({ ...agent, tokens: 0 })),
             workflows: status.workflows?.map((workflow) => ({ ...workflow, tokens: 0 })),

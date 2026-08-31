@@ -406,6 +406,16 @@ export const MetadataSchema = z.object({
             startedAt: z.number(),
             tokens: z.number().optional(),
         }).passthrough().optional(),
+        // The tally: main thread plus every subagent, added up ONCE on the CLI
+        // where the transcripts are (DROVE-184). The app never adds up the
+        // cards — it cannot, because a finished agent leaves `agents[]` 90s
+        // after its last write and its spend would vanish with it.
+        tokens: z.object({
+            turn: z.number(),
+            turnMain: z.number(),
+            session: z.number(),
+            sessionMain: z.number(),
+        }).passthrough().optional(),
         tool: z.object({
             id: z.string(),
             name: z.string(),
@@ -418,6 +428,15 @@ export const MetadataSchema = z.object({
             startedAt: z.number(),
             tokens: z.number().optional(),
             toolId: z.string().optional(),
+            // Who spawned it (DROVE-185). Absent means the pane did, which is
+            // the only way "top level" is stated: Claude Code writes
+            // parentAgentId from spawnDepth 2 down and nothing at depth 1.
+            // Every agent lands in the session's one flat subagents/
+            // directory whatever its depth, so nested agents were always in
+            // this array — this is what tells them apart. An older CLI sends
+            // none and every agent reads as top level, which is exactly the
+            // flat list the app drew before.
+            parentId: z.string().optional(),
         }).passthrough()).optional(),
         workflows: z.array(z.object({
             id: z.string(),

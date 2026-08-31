@@ -117,7 +117,7 @@ vi.mock('@/text', async () => {
 
 import { AgentInputStatusRow, type StatusRowProps } from './AgentInputStatusRow';
 import { resolveUsageStrip } from './agentInputUsage';
-import { statusRowShrink } from './statusRowLayout';
+import { statusRowLiveCap, statusRowShrink, statusRowUsableWidth } from './statusRowLayout';
 import { confirmDroverSwitch } from '@/utils/droverAccountSwitch';
 
 const originalConsoleError = console.error;
@@ -213,6 +213,66 @@ sessions.busy = {
             agents: [
                 { id: 'a1', label: 'Sweep the backlog', startedAt: now - 20_000 },
             ],
+        },
+    },
+};
+
+/**
+ * The row Clay photographed on DROVE-223: no tool, so the label is the working
+ * word, six agents out, `4m 20s` on the clock and `51.6k` spent.
+ */
+sessions.photographed = {
+    metadata: {
+        liveStatus: {
+            at: now,
+            turnStartedAt: now - 259_000,
+            main: { startedAt: now - 259_000, tokens: 51_600 },
+            agents: [1, 2, 3, 4, 5, 6].map((n) => ({
+                id: `a${n}`, label: `Agent ${n}`, startedAt: now - 20_000,
+            })),
+        },
+    },
+};
+
+/** The same row with a task list on it, which is the widest it ever gets. */
+sessions.photographedWithTasks = {
+    metadata: sessions.photographed.metadata,
+    todos: [
+        { content: 'Read the reducer', status: 'completed' },
+        { content: 'Write the sheet', status: 'in_progress' },
+        { content: 'Wire the wrist', status: 'pending' },
+    ],
+};
+
+/**
+ * Clay's night, from a CLI that publishes the tally (DROVE-184): the main
+ * thread spent 51.6k and nine subagents spent 200k each, so the row's old
+ * number understated it by an order of magnitude.
+ */
+sessions.tallied = {
+    metadata: {
+        liveStatus: {
+            at: now,
+            turnStartedAt: now - 259_000,
+            main: { startedAt: now - 259_000, tokens: 51_600 },
+            tokens: { turn: 1_851_600, turnMain: 51_600, session: 1_851_600, sessionMain: 51_600 },
+            agents: [1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => ({
+                id: `a${n}`, label: `Agent ${n}`, startedAt: now - 20_000, tokens: 200_000,
+            })),
+        },
+    },
+};
+
+/** The same fan-out once it has outlived the turn: no main block, tally still live. */
+sessions.talliedAgentsOnly = {
+    metadata: {
+        liveStatus: {
+            at: now,
+            turnStartedAt: now - 400_000,
+            tokens: { turn: 1_800_000, turnMain: 51_600, session: 1_851_600, sessionMain: 51_600 },
+            agents: [1, 2, 3].map((n) => ({
+                id: `a${n}`, label: `Agent ${n}`, startedAt: now - 380_000, tokens: 600_000,
+            })),
         },
     },
 };
@@ -503,15 +563,74 @@ describe('AgentInputStatusRow while the session is working', () => {
             const live = renderer.root.findAllByType('Pressable' as any)
                 .find((node: any) => String(node.props.accessibilityLabel).startsWith('Main thread:'));
             const style = live.props.style({ pressed: false });
-            // The last of the two that shrink, behind the account, and never
-            // more than 45% of the row.
+            // The last of the two that shrink, behind the account, and held to
+            // what the rest of the line does not need. It was a flat `45%` of
+            // the row, which is a share of the WHOLE row and so does not move
+            // when the row empties (DROVE-223); this is measured off the
+            // account and the separators actually on it.
             expect(style.flexShrink).toBe(statusRowShrink.live);
-            expect(style.maxWidth).toBe('45%');
+            expect(typeof style.maxWidth).toBe('number');
+            expect(style.maxWidth).toBeLessThan(statusRowUsableWidth(screen.width));
+            expect(style.maxWidth).toBeGreaterThan(0.45 * statusRowUsableWidth(screen.width));
             const account = renderer.root.findAllByType('Text' as any)
                 .find((node: any) => node.props.children === 'jamrizzi');
             expect(account.props.style.flexShrink).toBe(statusRowShrink.account);
             expect(statusRowShrink.live).toBeLessThan(statusRowShrink.account);
         } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    /**
+     * DROVE-223. Clay photographed `● wor… 4m 20s 51.6k ⛄6 ˄ · main 8% ˄`: the
+     * working word cut to three letters on a row with two thirds of the line
+     * empty beside it. The cut came from a `45%` cap in this file that no
+     * budget knew about, over a segment whose only shrinkable child is the
+     * label, and with no tool running the label IS the working word.
+     */
+    it('draws the working word whole at 320, 375 and 393, and never caps it', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(now + 1_000);
+        try {
+            for (const width of [320, 375, 393]) {
+                screen.width = width;
+                const renderer = row({ sessionId: 'photographed' });
+                // Whole, not `wor…`. The assertion is the STRING, because a
+                // truncated one is what the ticket is about.
+                expect(line(renderer), `width ${width}`).toContain('working');
+                expect(line(renderer).join(' '), `width ${width}`).toContain('4m 20s 51.6k');
+                const live = renderer.root.findAllByType('Pressable' as any)
+                    .find((node: any) => String(node.props.accessibilityLabel).startsWith('Main thread:'));
+                // No cap at all over the segment carrying it: the working word
+                // is last in STATUS_ROW_GIVE_WAY, so nothing above it may
+                // clamp the box it lives in.
+                expect(live.props.style({ pressed: false }).maxWidth, `width ${width}`).toBeUndefined();
+            }
+        } finally {
+            screen.width = 390;
+            vi.useRealTimers();
+        }
+    });
+
+    it('gives up the token count and then the clock before it gives up the word', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(now + 1_000);
+        screen.width = 393;
+        try {
+            // The widest a working-word row gets: the agents, a task list, the
+            // account and the gauge. Two facts have to go and the order says
+            // which two. The word is not one of them.
+            const renderer = row({
+                sessionId: 'photographedWithTasks',
+                contextStatus: { percent: 42, detailText: '84k / 200k context', color: 'ok' },
+            });
+            const text = line(renderer);
+            expect(text).toContain('working');
+            expect(text).toContain('1/3 tasks');
+            expect(text.join(' ')).not.toContain('51.6k');
+            expect(text.join(' ')).not.toContain('4m 20s');
+        } finally {
+            screen.width = 390;
             vi.useRealTimers();
         }
     });
@@ -557,7 +676,7 @@ describe('AgentInputStatusRow while the session is working', () => {
             // Closed by default, and nothing unfolded under the row.
             expect(agents().props.open).toBe(false);
             expect(renderer.root.findAllByType('ScrollView' as any)).toHaveLength(0);
-            const working = segment(renderer, 'Main thread: working 1m 2s, 251.2k tokens, 1 agent');
+            const working = segment(renderer, 'Main thread: working 1m 2s, 251.2k tokens across main and agents, 1 agent');
             act(() => {
                 working.props.onPress();
             });
@@ -589,7 +708,7 @@ describe('AgentInputStatusRow while the session is working', () => {
             const agents = () => renderer.root.findByType('SessionAgentsSheet' as any);
             const usage = () => renderer.root.findByType('UsageAccountBarsSheet' as any);
             act(() => {
-                segment(renderer, 'Main thread: working 1m 2s, 251.2k tokens, 1 agent').props.onPress();
+                segment(renderer, 'Main thread: working 1m 2s, 251.2k tokens across main and agents, 1 agent').props.onPress();
             });
             expect([agents().props.open, usage().props.open]).toEqual([true, false]);
             act(() => {
@@ -609,6 +728,85 @@ describe('AgentInputStatusRow while the session is working', () => {
  * are running or when we're actually thinking in the main chat". The dot means
  * the MAIN thread. The count means the agents.
  */
+describe('the token tally on the strip (DROVE-184)', () => {
+    /**
+     * Clay: "where's my damn token counter showing tally of all tokens used
+     * across main agent and all subagents". The row drew `main.tokens`, the
+     * MAIN transcript alone, so a night of nine agents at 200k each read as
+     * 51.6k.
+     */
+    it('draws main plus every subagent in the row\'s one token slot', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(now + 1_000);
+        try {
+            const text = line(row({ sessionId: 'tallied' })).join(' ');
+            expect(text).toContain('4m 20s 1.9M');
+            // The main-only number is no longer what the row says.
+            expect(text).not.toContain('51.6k');
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('adds no term to the line: same slot, at 320, 375 and 393', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(now + 1_000);
+        try {
+            for (const width of [320, 375, 393]) {
+                screen.width = width;
+                const text = line(row({ sessionId: 'tallied' }));
+                // DROVE-223's rule holds unchanged: the working word is last
+                // to give way and nothing above it has been crowded out.
+                expect(text, `width ${width}`).toContain('working');
+                expect(text.join(' '), `width ${width}`).toContain('4m 20s 1.9M');
+            }
+        } finally {
+            screen.width = 390;
+            vi.useRealTimers();
+        }
+    });
+
+    it('still shows the spend once the fan-out has outlived the turn', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(now + 1_000);
+        try {
+            const renderer = row({ sessionId: 'talliedAgentsOnly' });
+            const text = line(renderer);
+            // No clock and no working word, because the MAIN thread is idle
+            // and the dot has to stay honest (DROVE-155). The number is there
+            // anyway, which is the whole point: this is the state Clay was
+            // looking at when he asked where it was.
+            expect(text.join(' ')).toContain('1.8M');
+            expect(text).not.toContain('working');
+            expect(renderer.root.findByType('StatusDot' as any).props.color).toBe('green');
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('tells a screen reader the number is a total, not the main thread\'s', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(now + 1_000);
+        try {
+            const live = row({ sessionId: 'tallied' }).root.findAllByType('Pressable' as any)
+                .find((node: any) => String(node.props.accessibilityLabel).startsWith('Main thread:'));
+            expect(live.props.accessibilityLabel).toContain('1.9M tokens across main and agents');
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('keeps the main-only number on a CLI too old to publish a tally', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(now + 1_000);
+        try {
+            expect(line(row({ sessionId: 'photographed' })).join(' ')).toContain('4m 20s 51.6k');
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+});
+
 describe('AgentInputStatusRow dot rule', () => {
     it('is the working blue only while the MAIN thread is working', () => {
         vi.useFakeTimers();
@@ -883,7 +1081,7 @@ describe('AgentInputStatusRow tasks', () => {
         expect(line(renderer)).toEqual(['jamrizzi', '23%']);
     });
 
-    it('counts against the width, but with the model gone the name survives it too (DROVE-178)', () => {
+    it('counts against the width, and the numbers give way before the word (DROVE-223)', () => {
         vi.useFakeTimers();
         vi.setSystemTime(now + 1_000);
         try {
@@ -898,21 +1096,28 @@ describe('AgentInputStatusRow tasks', () => {
             // The badge is what the estimate used to be missing (DROVE-167),
             // and counting it cost the tool name AND the model whole at 393.
             // The model is off the row now (DROVE-178), so the same working
-            // session with a list draws entire from 393 up.
-            for (const width of [393, 430, 500]) {
+            // session with a list draws entire from 430 up.
+            for (const width of [430, 500]) {
                 screen.width = width;
                 expect(line(row({ sessionId: 'busyWithTasks' })), String(width))
                     .toEqual(['working', '1m 2s 251.2k', '1', '·', '1/3 tasks', '·', 'jamrizzi', '23%']);
             }
-            // At 375 and below the tool name gives, and ONLY the tool name.
-            // That is the whole difference: the same two widths used to lose
-            // the model as well, and the account was being cut around a badge
-            // that held its width.
-            for (const width of [375, 320]) {
+            // THIS IS THE ROW THE TICKET IS ABOUT. `busy` has no tool, so the
+            // label is the WORKING WORD, and the fold that used to fire here
+            // took it out first of everything on the line. It cannot any more:
+            // the token count goes instead, which is the next step down
+            // STATUS_ROW_GIVE_WAY. 349 against 339 at 393 and 321 at 375.
+            for (const width of [393, 375]) {
                 screen.width = width;
                 expect(line(row({ sessionId: 'busyWithTasks' })), String(width))
-                    .toEqual(['1m 2s 251.2k', '1', '·', '1/3 tasks', '·', 'jamrizzi', '23%']);
+                    .toEqual(['working', '1m 2s', '1', '·', '1/3 tasks', '·', 'jamrizzi', '23%']);
             }
+            // At 320, below the supported floor, the clock goes as well and
+            // the account starts to shrink around what is left. The word is
+            // still there, because there is no step below it.
+            screen.width = 320;
+            expect(line(row({ sessionId: 'busyWithTasks' })))
+                .toEqual(['working', '1', '·', '1/3 tasks', '·', 'jamrizzi', '23%']);
         } finally {
             screen.width = 390;
             vi.useRealTimers();
