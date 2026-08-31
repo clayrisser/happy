@@ -138,6 +138,9 @@ import {
     deservesAWake,
     startDroverWatchFeed,
 } from './droverWatchFeed';
+import { getSessionName } from '@/utils/sessionUtils';
+import { currentDroverAccountRow } from '@/utils/droverUsage';
+import { resolveSessionState } from './sessionState';
 
 /** Only the fields the feed reads; the real sessions are built in storage.ts. */
 function session(options: {
@@ -160,17 +163,27 @@ function session(options: {
     thinkingAt?: number;
     /** The CLI's account/headroom snapshot (DROVE-47), read by the picker. */
     droverUsage?: unknown;
+    /** `Session.presence` — what the phone resolves its state from (DROVE-129). */
+    presence?: 'online' | number;
+    /** `metadata.name` — the CLI's own copy of the session's name (DROVE-127). */
+    name?: string;
 }) {
     return {
         // Connected unless a test says otherwise: a non-rig session with no
         // socket reads as ARCHIVED, so a default of false would have quietly
         // emptied the wrist in every case below and called it a pass.
         active: options.active ?? true,
+        // Online unless a test says otherwise, matching `active`: the feed
+        // resolves the session's state through the phone's own
+        // resolveSessionState, which reads presence and not the socket flag
+        // (DROVE-129).
+        presence: options.presence ?? (options.active === false ? 0 : 'online'),
         thinking: options.thinking ?? false,
         thinkingAt: options.thinkingAt ?? 0,
         agentState: options.requests ? { requests: options.requests } : undefined,
         metadata: {
             path: options.path,
+            name: options.name,
             summary: options.summary ? { text: options.summary, updatedAt: 0 } : undefined,
             droverAccount: options.account,
             droverUsage: options.droverUsage,
@@ -377,6 +390,7 @@ describe('collectSessions', () => {
             id: 's1',
             title: 'drover',
             active: true,
+            state: 'waiting',
             path: '/Users/clay/Projects/drover',
             subagents: 3,
         }]);
@@ -387,7 +401,10 @@ describe('collectSessions', () => {
         const [s] = collectSessions();
         expect('path' in s).toBe(false);
         expect('subagents' in s).toBe(false);
-        expect(s.title).toBe('session');
+        // The phone's last word for a session with neither a name nor a path,
+        // not the wrist's old literal `session` (DROVE-127). `@/text` is
+        // mocked to echo its key.
+        expect(s.title).toBe('session.newChat:');
     });
 
     it('excludes the drover bridge session, which holds no conversation to flip', () => {
@@ -436,6 +453,139 @@ describe('collectSessions', () => {
             expect('status' in s).toBe(false);
             expect('statusSince' in s).toBe(false);
         }
+    });
+});
+
+/**
+ * DROVE-127 and DROVE-129: the wrist is the phone folded to wrist size, so
+ * every value it shows has to come off the phone's own derivation.
+ *
+ * Asserted at the SHARED FUNCTION, never through a screen. A UI test would
+ * pass the day someone reimplemented `sessionDisplayTitle` inside the feed,
+ * which is exactly the bug: two implementations that happen to agree today.
+ * These call the phone's function and the feed's output and demand they be the
+ * same string.
+ */
+describe('what the wrist shows is what the phone shows', () => {
+    it('titles a session by its NAME, which is what the phone header shows', () => {
+        mocks.sessions = {
+            s1: session({
+                path: '/Users/clay/Projects/bitspur/cattle-drover',
+                summary: 'DROVER',
+                running: true,
+            }),
+        };
+        const [wrist] = collectSessions();
+        // The photo Clay sent: the wrist said one of these and the phone the
+        // other, for one session.
+        expect(wrist.title).toBe('DROVER');
+        expect(wrist.title).not.toBe('cattle-drover');
+        expect(wrist.title).toBe(getSessionName(mocks.sessions.s1 as never));
+    });
+
+    it('takes metadata.name when only the CLI stamped one', () => {
+        mocks.sessions = { s1: session({ path: '/a/cattle-drover', name: 'zap' }) };
+        const [wrist] = collectSessions();
+        expect(wrist.title).toBe('zap');
+        expect(wrist.title).toBe(getSessionName(mocks.sessions.s1 as never));
+    });
+
+    it('still falls back to the directory when a session has no name at all', () => {
+        mocks.sessions = { s1: session({ path: '/Users/clay/Projects/bitspur/cattle-drover' }) };
+        const [wrist] = collectSessions();
+        expect(wrist.title).toBe('cattle-drover');
+        expect(wrist.title).toBe(getSessionName(mocks.sessions.s1 as never));
+    });
+
+    /** AC: renaming a session updates the wrist without a restart. */
+    it('republishes when a session is renamed, so the wrist follows a rename', async () => {
+        mocks.sessions = { s1: session({ path: '/a/cattle-drover', running: true }) };
+        start();
+        expect(mocks.published.at(-1)?.sessions[0].title).toBe('cattle-drover');
+        const published = mocks.published.length;
+        mocks.sessions = {
+            s1: session({ path: '/a/cattle-drover', summary: 'DROVER', running: true }),
+        };
+        mocks.onStorage?.();
+        await Promise.resolve();
+        expect(mocks.published.length).toBeGreaterThan(published);
+        expect(mocks.published.at(-1)?.sessions[0].title).toBe('DROVER');
+    });
+
+    /**
+     * The account line, resolved the way the session info screen and the
+     * composer popup resolve it. `droverUsage` marks the account the session
+     * is on RIGHT NOW; the `droverAccount` stamp is the older fact, and the
+     * wrist used to read only that.
+     */
+    it('names the account the phone names, not the stale stamp', () => {
+        const droverUsage = {
+            capturedAt: 1,
+            accounts: [
+                { name: 'work', headroom: 12 },
+                { name: 'work-2', headroom: 88, current: true },
+            ],
+        };
+        mocks.sessions = {
+            s1: session({ path: '/a/work', running: true, account: 'work', droverUsage }),
+        };
+        const [wrist] = collectSessions();
+        expect(wrist.account).toBe('work-2');
+        expect(wrist.account).toBe(currentDroverAccountRow(droverUsage, 'work')?.name);
+    });
+
+    it('keeps the plain stamp when nothing measured the accounts', () => {
+        mocks.sessions = { s1: session({ path: '/a/work', running: true, account: 'work' }) };
+        expect(collectSessions()[0].account).toBe('work');
+    });
+
+    it('omits the account rather than inventing one for an unaccounted session', () => {
+        mocks.sessions = { s1: session({ path: '/a/work', running: true }) };
+        expect('account' in collectSessions()[0]).toBe(false);
+    });
+
+    /**
+     * The state word. The wrist cannot import resolveSessionState, so the
+     * phone resolves and sends; sessionStateWire.spec.ts is what pins the
+     * Swift that draws it.
+     */
+    it('sends the phone resolved state, not whether the process is up', () => {
+        mocks.sessions = {
+            idle: session({ path: '/a/idle', running: true }),
+            busy: session({ path: '/a/busy', running: true, thinking: true }),
+            gated: session({ path: '/a/gated', running: true, requests: { r1: { tool: 'Bash' } } }),
+            gone: session({ path: '/a/gone', running: true, presence: 0, rig: true }),
+        };
+        const byId = Object.fromEntries(collectSessions().map((s) => [s.id, s]));
+        expect(byId.idle.state).toBe('waiting');
+        expect(byId.busy.state).toBe('thinking');
+        expect(byId.gated.state).toBe('permission_required');
+        expect(byId.gone.state).toBe('disconnected');
+        for (const [id, wrist] of Object.entries(byId)) {
+            const phone = mocks.sessions[id] as {
+                agentState?: unknown; thinking?: boolean; presence?: unknown;
+            };
+            expect(wrist.state, id).toBe(resolveSessionState({
+                agentState: phone.agentState as never,
+                thinking: !!phone.thinking,
+                isOnline: phone.presence === 'online',
+            }));
+        }
+    });
+
+    /**
+     * A session running and a session blocked on a permission both report
+     * `active: true`, so the old wrist drew the same green dot for both. That
+     * is the divergence the state field closes.
+     */
+    it('tells a running session apart from one waiting on a human, which `active` cannot', () => {
+        mocks.sessions = {
+            busy: session({ path: '/a/busy', running: true, thinking: true }),
+            gated: session({ path: '/a/gated', running: true, requests: { r1: { tool: 'Bash' } } }),
+        };
+        const [busy, gated] = collectSessions().sort((a, b) => a.id.localeCompare(b.id));
+        expect(busy.active).toBe(gated.active);
+        expect(busy.state).not.toBe(gated.state);
     });
 });
 

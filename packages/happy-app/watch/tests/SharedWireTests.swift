@@ -170,6 +170,9 @@ struct SharedWireTests {
         aSnapshotWithoutTheNewKeysStillDecodes()
         sessionCarriesWhatItIsDoing()
         sessionWithoutAStatusStillDecodes()
+        theSessionStateTheWristDrawsIsThePhonesOwn()
+        aStateTheWristDoesNotKnowFallsBackRatherThanThrowing()
+        theWristTakesThePhonesTitleVerbatim()
         accountHeadroomSurvivesTheWire()
         aNewGateEarnsACue()
         aGateTheWristAlreadyKnowsDoesNot()
@@ -556,6 +559,89 @@ struct SharedWireTests {
         }
         check(session.status == nil, "a session with no status key decodes")
         check(session.statusSince == nil, "a session with no statusSince key decodes")
+        check(session.state == nil, "a session with no state key decodes")
+        check(
+            session.resolvedState == .thinking,
+            "a running session from a phone that predates `state` still reads as busy"
+        )
+    }
+
+    /// The phone resolves the session state and SENDS it, because the wrist
+    /// cannot import resolveSessionState (DROVE-129). Every word in the
+    /// phone's SessionState union has to land on a case here, or the wrist
+    /// silently falls back to `active` and starts answering a different
+    /// question from the phone's list.
+    static func theSessionStateTheWristDrawsIsThePhonesOwn() {
+        let wire = ["disconnected", "waiting", "thinking", "permission_required", "input_required"]
+        for raw in wire {
+            check(
+                SessionState(rawValue: raw) != nil,
+                "the wrist knows the phone's `\(raw)` state"
+            )
+        }
+        check(
+            Set(SessionState.allCases.map(\.rawValue)) == Set(wire),
+            "the wrist knows exactly the phone's five states and no sixth of its own"
+        )
+        check(SessionState.thinking.label == "working", "a busy turn is `working`, the phone's own word for one it cannot name")
+        check(SessionState.waiting.label == "online", "an idle connected session is `online`, as the phone says")
+        check(SessionState.disconnected.label == "offline", "a disconnected session is `offline`, as the phone says")
+        check(
+            SessionState.permissionRequired.label == "permission required"
+                && SessionState.inputRequired.label == "waiting for your answer",
+            "the two blocked states carry the phone's own strings"
+        )
+        check(
+            SessionState.permissionRequired.needsYou && SessionState.inputRequired.needsYou
+                && !SessionState.thinking.needsYou,
+            "only the two blocked states are waiting on a human"
+        )
+        check(
+            SessionState.disconnected.tintHex == "999999"
+                && SessionState.waiting.tintHex == "34C759"
+                && SessionState.thinking.tintHex == "007AFF"
+                && SessionState.permissionRequired.tintHex == "FF9500"
+                && SessionState.inputRequired.tintHex == "FF9500",
+            "the dot on the wrist is the colour the phone's list draws for the same state"
+        )
+    }
+
+    /// A state the wrist has never heard of costs the STATE, not the session.
+    /// Same rule as DroverGate.Kind: a Codable enum would throw and take the
+    /// whole snapshot with it.
+    static func aStateTheWristDoesNotKnowFallsBackRatherThanThrowing() {
+        let payload = """
+        {"gates":[],"updatedAt":"2026-08-30T19:50:00Z","connected":true,
+        "sessions":[{"id":"s1","title":"DROVER","account":null,"active":false,"state":"levitating"}]}
+        """
+        guard let snapshot = try? DroverSnapshot.decoder.decode(
+            DroverSnapshot.self, from: Data(payload.utf8)
+        ), let session = snapshot.sessions.first else {
+            check(false, "a session carrying an unknown state still decodes")
+            return
+        }
+        check(session.state == "levitating", "the unknown state survives the wire verbatim")
+        check(session.resolvedState == .disconnected, "an unknown state falls back to what `active` says")
+    }
+
+    /// The name the session was GIVEN, not its folder (DROVE-127). The phone
+    /// derives it and the wrist draws it; there is nothing here for the wrist
+    /// to compute, which is the whole fix.
+    static func theWristTakesThePhonesTitleVerbatim() {
+        let payload = """
+        {"gates":[],"updatedAt":"2026-08-30T19:50:00Z","connected":true,
+        "sessions":[{"id":"s1","title":"DROVER","account":"bitspur","active":true,
+        "path":"/Users/x/Projects/cattle-drover","state":"thinking"}]}
+        """
+        guard let snapshot = try? DroverSnapshot.decoder.decode(
+            DroverSnapshot.self, from: Data(payload.utf8)
+        ), let session = snapshot.sessions.first else {
+            check(false, "a named session decodes")
+            return
+        }
+        check(session.title == "DROVER", "the wrist shows the name the phone shows, not the directory")
+        check(session.path == "/Users/x/Projects/cattle-drover", "the directory still travels, under the title")
+        check(session.resolvedState == .thinking, "the phone's resolved state reaches the wrist")
     }
 
     /// The flip picker orders by headroom (DROVE-28's watch half), so the row
@@ -612,10 +698,10 @@ struct SharedWireTests {
         )
     }
 
-    static func session(_ id: String, active: Bool) -> DroverSession {
+    static func session(_ id: String, active: Bool, state: String? = nil) -> DroverSession {
         DroverSession(
             id: id, title: id, account: nil, active: active,
-            path: nil, subagents: nil, status: nil, statusSince: nil
+            path: nil, subagents: nil, status: nil, statusSince: nil, state: state
         )
     }
 
