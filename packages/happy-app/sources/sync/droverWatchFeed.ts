@@ -21,6 +21,12 @@ import { newGateEntries, togglesFromSettings, wakeDeserved } from './droverChann
 import { demoLog, isDroverDemoId } from './droverDemo';
 import { isSessionArchived } from './sessionArchive';
 import { liveStatusSince, liveStatusWatchLine } from '@/utils/liveStatus';
+import { sessionDisplayTitle } from '@/utils/sessionTitle';
+import { deriveSessionTasks } from '@/utils/sessionTasks';
+import { currentDroverAccountRow } from '@/utils/droverUsage';
+import type { DroverUsageAccountLike } from '@/utils/droverUsage';
+import { droverBindingLimit } from '@/components/agentInputUsage';
+import { resolveSessionState } from './sessionState';
 import {
     addDroverAnswerListener,
     addDroverFlipListener,
@@ -117,12 +123,7 @@ export function collectAccountRows(
     if (!freshest) return [];
     const rows: DroverAccountRow[] = [];
     for (const entry of freshest.accounts) {
-        const account = entry as {
-            name?: unknown;
-            loggedIn?: unknown;
-            headroom?: unknown;
-            cooling?: { until?: unknown } | null;
-        };
+        const account = entry as DroverUsageAccountLike & { cooling?: { until?: unknown } | null };
         if (!account || typeof account.name !== 'string' || !account.name) continue;
         const headroom = typeof account.headroom === 'number' && Number.isFinite(account.headroom)
             ? Math.round(Math.min(100, Math.max(0, account.headroom)))
@@ -130,6 +131,11 @@ export function collectAccountRows(
         const until = account.cooling && typeof account.cooling.until === 'number'
             ? account.cooling.until
             : undefined;
+        // WHICH limit that headroom is about, decided by the phone's own
+        // ranking rather than re-derived on the wrist (DROVE-131, DROVE-129).
+        // Its percentLeft is the same number `headroom` is — both are 100
+        // minus the fullest row — so the bar and the label always agree.
+        const binding = droverBindingLimit(account);
         rows.push({
             name: account.name,
             // Omitted, never null: WatchConnectivity payloads take
@@ -137,6 +143,14 @@ export function collectAccountRows(
             ...(headroom === undefined ? {} : { headroom }),
             ...(account.loggedIn === false ? { loggedIn: false } : { loggedIn: true }),
             ...(until ? { backAt: new Date(until).toISOString() } : {}),
+            ...(account.current ? { current: true } : {}),
+            ...(binding
+                ? {
+                    limit: binding.label,
+                    tone: binding.tone,
+                    ...(binding.resetsAt ? { resetsAt: new Date(binding.resetsAt).toISOString() } : {}),
+                }
+                : {}),
         });
     }
     // Most headroom first, logged-out last: the wrist reads top down and the
@@ -164,16 +178,44 @@ export function collectSessions(): DroverSession[] {
         // sat among the live ones.
         if (isSessionArchived(session)) continue;
         const path = metadata.path ?? '';
-        const title = path.split('/').filter(Boolean).pop() || 'session';
-        const account = metadata.droverAccount;
+        // The name the session was GIVEN, through the phone's own derivation
+        // (DROVE-127). This line used to be `path.split('/').pop()`, which is
+        // why Clay's wrist said `cattle-drover` while the phone header said
+        // `DROVER` for the same session. sessionTitle.ts owns the rule and
+        // still falls back to the basename when a session has no name, so the
+        // wrist loses nothing and the two cannot answer differently.
+        const title = sessionDisplayTitle(session);
+        // The account the PHONE says this session is on (DROVE-127). Not the
+        // `droverAccount` stamp alone: the CLI marks the live account
+        // `current` on metadata.droverUsage, and the info screen and the
+        // composer popup both resolve through this, so a wrist reading the
+        // older stamp printed the account the session used to be on.
+        const account = currentDroverAccountRow(metadata.droverUsage, metadata.droverAccount)?.name;
         // Running, not total: total counts the ones already finished, and the
         // wrist question is "how much is out right now".
         const subagents = metadata.activity?.subagents?.running;
+        // The phone's own state precedence, resolved here and SENT, because
+        // the wrist cannot import it (DROVE-129). The watch used to answer
+        // "running"/"idle" off `active` alone, which is whether the process is
+        // alive — a different question from the one the phone's list answers
+        // with its dot, and one that says nothing about a session sitting on a
+        // permission prompt.
+        const state = resolveSessionState({
+            agentState: session.agentState,
+            thinking: !!session.thinking,
+            isOnline: session.presence === 'online',
+        });
         // What it is DOING, not just that it is on (DROVE-54). Absent while
         // the session is idle, and absent again once the snapshot goes stale,
         // so the wrist never shows a timer for a turn that ended.
         const status = liveStatusWatchLine(metadata.liveStatus, now);
         const statusSince = status ? liveStatusSince(metadata.liveStatus, now) : undefined;
+        // The task list, decided here and SENT (DROVE-129, DROVE-167). Swift
+        // cannot import the derivation, so the phone does the sorting and the
+        // trimming and hands over the unfinished lines. `tasksDone` and
+        // `tasksTotal` ride along because "2 of 7" is the sentence the wrist
+        // wants at the top of a scroll it will not finish reading.
+        const tasks = deriveSessionTasks(session.todos);
         out.push({
             id: sessionId,
             title,
@@ -184,6 +226,12 @@ export function collectSessions(): DroverSession[] {
             ...(typeof subagents === 'number' ? { subagents } : {}),
             ...(status ? { status } : {}),
             ...(statusSince ? { statusSince } : {}),
+            ...(tasks.isEmpty ? {} : {
+                tasks: tasks.remaining.map((task) => task.text),
+                tasksDone: tasks.completedCount,
+                tasksTotal: tasks.total,
+            }),
+            state,
         });
     }
     return out;
@@ -232,15 +280,26 @@ function sameSessionSet(a: DroverSession[], b: DroverSession[]): boolean {
     // and a line that only refreshes when something else moved is a stale line
     // dressed as a live one. Neither carries an elapsed time, so
     // they change on a transition and not on a tick.
+    // The task list is in the key too (DROVE-167): a task ticking over to done
+    // moves nothing else about the session, and a wrist list that only
+    // refreshed when the tool changed would show yesterday's tasks.
     const key = (s: DroverSession) =>
-        `${s.id}|${s.account ?? ''}|${s.active}|${s.subagents ?? ''}|${s.status ?? ''}|${s.statusSince ?? ''}`;
+        `${s.id}|${s.title}|${s.account ?? ''}|${s.active}|${s.state ?? ''}`
+        + `|${s.subagents ?? ''}|${s.status ?? ''}|${s.statusSince ?? ''}`
+        + `|${s.tasksDone ?? ''}/${s.tasksTotal ?? ''}|${(s.tasks ?? []).join('\u0001')}`;
     const keys = new Set(a.map(key));
     return b.every((s) => keys.has(key(s)));
 }
 
 function sameAccountRows(a: DroverAccountRow[], b: DroverAccountRow[]): boolean {
     if (a.length !== b.length) return false;
-    const key = (r: DroverAccountRow) => `${r.name}|${r.headroom ?? ''}|${r.loggedIn}|${r.backAt ?? ''}`;
+    // The binding limit and which account is current are in the key because
+    // the wrist SHOWS them (DROVE-131): the window can change from Session to
+    // Fable week, or the current account can move under a flip, with every
+    // headroom figure unchanged, and a publish keyed only on the numbers would
+    // leave the wrist naming yesterday's limit.
+    const key = (r: DroverAccountRow) =>
+        `${r.name}|${r.headroom ?? ''}|${r.loggedIn}|${r.backAt ?? ''}|${r.current === true}|${r.limit ?? ''}|${r.resetsAt ?? ''}|${r.tone ?? ''}`;
     return a.every((row, i) => key(row) === key(b[i]));
 }
 
@@ -546,13 +605,14 @@ export function startDroverWatchFeed(): () => void {
     // A message dictated on the wrist (DROVE-92). It leaves this phone by the
     // same sync.sendMessage the composer's Send calls, so it reaches the
     // session's inbox and lands in the transcript, on both devices, exactly
-    // as a phone-typed message does. Whatever the phone was reading aloud is
-    // cut first, as SessionView cuts it on its own Send: a reply narrated
-    // over the question just asked is the wrong reply.
+    // as a phone-typed message does. It goes through the same userSent as
+    // SessionView's own Send (DROVE-122), so the wrist's capture stops while
+    // the phone keeps narrating the old reply until the new one has its first
+    // sentence to say.
     const says = addDroverSayListener((event) => {
         const text = (event.text ?? '').trim();
         if (!event.sessionId || !text) return;
-        readAloud.interrupt('sent');
+        readAloud.userSent();
         void Promise.resolve(sync.sendMessage(event.sessionId, text, { source: 'voice' })).catch(() => {});
     });
 

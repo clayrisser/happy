@@ -345,6 +345,16 @@ export default function MachineDetailScreen() {
                             <ActivityIndicator size="small" color={theme.colors.textSecondary} />
                         ) : undefined}
                     />
+                    {/* The list itself lives in Settings › Accounts (DROVE-165),
+                        which shows every machine's accounts under its own
+                        heading and watches a login through to the new row. This
+                        machine's group is the same one, reached from here. */}
+                    <Item
+                        title="This machine’s accounts"
+                        subtitle="See what is logged in here, and remove one"
+                        icon={<Ionicons name="people-circle-outline" size={29} color="#007AFF" />}
+                        onPress={() => router.push('/settings/accounts' as any)}
+                    />
                 </ItemGroup>
 
                 {/* CLI Availability */}

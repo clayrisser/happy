@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { SettingsSchema, settingsParse, applySettings, settingsDefaults, settingsToSyncPayload, isCodeWrapOn, toggleCodeWrap, resolveStreamTalk, updateStreamTalk, type Settings, resolveSpeakReplies } from './settings';
+import { SettingsSchema, settingsParse, applySettings, settingsDefaults, settingsToSyncPayload, isCodeWrapOn, toggleCodeWrap, resolveSpokenRate, resolveStreamTalk, streamTalkCatchUpRateRange, streamTalkJumpRange, streamTalkRateCeiling, streamTalkRateRange, updateStreamTalk, type Settings, resolveSpeakReplies } from './settings';
 
 describe('settings', () => {
     describe('the delivery channels (DROVE-72)', () => {
@@ -211,14 +211,28 @@ describe('settings', () => {
                 avatarStyle: 'brutalist',
                 avatarMonochrome: false,
                 sessionListGrouping: 'flat',
-                droverAccountFilter: '',
                 showFlavorIcons: false,
                 showHarnessIconInSessionHeader: true,
                 userMessageBubbleColor: 'gray',
                 usageLimitShowRemaining: false,
                 codeWrap: { terminal: false, code: false },
-                streamTalk: { voiceId: null, rate: 0.52, pitch: 1.0, maxLagSeconds: 15 },
+                codeScroll: {},
+                streamTalk: { voiceId: null, rate: 0.52, catchUpRate: 0.78, pitch: 1.0, maxBacklogSeconds: 15, jumpBacklogSeconds: 45 },
                 speakReplies: { on: 'auto' },
+                audioCues: {
+                    on: true,
+                    heartbeat: true,
+                    volume: 0.35,
+                    workingIntervalSeconds: 6,
+                    waitingIntervalSeconds: 3,
+                    muted: [],
+                    speakTitles: true,
+                    speakAgentTitles: true,
+                    speakToolTitles: true,
+                    titlesPerRun: 3,
+                    toolCuesPerMinute: 6,
+                    agentCuesPerMinute: 12,
+                },
                 droverAnnounceVisual: true,
                 droverAnnounceHaptic: true,
                 droverAnnounceAudio: false,
@@ -498,66 +512,180 @@ describe('settings', () => {
     });
 });
 
-describe('codeWrap (DROVE-95)', () => {
-    it('defaults both kinds off', () => {
-        expect(settingsDefaults.codeWrap).toEqual({ terminal: false, code: false });
-        expect(isCodeWrapOn(settingsDefaults, 'terminal')).toBe(false);
-        expect(isCodeWrapOn(settingsDefaults, 'code')).toBe(false);
+describe('codeWrap (DROVE-95, default flipped in DROVE-149)', () => {
+    it('wraps both kinds with no interaction', () => {
+        expect(settingsDefaults.codeScroll).toEqual({});
+        expect(isCodeWrapOn(settingsDefaults, 'terminal')).toBe(true);
+        expect(isCodeWrapOn(settingsDefaults, 'code')).toBe(true);
+    });
+
+    it('double-tap turns wrapping off, and again brings it back', () => {
+        const once = applySettings(settingsDefaults, toggleCodeWrap(settingsDefaults, 'terminal'));
+        expect(once.codeScroll).toEqual({ terminal: true });
+        expect(isCodeWrapOn(once, 'terminal')).toBe(false);
+        // The other kind is untouched, so it is still wrapped.
+        expect(isCodeWrapOn(once, 'code')).toBe(true);
+
+        const twice = applySettings(once, toggleCodeWrap(once, 'terminal'));
+        expect(twice.codeScroll).toEqual({ terminal: false });
+        expect(isCodeWrapOn(twice, 'terminal')).toBe(true);
+
+        const thrice = applySettings(twice, toggleCodeWrap(twice, 'terminal'));
+        expect(isCodeWrapOn(thrice, 'terminal')).toBe(false);
     });
 
     it('toggles one kind and leaves the other alone', () => {
-        const once = applySettings(settingsDefaults, toggleCodeWrap(settingsDefaults, 'terminal'));
-        expect(once.codeWrap).toEqual({ terminal: true, code: false });
-        expect(isCodeWrapOn(once, 'terminal')).toBe(true);
-        expect(isCodeWrapOn(once, 'code')).toBe(false);
+        const terminal = applySettings(settingsDefaults, toggleCodeWrap(settingsDefaults, 'terminal'));
+        const both = applySettings(terminal, toggleCodeWrap(terminal, 'code'));
+        expect(both.codeScroll).toEqual({ terminal: true, code: true });
+        expect(isCodeWrapOn(both, 'terminal')).toBe(false);
+        expect(isCodeWrapOn(both, 'code')).toBe(false);
+    });
 
-        const twice = applySettings(once, toggleCodeWrap(once, 'terminal'));
-        expect(twice.codeWrap).toEqual({ terminal: false, code: false });
+    it('reads one value per kind, so a merged run of shell cards moves together', () => {
+        // Consecutive terminal blocks fold into one card (DROVE-84). Every
+        // card inside it reads the same kind, so a double-tap on any member is
+        // a double-tap on the block.
+        const merged = applySettings(settingsDefaults, toggleCodeWrap(settingsDefaults, 'terminal'));
+        const perCard = [0, 1, 2].map(() => isCodeWrapOn(merged, 'terminal'));
+        expect(perCard).toEqual([false, false, false]);
+        const back = applySettings(merged, toggleCodeWrap(merged, 'terminal'));
+        expect([0, 1, 2].map(() => isCodeWrapOn(back, 'terminal'))).toEqual([true, true, true]);
+    });
 
-        const code = applySettings(once, toggleCodeWrap(once, 'code'));
-        expect(code.codeWrap).toEqual({ terminal: true, code: true });
+    it('ignores the legacy codeWrap key, which every synced account already has set to false', () => {
+        // DROVE-95 shipped codeWrap default {terminal: false, code: false} and
+        // settings sync POSTs the whole object, so that pair is on the server
+        // for anyone who ever changed a setting. It must not read as "off".
+        const legacy = settingsParse({ codeWrap: { terminal: false, code: false } });
+        expect(isCodeWrapOn(legacy, 'terminal')).toBe(true);
+        expect(isCodeWrapOn(legacy, 'code')).toBe(true);
     });
 
     it('survives a partial or missing object from another app version', () => {
-        expect(settingsParse({ codeWrap: { code: true } }).codeWrap).toEqual({ code: true });
-        expect(isCodeWrapOn({ codeWrap: { code: true } }, 'terminal')).toBe(false);
-        expect(isCodeWrapOn({ codeWrap: { code: true } }, 'code')).toBe(true);
-        expect(toggleCodeWrap({ codeWrap: undefined as any }, 'code')).toEqual({ codeWrap: { code: true } });
+        expect(settingsParse({ codeScroll: { code: true } }).codeScroll).toEqual({ code: true });
+        expect(isCodeWrapOn({ codeScroll: { code: true } }, 'terminal')).toBe(true);
+        expect(isCodeWrapOn({ codeScroll: { code: true } }, 'code')).toBe(false);
+        expect(toggleCodeWrap({ codeScroll: undefined as any }, 'code')).toEqual({ codeScroll: { code: true } });
         // A wrong type falls back to the default rather than poisoning the rest.
-        expect(settingsParse({ codeWrap: 'yes', viewInline: true }).codeWrap).toEqual(settingsDefaults.codeWrap);
+        expect(settingsParse({ codeScroll: 'yes', viewInline: true }).codeScroll).toEqual(settingsDefaults.codeScroll);
     });
 
     it('persists through the sync payload', () => {
-        const on = applySettings(settingsDefaults, toggleCodeWrap(settingsDefaults, 'code'));
-        expect(settingsToSyncPayload(on).codeWrap).toEqual({ terminal: false, code: true });
-        expect(settingsParse(settingsToSyncPayload(on)).codeWrap).toEqual({ terminal: false, code: true });
+        const off = applySettings(settingsDefaults, toggleCodeWrap(settingsDefaults, 'code'));
+        expect(settingsToSyncPayload(off).codeScroll).toEqual({ code: true });
+        expect(settingsParse(settingsToSyncPayload(off)).codeScroll).toEqual({ code: true });
+        expect(isCodeWrapOn(settingsParse(settingsToSyncPayload(off)), 'code')).toBe(false);
     });
 
-    describe('streamTalk (DROVE-97)', () => {
+    describe('streamTalk (DROVE-97, threshold reworked in DROVE-108, two speeds in DROVE-116)', () => {
         it('fills in every field from the defaults when nothing is set', () => {
             expect(resolveStreamTalk({ streamTalk: {} })).toEqual({
-                voiceId: null, rate: 0.52, pitch: 1.0, maxLagSeconds: 15,
+                voiceId: null, rate: 0.52, catchUpRate: 0.78, pitch: 1.0,
+                maxBacklogSeconds: 15, jumpBacklogSeconds: 45,
             });
             expect(resolveStreamTalk({ streamTalk: undefined as any })).toEqual(resolveStreamTalk(settingsDefaults));
         });
 
         it('keeps a chosen voice and clamps the sliders to their ranges', () => {
-            expect(resolveStreamTalk({ streamTalk: { voiceId: 'com.apple.voice.premium.en-US.Zoe', rate: 0.9, pitch: 0.1, maxLagSeconds: 45 } })).toEqual({
-                voiceId: 'com.apple.voice.premium.en-US.Zoe', rate: 0.6, pitch: 0.5, maxLagSeconds: 30,
+            expect(resolveStreamTalk({ streamTalk: { voiceId: 'com.apple.voice.premium.en-US.Zoe', rate: 0.9, pitch: 0.1, maxBacklogSeconds: 45 } })).toEqual({
+                voiceId: 'com.apple.voice.premium.en-US.Zoe', rate: 0.6, catchUpRate: 0.78, pitch: 0.5,
+                maxBacklogSeconds: 30, jumpBacklogSeconds: 45,
             });
-            expect(resolveStreamTalk({ streamTalk: { maxLagSeconds: 3 } }).maxLagSeconds).toBe(10);
+            expect(resolveStreamTalk({ streamTalk: { maxBacklogSeconds: 3 } }).maxBacklogSeconds).toBe(10);
             expect(resolveStreamTalk({ streamTalk: { voiceId: '' } }).voiceId).toBeNull();
         });
 
         it('survives a partial object synced from another app version', () => {
             const parsed = settingsParse({ streamTalk: { rate: 0.45 } });
             expect(parsed.streamTalk).toEqual({ rate: 0.45 });
-            expect(resolveStreamTalk(parsed)).toMatchObject({ rate: 0.45, pitch: 1.0, maxLagSeconds: 15 });
+            expect(resolveStreamTalk(parsed)).toMatchObject({ rate: 0.45, pitch: 1.0, maxBacklogSeconds: 15 });
         });
 
         it('patches one field and keeps the rest', () => {
-            const patched = updateStreamTalk({ streamTalk: { voiceId: 'x', rate: 0.5 } }, { maxLagSeconds: 20 });
-            expect(patched).toEqual({ streamTalk: { voiceId: 'x', rate: 0.5, pitch: 1.0, maxLagSeconds: 20 } });
+            const patched = updateStreamTalk({ streamTalk: { voiceId: 'x', rate: 0.5 } }, { maxBacklogSeconds: 20 });
+            expect(patched).toEqual({
+                streamTalk: {
+                    voiceId: 'x', rate: 0.5, catchUpRate: 0.78, pitch: 1.0,
+                    maxBacklogSeconds: 20, jumpBacklogSeconds: 45,
+                },
+            });
+        });
+
+        /**
+         * DROVE-116. The fast speed is allowed ABOVE the normal slider's own
+         * maximum, because the slider bounds what the user picks for prose and
+         * must not also bound what catching up may add on top; that clamp was
+         * the bug that made catch-up a no-op for anyone with the speed up.
+         */
+        it('lets the fast speed exceed the normal slider, up to the engine ceiling', () => {
+            expect(streamTalkCatchUpRateRange.max).toBeGreaterThan(streamTalkRateRange.max);
+            expect(streamTalkCatchUpRateRange.max).toBe(streamTalkRateCeiling);
+            expect(resolveStreamTalk({ streamTalk: { catchUpRate: 0.84 } }).catchUpRate).toBe(0.84);
+            expect(resolveStreamTalk({ streamTalk: { catchUpRate: 2 } }).catchUpRate).toBe(streamTalkRateCeiling);
+        });
+
+        it('is at least 1.5x the normal speed by default', () => {
+            const talk = resolveStreamTalk({ streamTalk: {} });
+            expect(talk.catchUpRate / talk.rate).toBeGreaterThanOrEqual(1.5);
+        });
+
+        it('never lets the fast speed sit below the normal one', () => {
+            // Both directions: an old synced object with no fast speed at all,
+            // and one that names a slower fast speed outright.
+            expect(resolveStreamTalk({ streamTalk: { rate: 0.6, catchUpRate: 0.42 } })).toMatchObject({
+                rate: 0.6, catchUpRate: 0.6,
+            });
+            expect(resolveStreamTalk({ streamTalk: { rate: 0.6 } }).catchUpRate).toBeGreaterThanOrEqual(0.6);
+        });
+
+        /**
+         * The clamp DROVE-116 was really about. The engine used to bound
+         * `rate x rateScale` by the speed slider's own maximum, so at the top
+         * of that slider the product clamped straight back to it: anyone who
+         * likes fast speech, which is exactly the person who wants catch-up,
+         * silently got none of it and every backlog ended in a jump.
+         */
+        describe('the rate one utterance is actually spoken at (DROVE-116)', () => {
+            const top = streamTalkRateRange.max;
+
+            it('still rises with the backlog when the speed slider is at its maximum', () => {
+                const atRest = resolveSpokenRate(top, 1, false);
+                const behind = resolveSpokenRate(top, 1.25, false);
+                const farBehind = resolveSpokenRate(top, 1.5, false);
+                expect(atRest).toBe(top);
+                expect(behind).toBeGreaterThan(atRest);
+                expect(farBehind).toBeGreaterThan(behind);
+            });
+
+            it('never goes past the engine-safe ceiling, however big the multiplier', () => {
+                expect(resolveSpokenRate(top, 10, false)).toBe(streamTalkRateCeiling);
+                expect(resolveSpokenRate(0.4, 0.1, false)).toBe(streamTalkRateRange.min);
+            });
+
+            it('leaves an ordinary sentence at exactly the chosen rate', () => {
+                expect(resolveSpokenRate(0.52, 1, false)).toBeCloseTo(0.52, 5);
+            });
+
+            /**
+             * A title is read faster and higher than the reply (DROVE-112).
+             * The catch-up must not stack on top of that into something
+             * unintelligible, which is why both share one ceiling: a title
+             * spoken while far behind is never faster than the fastest prose.
+             */
+            it('keeps an aside above the prose around it and under the same ceiling', () => {
+                expect(resolveSpokenRate(0.52, 1, true)).toBeGreaterThan(resolveSpokenRate(0.52, 1, false));
+                expect(resolveSpokenRate(top, 1.5, true)).toBe(streamTalkRateCeiling);
+                expect(resolveSpokenRate(top, 1.5, true)).toBeLessThanOrEqual(streamTalkRateCeiling);
+            });
+        });
+
+        it('keeps the jump threshold strictly above the speed-up threshold', () => {
+            expect(resolveStreamTalk({ streamTalk: { maxBacklogSeconds: 30, jumpBacklogSeconds: 20 } })).toMatchObject({
+                maxBacklogSeconds: 30, jumpBacklogSeconds: 31,
+            });
+            expect(resolveStreamTalk({ streamTalk: { maxBacklogSeconds: 30, jumpBacklogSeconds: 30 } }).jumpBacklogSeconds).toBe(31);
+            expect(resolveStreamTalk({ streamTalk: { jumpBacklogSeconds: 500 } }).jumpBacklogSeconds).toBe(streamTalkJumpRange.max);
         });
     });
 

@@ -226,11 +226,21 @@ export const SettingsView = React.memo(function SettingsView({
                     icon={<Ionicons name="options-outline" size={29} color="#5AC8FA" />}
                     onPress={() => router.push('/settings/agents' as any)}
                 />
+                {/* Every Claude account, under the machine it is logged in on
+                    (DROVE-165 / DROVE-136). Above Flip policy because it is the
+                    page that says WHERE work can go; the policy below decides
+                    which of them it picks. */}
+                <Item
+                    title="Accounts"
+                    subtitle="Claude accounts, per machine, and adding one"
+                    icon={<Ionicons name="people-circle-outline" size={29} color="#007AFF" />}
+                    onPress={() => router.push('/settings/accounts' as any)}
+                />
                 {/* Cattle Drover's flip and model-fallback defaults (DROVE-3).
                     Reachable without a session, because the case it exists for
                     is setting what the NEXT session starts with. */}
                 <Item
-                    title="Flip policy"
+                    title="Account switching"
                     subtitle="What a session does when an account runs out"
                     icon={<Ionicons name="swap-horizontal-outline" size={29} color="#FF9500" />}
                     onPress={() => router.push('/settings/flip-policy' as any)}

@@ -172,3 +172,69 @@ export function demoBuzzGate(spec: WristCueSpec, now: number = Date.now()): Demo
         account: 'demo',
     };
 }
+
+/**
+ * WHAT THE WRIST WILL ACTUALLY FEEL, said on the phone (DROVE-124).
+ *
+ * The patterns above are only ever played by `WKInterfaceDevice.play`, and
+ * watchOS runs that only while the watch app is FRONTMOST. Closed, the wrist
+ * gets a watch-local notification instead and watchOS picks the haptic, so
+ * every kind feels identical and only the card differs. Closed with no wake
+ * budget, it gets nothing until it is raised.
+ *
+ * Three very different outcomes that are indistinguishable from the wrist, so
+ * the phone has to be the one to say which is live. Mirrors `WristReach` in
+ * Swift: that file decides it on the watch, this one reports it on the phone.
+ */
+export type WristFidelity = 'pattern' | 'systemTap' | 'silent' | 'none';
+
+export interface WristFidelityVerdict {
+    fidelity: WristFidelity;
+    /** Short enough for a row title. */
+    headline: string;
+    /** What is really happening and, when it is bad news, what to do. */
+    detail: string;
+}
+
+/**
+ * `reachable` is WatchConnectivity's own answer to "is the watch app
+ * frontmost": on iOS it is true exactly when the paired watch is in range and
+ * the counterpart app is running in the foreground. So it is not a guess at
+ * the state the Swift branches on, it IS that state, read from the other end.
+ */
+export function describeWristFidelity(status: {
+    paired: boolean;
+    installed: boolean;
+    reachable: boolean;
+    wakes?: number;
+} | null | undefined): WristFidelityVerdict {
+    if (!status || !status.paired || !status.installed) {
+        return {
+            fidelity: 'none',
+            headline: 'No wrist to reach',
+            detail: 'No paired watch with Cattle Drover installed, so nothing here reaches a wrist.',
+        };
+    }
+    if (status.reachable) {
+        return {
+            fidelity: 'pattern',
+            headline: 'Full pattern',
+            detail: 'The watch app is open, so the wrist plays Drover\'s own pattern and each kind feels different.',
+        };
+    }
+    // An absent budget is an older native module that never reported one.
+    // Read as a wake being possible, because calling the wrist dead on a build
+    // that simply cannot count is the worse error.
+    if (status.wakes === 0) {
+        return {
+            fidelity: 'silent',
+            headline: 'Quiet until you raise it',
+            detail: 'The watch app is closed and this phone has no background wakes left. Put the Drover complication on a watch face; with it on none, the budget is zero all day.',
+        };
+    }
+    return {
+        fidelity: 'systemTap',
+        headline: 'One tap, watchOS picks it',
+        detail: 'The watch app is closed, so it taps once with watchOS\'s own haptic and shows the card. The per-kind patterns need the app on screen.',
+    };
+}

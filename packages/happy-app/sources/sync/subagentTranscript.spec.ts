@@ -8,8 +8,10 @@ import {
     applySubagentTranscriptRows,
     createSubagentTranscriptState,
     describeSubagent,
+    findSubagentRun,
     SUBAGENT_QUIET_MS,
 } from './subagentTranscript';
+import type { Message, ToolCall } from './typesMessage';
 
 const iso = (ms: number) => new Date(ms).toISOString();
 const usage = { input_tokens: 2, output_tokens: 5, cache_creation_input_tokens: 100, cache_read_input_tokens: 9000 };
@@ -105,7 +107,7 @@ describe('describeSubagent', () => {
 
     it('ticks off the phone clock while running', () => {
         const h = describeSubagent({ state: 'running', updatedAt: 61_000 }, transcript, 91_000);
-        expect(h).toEqual({ state: 'running', elapsedMs: 90_000, tokens: 310_800 });
+        expect(h).toEqual({ state: 'running', runState: 'running', elapsedMs: 90_000, tokens: 310_800 });
     });
 
     it('says so when a running agent has gone quiet', () => {
@@ -116,7 +118,7 @@ describe('describeSubagent', () => {
 
     it('freezes the clock at the parent notification once done', () => {
         const h = describeSubagent({ state: 'done', updatedAt: 61_000, endedAt: 70_000 }, transcript, 999_000);
-        expect(h).toEqual({ state: 'done', elapsedMs: 69_000, tokens: 310_800 });
+        expect(h).toEqual({ state: 'done', runState: 'finished', elapsedMs: 69_000, tokens: 310_800 });
     });
 
     it('falls back to the newest row when the parent never said', () => {
@@ -125,7 +127,88 @@ describe('describeSubagent', () => {
         expect(h.elapsedMs).toBe(60_000);
     });
 
-    it('is running with nothing known yet', () => {
-        expect(describeSubagent(null, { tokens: 0 }, 5)).toEqual({ state: 'running', elapsedMs: 0, tokens: 0 });
+    // DROVE-132. The screenshot on the ticket read `Running · 0s` for an
+    // agent that had finished minutes earlier: the CLI could not be reached,
+    // so the header had nothing, and nothing defaulted to running with a
+    // clock that started when the screen opened.
+    it('says it does not know rather than Running when nothing is readable', () => {
+        expect(describeSubagent(null, { tokens: 0 }, 5)).toEqual({ state: 'unknown', runState: 'unknown', tokens: 0 });
+    });
+
+    it('prints no clock at all when it cannot read one', () => {
+        expect(describeSubagent(null, { tokens: 0 }, 5).elapsedMs).toBeUndefined();
+    });
+
+    it('uses the run the session already recorded when the CLI is unreachable', () => {
+        const h = describeSubagent(null, { tokens: 0 }, 999_000, { runState: 'finished', startedAt: 1000, durationMs: 69_000 });
+        expect(h).toEqual({ state: 'unknown', runState: 'finished', elapsedMs: 69_000, tokens: 0 });
+    });
+
+    it('keeps ticking off a recorded start while the CLI is away', () => {
+        const h = describeSubagent(null, { tokens: 0 }, 91_000, { runState: 'running', startedAt: 1_000 });
+        expect(h.runState).toBe('running');
+        expect(h.elapsedMs).toBe(90_000);
+    });
+
+    it('measures a finished run off its rows when the session recorded no duration', () => {
+        const h = describeSubagent(null, transcript, 999_000, { runState: 'failed' });
+        expect(h.runState).toBe('failed');
+        expect(h.elapsedMs).toBe(60_000);
+    });
+});
+
+const agentTool = (tool: Partial<ToolCall>): Message => ({
+    kind: 'tool-call',
+    id: 'm1',
+    localId: null,
+    createdAt: 1_000,
+    children: [],
+    tool: {
+        name: 'Agent',
+        state: 'completed',
+        input: { description: 'Implement DROVE-132', subagent_type: 'general-purpose' },
+        createdAt: 1_000,
+        startedAt: 1_000,
+        completedAt: 2_000,
+        description: null,
+        ...tool,
+    } as ToolCall,
+});
+
+describe('findSubagentRun', () => {
+    it('reads the terminal result DROVE-115 put on the launching call', () => {
+        const messages = [agentTool({
+            result: { isAsync: true, status: 'completed', agentId: 'a1', content: [{ type: 'text', text: 'done' }], totalDurationMs: 245_000 },
+        })];
+        expect(findSubagentRun(messages, 'a1')).toEqual({ runState: 'finished', startedAt: 1_000, durationMs: 245_000 });
+    });
+
+    it('reads a failure the same way', () => {
+        const messages = [agentTool({ result: { status: 'killed', agentId: 'a1' } })];
+        expect(findSubagentRun(messages, 'a1')?.runState).toBe('failed');
+    });
+
+    // The bug in the ticket's header. `agentRunState` answers `running` for
+    // anything it cannot read, which is right for a card that must never draw
+    // a working agent as dead and wrong for a header that would then assert a
+    // state it does not have.
+    it('reports nothing for a call still holding only the launch receipt', () => {
+        const messages = [agentTool({ result: { isAsync: true, status: 'async_launched', agentId: 'a1' } })];
+        expect(findSubagentRun(messages, 'a1')).toBeNull();
+    });
+
+    it('does report running while a synchronous Task call is still open', () => {
+        const messages = [agentTool({ state: 'running', input: { description: 'x', agentId: 'a1' }, result: undefined })];
+        expect(findSubagentRun(messages, 'a1')?.runState).toBe('running');
+    });
+
+    it('finds a call folded under another card', () => {
+        const parent = agentTool({ result: { status: 'completed', agentId: 'other' } }) as Extract<Message, { kind: 'tool-call' }>;
+        parent.children = [agentTool({ result: { status: 'completed', agentId: 'a1', totalDurationMs: 5_000 } })];
+        expect(findSubagentRun([parent], 'a1')?.durationMs).toBe(5_000);
+    });
+
+    it('is null for an agent the session never launched', () => {
+        expect(findSubagentRun([agentTool({ result: { status: 'completed', agentId: 'a1' } })], 'a2')).toBeNull();
     });
 });

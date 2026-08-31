@@ -7,14 +7,17 @@ describe('agent input compact mobile layout', () => {
     it('aligns composer text start with the left edge of the add glyph', () => {
         const layout = resolveAgentInputLayout({
             shellInset: 10,
-            actionSize: 42,
+            actionSize: 44,
             addIconSize: 26,
         });
 
-        expect(layout.textInset).toBe(18);
-        expect(layout.inputContainerPaddingLeft).toBe(8);
-        expect(layout.inputContainerPaddingRight).toBe(8);
-        expect(layout.textInset).toBe(layout.shellInset + (42 - 26) / 2);
+        expect(layout.textInset).toBe(19);
+        expect(layout.inputContainerPaddingLeft).toBe(9);
+        expect(layout.inputContainerPaddingRight).toBe(9);
+        expect(layout.textInset).toBe(layout.shellInset + (44 - 26) / 2);
+        // The trailing side is not symmetric: the send/voice button lives
+        // inside the field at that edge now (DROVE-153).
+        expect(layout.inputTrailingActionPadding).toBe(4 + 36 + 6);
     });
 
     it('publishes one visual metric contract for Home and Chat composers', () => {
@@ -29,17 +32,22 @@ describe('agent input compact mobile layout', () => {
             inputLineHeight: 22,
             inputPaddingTop: 4,
             inputPaddingBottom: 4,
-            actionRowHeight: 42,
-            actionSize: 42,
+            actionRowHeight: 44,
+            actionSize: 44,
             addIconSize: 26,
             secondaryActionHeight: 40,
             effortWidth: 64,
-            primaryActionSize: 42,
-            primaryActionMarginLeft: 8,
+            primaryActionSize: 36,
+            primaryActionSlop: 6,
+            primaryActionMarginLeft: 6,
+            primaryActionInset: 4,
             attachmentExtraHeight: 72,
         });
-        expect((agentInputLayout as Record<string, unknown>).MOBILE_COMPOSER_BASE_HEIGHT).toBe(102);
-        expect((agentInputLayout as Record<string, unknown>).MOBILE_COMPOSER_CHROME_HEIGHT).toBe(58);
+        // 104, not 102: the row's buttons are drawn at 44 rather than 42
+        // (DROVE-153), which is two points of composer for a control that
+        // finally matches its own tap target.
+        expect((agentInputLayout as Record<string, unknown>).MOBILE_COMPOSER_BASE_HEIGHT).toBe(104);
+        expect((agentInputLayout as Record<string, unknown>).MOBILE_COMPOSER_CHROME_HEIGHT).toBe(60);
     });
 
     it('starts collapsed composer text where the capsule becomes straight', () => {
@@ -61,15 +69,15 @@ describe('agent input compact mobile layout', () => {
         const resolveHeight = (agentInputLayout as Record<string, unknown>)
             .resolveMobileComposerHeight as undefined | ((inputHeight: number, hasAttachments?: boolean) => number);
 
-        expect(resolveHeight?.(30)).toBe(102);
-        expect(resolveHeight?.(52)).toBe(118);
-        expect(resolveHeight?.(120)).toBe(186);
-        expect(resolveHeight?.(30, true)).toBe(174);
+        expect(resolveHeight?.(30)).toBe(104);
+        expect(resolveHeight?.(52)).toBe(120);
+        expect(resolveHeight?.(120)).toBe(188);
+        expect(resolveHeight?.(30, true)).toBe(176);
     });
 
     it.each([
         ['icon',
-            { width: 42, height: 42, flexShrink: 0 },
+            { width: 44, height: 44, flexShrink: 0 },
             { width: '100%', height: '100%', alignItems: 'center', justifyContent: 'center' }],
         // The pair is right-aligned, so each chip keeps its slack on the outside
         // of the separator. Only the model shrinks; the effort reserves the
@@ -109,29 +117,32 @@ describe('agent input compact mobile layout', () => {
         const resolveAction = exports.resolveMobileComposerActionGeometry as undefined | ((kind: string) => Record<string, unknown>);
 
         expect(resolveRow?.()).toEqual({
-            height: 42,
+            height: 44,
             flexDirection: 'row',
             alignItems: 'center',
             justifyContent: 'flex-start',
-            gap: 2,
+            gap: 6,
             paddingHorizontal: 0,
         });
         expect(resolveAction?.('icon')).toEqual({
-            width: 42,
-            height: 42,
-            borderRadius: 21,
+            width: 44,
+            height: 44,
+            borderRadius: 22,
             alignItems: 'center',
             justifyContent: 'center',
             flexShrink: 0,
         });
+        // The primary is smaller than the row's buttons because it is nested
+        // inside the 44pt input capsule now (DROVE-153), the way Messages nests
+        // its mic. 36 drawn plus 6pt of slop is a 48pt target.
         expect(resolveAction?.('primary')).toEqual({
-            width: 42,
-            height: 42,
-            borderRadius: 21,
+            width: 36,
+            height: 36,
+            borderRadius: 18,
             alignItems: 'center',
             justifyContent: 'center',
             flexShrink: 0,
-            marginLeft: 8,
+            marginLeft: 6,
         });
     });
 });

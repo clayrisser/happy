@@ -1,5 +1,6 @@
 import { StyleSheet, UnistylesRuntime } from 'react-native-unistyles';
 import { darkTheme, lightTheme } from './theme';
+import { createSubagentTheme } from './utils/subagentTint';
 import { loadThemePreference } from './sync/persistence';
 import { Appearance, Platform } from 'react-native';
 import * as SystemUI from 'expo-system-ui';
@@ -10,7 +11,13 @@ import * as SystemUI from 'expo-system-ui';
 
 const appThemes = {
     light: lightTheme,
-    dark: darkTheme
+    dark: darkTheme,
+    // The same two themes with their surfaces washed towards the running-agent
+    // accent (DROVE-109). Nothing selects these as the app theme; the subagent
+    // screen scopes to one of them with <ScopedTheme>, so every row and card
+    // under it picks the tint up without the renderer being forked.
+    lightSubagent: createSubagentTheme(lightTheme),
+    darkSubagent: createSubagentTheme(darkTheme),
 };
 
 const breakpoints = {

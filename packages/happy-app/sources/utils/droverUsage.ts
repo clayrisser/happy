@@ -78,6 +78,22 @@ export function droverFamilyWindowId(row: Pick<DroverUsageRowLike, 'kind' | 'sco
 }
 
 /**
+ * The window id for ANY usage row, scoped or not.
+ *
+ * `session` becomes `five_hour` and `weekly_all` becomes `seven_day`, the two
+ * ids the strip already knows; a scoped row keeps its family in the id. Pulled
+ * out of usageLimitsFromDroverUsage so the wrist's binding-limit row
+ * (DROVE-131) names a window with the same string the strip does, rather than
+ * a second spelling that would look like a different limit (DROVE-129).
+ */
+export function droverWindowId(row: Pick<DroverUsageRowLike, 'kind' | 'scope' | 'family'>): string {
+    if (row.scope || row.family) return droverFamilyWindowId(row);
+    if (row.kind === 'session') return 'five_hour';
+    if (row.kind === 'weekly_all') return 'seven_day';
+    return row.kind;
+}
+
+/**
  * The current account's rows in the shape agentState.usageLimits takes.
  *
  * `session` becomes `five_hour` and `weekly_all` becomes `seven_day`, the two
@@ -92,22 +108,47 @@ export function usageLimitsFromDroverUsage(
 ): UsageLimitsLike {
     const account = currentDroverUsageAccount(usage, droverAccount);
     if (!usage || !account) return null;
-    const windows = rows(account).map((row) => {
+    const windows = droverAccountWindows(account).map((w) => ({
+        id: w.id,
+        ...(w.family ? { label: w.family } : {}),
+        utilization: w.utilization,
+        resetsAt: w.resetsAt,
+    }));
+    return { capturedAt: usage.capturedAt, windows };
+}
+
+export type DroverUsageWindow = {
+    /** `five_hour`, `seven_day`, `seven_day_fable`, or the cache's own kind. */
+    id: string;
+    /** "Fable" when the row is scoped to a model family; null when it is not. */
+    family: string | null;
+    /** Percent USED, the wire's direction. */
+    utilization: number;
+    resetsAt: number | null;
+};
+
+/**
+ * One account's limits as windows, ids matching the SDK's.
+ *
+ * Split out for DROVE-148: the quota sheet now draws Session, Week and each
+ * family week for EVERY account, not only the one the session is on, so the
+ * mapping that used to serve the current account alone has to work on any of
+ * them. A row this cannot place is still passed through under its own kind.
+ */
+export function droverAccountWindows(account: DroverUsageAccountLike | null | undefined): DroverUsageWindow[] {
+    return rows(account).map((row) => {
         const scoped = !!(row.scope || row.family);
-        const id = scoped
-            ? droverFamilyWindowId(row)
-            : row.kind === 'session' ? 'five_hour'
-                : row.kind === 'weekly_all' ? 'seven_day'
-                    : row.kind;
-        const family = scoped ? droverFamilyLabel(row) : null;
         return {
-            id,
-            ...(family ? { label: family } : {}),
+            id: scoped
+                ? droverFamilyWindowId(row)
+                : row.kind === 'session' ? 'five_hour'
+                    : row.kind === 'weekly_all' ? 'seven_day'
+                        : row.kind,
+            family: scoped ? droverFamilyLabel(row) : null,
             utilization: row.percent,
             resetsAt: row.resetsAt ?? null,
         };
     });
-    return { capturedAt: usage.capturedAt, windows };
 }
 
 export type DroverFamilyRow = {
@@ -158,19 +199,76 @@ export function droverOtherAccounts(usage: DroverUsageLike, droverAccount?: stri
     const current = currentDroverUsageAccount(usage, droverAccount);
     return usage.accounts
         .filter((a) => a && typeof a.name === 'string' && a !== current)
-        .map((a) => {
-            const cooling = a.cooling && typeof a.cooling.until === 'number' ? a.cooling : null;
-            const family = cooling?.family
-                ? droverFamilyLabel({ family: cooling.family })
-                : null;
-            return {
-                name: a.name,
-                loggedIn: a.loggedIn !== false,
-                headroom: typeof a.headroom === 'number' && Number.isFinite(a.headroom)
-                    ? Math.round(Math.min(100, Math.max(0, a.headroom)))
-                    : null,
-                back: cooling?.until ?? null,
-                family,
-            };
-        });
+        .map(toAccountRow);
+}
+
+/**
+ * One account as a row. Extracted so the CURRENT account and every other one
+ * are described by the same code (DROVE-129: one derivation, not two that
+ * drift). The composer popup lists the others with this shape; the session
+ * info screen shows the current one with it (DROVE-137).
+ */
+function toAccountRow(a: DroverUsageAccountLike): DroverOtherAccountRow {
+    const cooling = a.cooling && typeof a.cooling.until === 'number' ? a.cooling : null;
+    const family = cooling?.family
+        ? droverFamilyLabel({ family: cooling.family })
+        : null;
+    return {
+        name: a.name,
+        loggedIn: a.loggedIn !== false,
+        headroom: typeof a.headroom === 'number' && Number.isFinite(a.headroom)
+            ? Math.round(Math.min(100, Math.max(0, a.headroom)))
+            : null,
+        back: cooling?.until ?? null,
+        family,
+    };
+}
+
+export type DroverAccountUsageRow = DroverOtherAccountRow & {
+    /** The account the session is on. Exactly one, when the snapshot names one. */
+    current: boolean;
+    windows: DroverUsageWindow[];
+};
+
+/**
+ * EVERY account in the snapshot, the current one first, registry order after
+ * it, each carrying its own quota windows (DROVE-148).
+ *
+ * Clay: "This should be listing all three bars for each account." One headroom
+ * number per account does not answer the question the sheet exists for, which
+ * is where to flip to: an account can be fine on the week and burnt on the
+ * session, and that is exactly the moment the sheet gets opened. So the sheet
+ * needs each account's windows, not just its fullest limit.
+ *
+ * Current first rather than in registry order, because it is the account being
+ * compared against; the rest keep the order `drover accounts` prints.
+ */
+export function droverAccountsUsage(usage: DroverUsageLike, droverAccount?: string | null): DroverAccountUsageRow[] {
+    if (!usage || !Array.isArray(usage.accounts)) return [];
+    const current = currentDroverUsageAccount(usage, droverAccount);
+    const named = usage.accounts.filter((a) => a && typeof a.name === 'string');
+    const ordered = current ? [current, ...named.filter((a) => a !== current)] : named;
+    return ordered.map((a) => ({
+        ...toAccountRow(a),
+        current: a === current,
+        windows: droverAccountWindows(a),
+    }));
+}
+
+/**
+ * The account this session is running on, in that same row shape (DROVE-137).
+ *
+ * Falls back to the `droverAccount` stamp when there is no usage snapshot at
+ * all: a session on a machine whose CLI predates DROVE-47 still knows WHICH
+ * account it is on, and the name with no bar beats no line at all.
+ */
+export function currentDroverAccountRow(
+    usage: DroverUsageLike,
+    droverAccount?: string | null,
+): DroverOtherAccountRow | null {
+    const account = currentDroverUsageAccount(usage, droverAccount);
+    if (account && typeof account.name === 'string') return toAccountRow(account);
+    const name = droverAccount?.trim();
+    if (!name) return null;
+    return { name, loggedIn: true, headroom: null, back: null, family: null };
 }

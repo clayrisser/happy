@@ -1,8 +1,13 @@
 import * as Localization from 'expo-localization';
 import { isDroverSpeechAvailable, listVoices, speakUtterance, stopSpeaking, type SpeechVoice } from 'drover-speech';
 import { storage } from '@/sync/storage';
-import { resolveStreamTalk } from '@/sync/settings';
-import type { SpeechEngine } from './readAloud';
+import {
+    asidePitchScale,
+    resolveSpokenRate,
+    resolveStreamTalk,
+    streamTalkPitchRange,
+} from '@/sync/settings';
+import type { SpeakOptions, SpeechEngine } from './readAloud';
 import { pickVoice } from './voicePick';
 
 /**
@@ -16,6 +21,11 @@ import { pickVoice } from './voicePick';
  * The voice is picked here, in JS, by pickVoice over the installed list, so
  * the rule is the tested one; native applies the same rule only when JS
  * passes no identifier.
+ *
+ * DROVE-108: the queue may ask for a faster read when it is behind. That is
+ * a multiplier on the chosen rate, clamped against the absolute engine-safe
+ * ceiling rather than the speed slider's own maximum (DROVE-116) — see the
+ * comment on `ceiling` below for why that distinction is the whole feature.
  */
 
 let voicesCache: SpeechVoice[] | null = null;
@@ -41,14 +51,22 @@ export function speechLanguage(): string {
 }
 
 export const speechEngine: SpeechEngine = {
-    async speak(text: string) {
+    async speak(text: string, options?: SpeakOptions) {
         const talk = resolveStreamTalk(storage.getState().settings);
         const language = speechLanguage();
         const voices = await installedVoices();
         const voice = pickVoice(voices, language, talk.voiceId);
+        const aside = options?.aside === true;
+        // The rate is resolveSpokenRate's business (settings.ts): an aside is
+        // the title of a tool call and has to sound like one (DROVE-112), and
+        // the catch-up is clamped against the engine's ceiling rather than the
+        // speed slider's (DROVE-116). Pitch carries the rest of the aside's
+        // difference, because the native module takes no per-utterance volume.
         return speakUtterance(text, {
-            rate: talk.rate,
-            pitch: talk.pitch,
+            rate: resolveSpokenRate(talk.rate, options?.rateScale ?? 1, aside),
+            pitch: aside
+                ? Math.min(streamTalkPitchRange.max, talk.pitch * asidePitchScale)
+                : talk.pitch,
             voiceId: voice?.identifier ?? talk.voiceId,
             language,
         });

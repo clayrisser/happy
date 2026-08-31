@@ -1,20 +1,15 @@
 /**
- * The session pill's label and the session sheet's row model (DROVE-83).
+ * The composer's session label (DROVE-83, DROVE-111, DROVE-138).
  *
- * The pill reads `<mode> · <short model> · <effort>`, the short names come
- * from the model id, only the model segment may truncate and only in the
- * middle, and every model the pickers offer fits at default font on a 393pt
- * screen. The sheet lists a row per setting the session can change, in the
- * pill's order.
+ * The short names come from the model id, the mode and the effort are drawn
+ * as glyphs, and the model's name moved down to the status line where it has
+ * the room to be read whole. The width arithmetic went with it, so the budget
+ * is pinned in statusRowLayout.spec.ts now; this is the naming.
  */
 import { describe, expect, it } from 'vitest';
 import {
     buildSessionPillLabel,
-    buildSessionSheetRows,
-    resolveSessionPillTextBudget,
     SESSION_PILL_SEPARATOR,
-    SESSION_PILL_TRUNCATION,
-    sessionPillFits,
     shortModelName,
 } from './sessionPillLabel';
 import {
@@ -81,66 +76,4 @@ describe('buildSessionPillLabel', () => {
         expect(buildSessionPillLabel({ modeLabel: '  ' }).text).toBe('');
     });
 
-    it('only ever truncates the model, in the middle', () => {
-        expect(SESSION_PILL_TRUNCATION).toEqual({ segment: 'model', ellipsizeMode: 'middle' });
-    });
-});
-
-describe('sessionPillFits at 393pt', () => {
-    const widest = (names: string[]) => names
-        .reduce((widest, name) => (name.length > widest.length ? name : widest), '');
-    // The widest one-word mode any harness ships, and each harness's widest
-    // effort name, paired with that harness's own models.
-    const widestMode = 'Workspace';
-    const harnesses = [
-        { models: getClaudeModelModes(), effort: widest(getClaudeEffortLevels().map((level) => level.name)) },
-        { models: getCodexModelModes(), effort: widest(getCodexEffortLevels('gpt-5.6-sol').map((level) => level.name)) },
-        { models: getGeminiModelModes(), effort: null },
-    ];
-
-    it('leaves the text a budget of the screen minus the paddings', () => {
-        expect(resolveSessionPillTextBudget(393)).toBe(393 - 16 - 20 - 24);
-    });
-
-    it('fits every model in the pickers with the widest mode and effort', () => {
-        for (const { models, effort } of harnesses) {
-            expect(models.length).toBeGreaterThan(0);
-            for (const model of models) {
-                const label = buildSessionPillLabel({ modeLabel: widestMode, model, effortLabel: effort });
-                expect(sessionPillFits(label, 393), label.text).toBe(true);
-            }
-        }
-    });
-
-    it('reports a model name that would overflow so the pill knows to cut it', () => {
-        const label = buildSessionPillLabel({
-            modeLabel: widestMode,
-            model: { key: 'x'.repeat(60) },
-            effortLabel: 'Ultracode',
-        });
-        expect(sessionPillFits(label, 393)).toBe(false);
-    });
-});
-
-describe('buildSessionSheetRows', () => {
-    it('lists permission, model, effort in the pill order with the current values', () => {
-        expect(buildSessionSheetRows({
-            effort: { title: 'EFFORT', value: 'High', available: true },
-            model: { title: 'MODEL', value: 'Fable 5', available: true },
-            permission: { title: 'PERMISSION MODE', value: 'Yolo', available: true },
-        })).toEqual([
-            { key: 'permission', title: 'PERMISSION MODE', value: 'Yolo' },
-            { key: 'model', title: 'MODEL', value: 'Fable 5' },
-            { key: 'effort', title: 'EFFORT', value: 'High' },
-        ]);
-    });
-
-    it('has no row for a setting the session cannot change', () => {
-        expect(buildSessionSheetRows({
-            permission: { title: 'PERMISSION MODE', value: 'Yolo', available: true },
-            model: { title: 'MODEL', value: 'Opus 5', available: false },
-            effort: null,
-        })).toEqual([{ key: 'permission', title: 'PERMISSION MODE', value: 'Yolo' }]);
-        expect(buildSessionSheetRows({})).toEqual([]);
-    });
 });

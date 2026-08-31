@@ -10,7 +10,9 @@ import { ItemGroup } from '@/components/ItemGroup';
 import { useSetting, useSettingMutable } from '@/sync/storage';
 import {
     resolveStreamTalk,
-    streamTalkLagRange,
+    streamTalkBacklogRange,
+    streamTalkCatchUpRateRange,
+    streamTalkJumpRange,
     streamTalkPitchRange,
     streamTalkRateRange,
     type StreamTalk,
@@ -22,9 +24,18 @@ import { t } from '@/text';
 
 /**
  * The stream-talk voice controls on the voice settings screen (DROVE-97):
- * which installed voice reads replies, with a Preview per voice, then speed,
- * pitch and the skip-ahead threshold, and a pointer to Settings when only
- * the compact voice is installed for the language.
+ * which installed voice reads replies, with a Preview per voice, then the
+ * delivery, and a pointer to Settings when only the compact voice is installed
+ * for the language.
+ *
+ * The delivery is four plain statements since DROVE-116 — the normal speed,
+ * the fast speed, when to speed up, and when to jump — plus pitch. Clay: "you
+ * pick the speed you want it normally but then as it gets behind you pick the
+ * fast speed", and "we can also set when it jumps". Each pair is kept in order
+ * as it is dragged: the fast speed can never be set slower than the normal
+ * one, and the jump can never happen before the speed-up. The two speed rows
+ * each carry their own preview, because the fast one is only judgeable
+ * against the normal one.
  *
  * The pick itself is pickVoice in sources/voice/voicePick.ts; this screen
  * shows the same list it picks from so "Automatic" says which voice it means.
@@ -64,15 +75,28 @@ interface SliderRowProps {
     step: number;
     onChange: (value: number) => void;
     onCommit: (value: number) => void;
+    /**
+     * Hear THIS slider (DROVE-116). A row that sets a speaking rate carries
+     * its own preview, because two speeds a screen apart cannot be judged
+     * against one shared play button: the point of the fast one is how it
+     * sounds compared with the normal one.
+     */
+    onPreview?: () => void;
+    previewing?: boolean;
 }
 
 function SliderRow(props: SliderRowProps) {
     const { theme } = useUnistyles();
     return (
         <View style={{ paddingHorizontal: 16, paddingVertical: 10 }}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
                 <Text style={{ fontSize: 16, color: theme.colors.text }}>{props.label}</Text>
-                <Text style={{ fontSize: 15, color: theme.colors.textSecondary }}>{props.display}</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                    <Text style={{ fontSize: 15, color: theme.colors.textSecondary }}>{props.display}</Text>
+                    {props.onPreview ? (
+                        <PreviewButton active={props.previewing === true} onPress={props.onPreview} />
+                    ) : null}
+                </View>
             </View>
             <Slider
                 value={props.value}
@@ -102,14 +126,18 @@ export const SpeakingVoiceSettings = React.memo(function SpeakingVoiceSettings()
     // Slider positions while the thumb is down; settings are written on release
     // so a drag does not push a sync per pixel.
     const [rate, setRate] = React.useState(talk.rate);
+    const [catchUpRate, setCatchUpRate] = React.useState(talk.catchUpRate);
     const [pitch, setPitch] = React.useState(talk.pitch);
-    const [lag, setLag] = React.useState(talk.maxLagSeconds);
+    const [backlog, setBacklog] = React.useState(talk.maxBacklogSeconds);
+    const [jump, setJump] = React.useState(talk.jumpBacklogSeconds);
 
     React.useEffect(() => {
         setRate(talk.rate);
+        setCatchUpRate(talk.catchUpRate);
         setPitch(talk.pitch);
-        setLag(talk.maxLagSeconds);
-    }, [talk.rate, talk.pitch, talk.maxLagSeconds]);
+        setBacklog(talk.maxBacklogSeconds);
+        setJump(talk.jumpBacklogSeconds);
+    }, [talk.rate, talk.catchUpRate, talk.pitch, talk.maxBacklogSeconds, talk.jumpBacklogSeconds]);
 
     React.useEffect(() => {
         let cancelled = false;
@@ -135,10 +163,13 @@ export const SpeakingVoiceSettings = React.memo(function SpeakingVoiceSettings()
         setStored({ ...talk, ...patch });
     }, [talk, setStored]);
 
-    const preview = React.useCallback(async (voiceId: string | null, key: string) => {
+    const preview = React.useCallback(async (voiceId: string | null, key: string, atRate?: number) => {
         // The reader must not be mid-reply under a preview, and a second tap
-        // on the same row stops rather than restarts.
-        readAloud.interrupt('typed');
+        // on the same row stops rather than restarts. Its own reason since
+        // DROVE-162: this is the last place that really does want the voice
+        // stopped, and calling it 'typed' would have kept the name alive for
+        // something typing no longer does.
+        readAloud.interrupt('preview');
         await stopSpeaking();
         if (previewing === key) {
             setPreviewing(null);
@@ -147,7 +178,9 @@ export const SpeakingVoiceSettings = React.memo(function SpeakingVoiceSettings()
         setPreviewing(key);
         try {
             await speakUtterance(t('settingsVoice.speaking.previewSentence'), {
-                rate,
+                // Whichever slider is being adjusted, at the speed it is set
+                // to right now rather than the one in settings (DROVE-116).
+                rate: atRate ?? rate,
                 pitch,
                 voiceId: voiceId ?? pickVoice(voices, language, null)?.identifier ?? null,
                 language,
@@ -221,6 +254,11 @@ export const SpeakingVoiceSettings = React.memo(function SpeakingVoiceSettings()
                 title={t('settingsVoice.speaking.deliveryTitle')}
                 footer={t('settingsVoice.speaking.deliveryFooter')}
             >
+                {/* Four plain statements (DROVE-116): the normal speed, the
+                    fast speed, when to speed up, and when to jump. Each pair
+                    is kept in order as it is dragged, so the fast speed can
+                    never end up slower than the normal one and the jump can
+                    never happen before the speed-up. */}
                 <SliderRow
                     label={t('settingsVoice.speaking.rate')}
                     value={rate}
@@ -228,8 +266,25 @@ export const SpeakingVoiceSettings = React.memo(function SpeakingVoiceSettings()
                     min={streamTalkRateRange.min}
                     max={streamTalkRateRange.max}
                     step={0.01}
-                    onChange={setRate}
-                    onCommit={(value) => commit({ rate: value })}
+                    onChange={(value) => {
+                        setRate(value);
+                        setCatchUpRate((fast) => Math.max(fast, value));
+                    }}
+                    onCommit={(value) => commit({ rate: value, catchUpRate: Math.max(catchUpRate, value) })}
+                    previewing={previewing === 'rate'}
+                    onPreview={() => { void preview(chosenInstalled ? talk.voiceId : null, 'rate', rate); }}
+                />
+                <SliderRow
+                    label={t('settingsVoice.speaking.catchUpRate')}
+                    value={catchUpRate}
+                    display={`${Math.round((catchUpRate / 0.5) * 100)}%`}
+                    min={rate}
+                    max={streamTalkCatchUpRateRange.max}
+                    step={0.01}
+                    onChange={setCatchUpRate}
+                    onCommit={(value) => commit({ catchUpRate: Math.max(rate, value) })}
+                    previewing={previewing === 'catchUpRate'}
+                    onPreview={() => { void preview(chosenInstalled ? talk.voiceId : null, 'catchUpRate', catchUpRate); }}
                 />
                 <SliderRow
                     label={t('settingsVoice.speaking.pitch')}
@@ -242,14 +297,30 @@ export const SpeakingVoiceSettings = React.memo(function SpeakingVoiceSettings()
                     onCommit={(value) => commit({ pitch: value })}
                 />
                 <SliderRow
-                    label={t('settingsVoice.speaking.lag')}
-                    value={lag}
-                    display={t('settingsVoice.speaking.seconds', { seconds: Math.round(lag) })}
-                    min={streamTalkLagRange.min}
-                    max={streamTalkLagRange.max}
+                    label={t('settingsVoice.speaking.backlog')}
+                    value={backlog}
+                    display={t('settingsVoice.speaking.seconds', { seconds: Math.round(backlog) })}
+                    min={streamTalkBacklogRange.min}
+                    max={streamTalkBacklogRange.max}
                     step={1}
-                    onChange={setLag}
-                    onCommit={(value) => commit({ maxLagSeconds: Math.round(value) })}
+                    onChange={(value) => {
+                        setBacklog(value);
+                        setJump((at) => Math.max(at, Math.round(value) + 1));
+                    }}
+                    onCommit={(value) => commit({
+                        maxBacklogSeconds: Math.round(value),
+                        jumpBacklogSeconds: Math.max(jump, Math.round(value) + 1),
+                    })}
+                />
+                <SliderRow
+                    label={t('settingsVoice.speaking.jump')}
+                    value={jump}
+                    display={t('settingsVoice.speaking.seconds', { seconds: Math.round(jump) })}
+                    min={Math.round(backlog) + 1}
+                    max={streamTalkJumpRange.max}
+                    step={1}
+                    onChange={setJump}
+                    onCommit={(value) => commit({ jumpBacklogSeconds: Math.max(Math.round(backlog) + 1, Math.round(value)) })}
                 />
                 <Item
                     title={t('settingsVoice.speaking.preview')}

@@ -82,7 +82,7 @@ export default function FlipPolicyDefaultsScreen() {
     if (!machineId) {
         return (
             <>
-                <Stack.Screen options={{ title: 'Flip policy defaults' }} />
+                <Stack.Screen options={{ title: 'Account switching defaults' }} />
                 <ItemList containerStyle={{ paddingTop: Platform.OS === 'ios' ? MOBILE_GLASS_HEADER_HEIGHT : 0 }}>
                     <ItemGroup
                         title="Which machine"
@@ -106,7 +106,7 @@ export default function FlipPolicyDefaultsScreen() {
 
     return (
         <>
-            <Stack.Screen options={{ title: 'Flip policy defaults' }} />
+            <Stack.Screen options={{ title: 'Account switching defaults' }} />
             <ItemList containerStyle={{ paddingTop: Platform.OS === 'ios' ? MOBILE_GLASS_HEADER_HEIGHT : 0 }}>
                 {error && (
                     <ItemGroup>

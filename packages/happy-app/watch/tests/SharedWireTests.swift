@@ -170,7 +170,19 @@ struct SharedWireTests {
         aSnapshotWithoutTheNewKeysStillDecodes()
         sessionCarriesWhatItIsDoing()
         sessionWithoutAStatusStillDecodes()
+        sessionTasksSurviveTheWire()
+        aSnapshotWithNoTasksSaysSoRatherThanShowingABlank()
+        theTaskDoorCountsInEnglish()
+        theSessionStateTheWristDrawsIsThePhonesOwn()
+        aStateTheWristDoesNotKnowFallsBackRatherThanThrowing()
+        theWristTakesThePhonesTitleVerbatim()
         accountHeadroomSurvivesTheWire()
+        theBindingLimitSurvivesTheWire()
+        anAccountRowWithoutTheLimitKeysStillDecodes()
+        theCurrentAccountIsTheOnePhoneMarked()
+        aWristDraftAccumulatesAcrossSheets()
+        aWristDraftIgnoresAnEmptySheet()
+        aWristDraftCanDropItsLastPhrase()
         aNewGateEarnsACue()
         aGateTheWristAlreadyKnowsDoesNot()
         anOldGateDoesNotBuzzOnAColdLaunch()
@@ -190,6 +202,12 @@ struct SharedWireTests {
         theDemoPlaysEveryCueLoudestFirst()
         aDemoGapOutlastsThePattern()
         thePhonesBuzzGateIsADemoAndStillBuzzes()
+        aFrontmostAppAlwaysPlaysItsOwnPattern()
+        anAuthorizedClosedAppTapsButLosesThePattern()
+        anUnaskedOrRefusedWristSaysWhyItIsSilent()
+        aQuietOnlyAuthorizationIsSilenceNotSuccess()
+        everySilenceSaysWhatToDoAboutIt()
+        aRefusalNamesTheCueThatWasLost()
 
         if failures.isEmpty {
             print("\nall wire checks passed")
@@ -556,6 +574,147 @@ struct SharedWireTests {
         }
         check(session.status == nil, "a session with no status key decodes")
         check(session.statusSince == nil, "a session with no statusSince key decodes")
+        check(session.state == nil, "a session with no state key decodes")
+        check(session.tasks == nil, "a session from a phone that predates the task keys decodes")
+        check(session.openTasks.isEmpty, "no task keys reads as no tasks, never as a crash")
+        check(!session.hasTasks, "a session with no task keys has no tasks")
+        check(session.taskHeadline == "No tasks yet", "and it says so rather than showing a blank")
+        check(
+            session.resolvedState == .thinking,
+            "a running session from a phone that predates `state` still reads as busy"
+        )
+    }
+
+    /// The task list the wrist draws is the phone's own, decided in
+    /// utils/sessionTasks.ts and SENT (DROVE-129, DROVE-167). The wrist sorts
+    /// nothing and drops nothing: what arrives is what it shows.
+    static func sessionTasksSurviveTheWire() {
+        let payload = """
+        {"gates":[],"updatedAt":"2026-08-31T07:00:00Z","connected":true,
+        "sessions":[{"id":"s1","title":"drover","active":true,
+        "tasks":["Wire the derivation","Draw the sheet"],"tasksDone":2,"tasksTotal":4}]}
+        """
+        guard let snapshot = try? DroverSnapshot.decoder.decode(
+            DroverSnapshot.self, from: Data(payload.utf8)
+        ), let session = snapshot.sessions.first else {
+            check(false, "a session carrying tasks decodes")
+            return
+        }
+        check(session.openTasks == ["Wire the derivation", "Draw the sheet"], "the wrist draws the phone's lines in the phone's order")
+        check(session.hasTasks, "a session with unfinished lines has tasks")
+        check(session.taskHeadline == "2 of 4 done", "the counts read as the phone's own sentence")
+        check(snapshot.sessionsWithTasks.count == 1, "the session is on the tasks door")
+        check(snapshot.openTaskCount == 2, "the door counts what is left, not the whole list")
+        check(snapshot.taskDoorLabel == "2 tasks in 1 session", "the door says what is behind it")
+    }
+
+    /// The empty case is a sentence on the wrist, and the door is not drawn at
+    /// all. The screenshot on DROVE-167 is what a blank one looks like.
+    static func aSnapshotWithNoTasksSaysSoRatherThanShowingABlank() {
+        let quiet = snapshot(sessions: [session("s1", active: true)])
+        check(quiet.sessionsWithTasks.isEmpty, "a session with no list is not on the tasks door")
+        check(quiet.openTaskCount == 0, "nothing is counted")
+        check(
+            quiet.sessions[0].taskHeadline == "No tasks yet",
+            "a session that never kept a list says so"
+        )
+        let finished = snapshot(sessions: [
+            session("s1", active: true, tasks: [], tasksDone: 3, tasksTotal: 3),
+        ])
+        check(
+            finished.sessionsWithTasks.isEmpty,
+            "a session whose list is finished is off the door: a wall of ticks is not read"
+        )
+        check(finished.sessions[0].taskHeadline == "3 of 3 done", "and its score still reads")
+    }
+
+    /// One task in one session must not read as `1 tasks in 1 sessions`.
+    static func theTaskDoorCountsInEnglish() {
+        let one = snapshot(sessions: [session("s1", active: true, tasks: ["Ship it"], tasksDone: 0, tasksTotal: 1)])
+        check(one.taskDoorLabel == "1 task in 1 session", "one of each is singular")
+        let many = snapshot(sessions: [
+            session("s1", active: true, tasks: ["a", "b"], tasksDone: 1, tasksTotal: 3),
+            session("s2", active: true, tasks: ["c"], tasksDone: 0, tasksTotal: 1),
+        ])
+        check(many.taskDoorLabel == "3 tasks in 2 sessions", "more than one of each is plural")
+    }
+
+    /// The phone resolves the session state and SENDS it, because the wrist
+    /// cannot import resolveSessionState (DROVE-129). Every word in the
+    /// phone's SessionState union has to land on a case here, or the wrist
+    /// silently falls back to `active` and starts answering a different
+    /// question from the phone's list.
+    static func theSessionStateTheWristDrawsIsThePhonesOwn() {
+        let wire = ["disconnected", "waiting", "thinking", "permission_required", "input_required"]
+        for raw in wire {
+            check(
+                SessionState(rawValue: raw) != nil,
+                "the wrist knows the phone's `\(raw)` state"
+            )
+        }
+        check(
+            Set(SessionState.allCases.map(\.rawValue)) == Set(wire),
+            "the wrist knows exactly the phone's five states and no sixth of its own"
+        )
+        check(SessionState.thinking.label == "working", "a busy turn is `working`, the phone's own word for one it cannot name")
+        check(SessionState.waiting.label == "online", "an idle connected session is `online`, as the phone says")
+        check(SessionState.disconnected.label == "offline", "a disconnected session is `offline`, as the phone says")
+        check(
+            SessionState.permissionRequired.label == "permission required"
+                && SessionState.inputRequired.label == "waiting for your answer",
+            "the two blocked states carry the phone's own strings"
+        )
+        check(
+            SessionState.permissionRequired.needsYou && SessionState.inputRequired.needsYou
+                && !SessionState.thinking.needsYou,
+            "only the two blocked states are waiting on a human"
+        )
+        check(
+            SessionState.disconnected.tintHex == "999999"
+                && SessionState.waiting.tintHex == "34C759"
+                && SessionState.thinking.tintHex == "007AFF"
+                && SessionState.permissionRequired.tintHex == "FF9500"
+                && SessionState.inputRequired.tintHex == "FF9500",
+            "the dot on the wrist is the colour the phone's list draws for the same state"
+        )
+    }
+
+    /// A state the wrist has never heard of costs the STATE, not the session.
+    /// Same rule as DroverGate.Kind: a Codable enum would throw and take the
+    /// whole snapshot with it.
+    static func aStateTheWristDoesNotKnowFallsBackRatherThanThrowing() {
+        let payload = """
+        {"gates":[],"updatedAt":"2026-08-30T19:50:00Z","connected":true,
+        "sessions":[{"id":"s1","title":"DROVER","account":null,"active":false,"state":"levitating"}]}
+        """
+        guard let snapshot = try? DroverSnapshot.decoder.decode(
+            DroverSnapshot.self, from: Data(payload.utf8)
+        ), let session = snapshot.sessions.first else {
+            check(false, "a session carrying an unknown state still decodes")
+            return
+        }
+        check(session.state == "levitating", "the unknown state survives the wire verbatim")
+        check(session.resolvedState == .disconnected, "an unknown state falls back to what `active` says")
+    }
+
+    /// The name the session was GIVEN, not its folder (DROVE-127). The phone
+    /// derives it and the wrist draws it; there is nothing here for the wrist
+    /// to compute, which is the whole fix.
+    static func theWristTakesThePhonesTitleVerbatim() {
+        let payload = """
+        {"gates":[],"updatedAt":"2026-08-30T19:50:00Z","connected":true,
+        "sessions":[{"id":"s1","title":"DROVER","account":"bitspur","active":true,
+        "path":"/Users/x/Projects/cattle-drover","state":"thinking"}]}
+        """
+        guard let snapshot = try? DroverSnapshot.decoder.decode(
+            DroverSnapshot.self, from: Data(payload.utf8)
+        ), let session = snapshot.sessions.first else {
+            check(false, "a named session decodes")
+            return
+        }
+        check(session.title == "DROVER", "the wrist shows the name the phone shows, not the directory")
+        check(session.path == "/Users/x/Projects/cattle-drover", "the directory still travels, under the title")
+        check(session.resolvedState == .thinking, "the phone's resolved state reaches the wrist")
     }
 
     /// The flip picker orders by headroom (DROVE-28's watch half), so the row
@@ -581,6 +740,152 @@ struct SharedWireTests {
         // "out" and would hide the one account with room.
         check(snapshot.accountRows[2].headroom == nil, "an unmeasured account carries no figure")
         check(snapshot.accountRows[2].loggedIn == false, "a logged-out account says so")
+    }
+
+    // ---- what is left, on the wrist (DROVE-131) ---------------------------
+
+    /// The wrist shows the account's MOST BINDING limit, and the phone decides
+    /// which that is. So the wire has to carry the window's name, when it
+    /// resets and the band the bar fills in, and none of it may be re-derived
+    /// here from raw rows the watch does not have (DROVE-129).
+    static func theBindingLimitSurvivesTheWire() {
+        let payload = """
+        {"gates":[],"updatedAt":"2026-08-31T12:00:00Z","connected":true,
+        "accountRows":[
+        {"name":"promanagerdevteam","headroom":2,"loggedIn":true,"current":true,
+         "limit":"Session","resetsAt":"2026-08-31T18:00:00Z","tone":"critical"},
+        {"name":"jamrizzi","headroom":51,"loggedIn":true,"limit":"Fable week","tone":"ample"},
+        {"name":"main","headroom":20,"loggedIn":true,"limit":"Week","tone":"nebulous"}]}
+        """
+        guard let snapshot = try? DroverSnapshot.decoder.decode(
+            DroverSnapshot.self, from: Data(payload.utf8)
+        ) else {
+            check(false, "a snapshot carrying binding limits decodes")
+            return
+        }
+        let rows = snapshot.accountRows
+        check(rows.count == 3, "every account row decodes")
+        check(rows[0].limit == "Session", "the wrist is told WHICH limit the figure is about")
+        check(rows[0].resetsAt != nil, "the binding limit carries when it resets")
+        check(rows[0].band == .critical, "the phone's band comes through as the bar's colour")
+        check(rows[1].band == .ample, "an account with room reads as ample")
+        // A band from a newer phone must cost this one label and nothing else.
+        // A Codable enum would have thrown and taken the whole snapshot with
+        // it, which is the failure DroverGate.kind is written the same way for.
+        check(rows[2].band == .unknown, "a band this build has never heard of is unknown, not a throw")
+        // The bar fills with what is LEFT, in both directions of the extreme.
+        check(rows[0].fraction < 0.05, "an account nearly out draws a nearly empty track")
+        check(abs(rows[1].fraction - 0.51) < 0.001, "the track is the headroom left, not the amount used")
+        // Nothing measured must not look healthy.
+        let unmeasured = DroverAccount(
+            name: "spare", headroom: nil, loggedIn: true, backAt: nil,
+            current: nil, limit: nil, resetsAt: nil, tone: nil
+        )
+        check(unmeasured.fraction == 0, "an unmeasured account draws an empty track, never a full one")
+        check(unmeasured.band == .unknown, "an unmeasured account has no band to claim")
+        // A reset time already past is the cache being behind; printing
+        // "resets 6 PM" at 9 PM is worse than printing nothing.
+        let then = Date(timeIntervalSince1970: 1_000)
+        check(rows[0].resets(after: then) != nil, "a live reset time is shown")
+        check(
+            rows[0].resets(after: Date(timeIntervalSince1970: 4_000_000_000)) == nil,
+            "a reset time in the past is not printed as a promise"
+        )
+    }
+
+    /// The watch is a TestFlight binary and cannot be updated OTA, so a phone
+    /// that predates these keys has to keep working — and so does an app-group
+    /// blob written before them, which outlives an app update.
+    static func anAccountRowWithoutTheLimitKeysStillDecodes() {
+        let payload = """
+        {"gates":[],"updatedAt":"2026-08-31T12:00:00Z","connected":true,
+        "accountRows":[{"name":"main","headroom":40,"loggedIn":true}]}
+        """
+        guard let snapshot = try? DroverSnapshot.decoder.decode(
+            DroverSnapshot.self, from: Data(payload.utf8)
+        ) else {
+            check(false, "an account row with none of the DROVE-131 keys decodes")
+            return
+        }
+        let row = snapshot.accountRows.first
+        check(row?.headroom == 40, "the figure it does carry still arrives")
+        check(row?.limit == nil, "a missing limit is absent, not a decode failure")
+        check(row?.current == nil, "a missing current flag is absent, not a decode failure")
+        check(row?.band == .unknown, "no band sent reads as unknown")
+    }
+
+    /// Which account the glance is about. The phone's `current` flag decides
+    /// it; an older phone sends none, and falling back to the first row is
+    /// better than a blank screen — the rows are ordered most headroom first,
+    /// so the first is the one the wrist would offer next anyway.
+    static func theCurrentAccountIsTheOnePhoneMarked() {
+        let rows = [
+            DroverAccount(name: "jamrizzi", headroom: 90, loggedIn: true, backAt: nil,
+                          current: nil, limit: "Week", resetsAt: nil, tone: "ample"),
+            DroverAccount(name: "promanagerdevteam", headroom: 2, loggedIn: true, backAt: nil,
+                          current: true, limit: "Session", resetsAt: nil, tone: "critical"),
+        ]
+        var snapshot = DroverSnapshot.empty
+        snapshot.accountRows = rows
+        check(
+            snapshot.currentAccount?.name == "promanagerdevteam",
+            "the glance is about the account the work is ON, not the emptiest one"
+        )
+        check(
+            snapshot.otherAccounts.map { $0.name } == ["jamrizzi"],
+            "every other account is reachable, and the current one is not listed twice"
+        )
+        var older = DroverSnapshot.empty
+        older.accountRows = [rows[0]]
+        check(
+            older.currentAccount?.name == "jamrizzi",
+            "a phone that never marks current still gives the wrist a bar to draw"
+        )
+        check(DroverSnapshot.empty.currentAccount == nil, "no rows means no glance, not a crash")
+    }
+
+    // ---- the latched wrist mic (DROVE-130) --------------------------------
+
+    /// The complaint, on both devices: "when I'm silent and then talk again
+    /// it's overwriting what I said" (DROVE-140). On the wrist every input
+    /// sheet hands back one phrase and closes, so without accumulation the
+    /// last thing said IS the whole message. Every return appends.
+    static func aWristDraftAccumulatesAcrossSheets() {
+        let draft = WristDraft.empty
+            .appending("fix the build")
+            .appending("and push it")
+        check(draft.text == "fix the build and push it", "a second phrase is added, never substituted")
+        check(draft.count == 2, "the wrist can say how many times it has been opened")
+        check(!draft.isEmpty, "a draft with words in it is not empty")
+        // Whatever the sheet hands back is trimmed on the way in, so the join
+        // cannot produce a run of spaces in the middle of a sentence.
+        check(
+            WristDraft.empty.appending("  one  ").appending(" two ").text == "one two",
+            "phrases are trimmed, so the join is one space and no more"
+        )
+        check(WristDraft.empty.text.isEmpty, "an untouched draft sends nothing")
+    }
+
+    /// The sheet is dismissed with nothing in it far more often than it hands
+    /// back a real empty phrase. A draft that grows a space every time Clay
+    /// changes his mind is a draft that cannot be read.
+    static func aWristDraftIgnoresAnEmptySheet() {
+        let draft = WristDraft.empty.appending("hello")
+        check(draft.appending("") == draft, "a blank return changes nothing")
+        check(draft.appending("   \n ") == draft, "a whitespace-only return changes nothing")
+        check(WristDraft.empty.appending("") == WristDraft.empty, "a blank on an empty draft leaves it empty")
+    }
+
+    /// Dictation mishears the last thing said far more often than the first,
+    /// and re-saying one phrase must not mean re-saying the paragraph.
+    static func aWristDraftCanDropItsLastPhrase() {
+        let draft = WristDraft.empty.appending("one").appending("two").appending("three")
+        check(draft.droppingLast().text == "one two", "the undo drops exactly one phrase")
+        check(
+            draft.droppingLast().droppingLast().droppingLast().isEmpty,
+            "undoing every phrase empties the draft"
+        )
+        check(WristDraft.empty.droppingLast().isEmpty, "an undo with nothing to undo is a no-op")
     }
 
     // ---- the wrist buzz, DROVE-62 -----------------------------------------
@@ -612,10 +917,18 @@ struct SharedWireTests {
         )
     }
 
-    static func session(_ id: String, active: Bool) -> DroverSession {
+    static func session(
+        _ id: String,
+        active: Bool,
+        state: String? = nil,
+        tasks: [String]? = nil,
+        tasksDone: Int? = nil,
+        tasksTotal: Int? = nil
+    ) -> DroverSession {
         DroverSession(
             id: id, title: id, account: nil, active: active,
-            path: nil, subagents: nil, status: nil, statusSince: nil
+            path: nil, subagents: nil, status: nil, statusSince: nil, state: state,
+            tasks: tasks, tasksDone: tasksDone, tasksTotal: tasksTotal
         )
     }
 
@@ -715,5 +1028,80 @@ struct SharedWireTests {
         check(WristCue.needsYou.breaksThroughFocus, "a needs-you request interrupts a Focus")
         check(WristCue.permission.breaksThroughFocus, "a permission gate interrupts a Focus")
         check(!WristCue.finished.breaksThroughFocus, "a finished session waits for you")
+    }
+
+    // MARK: DROVE-124, what the wrist can actually deliver
+
+    /// The pattern goes straight to the Taptic Engine and no notification is
+    /// involved, so alerts being off must NOT mute it. Getting the order of
+    /// these two checks wrong would silence the one route that always works.
+    static func aFrontmostAppAlwaysPlaysItsOwnPattern() {
+        for permission in WristAlertPermission.allCases {
+            let delivery = WristReach.delivery(frontmost: true, permission: permission)
+            check(delivery == .pattern, "frontmost plays the pattern even when alerts are \(permission.rawValue)")
+            check(delivery.keepsPattern, "frontmost keeps the per-cue pattern with alerts \(permission.rawValue)")
+        }
+    }
+
+    /// The background route taps, and that is all it does: watchOS picks the
+    /// haptic, so the five patterns collapse to one. Anything in the app that
+    /// implies otherwise is a claim it cannot deliver.
+    static func anAuthorizedClosedAppTapsButLosesThePattern() {
+        let delivery = WristReach.delivery(frontmost: false, permission: .allowed)
+        check(delivery == .systemAlert, "a closed app with alerts on posts a notification")
+        check(delivery.buzzes, "the notification route does tap the wrist")
+        check(!delivery.keepsPattern, "the notification route loses the per-cue pattern")
+        check(delivery.silence == nil, "a wrist that taps has no silence to explain")
+    }
+
+    /// The failure this ticket exists for: `add` succeeds and the alert is
+    /// dropped at delivery, so silence has to be a state the app knows it is
+    /// in rather than an absence it cannot see.
+    static func anUnaskedOrRefusedWristSaysWhyItIsSilent() {
+        check(
+            WristReach.delivery(frontmost: false, permission: .notDetermined) == .silent(.notAsked),
+            "a wrist that never allowed alerts is silent, and knows it"
+        )
+        check(
+            WristReach.delivery(frontmost: false, permission: .denied) == .silent(.denied),
+            "a wrist with alerts refused is silent, and knows it"
+        )
+        check(
+            !WristReach.delivery(frontmost: false, permission: .denied).buzzes,
+            "a refused wrist does not claim to buzz"
+        )
+    }
+
+    /// Provisional is an AUTHORIZATION that delivers quietly: into Notification
+    /// Center, no sound, no haptic. A `status != .denied` check reads it as
+    /// fine and the wrist stays silent anyway, which is the same invisible
+    /// failure one layer down.
+    static func aQuietOnlyAuthorizationIsSilenceNotSuccess() {
+        let delivery = WristReach.delivery(frontmost: false, permission: .provisional)
+        check(delivery == .silent(.quietOnly), "quiet delivery is silence, not a buzz")
+        check(!delivery.buzzes, "provisional authorization does not tap the wrist")
+    }
+
+    /// A reason with nothing to do about it is a mystery with extra words.
+    static func everySilenceSaysWhatToDoAboutIt() {
+        for silence in WristSilence.allCases {
+            let reason = silence.reason
+            check(!reason.isEmpty, "\(silence.rawValue) has a reason")
+            check(reason.contains("cannot buzz"), "\(silence.rawValue) says the wrist cannot buzz")
+            let actionable = reason.contains("Watch app") || reason.contains("Open Drover")
+            check(actionable, "\(silence.rawValue) says what to do about it")
+        }
+    }
+
+    /// "The wrist is muted" and "your permission question never reached you"
+    /// are different news, so the cue is named when there is one.
+    static func aRefusalNamesTheCueThatWasLost() {
+        let named = WristReach.refusal(for: .denied, cue: .question)
+        check(named.hasPrefix(WristCue.question.headline), "a refusal leads with the cue that was lost")
+        check(named.contains(WristSilence.denied.reason), "a refusal still carries the fix")
+        check(
+            WristReach.refusal(for: .denied, cue: nil) == WristSilence.denied.reason,
+            "with no cue to name, the refusal is the reason alone"
+        )
     }
 }

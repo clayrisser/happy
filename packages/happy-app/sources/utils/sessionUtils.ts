@@ -4,6 +4,7 @@ import { resolveSessionState } from '@/sync/sessionState';
 import type { SessionState } from '@/sync/sessionState';
 import { t } from '@/text';
 import { buildResumeCommand, buildResumeCommandBlock, ResumeCommandBlock } from './resumeCommand';
+import { sessionDisplayTitle } from './sessionTitle';
 
 export type { SessionState } from '@/sync/sessionState';
 
@@ -91,14 +92,15 @@ export function useSessionStatus(session: Session): SessionStatus {
 }
 
 /**
- * Extracts a display name from a session's metadata path.
- * Returns the last segment of the path, or 'unknown' if no path is available.
+ * The session's display name.
+ *
+ * Delegated, not implemented: the wrist names sessions too, and while this
+ * function held the rule the watch feed held a second one that answered
+ * `cattle-drover` where this answered `DROVER` (DROVE-127). `sessionTitle.ts`
+ * is the one owner now; both surfaces call it.
  */
 export function getSessionName(session: Session): string {
-    if (session.metadata?.summary) {
-        return session.metadata.summary.text;
-    }
-    return t('session.newChat');
+    return sessionDisplayTitle(session);
 }
 
 /**

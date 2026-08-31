@@ -21,6 +21,10 @@ import {
     shouldUseCompactToolRow,
 } from '@/utils/toolDisplay';
 import { useSetting } from '@/sync/storage';
+import { InlineImage } from '@/components/InlineImage';
+import { toolResultImage } from '@/utils/imageResult';
+import { getToolRowRoute } from '@/utils/toolRowRoute';
+import { useSubagentScope } from '@/sync/subagentMessages';
 
 interface ToolViewProps {
     metadata: Metadata | null;
@@ -36,25 +40,33 @@ export const ToolView = React.memo<ToolViewProps>((props) => {
     const router = useRouter();
     const { theme } = useUnistyles();
     const compactToolCalls = useSetting('compactToolCalls');
+    // Null in the session's own transcript, the agent's id on an agent screen
+    // (DROVE-166).
+    const agentId = useSubagentScope();
 
-    // For file-editing tools, navigate to file route instead of message detail
-    const fileEditTools = ['Edit', 'MultiEdit', 'Write'];
-    const isFileEditTool = fileEditTools.includes(tool.name);
-    const filePath = isFileEditTool && typeof tool.input?.file_path === 'string' ? tool.input.file_path : null;
+    // A card and a row inside a consolidated group open the same detail, so
+    // both ask the same function where that is (DROVE-152). That function also
+    // owns the file-editing special case this used to inline.
+    const route = getToolRowRoute({ sessionId, agentId, messageId, tool });
 
-    // Create default onPress handler for navigation
+    // When a tool reads an image the image IS the result, so it belongs in the
+    // transcript rather than two taps inside the detail screen (DROVE-151).
+    const resultImage = React.useMemo(
+        () => (tool.state === 'completed' ? toolResultImage(tool.result) : null),
+        [tool.state, tool.result],
+    );
+
     const handlePress = React.useCallback(() => {
         if (onPress) {
             onPress();
-        } else if (sessionId && filePath) {
-            router.push(`/session/${sessionId}/file?path=${btoa(filePath)}`);
-        } else if (sessionId && messageId) {
-            router.push(`/session/${sessionId}/message/${messageId}`);
+            return;
         }
-    }, [onPress, sessionId, messageId, filePath, router]);
+        if (route) {
+            router.push(route);
+        }
+    }, [onPress, route, router]);
 
-    // Enable pressable if either onPress is provided or we have navigation params
-    const isPressable = !!(onPress || (sessionId && filePath) || (sessionId && messageId));
+    const isPressable = !!(onPress || route);
 
     let knownTool = knownTools[tool.name as keyof typeof knownTools] as any;
 
@@ -247,9 +259,18 @@ export const ToolView = React.memo<ToolViewProps>((props) => {
 
             {/* Content area - either custom children or tool-specific view */}
             {(() => {
-                // Check if minimal first - minimal tools don't show content
+                // Check if minimal first - minimal tools don't show content,
+                // except a picture, which is the whole point of the call.
                 if (isCompactActivityTool) {
-                    return null;
+                    return resultImage ? (
+                        <View style={styles.compactImage}>
+                            <InlineImage
+                                uri={resultImage.uri}
+                                width={resultImage.width}
+                                height={resultImage.height}
+                            />
+                        </View>
+                    ) : null;
                 }
 
                 // Try to use a specific tool view component first
@@ -406,5 +427,12 @@ const styles = StyleSheet.create((theme) => ({
         paddingHorizontal: 12,
         paddingTop: 8,
         overflow: 'visible'
+    },
+    // Lines up under the compact row's label rather than its icon gutter.
+    compactImage: {
+        paddingLeft: 38,
+        paddingRight: 8,
+        paddingTop: 4,
+        paddingBottom: 2,
     },
 }));

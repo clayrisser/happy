@@ -6,7 +6,9 @@ import { SessionGateOverlay } from '@/components/SessionGateOverlay';
 import { PushPermissionNotice } from '@/components/PushPermissionNotice';
 import { AgentInput } from '@/components/AgentInput';
 import { readAloud } from '@/voice/readAloudService';
+import { composerVoiceEvent } from '@/voice/composerVoice';
 import { useVoiceComposer } from '@/voice/useVoiceComposer';
+import { ReadAloudRouteToast } from '@/voice/ReadAloudRouteToast';
 import { resolveVisibleAgentGoalStatus } from '@/components/agentGoalStatus';
 import type { MultiTextInputHandle } from '@/components/MultiTextInput';
 import { layout } from '@/components/layout';
@@ -24,6 +26,7 @@ import {
     EffortLevel,
 } from '@/components/modelModeOptions';
 import { getSuggestions } from '@/components/autocomplete/suggestions';
+import { primeCommands } from '@/sync/suggestionCommands';
 import { ChatHeaderView } from '@/components/ChatHeaderView';
 import { ChatList } from '@/components/ChatList';
 import { Deferred } from '@/components/Deferred';
@@ -73,7 +76,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import type { ModelMode, PermissionMode } from '@/components/PermissionModeSelector';
 import { resolveAgentDefaultConfig } from '@/sync/agentDefaults';
 import { performAgentGoalAction } from './agentGoalActionHandler';
-import { MOBILE_GLASS_HEADER_HEIGHT } from '@/components/navigation/headerMetrics';
+import { MOBILE_GLASS_CONTROL_SIZE, MOBILE_GLASS_HEADER_HEIGHT } from '@/components/navigation/headerMetrics';
 import {
     getRigReasoningSelection,
     isRigMetadata,
@@ -385,6 +388,16 @@ export const SessionView = React.memo((props: { id: string }) => {
             <Pressable
                 onPress={() => router.push(`/session/${sessionId}/info`)}
                 hitSlop={10}
+                accessibilityRole="button"
+                accessibilityLabel="Session details"
+                // The whole glass capsule is the target, not just the 28pt
+                // avatar sitting in the middle of it (DROVE-133).
+                style={{
+                    width: MOBILE_GLASS_CONTROL_SIZE,
+                    height: MOBILE_GLASS_CONTROL_SIZE,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                }}
             >
                 <Avatar
                     id={getSessionAvatarId(session)}
@@ -625,10 +638,13 @@ const ChatComposer = React.memo(function ChatComposer(props: ChatComposerProps) 
     const dictatingRef = React.useRef(false);
 
     const handleChangeText = React.useCallback((text: string) => {
-        // Typing means the user has stopped listening and started writing, so
-        // read-aloud is cut here rather than at the end of the sentence
-        // (DROVE-30). Idempotent: only the first keystroke reaches the engine.
-        if (!dictatingRef.current) readAloud.interrupt('typed');
+        // Typing stops the dictation and nothing else (DROVE-162). Clay: "And
+        // don't stop talking when I'm typing" — he is usually typing the next
+        // thing while listening to the current reply, and this line used to
+        // call interrupt('typed'), which threw the reading away on the first
+        // keystroke and made read-aloud and the keyboard mutually exclusive.
+        // The rule is in composerVoice.ts so a spec drives the SAME code.
+        composerVoiceEvent(readAloud, dictatingRef.current ? 'dictation-write' : 'keystroke');
         // Transition keeps the textarea responsive even when the draft
         // autosave / re-render takes longer than a frame.
         React.startTransition(() => setMessage(text));
@@ -834,12 +850,13 @@ export function SessionViewLoaded({
     const pickerEffortLevels = React.useMemo<EffortLevel[]>(() => (
         getEffortLevelsForPicker(flavor, modelKey, session.metadata)
     ), [flavor, modelKey, session.metadata]);
-    // Same rule for effort, from the same transcript field. `ultracode` is the
-    // one pick the pane can never confirm: Claude Code records it as the xhigh
-    // it runs at, so a session set to Ultracode reports `xhigh` and the chip
-    // settles there. That is honest about the effort and loses the workflow
-    // orchestration half of the name; better than claiming a level the pane is
-    // not on.
+    // Same rule for effort, and `ultracode` used to be the one pick the pane
+    // could never confirm: Claude Code records it as the `xhigh` it runs at,
+    // with no field to tell the two apart, so a session set to Ultracode
+    // reported xHigh and the chip snapped there — which read as the app undoing
+    // the pick. The CLI now reads ultracode off the composer's own rule and
+    // sends `paneEffort: 'ultracode'` (DROVE-164, claudeLocalLauncher), so this
+    // field is the truth for that level too.
     const paneEffortKey = session.metadata?.hasPane ? session.metadata?.paneEffort ?? null : null;
     const effortLevel = React.useMemo<EffortLevel | null>(() => (
         resolveCurrentOption(availableEffortLevels, [
@@ -858,7 +875,7 @@ export function SessionViewLoaded({
     const resumeCommandBlock = getResumeCommandBlock(session);
 
     // Attachment availability is capability-driven by the active session.
-    const { selectedImages, pickImages, removeImage, clearImages, addImages } = useImagePicker();
+    const { selectedImages, pickImages, takePhoto, pickFiles, removeImage, clearImages, addImages } = useImagePicker();
     const canUseAttachments = isRigMetadataV1(session.metadata)
         ? rigCanUseAttachments(session.metadata)
         : supportsImageAttachmentsForFlavor(session.metadata?.flavor);
@@ -925,7 +942,11 @@ export function SessionViewLoaded({
     const handleSend = React.useCallback(() => {
         const liveMessage = composerHandleRef.current?.getMessage() ?? '';
         if (liveMessage.trim() || selectedImages.length > 0) {
-            readAloud.interrupt('sent');
+            // Stops the mic, not the narration (DROVE-122). The answer being
+            // asked for does not exist yet, so cutting here would be a silence
+            // as long as the model takes to start. The old reply is dropped
+            // when the new one has its first sentence to say.
+            readAloud.userSent();
             const attachments = selectedImages.length > 0 ? selectedImages : undefined;
             const communicationsToDismiss = [...pendingCommunications];
             composerHandleRef.current?.clearMessage();
@@ -976,6 +997,13 @@ export function SessionViewLoaded({
     const handleAutocompleteSuggestions = React.useCallback((query: string) => (
         getSuggestions(sessionId, query)
     ), [sessionId]);
+
+    // Ask the machine what this session can run before the user types, so the
+    // first `/` shows the real inventory rather than the fallback five and a
+    // keystroke of catch-up (DROVE-170).
+    React.useEffect(() => {
+        primeCommands(sessionId);
+    }, [sessionId]);
 
     const connectionStatus = React.useMemo(() => ({
         text: sessionStatus.statusText,
@@ -1179,9 +1207,11 @@ export function SessionViewLoaded({
                 onReadAloudToggle={voiceComposer.onReadAloudToggle}
                 onTalkPressIn={voiceComposer.onTalkPressIn}
                 onTalkPressOut={voiceComposer.onTalkPressOut}
-                onTalkStop={voiceComposer.onTalkStop}
+                onTalkSlide={voiceComposer.onTalkSlide}
                 onTalkCancel={voiceComposer.onTalkCancel}
                 talkState={voiceComposer.talkState}
+                talkCancelArmed={voiceComposer.talkCancelArmed}
+                talkSendArmed={voiceComposer.talkSendArmed}
                 talk={voiceComposer.talk}
                 onAbort={isDisconnected || !rigCanAbort(session.metadata) ? undefined : handleAbort}
                 showAbortButton={rigCanAbort(session.metadata) && (
@@ -1196,6 +1226,8 @@ export function SessionViewLoaded({
                 onFileViewerPress={experiments && !isTablet && rigCanBrowseFiles(session.metadata) && rigCanReadFiles(session.metadata) ? handleFileViewerPress : undefined}
                 selectedImages={canUseAttachments ? selectedImages : undefined}
                 onPickImages={canUseAttachments ? pickImages : undefined}
+                onTakePhoto={canUseAttachments ? takePhoto : undefined}
+                onPickFiles={canUseAttachments ? pickFiles : undefined}
                 onRemoveImage={canUseAttachments ? removeImage : undefined}
                 onAddImages={canUseAttachments ? addImages : undefined}
                 autocompletePrefixes={AGENT_INPUT_AUTOCOMPLETE_PREFIXES}
@@ -1210,6 +1242,10 @@ export function SessionViewLoaded({
                 onSessionInfoPress={handleSessionInfoPress}
                 onActionAreaOffsetChange={usesFloatingMobileDock ? handleComposerCardOffsetChange : undefined}
             />
+            {/* Why read-aloud went quiet, when the route took it away
+                (DROVE-119). Absolute over the composer, so it costs the
+                chat no height. */}
+            <ReadAloudRouteToast />
         </View>
     );
 

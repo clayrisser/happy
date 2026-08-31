@@ -19,6 +19,11 @@ import { MOBILE_GLASS_HEADER_HEIGHT } from '@/components/navigation/headerMetric
 import { Typography } from '@/constants/Typography';
 import { usePendingGates, type DroverGateEntry } from '@/hooks/usePendingGates';
 import { useNavigateToSession } from '@/hooks/useNavigateToSession';
+import { useAllSessions } from '@/sync/storage';
+import { isSessionArchived } from '@/sync/sessionArchive';
+import { sessionDisplayTitle } from '@/utils/sessionTitle';
+import { collectSessionTasks, sessionTasksSectionLabel, type SessionTasksCard } from '@/utils/sessionTasks';
+import { SessionTasksList } from '@/components/SessionTasksList';
 import { ageLabel, splitInbox } from '@/sync/droverGates';
 import { isDroverDemoId } from '@/sync/droverDemo';
 import { sessionAllow, sessionDeny } from '@/sync/ops';
@@ -54,6 +59,14 @@ import {
  * own buttons call, and builds a question's payload with the same helper the
  * transcript card uses. There is no second decision path here, only a second
  * way in.
+ *
+ * THREE GROUPS SINCE DROVE-167. DROVE-71's brief was "use it for todo list AND
+ * all active prompts", and the to-do half it shipped was the CLI's `drover
+ * needs` records — not the task list Claude Code keeps while it works. So Clay
+ * kept tapping the longhorn looking for his tasks: "Why when I click on the
+ * drover icon it doesn't show the todo", "why does this not let me see my
+ * fucking tasks". They are here now, under the two gate groups, because a gate
+ * is blocking and a task is not.
  */
 export default function GatesScreen() {
     const gates = usePendingGates();
@@ -61,6 +74,20 @@ export default function GatesScreen() {
     // The header is transparent glass on iOS, so the first card would sit under
     // it. Same inset the settings screen applies for the same header.
     const topContentInset = Platform.OS === 'ios' ? MOBILE_GLASS_HEADER_HEIGHT : 0;
+
+    // Every session's task list, off the same derivation the session sheet and
+    // the wrist read (DROVE-167). Nothing is fetched: the reducer has been
+    // writing `session.todos` on every TodoWrite since long before this ticket.
+    const sessions = useAllSessions();
+    const taskCards = React.useMemo(() => collectSessionTasks(
+        sessions
+            .filter((session) => !isSessionArchived(session))
+            .map((session) => ({
+                sessionId: session.id,
+                title: sessionDisplayTitle(session),
+                todos: session.todos,
+            })),
+    ), [sessions]);
 
     // `?focus=` is a tap on a gate push whose raising session the bridge did
     // not know (DROVE-94): the card is lit and scrolled to, once, when it
@@ -80,7 +107,7 @@ export default function GatesScreen() {
         listRef.current?.scrollTo({ y: Math.max(0, event.nativeEvent.layout.y), animated: true });
     }, [focusId]);
 
-    if (gates.length === 0) {
+    if (gates.length === 0 && taskCards.length === 0) {
         return <EmptyGates topContentInset={topContentInset} />;
     }
 
@@ -115,6 +142,15 @@ export default function GatesScreen() {
                     />
                 )}
                 {todos.map(card)}
+                {taskCards.length > 0 && (
+                    <SectionHeading
+                        icon="list-outline"
+                        label={sessionTasksSectionLabel(taskCards)}
+                        note="What each session is still working through"
+                        loud={false}
+                    />
+                )}
+                {taskCards.map((card) => <SessionTasksCardView key={card.sessionId} card={card} />)}
                 <PlaygroundLink />
             </View>
         </ItemList>
@@ -129,7 +165,7 @@ export default function GatesScreen() {
  * blocked" — and that sentence is the whole reason the two are not one list.
  */
 function SectionHeading({ icon, label, note, loud }: {
-    icon: 'hand-left-outline' | 'checkbox-outline';
+    icon: 'hand-left-outline' | 'checkbox-outline' | 'list-outline';
     label: string;
     note: string;
     loud: boolean;
@@ -152,6 +188,41 @@ function SectionHeading({ icon, label, note, loud }: {
     );
 }
 
+/**
+ * One session's task list, in the inbox (DROVE-167).
+ *
+ * The whole card is the way into the session, because a task Clay wants to
+ * look at is a session he wants to open. Only the unfinished lines: the
+ * finished ones are in the session's own sheet and would double this card's
+ * height for nothing.
+ */
+function SessionTasksCardView({ card }: { card: SessionTasksCard }) {
+    const { theme } = useUnistyles();
+    const navigateToSession = useNavigateToSession();
+    return (
+        <Pressable
+            onPress={() => navigateToSession(card.sessionId)}
+            accessibilityRole="button"
+            accessibilityLabel={`${card.title}, ${card.tasks.headline}`}
+            style={({ pressed }) => [styles.card, { opacity: pressed ? 0.7 : 1 }]}
+        >
+            <View style={styles.cardHeader}>
+                <Ionicons name="list-outline" size={16} color={theme.colors.textSecondary} />
+                <View style={styles.cardHeaderText}>
+                    <Text style={styles.cardTitle} numberOfLines={1}>{card.title}</Text>
+                    <Text style={styles.cardReason}>{card.tasks.headline}</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={16} color={theme.colors.textSecondary} />
+            </View>
+            <View style={styles.cardBody}>
+                <View style={{ marginBottom: 12 }}>
+                    <SessionTasksList tasks={{ ...card.tasks, tasks: card.tasks.remaining }} />
+                </View>
+            </View>
+        </Pressable>
+    );
+}
+
 function EmptyGates({ topContentInset }: { topContentInset: number }) {
     const { theme } = useUnistyles();
     return (
@@ -159,8 +230,9 @@ function EmptyGates({ topContentInset }: { topContentInset: number }) {
             <Ionicons name="checkmark-circle-outline" size={48} color={theme.colors.textSecondary} />
             <Text style={styles.emptyTitle}>Nothing waiting</Text>
             <Text style={styles.emptyBody}>
-                Prompts from every session land here, and so does anything an
-                agent has asked you to do.
+                Prompts from every session land here, so does anything an agent
+                has asked you to do, and so does every task list a session is
+                still working through.
             </Text>
             <PlaygroundLink />
         </View>

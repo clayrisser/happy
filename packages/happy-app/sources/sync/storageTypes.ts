@@ -393,6 +393,14 @@ export const MetadataSchema = z.object({
     liveStatus: z.object({
         at: z.number(),
         turnStartedAt: z.number().optional(),
+        // The MAIN thread's own turn (DROVE-155), written only while the main
+        // thread is actually working. Absent while a fan-out of background
+        // agents runs on past the turn that launched it, which is what lets
+        // the status row's dot mean the main session and nothing else.
+        main: z.object({
+            startedAt: z.number(),
+            tokens: z.number().optional(),
+        }).passthrough().optional(),
         tool: z.object({
             id: z.string(),
             name: z.string(),

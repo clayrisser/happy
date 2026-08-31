@@ -25,6 +25,32 @@ import Speech
 /// quietly shipping the microphone to Apple's servers — the alternative is a
 /// silent fallback that sends audio off the device without anyone deciding to.
 
+/// The recognition request the audio tap appends to (DROVE-140).
+///
+/// A pause makes Apple finalise the current task, and the next words belong to
+/// a NEW request, so the tap cannot capture one request for the life of the
+/// engine the way it used to. The tap runs on the audio thread and the swap
+/// happens on the main one, so the reference is held behind a lock rather than
+/// raced on. The critical section is one load, which is short enough that a
+/// lock on the audio thread is the lesser evil against a torn read.
+final class RequestBox {
+    private let lock = NSLock()
+    private var request: SFSpeechAudioBufferRecognitionRequest?
+
+    func set(_ next: SFSpeechAudioBufferRecognitionRequest?) {
+        lock.lock()
+        request = next
+        lock.unlock()
+    }
+
+    func append(_ buffer: AVAudioPCMBuffer) {
+        lock.lock()
+        let target = request
+        lock.unlock()
+        target?.append(buffer)
+    }
+}
+
 /// AVSpeechSynthesizerDelegate needs NSObjectProtocol, which Expo's `Module`
 /// is not, so the delegate is its own object and the module owns it — the same
 /// split DroverWatchModule already makes for WCSessionDelegate.
@@ -76,11 +102,35 @@ public final class DroverSpeechModule: Module {
     private var inputTapInstalled = false
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
-    private var latestTranscript = ""
+    /// The request the audio tap is feeding, behind a lock: the tap runs on the
+    /// audio thread while a restart swaps the request on the main one
+    /// (DROVE-140).
+    private let tapTarget = RequestBox()
+    /// The recogniser this dictation was opened with, kept so a task that
+    /// finalises after a pause can be replaced with another one (DROVE-140).
+    private var dictationRecognizer: SFSpeechRecognizer?
+    /// Bumped for every recognition task. JS keys accumulation on it: the same
+    /// id REVISES what it already said, a new id APPENDS to it (DROVE-140).
+    private var recognitionTaskId = 0
+    /// What tasks that already ENDED inside this dictation heard. Apple
+    /// finalises on its own after a pause and the next task reports from
+    /// empty, so its words are banked here rather than written over.
+    private var bankedTranscript = ""
+    /// What the CURRENT task has heard, revised in place while it runs.
+    private var taskTranscript = ""
+    /// Tasks replaced in a row without hearing a word. A recogniser that
+    /// finalises instantly over silence would otherwise be restarted forever.
+    private var emptyRestarts = 0
     private var pendingStop: Promise?
     /// When the last `onDictationLevel` went out. The tap fires around ninety
     /// times a second; JS wants at most twenty (DROVE-74).
     private var lastLevelSentAt: TimeInterval = 0
+
+    /// The AVAudioSession route-change observer, held so it can be removed
+    /// (DROVE-119). Registered for the whole life of the module, not only
+    /// while speech is running: JS keeps the last route it saw, and a change
+    /// that lands between two replies still has to be remembered.
+    private var routeObserver: NSObjectProtocol?
 
     /// The session as it was before dictation took it over, put back when
     /// dictation lets go. Nil while nobody is dictating.
@@ -99,18 +149,45 @@ public final class DroverSpeechModule: Module {
         audioEngine != nil || recognitionTask != nil
     }
 
+    /// Everything heard since the microphone opened, across every recognition
+    /// task inside it (DROVE-140). This is the contract JS relies on: the
+    /// final transcript covers the WHOLE capture, not merely the last task, so
+    /// a stop after a pause never resolves with less than what was shown.
+    private var latestTranscript: String {
+        Self.joinedTranscript(bankedTranscript, taskTranscript)
+    }
+
+    private func resetTranscript() {
+        bankedTranscript = ""
+        taskTranscript = ""
+        emptyRestarts = 0
+    }
+
+    /// Two stretches of speech with one space between them, and no space when
+    /// either side is empty. The same join JS makes, so the two agree on what
+    /// the transcript reads as.
+    private static func joinedTranscript(_ base: String, _ next: String) -> String {
+        let left = base.trimmingCharacters(in: .whitespacesAndNewlines)
+        let right = next.trimmingCharacters(in: .whitespacesAndNewlines)
+        if left.isEmpty { return right }
+        if right.isEmpty { return left }
+        return left + " " + right
+    }
+
     public func definition() -> ModuleDefinition {
         Name("DroverSpeech")
 
-        Events("onDictationPartial", "onDictationEnded", "onDictationLevel")
+        Events("onDictationPartial", "onDictationEnded", "onDictationLevel", "onAudioRouteChange")
 
         OnCreate {
             self.synthesizer.delegate = self.speechDelegate
+            self.startWatchingAudioRoute()
         }
 
         OnDestroy {
             self.synthesizer.stopSpeaking(at: .immediate)
             self.teardownDictation()
+            self.stopWatchingAudioRoute()
         }
 
         /// Speak one utterance and resolve when it is over — finished or cut.
@@ -200,6 +277,15 @@ public final class DroverSpeechModule: Module {
             AVAudioSession.sharedInstance().currentRoute.outputs.map { $0.portType.rawValue }
         }
 
+        /// Whether this binary posts `onAudioRouteChange`. There is no way to
+        /// ask a module which events it declares, so JS asks for the function
+        /// that shipped in the same binary (DROVE-119). A build without it
+        /// gets no event, and the JS guard says so rather than claiming a
+        /// protection it does not have.
+        Function("watchesAudioRoute") { () -> Bool in
+            true
+        }
+
         /// Whether this device can transcribe WITHOUT sending audio anywhere.
         /// JS asks before offering the talk button, so an unsupported locale
         /// says so up front instead of failing on the first press.
@@ -275,7 +361,7 @@ public final class DroverSpeechModule: Module {
         /// somewhere that is not the button, or left the session.
         AsyncFunction("cancelDictation") { () -> Void in
             self.teardownDictation()
-            self.latestTranscript = ""
+            self.resetTranscript()
             self.pendingStop = nil
         }
     }
@@ -302,6 +388,55 @@ public final class DroverSpeechModule: Module {
 
     private static func primarySubtag(_ tag: String) -> String {
         normalizedTag(tag).split(separator: "-").first.map(String.init) ?? ""
+    }
+
+    /// The audio route changing, forwarded to JS (DROVE-119).
+    ///
+    /// Polling `audioRoute()` on a timer leaves up to a poll's worth of a
+    /// private reply playing out of the phone's speaker after an AirPod comes
+    /// out, which is exactly the thing the feature exists to stop. The
+    /// notification fires as the route moves, so JS can cut the utterance
+    /// mid-word. Nothing is decided here: the port names go up and the JS
+    /// side works out whether headphones just became the room.
+    private func startWatchingAudioRoute() {
+        guard routeObserver == nil else { return }
+        routeObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: AVAudioSession.sharedInstance(),
+            queue: nil
+        ) { [weak self] notification in
+            guard let self else { return }
+            let raw = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt ?? 0
+            let outputs = AVAudioSession.sharedInstance().currentRoute.outputs.map { $0.portType.rawValue }
+            self.sendEvent("onAudioRouteChange", [
+                "outputs": outputs,
+                "reason": Self.routeChangeReasonName(raw)
+            ])
+        }
+    }
+
+    private func stopWatchingAudioRoute() {
+        guard let routeObserver else { return }
+        NotificationCenter.default.removeObserver(routeObserver)
+        self.routeObserver = nil
+    }
+
+    /// AVAudioSession's reason code as a name JS can log. `oldDeviceUnavailable`
+    /// is the one that means "the headphones went away"; the guard does not
+    /// depend on it (the port names are enough and are the same on every
+    /// build), it is carried so a log line says what happened.
+    private static func routeChangeReasonName(_ raw: UInt) -> String {
+        switch AVAudioSession.RouteChangeReason(rawValue: raw) ?? .unknown {
+        case .newDeviceAvailable: return "newDeviceAvailable"
+        case .oldDeviceUnavailable: return "oldDeviceUnavailable"
+        case .categoryChange: return "categoryChange"
+        case .override: return "override"
+        case .wakeFromSleep: return "wakeFromSleep"
+        case .noSuitableRouteForCategory: return "noSuitableRouteForCategory"
+        case .routeConfigurationChange: return "routeConfigurationChange"
+        case .unknown: return "unknown"
+        @unknown default: return "unknown"
+        }
     }
 
     /// The same rule as pickVoice in sources/voice/voicePick.ts: the chosen
@@ -452,6 +587,28 @@ public final class DroverSpeechModule: Module {
         }
 
         let session = AVAudioSession.sharedInstance()
+
+        // The category is CHECKED here, not merely set above (DROVE-143).
+        // Pausing the synthesiser does not stop the read-aloud queue from
+        // starting the next sentence, and every `speak` puts the session back
+        // into `.playback`, where the input node reports 0 Hz / 0 channels and
+        // installing a tap on it aborts the app. That fight is a race, not a
+        // permanent state, so one retry first and a refusal only if it will
+        // not hold. JS keeps the reader silent for the whole capture, which is
+        // the real fix; this is the belt under it.
+        if session.category != .playAndRecord {
+            try? activateRecording()
+        }
+        guard session.category == .playAndRecord else {
+            releaseSession()
+            promise.reject(
+                "DroverSpeech",
+                "something else is holding the audio session in "
+                    + "\(session.category.rawValue); the microphone cannot open over it"
+            )
+            return
+        }
+
         guard session.isInputAvailable else {
             releaseSession()
             promise.reject("DroverSpeech", "no microphone is available on the current audio route")
@@ -473,38 +630,14 @@ public final class DroverSpeechModule: Module {
             return
         }
 
-        let request = SFSpeechAudioBufferRecognitionRequest()
-        request.shouldReportPartialResults = true
-        request.requiresOnDeviceRecognition = true
-
-        self.latestTranscript = ""
-        self.recognitionRequest = request
+        self.resetTranscript()
         self.audioEngine = engine
+        self.dictationRecognizer = recognizer
 
-        self.recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
-            guard let self else { return }
-            // A callback after teardown (the cancel itself reports an error)
-            // belongs to a task that is already gone.
-            guard self.recognitionTask != nil else { return }
-            if let result {
-                self.latestTranscript = result.bestTranscription.formattedString
-                self.sendEvent("onDictationPartial", ["text": self.latestTranscript])
-            }
-            let final = result?.isFinal ?? false
-            guard final || error != nil else { return }
-            if self.pendingStop != nil {
-                self.settleStop(with: self.latestTranscript)
-                return
-            }
-            // The recogniser ended on its own: Apple finalised after a long
-            // silence, or gave up ("no speech detected"). Nobody asked it to,
-            // so nobody is waiting on a promise; tell JS instead, or a
-            // latched mic looks live over a dead task (DROVE-30).
-            let transcript = self.latestTranscript
-            let reason = final ? "final" : (error?.localizedDescription ?? "error")
+        guard self.startRecognitionTask(recognizer) else {
             self.teardownDictation()
-            self.latestTranscript = ""
-            self.sendEvent("onDictationEnded", ["text": transcript, "reason": reason])
+            promise.reject("DroverSpeech", "the speech recogniser refused to start a task")
+            return
         }
 
         // A second tap on a bus is the other thing AVFAudio raises on. The
@@ -512,11 +645,14 @@ public final class DroverSpeechModule: Module {
         // alternative is an abort.
         inputNode.removeTap(onBus: 0)
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
-            request.append(buffer)
+            guard let self else { return }
+            // The CURRENT request, not the one that was live when the tap went
+            // on: a pause starts a new recognition task and the audio has to
+            // follow it there (DROVE-140).
+            self.tapTarget.append(buffer)
             // The level behind the waveform (DROVE-74): RMS of the first
             // channel, at most twenty a second. The tap runs on the audio
             // thread, so the event hops to main.
-            guard let self else { return }
             let now = Date().timeIntervalSinceReferenceDate
             guard now - self.lastLevelSentAt >= 0.05 else { return }
             self.lastLevelSentAt = now
@@ -545,6 +681,87 @@ public final class DroverSpeechModule: Module {
         promise.resolve(true)
     }
 
+    /// Open one recognition task on the request the tap will feed, and report
+    /// its id with every partial (DROVE-140).
+    ///
+    /// A task is not the capture. Apple ends one after a pause and the words
+    /// that follow belong to the next, so the id is the only thing that tells
+    /// JS whether a transcript REVISES the last one or CONTINUES it. Comparing
+    /// the strings cannot: "yes" after "no" is a correction when the
+    /// recogniser changed its mind and a new sentence when he said them a
+    /// breath apart.
+    @discardableResult
+    private func startRecognitionTask(_ recognizer: SFSpeechRecognizer) -> Bool {
+        let request = SFSpeechAudioBufferRecognitionRequest()
+        request.shouldReportPartialResults = true
+        request.requiresOnDeviceRecognition = true
+
+        recognitionTaskId += 1
+        let taskId = recognitionTaskId
+        taskTranscript = ""
+        recognitionRequest = request
+        tapTarget.set(request)
+
+        recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
+            guard let self else { return }
+            // A callback after teardown (the cancel itself reports an error),
+            // or from a task that has since been replaced, belongs to a task
+            // that is already gone.
+            guard self.recognitionTaskId == taskId, self.recognitionTask != nil else { return }
+            if let result {
+                self.taskTranscript = result.bestTranscription.formattedString
+                self.sendEvent("onDictationPartial", ["text": self.latestTranscript, "task": taskId])
+            }
+            let final = result?.isFinal ?? false
+            guard final || error != nil else { return }
+            if self.pendingStop != nil {
+                self.settleStop(with: self.latestTranscript)
+                return
+            }
+            // Apple finalised on its own after a pause, and nobody asked it
+            // to. The microphone is still open and he is probably still
+            // talking, so bank what this task heard and start ANOTHER one on
+            // the same engine rather than ending the capture under him
+            // (DROVE-140). Only a clean final is continued: an error is the
+            // recogniser saying it cannot go on.
+            if final, error == nil, self.continueAfterFinal() { return }
+            // Nothing more is coming: it gave up, or the restart failed. Tell
+            // JS, or a latched mic looks live over a dead task (DROVE-30).
+            let transcript = self.latestTranscript
+            let reason = final ? "final" : (error?.localizedDescription ?? "error")
+            self.teardownDictation()
+            self.resetTranscript()
+            self.sendEvent("onDictationEnded", ["text": transcript, "reason": reason, "task": taskId])
+        }
+        return recognitionTask != nil
+    }
+
+    /// Replace a task that finalised with a fresh one on the same running
+    /// engine, so a pause does not end the capture (DROVE-140). False when
+    /// there is nothing left to continue on, and the caller then ends it.
+    private func continueAfterFinal() -> Bool {
+        guard let engine = audioEngine, engine.isRunning, inputTapInstalled else { return false }
+        guard let recognizer = dictationRecognizer, recognizer.isAvailable else { return false }
+        // A task that heard nothing and finalised anyway is the shape of a
+        // restart loop, so a run of them ends the capture instead of spinning.
+        // One that heard something resets the count: a long pause between two
+        // sentences is the case this whole path exists for.
+        if taskTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            emptyRestarts += 1
+            if emptyRestarts > 3 { return false }
+        } else {
+            emptyRestarts = 0
+        }
+        bankedTranscript = latestTranscript
+        taskTranscript = ""
+        // Let go of the finished task before making the next one, so
+        // `isDictating` never sees two and the old callback stops here.
+        recognitionTask = nil
+        recognitionRequest = nil
+        tapTarget.set(nil)
+        return startRecognitionTask(recognizer)
+    }
+
     /// Resolve the outstanding `stopDictation` exactly once — the final result
     /// and the two-second timeout race, and whichever lands first wins.
     private func settleStop(with transcript: String) {
@@ -564,6 +781,8 @@ public final class DroverSpeechModule: Module {
         recognitionTask?.cancel()
         recognitionTask = nil
         recognitionRequest = nil
+        tapTarget.set(nil)
+        dictationRecognizer = nil
         if let engine = audioEngine {
             if engine.isRunning { engine.stop() }
             removeInputTap()

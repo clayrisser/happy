@@ -8,6 +8,7 @@ import { run as runRipgrep } from '@/modules/ripgrep/index';
 import { run as runDifftastic } from '@/modules/difftastic/index';
 import { RpcHandlerManager } from '../../api/rpc/RpcHandlerManager';
 import { validatePath, PathValidationResult } from './pathSecurity';
+import { discoverSessionInventory, type SessionInventoryResponse } from '@/utils/sessionInventory';
 
 const execAsync = promisify(exec);
 
@@ -165,7 +166,15 @@ export type SpawnSessionResult =
  * null — the daemon serves the whole machine and its process.cwd() is just
  * wherever it happened to be started from, not a meaningful boundary.
  */
-export function registerCommonHandlers(rpcHandlerManager: RpcHandlerManager, workingDirectory: string | null) {
+/**
+ * @param flavor  Which agent this session runs, so the inventory walk knows
+ *                whose layout to read. Absent means Claude Code's.
+ */
+export function registerCommonHandlers(
+    rpcHandlerManager: RpcHandlerManager,
+    workingDirectory: string | null,
+    flavor?: string | null,
+) {
 
     const checkPath = (targetPath: string): PathValidationResult =>
         workingDirectory === null
@@ -548,4 +557,35 @@ export function registerCommonHandlers(rpcHandlerManager: RpcHandlerManager, wor
             };
         }
     });
+
+    // What this session can be asked to run (DROVE-170). Answered by the
+    // machine the session is ON, reading the config dir it is on RIGHT NOW, so
+    // it is per-machine and per-account by construction rather than by a cache
+    // somebody has to invalidate.
+    //
+    // Deliberately NOT on the metadata snapshot: metadata is rewritten once a
+    // second while a turn runs (liveStatus), and the inventory is ~12KB that
+    // changes about never. Riding that channel would send it to the phone a
+    // thousand times an hour to say nothing. runClaude replaces this handler
+    // with one that follows a flip's CLAUDE_CONFIG_DIR.
+    rpcHandlerManager.registerHandler<Record<string, never>, SessionInventoryResponse>(
+        'sessionInventory',
+        async () => {
+            try {
+                return {
+                    success: true,
+                    inventory: await discoverSessionInventory({
+                        flavor,
+                        cwd: workingDirectory ?? undefined,
+                    }),
+                };
+            } catch (error) {
+                logger.debug('Failed to read session inventory:', error);
+                return {
+                    success: false,
+                    error: error instanceof Error ? error.message : 'Failed to read session inventory'
+                };
+            }
+        },
+    );
 }

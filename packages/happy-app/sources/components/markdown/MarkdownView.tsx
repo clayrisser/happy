@@ -1,4 +1,6 @@
 import { MarkdownSpan, parseMarkdown } from './parseMarkdown';
+import { type HighlightedSpan, highlightSpans } from './sentenceHighlight';
+import { splitIntoSentenceRuns } from './sentenceTargets';
 import * as React from 'react';
 import { Image, Pressable, View, Platform } from 'react-native';
 import { HorizontalScrollView } from '../HorizontalScrollView';
@@ -34,6 +36,22 @@ export const MarkdownView = React.memo((props: {
      * selection and the built-in copy gesture so only one of them fires.
      */
     externalCopyHandler?: boolean;
+    /**
+     * The sentence read-aloud is speaking out of this message right now
+     * (DROVE-114). Marked where it is found and ignored where it is not; it
+     * changes colour only, never layout, so it cannot move the viewport.
+     */
+    highlightSentence?: string | null;
+    /**
+     * A sentence of prose was tapped (DROVE-163), with its rendered text.
+     *
+     * Given, every prose block is cut into one pressable run per sentence, so
+     * the layout engine does the hit test and the caller is told which
+     * sentence the finger was inside. Left out, blocks render exactly as they
+     * did — one Text, no extra nesting — which is what a user bubble, a
+     * preview or a tool card wants.
+     */
+    onSentencePress?: (sentence: string) => void;
 }) => {
     const blocks = React.useMemo(() => parseMarkdown(props.markdown), [props.markdown]);
     
@@ -68,15 +86,15 @@ export const MarkdownView = React.memo((props: {
             <View style={{ width: '100%' }}>
                 {blocks.map((block, index) => {
                     if (block.type === 'text') {
-                        return <RenderTextBlock spans={block.content} key={index} first={index === 0} last={index === blocks.length - 1} selectable={selectable} onLinkPress={handleLinkPress} />;
+                        return <RenderTextBlock spans={block.content} key={index} first={index === 0} last={index === blocks.length - 1} selectable={selectable} onLinkPress={handleLinkPress} highlightSentence={props.highlightSentence} onSentencePress={props.onSentencePress} />;
                     } else if (block.type === 'header') {
-                        return <RenderHeaderBlock level={block.level} spans={block.content} key={index} first={index === 0} last={index === blocks.length - 1} selectable={selectable} onLinkPress={handleLinkPress} />;
+                        return <RenderHeaderBlock level={block.level} spans={block.content} key={index} first={index === 0} last={index === blocks.length - 1} selectable={selectable} onLinkPress={handleLinkPress} highlightSentence={props.highlightSentence} onSentencePress={props.onSentencePress} />;
                     } else if (block.type === 'horizontal-rule') {
                         return <View style={style.horizontalRule} key={index} />;
                     } else if (block.type === 'list') {
-                        return <RenderListBlock items={block.items} key={index} first={index === 0} last={index === blocks.length - 1} selectable={selectable} onLinkPress={handleLinkPress} />;
+                        return <RenderListBlock items={block.items} key={index} first={index === 0} last={index === blocks.length - 1} selectable={selectable} onLinkPress={handleLinkPress} highlightSentence={props.highlightSentence} onSentencePress={props.onSentencePress} />;
                     } else if (block.type === 'numbered-list') {
-                        return <RenderNumberedListBlock items={block.items} key={index} first={index === 0} last={index === blocks.length - 1} selectable={selectable} onLinkPress={handleLinkPress} />;
+                        return <RenderNumberedListBlock items={block.items} key={index} first={index === 0} last={index === blocks.length - 1} selectable={selectable} onLinkPress={handleLinkPress} highlightSentence={props.highlightSentence} onSentencePress={props.onSentencePress} />;
                     } else if (block.type === 'code-block') {
                         return <RenderCodeBlock content={block.content} language={block.language} key={index} first={index === 0} last={index === blocks.length - 1} selectable={selectable} />;
                     } else if (block.type === 'mermaid') {
@@ -122,46 +140,125 @@ export const MarkdownView = React.memo((props: {
 });
 
 type RenderSpanProps = {
-    spans: MarkdownSpan[];
+    spans: (MarkdownSpan | HighlightedSpan)[];
     baseStyle?: any;
     selectable: boolean;
     onLinkPress: (url: string) => void;
 };
 
-function RenderTextBlock(props: { spans: MarkdownSpan[], first: boolean, last: boolean, selectable: boolean, onLinkPress: (url: string) => void }) {
-    return <Text selectable={props.selectable} style={[style.text, props.first && style.first, props.last && style.last]}><RenderSpans spans={props.spans} baseStyle={style.text} selectable={props.selectable} onLinkPress={props.onLinkPress} /></Text>;
+function RenderTextBlock(props: { spans: MarkdownSpan[], first: boolean, last: boolean, selectable: boolean, onLinkPress: (url: string) => void, highlightSentence?: string | null, onSentencePress?: (sentence: string) => void }) {
+    return (
+        <Text selectable={props.selectable} style={[style.text, props.first && style.first, props.last && style.last]}>
+            <RenderBody
+                spans={props.spans}
+                baseStyle={style.text}
+                selectable={props.selectable}
+                onLinkPress={props.onLinkPress}
+                highlightSentence={props.highlightSentence}
+                onSentencePress={props.onSentencePress}
+            />
+        </Text>
+    );
 }
 
-function RenderHeaderBlock(props: { level: 1 | 2 | 3 | 4 | 5 | 6, spans: MarkdownSpan[], first: boolean, last: boolean, selectable: boolean, onLinkPress: (url: string) => void }) {
+/** Split the spans around the spoken sentence, or leave them exactly as they were. */
+function useHighlightedSpans(spans: MarkdownSpan[], sentence: string | null | undefined): (MarkdownSpan | HighlightedSpan)[] {
+    return React.useMemo(
+        () => highlightSpans(spans, sentence ?? null) ?? spans,
+        [spans, sentence],
+    );
+}
+
+/**
+ * A block's spans, marked for the voice and cut for the finger.
+ *
+ * With no `onSentencePress` this is exactly the old single list of spans. With
+ * one, the block becomes one pressable Text per sentence (DROVE-163) and the
+ * spoken-sentence mark is applied inside each run, so the two splits do not
+ * have to know about each other: at most one run contains the spoken sentence
+ * and the rest come back unchanged.
+ */
+function RenderBody(props: {
+    spans: MarkdownSpan[],
+    baseStyle: any,
+    selectable: boolean,
+    onLinkPress: (url: string) => void,
+    highlightSentence?: string | null,
+    onSentencePress?: (sentence: string) => void,
+}) {
+    const { onSentencePress } = props;
+    const runs = React.useMemo(
+        () => (onSentencePress ? splitIntoSentenceRuns(props.spans) : null),
+        [props.spans, onSentencePress],
+    );
+    const plain = useHighlightedSpans(props.spans, props.highlightSentence);
+    if (runs === null || onSentencePress === undefined) {
+        return <RenderSpans spans={plain} baseStyle={props.baseStyle} selectable={props.selectable} onLinkPress={props.onLinkPress} />;
+    }
+    return (<>
+        {runs.map((run, index) => (
+            <Text
+                key={index}
+                selectable={props.selectable}
+                style={props.baseStyle}
+                onPress={() => onSentencePress(run.sentence)}
+            >
+                <RenderSpans
+                    spans={highlightSpans(run.spans, props.highlightSentence ?? null) ?? run.spans}
+                    baseStyle={props.baseStyle}
+                    selectable={props.selectable}
+                    onLinkPress={props.onLinkPress}
+                />
+            </Text>
+        ))}
+    </>);
+}
+
+function RenderHeaderBlock(props: { level: 1 | 2 | 3 | 4 | 5 | 6, spans: MarkdownSpan[], first: boolean, last: boolean, selectable: boolean, onLinkPress: (url: string) => void, highlightSentence?: string | null, onSentencePress?: (sentence: string) => void }) {
     const s = (style as any)[`header${props.level}`];
     const headerStyle = [style.header, s, props.first && style.first, props.last && style.last];
-    return <Text selectable={props.selectable} style={headerStyle}><RenderSpans spans={props.spans} baseStyle={headerStyle} selectable={props.selectable} onLinkPress={props.onLinkPress} /></Text>;
+    return (
+        <Text selectable={props.selectable} style={headerStyle}>
+            <RenderBody
+                spans={props.spans}
+                baseStyle={headerStyle}
+                selectable={props.selectable}
+                onLinkPress={props.onLinkPress}
+                highlightSentence={props.highlightSentence}
+                onSentencePress={props.onSentencePress}
+            />
+        </Text>
+    );
 }
 
 const BULLETS = ['•', '◦', '▪'] as const;
 
-function RenderListBlock(props: { items: { depth: number, spans: MarkdownSpan[] }[], first: boolean, last: boolean, selectable: boolean, onLinkPress: (url: string) => void }) {
+function RenderListBlock(props: { items: { depth: number, spans: MarkdownSpan[] }[], first: boolean, last: boolean, selectable: boolean, onLinkPress: (url: string) => void, highlightSentence?: string | null, onSentencePress?: (sentence: string) => void }) {
     const listStyle = [style.text, style.list];
     return (
         <View style={{ flexDirection: 'column', marginBottom: 8, gap: 6 }}>
             {props.items.map((item, index) => (
                 <View key={index} style={{ flexDirection: 'row', alignItems: 'flex-start', paddingLeft: item.depth * 16 }}>
                     <Text selectable={false} style={[listStyle, { marginRight: 8, marginTop: 1 }]}>{BULLETS[Math.min(item.depth, BULLETS.length - 1)]}</Text>
-                    <Text selectable={props.selectable} style={[listStyle, { flex: 1 }]}><RenderSpans spans={item.spans} baseStyle={listStyle} selectable={props.selectable} onLinkPress={props.onLinkPress} /></Text>
+                    <Text selectable={props.selectable} style={[listStyle, { flex: 1 }]}>
+                        <RenderBody spans={item.spans} baseStyle={listStyle} selectable={props.selectable} onLinkPress={props.onLinkPress} highlightSentence={props.highlightSentence} onSentencePress={props.onSentencePress} />
+                    </Text>
                 </View>
             ))}
         </View>
     );
 }
 
-function RenderNumberedListBlock(props: { items: { number: number, depth: number, spans: MarkdownSpan[] }[], first: boolean, last: boolean, selectable: boolean, onLinkPress: (url: string) => void }) {
+function RenderNumberedListBlock(props: { items: { number: number, depth: number, spans: MarkdownSpan[] }[], first: boolean, last: boolean, selectable: boolean, onLinkPress: (url: string) => void, highlightSentence?: string | null, onSentencePress?: (sentence: string) => void }) {
     const listStyle = [style.text, style.list];
     return (
         <View style={{ flexDirection: 'column', marginBottom: 8, gap: 6 }}>
             {props.items.map((item, index) => (
                 <View key={index} style={{ flexDirection: 'row', alignItems: 'flex-start', paddingLeft: item.depth * 16 }}>
                     <Text selectable={false} style={[listStyle, { marginRight: 8, marginTop: 1 }]}>{item.number}.</Text>
-                    <Text selectable={props.selectable} style={[listStyle, { flex: 1 }]}><RenderSpans spans={item.spans} baseStyle={listStyle} selectable={props.selectable} onLinkPress={props.onLinkPress} /></Text>
+                    <Text selectable={props.selectable} style={[listStyle, { flex: 1 }]}>
+                        <RenderBody spans={item.spans} baseStyle={listStyle} selectable={props.selectable} onLinkPress={props.onLinkPress} highlightSentence={props.highlightSentence} onSentencePress={props.onSentencePress} />
+                    </Text>
                 </View>
             ))}
         </View>
@@ -170,8 +267,9 @@ function RenderNumberedListBlock(props: { items: { number: number, depth: number
 
 function RenderCodeBlock(props: { content: string, language: string | null, first: boolean, last: boolean, selectable: boolean }) {
     const [isHovered, setIsHovered] = React.useState(false);
-    // Double-tap flips soft wrap for every code block (DROVE-95): the
-    // horizontal ScrollView goes away and the text breaks inside the block.
+    // Code blocks arrive wrapped (DROVE-149): the text breaks inside the
+    // block. A double-tap flips every code block back to the horizontal
+    // ScrollView, for a table or a diff that wrapping ruins.
     const [wrap, toggleWrap] = useCodeWrap('code');
     const { theme } = useUnistyles();
 
@@ -285,6 +383,10 @@ function RenderOptionsBlock(props: {
     );
 }
 
+function isHighlighted(span: MarkdownSpan | HighlightedSpan): boolean {
+    return 'highlighted' in span && span.highlighted === true;
+}
+
 function RenderSpans(props: RenderSpanProps) {
     return (<>
         {props.spans.map((span, index) => {
@@ -295,7 +397,7 @@ function RenderSpans(props: RenderSpanProps) {
                         key={index}
                         selectable={props.selectable}
                         accessibilityRole={isExternalLink ? 'link' : undefined}
-                        style={[props.baseStyle, isExternalLink && style.link, span.styles.map(s => style[s])]}
+                        style={[props.baseStyle, isExternalLink && style.link, span.styles.map(s => style[s]), isHighlighted(span) && style.spoken]}
                         {...(isExternalLink && Platform.OS === 'web' ? { onClick: () => props.onLinkPress(span.url!) } as any : {})}
                         onPress={isExternalLink && Platform.OS !== 'web'
                             ? () => props.onLinkPress(span.url!)
@@ -305,7 +407,7 @@ function RenderSpans(props: RenderSpanProps) {
                     </Text>
                 );
             } else {
-                return <Text key={index} selectable={props.selectable} style={[props.baseStyle, span.styles.map(s => style[s])]}>{span.text}</Text>
+                return <Text key={index} selectable={props.selectable} style={[props.baseStyle, span.styles.map(s => style[s]), isHighlighted(span) && style.spoken]}>{span.text}</Text>
             }
         })}
     </>)
@@ -417,6 +519,16 @@ const style = StyleSheet.create((theme) => ({
         fontWeight: '400',
     },
 
+    // The sentence read-aloud is on right now (DROVE-114), coloured rather
+    // than highlighted (DROVE-125): the grey block read as selected text, and
+    // on a dark theme it was heavy. COLOUR ONLY, and this is the constraint
+    // that matters rather than a preference. The mark may not change the text
+    // metrics, because a reflow is a new viewport, and a new viewport seeks
+    // the reader, which would move the mark. Colour does not reflow. Weight,
+    // size, style and family all would, so none of them may be added here.
+    spoken: {
+        color: theme.colors.spokenSentence,
+    },
     italic: {
         fontStyle: 'italic',
     },

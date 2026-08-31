@@ -3,7 +3,8 @@ import * as React from 'react';
 import { Platform, View, Pressable } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { MobileGlassSurface } from './MobileGlass';
+import { FAB_RADIUS, FAB_SIZE } from './glassChromeScreens';
+import { GlassChromeSurface } from './GlassChromeControl';
 
 const stylesheet = StyleSheet.create((theme, runtime) => ({
     container: {
@@ -11,9 +12,9 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         right: 16,
     },
     button: {
-        borderRadius: 20,
-        width: 56,
-        height: 56,
+        borderRadius: FAB_RADIUS,
+        width: FAB_SIZE,
+        height: FAB_SIZE,
         padding: Platform.select({ web: 16, default: 0 }),
         overflow: 'visible',
         shadowColor: Platform.select({ web: theme.colors.shadow.color, default: 'transparent' }),
@@ -34,11 +35,8 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         flex: 1,
         alignItems: 'center',
         justifyContent: 'center',
-        borderRadius: 20,
+        borderRadius: FAB_RADIUS,
         overflow: 'hidden',
-        backgroundColor: Platform.select({ web: 'transparent', android: theme.colors.glass.backgroundStrong, default: 'transparent' }),
-        borderWidth: Platform.select({ web: 0, default: StyleSheet.hairlineWidth }),
-        borderColor: theme.colors.glass.border,
         shadowColor: theme.colors.glass.shadow,
         shadowOffset: { width: 0, height: 8 },
         shadowOpacity: Platform.select({ web: 0, default: 1 }),
@@ -68,9 +66,26 @@ export const FAB = React.memo(({ onPress }: { onPress: () => void }) => {
                 {Platform.OS === 'web' ? (
                     <Ionicons name="add" size={24} color={theme.colors.fab.icon} />
                 ) : (
-                    <MobileGlassSurface interactive intensity={76} style={styles.glass}>
+                    /* The one control on the artifacts list that floats over
+                       it, so it gets the same material as everything else that
+                       floats (DROVE-161). It was on MobileGlassSurface's
+                       default `clear` style, the barely-there material Apple
+                       uses over photography, with no tint of its own.
+
+                       THE TINT IS THE FIX, not decoration. `fab.icon` is white
+                       on the light theme, because the web FAB is a black
+                       circle; on a barely-there surface over a white list that
+                       is a white glyph on white. The tint carries the colour
+                       the button already had on to the material, which is how
+                       the system draws a prominent glass button, and it is
+                       what the fallback paints where there is no material. */
+                    <GlassChromeSurface
+                        radius={FAB_RADIUS}
+                        tintColor={theme.colors.fab.background}
+                        style={styles.glass}
+                    >
                         <Ionicons name="add" size={24} color={theme.colors.fab.icon} />
-                    </MobileGlassSurface>
+                    </GlassChromeSurface>
                 )}
             </Pressable>
         </View>

@@ -8,6 +8,7 @@ import { sync } from './sync';
 import { storage } from './storage';
 import { describeDemoInput, isDroverDemoId, recordDemoAnswer } from './droverDemo';
 import type { AgentQuestionAnswer, MachineMetadata, SessionAgentModesPatch } from './storageTypes';
+import type { SessionInventoryPayload } from './sessionInventory';
 import { markAgentModePushPending, clearAgentModePushPending, type AgentModeField } from './agentModesPending';
 import {
     isRigMetadata,
@@ -146,6 +147,12 @@ interface SessionRipgrepResponse {
     exitCode?: number;
     stdout?: string;
     stderr?: string;
+    error?: string;
+}
+
+interface SessionInventoryResponse {
+    success: boolean;
+    inventory?: SessionInventoryPayload;
     error?: string;
 }
 
@@ -1098,6 +1105,30 @@ export async function sessionRipgrep(
             request
         );
         return response;
+    } catch (error) {
+        return {
+            success: false,
+            error: error instanceof Error ? error.message : 'Unknown error'
+        };
+    }
+}
+
+/**
+ * The commands and skills this session can actually be asked to run (DROVE-170).
+ *
+ * Answered by the machine the session runs on, reading the account and project
+ * it is on at the moment of the call, so it needs no invalidation when a
+ * session flips account or moves machine. A harness whose CLI predates the
+ * handler answers nothing, and the caller falls back to the snapshot's flat
+ * lists and then to the built-in five.
+ */
+export async function sessionInventory(sessionId: string): Promise<SessionInventoryResponse> {
+    try {
+        return await apiSocket.sessionRPC<SessionInventoryResponse, Record<string, never>>(
+            sessionId,
+            'sessionInventory',
+            {}
+        );
     } catch (error) {
         return {
             success: false,

@@ -20,7 +20,8 @@ import { useSession } from '@/sync/storage';
 import { DuplicateSheet } from '@/components/DuplicateSheet';
 import type { SessionActionShortcutId } from '@/keyboard/shortcuts';
 import { isRigMetadata } from '@/sync/rig';
-import { collectDroverAccountsFromSessions, droverFlipMessage } from '@/utils/droverAccounts';
+import { collectDroverAccountsFromSessions } from '@/utils/droverAccounts';
+import { confirmDroverSwitch } from '@/utils/droverAccountSwitch';
 
 /**
  * Menu rows are keyed by their keyboard shortcut where one exists. `flip-account`
@@ -182,10 +183,12 @@ export function useSessionQuickActions(
         && isMachineOnline(machine)
     );
 
-    // Cattle Drover flip (BASED-133). There is no flip RPC and there must not
-    // be one: happy-cli intercepts `/flip` in the message stream before the
-    // queue, so moving a session to another account is an ordinary chat
-    // message. The watch sends the identical string (sync/droverWatchFeed.ts).
+    // Cattle Drover account switch (BASED-133). There is no flip RPC and there
+    // must not be one: happy-cli intercepts `/flip` in the message stream
+    // before the queue, so moving a session to another account is an ordinary
+    // chat message. The watch sends the identical string
+    // (sync/droverWatchFeed.ts), and so does the quota sheet (DROVE-160). The
+    // user-facing word is "switch"; `flip` is the mechanism's own name.
     const droverAccounts = useDroverAccounts();
     const currentDroverAccount = session.metadata?.droverAccount ?? null;
     // Flip shows on ANY Cattle Drover session, not only once the app has itself
@@ -202,28 +205,31 @@ export function useSessionQuickActions(
     // this row from most sessions.
     const canFlipAccount = currentDroverAccount != null;
 
-    const sendFlip = React.useCallback((account?: string | null) => {
-        void Promise.resolve(sync.sendMessage(session.id, droverFlipMessage(account))).catch(() => {});
-    }, [session.id]);
+    // DROVE-37's warning is said BEFORE the switch rather than after it, and
+    // both it and the send live in utils/droverAccountSwitch.ts (DROVE-160), so
+    // the menu here and the quota sheet cannot drift into two paths.
+    const confirmFlip = React.useCallback((account: string | null) => {
+        confirmDroverSwitch({ sessionId: session.id, account, from: currentDroverAccount });
+    }, [currentDroverAccount, session.id]);
 
     const flipAccount = React.useCallback(() => {
         if (!canFlipAccount) return;
-        // Always confirm through the sheet, even when this app only knows the
+        // Always confirm through the picker, even when this app only knows the
         // one account it is on: "Next available" is a real choice the CLI
-        // resolves, and a silent immediate flip reads as the button doing
+        // resolves, and a silent immediate switch reads as the button doing
         // nothing. Any OTHER accounts the app has seen become named rows.
         const targets = droverAccounts.filter((account) => account !== currentDroverAccount);
         const buttons: Array<{ text: string; onPress?: () => void; style?: 'cancel' | 'destructive' | 'default' }> = [
-            { text: 'Next available', onPress: () => sendFlip() },
-            ...targets.map((account) => ({ text: account, onPress: () => sendFlip(account) })),
+            { text: 'Next available', onPress: () => confirmFlip(null) },
+            ...targets.map((account) => ({ text: account, onPress: () => confirmFlip(account) })),
         ];
         buttons.push({ text: t('common.cancel'), style: 'cancel' });
         Modal.alert(
-            'Move to another account',
+            'Switch account',
             currentDroverAccount ? `Now on ${currentDroverAccount}` : undefined,
             buttons,
         );
-    }, [canFlipAccount, currentDroverAccount, droverAccounts, sendFlip]);
+    }, [canFlipAccount, confirmFlip, currentDroverAccount, droverAccounts]);
 
     const openDetails = React.useCallback(() => {
         router.push(`/session/${session.id}/info`);
@@ -361,7 +367,7 @@ export function useSessionQuickActions(
         }
 
         if (canFlipAccount) {
-            items.push({ id: 'flip-account', icon: 'swap-horizontal-outline', label: 'Move to another account', onPress: flipAccount });
+            items.push({ id: 'flip-account', icon: 'swap-horizontal-outline', label: 'Switch account', onPress: flipAccount });
         }
 
         if (canCopySessionMetadata) {

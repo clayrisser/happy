@@ -10,6 +10,12 @@ export interface AgentInputLayout {
     textInset: number;
     inputContainerPaddingLeft: number;
     inputContainerPaddingRight: number;
+    /**
+     * What the text has to leave clear on the trailing side for the in-field
+     * send/voice button (DROVE-153): the button's inset from the capsule edge,
+     * the button, and air between it and the last character.
+     */
+    inputTrailingActionPadding: number;
 }
 
 /**
@@ -28,13 +34,33 @@ export const MOBILE_COMPOSER_METRICS = {
     inputLineHeight: 22,
     inputPaddingTop: 4,
     inputPaddingBottom: 4,
-    actionRowHeight: 42,
-    actionSize: 42,
+    // 44, not 42 (DROVE-153). Clay: "I am expecting the button sizes to be
+    // the normal button sizes that you see on a normal app". 42 with 6pt of
+    // slop already passed the HIG's 44pt target, and that is not what he was
+    // looking at: he was looking at what is DRAWN. Drawn size and target are
+    // now the same number, so there is nothing left to argue about.
+    actionRowHeight: 44,
+    actionSize: 44,
     addIconSize: 26,
     secondaryActionHeight: 40,
     effortWidth: 64,
-    primaryActionSize: 42,
-    primaryActionMarginLeft: 8,
+    /**
+     * The send/voice/stop button, which now sits INSIDE the input capsule at
+     * its trailing edge rather than at the end of the button row (DROVE-153).
+     *
+     * Clay's Messages reference is one capsule field with the primary
+     * affordance inside it at the trailing edge, and this is that. Smaller
+     * than the row's buttons on purpose: it is nested in a 44pt-tall field, so
+     * drawing it at 44 would touch both edges. 36 drawn with 6pt of slop is a
+     * 48pt target, above the floor, and it is the same proportion Messages
+     * uses for the mic inside its own field.
+     */
+    primaryActionSize: 36,
+    primaryActionSlop: 6,
+    /** Air between the text and the in-field primary. */
+    primaryActionMarginLeft: 6,
+    /** Keeps the primary off the capsule's rounded trailing end. */
+    primaryActionInset: 4,
     attachmentExtraHeight: 72,
 } as const;
 
@@ -211,7 +237,10 @@ export function resolveMobileComposerActionRowGeometry(): MobileComposerGeometry
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'flex-start',
-        gap: 2,
+        // Three filled circles need air between them (DROVE-118). At 2 the
+        // speaker, the mic and the primary read as one blob once they all
+        // carry a surface.
+        gap: 6,
         paddingHorizontal: 0,
     };
 }
@@ -251,6 +280,9 @@ export function resolveAgentInputLayout({
         textInset: shellInset + addGlyphOffset,
         inputContainerPaddingLeft: addGlyphOffset,
         inputContainerPaddingRight: addGlyphOffset,
+        inputTrailingActionPadding: MOBILE_COMPOSER_METRICS.primaryActionInset
+            + MOBILE_COMPOSER_METRICS.primaryActionSize
+            + MOBILE_COMPOSER_METRICS.primaryActionMarginLeft,
     };
 }
 

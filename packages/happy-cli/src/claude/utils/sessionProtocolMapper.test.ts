@@ -652,13 +652,93 @@ describe('readClaudeActivity', () => {
         expect(readClaudeActivity(state).subagents).toEqual({ running: 0, queued: 0, total: 2 });
     });
 
-    it('leaves workflows, processes and tasks at zero so their rows stay hidden', () => {
+    it('leaves workflows and processes at zero so their rows stay hidden', () => {
         const activity = readClaudeActivity({ currentTurnId: null });
         expect(activity.workflows).toEqual({ running: 0, total: 0 });
         expect(activity.processes).toEqual({ running: 0 });
-        expect(activity.tasks).toEqual({ pending: 0, inProgress: 0, completed: 0, total: 0 });
+    });
+
+    /**
+     * DROVE-167. `metadata.activity.tasks` shipped with BASED-134 and was
+     * hardcoded to zeros here, so the phone's Tasks row said `0 in progress ·
+     * 0 pending` for every session that ever kept a list.
+     */
+    it('counts the main thread\'s task list off the TodoWrite that wrote it', () => {
+        const state: ClaudeSessionProtocolState = { currentTurnId: null };
+        expect(readClaudeActivity(state).tasks).toEqual({ pending: 0, inProgress: 0, completed: 0, total: 0 });
+
+        writeTodos(state, [
+            { content: 'Read the reducer', status: 'completed' },
+            { content: 'Write the sheet', status: 'in_progress' },
+            { content: 'Wire the wrist', status: 'pending' },
+            { content: 'Ship it', status: 'pending' },
+        ]);
+        expect(readClaudeActivity(state).tasks).toEqual({ pending: 2, inProgress: 1, completed: 1, total: 4 });
+
+        // The list survives the turn that wrote it: Claude Code carries it
+        // across turns, and a row that emptied at every turn end would be
+        // wrong for most of the day.
+        closeClaudeTurnWithStatus(state, 'completed');
+        expect(readClaudeActivity(state).tasks.total).toBe(4);
+
+        writeTodos(state, [{ content: 'Ship it', status: 'completed' }]);
+        expect(readClaudeActivity(state).tasks).toEqual({ pending: 0, inProgress: 0, completed: 1, total: 1 });
+    });
+
+    it('ignores a subagent\'s list, which is not the session\'s', () => {
+        const state: ClaudeSessionProtocolState = { currentTurnId: null };
+        writeTodos(state, [{ content: 'Mine', status: 'pending' }]);
+        const agent = runAgentSubagent(state, 'one');
+        agent.start();
+        mapClaudeLogMessageToSessionEnvelopes({
+            type: 'assistant',
+            uuid: 'a-sub-todo',
+            parent_tool_use_id: 'tool-one',
+            message: {
+                role: 'assistant',
+                content: [{
+                    type: 'tool_use',
+                    id: 'sub-todo-1',
+                    name: 'TodoWrite',
+                    input: { todos: [{ content: 'Theirs', status: 'completed' }] },
+                }],
+            },
+        } as any, state);
+        expect(readClaudeActivity(state).tasks).toEqual({ pending: 1, inProgress: 0, completed: 0, total: 1 });
+    });
+
+    it('ignores a TodoWrite whose input is not a list', () => {
+        const state: ClaudeSessionProtocolState = { currentTurnId: null };
+        writeTodos(state, [{ content: 'Real', status: 'pending' }]);
+        mapClaudeLogMessageToSessionEnvelopes({
+            type: 'assistant',
+            uuid: 'a-bad-todo',
+            message: {
+                role: 'assistant',
+                content: [{ type: 'tool_use', id: 'bad-todo', name: 'TodoWrite', input: { todos: '[]' } }],
+            },
+        } as any, state);
+        expect(readClaudeActivity(state).tasks.total).toBe(1);
     });
 });
+
+let todoCall = 0;
+
+/** One TodoWrite from the main thread, mapped the way the transcript sends it. */
+function writeTodos(
+    state: ClaudeSessionProtocolState,
+    todos: { content: string; status: string }[],
+): void {
+    todoCall += 1;
+    mapClaudeLogMessageToSessionEnvelopes({
+        type: 'assistant',
+        uuid: `a-todo-${todoCall}`,
+        message: {
+            role: 'assistant',
+            content: [{ type: 'tool_use', id: `todo-${todoCall}`, name: 'TodoWrite', input: { todos } }],
+        },
+    } as any, state);
+}
 
 describe('ClaudeActivityPublisher', () => {
     afterEach(() => {

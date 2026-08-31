@@ -6,6 +6,9 @@ const {
     mockCreateSessionScanner,
     mockInjectIntoPane,
     mockPaneIsIdle,
+    mockPaneAcceptsCommand,
+    mockCapturePane,
+    mockPressPaneKey,
     mockFindInbox,
     mockSendToInbox,
     mockInterruptPane,
@@ -18,6 +21,15 @@ const {
     mockCreateSessionScanner: vi.fn(),
     mockInjectIntoPane: vi.fn(),
     mockPaneIsIdle: vi.fn(async () => true),
+    // DROVE-164: the picker's commands take this gate instead. It does NOT
+    // wait for the turn to end, so it is open by default here the way the
+    // pane really behaves.
+    mockPaneAcceptsCommand: vi.fn(async () => true),
+    // What the pane shows when the launcher reads its command back. An empty
+    // screen parses as "nothing came back", which is the pending path, so a
+    // test that does not care about the outcome is unaffected by the readback.
+    mockCapturePane: vi.fn(async (): Promise<string | null> => null),
+    mockPressPaneKey: vi.fn(async () => true),
     mockFindInbox: vi.fn(),
     mockSendToInbox: vi.fn(),
     mockInterruptPane: vi.fn(),
@@ -63,6 +75,11 @@ vi.mock('./utils/paneInject', () => ({
     // check. Idle by default here so a queued /model is not held forever; the
     // model-routing tests below override it.
     paneIsIdle: mockPaneIsIdle,
+    // DROVE-164: model and effort no longer wait for idle, and the launcher
+    // reads the pane back instead of assuming the keystrokes worked.
+    paneAcceptsCommand: mockPaneAcceptsCommand,
+    capturePane: mockCapturePane,
+    pressPaneKey: mockPressPaneKey,
     interruptPane: mockInterruptPane,
 }));
 
@@ -102,6 +119,7 @@ type ScannerOptions = {
     sessionId: string | null;
     workingDirectory: string;
     onMessage: (message: any) => void;
+    onAgentNotification?: (notification: any) => void;
     onRunObserved?: (run: { model: string; effort: string | null }) => void;
 };
 
@@ -185,6 +203,7 @@ async function startLauncher(overrides: {
 
     return {
         onNewSession,
+        session,
         sessionFound: () => sessionFound!,
         finish: async () => {
             localRun.resolve();
@@ -336,6 +355,15 @@ describe('claudeLocalLauncher', () => {
         await expect(launcher).resolves.toEqual({ type: 'switch' });
     });
 
+    it('registers no goal carrier for a PANELESS session, because there is no prompt to type at', async () => {
+        // DROVE-78: absent is the honest answer. runClaude turns it into "this
+        // session has no pane to run /goal in" rather than offering the app a
+        // button that throws.
+        const started = await startLauncher({ sessionId: 'claude-session-paneless' });
+        expect((started.session as any).paneSlashCommandCarrier).toBeUndefined();
+        await started.finish();
+    });
+
     it('routes scanner messages through local transcript replay so attachments can be uploaded', async () => {
         const localRun = createDeferred<void>();
         let scannerOptions: ScannerOptions | undefined;
@@ -407,6 +435,84 @@ describe('claudeLocalLauncher', () => {
             );
         });
         expect(session.client.sendClaudeSessionMessage).not.toHaveBeenCalled();
+
+        localRun.resolve();
+        await launcher;
+    });
+
+    /**
+     * DROVE-115. An async agent's Agent tool call ends at LAUNCH, so its card
+     * on the phone had no second result to move it off "Running" and a
+     * finished agent sat there for the rest of the session. The completion
+     * reaches the scanner as a task-notification; this is the launcher turning
+     * it into the terminal result for that same call.
+     */
+    it('sends a terminal tool-call-end when a background agent reports', async () => {
+        const localRun = createDeferred<void>();
+        let scannerOptions: ScannerOptions | undefined;
+
+        mockCreateSessionScanner.mockImplementation(async (opts: ScannerOptions) => {
+            scannerOptions = opts;
+            return { onNewSession: vi.fn(), cleanup: vi.fn(async () => {}) };
+        });
+        mockClaudeLocal.mockImplementation(async () => {
+            await localRun.promise;
+        });
+
+        const sendClaudeAgentStop = vi.fn();
+        const session = {
+            sessionId: 'claude-session-115',
+            path: '/tmp/project',
+            client: {
+                sendClaudeSessionMessage: vi.fn(),
+                sendClaudeSessionMessageFromLocalTranscript: vi.fn(async () => {}),
+                sendClaudeAgentStop,
+                closeClaudeSessionTurn: vi.fn(),
+                rpcHandlerManager: { registerHandler: vi.fn() },
+            },
+            queue: { reset: vi.fn(), setOnMessage: vi.fn(), size: vi.fn(() => 0) },
+            addSessionFoundCallback: vi.fn(),
+            removeSessionFoundCallback: vi.fn(),
+            onAbort: vi.fn(),
+            onSessionFound: vi.fn(),
+            onThinkingChange: vi.fn(),
+            consumeOneTimeFlags: vi.fn(),
+            claudeEnvVars: undefined,
+            claudeArgs: undefined,
+            mcpServers: {},
+            allowedTools: [],
+            hookSettingsPath: '/tmp/hook-settings.json',
+            sandboxConfig: undefined,
+        };
+
+        const launcher = claudeLocalLauncher(session as any);
+        await vi.waitFor(() => { expect(scannerOptions).toBeDefined(); });
+
+        // The launch is the only place the agent id and its Agent tool call
+        // are named together, and the notification below deliberately does not
+        // name the call, so this is what makes it addressable.
+        scannerOptions!.onMessage(asyncAgentLaunched('agent-115'));
+        scannerOptions!.onAgentNotification?.({
+            agentId: 'agent-115',
+            status: 'completed',
+            terminal: true,
+            succeeded: true,
+            result: 'Pushed as 55c43f95.',
+            at: Date.now(),
+        });
+
+        await vi.waitFor(() => { expect(sendClaudeAgentStop).toHaveBeenCalledTimes(1); });
+        expect(sendClaudeAgentStop.mock.calls[0][0]).toMatchObject({
+            call: 'toolu_agent-115',
+            isError: false,
+            result: { agentId: 'agent-115', status: 'completed', content: [{ type: 'text', text: 'Pushed as 55c43f95.' }] },
+        });
+
+        // A progress note must never settle a card, and an agent nothing knows
+        // a call for is left alone rather than addressed at a guess.
+        scannerOptions!.onAgentNotification?.({ agentId: 'agent-115', status: 'progress', terminal: false, succeeded: false, at: Date.now() });
+        scannerOptions!.onAgentNotification?.({ agentId: 'agent-unknown', status: 'completed', terminal: true, succeeded: true, at: Date.now() });
+        expect(sendClaudeAgentStop).toHaveBeenCalledTimes(1);
 
         localRun.resolve();
         await launcher;
@@ -628,6 +734,11 @@ describe('claudeLocalLauncher in a tmux pane', () => {
             hookSettingsPath: '/tmp/hook-settings.json',
             sandboxConfig: undefined,
             pendingInitialPrompt: undefined as string | undefined,
+            // DROVE-78: written by the launcher (the pane's carrier for a
+            // slash command the app raised over RPC) and read by it (where a
+            // goal_status record off this pane's transcript goes).
+            paneSlashCommandCarrier: undefined as ((command: string) => Promise<boolean>) | null | undefined,
+            onGoalStatusEvent: undefined as ((event: any) => void) | null | undefined,
         };
         const emitMetadata = (patch: Record<string, any>) => {
             metadata = { ...metadata, ...patch };
@@ -693,14 +804,16 @@ describe('claudeLocalLauncher in a tmux pane', () => {
             await launcher;
         });
 
-        it('waits for the prompt instead of pasting a half-typed command into it', async () => {
+        it('holds the command while something is typed in the input box', async () => {
             // The one thing that must never happen: `/model x` landing in the
-            // middle of Clay's own line. A message is drafted when the pane is
-            // busy; a command is HELD.
+            // middle of Clay's own line. That is what `paneAcceptsCommand`
+            // checks, and DROVE-164 is the discovery that it is the WHOLE
+            // check — waiting for the turn to end as well was not caution, it
+            // was a gate that never opened in a session anyone was working.
             const runs = trackRuns();
             const { session, emitMetadata } = paneSession({});
             mockInjectIntoPane.mockResolvedValue(true);
-            mockPaneIsIdle.mockResolvedValue(false);
+            mockPaneAcceptsCommand.mockResolvedValue(false);
 
             const launcher = claudeLocalLauncher(session as any);
             await vi.waitFor(() => expect(runs).toHaveLength(1));
@@ -709,12 +822,99 @@ describe('claudeLocalLauncher in a tmux pane', () => {
             await new Promise((r) => setTimeout(r, 50));
             expect(mockInjectIntoPane).not.toHaveBeenCalled();
 
-            // ...and it goes in the moment the prompt opens up.
-            mockPaneIsIdle.mockResolvedValue(true);
+            // ...and it goes in the moment the box is clear.
+            mockPaneAcceptsCommand.mockResolvedValue(true);
             await vi.waitFor(() => expect(mockInjectIntoPane).toHaveBeenCalledWith(
                 pane, '/model claude-sonnet-5', { submit: true },
             ), { timeout: 5000 });
 
+            runs[0].run.resolve();
+            await launcher;
+        });
+
+        it('types the pick MID-TURN rather than waiting for a prompt that never opens', async () => {
+            // DROVE-164, and the whole of it. Clay's own log for 2026-08-31 has
+            // `/effort max` queued at 05:40:59 and still held at 08:06, 4454
+            // "pane is busy" lines later, because a session being worked is
+            // never idle. Measured on 2.1.251: a `/effort` pasted while a turn
+            // is streaming runs immediately and the turn carries on.
+            const runs = trackRuns();
+            const { session, emitMetadata } = paneSession({});
+            mockInjectIntoPane.mockResolvedValue(true);
+            mockPaneIsIdle.mockResolvedValue(false);
+            mockPaneAcceptsCommand.mockResolvedValue(true);
+
+            const launcher = claudeLocalLauncher(session as any);
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+
+            emitMetadata({ effortLevel: 'ultracode' });
+            await vi.waitFor(() => expect(mockInjectIntoPane).toHaveBeenCalledWith(
+                pane, '/effort ultracode', { submit: true },
+            ), { timeout: 5000 });
+            expect(mockPaneIsIdle).not.toHaveBeenCalled();
+
+            mockPaneIsIdle.mockResolvedValue(true);
+            runs[0].run.resolve();
+            await launcher;
+        });
+
+        it('answers the confirmation Claude Code puts up, instead of leaving it on screen', async () => {
+            // Measured on 2.1.251: every `/effort` at an idle prompt on a
+            // conversation with history draws "Change effort level?" and waits.
+            // Nobody was pressing that Enter, so the pick stopped there while
+            // the app was told it had landed.
+            const runs = trackRuns();
+            const { session, emitMetadata, readMetadata } = paneSession({});
+            mockInjectIntoPane.mockResolvedValue(true);
+            const rule = '\u2500'.repeat(40);
+            const idleScreen = [rule, '\u276f ', rule].join('\n');
+            const dialog = ['   Change effort level?', '   \u276f 1. Yes, switch to max'].join('\n');
+            const applied = ['  \u23bf  Set effort level to max (this session only)', rule, '\u276f ', rule].join('\n');
+            let answered = false;
+            mockCapturePane.mockImplementation(async () => (answered ? applied : idleScreen + '\n' + dialog));
+            mockPressPaneKey.mockImplementation(async () => { answered = true; return true; });
+
+            const launcher = claudeLocalLauncher(session as any);
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+
+            emitMetadata({ effortLevel: 'max' });
+            await vi.waitFor(() => expect(mockPressPaneKey).toHaveBeenCalledWith(pane, 'Enter'), { timeout: 5000 });
+            await vi.waitFor(() => expect(readMetadata().paneEffort).toBe('max'), { timeout: 5000 });
+
+            mockCapturePane.mockResolvedValue(null);
+            mockPressPaneKey.mockResolvedValue(true);
+            runs[0].run.resolve();
+            await launcher;
+        });
+
+        it('tells the phone in the pane\'s own words when the level is refused', async () => {
+            // A level the harness will not take must never look accepted. The
+            // pill stays where it was and the reason is said out loud.
+            const runs = trackRuns();
+            const { session, emitMetadata } = paneSession({});
+            mockInjectIntoPane.mockResolvedValue(true);
+            const rule = '\u2500'.repeat(40);
+            const refusal = [
+                "  \u23bf  Ultracode runs at xhigh effort, which claude-opus-4-6 doesn't support \u2014 switch to an xhigh-capable model (Fable 5, Opus 4.7+, Sonnet 5).",
+                rule, '\u276f ', rule,
+            ].join('\n');
+            let typed = false;
+            mockCapturePane.mockImplementation(async () => (typed ? refusal : [rule, '\u276f ', rule].join('\n')));
+            mockInjectIntoPane.mockImplementation(async () => { typed = true; return true; });
+
+            const launcher = claudeLocalLauncher(session as any);
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+
+            emitMetadata({ effortLevel: 'ultracode' });
+            await vi.waitFor(() => expect(session.client.sendSessionEvent).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    type: 'message',
+                    message: expect.stringContaining("doesn't support"),
+                }),
+            ), { timeout: 5000 });
+
+            mockCapturePane.mockResolvedValue(null);
+            mockInjectIntoPane.mockResolvedValue(true);
             runs[0].run.resolve();
             await launcher;
         });
@@ -767,7 +967,7 @@ describe('claudeLocalLauncher in a tmux pane', () => {
             });
             const { session, emitMetadata } = paneSession({});
             mockInjectIntoPane.mockResolvedValue(true);
-            mockPaneIsIdle.mockResolvedValue(false);
+            mockPaneAcceptsCommand.mockResolvedValue(false);
 
             const launcher = claudeLocalLauncher(session as any);
             await vi.waitFor(() => expect(runs).toHaveLength(1));
@@ -779,7 +979,7 @@ describe('claudeLocalLauncher in a tmux pane', () => {
 
             scannerOptions!.onRunObserved!({ model: 'claude-sonnet-5', effort: null });
             emitMetadata({ modelMode: 'claude-sonnet-5' });
-            mockPaneIsIdle.mockResolvedValue(true);
+            mockPaneAcceptsCommand.mockResolvedValue(true);
             await new Promise((r) => setTimeout(r, 300));
             expect(mockInjectIntoPane).not.toHaveBeenCalled();
 
@@ -806,17 +1006,54 @@ describe('claudeLocalLauncher in a tmux pane', () => {
             await launcher;
         });
 
-        it('says the pane is on the new model straight away, so the chip stops lying', async () => {
+        it('says the pane is on the new model as soon as the pane says so', async () => {
+            // It used to say so as soon as the keystrokes went in, which is
+            // how a refused command still moved the chip (DROVE-164). Now the
+            // pane's own answer is what moves it.
             const runs = trackRuns();
             const { session, emitMetadata, readMetadata } = paneSession({ modelMode: 'claude-opus-5' });
-            mockInjectIntoPane.mockResolvedValue(true);
+            const rule = '\u2500'.repeat(40);
+            const applied = ['  \u23bf  Set model to claude-sonnet-5', rule, '\u276f ', rule].join('\n');
+            let typed = false;
+            mockCapturePane.mockImplementation(async () => (typed ? applied : [rule, '\u276f ', rule].join('\n')));
+            mockInjectIntoPane.mockImplementation(async () => { typed = true; return true; });
 
             const launcher = claudeLocalLauncher(session as any);
             await vi.waitFor(() => expect(runs).toHaveLength(1));
 
             emitMetadata({ modelMode: 'claude-sonnet-5' });
-            await vi.waitFor(() => expect(readMetadata().paneModel).toBe('claude-sonnet-5'));
+            await vi.waitFor(() => expect(readMetadata().paneModel).toBe('claude-sonnet-5'), { timeout: 5000 });
 
+            mockCapturePane.mockResolvedValue(null);
+            mockInjectIntoPane.mockResolvedValue(true);
+            runs[0].run.resolve();
+            await launcher;
+        });
+
+        it('reports ultracode as ultracode, not as the xhigh the transcript records', async () => {
+            // Claude Code runs ultracode as xhigh with dynamic workflows beside
+            // it, and the transcript carries no field that tells them apart —
+            // so a session set to Ultracode reported xHigh and the chip snapped
+            // back, which read as the app refusing the pick (DROVE-101). The
+            // composer's top rule is the only place the word is written down.
+            const runs = trackRuns();
+            let scannerOptions: ScannerOptions | undefined;
+            mockCreateSessionScanner.mockImplementation(async (opts: ScannerOptions) => {
+                scannerOptions = opts;
+                return { onNewSession: vi.fn(), cleanup: vi.fn(async () => {}) };
+            });
+            const { session, readMetadata } = paneSession({});
+            const rule = '\u2500'.repeat(40);
+            mockCapturePane.mockResolvedValue([rule + ' ultracode \u2500', '\u276f ', rule].join('\n'));
+
+            const launcher = claudeLocalLauncher(session as any);
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+            await vi.waitFor(() => expect(scannerOptions?.onRunObserved).toBeTypeOf('function'));
+
+            scannerOptions!.onRunObserved!({ model: 'claude-opus-5', effort: 'xhigh' });
+            await vi.waitFor(() => expect(readMetadata().paneEffort).toBe('ultracode'), { timeout: 5000 });
+
+            mockCapturePane.mockResolvedValue(null);
             runs[0].run.resolve();
             await launcher;
         });
@@ -1269,6 +1506,121 @@ describe('claudeLocalLauncher in a tmux pane', () => {
             await expect(launcher).resolves.toEqual({ type: 'exit', code: 0 });
         });
 
+        /**
+         * DROVE-78. The app's goal card acts over the `goal-action` RPC, which
+         * runClaude answers. Its only carrier used to be the SDK message
+         * queue, which a pane session does not have. So the goal was dead for
+         * every session under one mode. The pane carrier below is what the RPC
+         * reaches for, and it is the SAME gate a `/goal` typed on the phone
+         * goes through: no ungated paste, held rather than drafted.
+         */
+        describe('the goal carrier the app\'s goal card uses', () => {
+            it('types /goal at an idle prompt, and never writes it to the inbox socket as prose', async () => {
+                mockFindInbox.mockResolvedValue(inbox);
+                mockSendToInbox.mockResolvedValue('ok');
+                mockPaneIsIdle.mockResolvedValue(true);
+                mockInjectIntoPane.mockResolvedValue(true);
+                const runs = trackRuns();
+                const { session } = paneSession();
+
+                const launcher = claudeLocalLauncher(session as any);
+                await vi.waitFor(() => expect(runs).toHaveLength(1));
+                await vi.waitFor(() => expect(session.paneSlashCommandCarrier).toEqual(expect.any(Function)));
+
+                await expect(session.paneSlashCommandCarrier!('/goal ship the thing')).resolves.toBe(true);
+                expect(mockInjectIntoPane).toHaveBeenCalledWith(pane, '/goal ship the thing', { submit: true });
+                // Claude Code hardcodes skipSlashCommands:true on everything it
+                // reads off the inbox socket, so a /goal written there is four
+                // words of prose. It must never go that way.
+                expect(mockSendToInbox).not.toHaveBeenCalled();
+
+                runs[0].run.resolve();
+                await expect(launcher).resolves.toEqual({ type: 'exit', code: 0 });
+            });
+
+            it('holds the goal for the prompt while a subagent runs, and types NOTHING', async () => {
+                mockFindInbox.mockResolvedValue(inbox);
+                mockSendToInbox.mockResolvedValue('ok');
+                mockPaneIsIdle.mockResolvedValue(true);
+                mockInjectIntoPane.mockResolvedValue(true);
+                const runs = trackRuns();
+                let scannerOnMessage: ((message: any) => void) | undefined;
+                mockCreateSessionScanner.mockImplementation(async (opts: any) => {
+                    scannerOnMessage = opts.onMessage;
+                    return { onNewSession: vi.fn(), cleanup: vi.fn(async () => {}) };
+                });
+                const { session } = paneSession();
+
+                const launcher = claudeLocalLauncher(session as any);
+                await vi.waitFor(() => expect(runs).toHaveLength(1));
+                await vi.waitFor(() => expect(session.paneSlashCommandCarrier).toEqual(expect.any(Function)));
+                scannerOnMessage!(asyncAgentLaunched('agent-9'));
+
+                // Accepted, because the queue owns the retry. But a keystroke
+                // aimed at the prompt right now could land on whichever agent
+                // the terminal is showing.
+                await expect(session.paneSlashCommandCarrier!('/goal ship the thing')).resolves.toBe(true);
+                expect(mockInjectIntoPane).not.toHaveBeenCalled();
+                expect(mockSendToInbox).not.toHaveBeenCalled();
+                expect(session.client.sendSessionEvent).toHaveBeenCalledWith(
+                    expect.objectContaining({ message: expect.stringContaining('/goal ship the thing is waiting') }));
+
+                runs[0].run.resolve();
+                await expect(launcher).resolves.toEqual({ type: 'exit', code: 0 });
+            });
+
+            it('goes with the launcher, so a goal never aims at a pane this call no longer owns', async () => {
+                mockPaneIsIdle.mockResolvedValue(true);
+                mockInjectIntoPane.mockResolvedValue(true);
+                const runs = trackRuns();
+                const { session } = paneSession();
+
+                const launcher = claudeLocalLauncher(session as any);
+                await vi.waitFor(() => expect(runs).toHaveLength(1));
+                await vi.waitFor(() => expect(session.paneSlashCommandCarrier).toEqual(expect.any(Function)));
+                const carrier = session.paneSlashCommandCarrier!;
+
+                runs[0].run.resolve();
+                await expect(launcher).resolves.toEqual({ type: 'exit', code: 0 });
+
+                expect(session.paneSlashCommandCarrier).toBeNull();
+                // And the closure itself refuses: no child is in the pane, so
+                // there is nothing in there to run the command.
+                await expect(carrier('/goal ship the thing')).resolves.toBe(false);
+                expect(mockInjectIntoPane).not.toHaveBeenCalled();
+            });
+
+            it('hands goal_status records from the pane transcript to the session reducer', async () => {
+                mockPaneIsIdle.mockResolvedValue(true);
+                let scannerOnTranscriptEvent: ((event: any) => void) | undefined;
+                mockCreateSessionScanner.mockImplementation(async (opts: any) => {
+                    scannerOnTranscriptEvent = opts.onTranscriptEvent;
+                    return { onNewSession: vi.fn(), cleanup: vi.fn(async () => {}) };
+                });
+                const runs = trackRuns();
+                const { session } = paneSession();
+                const onGoalStatusEvent = vi.fn();
+                session.onGoalStatusEvent = onGoalStatusEvent;
+
+                const launcher = claudeLocalLauncher(session as any);
+                await vi.waitFor(() => expect(runs).toHaveLength(1));
+                expect(scannerOnTranscriptEvent).toEqual(expect.any(Function));
+
+                const event = {
+                    type: 'goal_status',
+                    uuid: 'goal-1',
+                    sourceRevision: 'goal-1',
+                    sourceSessionId: claudeSessionId,
+                    attachment: { type: 'goal_status', met: false, condition: 'ship the thing' },
+                };
+                scannerOnTranscriptEvent!(event);
+                expect(onGoalStatusEvent).toHaveBeenCalledWith(event);
+
+                runs[0].run.resolve();
+                await expect(launcher).resolves.toEqual({ type: 'exit', code: 0 });
+            });
+        });
+
         it('leaves an ordinary message on the socket, wrapped so the pane stops printing the peer note', async () => {
             mockFindInbox.mockResolvedValue(inbox);
             mockSendToInbox.mockResolvedValue('ok');
@@ -1667,6 +2019,55 @@ describe('claudeLocalLauncher in a tmux pane', () => {
             expect(session.client.sendSessionEvent).toHaveBeenCalledWith(
                 expect.objectContaining({ message: expect.stringContaining('no turn to stop') }),
             );
+
+            runs[0].run.resolve();
+            await expect(launcher).resolves.toEqual({ type: 'exit', code: 0 });
+        });
+
+        /**
+         * DROVE-80. Stop over an open permission dialog used to type Escape
+         * into it, which is a deny. interruptPane withdraws the prompt on the
+         * bus instead, and the outcome has to reach the phone: the turn is not
+         * stopped by that, so a silent Stop would read as one that worked.
+         */
+        it('says so when Stop withdrew an open prompt instead of pressing Escape', async () => {
+            mockInterruptPane.mockResolvedValue('gate-cancelled');
+            const runs = trackRuns();
+            const { session } = paneSession();
+
+            const launcher = claudeLocalLauncher(session as any);
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+
+            await abortHandler(session)();
+
+            expect(runs[0].opts.abort.aborted).toBe(false);
+            expect(session.client.sendSessionEvent).toHaveBeenCalledWith(
+                expect.objectContaining({ message: expect.stringContaining('withdrew it') }),
+            );
+            expect(session.client.closeClaudeSessionTurn).toHaveBeenCalledWith('cancelled');
+
+            runs[0].run.resolve();
+            await expect(launcher).resolves.toEqual({ type: 'exit', code: 0 });
+        });
+
+        it('leaves the turn open, and says why, when the bus could not be asked', async () => {
+            // Nothing was typed and nothing was withdrawn, so the turn really
+            // is still running: closing it would take the Stop button off the
+            // screen the message just asked him to press again.
+            mockInterruptPane.mockResolvedValue('unknown');
+            const runs = trackRuns();
+            const { session } = paneSession();
+
+            const launcher = claudeLocalLauncher(session as any);
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+
+            await abortHandler(session)();
+
+            expect(runs[0].opts.abort.aborted).toBe(false);
+            expect(session.client.sendSessionEvent).toHaveBeenCalledWith(
+                expect.objectContaining({ message: expect.stringContaining('did not answer') }),
+            );
+            expect(session.client.closeClaudeSessionTurn).not.toHaveBeenCalled();
 
             runs[0].run.resolve();
             await expect(launcher).resolves.toEqual({ type: 'exit', code: 0 });

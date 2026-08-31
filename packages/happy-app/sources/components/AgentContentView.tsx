@@ -2,6 +2,13 @@ import { useHeaderHeight } from '@/utils/responsive';
 import * as React from 'react';
 import { LayoutChangeEvent, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
+import {
+    TRANSCRIPT_FADE_HEIGHT,
+    resolveDockBottomOffset,
+    resolveDockInset,
+    resolveDockScrimHeight,
+    transparentOf,
+} from './agentDockLayout';
 import { ScrollView } from 'react-native-gesture-handler';
 import { useKeyboardState } from 'react-native-keyboard-controller';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -38,8 +45,20 @@ export const AgentContentView: React.FC<AgentContentViewProps> = React.memo(({
         ));
     }, []);
 
+    // See agentDockLayout: AgentInput's own bottom padding is spent inside the
+    // safe-area gap rather than stacked on top of it (DROVE-113).
+    const dockBottomOffset = resolveDockBottomOffset(safeArea.bottom, floatingDock);
+    const dockScrimHeight = resolveDockScrimHeight(dockHeight, safeArea.bottom);
+    // The chat's own background, painted solid so nothing reads through.
+    const dockSurface = theme.colors.groupped.background;
+
     React.useEffect(() => {
-        onDockInsetChange?.(floatingDock ? dockHeight + keyboardInset + safeArea.bottom : 0);
+        onDockInsetChange?.(resolveDockInset({
+            dockHeight,
+            safeAreaBottom: safeArea.bottom,
+            floatingDock,
+            keyboardInset,
+        }));
     }, [dockHeight, floatingDock, keyboardInset, onDockInsetChange, safeArea.bottom]);
 
     if (floatingDock) {
@@ -57,7 +76,7 @@ export const AgentContentView: React.FC<AgentContentViewProps> = React.memo(({
                             top: safeArea.top + headerHeight,
                             left: 0,
                             right: 0,
-                            bottom: dockHeight + keyboardInset + safeArea.bottom,
+                            bottom: dockHeight + keyboardInset + dockBottomOffset,
                         }}
                         contentContainerStyle={{ alignItems: 'center', justifyContent: 'center', flex: 1 }}
                         keyboardShouldPersistTaps="handled"
@@ -66,7 +85,16 @@ export const AgentContentView: React.FC<AgentContentViewProps> = React.memo(({
                         {placeholder}
                     </ScrollView>
                 )}
-                {dockHeight > 0 && (
+                {/* Android and web keep the painted backdrop (DROVE-113):
+                    fades in over the top TRANSCRIPT_FADE_HEIGHT and is the
+                    chat's own surface from there down. iOS masks the
+                    transcript instead (DROVE-168), because it is the only
+                    platform where the composer is real Liquid Glass and a
+                    slab behind it costs something. Same ramp length either
+                    way so the two cannot drift. Sits below the dock's zIndex
+                    so the DROVE-88 gate overlay, a child of the dock at
+                    bottom: '100%', still paints over it and is not clipped. */}
+                {dockScrimHeight > 0 && (
                     <View
                         pointerEvents="none"
                         style={{
@@ -74,19 +102,18 @@ export const AgentContentView: React.FC<AgentContentViewProps> = React.memo(({
                             left: 0,
                             right: 0,
                             bottom: keyboardInset,
-                            height: dockHeight + safeArea.bottom + 28,
+                            height: dockScrimHeight,
                             zIndex: 1,
                         }}
                     >
                         <LinearGradient
-                            colors={theme.dark
-                                ? ['rgba(0, 0, 0, 0)', 'rgba(0, 0, 0, 0.20)', 'rgba(0, 0, 0, 0.66)']
-                                : ['rgba(255, 255, 255, 0)', 'rgba(255, 255, 255, 0.18)', 'rgba(255, 255, 255, 0.74)']}
-                            locations={[0, 0.42, 1]}
+                            colors={[transparentOf(dockSurface), dockSurface]}
+                            locations={[0, 1]}
                             start={{ x: 0.5, y: 0 }}
                             end={{ x: 0.5, y: 1 }}
-                            style={{ flex: 1 }}
+                            style={{ height: TRANSCRIPT_FADE_HEIGHT }}
                         />
+                        <View style={{ flex: 1, backgroundColor: dockSurface }} />
                     </View>
                 )}
                 <View
@@ -96,7 +123,7 @@ export const AgentContentView: React.FC<AgentContentViewProps> = React.memo(({
                         position: 'absolute',
                         left: 0,
                         right: 0,
-                        bottom: keyboardInset + safeArea.bottom,
+                        bottom: keyboardInset + dockBottomOffset,
                         zIndex: 2,
                     }}
                 >

@@ -1,39 +1,34 @@
 /**
- * The session pill on the compact composer (DROVE-83): what it reads, how
- * it truncates, and the rows of the sheet it opens.
+ * What the composer says about the session's mode, model and effort
+ * (DROVE-83, DROVE-111, DROVE-138).
  *
- * Pure so the label and the row model can be tested without a renderer. The
- * pill itself is ComposerSessionPill.tsx; the sheet rows are drawn by
- * AgentInput from the row model returned here.
+ * DROVE-83 read the three as one pill, `Yolo · Opus 5 1M · High`, on a row of
+ * its own. DROVE-111 folded them into the button row: the mode a glyph, the
+ * effort a glyph, the model the only one still spelled out. DROVE-138 then
+ * moved the model down to the status line, because a name sharing a row with
+ * six buttons was showing `Opus 5 1M` as `Opus 5...`.
+ *
+ * So this file is now just the naming. The glyph controls read `mode` and
+ * `effort` to know they have something to draw, the status row reads `model`,
+ * and `text` is the whole sentence for a screen reader. The width arithmetic
+ * left with the model and lives in statusRowLayout.ts.
+ *
+ * Pure, so the names can be tested without a renderer.
+ * ComposerSessionControls.tsx and AgentInputStatusRow.tsx draw them.
  */
-import { MOBILE_COMPOSER_METRICS } from './agentInputLayout';
 
 export const SESSION_PILL_SEPARATOR = ' · ';
 
-/** Matches the composer chips the pill replaces. */
-export const SESSION_PILL_FONT_SIZE = 14;
-
 /**
- * Horizontal room the pill's text does NOT get on a phone: AgentInput's
- * container padding, the glass shell inset, and the pill's own padding, each
- * on both sides. The container padding is a literal in AgentInput (8 below
- * 700pt), mirrored here.
+ * The mode and effort segments inside the session capsule.
+ *
+ * 44, up from 38 (DROVE-153). They were half a step under the row's buttons
+ * because seven separate discs had to fit across 357pt. They no longer have
+ * to: the mode and the effort are one capsule now, the primary has moved into
+ * the input, and DROVE-138 took the model off the row entirely, so the capsule
+ * is two 44pt segments with nothing to squeeze.
  */
-export const SESSION_PILL_GEOMETRY = {
-    containerPaddingHorizontal: 8,
-    shellInset: MOBILE_COMPOSER_METRICS.shellInset,
-    paddingHorizontal: 12,
-    height: MOBILE_COMPOSER_METRICS.secondaryActionHeight,
-} as const;
-
-/**
- * Only the model may truncate, and it truncates in the middle. The mode and
- * the effort are one word each and are never cut.
- */
-export const SESSION_PILL_TRUNCATION = {
-    segment: 'model',
-    ellipsizeMode: 'middle',
-} as const;
+export const COMPOSER_SESSION_CONTROL_SIZE = 44;
 
 export interface SessionPillModelLike {
     key?: string | null;
@@ -102,67 +97,4 @@ export function buildSessionPillLabel(input: SessionPillInput): SessionPillLabel
         effort,
         text: [mode, model, effort].filter((segment): segment is string => !!segment).join(SESSION_PILL_SEPARATOR),
     };
-}
-
-/**
- * A generous average advance for the system font at 14pt: SF Pro Text
- * averages under 7pt across mixed-case words, Roboto about the same. A label
- * that fits by this estimate fits on the phone; the estimate only ever errs
- * toward "does not fit".
- */
-const AVERAGE_GLYPH_WIDTH = 7.5;
-
-export function estimateSessionPillTextWidth(text: string): number {
-    return text.length * AVERAGE_GLYPH_WIDTH;
-}
-
-/** The width the pill's text can use on a screen this wide. */
-export function resolveSessionPillTextBudget(screenWidth: number): number {
-    return screenWidth
-        - 2 * SESSION_PILL_GEOMETRY.containerPaddingHorizontal
-        - 2 * SESSION_PILL_GEOMETRY.shellInset
-        - 2 * SESSION_PILL_GEOMETRY.paddingHorizontal;
-}
-
-/** True when the whole label fits without the model segment truncating. */
-export function sessionPillFits(label: SessionPillLabel, screenWidth: number): boolean {
-    return estimateSessionPillTextWidth(label.text) <= resolveSessionPillTextBudget(screenWidth);
-}
-
-export type SessionSheetRowKey = 'permission' | 'model' | 'effort';
-
-export interface SessionSheetRowInput {
-    title: string;
-    /** The current value as the pill shows it, or a placeholder when unset. */
-    value: string;
-    /** False when the session offers no choice here: no options, or no handler. */
-    available: boolean;
-}
-
-export interface SessionSheetRow {
-    key: SessionSheetRowKey;
-    title: string;
-    value: string;
-}
-
-export interface SessionSheetInput {
-    permission?: SessionSheetRowInput | null;
-    model?: SessionSheetRowInput | null;
-    effort?: SessionSheetRowInput | null;
-}
-
-/**
- * The rows of the session sheet, in the order the pill reads them. A setting
- * the session cannot change has no row: a row that opens nothing is worse than
- * no row.
- */
-export function buildSessionSheetRows(input: SessionSheetInput): SessionSheetRow[] {
-    const rows: SessionSheetRow[] = [];
-    const keys: SessionSheetRowKey[] = ['permission', 'model', 'effort'];
-    for (const key of keys) {
-        const row = input[key];
-        if (!row || !row.available) continue;
-        rows.push({ key, title: row.title, value: row.value });
-    }
-    return rows;
 }

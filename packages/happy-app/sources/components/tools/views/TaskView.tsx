@@ -10,6 +10,18 @@
  *
  * Tapping the status row unfolds the rest: the prompt as text, every step,
  * the agent's final report as markdown, and the raw JSON. Fold, never drop.
+ *
+ * The state itself comes from utils/agentCard.ts, which errs to running: a
+ * background agent's tool call ends at launch and used to draw a red Failed
+ * over an agent that was working (DROVE-110). A run nothing has heard from for
+ * a while is called quiet here in the same words as the agent screen.
+ *
+ * A background agent that has FINISHED then sat on "Running, quiet for 40m"
+ * forever, because the launch receipt was the only result its call would ever
+ * get. The CLI now sends the real one on the same call when the agent's
+ * task-notification lands (DROVE-115), so nothing here changed: the same
+ * agentRunState reads it, the clock stops because the agent is no longer
+ * running, and the numbers come off the report rather than the ticking now.
  */
 import * as React from 'react';
 import { ActivityIndicator, Platform, Pressable, Text, View } from 'react-native';
@@ -20,12 +32,14 @@ import { t } from '@/text';
 import { MarkdownView } from '@/components/markdown/MarkdownView';
 import { ToolCall } from '@/sync/typesMessage';
 import { Metadata } from '@/sync/storageTypes';
-import { agentOutcome, agentOwnKeys, agentPrompt, agentRunState, agentSubagentType } from '@/utils/agentCard';
+import { agentOutcome, agentOwnKeys, agentPrompt, agentQuietFor, agentRunState, agentSubagentType } from '@/utils/agentCard';
 import { formatElapsed, formatTokens, isLiveStatusFresh } from '@/utils/liveStatus';
 import { structuredRowsOmitting } from '@/utils/structuredFields';
 import { knownTools } from '../../tools/knownTools';
 import { useTickingNow } from '../../useTickingNow';
 import { RawDisclosure, RowsView } from '../StructuredFieldsView';
+import { DisclosureFooter, useInlineDisclosure } from '@/components/DisclosureFooter';
+import { edgeClearance, tapSlopFor } from '@/components/scrollIndicatorInset';
 import { ToolViewProps } from './_all';
 
 interface FilteredTool {
@@ -37,23 +51,41 @@ interface FilteredTool {
 /** Collapsed shows this many of the newest steps: what the agent is doing NOW. */
 const collapsedSteps = 3;
 
+interface LiveAgent {
+    /** The phone's clock, ticking while the agent runs. */
+    now: number;
+    /** Elapsed and tokens off session metadata, null when the CLI is not reporting it. */
+    numbers: string[] | null;
+    /** The last sign of life we have, epoch ms. */
+    movedAt: number | undefined;
+}
+
 /**
  * A running agent's own clock and token count (DROVE-54), read off session
- * metadata. Null once the agent has finished: the metadata only carries agents
- * that are still writing, and the finished numbers come from the report.
+ * metadata, plus when it last showed a sign of life (DROVE-110).
+ *
+ * `running` is the agent's state, not the tool call's: an async agent's call
+ * ends at launch and the agent keeps working, so gating this on the call being
+ * open left every background agent with no clock at all. A fresh liveStatus
+ * that still lists the agent IS the sign of life: the CLI tails the agent's
+ * transcript and drops it from the list once the file stops moving.
  */
-function useLiveAgentNumbers(tool: ToolCall, metadata: Metadata | null): string[] | null {
+function useLiveAgent(tool: ToolCall, metadata: Metadata | null, running: boolean, lastStepAt: number): LiveAgent {
     const live = metadata?.liveStatus ?? null;
     const callId = tool.callId;
-    const now = useTickingNow(!!live && !!callId && tool.state === 'running');
-    if (!callId || tool.state !== 'running' || !isLiveStatusFresh(live, now)) return null;
-    const agent = live!.agents?.find((candidate) => candidate.toolId === callId);
-    if (!agent) return null;
-    const parts = [formatElapsed(now - agent.startedAt)];
-    if (typeof agent.tokens === 'number' && agent.tokens > 0) {
-        parts.push(`${formatTokens(agent.tokens)} tokens`);
+    const now = useTickingNow(running);
+    const launchedAt = tool.completedAt ?? tool.startedAt ?? tool.createdAt;
+    const fallback = Math.max(lastStepAt, launchedAt || 0) || undefined;
+    if (!callId || !running || !isLiveStatusFresh(live, now)) {
+        return { now, numbers: null, movedAt: fallback };
     }
-    return parts;
+    const agent = live!.agents?.find((candidate) => candidate.toolId === callId);
+    if (!agent) return { now, numbers: null, movedAt: fallback };
+    const numbers = [formatElapsed(now - agent.startedAt)];
+    if (typeof agent.tokens === 'number' && agent.tokens > 0) {
+        numbers.push(`${formatTokens(agent.tokens)} tokens`);
+    }
+    return { now, numbers, movedAt: Math.max(live!.at, fallback ?? 0) };
 }
 
 function stepTitle(step: ToolCall, metadata: Metadata | null): string {
@@ -70,35 +102,51 @@ function stepTitle(step: ToolCall, metadata: Metadata | null): string {
 
 export const TaskView = React.memo<ToolViewProps>(({ tool, metadata, messages, sessionId }) => {
     const { theme } = useUnistyles();
-    const [expanded, setExpanded] = React.useState(false);
+    const { expanded, toggle, expand, collapse, headerRef, footerRef } = useInlineDisclosure();
 
     const subagentType = agentSubagentType(tool.input);
     const prompt = agentPrompt(tool.input);
     const outcome = React.useMemo(() => agentOutcome(tool.result), [tool.result]);
     const runState = agentRunState(tool);
+    const running = runState === 'running';
     const rest = React.useMemo(() => structuredRowsOmitting(tool.input, agentOwnKeys), [tool.input]);
-    const liveNumbers = useLiveAgentNumbers(tool, metadata);
 
     // Every step the subagent took stays reachable, not just the last three
     // (DROVE-32): the bridge forwards the sidechain tool calls as children.
     const steps: FilteredTool[] = [];
+    let lastStepAt = 0;
     for (const m of messages) {
         if (m.kind !== 'tool-call') continue;
         if (m.tool.state === 'running' || m.tool.state === 'completed' || m.tool.state === 'error') {
             steps.push({ tool: m.tool, title: stepTitle(m.tool, metadata), state: m.tool.state });
+            lastStepAt = Math.max(lastStepAt, m.tool.completedAt ?? m.tool.startedAt ?? m.tool.createdAt);
         }
     }
     const hiddenSteps = expanded ? 0 : Math.max(0, steps.length - collapsedSteps);
     const visibleSteps = hiddenSteps > 0 ? steps.slice(hiddenSteps) : steps;
 
+    const live = useLiveAgent(tool, metadata, running, lastStepAt);
+    const quietMs = agentQuietFor(running, live.movedAt, live.now);
+
     const stateLabel = runState === 'running'
         ? t('tools.agent.running')
         : runState === 'finished' ? t('tools.agent.finished') : t('tools.agent.failed');
-    const numbers: string[] = liveNumbers ?? [];
-    if (!liveNumbers && outcome) {
+    const numbers: string[] = live.numbers ? [...live.numbers] : [];
+    if (!live.numbers && outcome) {
         if (typeof outcome.durationMs === 'number') numbers.push(formatElapsed(outcome.durationMs));
         if (typeof outcome.tokens === 'number' && outcome.tokens > 0) numbers.push(`${formatTokens(outcome.tokens)} tokens`);
         if (typeof outcome.toolUses === 'number' && outcome.toolUses > 0) numbers.push(t('tools.agent.toolUses', { count: outcome.toolUses }));
+    }
+    // A background agent the CLI is not reporting on still gets a clock, off
+    // the launch or its newest step, so the card reads like the agent screen.
+    if (numbers.length === 0 && running && live.movedAt) {
+        const launchedAt = tool.completedAt ?? tool.startedAt ?? tool.createdAt;
+        if (launchedAt) numbers.push(formatElapsed(live.now - launchedAt));
+    }
+    // Same words and same threshold as DROVE-93's agent screen: nothing on
+    // disk tells a dead agent from a silent one, so neither surface guesses.
+    if (quietMs !== undefined) {
+        numbers.push(t('subagent.quiet', { duration: formatElapsed(quietMs) }));
     }
 
     const stateIcon = runState === 'running'
@@ -110,8 +158,10 @@ export const TaskView = React.memo<ToolViewProps>(({ tool, metadata, messages, s
     return (
         <View style={styles.container}>
             <Pressable
-                onPress={() => setExpanded((value) => !value)}
-                hitSlop={6}
+                ref={headerRef}
+                collapsable={false}
+                onPress={toggle}
+                hitSlop={tapSlopFor(statusRowHeight)}
                 accessibilityRole="button"
                 accessibilityLabel={t('tools.agent.details')}
                 style={({ pressed }) => [styles.statusRow, pressed && styles.pressed]}
@@ -158,7 +208,7 @@ export const TaskView = React.memo<ToolViewProps>(({ tool, metadata, messages, s
                     {hiddenSteps > 0 ? (
                         <Pressable
                             style={styles.moreSteps}
-                            onPress={() => setExpanded(true)}
+                            onPress={expand}
                             hitSlop={8}
                             accessibilityRole="button"
                         >
@@ -182,9 +232,21 @@ export const TaskView = React.memo<ToolViewProps>(({ tool, metadata, messages, s
 
             {expanded && rest.length > 0 ? <RowsView rows={rest} /> : null}
             {expanded ? <RawDisclosure value={tool.input} /> : null}
+            {expanded ? (
+                <DisclosureFooter
+                    label={[stateLabel, ...numbers].join(' · ')}
+                    onPress={collapse}
+                    innerRef={footerRef}
+                    iconSize={14}
+                    textStyle={styles.stateText}
+                />
+            ) : null}
         </View>
     );
 });
+
+/** Kept as a name so the row's hit slop can be derived from it. */
+const statusRowHeight = 24;
 
 const styles = StyleSheet.create((theme) => ({
     container: {
@@ -196,7 +258,9 @@ const styles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         gap: 8,
-        minHeight: 24,
+        minHeight: statusRowHeight,
+        // The chevron sat flush right, under the scroll indicator (DROVE-156).
+        paddingRight: edgeClearance(),
     },
     pressed: {
         opacity: 0.6,

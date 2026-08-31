@@ -1,6 +1,17 @@
 const { getDefaultConfig } = require("expo/metro-config");
 const path = require("path");
 
+// DROVE-104. Metro resolves @slopus/happy-wire to its BUILT dist, never its
+// source, so `expo export` and `eas update` bundle whatever dist is on disk.
+// Between 2026-08-28 and 08-31 that dist was three days older than the wire's
+// source and zod silently stripped every field added since (DROVE-103). Refuse
+// to bundle a stale one instead of shipping it. This sits in the metro config
+// on purpose: it then runs for a plain `expo export` and for the EAS update
+// workflow, not only for the package scripts.
+require("../happy-wire/bin/check-dist-fresh.cjs").assertWireDistFresh({
+  fromDir: __dirname,
+});
+
 const config = getDefaultConfig(__dirname, {
   // Enable CSS support for web
   isCSSEnabled: true,

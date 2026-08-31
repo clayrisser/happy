@@ -4,8 +4,16 @@
  * A pane session has no agentState.usageLimits, so what the strip shows
  * comes out of metadata.droverUsage alone. These pin the choice between the
  * two feeds, the gate on the week figure, and every row of the popup down to
- * the label — the part the mapping tests in utils/droverUsage.spec.ts stop
- * short of.
+ * its bar, the part the mapping tests in utils/droverUsage.spec.ts stop short
+ * of. The bar rows are DROVE-107: one line per measure, filled to the headroom
+ * left, coloured by that and not by which account it is.
+ *
+ * DROVE-148 gave EVERY account the same measures. Before it, the current
+ * account had Session, Week and Fable week and every other account had a
+ * single bar for its fullest limit, which cannot answer where to flip to: main
+ * below is 4% into its session and 100% through its week, and the one figure
+ * said only "0% left". So these now pin one block shape for all of them, the
+ * dash a missing measure renders, and the five-account case.
  */
 import { describe, expect, it, vi } from 'vitest';
 import { formatUsageLimitResetTime, type UsageLimitsLike } from '@/utils/sessionStatusBar';
@@ -24,7 +32,14 @@ vi.mock('@/text', async () => {
     };
 });
 
-import { resolveUsageStrip } from './agentInputUsage';
+import {
+    droverBindingLimit,
+    resolveUsageStrip,
+    truncateUsageName,
+    usageBarFraction,
+    usageBarNameLimit,
+    usageBarTone,
+} from './agentInputUsage';
 
 // What the CLI stamps for Clay's registry as measured 2026-08-30: on jamrizzi,
 // main dead for the week, bitspur.com out for Fable only, spare never logged in.
@@ -87,28 +102,144 @@ describe('resolveUsageStrip on a pane session', () => {
         expect(resolveUsageStrip({ ...pane, showRemaining: true }).weekPercent).toBe(77);
     });
 
-    it('heads the popup with the picker\'s own number and lists session, week and the Fable row', () => {
-        const [mine] = resolveUsageStrip({ ...pane, showRemaining: true }).usageMenuGroups;
-        expect(mine.key).toBe('usage');
+    it('heads the current account\'s block with the picker\'s own number and lists session, week and the Fable row', () => {
+        const [mine] = resolveUsageStrip({ ...pane, showRemaining: true }).usageBarGroups;
+        expect(mine.key).toBe('account:jamrizzi');
+        // The block the session is on comes first and says so, which is the
+        // only thing that tells it apart now the row shape is shared.
+        expect(mine.active).toBe(true);
         expect(mine.title).toBe('jamrizzi · 51% left');
-        expect(mine.options.map((o) => o.label)).toEqual([
-            `Session · 51%\nResets ${formatUsageLimitResetTime(sessionReset)}`,
-            `Week · 77%\nResets ${formatUsageLimitResetTime(sep5)}`,
-            `Fable week · 61%\nResets ${formatUsageLimitResetTime(sep5)}`,
+        expect(mine.rows.map((r) => [r.name, r.percentText, r.trailing])).toEqual([
+            ['Session', '51%', `Resets ${formatUsageLimitResetTime(sessionReset)}`],
+            ['Week', '77%', `Resets ${formatUsageLimitResetTime(sep5)}`],
+            ['Fable week', '61%', `Resets ${formatUsageLimitResetTime(sep5)}`],
+        ]);
+        // One line each: nothing in a row may carry the newline that used to
+        // stack the reset time under the name.
+        expect(mine.rows.every((r) => !`${r.name}${r.percentText}${r.trailing}`.includes('\n'))).toBe(true);
+    });
+
+    it('fills every bar to the headroom LEFT, whichever number the setting prints', () => {
+        const used = resolveUsageStrip(pane).usageBarGroups[0];
+        const left = resolveUsageStrip({ ...pane, showRemaining: true }).usageBarGroups[0];
+        // 49% used and 51% left are the same bar; only the text flips.
+        expect(used.rows.map((r) => r.fraction)).toEqual([0.51, 0.77, 0.61]);
+        expect(left.rows.map((r) => r.fraction)).toEqual([0.51, 0.77, 0.61]);
+        expect(used.rows.map((r) => r.percentText)).toEqual(['49%', '23%', '39%']);
+    });
+
+    it('gives every other account the same three measures, headed by its own name', () => {
+        const groups = resolveUsageStrip(pane).usageBarGroups;
+        // One shape for all of them, current first, registry order after it
+        // (DROVE-148). No heading over the LIST (DROVE-117): each block is
+        // headed by the account, which is the name being chosen between.
+        expect(groups.map((g) => [g.key, g.title, g.active === true])).toEqual([
+            ['account:jamrizzi', 'jamrizzi · 49% used', true],
+            ['account:main', 'main · 100% used', false],
+            ['account:bitspur.com', 'bitspur.com · 100% used', false],
+            ['account:spare', 'spare · no login', false],
+        ]);
+        // main: burnt for the week, barely touched on the session. That split
+        // is the whole reason for three bars instead of one headroom figure.
+        expect(groups[1].rows.map((r) => [r.name, r.percentText, r.trailing, r.tone])).toEqual([
+            ['Session', '4%', `Resets ${formatUsageLimitResetTime(1_500)}`, 'ample'],
+            ['Week', '100%', `Resets ${formatUsageLimitResetTime(sep3)}`, 'critical'],
+            // Never scoped a Fable limit. The row is drawn honestly rather
+            // than dropped, so the measures stay level down the sheet.
+            ['Fable week', null, '', 'unknown'],
+        ]);
+        // bitspur.com: out for Fable only, which one number could not say.
+        expect(groups[2].rows.map((r) => [r.name, r.percentText, r.tone])).toEqual([
+            ['Session', null, 'unknown'],
+            ['Week', '60%', 'ample'],
+            ['Fable week', '100%', 'critical'],
+        ]);
+        // A logged-out account keeps its three rows and dims all of them.
+        expect(groups[3].rows.map((r) => [r.name, r.percentText, r.disabled])).toEqual([
+            ['Session', null, true],
+            ['Week', null, true],
+            ['Fable week', null, true],
         ]);
     });
 
-    it('folds every other account under its own heading, with the figures the picker prints', () => {
-        const [, others] = resolveUsageStrip(pane).usageMenuGroups;
-        expect(others.key).toBe('accounts');
-        expect(others.title).toBe('Other accounts');
-        expect(others.options).toEqual([
-            { key: 'account:main', label: `main · 100% used\nBack ${formatUsageLimitResetTime(sep3)}`, disabled: false },
-            { key: 'account:bitspur.com', label: `bitspur.com · 100% used\nFable back ${formatUsageLimitResetTime(sep4)}`, disabled: false },
-            { key: 'account:spare', label: 'spare · no login', disabled: true },
+    it('keeps five accounts to the same three rows, so the sheet stays comparable', () => {
+        const five: DroverUsageLike = {
+            capturedAt: 1_000,
+            accounts: [
+                ...paneUsage!.accounts,
+                {
+                    name: 'risserproperties', current: false, loggedIn: true, fetchedAt: 900, headroom: 43, cooling: null,
+                    limits: [{ kind: 'session', percent: 57, resetsAt: sessionReset, scope: null, family: null }],
+                },
+            ],
+        };
+        const groups = resolveUsageStrip({ ...pane, droverUsage: five }).usageBarGroups;
+        expect(groups).toHaveLength(5);
+        // Same three rows in the same order in every block. Nothing dropped,
+        // nothing added, so the bars line up across accounts.
+        for (const group of groups) {
+            expect(group.rows.map((r) => r.name)).toEqual(['Session', 'Week', 'Fable week']);
+        }
+        // Exactly one block is the one the session is on.
+        expect(groups.filter((g) => g.active)).toHaveLength(1);
+        // Fifteen rows, fifteen keys: the list renders by them.
+        const keys = groups.flatMap((g) => g.rows.map((r) => r.key));
+        expect(new Set(keys).size).toBe(15);
+    });
+
+    it('keeps a never-measured account as a block of empty tracks with the reason on its name', () => {
+        const unmeasured: DroverUsageLike = {
+            capturedAt: 1_000,
+            accounts: [
+                ...paneUsage!.accounts,
+                { name: 'fresh', current: false, loggedIn: true, fetchedAt: null, headroom: null, cooling: null, limits: [] },
+            ],
+        };
+        const fresh = resolveUsageStrip({ ...pane, droverUsage: unmeasured }).usageBarGroups
+            .find((g) => g.key === 'account:fresh')!;
+        expect(fresh.title).toBe('fresh · not measured');
+        expect(fresh.rows.map((r) => [r.name, r.fraction, r.percentText, r.tone])).toEqual([
+            ['Session', 0, null, 'unknown'],
+            ['Week', 0, null, 'unknown'],
+            ['Fable week', 0, null, 'unknown'],
         ]);
     });
 
+    it('says when an account is back on its name, when no row of it can', () => {
+        const cooling: DroverUsageLike = {
+            capturedAt: 1_000,
+            accounts: [
+                ...paneUsage!.accounts,
+                { name: 'cooling', current: false, loggedIn: true, fetchedAt: 900, headroom: 0, cooling: { until: sep4, reason: null, family: 'fable' }, limits: [] },
+            ],
+        };
+        const groups = resolveUsageStrip({ ...pane, droverUsage: cooling }).usageBarGroups;
+        // Cooling with nothing measured: the return time is the only fact
+        // there is, so it goes on the name rather than nowhere.
+        expect(groups.find((g) => g.key === 'account:cooling')!.title)
+            .toBe(`cooling · 100% used · Fable back ${formatUsageLimitResetTime(sep4)}`);
+        // main is back Sep 3 too, but its Week row already prints that, so it
+        // is not said twice.
+        expect(groups.find((g) => g.key === 'account:main')!.title).toBe('main · 100% used');
+    });
+
+    it('keeps a long account name on its heading and off the bars', () => {
+        const long: DroverUsageLike = {
+            capturedAt: 1_000,
+            accounts: [
+                ...paneUsage!.accounts,
+                { name: 'promanagerdevteam@gmail.com', current: false, loggedIn: true, fetchedAt: 900, headroom: 43, cooling: null, limits: [] },
+            ],
+        };
+        const group = resolveUsageStrip({ ...pane, droverUsage: long, showRemaining: true }).usageBarGroups
+            .find((g) => g.title.startsWith('promanagerdevteam'))!;
+        // The name heads the block now instead of sitting in the name column,
+        // so it stays whole and the row names are the measures, which always
+        // fit. The heading is one line in the component; nothing wraps it.
+        expect(group.title).toBe('promanagerdevteam@gmail.com · 43% left');
+        expect(group.rows.every((r) => !r.nameTruncated)).toBe(true);
+        expect(group.rows.every((r) => r.name.length <= usageBarNameLimit)).toBe(true);
+    });
     it('falls back to the droverAccount stamp when the snapshot marks nothing current', () => {
         const unmarked: DroverUsageLike = {
             capturedAt: 1_000,
@@ -116,8 +247,23 @@ describe('resolveUsageStrip on a pane session', () => {
         };
         const strip = resolveUsageStrip({ ...pane, droverUsage: unmarked });
         expect(strip.weekPercent).toBe(23);
-        expect(strip.usageMenuGroups[0].title).toBe('jamrizzi · 49% used');
-        expect(strip.usageMenuGroups[1].options.map((o) => o.key)).toEqual(['account:main', 'account:bitspur.com', 'account:spare']);
+        expect(strip.usageBarGroups[0].title).toBe('jamrizzi · 49% used');
+        expect(strip.usageBarGroups.map((g) => g.key))
+            .toEqual(['account:jamrizzi', 'account:main', 'account:bitspur.com', 'account:spare']);
+    });
+    it('marks which blocks can take the session and which cannot (DROVE-160)', () => {
+        const groups = resolveUsageStrip(pane).usageBarGroups;
+        expect(groups.map((g) => [g.account, g.active === true, g.switchable])).toEqual([
+            // The one in use is not a target: switching to where you already
+            // are is a teardown for nothing.
+            ['jamrizzi', true, false],
+            ['main', false, true],
+            ['bitspur.com', false, true],
+            // No login means the account cannot take the session, so the tap
+            // is refused here rather than by a switch that bounces a minute
+            // later on the Mac.
+            ['spare', false, false],
+        ]);
     });
 });
 
@@ -130,23 +276,27 @@ describe('resolveUsageStrip on a remote session', () => {
         const shown = resolveUsageStrip({ ...pane, usageLimits: sdkLimits, contextShown: true });
         // 60 from the SDK, not 23 from the snapshot.
         expect(shown.weekPercent).toBe(60);
-        expect(shown.usageMenuGroups[0].options.map((o) => o.label.split('\n')[0])).toEqual([
-            'Session · 10%',
-            'Week · 60%',
-            'Fable week · 39%',
+        expect(shown.usageBarGroups[0].rows.map((r) => `${r.name} ${r.percentText}`)).toEqual([
+            'Session 10%',
+            'Week 60%',
+            'Fable week 39%',
         ]);
     });
 
-    it('still folds the other accounts in beside the SDK figures', () => {
+    it('still lists the other accounts, at three bars each, beside the SDK figures', () => {
         const strip = resolveUsageStrip({ ...pane, usageLimits: sdkLimits, contextShown: true });
-        expect(strip.usageMenuGroups.map((g) => g.key)).toEqual(['usage', 'accounts']);
+        expect(strip.usageBarGroups.map((g) => g.key))
+            .toEqual(['account:jamrizzi', 'account:main', 'account:bitspur.com', 'account:spare']);
+        // The live stream overrides only the account it belongs to; the rest
+        // are still read from the snapshot.
+        expect(strip.usageBarGroups[1].rows.map((r) => r.percentText)).toEqual(['4%', '100%', null]);
     });
 });
 
 describe('resolveUsageStrip with nothing to show', () => {
     it('hides the figure and offers no popup', () => {
         const strip = resolveUsageStrip({ usageLimits: null, droverUsage: null, showRemaining: false, contextShown: true });
-        expect(strip).toEqual({ weekPercent: null, usageFromDrover: false, usageMenuGroups: [] });
+        expect(strip).toEqual({ weekPercent: null, usageFromDrover: false, usageBarGroups: [] });
     });
 
     it('does not read a snapshot of other accounts as this session\'s own usage', () => {
@@ -155,7 +305,132 @@ describe('resolveUsageStrip with nothing to show', () => {
         // but the others are still reachable.
         const strip = resolveUsageStrip({ usageLimits: null, droverUsage: { capturedAt: 1, accounts: paneUsage!.accounts.map((a) => ({ ...a, current: false })) }, droverAccount: null, showRemaining: false, contextShown: false });
         expect(strip.weekPercent).toBeNull();
-        expect(strip.usageMenuGroups.map((g) => g.key)).toEqual(['accounts']);
-        expect(strip.usageMenuGroups[0].options).toHaveLength(4);
+        // Every account is listed and none is marked as this session's.
+        expect(strip.usageBarGroups).toHaveLength(4);
+        expect(strip.usageBarGroups.some((g) => g.active)).toBe(false);
+    });
+});
+
+/**
+ * The one figure a wrist has room for (DROVE-131).
+ *
+ * The phone shows Session, Week and every family week side by side and lets
+ * Clay rank them. A watch cannot, so the ranking is decided here and SENT, and
+ * these pin that it agrees with `headroom` — which the CLI writes as `100 -
+ * max(percent)` over the same rows — because two numbers for one fact drifting
+ * apart is the whole of DROVE-129.
+ */
+describe('droverBindingLimit', () => {
+    const account = (name: string) => paneUsage!.accounts.find((a) => a.name === name)!;
+
+    it('picks the window with the least left, and agrees with the account headroom', () => {
+        // jamrizzi: session 49% used, week 23%, Fable week 39%. The session is
+        // the one that bites, and 100 - 49 is the 51 the picker prints.
+        const binding = droverBindingLimit(account('jamrizzi'));
+        expect(binding).toEqual({
+            id: 'five_hour',
+            label: 'Session',
+            percentLeft: 51,
+            resetsAt: sessionReset,
+            tone: 'ample',
+        });
+        expect(binding!.percentLeft).toBe(account('jamrizzi').headroom);
+    });
+
+    it('names a family window with the family, the same word the sheet prints', () => {
+        // bitspur.com is out for Fable only: the scoped row at 100% binds,
+        // not the account-wide week at 60%.
+        expect(droverBindingLimit(account('bitspur.com'))).toEqual({
+            id: 'seven_day_fable',
+            label: 'Fable week',
+            percentLeft: 0,
+            resetsAt: sep4,
+            tone: 'critical',
+        });
+    });
+
+    it('names the week when the week is what is dead', () => {
+        expect(droverBindingLimit(account('main'))).toMatchObject({
+            id: 'seven_day',
+            label: 'Week',
+            percentLeft: 0,
+            resetsAt: sep3,
+        });
+    });
+
+    // An account never measured shows no figure rather than a 0 that reads as
+    // "out" and would hide the one account with room.
+    it('says nothing about an account with no limit rows', () => {
+        expect(droverBindingLimit(account('spare'))).toBeNull();
+        expect(droverBindingLimit(null)).toBeNull();
+        expect(droverBindingLimit(undefined)).toBeNull();
+        expect(droverBindingLimit({ name: 'x', limits: null })).toBeNull();
+    });
+
+    it('keeps the shorter window on a tie, because it bites first', () => {
+        expect(droverBindingLimit({
+            name: 'tied',
+            limits: [
+                { kind: 'session', percent: 80, resetsAt: 1_000, scope: null, family: null },
+                { kind: 'weekly_all', percent: 80, resetsAt: 2_000, scope: null, family: null },
+            ],
+        })).toMatchObject({ label: 'Session', percentLeft: 20 });
+    });
+
+    it('prints a window it cannot name as itself rather than calling it Week', () => {
+        // `headroom` is computed over EVERY row including the
+        // provider-internal ones, so one of those really can be the binding
+        // limit, and naming the wrong window is worse than an ugly word.
+        expect(droverBindingLimit({
+            name: 'odd',
+            limits: [{ kind: 'nimbus_quill', percent: 95, resetsAt: null, scope: null, family: null }],
+        })).toMatchObject({ id: 'nimbus_quill', label: 'nimbus_quill', percentLeft: 5, tone: 'critical' });
+    });
+
+    it('clamps a cache that overshoots and ignores a row with no number', () => {
+        expect(droverBindingLimit({
+            name: 'over',
+            limits: [
+                { kind: 'session', percent: 120, resetsAt: null, scope: null, family: null },
+                { kind: 'weekly_all', percent: Number.NaN, resetsAt: null, scope: null, family: null },
+            ],
+        })).toMatchObject({ percentLeft: 0, resetsAt: null, tone: 'critical' });
+    });
+});
+
+describe('the bar model', () => {
+    it('turns a percentage into a track fraction and clamps what is out of range', () => {
+        expect(usageBarFraction(43)).toBeCloseTo(0.43);
+        expect(usageBarFraction(100)).toBe(1);
+        expect(usageBarFraction(140)).toBe(1);
+        expect(usageBarFraction(-5)).toBe(0);
+    });
+
+    it('draws an empty track at zero rather than no track', () => {
+        expect(usageBarFraction(0)).toBe(0);
+        expect(usageBarTone(0)).toBe('critical');
+    });
+
+    it('reads a not-measured figure as empty and grey, never as full', () => {
+        expect(usageBarFraction(null)).toBe(0);
+        expect(usageBarFraction(undefined)).toBe(0);
+        expect(usageBarFraction(Number.NaN)).toBe(0);
+        expect(usageBarTone(null)).toBe('unknown');
+        expect(usageBarTone(Number.NaN)).toBe('unknown');
+    });
+
+    it('colours by headroom left, in three bands', () => {
+        expect(usageBarTone(9)).toBe('critical');
+        expect(usageBarTone(10)).toBe('low');
+        expect(usageBarTone(34)).toBe('low');
+        expect(usageBarTone(35)).toBe('ample');
+        expect(usageBarTone(100)).toBe('ample');
+    });
+
+    it('leaves a name that fits alone and ends a long one in an ellipsis', () => {
+        expect(truncateUsageName('main')).toEqual({ name: 'main', truncated: false });
+        expect(truncateUsageName('bitspur.com')).toEqual({ name: 'bitspur.com', truncated: false });
+        expect(truncateUsageName('risserproperties')).toEqual({ name: 'risserpropert\u2026', truncated: true });
+        expect(truncateUsageName('risserproperties', 6)).toEqual({ name: 'risse\u2026', truncated: true });
     });
 });

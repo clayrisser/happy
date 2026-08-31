@@ -19,6 +19,13 @@ enum DroverRoute: Hashable {
     /// The Playground: every buzz and every card on demand, local to this
     /// wrist (DROVE-75).
     case demo
+    /// What is left: the current account's binding limit, then every other
+    /// account (DROVE-131).
+    case limits
+    /// Every session's unfinished task list (DROVE-167).
+    case tasks
+    /// One session's list, off its own detail screen.
+    case sessionTasks(DroverSession)
 }
 
 /// The wall: every gate waiting on a human, newest first (BASED-98).
@@ -44,7 +51,17 @@ struct GateListView: View {
                             connected: store.snapshot.connected,
                             freshness: freshness,
                             updatedAt: store.snapshot.updatedAt,
-                            lastError: store.lastError
+                            lastError: store.lastError,
+                            // The wall is empty most of the day, which makes
+                            // it the one place on the wrist with room for the
+                            // glance that answers "can I still work"
+                            // (DROVE-131). Deliberately not shown above a wall
+                            // that HAS gates on it: things waiting on him
+                            // outrank a quota.
+                            headroom: store.snapshot.currentAccount,
+                            tasksLabel: store.snapshot.sessionsWithTasks.isEmpty
+                                ? nil
+                                : store.snapshot.taskDoorLabel
                         )
                     } else {
                         List {
@@ -76,6 +93,16 @@ struct GateListView: View {
                                 // is merely slow.
                                 .disabled(store.isAnswering(gate))
                             }
+                            // What the sessions are working through, under
+                            // the gates and above the Playground (DROVE-167).
+                            // Below the gates because a gate is blocking a
+                            // session right now and a task is not; present at
+                            // all because Clay kept opening this app looking
+                            // for his list and finding a wall with nothing on
+                            // it.
+                            if !store.snapshot.sessionsWithTasks.isEmpty {
+                                TasksRow(label: store.snapshot.taskDoorLabel)
+                            }
                             PlaygroundRow()
                         }
                         .listStyle(.carousel)
@@ -102,6 +129,9 @@ struct GateListView: View {
                 case .sessions: SessionListView()
                 case let .detail(session): SessionDetailView(session: session)
                 case .demo: DemoView()
+                case .limits: LimitsView()
+                case .tasks: TasksView()
+                case let .sessionTasks(session): SessionTasksView(session: session)
                 }
             }
             // A session row opens the CONVERSATION (DROVE-91): the transcript
@@ -150,6 +180,12 @@ private struct EmptyStateView: View {
     let freshness: DroverFreshness
     let updatedAt: Date
     let lastError: String?
+    /// The account the work is on, when the phone has sent one (DROVE-131).
+    let headroom: DroverAccount?
+    /// `3 tasks in 2 sessions`, or nil when no session is keeping a list
+    /// (DROVE-167). The wall is empty most of the day, and this is exactly
+    /// when Clay is looking for what the work is.
+    let tasksLabel: String?
 
     private var clear: Bool { connected && freshness == .fresh }
 
@@ -187,6 +223,20 @@ private struct EmptyStateView: View {
                     .font(.system(size: 9))
                     .foregroundStyle(.red)
                     .multilineTextAlignment(.center)
+            }
+            // Nothing is waiting on him, so the next question is whether he
+            // can still work (DROVE-131). One line: the account, its bar and
+            // the percentage on the limit that binds. Everything else is one
+            // tap away in Limits.
+            if let headroom {
+                HeadroomLink(account: headroom)
+                    .padding(.top, 6)
+            }
+            // Nothing is BLOCKED, which does not mean nothing is happening.
+            // Same door as the row at the foot of the list (DROVE-167).
+            if let tasksLabel {
+                TasksRow(label: tasksLabel)
+                    .padding(.top, 6)
             }
             // The wall is empty most of the day, and the Playground is how
             // the buzzes get felt without waiting for it not to be

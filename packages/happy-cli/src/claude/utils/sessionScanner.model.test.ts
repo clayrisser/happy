@@ -12,7 +12,7 @@
  * these want a transcript built one assistant entry at a time.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
@@ -33,14 +33,24 @@ function assistantTurn(uuid: string, model: string, effort?: string | null) {
     }) + '\n'
 }
 
-const settle = (ms = 200) => new Promise((r) => setTimeout(r, ms))
-
 describe('sessionScanner reports the model the pane is running', () => {
     let testDir: string
     let projectDir: string
     let file: string
     let runs: ObservedRun[]
     let scanner: Awaited<ReturnType<typeof createSessionScanner>> | null = null
+
+    /**
+     * Wait for the scanner to have reported exactly this (DROVE-68).
+     *
+     * It used to sleep 200 ms after each write and read `runs` once, which on
+     * a loaded box reports a slow poll as a wrong answer. The assertion is
+     * unchanged, so an extra report or a missing one still fails with the same
+     * diff. Only the waiting stopped being a guess.
+     */
+    async function reports(expected: ObservedRun[]): Promise<void> {
+        await vi.waitFor(() => expect(runs).toEqual(expected), { timeout: 2_000, interval: 10 })
+    }
 
     beforeEach(async () => {
         // Nothing here may reach the real drover bus.
@@ -78,11 +88,10 @@ describe('sessionScanner reports the model the pane is running', () => {
         await writeFile(file,
             assistantTurn('u1', 'claude-fable-5', 'xhigh')
             + assistantTurn('u2', 'claude-opus-5', 'high'))
-        await settle()
 
         // The first report is the SEEDING one: what the session was already
         // running when the app reconnected, not something that just changed.
-        expect(runs).toEqual([
+        await reports([
             { model: 'claude-fable-5', effort: 'xhigh' },
             { model: 'claude-opus-5', effort: 'high' },
         ])
@@ -94,42 +103,54 @@ describe('sessionScanner reports the model the pane is running', () => {
         // no record of its own — the evidence is the NEXT turn's model id.
         await writeFile(file, assistantTurn('u1', 'claude-opus-5', 'xhigh'))
         await start()
-        await settle()
-        expect(runs).toEqual([{ model: 'claude-opus-5', effort: 'xhigh' }])
+        await reports([{ model: 'claude-opus-5', effort: 'xhigh' }])
 
         await writeFile(file,
             assistantTurn('u1', 'claude-opus-5', 'xhigh')
             + assistantTurn('u2', 'claude-sonnet-5', 'xhigh'))
-        await settle()
-
-        expect(runs.at(-1)).toEqual({ model: 'claude-sonnet-5', effort: 'xhigh' })
+        await reports([
+            { model: 'claude-opus-5', effort: 'xhigh' },
+            { model: 'claude-sonnet-5', effort: 'xhigh' },
+        ])
     })
 
     it('says nothing when the model has not changed', async () => {
         await writeFile(file, assistantTurn('u1', 'claude-opus-5', 'xhigh'))
         await start()
-        await settle()
+        await reports([{ model: 'claude-opus-5', effort: 'xhigh' }])
+        // The unchanged turn is followed by a real change, so there is
+        // something to wait FOR. Landing on exactly two reports is the proof
+        // that u2 was read and skipped, which a sleep could only assume.
         await writeFile(file,
             assistantTurn('u1', 'claude-opus-5', 'xhigh')
-            + assistantTurn('u2', 'claude-opus-5', 'xhigh'))
-        await settle()
-
-        expect(runs).toEqual([{ model: 'claude-opus-5', effort: 'xhigh' }])
+            + assistantTurn('u2', 'claude-opus-5', 'xhigh')
+            + assistantTurn('u3', 'claude-sonnet-5', 'xhigh'))
+        await reports([
+            { model: 'claude-opus-5', effort: 'xhigh' },
+            { model: 'claude-sonnet-5', effort: 'xhigh' },
+        ])
     })
 
     it('reports a switch BACK, which a per-entry dedupe key would have eaten', async () => {
         await writeFile(file, assistantTurn('u1', 'claude-opus-5', 'xhigh'))
         await start()
-        await settle()
+        await reports([{ model: 'claude-opus-5', effort: 'xhigh' }])
         await writeFile(file,
             assistantTurn('u1', 'claude-opus-5', 'xhigh')
             + assistantTurn('u2', 'claude-sonnet-5', 'xhigh'))
-        await settle()
+        await reports([
+            { model: 'claude-opus-5', effort: 'xhigh' },
+            { model: 'claude-sonnet-5', effort: 'xhigh' },
+        ])
         await writeFile(file,
             assistantTurn('u1', 'claude-opus-5', 'xhigh')
             + assistantTurn('u2', 'claude-sonnet-5', 'xhigh')
             + assistantTurn('u3', 'claude-opus-5', 'xhigh'))
-        await settle()
+        await reports([
+            { model: 'claude-opus-5', effort: 'xhigh' },
+            { model: 'claude-sonnet-5', effort: 'xhigh' },
+            { model: 'claude-opus-5', effort: 'xhigh' },
+        ])
 
         expect(runs.map((r) => r.model)).toEqual([
             'claude-opus-5', 'claude-sonnet-5', 'claude-opus-5',
@@ -139,13 +160,11 @@ describe('sessionScanner reports the model the pane is running', () => {
     it('notices an effort change on its own, with the model unchanged', async () => {
         await writeFile(file, assistantTurn('u1', 'claude-opus-5', 'high'))
         await start()
-        await settle()
+        await reports([{ model: 'claude-opus-5', effort: 'high' }])
         await writeFile(file,
             assistantTurn('u1', 'claude-opus-5', 'high')
             + assistantTurn('u2', 'claude-opus-5', 'xhigh'))
-        await settle()
-
-        expect(runs).toEqual([
+        await reports([
             { model: 'claude-opus-5', effort: 'high' },
             { model: 'claude-opus-5', effort: 'xhigh' },
         ])
@@ -154,20 +173,23 @@ describe('sessionScanner reports the model the pane is running', () => {
     it('ignores <synthetic>, which marks a harness notice rather than a turn', async () => {
         await writeFile(file, assistantTurn('u1', 'claude-opus-5', 'xhigh'))
         await start()
-        await settle()
+        await reports([{ model: 'claude-opus-5', effort: 'xhigh' }])
+        // A real turn behind the synthetic one, so the pass that had to skip
+        // it is one this test can wait for rather than sleep through. Two
+        // reports and not three is the whole assertion.
         await writeFile(file,
             assistantTurn('u1', 'claude-opus-5', 'xhigh')
-            + assistantTurn('u2', '<synthetic>'))
-        await settle()
-
-        expect(runs).toEqual([{ model: 'claude-opus-5', effort: 'xhigh' }])
+            + assistantTurn('u2', '<synthetic>')
+            + assistantTurn('u3', 'claude-sonnet-5', 'xhigh'))
+        await reports([
+            { model: 'claude-opus-5', effort: 'xhigh' },
+            { model: 'claude-sonnet-5', effort: 'xhigh' },
+        ])
     })
 
     it('reports a turn with no effort field rather than dropping it', async () => {
         await writeFile(file, assistantTurn('u1', 'claude-opus-5'))
         await start()
-        await settle()
-
-        expect(runs).toEqual([{ model: 'claude-opus-5', effort: null }])
+        await reports([{ model: 'claude-opus-5', effort: null }])
     })
 })

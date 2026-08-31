@@ -34,6 +34,14 @@ struct SessionListView: View {
                     if let message = store.lastError {
                         BannerRow(text: message, symbol: "exclamationmark.triangle", tint: .red)
                     }
+                    // What is left, above the list of what is running
+                    // (DROVE-131). This screen is where a flip is decided, and
+                    // "which account has room" is the question the flip is an
+                    // answer to, so the glance belongs at the top of it rather
+                    // than behind a menu somewhere else.
+                    if let headroom = store.snapshot.currentAccount {
+                        HeadroomLink(account: headroom)
+                    }
                     ForEach(store.sessions) { session in
                         NavigationLink(value: session) {
                             SessionRow(session: session, flipping: store.flipping.contains(session.id))
@@ -54,9 +62,11 @@ private struct SessionRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 4) {
-                Circle()
-                    .fill(session.active ? .green : .secondary)
-                    .frame(width: 6, height: 6)
+                StateDot(state: session.resolvedState)
+                // The name the PHONE shows, verbatim (DROVE-127). The wrist
+                // used to be handed the working directory basename instead, so
+                // the same session read `cattle-drover` here and `DROVER` on
+                // the phone. Nothing is derived on this side any more.
                 Text(session.title)
                     .font(.caption)
                     .lineLimit(1)
@@ -68,7 +78,7 @@ private struct SessionRow: View {
                         .foregroundStyle(.orange)
                 }
                 if flipping {
-                    Text("flipping…")
+                    Text("switching…")
                         .font(.system(size: 9))
                         .foregroundStyle(.secondary)
                 }
@@ -81,6 +91,41 @@ private struct SessionRow: View {
             }
         }
         .padding(.vertical, 2)
+    }
+}
+
+/// The dot beside a session, in the phone's colour for the phone's state
+/// (DROVE-129).
+///
+/// It used to be green-or-grey off `active`, which is whether the process is
+/// alive. The phone's list draws five colours off `resolveSessionState`, and
+/// the wrist now draws the same five off the answer the phone sends, so one
+/// glance means the same thing on both.
+private struct StateDot: View {
+    let state: SessionState
+
+    var body: some View {
+        Circle()
+            .fill(Color(hex: state.tintHex))
+            .frame(width: 6, height: 6)
+    }
+}
+
+extension Color {
+    /// `RRGGBB`. Only ever fed SessionState.tintHex, which is why a malformed
+    /// string falls back to secondary rather than throwing: a colour is not
+    /// worth blanking a row for.
+    init(hex: String) {
+        var value: UInt64 = 0
+        guard hex.count == 6, Scanner(string: hex).scanHexInt64(&value) else {
+            self = .secondary
+            return
+        }
+        self = Color(
+            red: Double((value >> 16) & 0xFF) / 255,
+            green: Double((value >> 8) & 0xFF) / 255,
+            blue: Double(value & 0xFF) / 255
+        )
     }
 }
 
@@ -151,8 +196,23 @@ struct SessionDetailView: View {
 
                 // Dictate a message to this session from its facts screen
                 // too (DROVE-92): the same control the transcript's bottom
-                // bar carries, so the mic is wherever the session is.
+                // bar carries, so the mic is wherever the session is. And
+                // since DROVE-130 the draft comes with it — the phrases
+                // accumulate on the store, not in either screen, so walking
+                // from the transcript to here mid-sentence does not lose it.
                 SayLink(session: session)
+                WristDraftBar(session: session)
+
+                // What this session is working through (DROVE-167). A link
+                // rather than the list itself: the facts screen is already a
+                // scroll, and a seven-line task list under the flip buttons
+                // would push them off the bottom of a 40mm screen.
+                if session.hasTasks {
+                    NavigationLink(value: DroverRoute.sessionTasks(session)) {
+                        Label(session.taskHeadline, systemImage: "checklist")
+                            .font(.caption)
+                    }
+                }
 
                 Button {
                     store.flip(session)
@@ -195,11 +255,15 @@ struct SessionDetailView: View {
     private var facts: some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 4) {
-                Circle()
-                    .fill(session.active ? .green : .secondary)
-                    .frame(width: 6, height: 6)
-                Text(session.active ? "running" : "idle")
+                StateDot(state: session.resolvedState)
+                // The phone's own word, not "running"/"idle" (DROVE-129).
+                // `active` says whether the PROCESS is up; the phone's list
+                // answers a different question with its dot, and a session
+                // sitting on a permission prompt is the case where the two
+                // used to disagree most loudly.
+                Text(session.resolvedState.label)
                     .font(.caption2)
+                    .foregroundStyle(session.resolvedState.needsYou ? Color.orange : .primary)
             }
             if let account = session.account {
                 Text("on \(account)")
@@ -210,7 +274,10 @@ struct SessionDetailView: View {
             // on a wrist, and a phone that predates the field sends no count
             // rather than a zero, which would read as a fact it never checked.
             if let subagents = session.subagents, subagents > 0 {
-                Text(subagents == 1 ? "1 subagent" : "\(subagents) subagents")
+                // "agents", which is what the phone calls them everywhere it
+                // counts them — the live-status line, the rig activity bar
+                // (DROVE-129). "subagents" was a word only the wrist used.
+                Text(subagents == 1 ? "1 agent" : "\(subagents) agents")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -218,8 +285,15 @@ struct SessionDetailView: View {
             if let status = session.status {
                 LiveStatusLine(status: status, since: session.statusSince, size: 11)
             }
+            // Only when the session kept a list. "0 of 0 done" is noise, and a
+            // phone that predates the key sends no counts rather than zeros.
+            if session.hasTasks {
+                Text(session.taskHeadline)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
             if flipping {
-                Text("flipping…")
+                Text("switching…")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -256,12 +330,26 @@ private struct AccountLabel: View {
         }
     }
 
+    /// The phone's own words, character for character (DROVE-129), naming the
+    /// window the figure is about (DROVE-131).
+    ///
+    /// `no login`, `Back 3:26 PM`, `51% left` and `not measured` are what
+    /// agentInputUsage.ts prints in the composer popup and on the session info
+    /// screen. The wrist said "not logged in", lower-cased the "back", and
+    /// showed nothing at all for an account nobody had measured: three
+    /// different sentences for three states the phone already had names for.
+    ///
+    /// The window rides on the end of the percentage, because a flip decided on
+    /// a bare figure cannot tell an account that is out for the next five hours
+    /// from one that is out for the rest of the week. An unmeasured account
+    /// still says so rather than going blank, which is DROVE-129's rule.
     private var detail: String? {
-        if account.loggedIn == false { return "not logged in" }
+        if account.loggedIn == false { return "no login" }
         if let backAt = account.backAt, backAt > Date() {
-            return "back \(backAt.formatted(date: .omitted, time: .shortened))"
+            return "Back \(backAt.formatted(date: .omitted, time: .shortened))"
         }
-        if let headroom = account.headroom { return "\(headroom)% left" }
-        return nil
+        guard let headroom = account.headroom else { return "not measured" }
+        if let limit = account.limit { return "\(headroom)% left · \(limit)" }
+        return "\(headroom)% left"
     }
 }

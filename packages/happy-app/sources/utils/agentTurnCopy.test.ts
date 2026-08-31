@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildAgentTurnCopyTextByMessageId, type AgentTurnCopyMessage } from './agentTurnCopy';
+import { agentLongPressCopyText, buildAgentTurnCopyTextByMessageId, type AgentTurnCopyMessage } from './agentTurnCopy';
 
 describe('buildAgentTurnCopyTextByMessageId', () => {
     it('copies every non-thinking text block without tool calls', () => {
@@ -35,5 +35,28 @@ describe('buildAgentTurnCopyTextByMessageId', () => {
         expect(buildAgentTurnCopyTextByMessageId(messages, { currentTurnComplete: false })).toEqual(
             new Map([['previous-final', 'Previous answer']]),
         );
+    });
+});
+
+/**
+ * The copy glyph is gone and the hold carries it instead (DROVE-121), so this
+ * is the only thing standing between a long press and an empty clipboard.
+ */
+describe('agentLongPressCopyText', () => {
+    it('copies the whole turn where the glyph used to offer it', () => {
+        expect(agentLongPressCopyText('First block\n\nSecond block', 'Second block'))
+            .toBe('First block\n\nSecond block');
+    });
+
+    it('falls back to the block itself, so a turn still being written can be copied', () => {
+        expect(agentLongPressCopyText(undefined, 'Still working on it')).toBe('Still working on it');
+    });
+
+    it('ignores a turn payload that is only whitespace', () => {
+        expect(agentLongPressCopyText('   ', 'Real text')).toBe('Real text');
+    });
+
+    it('is null when there is nothing to copy, so no gesture is attached', () => {
+        expect(agentLongPressCopyText(undefined, '   ')).toBeNull();
     });
 });

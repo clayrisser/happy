@@ -28,7 +28,7 @@ describe('droverPolicySummary', () => {
     it('names both policies in the words the engine uses', () => {
         expect(droverPolicySummary(policy({
             effective: { onLimit: 'auto', onFamilyExhausted: 'fallback' },
-        }))).toBe('Flips on its own, falls back to another model');
+        }))).toBe('Switches on its own, falls back to another model');
 
         expect(droverPolicySummary(policy({
             effective: { onLimit: 'prompt', onFamilyExhausted: 'stop' },

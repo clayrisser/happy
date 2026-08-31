@@ -91,6 +91,18 @@ export default defineConfig({
     resolve: {
         alias: {
             '@': resolve('./src'),
+            // Test the wire in THIS tree, not the last artifact someone built
+            // (DROVE-103). `@slopus/happy-wire` publishes only `dist`, and that
+            // dist is refreshed by the root postinstall, so it is whatever the
+            // last `pnpm install` produced. DROVE-95 added `result`/`isError`
+            // to sessionToolCallEndEventSchema; the dist on this machine was
+            // three days older, and `createEnvelope` zod-parses through it, so
+            // every tool-call-end came out as bare `{t, call}` and the three
+            // DROVE-95 tests failed against correct code. Worse in a worktree:
+            // node_modules is symlinked to the main checkout, so a worktree
+            // resolved the main checkout's stale dist. Point at the source and
+            // the tests measure the lane.
+            '@slopus/happy-wire': resolve('../happy-wire/src/index.ts'),
         },
     },
 })

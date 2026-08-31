@@ -7,6 +7,17 @@
  * out of the synced settings, the bus's read on open and adopted when they
  * differ, and every write mirrored to each connected Mac.
  *
+ * IT SLIDES UP (DROVE-123). It used to be one branch of the composer's shared
+ * floating panel, which is the third popup Clay has asked to be a sheet, so
+ * it is a rule and not three requests: anything that opens from the composer
+ * strip is a bottom sheet. The mechanism is DROVE-117's, and since DROVE-128
+ * it is literally DROVE-117's: this file carried a character-for-character
+ * copy of the backdrop, the grabber and the drag until ComposerSheet
+ * was extracted, and four copies of a gesture is three too many. Dismissed by
+ * dragging the grabber down on the gate overlay's thresholds, or by tapping
+ * outside, identically to the quota sheet, because it IS the quota sheet's
+ * shell.
+ *
  * The AUDIO section is two rows, not one (DROVE-100). Speaking a prompt when
  * it arrives and reading replies aloud are separate settings that both read
  * "Audio" until now, which is why turning one on looked broken. droverChannels
@@ -18,27 +29,47 @@
  */
 
 import * as React from 'react';
-import { Text, View } from 'react-native';
-import { useUnistyles } from 'react-native-unistyles';
+import { Text, useWindowDimensions, View } from 'react-native';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Ionicons } from '@expo/vector-icons';
 
 import { Typography } from '@/constants/Typography';
 import { BubblePressable } from './BubblePressable';
+import { ComposerSheet } from './ComposerSheet';
 import { ComposerSheetRow } from './ComposerSheetRow';
+import { channelSheetMaxHeight } from './droverChannelsSheetLayout';
 import { hapticsLight } from './haptics';
 import { useDroverChannels } from '@/hooks/useDroverChannels';
 import { audioRows, MODE_COPY, modeTitle } from '@/sync/droverChannels';
 import { useLocalSettingMutable } from '@/sync/storage';
 import { t } from '@/text';
 
+const stylesheet = StyleSheet.create((theme) => ({
+    // The composer's own section metrics, copied here rather than passed in,
+    // so the sheet no longer needs styles handed down from AgentInput.
+    section: {
+        paddingVertical: 8,
+    },
+    sectionTitle: {
+        fontSize: 12,
+        fontWeight: '600',
+        color: theme.colors.textSecondary,
+        paddingHorizontal: 16,
+        paddingBottom: 4,
+        ...Typography.default('semiBold'),
+    },
+}));
+
 export interface DroverChannelsSheetProps {
-    /** The section title style the composer uses, so the sheet matches its neighbours. */
-    titleStyle: object;
-    sectionStyle: object;
+    open: boolean;
+    onClose: () => void;
+    /** Side inset, matching the composer's other sheets. */
 }
 
 export const DroverChannelsSheet = React.memo(function DroverChannelsSheet(props: DroverChannelsSheetProps) {
+    const styles = stylesheet;
     const { theme } = useUnistyles();
+    const { height: windowHeight } = useWindowDimensions();
     const channels = useDroverChannels();
     // Stream-talk lives on this device, not on the bus, so it is read here
     // rather than through the channels hook (DROVE-100). The composer's
@@ -47,9 +78,16 @@ export const DroverChannelsSheet = React.memo(function DroverChannelsSheet(props
     const rows = audioRows({ announceAudio: channels.toggles.announceAudio, readAloudEnabled });
 
     return (
-        <>
-            <View style={props.sectionStyle}>
-                <Text style={props.titleStyle}>MODE</Text>
+        <ComposerSheet
+            open={props.open}
+            onClose={props.onClose}
+            maxHeight={channelSheetMaxHeight(windowHeight)}
+            // The switches are one tap, and a keyboard on its way out would
+            // otherwise eat it.
+            keyboardShouldPersistTaps="always"
+        >
+            <View style={styles.section}>
+                <Text style={styles.sectionTitle}>MODE</Text>
                 {channels.modes.map(({ name }) => {
                     const isSelected = channels.mode === name;
                     const copy = MODE_COPY[name];
@@ -108,8 +146,8 @@ export const DroverChannelsSheet = React.memo(function DroverChannelsSheet(props
                     );
                 })}
             </View>
-            <View style={props.sectionStyle}>
-                <Text style={props.titleStyle}>{t('agentInput.channels.title')}</Text>
+            <View style={styles.section}>
+                <Text style={styles.sectionTitle}>{t('agentInput.channels.title')}</Text>
                 <ComposerSheetRow
                     kind="toggle"
                     icon={channels.toggles.announceVisual ? 'phone-portrait-outline' : 'eye-off-outline'}
@@ -131,8 +169,8 @@ export const DroverChannelsSheet = React.memo(function DroverChannelsSheet(props
                     }}
                 />
             </View>
-            <View style={props.sectionStyle}>
-                <Text style={props.titleStyle}>{t('agentInput.channels.audioTitle')}</Text>
+            <View style={styles.section}>
+                <Text style={styles.sectionTitle}>{t('agentInput.channels.audioTitle')}</Text>
                 {rows.map((row) => (
                     <ComposerSheetRow
                         key={row.key}
@@ -160,6 +198,6 @@ export const DroverChannelsSheet = React.memo(function DroverChannelsSheet(props
                     </View>
                 )}
             </View>
-        </>
+        </ComposerSheet>
     );
 });

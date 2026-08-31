@@ -16,7 +16,7 @@
  * story in sessionScanner.test.ts.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
@@ -43,14 +43,37 @@ function stateBlock(mode: string) {
     ].map((r) => JSON.stringify(r)).join('\n') + '\n'
 }
 
-const settle = (ms = 200) => new Promise((r) => setTimeout(r, ms))
-
 describe('sessionScanner reports the permission mode the pane is in', () => {
     let testDir: string
     let projectDir: string
     let file: string
     let modes: string[]
+    let seen: number
     let scanner: Awaited<ReturnType<typeof createSessionScanner>> | null = null
+
+    /**
+     * Wait for the scanner to have reported exactly this (DROVE-68).
+     *
+     * It used to sleep 200 ms after each write and read the array once. On a
+     * loaded box a poll can miss that window, and the failure then reads as a
+     * wrong answer rather than a slow one. Waiting for the answer instead is
+     * the same assertion. A mode that never arrives, or an extra report that
+     * should not exist, still fails, and the diff still shows both lists.
+     */
+    async function reports(expected: string[]): Promise<void> {
+        await vi.waitFor(() => expect(modes).toEqual(expected), { timeout: 2_000, interval: 10 })
+    }
+
+    /**
+     * Wait for the scanner to have delivered n transcript records.
+     *
+     * The barrier for the tests that assert NOTHING was reported: a report is
+     * made in the same pass that hands the record over, so a record arriving
+     * is proof the pass ran and chose to stay quiet.
+     */
+    async function delivered(n: number): Promise<void> {
+        await vi.waitFor(() => expect(seen).toBeGreaterThanOrEqual(n), { timeout: 2_000, interval: 10 })
+    }
 
     beforeEach(async () => {
         // Nothing here may reach the real drover bus.
@@ -61,6 +84,7 @@ describe('sessionScanner reports the permission mode the pane is in', () => {
         await mkdir(projectDir, { recursive: true })
         file = join(projectDir, `${sessionId}.jsonl`)
         modes = []
+        seen = 0
     })
 
     afterEach(async () => {
@@ -77,7 +101,7 @@ describe('sessionScanner reports the permission mode the pane is in', () => {
         scanner = await createSessionScanner({
             sessionId,
             workingDirectory: testDir,
-            onMessage: () => { },
+            onMessage: () => { seen += 1 },
             onPermissionModeObserved: (mode) => modes.push(mode),
         })
     }
@@ -85,19 +109,16 @@ describe('sessionScanner reports the permission mode the pane is in', () => {
     it('seeds from what the transcript already says, so a reconnect is not blank', async () => {
         await writeFile(file, stateBlock('bypassPermissions'))
         await start()
-        await settle()
-        expect(modes).toEqual(['bypassPermissions'])
+        await reports(['bypassPermissions'])
     })
 
     it('reports a shift+tab at the keyboard on the next turn, with nothing restarting', async () => {
         await writeFile(file, stateBlock('bypassPermissions'))
         await start()
-        await settle()
+        await reports(['bypassPermissions'])
 
         await writeFile(file, stateBlock('bypassPermissions') + stateBlock('plan'))
-        await settle()
-
-        expect(modes).toEqual(['bypassPermissions', 'plan'])
+        await reports(['bypassPermissions', 'plan'])
     })
 
     it('says nothing while the mode holds, however many turns write it down', async () => {
@@ -106,11 +127,13 @@ describe('sessionScanner reports the permission mode the pane is in', () => {
         // the repetition has to die here.
         await writeFile(file, stateBlock('bypassPermissions'))
         await start()
-        await settle()
-        await writeFile(file, stateBlock('bypassPermissions').repeat(4))
-        await settle()
-
-        expect(modes).toEqual(['bypassPermissions'])
+        await reports(['bypassPermissions'])
+        // The repeats are followed by a real change, so there is something to
+        // wait FOR. Arriving at exactly [bypass, plan] is the proof the four
+        // repetitions in between were read and said nothing, which is stronger
+        // than reading the array once, 200 ms later, and hoping they had been.
+        await writeFile(file, stateBlock('bypassPermissions').repeat(4) + stateBlock('plan'))
+        await reports(['bypassPermissions', 'plan'])
     })
 
     it('reports a mode the session comes back to', async () => {
@@ -119,25 +142,31 @@ describe('sessionScanner reports the permission mode the pane is in', () => {
         // would have marked it history the first time.
         await writeFile(file, stateBlock('bypassPermissions'))
         await start()
-        await settle()
+        await reports(['bypassPermissions'])
         await writeFile(file, stateBlock('bypassPermissions') + stateBlock('plan'))
-        await settle()
+        await reports(['bypassPermissions', 'plan'])
         await writeFile(file,
             stateBlock('bypassPermissions') + stateBlock('plan') + stateBlock('bypassPermissions'))
-        await settle()
-
-        expect(modes).toEqual(['bypassPermissions', 'plan', 'bypassPermissions'])
+        await reports(['bypassPermissions', 'plan', 'bypassPermissions'])
     })
 
     it('says nothing for a transcript that has never recorded a mode', async () => {
-        await writeFile(file, JSON.stringify({
+        const turn = (uuid: string) => JSON.stringify({
             type: 'assistant',
-            uuid: 'u1',
+            uuid,
             sessionId,
             message: { role: 'assistant', model: 'claude-opus-5', content: [{ type: 'text', text: 'ok' }] },
-        }) + '\n')
+        }) + '\n'
+        await writeFile(file, turn('u1'))
         await start()
-        await settle()
+
+        // A second turn, appended after the scanner is watching, so there is a
+        // signal to wait for: the seeding pass and the pass that delivers this
+        // record have both been over a transcript with no mode in it, and
+        // neither reported one. The sleep it replaces could only say "nothing
+        // yet", which is also what a scanner that had not looked would say.
+        await writeFile(file, turn('u1') + turn('u2'))
+        await delivered(1)
         expect(modes).toEqual([])
     })
 })

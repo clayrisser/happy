@@ -47,6 +47,17 @@ struct DemoView: View {
                     .foregroundStyle(.secondary)
             }
 
+            // The honest half of the Playground (DROVE-124). Every pattern
+            // above plays only because this screen is up. With the app closed
+            // watchOS taps once with its own haptic and none of the patterns
+            // exist, and if alerts are off it does not tap at all — which used
+            // to be indistinguishable from nothing having happened.
+            Section {
+                ClosedAppRow(delivery: store.backgroundDelivery)
+            } header: {
+                Text("With the app closed")
+            }
+
             Section {
                 ForEach(gates) { gate in
                     NavigationLink(value: gate) {
@@ -65,6 +76,37 @@ struct DemoView: View {
         .navigationBarTitleDisplayMode(.inline)
         // Leaving mid play-all should not keep buzzing the wall.
         .onDisappear { store.stopDemo() }
+    }
+}
+
+/// What a gate does to this wrist when the app is NOT on screen (DROVE-124).
+///
+/// Three outcomes, and the app has to be able to say which one is live,
+/// because they are indistinguishable from the wrist: one identical system tap
+/// plus a card, or nothing at all. The patterns above are never among them.
+private struct ClosedAppRow: View {
+    let delivery: WristDelivery
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: delivery.buzzes ? "bell.badge" : "bell.slash")
+                .font(.caption2)
+                .foregroundStyle(delivery.buzzes ? .green : .orange)
+                .frame(width: 14)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(delivery.buzzes ? "One tap, watchOS picks it" : "No buzz")
+                    .font(.caption)
+                Text(detail)
+                    .font(.system(size: 9))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var detail: String {
+        if let silence = delivery.silence { return silence.reason }
+        return "A gate shows its card and taps once. The patterns above need this app on screen; watchOS chooses the haptic for a notification and no API selects it."
     }
 }
 

@@ -64,7 +64,7 @@ const onLimitChoices: Choice<'prompt' | 'auto'>[] = [
     },
     {
         value: 'auto',
-        title: 'Flip on its own',
+        title: 'Switch on its own',
         subtitle: 'Moves straight to the account with the most headroom and says in the transcript where it went and why.',
     },
 ];
@@ -85,7 +85,7 @@ const onFamilyExhaustedChoices: Choice<'stop' | 'fallback'>[] = [
 const onLimitTimeoutChoices: Choice<'auto' | 'stop'>[] = [
     {
         value: 'auto',
-        title: 'Flip anyway',
+        title: 'Switch anyway',
         subtitle: 'Keeps an unattended session working when nobody sees the question.',
     },
     {
@@ -173,7 +173,7 @@ export function DroverPolicyGroups(props: RowsProps) {
 
     if (policy?.unavailable) {
         return (
-            <ItemGroup title="Flip policy">
+            <ItemGroup title="Account switching">
                 <Item
                     title="The drover bus is not answering"
                     subtitle={policy.unavailable}

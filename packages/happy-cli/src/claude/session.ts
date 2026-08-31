@@ -8,6 +8,7 @@ import type { JsRuntime } from "./runClaude";
 import type { SandboxConfig } from "@/persistence";
 import type { FlipController } from "@/drover/flip/controller";
 import type { UsageReporter } from "@/drover/flip/usage";
+import type { ClaudeGoalStatusTranscriptEvent } from "./claudeGoalStatus";
 
 /**
  * The flags that point Claude Code at a transcript that ALREADY EXISTS, rather
@@ -84,6 +85,32 @@ export class Session {
     flip?: FlipController;
     /** Keeps metadata.droverUsage in step with the usage caches (DROVE-47). */
     usage?: UsageReporter;
+    /**
+     * How a slash command the APP raised over RPC reaches this session's
+     * Claude, when that Claude is a TUI in a tmux pane (DROVE-78).
+     *
+     * runClaude owns the goal RPC, because it has the goal state and the
+     * remote carrier. But under one mode (DROVE-1) every session is a pane
+     * session, and a pane has no message queue to push `/goal` onto. The
+     * carrier is set by claudeLocalLauncher for exactly as long as it owns a
+     * pane, so ABSENT is a real answer: this session has no terminal to run
+     * the command in, and the app is told that rather than being offered a
+     * button that throws.
+     *
+     * Resolves true when the command was typed at the pane's prompt or is
+     * waiting for it, false when there is no live Claude in the pane to take
+     * it. It never pastes on hope: see deliverSlashCommand in the launcher.
+     */
+    paneSlashCommandCarrier?: ((command: string) => Promise<boolean>) | null;
+    /**
+     * Where a `goal_status` record the LOCAL scanner read goes (DROVE-78).
+     *
+     * Set by runClaude, which keeps the goal state for both modes so the app
+     * sees one goal card whichever launcher is running. The local scanner is
+     * the one that follows a flip into another account's config dir, so
+     * without this the goal quietly stopped updating after a flip.
+     */
+    onGoalStatusEvent?: ((event: ClaudeGoalStatusTranscriptEvent) => void) | null;
     /**
      * The Claude transcript this Happy session was reattached to at start-up
      * (BASED-98). The server already holds every message in it, so the local

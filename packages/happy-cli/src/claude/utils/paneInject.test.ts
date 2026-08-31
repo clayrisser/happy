@@ -9,7 +9,7 @@
 
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { injectIntoPane } from './paneInject'
 
@@ -25,7 +25,34 @@ async function hasTmux(): Promise<boolean> {
 async function killSession(): Promise<void> {
     try { await run('tmux', ['kill-session', '-t', SESSION]) } catch { /* not there */ }
 }
-const settle = (ms = 300) => new Promise((r) => setTimeout(r, ms))
+/**
+ * Wait for the pane's foreground process to be what the test needs (DROVE-68).
+ *
+ * tmux starts a pane and then execs into it, so a fresh session's
+ * `pane_current_command` is whatever it happens to be for the first few
+ * milliseconds. This used to be a 300 ms sleep, which on a loaded box is a
+ * coin toss on a test whose whole subject is which command tmux reports.
+ */
+async function waitForPaneCommand(pane: string, want: (cmd: string) => boolean): Promise<void> {
+    await vi.waitFor(async () => {
+        const cmd = (await tmux(['display-message', '-p', '-t', pane, '#{pane_current_command}'])).trim()
+        if (!want(cmd)) throw new Error(`pane is running "${cmd}"`)
+    }, { timeout: 5_000, interval: 25 })
+}
+
+/** Wait for what was pasted to come back out of the pane. */
+async function waitForPaneBody(pane: string, ...needles: string[]): Promise<string> {
+    return await vi.waitFor(async () => {
+        const body = await tmux(['capture-pane', '-p', '-t', pane])
+        for (const needle of needles) {
+            if (!body.includes(needle)) throw new Error(`pane has not shown "${needle}" yet:\n${body}`)
+        }
+        return body
+    }, { timeout: 5_000, interval: 25 })
+}
+
+/** The commands paneInject treats as "not Claude", so a pane at one is refused. */
+const shells = new Set(['zsh', 'bash', 'sh', 'fish'])
 
 const maybe = (await hasTmux()) ? describe : describe.skip
 
@@ -36,38 +63,47 @@ maybe('injectIntoPane against real tmux', () => {
         // `cat` echoes stdin, so a delivered inject shows up in the pane, and
         // its foreground command is "cat" — not one of the refused shells.
         await run('tmux', ['new-session', '-d', '-s', SESSION, '-x', '80', '-y', '24', 'cat'])
-        await settle()
         const pane = (await tmux(['list-panes', '-t', SESSION, '-F', '#{pane_id}'])).trim()
+        await waitForPaneCommand(pane, (cmd) => cmd === 'cat')
 
         const delivered = await injectIntoPane(pane, 'hello from the phone')
-        await settle()
 
         expect(delivered).toBe(true)
-        expect(await tmux(['capture-pane', '-p', '-t', pane])).toContain('hello from the phone')
+        expect(await waitForPaneBody(pane, 'hello from the phone')).toContain('hello from the phone')
     })
 
     it('delivers a multi-line message as ONE paste, not a line at a time', async () => {
         await run('tmux', ['new-session', '-d', '-s', SESSION, '-x', '80', '-y', '24', 'cat'])
-        await settle()
         const pane = (await tmux(['list-panes', '-t', SESSION, '-F', '#{pane_id}'])).trim()
+        await waitForPaneCommand(pane, (cmd) => cmd === 'cat')
 
         const delivered = await injectIntoPane(pane, 'line-one\nline-two')
-        await settle()
 
         expect(delivered).toBe(true)
-        const body = await tmux(['capture-pane', '-p', '-t', pane])
+        const body = await waitForPaneBody(pane, 'line-one', 'line-two')
         expect(body).toContain('line-one')
         expect(body).toContain('line-two')
     })
 
     it('REFUSES a pane sitting at a shell prompt, and types nothing into it', async () => {
-        await run('tmux', ['new-session', '-d', '-s', SESSION, '-x', '80', '-y', '24']) // default shell
-        await settle(400)
+        // `sh` by name rather than the box's default shell. The refusal is
+        // about what tmux reports as `pane_current_command`, and an
+        // interactive login shell reports whatever its rc happens to be
+        // running for the first moment or two. On a loaded box that was
+        // still true when the inject went in, so the pane was not "at a shell"
+        // and nothing was refused. A pane started on sh reports sh and keeps
+        // reporting it.
+        await run('tmux', ['new-session', '-d', '-s', SESSION, '-x', '80', '-y', '24', 'sh'])
         const pane = (await tmux(['list-panes', '-t', SESSION, '-F', '#{pane_id}'])).trim()
+        // The refusal is ABOUT this command, so waiting for it is the
+        // precondition, not a delay. A sleep that came up short tested nothing
+        // and still passed.
+        await waitForPaneCommand(pane, (cmd) => shells.has(cmd))
 
         const delivered = await injectIntoPane(pane, 'should NOT be typed')
-        await settle()
 
+        // Nothing is in flight to wait for: a refusal returns before any
+        // set-buffer or paste-buffer is issued, so the pane can be read now.
         expect(delivered).toBe(false)
         expect(await tmux(['capture-pane', '-p', '-t', pane])).not.toContain('should NOT be typed')
     })
@@ -104,8 +140,12 @@ describe('the idle gate decides whether Enter is pressed', () => {
     let originalPath: string | undefined
     let bus: Server
     let busUrl: string
-    let pendingEvents: Array<{ origin?: { sessionId?: string | null } }> = []
+    let pendingEvents: Array<{ id?: string; kind?: string; origin?: { sessionId?: string | null } }> = []
     let busStatus = 200
+    /** What the bus answers a withdrawal with. 200 is the real one. */
+    let cancelStatus = 200
+    /** Every request the code under test made, in order. */
+    let busCalls: string[] = []
 
     async function tmuxArgv(): Promise<string[]> {
         try {
@@ -146,7 +186,18 @@ describe('the idle gate decides whether Enter is pressed', () => {
         configDir = await mkdtemp(join(tmpdir(), 'happy-fake-claude-'))
         await mkdir(join(configDir, 'sessions'), { recursive: true })
 
-        bus = createServer((_req, res) => {
+        // The two routes this module speaks: the pending list, and the
+        // withdrawal Stop posts when that list has something for the session.
+        bus = createServer((req, res) => {
+            const path = (req.url ?? '/').split('?')[0]
+            busCalls.push(`${req.method} ${req.url}`)
+            const cancel = path.match(/^\/v1\/events\/([^/]+)\/cancel$/)
+            if (cancel && req.method === 'POST') {
+                req.resume()
+                res.writeHead(cancelStatus, { 'Content-Type': 'application/json' })
+                res.end(JSON.stringify({ id: cancel[1], state: 'canceled' }))
+                return
+            }
             res.writeHead(busStatus, { 'Content-Type': 'application/json' })
             res.end(JSON.stringify({ events: pendingEvents }))
         })
@@ -169,6 +220,8 @@ describe('the idle gate decides whether Enter is pressed', () => {
         delete process.env.FAKE_PANE_CMD
         pendingEvents = []
         busStatus = 200
+        cancelStatus = 200
+        busCalls = []
         await setRegistryStatus('idle')
     })
 
@@ -284,6 +337,98 @@ describe('the idle gate decides whether Enter is pressed', () => {
 
             expect(await interruptPane(gate())).toBe('unavailable')
             expect((await tmuxArgv()).some((line) => line.startsWith('send-keys'))).toBe(false)
+        })
+
+        /**
+         * DROVE-80. Escape lands on whatever dialog is up, and Escape on a
+         * permission dialog is DENY — so a Stop pressed while a gate was
+         * pending did not stop the turn, it refused the tool call. The bus
+         * knows the gate is there; these pin that it is asked first and that
+         * the keyboard is left alone when it says yes.
+         */
+        describe('with a prompt open, Stop goes to the bus and not to the keyboard', () => {
+            const eventId = 'f3b0b7c2-2b1e-4d84-9d0a-9d1a1a3b6c77'
+
+            it('withdraws the pending gate and types NOTHING into the pane', async () => {
+                await setRegistryStatus('busy')
+                pendingEvents = [{ id: eventId, kind: 'permission', origin: { sessionId: claudeSessionId } }]
+
+                expect(await interruptPane(gate())).toBe('gate-cancelled')
+
+                // The whole point: no keystroke reached tmux, so nothing
+                // answered the dialog on the human's behalf.
+                const argv = await tmuxArgv()
+                expect(argv.some((line) => line.startsWith('send-keys'))).toBe(false)
+                expect(busCalls).toContain(`POST /v1/events/${eventId}/cancel`)
+            })
+
+            it('withdraws every prompt the session is holding, not just the first', async () => {
+                const second = 'a1c9f0de-31b6-4a05-9d2d-1f1a2b3c4d5e'
+                pendingEvents = [
+                    { id: eventId, kind: 'permission', origin: { sessionId: claudeSessionId } },
+                    { id: second, kind: 'question', origin: { sessionId: claudeSessionId } },
+                ]
+
+                expect(await interruptPane(gate())).toBe('gate-cancelled')
+                expect(busCalls).toContain(`POST /v1/events/${eventId}/cancel`)
+                expect(busCalls).toContain(`POST /v1/events/${second}/cancel`)
+            })
+
+            it('leaves another session\'s prompt alone and sends the Escape as before', async () => {
+                await setRegistryStatus('busy')
+                pendingEvents = [{ id: eventId, kind: 'permission', origin: { sessionId: 'someone-else' } }]
+
+                expect(await interruptPane(gate())).toBe('cancelled')
+                expect(await tmuxArgv()).toContain(`send-keys -t ${gatePane} Escape`)
+                expect(busCalls.some((c) => c.includes('/cancel'))).toBe(false)
+            })
+
+            it('is not fooled by a to-do, which is a notice and not a dialog', async () => {
+                // A to-do sits pending for days by design (DROVE-53). Reading
+                // one as an open dialog would leave Stop unable to stop
+                // anything, and withdrawing it would delete a record nobody
+                // had acted on.
+                await setRegistryStatus('busy')
+                pendingEvents = [{ id: eventId, kind: 'todo', origin: { sessionId: claudeSessionId } }]
+
+                expect(await interruptPane(gate())).toBe('cancelled')
+                expect(await tmuxArgv()).toContain(`send-keys -t ${gatePane} Escape`)
+                expect(busCalls.some((c) => c.includes('/cancel'))).toBe(false)
+            })
+
+            it('sends nothing when the bus cannot say whether a prompt is open', async () => {
+                await setRegistryStatus('busy')
+
+                // Nothing listening on this port: the fetch rejects, and a
+                // keystroke sent blind is the defect this ticket closed.
+                expect(await interruptPane({ ...gate(), busUrl: 'http://127.0.0.1:1' })).toBe('unknown')
+                expect((await tmuxArgv()).some((line) => line.startsWith('send-keys'))).toBe(false)
+            })
+
+            it('sends nothing when the bus answers the pending list with an error', async () => {
+                await setRegistryStatus('busy')
+                busStatus = 500
+
+                expect(await interruptPane(gate())).toBe('unknown')
+                expect((await tmuxArgv()).some((line) => line.startsWith('send-keys'))).toBe(false)
+            })
+
+            it('sends nothing when the bus refuses to withdraw the prompt it named', async () => {
+                await setRegistryStatus('busy')
+                pendingEvents = [{ id: eventId, kind: 'permission', origin: { sessionId: claudeSessionId } }]
+                cancelStatus = 500
+
+                expect(await interruptPane(gate())).toBe('unknown')
+                expect((await tmuxArgv()).some((line) => line.startsWith('send-keys'))).toBe(false)
+            })
+
+            it('takes a 409 as done: another surface ended the prompt first', async () => {
+                pendingEvents = [{ id: eventId, kind: 'permission', origin: { sessionId: claudeSessionId } }]
+                cancelStatus = 409
+
+                expect(await interruptPane(gate())).toBe('gate-cancelled')
+                expect((await tmuxArgv()).some((line) => line.startsWith('send-keys'))).toBe(false)
+            })
         })
     })
 })

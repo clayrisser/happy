@@ -8,16 +8,30 @@ import { t } from '@/text';
 interface CommandSuggestionProps {
     command: string;
     description?: string;
+    /**
+     * A skill and a slash command are different things and the row says so
+     * (DROVE-170). One flat list of a few hundred names reads as noise; the
+     * badge is what lets you tell your own `/huly-ticket` skill from the
+     * harness's `/compact` at a glance.
+     */
+    kind?: 'command' | 'skill';
 }
 
-export const CommandSuggestion = React.memo(({ command, description }: CommandSuggestionProps) => {
+export const CommandSuggestion = React.memo(({ command, description, kind = 'command' }: CommandSuggestionProps) => {
     return (
         <View style={styles.suggestionContainer}>
             <Text 
-                style={[styles.commandText, { marginRight: description ? 12 : 0 }]}
+                style={[styles.commandText, { marginRight: 8 }]}
             >
                 /{command}
             </Text>
+            <View style={kind === 'skill' ? styles.skillBadge : styles.commandBadge}>
+                <Text style={kind === 'skill' ? styles.skillBadgeText : styles.commandBadgeText}>
+                    {kind === 'skill'
+                        ? t('agentInput.suggestion.skillLabel')
+                        : t('agentInput.suggestion.commandLabel')}
+                </Text>
+            </View>
             {description && (
                 <Text
                     style={styles.descriptionText}
@@ -77,7 +91,32 @@ const styles = StyleSheet.create((theme) => ({
         flex: 1,
         fontSize: 13,
         color: theme.colors.textSecondary,
+        marginLeft: 8,
         ...Typography.default(),
+    },
+    commandBadge: {
+        paddingHorizontal: 6,
+        paddingVertical: 2,
+        borderRadius: 4,
+        backgroundColor: theme.colors.surfaceHigh,
+    },
+    commandBadgeText: {
+        fontSize: 10,
+        letterSpacing: 0.5,
+        color: theme.colors.textSecondary,
+        ...Typography.default('semiBold'),
+    },
+    skillBadge: {
+        paddingHorizontal: 6,
+        paddingVertical: 2,
+        borderRadius: 4,
+        backgroundColor: theme.colors.surfaceSelected,
+    },
+    skillBadgeText: {
+        fontSize: 10,
+        letterSpacing: 0.5,
+        color: theme.colors.text,
+        ...Typography.default('semiBold'),
     },
     iconContainer: {
         width: 32,

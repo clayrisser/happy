@@ -15,11 +15,22 @@ export const SUPPORTED_SCHEMA_VERSION = 2;
 export const SESSION_LIST_GROUPING_MODES = ['flat', 'project'] as const;
 export type SessionListGrouping = typeof SESSION_LIST_GROUPING_MODES[number];
 
-// Soft wrap for monospace cards (DROVE-95): terminal cards (CommandView) and
-// fenced code blocks, each toggled by a double-tap on the card. One preference
-// with two targets, so one nested value rather than two flat keys. Both fields
+// Soft wrap for monospace cards: terminal cards (CommandView) and fenced code
+// blocks, each toggled by a double-tap on the card. One preference with two
+// targets, so one nested value rather than two flat keys. Both fields
 // optional: a partial object from another app version merges instead of
-// failing the whole settings parse. Default off, the horizontal scroll.
+// failing the whole settings parse.
+//
+// Wrapping is the default (DROVE-149). Horizontal scrolling is the exception
+// you reach for when column alignment matters, so the stored value names the
+// kinds that SCROLL and an absent kind wraps.
+//
+// The key is new rather than a flipped default on DROVE-95's codeWrap,
+// because settings sync POSTs the whole settings object: every account that
+// changed any setting after DROVE-95 already has codeWrap {terminal: false,
+// code: false} on the server, and a flipped default would read as "off" for
+// all of them. An older app version ignores codeScroll and keeps its own
+// behavior, which is what it had anyway.
 export const CODE_WRAP_KINDS = ['terminal', 'code'] as const;
 export type CodeWrapKind = typeof CODE_WRAP_KINDS[number];
 export const CodeWrapSchema = z.object({
@@ -27,19 +38,30 @@ export const CodeWrapSchema = z.object({
     code: z.boolean().optional(),
 });
 export type CodeWrap = z.infer<typeof CodeWrapSchema>;
+export const CodeScrollSchema = CodeWrapSchema;
+export type CodeScroll = z.infer<typeof CodeScrollSchema>;
 
 // Stream-talk voice (DROVE-97): which installed voice reads replies aloud,
-// how fast and how high, and how far behind the text the voice may fall
-// before it skips ahead. One nested value, like codeWrap, so a partial
+// how fast and how high, and how much unspoken audio may pile up behind a
+// reply still being written before it skips ahead (DROVE-108, which replaced
+// a threshold on a sentence's AGE that fired on every long reply because
+// speech is always slower than generation). One nested value, like codeWrap, so a partial
 // object from another app version merges instead of failing the parse. The
 // voice identifier is per-device in practice (an iPad may not have the
 // iPhone's voice installed), so a missing voice falls back to the best
 // installed one rather than to silence.
+//
+// DROVE-116 made the delivery four plain statements instead of one speed and
+// one threshold: the normal speed, the fast speed, when to speed up, and when
+// to jump. Clay: "you pick the speed you want it normally but then as it gets
+// behind you pick the fast speed", and "we can also set when it jumps".
 export const StreamTalkSchema = z.object({
     voiceId: z.string().nullable().optional(),
     rate: z.number().optional(),
+    catchUpRate: z.number().optional(),
     pitch: z.number().optional(),
-    maxLagSeconds: z.number().optional(),
+    maxBacklogSeconds: z.number().optional(),
+    jumpBacklogSeconds: z.number().optional(),
 });
 export type StreamTalk = z.infer<typeof StreamTalkSchema>;
 
@@ -49,17 +71,162 @@ export type StreamTalk = z.infer<typeof StreamTalkSchema>;
  * slider covers the range that still sounds like a person.
  */
 export const streamTalkRateRange = { min: 0.4, max: 0.6 } as const;
+/**
+ * The absolute rate the engine may be driven to, above the speed slider's own
+ * maximum (DROVE-116).
+ *
+ * The slider bounds what the USER picks for ordinary prose. It must not also
+ * bound what catching up may add on top, which is the bug that made the whole
+ * catch-up a no-op: speechEngine clamped `rate * rateScale` back into
+ * streamTalkRateRange, so at the slider's own maximum the product clamped
+ * straight back to it and the voice never sped up at all. Anyone who likes
+ * fast speech, which is exactly the person who wants catch-up, silently got
+ * none of it. AVSpeechUtterance accepts up to 1.0 and the native module clamps
+ * there; 0.85 is the fastest that still parses as speech rather than a chipmunk.
+ */
+export const streamTalkRateCeiling = 0.85;
+/** The fast speed may sit anywhere from the normal floor up to that ceiling. */
+export const streamTalkCatchUpRateRange = { min: streamTalkRateRange.min, max: streamTalkRateCeiling } as const;
 /** AVSpeechUtterance.pitchMultiplier accepts 0.5 to 2.0. */
 export const streamTalkPitchRange = { min: 0.5, max: 2.0 } as const;
-/** Seconds the voice may lag the text before it drops the backlog. */
-export const streamTalkLagRange = { min: 10, max: 30 } as const;
+/**
+ * Seconds of UNSPOKEN AUDIO the voice may have queued behind a reply that is
+ * still being written before it starts reading FASTER. Not a delay, and it
+ * never applies to a finished reply, which is read to the end (DROVE-108).
+ */
+export const streamTalkBacklogRange = { min: 10, max: 30 } as const;
+/**
+ * Seconds of unspoken audio past which the tail is dropped outright.
+ *
+ * Its own setting since DROVE-116, rather than twice the speed-up threshold.
+ * That derivation was not merely timid, it was self-defeating: the cut fired
+ * at the same number the ramp STARTED at, so the ramp between the two never
+ * ran and the voice jumped without ever having sped up. Kept strictly above
+ * the speed-up threshold by resolveStreamTalk, so there is always a band in
+ * which reading faster is tried first.
+ */
+export const streamTalkJumpRange = { min: 15, max: 120 } as const;
 
 export const streamTalkDefaults: Required<StreamTalk> = {
     voiceId: null,
     rate: 0.52,
+    // 1.5x the normal default, which is where audiobook listeners sit and is
+    // well past the 1.15x ceiling DROVE-108 shipped with.
+    catchUpRate: 0.78,
     pitch: 1.0,
-    maxLagSeconds: 15,
+    maxBacklogSeconds: 15,
+    jumpBacklogSeconds: 45,
 };
+
+// The eyes-free audio cue system (DROVE-112): the ambient heartbeat, the
+// one-shot earcons, and the spoken one-line titles of tool calls, terminal
+// calls and agent spawns. One nested object, like streamTalk and codeWrap, so
+// a partial from another app version merges instead of failing the parse.
+//
+// `muted` is a bag of cue ids rather than a switch per cue, because the cue
+// table grows and a schema that has to grow with it turns every new sound into
+// a settings migration. An id nothing recognises is simply never looked up.
+export const AudioCuesSchema = z.object({
+    on: z.boolean().optional(),
+    heartbeat: z.boolean().optional(),
+    volume: z.number().optional(),
+    workingIntervalSeconds: z.number().optional(),
+    waitingIntervalSeconds: z.number().optional(),
+    muted: z.array(z.string()).optional(),
+    speakTitles: z.boolean().optional(),
+    speakAgentTitles: z.boolean().optional(),
+    speakToolTitles: z.boolean().optional(),
+    titlesPerRun: z.number().optional(),
+    toolCuesPerMinute: z.number().optional(),
+    agentCuesPerMinute: z.number().optional(),
+});
+export type AudioCues = z.infer<typeof AudioCuesSchema>;
+
+/** Cue loudness, on top of each cue's own gain in the table. */
+export const audioCueVolumeRange = { min: 0, max: 1 } as const;
+/**
+ * How often the ordinary WORKING pulse repeats. The floor is two seconds
+ * because anything faster stops being ambient and starts being an alarm; the
+ * ceiling is a minute, which is "tell me it is still alive" and little more.
+ */
+export const audioCueWorkingIntervalRange = { min: 2, max: 60 } as const;
+/** How often a WAITING pulse repeats. Faster than working, by design. */
+export const audioCueWaitingIntervalRange = { min: 1, max: 30 } as const;
+/**
+ * How many tool titles inside one RUN of consecutive tool calls are spoken
+ * before the rest of the run goes unnamed. A run of thirty greps must not
+ * become thirty spoken lines; two or three is enough to know what is going on.
+ * Agent spawns are exempt, because that is the one Clay most wants to hear.
+ */
+export const audioCueTitlesPerRunRange = { min: 0, max: 10 } as const;
+/** Cap on EARCONS per minute, per lane, with the excess dropped silently. */
+export const audioCueRateRange = { min: 1, max: 60 } as const;
+
+export const audioCuesDefaults: Required<AudioCues> = {
+    on: true,
+    heartbeat: true,
+    volume: 0.35,
+    workingIntervalSeconds: 6,
+    waitingIntervalSeconds: 3,
+    muted: [],
+    speakTitles: true,
+    speakAgentTitles: true,
+    speakToolTitles: true,
+    titlesPerRun: 3,
+    toolCuesPerMinute: 6,
+    agentCuesPerMinute: 12,
+};
+
+/**
+ * How much faster and higher a spoken TITLE is read than reply prose
+ * (DROVE-112).
+ *
+ * Not a setting, and deliberately: the point is that a tool call never sounds
+ * like Claude talking, and a slider that can be dragged back to 1.0 would let
+ * that distinction be silently switched off. Volume would have been the
+ * obvious third axis and is not available — DroverSpeechModule takes a rate,
+ * a pitch and a voice, and no per-utterance volume — so rate and pitch carry
+ * it, with the earcon in front doing the rest.
+ */
+export const asideRateScale = 1.22;
+export const asidePitchScale = 1.18;
+/**
+ * The absolute rate an aside may reach, above the speed slider's own maximum.
+ * The slider bounds what the USER picks for prose; it should not stop a title
+ * being read as the quick footnote it is.
+ *
+ * It is now literally the same engine-safe ceiling the catch-up uses
+ * (DROVE-116), and that is the whole guard against the two stacking: a title
+ * spoken while the voice is far behind gets rate x catch-up x aside, and this
+ * caps the product at the fastest ordinary prose can go rather than letting
+ * the two multipliers compound into something unintelligible.
+ */
+export const asideRateCeiling = streamTalkRateCeiling;
+
+/**
+ * The rate one utterance is actually spoken at.
+ *
+ * Here rather than in speechEngine because this one expression is the whole of
+ * DROVE-116 and the whole of the aside's voice, and neither is testable behind
+ * a native module. `rateScale` is the reader's catch-up multiplier, 1 at rest.
+ *
+ * The floor is the speed slider's own minimum. The CEILING is the absolute
+ * engine-safe rate, NOT the slider's maximum, and that is the fix: clamping
+ * the product back into the slider's range meant that at the top of the slider
+ * `rate x anything` clamped straight back to the rate, so the catch-up did
+ * nothing at all for the person most likely to want it. The slider bounds what
+ * the user CHOOSES; it must not bound what the reader adds on top.
+ *
+ * An aside is a tool-call title (DROVE-112) and shares that ceiling, which is
+ * what stops the two multipliers compounding: a title spoken while the voice
+ * is far behind is capped at the same rate as the fastest prose rather than
+ * being taken to rate x catch-up x aside.
+ */
+export function resolveSpokenRate(rate: number, rateScale: number, aside: boolean): number {
+    const scaled = rate * rateScale * (aside ? asideRateScale : 1);
+    const ceiling = aside ? asideRateCeiling : streamTalkRateCeiling;
+    return Math.min(ceiling, Math.max(streamTalkRateRange.min, scaled));
+}
 // The three feedback channels and how audio may answer (DROVE-72). Clay's
 // four ways of working (silent haptic, eyes-free audio, direct, hands-free
 // voice) are saved COMBINATIONS of these four keys, never code paths, and a
@@ -108,20 +275,17 @@ export const SettingsSchema = z.object({
     avatarStyle: z.string().describe('Generated avatar style: brutalist, pixelated, or gradient'),
     avatarMonochrome: z.boolean().describe('Render generated avatars in black and white'),
     sessionListGrouping: z.enum(SESSION_LIST_GROUPING_MODES).describe('Home session list layout: flat activity list or grouped by project'),
-    // Cattle Drover account filter (BASED-98). Empty string = show every
-    // account; otherwise only sessions stamped with this account. A free
-    // string rather than an enum: accounts are user-defined and sync across
-    // devices that may not know the same set.
-    droverAccountFilter: z.string().describe('Show only Cattle Drover sessions for this account; empty shows all'),
     // Keep the legacy key for synced settings compatibility. It controls the
     // harness badges in the session list.
     showFlavorIcons: z.boolean().describe('Whether to show harness icons in the session list'),
     showHarnessIconInSessionHeader: z.boolean().describe('Whether to show the harness icon in the session header'),
     userMessageBubbleColor: z.string().describe('User message bubble color preset'),
     usageLimitShowRemaining: z.boolean().describe('Show plan rate limits as quota remaining instead of quota used'),
-    codeWrap: CodeWrapSchema.describe('Soft-wrap monospace text in terminal cards and code blocks, toggled by double-tap'),
-    streamTalk: StreamTalkSchema.describe('Read-aloud voice: chosen voice identifier, rate, pitch and the lag threshold before skipping ahead'),
+    codeWrap: CodeWrapSchema.describe('Legacy opt-in soft wrap for monospace cards (no longer used; see codeScroll)'),
+    codeScroll: CodeScrollSchema.describe('Which monospace kinds scroll horizontally instead of wrapping, toggled by double-tap'),
+    streamTalk: StreamTalkSchema.describe('Read-aloud voice: chosen voice identifier, pitch, the normal and catch-up speaking rates, and the backlogs at which the voice speeds up and at which it jumps ahead'),
     speakReplies: SpeakRepliesSchema.describe('Which device speaks replies aloud: phone, watch, or auto (the one whose audio route has headphones, else the phone)'),
+    audioCues: AudioCuesSchema.describe('Eyes-free audio cues: the ambient heartbeat, the one-shot earcons, and the spoken titles of tool calls and agent spawns'),
     droverAnnounceVisual: z.boolean().describe('Visual channel: the alert push and the gum client announce a Cattle Drover prompt'),
     droverAnnounceHaptic: z.boolean().describe('Haptic channel: the phone taps and the wrist buzzes when a Cattle Drover prompt arrives'),
     droverAnnounceAudio: z.boolean().describe('Audio channel: a Cattle Drover prompt is spoken aloud when it arrives'),
@@ -205,14 +369,15 @@ export const settingsDefaults: Settings = {
     avatarStyle: 'brutalist',
     avatarMonochrome: false,
     sessionListGrouping: 'flat',
-    droverAccountFilter: '',
     showFlavorIcons: false,
     showHarnessIconInSessionHeader: true,
     userMessageBubbleColor: DEFAULT_USER_MESSAGE_BUBBLE_COLOR,
     usageLimitShowRemaining: false,
     codeWrap: { terminal: false, code: false },
+    codeScroll: {},
     streamTalk: { ...streamTalkDefaults },
     speakReplies: { on: speakRepliesDefault },
+    audioCues: { ...audioCuesDefaults },
     // Visual and haptic on, matching the bus's built-in defaults: the push and
     // the wrist buzz are what Clay already has. Audio off until DROVE-73's
     // measurements say what answering by click costs.
@@ -312,19 +477,22 @@ export function settingsToSyncPayload(settings: Settings): Partial<Settings> {
 }
 
 //
-// Code wrap (DROVE-95)
+// Code wrap (DROVE-95, default flipped to wrapped in DROVE-149)
 //
 
-export function isCodeWrapOn(settings: Pick<Settings, 'codeWrap'>, kind: CodeWrapKind): boolean {
-    return settings.codeWrap?.[kind] === true;
+/** A kind wraps unless it was explicitly turned over to horizontal scrolling. */
+export function isCodeWrapOn(settings: Pick<Settings, 'codeScroll'>, kind: CodeWrapKind): boolean {
+    return settings.codeScroll?.[kind] !== true;
 }
 
 /** The delta that flips one kind and leaves the other as it was. */
-export function toggleCodeWrap(settings: Pick<Settings, 'codeWrap'>, kind: CodeWrapKind): Pick<Settings, 'codeWrap'> {
+export function toggleCodeWrap(settings: Pick<Settings, 'codeScroll'>, kind: CodeWrapKind): Pick<Settings, 'codeScroll'> {
     return {
-        codeWrap: {
-            ...(settings.codeWrap ?? {}),
-            [kind]: !isCodeWrapOn(settings, kind),
+        codeScroll: {
+            ...(settings.codeScroll ?? {}),
+            // Scrolling becomes whatever wrapping is now, so a first double-tap
+            // on an untouched card turns wrapping off.
+            [kind]: isCodeWrapOn(settings, kind),
         },
     };
 }
@@ -345,17 +513,94 @@ function clamp(value: number | undefined, fallback: number, range: { min: number
  */
 export function resolveStreamTalk(settings: Pick<Settings, 'streamTalk'>): Required<StreamTalk> {
     const raw = settings.streamTalk ?? {};
+    const rate = clamp(raw.rate, streamTalkDefaults.rate, streamTalkRateRange);
+    const maxBacklogSeconds = clamp(raw.maxBacklogSeconds, streamTalkDefaults.maxBacklogSeconds, streamTalkBacklogRange);
     return {
         voiceId: typeof raw.voiceId === 'string' && raw.voiceId.length > 0 ? raw.voiceId : null,
-        rate: clamp(raw.rate, streamTalkDefaults.rate, streamTalkRateRange),
+        rate,
+        // The fast speed is never slower than the normal one. A pair that
+        // crossed over would read the backlog and then slow DOWN, and the UI
+        // enforces the same floor on the slider so the two cannot disagree.
+        catchUpRate: Math.max(rate, clamp(raw.catchUpRate, streamTalkDefaults.catchUpRate, streamTalkCatchUpRateRange)),
         pitch: clamp(raw.pitch, streamTalkDefaults.pitch, streamTalkPitchRange),
-        maxLagSeconds: clamp(raw.maxLagSeconds, streamTalkDefaults.maxLagSeconds, streamTalkLagRange),
+        maxBacklogSeconds,
+        // Strictly above the speed-up threshold, so there is always a band in
+        // which the voice reads faster before anything is thrown away.
+        jumpBacklogSeconds: Math.max(
+            maxBacklogSeconds + 1,
+            clamp(raw.jumpBacklogSeconds, streamTalkDefaults.jumpBacklogSeconds, streamTalkJumpRange),
+        ),
     };
 }
 
 /** The delta that changes some stream-talk fields and keeps the rest. */
 export function updateStreamTalk(settings: Pick<Settings, 'streamTalk'>, patch: Partial<StreamTalk>): Pick<Settings, 'streamTalk'> {
     return { streamTalk: { ...resolveStreamTalk(settings), ...patch } };
+}
+
+//
+// Eyes-free audio cues (DROVE-112)
+//
+
+/**
+ * The cue settings with every field present and inside its range.
+ *
+ * `muted` is filtered to strings and deduped rather than trusted: it is the
+ * one field another app version can put arbitrary content in, and a bad entry
+ * there would otherwise reach the mixer's lookup.
+ */
+export function resolveAudioCues(settings: Pick<Settings, 'audioCues'>): Required<AudioCues> {
+    const raw = settings.audioCues ?? {};
+    const muted = Array.isArray(raw.muted)
+        ? [...new Set(raw.muted.filter((id): id is string => typeof id === 'string'))]
+        : [];
+    return {
+        on: raw.on ?? audioCuesDefaults.on,
+        heartbeat: raw.heartbeat ?? audioCuesDefaults.heartbeat,
+        volume: clamp(raw.volume, audioCuesDefaults.volume, audioCueVolumeRange),
+        workingIntervalSeconds: clamp(
+            raw.workingIntervalSeconds,
+            audioCuesDefaults.workingIntervalSeconds,
+            audioCueWorkingIntervalRange,
+        ),
+        waitingIntervalSeconds: clamp(
+            raw.waitingIntervalSeconds,
+            audioCuesDefaults.waitingIntervalSeconds,
+            audioCueWaitingIntervalRange,
+        ),
+        muted,
+        speakTitles: raw.speakTitles ?? audioCuesDefaults.speakTitles,
+        speakAgentTitles: raw.speakAgentTitles ?? audioCuesDefaults.speakAgentTitles,
+        speakToolTitles: raw.speakToolTitles ?? audioCuesDefaults.speakToolTitles,
+        titlesPerRun: Math.round(clamp(raw.titlesPerRun, audioCuesDefaults.titlesPerRun, audioCueTitlesPerRunRange)),
+        toolCuesPerMinute: Math.round(
+            clamp(raw.toolCuesPerMinute, audioCuesDefaults.toolCuesPerMinute, audioCueRateRange),
+        ),
+        agentCuesPerMinute: Math.round(
+            clamp(raw.agentCuesPerMinute, audioCuesDefaults.agentCuesPerMinute, audioCueRateRange),
+        ),
+    };
+}
+
+/** The delta that changes some cue fields and keeps the rest. */
+export function updateAudioCues(
+    settings: Pick<Settings, 'audioCues'>,
+    patch: Partial<AudioCues>,
+): Pick<Settings, 'audioCues'> {
+    return { audioCues: { ...resolveAudioCues(settings), ...patch } };
+}
+
+/** The delta that silences one cue, or un-silences it. */
+export function muteAudioCue(
+    settings: Pick<Settings, 'audioCues'>,
+    id: string,
+    muted: boolean,
+): Pick<Settings, 'audioCues'> {
+    const current = resolveAudioCues(settings).muted;
+    const next = muted
+        ? [...new Set([...current, id])]
+        : current.filter((entry) => entry !== id);
+    return updateAudioCues(settings, { muted: next });
 }
 
 //

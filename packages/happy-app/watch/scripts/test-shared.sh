@@ -17,7 +17,9 @@ out=$(mktemp -d)
 swiftc -o "$out/shared-wire-test" \
 	"$root/DroverWatch/Shared/DroverSnapshot.swift" \
 	"$root/DroverWatch/Shared/WristCue.swift" \
+	"$root/DroverWatch/Shared/WristReach.swift" \
 	"$root/DroverWatch/Shared/DroverDemo.swift" \
+	"$root/DroverWatch/Shared/WristDraft.swift" \
 	"$root/tests/SharedWireTests.swift"
 
 "$out/shared-wire-test"

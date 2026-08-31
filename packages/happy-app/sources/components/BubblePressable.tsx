@@ -17,6 +17,7 @@ import Animated, {
     withTiming,
 } from 'react-native-reanimated';
 import { resolveBubblePressableFeedback } from './bubblePressableFeedback';
+import { useNativeGlassPress } from './glassPress';
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
@@ -43,9 +44,11 @@ export const BubblePressable = React.memo(({
 }: BubblePressableProps) => {
     const scale = useSharedValue(1);
     const [pressed, setPressed] = React.useState(false);
+    const nativeGlassPress = useNativeGlassPress();
     const { animateScale } = resolveBubblePressableFeedback({
         platform: Platform.OS === 'web' ? 'web' : 'native',
         scaleFeedback,
+        nativeGlassPress,
     });
     React.useEffect(() => {
         if (animateScale) {

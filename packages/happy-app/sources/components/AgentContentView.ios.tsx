@@ -2,10 +2,17 @@ import { useHeaderHeight } from '@/utils/responsive';
 import * as React from 'react';
 import { LayoutChangeEvent, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
+import MaskedView from '@react-native-masked-view/masked-view';
+import {
+    TRANSCRIPT_FADE_LOCATIONS,
+    TRANSCRIPT_FADE_MASK_COLORS,
+    resolveDockBottomOffset,
+    resolveDockInset,
+    resolveTranscriptMask,
+} from './agentDockLayout';
 import { useKeyboardHandler, useReanimatedKeyboardAnimation } from 'react-native-keyboard-controller';
 import Animated, { useAnimatedStyle, useSharedValue } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useUnistyles } from 'react-native-unistyles';
 
 interface AgentContentViewProps {
     input?: React.ReactNode | null;
@@ -24,7 +31,6 @@ export const AgentContentView: React.FC<AgentContentViewProps> = React.memo(({
     floatingDock = false,
     onDockInsetChange,
 }) => {
-    const { theme } = useUnistyles();
     const safeArea = useSafeAreaInsets();
     const height = useReanimatedKeyboardAnimation();
     const headerHeight = useHeaderHeight();
@@ -38,38 +44,79 @@ export const AgentContentView: React.FC<AgentContentViewProps> = React.memo(({
         ));
     }, []);
 
+    // The dock's frame sits this far above the screen edge. In floating mode
+    // AgentInput's own 8pt container padding under the status row counts
+    // toward the home indicator clearance instead of stacking on top of it,
+    // which is the empty band in DROVE-113. Everything that animates with the
+    // keyboard uses this same number, so a dock at `bottom: B` translated by
+    // `-keyboardHeight + B * progress` lands exactly on the keyboard.
+    const dockBottomOffset = resolveDockBottomOffset(safeArea.bottom, floatingDock);
+    // The transcript runs behind the composer and is faded to nothing before
+    // it reaches it (DROVE-168). A mask rather than a painted scrim: it takes
+    // the chat's OWN alpha down, so a white code block and body prose fade
+    // identically and on either theme, and the glass keeps the real screen
+    // behind it instead of a slab of `groupped.background`.
+    const transcriptMask = resolveTranscriptMask(dockHeight, safeArea.bottom);
+
     React.useEffect(() => {
-        onDockInsetChange?.(floatingDock ? dockHeight + safeArea.bottom : 0);
+        onDockInsetChange?.(resolveDockInset({ dockHeight, safeAreaBottom: safeArea.bottom, floatingDock }));
     }, [dockHeight, floatingDock, onDockInsetChange, safeArea.bottom]);
 
     useKeyboardHandler({
         onEnd(e) {
             'worklet';
-            animatedPadding.value = e.progress === 1 ? (-height.height.value - safeArea.bottom) : 0;
+            animatedPadding.value = e.progress === 1 ? (-height.height.value - dockBottomOffset) : 0;
         },
         onStart(e) {
             'worklet';
             animatedPadding.value = 0;
         },
-    },[safeArea.bottom]);
+    },[dockBottomOffset]);
     const animatedStyle = useAnimatedStyle(() => ({
         paddingTop: animatedPadding.value,
-        transform: [{ translateY: height.height.value + safeArea.bottom * height.progress.value }]
-    }), [safeArea.bottom]);
+        transform: [{ translateY: height.height.value + dockBottomOffset * height.progress.value }]
+    }), [dockBottomOffset]);
     const animatedInputStyle = useAnimatedStyle(() => ({
-        transform: [{ translateY: height.height.value + safeArea.bottom * height.progress.value }]
-    }), [safeArea.bottom]);
+        transform: [{ translateY: height.height.value + dockBottomOffset * height.progress.value }]
+    }), [dockBottomOffset]);
     const animatePlaceholderdStyle = useAnimatedStyle(() => ({
         paddingTop: height.progress.value === 1 ? height.height.value : 0,
-        transform: [{ translateY: (height.height.value  + safeArea.bottom * height.progress.value) / 2 }]
-    }), [safeArea.bottom]);
+        transform: [{ translateY: (height.height.value  + dockBottomOffset * height.progress.value) / 2 }]
+    }), [dockBottomOffset]);
 
     if (floatingDock) {
         return (
             <View style={{ flexBasis: 0, flexGrow: 1 }}>
                 {content && (
                     <Animated.View style={[{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }, animatedStyle]}>
-                        {content}
+                        {/* The mask lives INSIDE the content's animated
+                            wrapper on purpose. That wrapper and the dock carry
+                            the same keyboard translation, and this box's
+                            bottom edge is the screen edge, so a mask measured
+                            up from it lands on the glass at every keyboard
+                            position without animating the mask element
+                            itself, which would mean driving a layer UIKit has
+                            taken out of the view hierarchy to use as a mask. */}
+                        {transcriptMask.clearHeight > 0 ? (
+                            <MaskedView
+                                style={{ flex: 1 }}
+                                maskElement={(
+                                    <View pointerEvents="none" style={{ flex: 1 }}>
+                                        <View style={{ flex: 1, backgroundColor: '#000000' }} />
+                                        <LinearGradient
+                                            colors={TRANSCRIPT_FADE_MASK_COLORS}
+                                            locations={TRANSCRIPT_FADE_LOCATIONS}
+                                            start={{ x: 0.5, y: 0 }}
+                                            end={{ x: 0.5, y: 1 }}
+                                            style={{ height: transcriptMask.fadeHeight }}
+                                        />
+                                        <View style={{ height: transcriptMask.clearHeight }} />
+                                    </View>
+                                )}
+                            >
+                                {content}
+                            </MaskedView>
+                        ) : content}
                     </Animated.View>
                 )}
                 {placeholder && (
@@ -80,7 +127,7 @@ export const AgentContentView: React.FC<AgentContentViewProps> = React.memo(({
                                 top: safeArea.top + headerHeight,
                                 left: 0,
                                 right: 0,
-                                bottom: dockHeight + safeArea.bottom,
+                                bottom: dockHeight + dockBottomOffset,
                             },
                             animatePlaceholderdStyle,
                         ]}
@@ -91,32 +138,13 @@ export const AgentContentView: React.FC<AgentContentViewProps> = React.memo(({
                         {placeholder}
                     </Animated.ScrollView>
                 )}
-                {dockHeight > 0 && (
-                    <Animated.View
-                        pointerEvents="none"
-                        style={[
-                            {
-                                position: 'absolute',
-                                left: 0,
-                                right: 0,
-                                bottom: 0,
-                                height: dockHeight + safeArea.bottom + 28,
-                                zIndex: 1,
-                            },
-                            animatedInputStyle,
-                        ]}
-                    >
-                        <LinearGradient
-                            colors={theme.dark
-                                ? ['rgba(0, 0, 0, 0)', 'rgba(0, 0, 0, 0.20)', 'rgba(0, 0, 0, 0.66)']
-                                : ['rgba(255, 255, 255, 0)', 'rgba(255, 255, 255, 0.18)', 'rgba(255, 255, 255, 0.74)']}
-                            locations={[0, 0.42, 1]}
-                            start={{ x: 0.5, y: 0 }}
-                            end={{ x: 0.5, y: 1 }}
-                            style={{ flex: 1 }}
-                        />
-                    </Animated.View>
-                )}
+                {/* No backdrop behind the dock any more (DROVE-168). DROVE-113
+                    painted `groupped.background` solid from the fade down,
+                    past the dock and through the home indicator gap. That
+                    stopped chat text reading through, and it also gave the
+                    composer's glass a flat slab to sit on, which is half of
+                    why it had no edge (DROVE-171). The mask above does the
+                    same job on the transcript instead. */}
                 <Animated.View
                     onLayout={handleDockLayout}
                     pointerEvents="box-none"
@@ -125,7 +153,7 @@ export const AgentContentView: React.FC<AgentContentViewProps> = React.memo(({
                             position: 'absolute',
                             left: 0,
                             right: 0,
-                            bottom: safeArea.bottom,
+                            bottom: dockBottomOffset,
                             zIndex: 2,
                         },
                         animatedInputStyle,

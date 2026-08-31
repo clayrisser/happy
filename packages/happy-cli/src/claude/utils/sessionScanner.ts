@@ -8,6 +8,7 @@ import { startFileWatcher } from "@/modules/watcher/startFileWatcher";
 import { getProjectPath } from "./path";
 import { createLiveStatusReader, LiveStatusPublisher, type LiveStatus } from "./liveStatus";
 import { createSubagentTranscriptReader, type SubagentTranscriptRequest, type SubagentTranscriptResponse } from "./subagentTranscript";
+import { parseAgentNotifications, type AgentNotification } from "./agentNotification";
 
 /**
  * Known internal Claude Code event types that should be silently skipped.
@@ -104,7 +105,8 @@ type SessionLogEntry =
     | { kind: 'custom-title'; key: string; title: string }
     | { kind: 'permission-mode'; key: string; mode: string }
     | { kind: 'queued-prompt'; key: string; prompt: ScannerQueuedPrompt }
-    | { kind: 'bridge-session'; key: string; active: boolean };
+    | { kind: 'bridge-session'; key: string; active: boolean }
+    | { kind: 'agent-notification'; key: string; notification: AgentNotification };
 
 export async function createSessionScanner(opts: {
     sessionId: string | null,
@@ -116,6 +118,15 @@ export async function createSessionScanner(opts: {
      */
     claudeConfigDir?: string | null
     onMessage: (message: RawJSONLines) => void
+    /**
+     * A background agent has stopped (DROVE-115).
+     *
+     * Fires once per agent per status, whichever of the three records carried
+     * the `<task-notification>` — and two of the three never reach onMessage
+     * at all, which is the whole reason this is its own callback rather than
+     * something the message stream could be read for. See agentNotification.ts.
+     */
+    onAgentNotification?: (notification: AgentNotification) => void
     onTranscriptEvent?: (event: ScannerTranscriptEvent) => void
     /**
      * Claude Code's own `/rename`, mirrored into the Happy session title.
@@ -397,6 +408,9 @@ export async function createSessionScanner(opts: {
                 } else if (entry.kind === 'queued-prompt') {
                     logger.debug(`[SESSION_SCANNER] Prompt queued in the terminal (${entry.prompt.carrier})`);
                     opts.onQueuedPrompt?.(entry.prompt);
+                } else if (entry.kind === 'agent-notification') {
+                    logger.debug(`[SESSION_SCANNER] Agent ${entry.notification.agentId} reported ${entry.notification.status}`);
+                    opts.onAgentNotification?.(entry.notification);
                 } else if (entry.kind === 'bridge-session') {
                     // Nothing per-record: Remote Control is a level, and the
                     // newest record for the whole file is reported below. This
@@ -745,7 +759,25 @@ async function readSessionEntries(projectDir: string, sessionId: string): Promis
                 continue;
             }
             let message = JSON.parse(l);
-            
+
+            // DROVE-115: before every skip below, because Claude Code writes
+            // the notification onto a queue-operation and an attachment as
+            // well as a user turn, and the first two are dropped further down.
+            // Keyed by agent and status so the same completion arriving on all
+            // three carriers is reported exactly once. Deliberately NOT a
+            // `continue`: the record it rode in on is still whatever it was.
+            // The substring guard matters: this runs on every line of a
+            // transcript that reaches 13 MB, re-read on every poll, and the
+            // tags survive JSON encoding, so one scan of the raw line keeps
+            // the parser off 99.9% of records.
+            for (const notification of l.includes('<task-notification>') ? parseAgentNotifications(message) : []) {
+                entries.push({
+                    kind: 'agent-notification',
+                    key: `agent-notification:${notification.agentId}:${notification.status}`,
+                    notification,
+                });
+            }
+
             // Silently skip known internal Claude Code events
             // These are state/tracking events, not conversation messages
             if (message.type && INTERNAL_CLAUDE_EVENT_TYPES.has(message.type)) {

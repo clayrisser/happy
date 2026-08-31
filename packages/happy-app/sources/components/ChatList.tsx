@@ -7,6 +7,8 @@ import { useHeaderHeight } from '@/utils/responsive';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MessageView } from './MessageView';
 import { AgentWorkGroupView, type ToolGroupLayoutAnchor, ToolGroupView } from './ToolGroupView';
+import { DisclosureAnchorProvider } from './DisclosureFooter';
+import { anchoredScrollOffset } from './inlineDisclosure';
 import { Metadata, Session } from '@/sync/storageTypes';
 import { ChatFooter } from './ChatFooter';
 import { Message } from '@/sync/typesMessage';
@@ -17,8 +19,15 @@ import { resolveControlMode } from '@/sync/controlHandoff';
 import { usesControlledSessionUi } from '@/sync/rig';
 import { buildAgentTurnCopyTextByMessageId } from '@/utils/agentTurnCopy';
 import { collectSubagentTaskMessageIds } from '@/utils/subagentTaskLinks';
+import { GlassChromeButton } from './GlassChromeControl';
+import { resolveTranscriptBottomClearance } from './agentDockLayout';
+import { CHROME_TARGET_MIN } from './glassChrome';
 
 const SCROLL_THRESHOLD = 300;
+// The jump-to-bottom control's size, and therefore its hit area (DROVE-139).
+// It used to be a 32pt disc at 0.9 opacity, which both missed the 44pt floor
+// and let chat text read straight through it.
+const SCROLL_BUTTON_SIZE = CHROME_TARGET_MIN;
 const DOCK_DETAILS_SHOW_OFFSET = 16;
 const DOCK_DETAILS_HIDE_OFFSET = 48;
 // Visual gap between the button's bottom edge and the composer card's top
@@ -27,7 +36,6 @@ const SCROLL_BUTTON_COMPOSER_GAP = 16;
 // Fallback for non-floating layouts (tablet/web/landscape), where the list
 // already ends at the input's top edge.
 const SCROLL_BUTTON_DOCK_GAP = 4;
-
 export const ChatList = React.memo((props: {
     session: Session;
     topContentInset?: number;
@@ -131,18 +139,19 @@ export const ChatListInternal = React.memo((props: {
     });
     const preserveToolGroupAnchor = React.useCallback((anchor: ToolGroupLayoutAnchor) => {
         // Inverted FlatList rows keep their visual bottom edge fixed when their
-        // height changes. Measure the pressed header after layout and offset the
-        // list by the movement so details grow below it instead.
+        // height changes. Measure the anchored row after layout and offset the
+        // list by the movement so details grow below it instead. A collapse
+        // from a block's footer (DROVE-150) reuses this with the HEADER as the
+        // node, so the block's top lands back under the finger that closed it.
         requestAnimationFrame(() => {
             anchor.node.measureInWindow((_x, nextY, _width, height) => {
-                if (!Number.isFinite(nextY) || height <= 0) {
+                if (height <= 0) {
                     return;
                 }
-                const adjustment = anchor.y - nextY;
-                if (Math.abs(adjustment) < 0.5) {
+                const nextOffset = anchoredScrollOffset(scrollMetricsRef.current.offsetY, anchor.y, nextY);
+                if (nextOffset === null) {
                     return;
                 }
-                const nextOffset = Math.max(0, scrollMetricsRef.current.offsetY + adjustment);
                 scrollMetricsRef.current.offsetY = nextOffset;
                 flatListRef.current?.scrollToOffset({ offset: nextOffset, animated: false });
             });
@@ -448,6 +457,9 @@ export const ChatListInternal = React.memo((props: {
     }, []);
 
     return (
+        // Every inline disclosure under here can ask the list to hold its place
+        // when it collapses from its own footer (DROVE-150).
+        <DisclosureAnchorProvider value={preserveToolGroupAnchor}>
         <View style={{ flex: 1 }}>
             <FlatList
                 key={`${props.sessionId}:${handoffListRevision}`}
@@ -474,7 +486,19 @@ export const ChatListInternal = React.memo((props: {
                 // Inverted list: paddingTop renders at the visual bottom.
                 // The measured dock inset lets the newest message scroll above
                 // the floating composer instead of stopping underneath it.
-                contentContainerStyle={{ paddingTop: 8 + (props.bottomContentInset ?? 0) }}
+                //
+                // Over the dock inset the floating layout keeps the fade's own
+                // height rather than a flat 8pt gap (DROVE-168). The transcript
+                // now runs behind the composer and is masked to nothing over
+                // that band, so a newest line parked inside it would sit
+                // half-dissolved at rest. Costs 24pt of resting reading area,
+                // 32 in place of 8, and it is the price of the fade: every
+                // point of ramp is a point the list has to hold clear.
+                contentContainerStyle={{
+                    paddingTop: (props.bottomContentInset != null
+                        ? resolveTranscriptBottomClearance()
+                        : 8) + (props.bottomContentInset ?? 0),
+                }}
                 renderItem={renderItem}
                 onScroll={handleScroll}
                 scrollEventThrottle={16}
@@ -505,18 +529,22 @@ export const ChatListInternal = React.memo((props: {
                             : SCROLL_BUTTON_DOCK_GAP + (props.bottomContentInset ?? 0),
                     },
                 ]}>
-                    <Pressable
-                        style={({ pressed }) => [
-                            styles.scrollButton,
-                            pressed ? styles.scrollButtonPressed : styles.scrollButtonDefault
-                        ]}
+                    {/* Same material as the header and the composer (DROVE-153).
+                        It was a SwiftUI `.glass` button, which is a second
+                        implementation of the same idea and drew a slightly
+                        different surface from the chrome it floats over. */}
+                    <GlassChromeButton
+                        size={SCROLL_BUTTON_SIZE}
+                        accessibilityRole="button"
+                        accessibilityLabel="Jump to the newest message"
                         onPress={scrollToBottom}
                     >
-                        <Octicons name="arrow-down" size={14} color={theme.colors.text} />
-                    </Pressable>
+                        <Octicons name="arrow-down" size={17} color={theme.colors.text} />
+                    </GlassChromeButton>
                 </View>
             )}
         </View>
+        </DisclosureAnchorProvider>
     )
 });
 
@@ -533,27 +561,5 @@ const styles = StyleSheet.create((theme) => ({
         alignItems: 'center',
         justifyContent: 'center',
         pointerEvents: 'box-none',
-    },
-    scrollButton: {
-        borderRadius: 16,
-        width: 32,
-        height: 32,
-        alignItems: 'center',
-        justifyContent: 'center',
-        borderWidth: 1,
-        borderColor: theme.colors.divider,
-        shadowColor: theme.colors.shadow.color,
-        shadowOffset: { width: 0, height: 1 },
-        shadowRadius: 2,
-        shadowOpacity: theme.colors.shadow.opacity * 0.5,
-        elevation: 2,
-    },
-    scrollButtonDefault: {
-        backgroundColor: theme.colors.surface,
-        opacity: 0.9,
-    },
-    scrollButtonPressed: {
-        backgroundColor: theme.colors.surface,
-        opacity: 0.7,
     },
 }));

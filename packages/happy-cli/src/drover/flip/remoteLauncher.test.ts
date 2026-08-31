@@ -35,6 +35,33 @@ let engines: Engine[] = []
 let prompts: string[] = []
 /** The live engine's options, so a test can push a message through onMessage. */
 let live: any = null
+/**
+ * Every launcher a test started, so afterEach can stop it (DROVE-68).
+ *
+ * A test that fails part-way never reaches its own `handlers.switch()`, and
+ * the loop it left behind keeps going. `engines` is emptied for the next test
+ * while that orphan is still flipping, so it pushes ITS engine onto the fresh
+ * list and the next test's counts read one too high. That is where "expected
+ * a length of 2 but got 3" came from: not an ordering bug in the gate, but one
+ * slow assertion poisoning the test after it. Reproduced by failing a test on
+ * purpose and watching the next one start with a phantom engine already on the
+ * list.
+ */
+let launchers: { run: Promise<unknown>; stop: () => void }[] = []
+
+/**
+ * A failure budget, not a wait (DROVE-68).
+ *
+ * `vi.resetModules()` runs before every test here, so each one re-imports the
+ * launcher, the controller, the queue and the account registry from source.
+ * That is ~1.4s on an idle box, and on one running the whole 124-file suite it
+ * has been measured past vitest's default 5s, reported as "Test timed out"
+ * with nothing about what the test was doing. Nothing below WAITS for this
+ * number: every barrier in this file gives up after four seconds and says what
+ * it saw, so a real hang is still caught, and caught with a message. This only
+ * stops the module loader's own cost from being read as a broken test.
+ */
+vi.setConfig({ testTimeout: 20_000 })
 
 vi.mock('@/claude/claudeRemote', () => ({
     claudeRemote: vi.fn(async (opts: any) => {
@@ -191,10 +218,25 @@ beforeEach(() => {
     engines = []
     prompts = []
     live = null
+    launchers = []
     vi.resetModules()
 })
 
-afterEach(() => {
+afterEach(async () => {
+    // Stop every launcher this test started, BEFORE the temp root it reads
+    // from is removed. Nothing here is best-effort housekeeping: an orphan
+    // loop is the cascade described on `launchers` above, and it also tails a
+    // transcript inside the directory the next line deletes.
+    const orphans = launchers
+    launchers = []
+    for (const l of orphans) {
+        try {
+            l.stop()
+        } catch {
+            /* the handler is registered synchronously, but a test may have thrown before start() */
+        }
+    }
+    await Promise.allSettled(orphans.map((l) => l.run))
     rmSync(root, { recursive: true, force: true })
 })
 
@@ -225,21 +267,86 @@ async function build(opts: { flipConfirmMs?: number } = {}) {
     // The module itself is the registry: the cooldown ledger is on disk under
     // the env this harness already points at a temp root.
     const accounts = await import('./accounts')
-    return { ...harness, flip, said, terminal, cwd, mainDir, altDir, queue, claudeRemoteLauncher, accounts }
+    /**
+     * Start the remote launcher and put it on the teardown list.
+     *
+     * Every test goes through this rather than calling the launcher directly,
+     * so a failed assertion cannot leave a loop running into the next test.
+     */
+    const start = (): Promise<'switch' | 'exit'> => {
+        const run = claudeRemoteLauncher(harness.session)
+        launchers.push({ run, stop: () => harness.handlers.switch?.() })
+        return run
+    }
+    return { ...harness, flip, said, terminal, cwd, mainDir, altDir, queue, claudeRemoteLauncher, accounts, start }
 }
 
-/** Let the loop get as far as an engine waiting for something to say. */
-const settle = () => new Promise((r) => setTimeout(r, 20))
+/**
+ * Wait for the loop to have started its nth engine (DROVE-68).
+ *
+ * This is the barrier that replaced a 20 ms sleep at 30 sites, and it is a
+ * strong one: applyPendingFlip runs in the FINALLY of the turn that just
+ * ended, and only then does the loop go round again, so `engines.length === n`
+ * means flip n-1 is fully carried out. Transcript copied, account moved,
+ * metadata stamped, session event sent, bus warning said. Every assertion that
+ * used to sleep and hope is really waiting for exactly this.
+ *
+ * On failure it names what it saw, because "expected 2, got 1" on its own does
+ * not say whether the loop was slow or went somewhere else.
+ */
+async function waitForEngines(n: number): Promise<void> {
+    await vi.waitFor(
+        () => {
+            if (engines.length < n) {
+                throw new Error(
+                    `waited for ${n} engine(s), saw ${engines.length}: ` +
+                        `${engines.map((e) => e.account ?? '(unnamed)').join(', ') || '(none)'}`,
+                )
+            }
+        },
+        // Well inside the test's own budget on purpose: a waitFor that
+        // outlasts the test is reported as "Test timed out" and the message
+        // above is never printed, which is the unhelpful half of loud.
+        { timeout: 4_000, interval: 5 },
+    )
+}
+
+/** Wait for the engine to have been handed something to say. */
+async function waitForPrompts(n: number): Promise<void> {
+    await vi.waitFor(
+        () => {
+            if (prompts.length < n) {
+                throw new Error(`waited for ${n} prompt(s), saw: ${prompts.join(' | ') || '(nothing)'}`)
+            }
+        },
+        { timeout: 4_000, interval: 5 },
+    )
+}
+
+/**
+ * Has this promise NOT settled, decided without guessing at a duration?
+ *
+ * setImmediate fires in the event loop's check phase, which node reaches only
+ * once the microtask queue has drained, so a promise that had already settled
+ * would have run its continuation first, and losing the race is proof it has
+ * not. The alternative, sleeping and looking at a flag, is the thing this
+ * ticket is about.
+ */
+async function stillRunning(p: Promise<unknown>): Promise<boolean> {
+    const pending = Symbol('pending')
+    const checkPhase = new Promise<symbol>((resolve) => setImmediate(() => resolve(pending)))
+    return (await Promise.race([p.then(() => null, () => null), checkPhase])) === pending
+}
 
 describe('a flip requested while the session is in REMOTE mode', () => {
     it('moves the account and starts the next engine there, with the same session id', async () => {
         const h = await build()
-        const run = h.claudeRemoteLauncher(h.session)
-        await settle()
+        const run = h.start()
+        await waitForEngines(1)
         expect(engines).toHaveLength(1)
 
         h.flip.request({ account: 'alt', reason: 'manual', by: 'app' })
-        await settle()
+        await waitForEngines(2)
 
         // The defect this ticket is about: before the fix `request()` set
         // `pending`, found no abort handler, and nothing else ever happened.
@@ -260,10 +367,12 @@ describe('a flip requested while the session is in REMOTE mode', () => {
         // the message queue instead — and if it did not, a flipped remote
         // session would sit silent until someone happened to type at it.
         const h = await build()
-        const run = h.claudeRemoteLauncher(h.session)
-        await settle()
+        const run = h.start()
+        await waitForEngines(1)
         h.flip.request({ account: 'alt', reason: 'manual', by: 'app' })
-        await settle()
+        // The prompt is delivered by the flip and then READ by the engine it
+        // started, so the engine count is not the barrier here. The prompt is.
+        await waitForPrompts(1)
 
         expect(prompts).toHaveLength(1)
         expect(prompts[0]).toContain('Pick up where we left off')
@@ -278,10 +387,10 @@ describe('a flip requested while the session is in REMOTE mode', () => {
         const landing = join(h.altDir, 'projects', projectId, 'sess-1.jsonl')
         expect(existsSync(landing)).toBe(false)
 
-        const run = h.claudeRemoteLauncher(h.session)
-        await settle()
+        const run = h.start()
+        await waitForEngines(1)
         h.flip.request({ account: 'alt', reason: 'manual', by: 'app' })
-        await settle()
+        await waitForEngines(2)
 
         expect(existsSync(landing)).toBe(true)
         expect(readFileSync(landing, 'utf8')).toContain('"type":"user"')
@@ -296,20 +405,19 @@ describe('a flip requested while the session is in REMOTE mode', () => {
         // daemon + local), and whoever pressed flip on the phone is not at the
         // keyboard to take a session that quietly went interactive.
         const h = await build()
-        const run = h.claudeRemoteLauncher(h.session)
-        await settle()
+        const run = h.start()
+        await waitForEngines(1)
         h.flip.request({ account: 'alt', reason: 'manual', by: 'app' })
-        await settle()
+        await waitForEngines(2)
 
         // Still running: the launcher has not returned, so loop.ts has not
-        // been told to switch modes.
-        let settled = false
-        void run.then(() => {
-            settled = true
-        })
-        await settle()
-        expect(settled).toBe(false)
+        // been told to switch modes. Three ways of saying it, none of them a
+        // stopwatch. A second engine is a loop that went round instead of
+        // returning, the abort handler is cleared on the way out, and the
+        // promise itself has not settled.
         expect(engines).toHaveLength(2)
+        expect((h.flip as any).abortChild).not.toBeNull()
+        expect(await stillRunning(run)).toBe(true)
 
         h.handlers.switch()
         await expect(run).resolves.toBe('switch')
@@ -317,10 +425,10 @@ describe('a flip requested while the session is in REMOTE mode', () => {
 
     it('stamps the new account on the metadata the app renders', async () => {
         const h = await build()
-        const run = h.claudeRemoteLauncher(h.session)
-        await settle()
+        const run = h.start()
+        await waitForEngines(1)
         h.flip.request({ account: 'alt', reason: 'manual', by: 'app' })
-        await settle()
+        await waitForEngines(2)
 
         expect(h.metadata().droverAccount).toBe('alt')
         expect(String(h.metadata().name)).toContain('[alt]')
@@ -331,10 +439,12 @@ describe('a flip requested while the session is in REMOTE mode', () => {
 
     it('announces a refused flip and keeps the session alive rather than exiting', async () => {
         const h = await build()
-        const run = h.claudeRemoteLauncher(h.session)
-        await settle()
+        const run = h.start()
+        await waitForEngines(1)
         h.flip.request({ account: 'nosuch', reason: 'manual', by: 'app' })
-        await settle()
+        // A refused flip still stopped the engine, so the loop still starts a
+        // second one, on the account it never left.
+        await waitForEngines(2)
 
         expect(h.events.join('\n')).toContain('no account named "nosuch"')
         // Carried on where it was, on the SAME account.
@@ -350,10 +460,14 @@ describe('a flip requested while the session is in REMOTE mode', () => {
         // the turn as cancelled, contradicts the flip note arriving right
         // behind it.
         const h = await build()
-        const run = h.claudeRemoteLauncher(h.session)
-        await settle()
+        const run = h.start()
+        await waitForEngines(1)
         h.flip.request({ account: 'alt', reason: 'manual', by: 'app' })
-        await settle()
+        // "Aborted by user" would be sent the moment claudeRemote returns,
+        // which is before the finally that leads to the next engine, so a
+        // second engine means the whole window it could have appeared in has
+        // been and gone.
+        await waitForEngines(2)
 
         expect(h.events.join('\n')).not.toContain('Aborted by user')
 
@@ -374,8 +488,8 @@ describe('running out of headroom while REMOTE', () => {
         // controller would have passed all along.
         process.env.DROVER_ACCOUNT = 'main'
         const h = await build()
-        const run = h.claudeRemoteLauncher(h.session)
-        await settle()
+        const run = h.start()
+        await waitForEngines(1)
         expect(engines).toHaveLength(1)
 
         live.onMessage({
@@ -386,7 +500,7 @@ describe('running out of headroom while REMOTE', () => {
                 content: 'Claude usage limit reached. Resets at 3pm.',
             },
         })
-        await settle()
+        await waitForEngines(2)
 
         expect(engines).toHaveLength(2)
         expect(engines[1].account).toBe('alt')
@@ -401,8 +515,8 @@ describe('running out of headroom while REMOTE', () => {
         // Clay onto another account behind his back. Same guard local has.
         process.env.DROVER_ACCOUNT = 'main'
         const h = await build()
-        const run = h.claudeRemoteLauncher(h.session)
-        await settle()
+        const run = h.start()
+        await waitForEngines(1)
 
         live.onMessage({
             type: 'assistant',
@@ -412,8 +526,14 @@ describe('running out of headroom while REMOTE', () => {
                 content: 'The usage limit reached branch is the one to test here.',
             },
         })
-        await settle()
 
+        // Nothing to wait FOR, so nothing is waited for. onMessage runs the
+        // detector and, if it fires, request() queues the flip and aborts the
+        // engine, all of it synchronously, inside the call that just
+        // returned. An empty `pending` here is therefore the whole answer, and
+        // a stronger one than "still 1 engine after 20 ms": no later tick can
+        // start a flip that was never queued.
+        expect(h.flip.hasPending()).toBe(false)
         expect(engines).toHaveLength(1)
         expect(h.accounts.isCooling('main')).toBe(false)
 
@@ -454,11 +574,13 @@ describe('warning about the Remote Control it will sever', () => {
             { id: 'old', account: 'main', title: 'finished', state: 'ended' },
         ])
         const h = await build()
-        const run = h.claudeRemoteLauncher(h.session)
-        await settle()
+        const run = h.start()
+        await waitForEngines(1)
 
         h.flip.request({ account: 'alt', reason: 'manual', by: 'app' })
-        await settle()
+        // The warning is awaited INSIDE applyPendingFlip, so it is on the
+        // record before the loop can start the engine on the other account.
+        await waitForEngines(2)
 
         const said = h.said.join('\n')
         expect(said).toContain('employees (main)')
@@ -483,11 +605,11 @@ describe('warning about the Remote Control it will sever', () => {
             { id: 'old', account: 'main', title: 'finished', state: 'ended' },
         ])
         const h = await build()
-        const run = h.claudeRemoteLauncher(h.session)
-        await settle()
+        const run = h.start()
+        await waitForEngines(1)
 
         h.flip.request({ account: 'alt', reason: 'manual', by: 'app' })
-        await settle()
+        await waitForEngines(2)
 
         expect(h.metadata().remoteControlAtRisk).toEqual([
             { id: 'emp', label: 'employees', account: 'main' },
@@ -501,11 +623,14 @@ describe('warning about the Remote Control it will sever', () => {
     it('stays silent when every other live session is already on the target', async () => {
         busReturns([{ id: 'other', account: 'alt', title: 'already there', state: 'live-interactive' }])
         const h = await build()
-        const run = h.claudeRemoteLauncher(h.session)
-        await settle()
+        const run = h.start()
+        await waitForEngines(1)
 
         h.flip.request({ account: 'alt', reason: 'manual', by: 'app' })
-        await settle()
+        // Same barrier as the test that DOES expect the warning: the flip has
+        // been carried out, so the window in which it would have been said is
+        // closed.
+        await waitForEngines(2)
 
         expect(h.said.join('\n')).not.toContain('Remote Control')
 
@@ -518,11 +643,11 @@ describe('warning about the Remote Control it will sever', () => {
         // down must cost the warning, never the flip.
         ;(globalThis as any).fetch = vi.fn(async () => { throw new Error('bus unreachable') })
         const h = await build()
-        const run = h.claudeRemoteLauncher(h.session)
-        await settle()
+        const run = h.start()
+        await waitForEngines(1)
 
         h.flip.request({ account: 'alt', reason: 'manual', by: 'app' })
-        await settle()
+        await waitForEngines(2)
 
         expect(engines).toHaveLength(2)
         expect(engines[1].account).toBe('alt')
@@ -535,24 +660,27 @@ describe('warning about the Remote Control it will sever', () => {
 describe('the in-flight gate in remote mode', () => {
     it('holds a flip while subagents are running, and takes it on the repeat', async () => {
         const h = await build()
-        const run = h.claudeRemoteLauncher(h.session)
-        await settle()
+        const run = h.start()
+        await waitForEngines(1)
         // Two agents launched, as remote mode hears about them: an SDK user
         // message carrying the launch banner.
         live.onMessage(sdkLaunchMessage('agent0001'))
         live.onMessage(sdkLaunchMessage('agent0002'))
 
         h.flip.request({ account: 'alt', reason: 'manual', by: 'app' })
-        await settle()
 
-        // Nothing was stopped, and nothing was queued for later either.
+        // Nothing was stopped, and nothing was queued for later either. Both
+        // of those are decided inside the call above. The gate reads the
+        // probe, warns, and returns without setting `pending`, so this is the
+        // answer already, not a snapshot of a race still running.
+        expect(h.flip.hasPending()).toBe(false)
         expect(engines).toHaveLength(1)
         expect(h.said.join('\n')).toContain('2 subagents still running')
         expect(h.said.join('\n')).toContain('Ask again within')
 
         // The repeat means "do it anyway".
         h.flip.request({ account: 'alt', reason: 'manual', by: 'app' })
-        await settle()
+        await waitForEngines(2)
         expect(engines).toHaveLength(2)
         expect(engines[1].account).toBe('alt')
         expect(h.said.join('\n')).toContain('confirmed')
@@ -563,12 +691,12 @@ describe('the in-flight gate in remote mode', () => {
 
     it('flips anyway on a usage limit, after saying what it costs', async () => {
         const h = await build()
-        const run = h.claudeRemoteLauncher(h.session)
-        await settle()
+        const run = h.start()
+        await waitForEngines(1)
         live.onMessage(sdkLaunchMessage('agent0001'))
 
         h.flip.request({ account: null, reason: 'usage limit', by: 'auto' })
-        await settle()
+        await waitForEngines(2)
 
         expect(engines).toHaveLength(2)
         expect(engines[1].account).toBe('alt')
@@ -581,20 +709,25 @@ describe('the in-flight gate in remote mode', () => {
 
     it('forgets the count when the engine restarts, so it cannot jam the gate', async () => {
         const h = await build()
-        const run = h.claudeRemoteLauncher(h.session)
-        await settle()
+        const run = h.start()
+        await waitForEngines(1)
         live.onMessage(sdkLaunchMessage('agent0001'))
 
         // Confirmed flip: the agent is abandoned with the engine that held it.
+        // Two requests in one tick, and they are meant to read as gate then
+        // confirm and cost exactly ONE new engine. Asserted directly rather
+        // than inferred from a count that a leftover loop could inflate: the
+        // first is held, the second sets it going.
         h.flip.request({ account: 'alt', reason: 'manual', by: 'app' })
+        expect(h.flip.hasPending()).toBe(false)
         h.flip.request({ account: 'alt', reason: 'manual', by: 'app' })
-        await settle()
+        await waitForEngines(2)
         expect(engines).toHaveLength(2)
 
         // The next flip must not be gated by an agent that died two engines
         // ago — the entry belonged to a process that no longer exists.
         h.flip.request({ account: 'main', reason: 'back', by: 'app' })
-        await settle()
+        await waitForEngines(3)
         expect(engines).toHaveLength(3)
         expect(engines[2].account).toBe('main')
 
@@ -611,8 +744,8 @@ describe('the abort handler does not outlive the launcher that registered it', (
         // controller then had a handler that was already aborted, called it,
         // stopped nothing, and reported success.
         const h = await build()
-        const run = h.claudeRemoteLauncher(h.session)
-        await settle()
+        const run = h.start()
+        await waitForEngines(1)
         expect((h.flip as any).abortChild).not.toBeNull()
 
         h.handlers.switch()
@@ -626,8 +759,8 @@ describe('the abort handler does not outlive the launcher that registered it', (
 
     it('a flip requested between launchers queues instead of firing a stale abort', async () => {
         const h = await build()
-        const run = h.claudeRemoteLauncher(h.session)
-        await settle()
+        const run = h.start()
+        await waitForEngines(1)
         h.handlers.switch()
         await run
 

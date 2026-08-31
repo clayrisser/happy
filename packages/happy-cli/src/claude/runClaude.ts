@@ -36,7 +36,8 @@ import { findCustomTitle } from './utils/customTitle';
 import { applySandboxPermissionPolicy, normalizeRemotePermissionMode, resolveInitialClaudePermissionMode, resolveRemoteClaudePermissionMode } from './utils/permissionMode';
 import { decodeBase64, encodeBase64 } from '@/api/encryption';
 import type { Session as ApiSession } from '@/api/types';
-import { getProjectPath } from './utils/path';
+import { getProjectPath, resolveClaudeConfigDir } from './utils/path';
+import { discoverSessionInventory, type SessionInventoryResponse } from '@/utils/sessionInventory';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { RawJSONLinesSchema, type RawJSONLines } from './types';
@@ -534,12 +535,39 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
     };
 
     let currentRunMode: 'local' | 'remote' = options.startingMode ?? 'local';
+    // The running Session, set by the onSessionReady callback loop() fires.
+    // Declared before the goal state below rather than beside the hook server,
+    // because the goal carrier has to ask it whether a pane is listening and
+    // the scanner can report a goal before that far down the file (DROVE-78).
+    let currentSession: Session | null = null;
     let latestClaudeGoalStatus: AgentGoalStatus | null = null;
     const observedClaudeGoalRevisions = new Set<string>();
     let pendingClaudeGoalAction: PendingClaudeGoalAction | null = null;
+    /**
+     * The carrier that would run `/goal` for this session right now, or null.
+     *
+     * Remote mode has one always: the message queue, which the SDK drains.
+     * Local mode has one only while claudeLocalLauncher owns a tmux pane
+     * (DROVE-78). A paneless local run has no terminal and no query(), so
+     * there is genuinely nowhere to send the command, and saying so is the
+     * point of returning null rather than throwing later.
+     */
+    const goalActionCarrier = (): 'queue' | 'pane' | null => {
+        if (currentRunMode === 'remote') return 'queue';
+        return (currentSession as Session | null)?.paneSlashCommandCarrier ? 'pane' : null;
+    };
     const goalCommandSupported = () => {
         const slashCommands = session.getMetadata()?.slashCommands ?? [];
-        return slashCommands.includes('goal') || slashCommands.includes('/goal');
+        if (slashCommands.includes('goal') || slashCommands.includes('/goal')) {
+            return true;
+        }
+        // metadata.slashCommands is written from the SDK's system init, which
+        // only the remote launcher ever runs. A pane session has no query()
+        // to enumerate its commands, so the list is empty for every session
+        // under one mode and this used to read as "no /goal here" (DROVE-78).
+        // The pane's Claude is the same binary that wrote the goal_status
+        // record we are answering, so a live pane carrier IS the answer.
+        return goalActionCarrier() === 'pane';
     };
     const currentClaudeSessionId = () => session.getMetadata()?.claudeSessionId ?? null;
     const settlePendingClaudeGoalAction = (goalStatus: AgentGoalStatus) => {
@@ -626,13 +654,40 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
     session.rpcHandlerManager.registerHandler('subagentTranscript', async (params: unknown) =>
         remoteScanner.readSubagentTranscript((params ?? {}) as Parameters<typeof remoteScanner.readSubagentTranscript>[0]));
 
+    // DROVE-170: what THIS session can be asked to run. registerCommonHandlers
+    // already answered it from the ambient environment; this replaces it with
+    // one that reads the account the session is on right now. A drover flip
+    // (BASED-98) rewrites CLAUDE_CONFIG_DIR on the Session and never on this
+    // process's env, and each account is its own commands/ and skills/ tree, so
+    // asking the environment would keep answering with the account we left.
+    session.rpcHandlerManager.registerHandler<Record<string, never>, SessionInventoryResponse>(
+        'sessionInventory',
+        async () => {
+            try {
+                return {
+                    success: true,
+                    inventory: await discoverSessionInventory({
+                        flavor: 'claude',
+                        cwd: workingDirectory,
+                        configDir: resolveClaudeConfigDir(
+                            (currentSession as Session | null)?.claudeEnvVars?.CLAUDE_CONFIG_DIR,
+                        ),
+                    }),
+                };
+            } catch (error) {
+                logger.debug('[INVENTORY] Failed to read session inventory:', error);
+                return {
+                    success: false,
+                    error: error instanceof Error ? error.message : 'Failed to read session inventory',
+                };
+            }
+        },
+    );
+
     // Start Happy MCP server
     const happyServer = await startHappyServer(session);
     logger.debug(`[START] Happy MCP server started at ${happyServer.url}`);
 
-    // Variable to track current session instance (updated via onSessionReady callback)
-    // Used by hook server to notify Session when Claude changes session ID
-    let currentSession: Session | null = null;
     // Declared up here because the SessionStart hook below has to tell it when
     // Claude mints a new session id, and the hook is installed long before the
     // reporter is built (DROVE-3). A new id is a new key in the settings store,
@@ -775,8 +830,52 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
         if (command.type === 'set' && !capabilities.edit) {
             throw new Error('Claude edit goal action is not supported');
         }
-        if (currentRunMode !== 'remote') {
-            throw new Error('Claude goal action is not ready: remote mode is not active');
+        const slashCommand = command.type === 'clear'
+            ? '/goal clear'
+            : `/goal ${command.objective}`;
+
+        // DROVE-78: a local session used to stop here, and under one mode
+        // (DROVE-1) EVERY session is local, so the app's goal card was dead for
+        // every real session. The pane has a carrier: the same idle-gated
+        // command queue `/model` takes (DROVE-45) and the same one a slash
+        // command typed on the phone takes (DROVE-49). It is not the inbox
+        // socket that carries an ordinary message (DROVE-77): Claude Code's
+        // uds handler hardcodes `skipSlashCommands:true` on everything it
+        // reads off that socket, so `/goal ship it` written there arrives as
+        // three words of prose (see the header of utils/inboxSocket.ts).
+        //
+        // Nothing is pasted on hope. The queue waits for Claude's own registry
+        // to say idle, for the bus to hold no pending question, for the pane
+        // to still be running Claude, and for every async subagent to have
+        // reported in, so the command cannot land on whichever agent the
+        // terminal is showing. Held, never drafted.
+        const carrier = goalActionCarrier();
+        if (carrier === 'pane') {
+            const deliver = (currentSession as Session | null)?.paneSlashCommandCarrier;
+            if (!deliver) {
+                throw new Error('Claude goal action is not ready: the terminal is not listening');
+            }
+            const accepted = await deliver(slashCommand);
+            if (!accepted) {
+                throw new Error(
+                    'Claude goal action did not reach the terminal: nothing is running in this '
+                    + 'session\'s pane right now',
+                );
+            }
+            // Resolved on acceptance, not on confirmation. The command may be
+            // held for the prompt for as long as a subagent runs, which is
+            // longer than any RPC should sit open, and the launcher tells the
+            // phone it is waiting. The goal itself comes back the way it
+            // always does, as a goal_status record the scanner reads.
+            return { ok: true };
+        }
+        if (!carrier) {
+            // A local session with no pane: no query() and no terminal, so
+            // there is no way at all to run /goal. Said plainly rather than
+            // dressed up as "not ready": nothing is going to make it ready.
+            throw new Error(
+                'Claude goal action needs a terminal: this session has no pane to run /goal in',
+            );
         }
         if (!currentSession || currentSession.thinking) {
             throw new Error('Claude goal action is not ready while Claude is thinking');
@@ -785,9 +884,6 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
             throw new Error('Claude message queue is busy');
         }
 
-        const slashCommand = command.type === 'clear'
-            ? '/goal clear'
-            : `/goal ${command.objective}`;
         const mode = currentEnhancedMode();
 
         return await new Promise<{ ok: true }>((resolve, reject) => {
@@ -1270,6 +1366,12 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
         onSessionReady: (sessionInstance) => {
             // Store reference for hook server callback
             currentSession = sessionInstance;
+            // DROVE-78: the local scanner is the one that follows a flip into
+            // another account's config dir. The remote scanner above reads the
+            // dir this PROCESS was started on, which after a flip is the
+            // account we left, so the goal quietly stopped updating there.
+            // Both feed the same reducer; duplicate revisions are dropped.
+            sessionInstance.onGoalStatusEvent = updateClaudeGoalState;
         },
         onAbort: resetCurrentModeDefaults,
         mcpServers: {

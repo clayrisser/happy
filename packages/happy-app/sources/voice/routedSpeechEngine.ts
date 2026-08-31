@@ -1,4 +1,4 @@
-import type { SpeechEngine } from './readAloud';
+import type { SpeakOptions, SpeechEngine } from './readAloud';
 import type { Speaker } from './speaker';
 
 /**
@@ -28,7 +28,7 @@ export function createRoutedSpeechEngine(deps: RoutedSpeechDeps): SpeechEngine {
     const engineFor = (speaker: Speaker) => (speaker === 'watch' ? deps.watch : deps.phone);
 
     return {
-        async speak(text: string) {
+        async speak(text: string, options?: SpeakOptions) {
             const speaker = deps.pick();
             if (current === null) {
                 deps.onReplyStart?.(speaker);
@@ -36,7 +36,9 @@ export function createRoutedSpeechEngine(deps: RoutedSpeechDeps): SpeechEngine {
                 await engineFor(current).stop();
             }
             current = speaker;
-            return engineFor(speaker).speak(text);
+            // The wrist has no rate knob of its own, so it ignores the
+            // catch-up scale and reads at its own speed (DROVE-108).
+            return engineFor(speaker).speak(text, options);
         },
         async stop() {
             const was = current;

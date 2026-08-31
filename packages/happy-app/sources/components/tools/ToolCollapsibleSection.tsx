@@ -3,6 +3,8 @@ import { Pressable, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Ionicons } from '@expo/vector-icons';
 
+import { DisclosureFooter, useInlineDisclosure } from '@/components/DisclosureFooter';
+
 interface ToolCollapsibleSectionProps {
     title: string;
     lineCount: number;
@@ -15,19 +17,22 @@ interface ToolCollapsibleSectionProps {
  */
 export const ToolCollapsibleSection = React.memo<ToolCollapsibleSectionProps>(({ title, lineCount, children }) => {
     const { theme } = useUnistyles();
-    const [expanded, setExpanded] = React.useState(false);
+    const { expanded, toggle, collapse, headerRef, footerRef } = useInlineDisclosure();
+    const label = `${title} · ${lineCount} lines`;
 
     return (
         <View style={styles.section}>
             <Pressable
-                onPress={() => setExpanded((value) => !value)}
+                ref={headerRef}
+                collapsable={false}
+                onPress={toggle}
                 style={({ pressed }) => [
                     styles.header,
                     pressed && styles.headerPressed,
                 ]}
             >
                 <Text style={styles.headerTitle} numberOfLines={1}>
-                    {`${title} · ${lineCount} lines`}
+                    {label}
                 </Text>
                 <Ionicons
                     name={expanded ? 'chevron-down' : 'chevron-forward'}
@@ -35,7 +40,18 @@ export const ToolCollapsibleSection = React.memo<ToolCollapsibleSectionProps>(({
                     color={theme.colors.textSecondary}
                 />
             </Pressable>
-            {expanded ? <View>{children}</View> : null}
+            {expanded ? (
+                <View>
+                    {children}
+                    <DisclosureFooter
+                        label={label}
+                        onPress={collapse}
+                        innerRef={footerRef}
+                        iconSize={14}
+                        textStyle={styles.headerTitle}
+                    />
+                </View>
+            ) : null}
         </View>
     );
 });

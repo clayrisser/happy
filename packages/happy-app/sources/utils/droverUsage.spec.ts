@@ -10,6 +10,7 @@
 import { describe, expect, it } from 'vitest';
 import {
     currentDroverUsageAccount,
+    droverAccountsUsage,
     droverFamilyRows,
     droverOtherAccounts,
     usageLimitsFromDroverUsage,
@@ -133,5 +134,32 @@ describe('droverOtherAccounts', () => {
     it('is empty without a snapshot', () => {
         expect(droverOtherAccounts(null, 'jamrizzi')).toEqual([]);
         expect(droverOtherAccounts({ capturedAt: 1, accounts: [] }, null)).toEqual([]);
+    });
+});
+
+describe('droverAccountsUsage', () => {
+    it('carries every account\'s own windows, not just the current one\'s (DROVE-148)', () => {
+        const accounts = droverAccountsUsage(usage, null);
+        // Current first, then registry order, so the sheet compares against
+        // the account the session is on.
+        expect(accounts.map((a) => [a.name, a.current]))
+            .toEqual([['jamrizzi', true], ['main', false], ['bitspur.com', false], ['spare', false]]);
+        // main's windows, the ones the quota sheet had no way to reach before.
+        expect(accounts[1].windows).toEqual([
+            { id: 'five_hour', family: null, utilization: 4, resetsAt: 1_500 },
+            { id: 'seven_day', family: null, utilization: 100, resetsAt: sep3 },
+            { id: 'seven_day_fable', family: 'Fable', utilization: 100, resetsAt: sep3 },
+        ]);
+        // An account with nothing measured is a row with no windows, not a
+        // missing row.
+        expect(accounts[3]).toMatchObject({ name: 'spare', loggedIn: false, headroom: null, windows: [] });
+    });
+
+    it('is empty without a snapshot, and marks nothing current when the stamp names no one', () => {
+        expect(droverAccountsUsage(null, 'jamrizzi')).toEqual([]);
+        const unmarked: DroverUsageLike = { capturedAt: 1_000, accounts: usage!.accounts.map((a) => ({ ...a, current: false })) };
+        expect(droverAccountsUsage(unmarked, null).some((a) => a.current)).toBe(false);
+        // The older stamp still names it when the snapshot marked nothing.
+        expect(droverAccountsUsage(unmarked, 'bitspur.com')[0]).toMatchObject({ name: 'bitspur.com', current: true });
     });
 });
