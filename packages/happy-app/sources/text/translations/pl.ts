@@ -616,6 +616,7 @@ export const pl: TranslationStructure = {
         editedFiles: ({ count }: { count: number }) => `${plural({ count, one: 'Edytowano 1 plik', few: `Edytowano ${count} pliki`, many: `Edytowano ${count} plików` })}`,
         readFiles: ({ count }: { count: number }) => `${plural({ count, one: 'Odczytano 1 plik', few: `Odczytano ${count} pliki`, many: `Odczytano ${count} plików` })}`,
         ranCommands: ({ count }: { count: number }) => `${plural({ count, one: 'Wykonano 1 polecenie', few: `Wykonano ${count} polecenia`, many: `Wykonano ${count} poleceń` })}`,
+        ranShellCommands: ({ count }: { count: number }) => `${plural({ count, one: 'Wykonano 1 polecenie powłoki', few: `Wykonano ${count} polecenia powłoki`, many: `Wykonano ${count} poleceń powłoki` })}`,
         searched: ({ count }: { count: number }) => `${plural({ count, one: 'Wyszukano 1 raz', few: `Wyszukano ${count} razy`, many: `Wyszukano ${count} razy` })}`,
         fetchedUrls: ({ count }: { count: number }) => `${plural({ count, one: 'Pobrano 1 URL', few: `Pobrano ${count} URLe`, many: `Pobrano ${count} URLi` })}`,
         ranTasks: ({ count }: { count: number }) => `${plural({ count, one: 'Wykonano 1 zadanie', few: `Wykonano ${count} zadania`, many: `Wykonano ${count} zadań` })}`,

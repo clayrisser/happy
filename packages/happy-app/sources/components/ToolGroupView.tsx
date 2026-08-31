@@ -17,6 +17,7 @@ import { useElapsedTime } from '@/hooks/useElapsedTime';
 import { t } from '@/text';
 import { Message, ToolCallMessage } from '@/sync/typesMessage';
 import { getToolActivityLabel, getToolSummaryCategory, ToolSummaryCategory } from '@/utils/toolDisplay';
+import { toolRunLabel } from '@/utils/toolRunGroups';
 import { useRouter } from 'expo-router';
 
 interface ToolGroupViewProps {
@@ -49,8 +50,17 @@ export const ToolGroupView = React.memo<ToolGroupViewProps>((props) => {
         forceCompleted,
     } = props;
     const router = useRouter();
-    const summary = React.useMemo(() => generateGroupSummary(group.messages), [group.messages]);
-    const summaryCategory = React.useMemo(() => getGroupSummaryCategory(group.messages), [group.messages]);
+    // A same-tool run reads `Ran 4 shell commands` and opens onto the full
+    // per-call rows, exactly as they draw on their own (DROVE-84).
+    const runCategory = group.runCategory ?? null;
+    const summary = React.useMemo(
+        () => runCategory ? toolRunLabel(runCategory, group.messages.length) : generateGroupSummary(group.messages),
+        [group.messages, runCategory],
+    );
+    const summaryCategory = React.useMemo(
+        () => runCategory ?? getGroupSummaryCategory(group.messages),
+        [group.messages, runCategory],
+    );
     const hasRunning = !forceCompleted && group.hasRunning;
     const suppressChildren = hideSingleToolChildren && group.messages.length === 1 && group.messages[0]?.kind === 'tool-call';
     const singleToolMessage = suppressChildren && group.messages[0]?.kind === 'tool-call'
@@ -72,26 +82,36 @@ export const ToolGroupView = React.memo<ToolGroupViewProps>((props) => {
     }, [onToggle, router, sessionId, singleToolMessage]);
     const handleAnchoredToggle = useAnchoredToggle(expanded, onToggle, onAnchorLayoutChange);
     const renderGroupMessage = React.useCallback((msg: Message) => (
-        <ToolGroupMessageRow
-            key={msg.id}
-            message={msg}
-            metadata={metadata}
-            sessionId={sessionId}
-        />
-    ), [metadata, sessionId]);
+        runCategory ? (
+            <MessageView
+                key={msg.id}
+                message={msg}
+                metadata={metadata}
+                sessionId={sessionId}
+            />
+        ) : (
+            <ToolGroupMessageRow
+                key={msg.id}
+                message={msg}
+                metadata={metadata}
+                sessionId={sessionId}
+            />
+        )
+    ), [metadata, runCategory, sessionId]);
 
     const body = (
         <View style={nested ? styles.nestedInnerContainer : styles.innerContainer}>
             <CollapseHeader
                 expanded={expanded}
                 hasRunning={hasRunning}
+                hasError={group.hasError}
                 label={summary}
                 onPress={singleToolMessage ? handleSingleToolPress : handleAnchoredToggle}
                 category={summaryCategory}
                 showChevron
             />
             {expanded && !suppressChildren && (
-                <View style={styles.content}>
+                <View style={runCategory ? styles.runContent : styles.content}>
                     {group.messages.map(renderGroupMessage)}
                 </View>
             )}
@@ -236,6 +256,7 @@ export const AgentWorkGroupView = React.memo<AgentWorkGroupViewProps>((props) =>
 function CollapseHeader(props: {
     expanded: boolean;
     hasRunning: boolean;
+    hasError?: boolean;
     label: string;
     onPress: (anchor?: ToolGroupLayoutAnchor) => void;
     category?: ToolSummaryCategory | null;
@@ -276,6 +297,9 @@ function CollapseHeader(props: {
                     style={{ transform: [{ scaleX: 0.7 }, { scaleY: 0.7 }] }}
                 />
             )}
+            {props.hasError ? (
+                <Ionicons name="alert-circle-outline" size={15} color={theme.colors.warning} />
+            ) : null}
             {showChevron ? (
                 <Ionicons
                     name={props.expanded ? 'chevron-down' : 'chevron-forward'}
@@ -520,6 +544,12 @@ const styles = StyleSheet.create((theme) => ({
     content: {
         marginTop: 6,
         gap: 4,
+    },
+    // The per-call rows of a same-tool run sit a step in from the header so
+    // the list reads as one folded item, not four loose ones.
+    runContent: {
+        marginTop: 2,
+        paddingLeft: 12,
     },
     toolSummaryRow: {
         flexDirection: 'row',

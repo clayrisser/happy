@@ -599,6 +599,7 @@ export const pt: TranslationStructure = {
         editedFiles: ({ count }: { count: number }) => count === 1 ? 'Editou 1 arquivo' : `Editou ${count} arquivos`,
         readFiles: ({ count }: { count: number }) => count === 1 ? 'Leu 1 arquivo' : `Leu ${count} arquivos`,
         ranCommands: ({ count }: { count: number }) => count === 1 ? 'Executou 1 comando' : `Executou ${count} comandos`,
+        ranShellCommands: ({ count }: { count: number }) => count === 1 ? 'Executou 1 comando de shell' : `Executou ${count} comandos de shell`,
         searched: ({ count }: { count: number }) => count === 1 ? 'Pesquisou 1 vez' : `Pesquisou ${count} vezes`,
         fetchedUrls: ({ count }: { count: number }) => count === 1 ? 'Obteve 1 URL' : `Obteve ${count} URLs`,
         ranTasks: ({ count }: { count: number }) => count === 1 ? 'Executou 1 tarefa' : `Executou ${count} tarefas`,
