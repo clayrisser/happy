@@ -40,6 +40,7 @@ import { isSessionArchived } from './sessionArchive';
 import { t } from '@/text';
 import type { Project } from './projectTypes';
 import { getSessionProjectId, isHappyAgentSession } from './projectTypes';
+import { crossSessionIndexFor, type CrossSessionRender } from '@/utils/crossSessionAttachments';
 
 // Debounce timer for realtimeMode changes
 let realtimeModeDebounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1579,6 +1580,22 @@ export function useSessionMessages(sessionId: string): {
             isLoadingOlder: session?.isLoadingOlder ?? false
         };
     }));
+}
+
+/**
+ * The phone envelope this message arrived in, or null for ordinary prose
+ * (DROVE-234).
+ *
+ * The index is memoized on the messages array, so this returns the SAME object
+ * until the transcript actually changes, which is what lets it ride zustand's
+ * default identity check instead of a shallow compare over a nested shape.
+ */
+export function useCrossSessionMessage(sessionId: string, messageId: string): CrossSessionRender | null {
+    return storage((state) => {
+        const session = state.sessionMessages[sessionId];
+        if (!session) return null;
+        return crossSessionIndexFor(session.messages).byMessageId.get(messageId) ?? null;
+    });
 }
 
 export function useMessage(sessionId: string, messageId: string): Message | null {

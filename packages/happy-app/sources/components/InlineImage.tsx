@@ -33,6 +33,11 @@ interface InlineImageProps {
      * source degrades to what was there before rather than an empty box.
      */
     fallback?: React.ReactNode;
+    /**
+     * Which edge the picture sits on. Left by default; a picture inside a
+     * right-aligned user bubble wants the other one (DROVE-234).
+     */
+    align?: 'flex-start' | 'flex-end';
 }
 
 export const InlineImage = React.memo<InlineImageProps>(({
@@ -42,6 +47,7 @@ export const InlineImage = React.memo<InlineImageProps>(({
     maxHeight = inlineImageMaxHeight,
     placeholder,
     fallback,
+    align = 'flex-start',
 }) => {
     const [columnWidth, setColumnWidth] = React.useState(0);
     const [failed, setFailed] = React.useState(false);
@@ -72,7 +78,7 @@ export const InlineImage = React.memo<InlineImageProps>(({
     }
 
     return (
-        <View style={styles.column} onLayout={onLayout}>
+        <View style={[styles.column, { alignItems: align }]} onLayout={onLayout}>
             {box ? (
                 <Pressable onPress={openViewer} accessibilityRole="imagebutton" disabled={!uri}>
                     <Image
