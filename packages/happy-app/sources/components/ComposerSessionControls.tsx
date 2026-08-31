@@ -1,9 +1,10 @@
 import * as React from 'react';
-import { Text, View } from 'react-native';
+import { StyleSheet as RNStyleSheet, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Ionicons } from '@expo/vector-icons';
 import { Typography } from '@/constants/Typography';
 import { BubblePressable } from './BubblePressable';
+import { GlassChromeSurface } from './GlassChromeControl';
 import { NativeSettingsMenu, type NativeSettingsMenuGroup } from './NativeSettingsMenu';
 import {
     COMPOSER_MODEL_FONT_SIZE,
@@ -25,18 +26,21 @@ import {
  * the two words is what buys the model room to stay readable; losing the row
  * is what buys the chat its height back.
  *
- * GEOMETRY. 393pt of phone leaves the action row 357. The plus and the three
- * on the right are 42 each and are not negotiable (DROVE-118 wants them
- * reading as buttons), which with 6pt gaps and the primary's 8pt margin is
- * 252 before these controls exist at all. At 38pt each the mode and the
- * effort leave the model 63pt, which holds `Opus 5 1M` at 12pt with a little
- * to spare and tail-truncates anything longer. 38 plus 3pt of slop a side is
- * exactly the 44pt target, and exactly the 6pt gap, so no two of these
- * controls' hit boxes overlap: pressing effort cannot open the model list.
+ * ONE CAPSULE, THREE SEGMENTS (DROVE-153). Clay sent the Screenshot markup
+ * toolbar as a reference and the thing to take from it is not the pixel size,
+ * it is that two related actions share ONE capsule rather than sitting in two
+ * separate circles. Mode, effort and model are the same idea three times over:
+ * how this session is being run. So they are one glass capsule with hairline
+ * dividers, not three discs with air between them.
+ *
+ * Grouping costs nothing in reach and buys a great deal in room. Each segment
+ * is its own 44pt-tall, 44pt-wide press target with its own picker, so pressing
+ * effort still cannot open the model list. And the five 6pt gaps that separated
+ * seven discs are gone, which is where the model's name goes from 63pt to
+ * 121pt at 393 (see resolveComposerModelTextBudget). The old geometry note that
+ * lived here, about 38pt controls squeezing into what the discs left, described
+ * a row that no longer exists.
  */
-
-/** 38 + 3 + 3. Sized so neighbouring slop meets but never overlaps. */
-const controlHitSlop = { top: 8, bottom: 8, left: 3, right: 3 } as const;
 
 export type ComposerSessionPicker = 'permission' | 'model' | 'effort';
 
@@ -116,19 +120,36 @@ export function EffortMeter(props: { index: number; count: number; color: string
 }
 
 const styles = StyleSheet.create((theme) => ({
+    // The capsule the three segments share. The material is the surface's, so
+    // this carries only shape and flex.
+    capsule: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        flexShrink: 1,
+        minWidth: 0,
+        height: COMPOSER_SESSION_CONTROL_SIZE,
+    },
     control: {
         width: COMPOSER_SESSION_CONTROL_SIZE,
         height: COMPOSER_SESSION_CONTROL_SIZE,
-        borderRadius: COMPOSER_SESSION_CONTROL_SIZE / 2,
         alignItems: 'center',
         justifyContent: 'center',
         flexShrink: 0,
-        // The same surface the speaker and the mic gained in DROVE-118, so
-        // the row is buttons all the way across.
-        backgroundColor: theme.colors.surfaceHigh,
     },
+    // Pressed and open read as a wash on the glass rather than as a different
+    // fill, so the material underneath is still doing the drawing.
     controlOpen: {
-        backgroundColor: theme.colors.surfaceHighest,
+        backgroundColor: theme.colors.glass.backgroundSubtle,
+    },
+    /**
+     * The hairline between segments. Apple's grouped capsules separate their
+     * halves with a divider rather than a gap, which is what keeps the capsule
+     * reading as one object while the halves stay obviously separate.
+     */
+    segmentDivider: {
+        width: RNStyleSheet.hairlineWidth,
+        height: 20,
+        backgroundColor: theme.colors.glass.divider,
     },
     // The model's full name, not DROVE-83's middle-ellipsised remains of it.
     modelPressable: {
@@ -136,7 +157,7 @@ const styles = StyleSheet.create((theme) => ({
         minWidth: 0,
         height: COMPOSER_SESSION_CONTROL_SIZE,
         justifyContent: 'center',
-        paddingHorizontal: 2,
+        paddingHorizontal: 12,
     },
     model: {
         fontSize: COMPOSER_MODEL_FONT_SIZE,
@@ -174,7 +195,7 @@ function Control(props: {
                 groups={groups}
                 style={{ width: COMPOSER_SESSION_CONTROL_SIZE, height: COMPOSER_SESSION_CONTROL_SIZE }}
             >
-                <View style={styles.control}>{props.children}</View>
+                <View style={[styles.control, props.open && styles.controlOpen]}>{props.children}</View>
             </NativeSettingsMenu>
         );
     }
@@ -182,7 +203,6 @@ function Control(props: {
         <BubblePressable
             onPress={props.onPress ? () => props.onPress?.(props.picker) : undefined}
             disabled={!props.onPress}
-            hitSlop={controlHitSlop}
             style={(p) => [
                 styles.control,
                 props.open && styles.controlOpen,
@@ -223,8 +243,16 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
     if (!showMode && !showEffort && !label.model) {
         return null;
     }
+    // A divider goes between two drawn segments, never at either end, so a
+    // session with no effort scale does not leave a hairline floating in the
+    // capsule.
+    const effortNeedsDivider = showEffort && showMode;
+    const modelNeedsDivider = !!label.model && (showMode || showEffort);
     return (
-        <>
+        <GlassChromeSurface
+            radius={COMPOSER_SESSION_CONTROL_SIZE / 2}
+            style={styles.capsule}
+        >
             {showMode ? (
                 <Control
                     picker="permission"
@@ -241,6 +269,7 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                     />
                 </Control>
             ) : null}
+            {effortNeedsDivider ? <View style={styles.segmentDivider} /> : null}
             {showEffort ? (
                 <Control
                     picker="effort"
@@ -258,6 +287,7 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                     />
                 </Control>
             ) : null}
+            {modelNeedsDivider ? <View style={styles.segmentDivider} /> : null}
             {label.model ? (
                 nativeMenus && modelGroup ? (
                     <NativeSettingsMenu
@@ -277,7 +307,6 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                     <BubblePressable
                         onPress={canOpenModel && onPress ? () => onPress('model') : undefined}
                         disabled={!canOpenModel || !onPress}
-                        hitSlop={controlHitSlop}
                         style={(p) => [
                             styles.modelPressable,
                             { opacity: p.pressed && canOpenModel && onPress ? 0.7 : 1 },
@@ -296,6 +325,6 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                     </BubblePressable>
                 )
             ) : null}
-        </>
+        </GlassChromeSurface>
     );
 });

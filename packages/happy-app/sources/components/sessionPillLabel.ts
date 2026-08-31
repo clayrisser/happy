@@ -20,29 +20,49 @@ export const SESSION_PILL_SEPARATOR = ' · ';
 /** The model name on the button row; small, because it shares the row. */
 export const COMPOSER_MODEL_FONT_SIZE = 12;
 
-/** Half a step under the 42pt action buttons, so the row still fits. */
-export const COMPOSER_SESSION_CONTROL_SIZE = 38;
+/**
+ * The mode and effort segments inside the session capsule.
+ *
+ * 44, up from 38 (DROVE-153). They were half a step under the row's buttons
+ * because seven separate discs had to fit across 357pt. They no longer have to:
+ * the mode, the effort and the model are one capsule now, the primary has moved
+ * into the input, and the arithmetic below has that much more to spend.
+ */
+export const COMPOSER_SESSION_CONTROL_SIZE = 44;
 
 /**
  * Everything on the action row that is NOT the model's name, on a phone.
  *
- * AgentInput's container padding and the glass shell inset on both sides,
- * then the row itself: the add button, the mode glyph, the effort meter, the
- * speaker, the mic and the primary, with a gap between each and the primary's
- * own left margin. The container padding is a literal in AgentInput (8 below
- * 700pt), mirrored here.
+ * The row is three objects rather than seven discs after DROVE-153. Clay's two
+ * reference shots are the reason: the Screenshot markup toolbar puts two
+ * related actions in ONE shared capsule instead of two circles, and Messages
+ * keeps a single + outside its field. So the row reads
+ *
+ *     (+)   [ mode | effort | model ]   ...   [ speaker | mic ]
+ *
+ * with the send/voice/stop inside the input capsule above it. Three tap
+ * regions in the session capsule and two in the audio capsule, each its own
+ * 44pt segment, so grouping costs nothing in reach.
+ *
+ * AgentInput's container padding and the glass shell inset on both sides are
+ * paid first; the container padding is a literal in AgentInput (8 below 700pt),
+ * mirrored here.
  */
 export const COMPOSER_SESSION_ROW_GEOMETRY = {
     containerPaddingHorizontal: 8,
     shellInset: MOBILE_COMPOSER_METRICS.shellInset,
-    /** add, mode, effort, model, spacer, speaker, mic, primary: seven gaps. */
-    gaps: 7,
-    gap: 6,
+    /**
+     * Two: add to the session capsule, and the session capsule to the audio
+     * capsule. Segments inside a capsule have no gap between them, which is
+     * what makes each capsule read as one object.
+     */
+    gaps: 2,
+    gap: 8,
     addSize: MOBILE_COMPOSER_METRICS.actionSize,
     controlSize: COMPOSER_SESSION_CONTROL_SIZE,
-    voiceButtons: 3,
-    voiceButtonSize: MOBILE_COMPOSER_METRICS.actionSize,
-    primaryMarginLeft: MOBILE_COMPOSER_METRICS.primaryActionMarginLeft,
+    /** Speaker and mic. The primary is in the input capsule, not on this row. */
+    voiceButtons: 2,
+    voiceButtonSize: COMPOSER_SESSION_CONTROL_SIZE,
 } as const;
 
 /**
@@ -149,7 +169,6 @@ export function resolveComposerModelTextBudget(screenWidth: number): number {
         - g.addSize
         - 2 * g.controlSize
         - g.voiceButtons * g.voiceButtonSize
-        - g.primaryMarginLeft
         - g.gaps * g.gap;
 }
 
