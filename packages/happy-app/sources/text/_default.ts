@@ -482,6 +482,12 @@ export const en = {
             on: 'Reading replies aloud',
             off: 'Not reading replies aloud',
             onHint: 'Reading replies aloud. Tap a sentence to read from there',
+            // DROVE-233. "Paused" rather than "stopped": it says the place is
+            // being kept, which is the whole difference from off, and it names
+            // the gesture that gets it back because a long press is not a
+            // thing anyone finds twice by accident.
+            paused: 'Paused. Long press to carry on where it stopped',
+            resumed: 'Reading on from where it stopped',
             headphonesOff: 'Headphones disconnected, now on speaker',
         },
         dictate: {

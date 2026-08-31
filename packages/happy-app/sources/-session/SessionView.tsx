@@ -1279,6 +1279,8 @@ export function SessionViewLoaded({
                 isMicActive={(embedded || isDisconnected) ? false : micButtonState.isMicActive}
                 readAloudEnabled={voiceComposer.readAloudEnabled}
                 onReadAloudToggle={voiceComposer.onReadAloudToggle}
+                readAloudPaused={voiceComposer.readAloudPaused}
+                onReadAloudPauseToggle={voiceComposer.onReadAloudPauseToggle}
                 onTalkPressIn={voiceComposer.onTalkPressIn}
                 onTalkPressOut={voiceComposer.onTalkPressOut}
                 onTalkSlide={voiceComposer.onTalkSlide}

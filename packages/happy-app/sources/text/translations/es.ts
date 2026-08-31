@@ -460,6 +460,8 @@ export const es: TranslationStructure = {
             on: 'Leyendo las respuestas en voz alta',
             off: 'No se leen las respuestas',
             onHint: 'Leyendo las respuestas en voz alta. Toca una frase para leer desde ahí',
+            paused: 'En pausa. Mantén pulsado para continuar donde se quedó',
+            resumed: 'Continuando la lectura desde donde se quedó',
             headphonesOff: 'Auriculares desconectados, ahora por el altavoz',
         },
         dictate: {

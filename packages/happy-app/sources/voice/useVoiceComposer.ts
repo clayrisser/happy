@@ -31,6 +31,7 @@ import {
 } from './micButton';
 import { dictationBlock, unknownBuild } from './dictationCapability';
 import { headphoneAction } from './headphonePress';
+import { readAloudTransport, transportEffect } from './readAloudTransport';
 import { HeadphoneMic } from './headphoneMic';
 import { audioCues as cueService } from './audioCueService';
 import { cueDurationMs, cueSpec } from './audioCues';
@@ -88,6 +89,15 @@ export interface VoiceComposerOptions {
 export interface VoiceComposerState {
     readAloudEnabled?: boolean;
     onReadAloudToggle?: () => void;
+    /** On and holding its place (DROVE-233). Only ever true beside `readAloudEnabled`. */
+    readAloudPaused?: boolean;
+    /**
+     * The long press on the speaker: pause, or carry on from where it stopped
+     * (DROVE-233). Resolves to the state it ended in, which is what the toast
+     * names; null when the press meant nothing, which is only ever with
+     * read-aloud off.
+     */
+    onReadAloudPauseToggle?: () => boolean | null;
     /**
      * Finger down on the talk button. `touchAt` is the OS's touch clock, which
      * is what the tap-versus-hold split is measured on (DROVE-140). Absent
@@ -132,6 +142,10 @@ const idleTalk: DictationCaptureState = {
     settling: false,
 };
 
+/** Module scope so `useSyncExternalStore` gets a stable pair and never resubscribes. */
+const subscribeReadAloudTransport = (onChange: () => void) => readAloud.addTransportListener(onChange);
+const readReadAloudPaused = () => readAloud.isPaused;
+
 export function useVoiceComposer(options: VoiceComposerOptions): VoiceComposerState {
     const { sessionId, active, sessionDisconnected = false, voiceCallActive, getComposerText, setComposerText, send, onError } = options;
     const [readAloudEnabled, setReadAloudEnabled] = useLocalSettingMutable('readAloudEnabled');
@@ -141,6 +155,15 @@ export function useVoiceComposer(options: VoiceComposerOptions): VoiceComposerSt
     const [talkCancelArmed, setTalkCancelArmed] = React.useState(false);
     const [talkSendArmed, setTalkSendArmed] = React.useState(false);
     const [dictationSupported, setDictationSupported] = React.useState(false);
+    // The pause lives on the reader, not in local settings, so the button
+    // subscribes to it rather than owning it (DROVE-233). Three surfaces drive
+    // it and only one of them is this button, so a copy in React state would
+    // be a copy that drifts the moment he squeezes a headphone.
+    const readAloudPaused = React.useSyncExternalStore(
+        subscribeReadAloudTransport,
+        readReadAloudPaused,
+        readReadAloudPaused,
+    );
 
     // The callbacks change identity with the screen; the capture does not.
     // Refs keep the one controller pointed at the current ones.
@@ -378,6 +401,32 @@ export function useVoiceComposer(options: VoiceComposerOptions): VoiceComposerSt
     }, [readAloudEnabled, setReadAloudEnabled]);
 
     /**
+     * The long press (DROVE-233).
+     *
+     * Straight at the reader rather than through the local setting, and that
+     * is the point: `readAloudEnabled` is persisted and survives a relaunch,
+     * and a pause must not — coming back to a phone that is silently holding a
+     * place in a session from yesterday is the failure the whole ticket is
+     * about avoiding. It is runtime state on the one reader, which is also
+     * what lets the headphones and the lock screen share it.
+     */
+    const onReadAloudPauseToggle = React.useCallback((): boolean | null => {
+        const effect = transportEffect(
+            'long-press',
+            readAloudTransport(readAloud.isEnabled, readAloud.isPaused),
+        );
+        if (effect === 'pause') {
+            readAloud.setPaused(true);
+            return true;
+        }
+        if (effect === 'resume') {
+            readAloud.setPaused(false);
+            return false;
+        }
+        return null;
+    }, []);
+
+    /**
      * May this press move the gesture at all? Checked before any state moves,
      * so the button never goes red over a recording nothing will ever read
      * back (DROVE-105).
@@ -512,6 +561,8 @@ export function useVoiceComposer(options: VoiceComposerOptions): VoiceComposerSt
     return {
         readAloudEnabled: offersReadAloud ? readAloudEnabled : undefined,
         onReadAloudToggle: offersReadAloud ? onReadAloudToggle : undefined,
+        readAloudPaused: offersReadAloud ? readAloudPaused : undefined,
+        onReadAloudPauseToggle: offersReadAloud ? onReadAloudPauseToggle : undefined,
         onTalkPressIn: offersDictation ? onTalkPressIn : undefined,
         onTalkPressOut: offersDictation ? onTalkPressOut : undefined,
         onTalkSlide: offersDictation ? onTalkSlide : undefined,
