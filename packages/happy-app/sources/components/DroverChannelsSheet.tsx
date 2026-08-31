@@ -29,7 +29,7 @@
  */
 
 import * as React from 'react';
-import { Text, useWindowDimensions, View } from 'react-native';
+import { Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -37,7 +37,6 @@ import { Typography } from '@/constants/Typography';
 import { BubblePressable } from './BubblePressable';
 import { ComposerSheet } from './ComposerSheet';
 import { ComposerSheetRow } from './ComposerSheetRow';
-import { channelSheetMaxHeight } from './droverChannelsSheetLayout';
 import { hapticsLight } from './haptics';
 import { useDroverChannels } from '@/hooks/useDroverChannels';
 import { audioRows, MODE_COPY, modeTitle } from '@/sync/droverChannels';
@@ -69,7 +68,6 @@ export interface DroverChannelsSheetProps {
 export const DroverChannelsSheet = React.memo(function DroverChannelsSheet(props: DroverChannelsSheetProps) {
     const styles = stylesheet;
     const { theme } = useUnistyles();
-    const { height: windowHeight } = useWindowDimensions();
     const channels = useDroverChannels();
     // Stream-talk lives on this device, not on the bus, so it is read here
     // rather than through the channels hook (DROVE-100). The composer's
@@ -81,7 +79,6 @@ export const DroverChannelsSheet = React.memo(function DroverChannelsSheet(props
         <ComposerSheet
             open={props.open}
             onClose={props.onClose}
-            maxHeight={channelSheetMaxHeight(windowHeight)}
             // The switches are one tap, and a keyboard on its way out would
             // otherwise eat it.
             keyboardShouldPersistTaps="always"

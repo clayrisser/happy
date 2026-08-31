@@ -10,48 +10,49 @@ import { describe, expect, it } from 'vitest';
 
 import {
     channelSheetContentHeight,
-    channelSheetHeightCap,
-    channelSheetMaxHeight,
     channelSheetWidth,
     modesVisibleWithoutScrolling,
     sheetTitleColumnWidth,
     sheetTitleFitsOneLine,
     sheetTitleLines,
 } from './droverChannelsSheetLayout';
+import { composerSheetBody, composerSheetCap } from './composerSheetLayout';
 import { en } from '../text/translations/en';
 
 /** iPhone 15 Pro, the handset the screenshot came off. */
 const screenWidth = 393;
 const screenHeight = 852;
 
+/** That handset's notch and home indicator. */
+const phone = { windowHeight: screenHeight, safeAreaTop: 59, safeAreaBottom: 34 };
+
 describe('channel sheet height', () => {
-    it('caps at 460 on a full-size handset', () => {
-        expect(channelSheetMaxHeight(screenHeight)).toBe(channelSheetHeightCap);
-    });
-
-    it('shrinks with the window rather than running off the top', () => {
-        expect(channelSheetMaxHeight(600)).toBe(360);
-        expect(channelSheetMaxHeight(600)).toBeLessThan(channelSheetHeightCap);
-    });
-
-    it('never goes below the floor on a tiny window', () => {
-        expect(channelSheetMaxHeight(200)).toBe(240);
-    });
-
-    it('is shorter than its own content, so the sheet scrolls', () => {
+    it('fits on a handset without scrolling at all, now the cap is the screen', () => {
         const content = channelSheetContentHeight({ modes: 4, toggleSections: [2, 2] });
-        expect(content).toBeGreaterThan(channelSheetMaxHeight(screenHeight));
+        expect(composerSheetBody({ ...phone, contentHeight: content })).toEqual({
+            cap: composerSheetCap(phone),
+            height: content,
+            scrolls: false,
+        });
     });
 
     it('shows all four modes before the first scroll', () => {
         expect(modesVisibleWithoutScrolling({
             modes: 4,
-            maxHeight: channelSheetMaxHeight(screenHeight),
+            maxHeight: composerSheetCap(phone),
         })).toBe(true);
     });
 
-    it('still shows all four modes at the floor', () => {
-        expect(modesVisibleWithoutScrolling({ modes: 4, maxHeight: channelSheetMaxHeight(200) })).toBe(true);
+    it('still shows all four modes on the smallest window the sheet is drawn on', () => {
+        expect(modesVisibleWithoutScrolling({
+            modes: 4,
+            maxHeight: composerSheetCap({ ...phone, windowHeight: 480 }),
+        })).toBe(true);
+    });
+
+    it('scrolls only once the sections outgrow the screen', () => {
+        const content = channelSheetContentHeight({ modes: 4, toggleSections: [2, 2, 2, 2, 2, 2] });
+        expect(composerSheetBody({ ...phone, contentHeight: content }).scrolls).toBe(true);
     });
 
     it('grows a section at a time, not a row at a time', () => {

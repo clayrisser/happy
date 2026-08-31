@@ -47,9 +47,10 @@ export function SessionAgentsSheet(props: {
                     </Text>
                 </View>
             ) : null}
-            {/* The sheet is the cap now, so the tree stops capping itself at
-                the 180pt the composer's furniture allowed. */}
-            <SessionLiveStatusTree sessionId={props.sessionId} rows={rows} maxHeight={260} />
+            {/* The sheet is the cap, and since DROVE-201 the sheet's cap is
+                the screen. So the tree caps itself at nothing: it grows, the
+                sheet grows with it, and the sheet is what scrolls. */}
+            <SessionLiveStatusTree sessionId={props.sessionId} rows={rows} maxHeight={null} />
         </ComposerSheet>
     );
 }
