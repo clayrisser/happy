@@ -2,6 +2,7 @@ import * as React from 'react';
 import { Message } from '@/sync/typesMessage';
 import { getToolSummaryCategory, isInteractiveQuestionToolName, ToolSummaryCategory } from '@/utils/toolDisplay';
 import { isInvisibleMessage, isUserAttachment } from '@/utils/messageVisibility';
+import { crossSessionIndexFor, isClaimedAttachmentRow } from '@/utils/crossSessionAttachments';
 import { groupSameToolRuns, hasFailedToolCall, hasRunningToolCall } from '@/utils/toolRunGroups';
 import { t } from '@/text';
 
@@ -59,10 +60,20 @@ export function useGroupedMessages(
 }
 
 export function groupMessagesForDisplay(
-    messages: Message[],
+    all: Message[],
     enabled: boolean = true,
     options: { collapseCurrentTurn?: boolean } = {},
 ): DisplayItem[] {
+    // An upload row whose picture a phone envelope now draws inline stands
+    // down, so the screenshot appears once rather than twice (DROVE-234). Only
+    // ever a row whose ref a marker actually RESOLVED to: a marker that found
+    // nothing leaves the row exactly where it was, so the worst case here is
+    // the duplicate, never a missing image.
+    const claimedRefs = crossSessionIndexFor(all).claimedRefs;
+    const messages = claimedRefs.size === 0
+        ? all
+        : all.filter((message) => !isClaimedAttachmentRow(message, claimedRefs));
+
     if (!enabled) {
         // Grouping off is the default (`groupToolCalls: false`). This path
         // used to hand every message to the list untouched, which is how the

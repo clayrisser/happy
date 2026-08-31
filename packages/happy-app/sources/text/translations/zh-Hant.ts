@@ -1076,6 +1076,8 @@ export const zhHant: TranslationStructure = {
         unknownEvent: '未知事件',
         usageLimitUntil: ({ time }: { time: string }) => `使用限制到 ${time}`,
         sentAsGoal: 'Sent as goal',
+        sentFrom: ({ name }: { name: string }) => `From ${name}`,
+        sentFromWithMode: ({ name, mode }: { name: string; mode: string }) => `From ${name} · ${mode}`,
         unknownTime: '未知時間',
         thoughtProcess: '思考過程',
         thinkingNow: '正在思考…',

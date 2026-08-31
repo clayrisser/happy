@@ -1080,6 +1080,8 @@ export const ru: TranslationStructure = {
         unknownEvent: 'Неизвестное событие',
         usageLimitUntil: ({ time }: { time: string }) => `Лимит использования достигнут до ${time}`,
         sentAsGoal: 'Отправлено в качестве цели',
+        sentFrom: ({ name }: { name: string }) => `From ${name}`,
+        sentFromWithMode: ({ name, mode }: { name: string; mode: string }) => `From ${name} · ${mode}`,
         unknownTime: 'неизвестное время',
         thoughtProcess: 'Ход рассуждений',
         thinkingNow: 'Думает…',

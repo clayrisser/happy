@@ -66,6 +66,19 @@
  * did a moment ago; after a relaunch the pane's own value is the only truth
  * worth drawing.
  *
+ * DROVE-232 ADDS THE ONE WAIT THIS PHONE DID NOT START. A flip relaunches
+ * Claude Code under another account, and the new process reads its model and
+ * effort out of that account's config -- so the CLI has to carry the session's
+ * picks over and re-apply anything that did not land. That is a wait of exactly
+ * the shape above, started by the CLI rather than by a tap, so it cannot come
+ * from the device-local map. It arrives as `modeReapplyAt` in metadata and
+ * `reapplyRequest` below turns it into the same record, which means the four
+ * exits, the fold and the bound are shared rather than copied. The CLI also
+ * clears `paneModel` / `paneEffort` / `panePermissionMode` as it relaunches,
+ * because they describe a process that has gone -- so until the new one speaks
+ * there is nothing observed, the composer falls back to the request, and Clay
+ * keeps looking at the effort he picked.
+ *
  * Pure except for the map, so the rule can be pinned without a renderer.
  */
 
@@ -183,6 +196,38 @@ export function agentModePendingState(
     // Silence, bounded.
     if (now - request.at >= (input.giveUpMs ?? AGENT_MODE_PENDING_GIVE_UP_MS)) return 'settled';
     return 'pending';
+}
+
+/**
+ * The CLI's own re-apply, as the request record the rule above already knows
+ * how to reason about (DROVE-232).
+ *
+ * `value` is the STORED pick, because that is exactly what the CLI is trying to
+ * put back: it chose nothing, it is defending what was already chosen. So the
+ * "overwritten" exit still means what it always meant -- the CLI mirrored a
+ * refusal back and the stored pick is no longer the one we are waiting on --
+ * which is how a value the new account cannot honour ends the wait rather than
+ * hanging it.
+ *
+ * `observedWhenAsked` is pinned to what the pane holds NOW, which neuters the
+ * "contradicted" exit for this record, and that is deliberate. Contradiction
+ * asks "did somebody else move the pane after we asked". On a re-apply the CLI
+ * is the one moving it, and its own failure already has an exit of its own, so
+ * leaving contradiction armed would settle the wait on the very first report
+ * from the new process -- which is the report we are waiting to disagree with.
+ * What is left is: confirmed, rolled back, or the 45-second bound.
+ *
+ * Returns undefined when no re-apply is outstanding, so an ordinary session
+ * behaves exactly as it did before.
+ */
+export function reapplyRequest(
+    metadata: Metadata | null | undefined,
+    stored: string | null,
+    observed: string | null,
+): AgentModeRequest | undefined {
+    const at = metadata?.modeReapplyAt;
+    if (typeof at !== 'number') return undefined;
+    return { value: stored, observedWhenAsked: observed, at };
 }
 
 const bySession = new Map<string, Map<AgentModeControl, AgentModeRequest>>();

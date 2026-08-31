@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
     clampContextSize,
     formatUsageLimitAge,
+    formatUsageLimitResetTime,
     getContextUsageLevel,
     getContextUsagePercentage,
     getUsageLimitChips,
@@ -115,5 +116,23 @@ describe('usage limit helpers', () => {
         expect(formatUsageLimitAge(0, 3 * 60_000)).toBe('3m');
         expect(formatUsageLimitAge(0, 2 * 3600_000)).toBe('2h');
         expect(formatUsageLimitAge(0, 3 * 86400_000)).toBe('3d');
+    });
+});
+
+describe('the weekday on a reset date', () => {
+    // Clay: "I would actually like to know the day of the week for these."
+    // "Sep 3" is a date he has to convert before it means anything; the
+    // question he is actually asking is how long he has to wait.
+    it('names the day once the reset is more than a day out', () => {
+        const now = Date.UTC(2026, 7, 31, 12, 0);
+        const out = formatUsageLimitResetTime(Date.UTC(2026, 8, 3, 9, 59), now);
+        expect(out).toMatch(/Sep/);
+        expect(out).toMatch(/Mon|Tue|Wed|Thu|Fri|Sat|Sun/);
+    });
+
+    it('stays a clock time inside the day, where a weekday says nothing new', () => {
+        const now = Date.UTC(2026, 7, 31, 12, 0);
+        const out = formatUsageLimitResetTime(Date.UTC(2026, 7, 31, 20, 50), now);
+        expect(out).not.toMatch(/Mon|Tue|Wed|Thu|Fri|Sat|Sun/);
     });
 });

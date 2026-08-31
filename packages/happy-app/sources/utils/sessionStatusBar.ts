@@ -199,7 +199,13 @@ export function formatUsageLimitResetTime(ms: number, now = Date.now()): string 
     if (ms - now < 22 * 3600_000) {
         return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     }
-    return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+    // The WEEKDAY, not just the date. Clay: "I would actually like to know the
+    // day of the week for these." A window resetting on "Sep 3" is a date he
+    // has to convert before it means anything; "Thu Sep 3" answers the actual
+    // question, which is how long he has to wait. Inside 22 hours it is still
+    // a clock time, because a weekday on something happening this evening
+    // tells him nothing he does not already know.
+    return d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
 }
 
 /** Compact age like "3m" / "2h" for the "as of" footer. */

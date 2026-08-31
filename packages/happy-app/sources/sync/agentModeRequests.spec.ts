@@ -15,6 +15,7 @@ import {
     paneAgrees,
     paneDisagreesWithRequest,
     paneObservedMode,
+    reapplyRequest,
     resetAgentModeRequests,
     type AgentModeControl,
 } from './agentModeRequests';
@@ -230,6 +231,94 @@ describe('the record of what this device asked for', () => {
             request: getAgentModeRequest('s1', 'effortLevel'),
             stored: null,
             observed: 'high',
+            now: T0 + 500,
+        })).toBe('pending');
+    });
+});
+
+describe("the CLI's own re-apply after a relaunch (DROVE-232)", () => {
+    const reapply = (fields: Partial<Metadata>, stored: string | null, observed: string | null) =>
+        reapplyRequest(pane(fields), stored, observed);
+
+    it('is no request at all on a session that did not relaunch', () => {
+        expect(reapply({}, 'max', 'high')).toBeUndefined();
+    });
+
+    it('defends the stored pick rather than choosing anything', () => {
+        expect(reapply({ modeReapplyAt: T0 }, 'max', 'high'))
+            .toEqual({ value: 'max', observedWhenAsked: 'high', at: T0 });
+    });
+
+    it('draws nothing while the new pane has yet to say anything', () => {
+        // The CLI clears the pane fields as it relaunches, so there is nothing
+        // to wait on and the composer falls back to the request.
+        expect(agentModePendingState('effortLevel', {
+            request: reapply({ modeReapplyAt: T0 }, 'max', null),
+            stored: 'max',
+            observed: null,
+            now: T0 + 500,
+        })).toBe('settled');
+    });
+
+    it('waits while the new process is on the wrong effort', () => {
+        // This is Clay's bug: main hit its wall, the session moved to jamrizzi,
+        // and the fresh Claude came up on that account's default.
+        expect(agentModePendingState('effortLevel', {
+            request: reapply({ modeReapplyAt: T0, paneEffort: 'high' }, 'max', 'high'),
+            stored: 'max',
+            observed: 'high',
+            now: T0 + 500,
+        })).toBe('pending');
+    });
+
+    it('settles when the re-apply lands', () => {
+        expect(agentModePendingState('effortLevel', {
+            request: reapply({ modeReapplyAt: T0, paneEffort: 'max' }, 'max', 'max'),
+            stored: 'max',
+            observed: 'max',
+            now: T0 + 500,
+        })).toBe('settled');
+    });
+
+    it('settles at the pane value when the new account refuses it', () => {
+        // The CLI mirrored the refusal back into the request, which is the
+        // signal. The reason is already a line in the chat; the control just
+        // stops claiming a pick the terminal would not take.
+        expect(agentModePendingState('effortLevel', {
+            request: reapply({ modeReapplyAt: T0, paneEffort: 'high' }, 'max', 'high'),
+            stored: 'high',
+            observed: 'high',
+            now: T0 + 500,
+        })).toBe('settled');
+    });
+
+    it('gives up on the same bound as any other wait, so a dead CLI cannot hold it amber', () => {
+        expect(agentModePendingState('effortLevel', {
+            request: reapply({ modeReapplyAt: T0, paneEffort: 'high' }, 'max', 'high'),
+            stored: 'max',
+            observed: 'high',
+            now: T0 + AGENT_MODE_PENDING_GIVE_UP_MS,
+        })).toBe('settled');
+    });
+
+    it('waits on the model and the permission mode too, folded as always', () => {
+        expect(agentModePendingState('modelMode', {
+            request: reapply({ modeReapplyAt: T0, paneModel: 'claude-sonnet-5' }, 'claude-opus-5', 'claude-sonnet-5'),
+            stored: 'claude-opus-5',
+            observed: 'claude-sonnet-5',
+            now: T0 + 500,
+        })).toBe('pending');
+        // ...and the [1m] variant is not a disagreement.
+        expect(agentModePendingState('modelMode', {
+            request: reapply({ modeReapplyAt: T0, paneModel: 'claude-opus-5' }, 'claude-opus-5[1m]', 'claude-opus-5'),
+            stored: 'claude-opus-5[1m]',
+            observed: 'claude-opus-5',
+            now: T0 + 500,
+        })).toBe('settled');
+        expect(agentModePendingState('permissionMode', {
+            request: reapply({ modeReapplyAt: T0, panePermissionMode: 'default' }, 'yolo', 'default'),
+            stored: 'yolo',
+            observed: 'default',
             now: T0 + 500,
         })).toBe('pending');
     });

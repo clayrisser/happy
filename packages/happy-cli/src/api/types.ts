@@ -436,6 +436,23 @@ export type Metadata = {
   effortLevel?: string | null,
   permissionMode?: string | null,
   /**
+   * When this session last relaunched and started re-applying the three picks
+   * above to a fresh Claude Code (DROVE-232).
+   *
+   * A relaunch -- a flip onto another account, or DROVE-220 picking up a
+   * rebuilt CLI -- brings up a process that reads its model and effort out of
+   * a config dir rather than out of the session. The picks are carried onto
+   * its argv and, for anything that does not land, re-applied through the pane.
+   * That takes a moment, and this is how the phone knows to draw the controls
+   * as PENDING for it (DROVE-217) instead of showing the new process's default
+   * and then changing under Clay.
+   *
+   * Written by the launcher, null once the new pane has reported and agrees.
+   * The app bounds it by DROVE-217's own give-up window, so a CLI that dies
+   * mid-relaunch cannot leave a control amber forever.
+   */
+  modeReapplyAt?: number | null,
+  /**
    * The app's Remote Control request for this session: `on`, `off`, or absent /
    * null for "not asking" (DROVE-63). Carried as a string because that is what
    * the app's existing per-session pick transport takes, which is the whole

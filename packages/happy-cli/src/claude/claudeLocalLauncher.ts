@@ -11,6 +11,11 @@ import { paneCommandKind, paneCommandOutcome, paneUltracodeActive } from "./util
 import { createPaneCommandQueue, paneCommandArgument, paneCommandsForSelection, paneModelAsRequest, paneSlashCommand, parseRemoteControlRequest, remoteControlCommand, type PaneModelSelection } from "./utils/paneModelSync";
 import { cyclePaneMode, panePermissionAsRequest, pressCycleKey, readPaneMode, readPaneModeChip, type PaneMode } from "./utils/panePermissionSync";
 import { isPermissionMode, mapToClaudeMode } from "./utils/permissionMode";
+// DROVE-232: a relaunch is a fresh Claude Code, and a fresh Claude Code reads
+// its model and effort out of the config dir rather than out of the session it
+// is continuing. Both halves of the answer -- the argv that makes it boot right
+// and the reconcile that catches what the argv did not land -- live here.
+import { modeCarryArgs, modeReconcileCommands, type ModeObservation, type ModeRequest } from "./utils/modeCarry";
 import { findInbox, sendToInbox, wrapForPane } from "./utils/inboxSocket";
 import {
     noteMessageDelivered,
@@ -33,7 +38,7 @@ import { applyPendingFlip, transcriptPathFor } from "@/drover/flip/apply";
 // turns.
 import { announceRelaunch } from "@/drover/relaunch/announce";
 import { startRelaunchGate, type RelaunchGate } from "@/drover/relaunch/gate";
-import { relaunchExitCode } from "@/drover/relaunch/handover";
+import { relaunchExitCode, relaunchIsHandover } from "@/drover/relaunch/handover";
 import { loadedDistStamp, distEntrypoint, distEntryIsComplete, readDistStamp } from "@/drover/relaunch/stamp";
 import { createStaleWatcher } from "@/drover/relaunch/staleWatcher";
 
@@ -173,7 +178,7 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
                         paneModel: run.model,
                         paneEffort: effort,
                     }));
-                    reconcilePaneEffort();
+                    reconcilePaneModes();
                     // After the reconcile, never before it: the reconcile is
                     // the one place the app's standing request is allowed to
                     // beat the pane (DROVE-164), and mirroring first would
@@ -505,6 +510,12 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
             ...metadata,
             panePermissionMode: mode,
         }));
+        // DROVE-232: reconcile BEFORE mirroring, for the reason the reconcile's
+        // own header gives. The footer watcher runs on its own 2s poll rather
+        // than off the transcript, so for the permission mode this is the path
+        // that gets there first, and the mirror it used to call straight into
+        // is what wrote a relaunch's default over the request.
+        if (!applying) reconcilePaneModes();
         mirrorPanePermissionIntoRequest(applying);
     }
 
@@ -795,33 +806,165 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
     };
 
     /**
-     * Once per launcher, when the pane's real effort is first known: does it
-     * match what the app asked for (DROVE-164)?
+     * The session is about to spawn a REPLACEMENT child (DROVE-232).
+     *
+     * Called on every spawn after the first, which in practice means a flip or
+     * a crash-restart; DROVE-220's CLI relaunch arrives as a whole new process
+     * and gets the same treatment for free, because a new process starts here
+     * anyway. Three things have to be true before the new Claude comes up:
+     *
+     *   the reconcile is armed again      it is latched per child, and the old
+     *                                     child spent it.
+     *   the observations are dropped      `paneModel` / `paneEffort` /
+     *                                     `panePermissionMode` describe a pane
+     *                                     that no longer exists. Leaving them
+     *                                     standing means the composer draws a
+     *                                     dead process's effort, and the app's
+     *                                     own change test runs against it. Null
+     *                                     is the honest answer until the new
+     *                                     child says otherwise, and the app
+     *                                     falls back to the REQUEST for the
+     *                                     gap, which is the value Clay picked.
+     *   the wait is declared              `modeReapplyAt` tells the phone this
+     *                                     session is re-applying, so DROVE-217
+     *                                     can draw the controls amber while it
+     *                                     happens instead of letting a value
+     *                                     appear and then change under him.
+     */
+    function noteModeReapply(): void {
+        if (!tmuxPane) return;
+        armModeReconcile();
+        observedRun = {};
+        observedPermissionMode = undefined;
+        session.client.updateMetadata((metadata) => ({
+            ...metadata,
+            paneModel: null,
+            paneEffort: null,
+            panePermissionMode: null,
+            modeReapplyAt: Date.now(),
+        }));
+        logger.debug('[local]: relaunching — carrying the session modes onto the new child and re-applying what it does not take');
+    }
+
+    /**
+     * Take the wait down once the new child has spoken and agrees.
+     *
+     * Only ever narrows: a marker left standing costs an amber control for the
+     * 45 seconds the app bounds it by, and the app settles on the pane agreeing
+     * whatever this field says. Clearing it is tidiness, not correctness.
+     */
+    function settleModeReapply(observed: ModeObservation): void {
+        if (session.client.getMetadata()?.modeReapplyAt == null) return;
+        const spoken = observed.model !== undefined
+            || observed.effort !== undefined
+            || observed.permissionMode !== undefined;
+        if (!spoken) return;
+        session.client.updateMetadata((metadata) => ({ ...metadata, modeReapplyAt: null }));
+    }
+
+    /**
+     * WHICH FIELDS ARE ARMED AT LAUNCHER START, AND WHY IT IS NOT ALL THREE.
+     *
+     * A launcher starting up is attaching to a pane whose Claude Code has been
+     * running: its model is the TRUTH and the stored request may be months
+     * stale, which is why DROVE-191 mirrors the pane into the request there
+     * rather than retyping. A launcher relaunching a CHILD is the opposite case
+     * -- the process is seconds old and its model came out of a config file, so
+     * the request is the truth and the pane is the thing that is wrong.
+     *
+     * Effort is armed at start anyway, and that is not an inconsistency: it is
+     * DROVE-164, where a pick made while the CLI was down never reached the
+     * pane at all because only a metadata DELTA applied one. Model and
+     * permission mode are NOT, because arming them would make a `/model` typed
+     * at Clay's own keyboard get typed straight back at him -- the exact loop
+     * DROVE-191 exists to prevent.
+     */
+    let modeReconciled = { model: true, effort: false, permissionMode: true };
+    function armModeReconcile(): void {
+        modeReconciled = { model: false, effort: false, permissionMode: false };
+    }
+    /** The three picks as metadata holds them right now. */
+    function requestedModes(): ModeRequest {
+        const metadata = session.client.getMetadata();
+        return {
+            modelMode: metadata?.modelMode,
+            effortLevel: metadata?.effortLevel,
+            permissionMode: metadata?.permissionMode,
+        };
+    }
+    /**
+     * Once per CHILD, when the pane's real modes are first known: are they what
+     * the app asked for (DROVE-164, widened by DROVE-232)?
      *
      * `paneSelection` is seeded from the app's OWN request, on the reasoning
      * that a reconnect should not retype a pick that never changed. The cost is
-     * that a pick made while the CLI was down, or one that a crash or a flip
-     * interrupted, is assumed to have landed and is never typed at all — the
-     * only thing that ever applies effort is a metadata DELTA. Remote Control
-     * has had a start-up reconcile since DROVE-63; this is the same one.
+     * that a pick made while the CLI was down, or one that a crash or a
+     * relaunch interrupted, is assumed to have landed and is never typed at all
+     * -- the only thing that ever applies a mode is a metadata DELTA. Remote
+     * Control has had a start-up reconcile since DROVE-63; this is the same one.
      *
-     * Effort only, still. The transcript reports a model as `claude-opus-5`
-     * whether or not the pane is on the `[1m]` variant, so reconciling the
-     * model against it would retype `/model` on every launch forever. DROVE-191
-     * does not change that: it fixes the model by mirroring the pane INTO the
-     * request (mirrorPaneIntoRequest), which is the direction that terminates.
+     * DROVE-232 changed two things about it, and both were the same bug seen
+     * from different ends.
+     *
+     * PER CHILD, NOT PER LAUNCHER. A flip does not restart the launcher, it
+     * respawns the child inside it (drover/flip/apply.ts), so the old
+     * once-a-launcher latch was already spent by the time the new account's
+     * Claude came up and the reconcile never ran for the one case it was most
+     * needed in. `armModeReconcile()` clears it on every spawn after the first.
+     *
+     * ALL THREE FIELDS, NOT JUST EFFORT. Effort was the only one reconciled
+     * because the model could not be compared against a transcript that cannot
+     * tell `claude-opus-5` from `claude-opus-5[1m]`. `paneHoldsRequest` folds
+     * that variant the way the app's own `paneAgrees` does, so the comparison
+     * terminates and the model and the permission mode can join.
+     *
+     * IT RUNS BEFORE THE MIRROR, and that ordering is the whole fix. The mirror
+     * exists to follow the pane when Clay moves it at his keyboard, and it
+     * cannot tell that apart from a relaunch landing on another account's
+     * default -- so left to itself it wrote `high` over `effortLevel: max` and
+     * the request was gone rather than merely unapplied. Reconciling first
+     * queues the command, and a queued command of that kind suppresses the
+     * mirror for that field, so the request survives long enough to be applied
+     * or to be REFUSED out loud.
      */
-    let effortReconciled = false;
-    function reconcilePaneEffort(): void {
-        if (!tmuxPane || effortReconciled) return;
-        effortReconciled = true;
-        const wanted = session.client.getMetadata()?.effortLevel;
-        if (wanted === undefined || wanted === null) return;
-        const running = observedRun.effort ?? undefined;
-        if (running === undefined || running === wanted) return;
-        logger.debug(`[local]: the app asked for effort ${wanted} and the pane is on ${running} — queueing the difference`);
-        paneSelection = { ...paneSelection, effortLevel: wanted };
-        paneCommands.request([`/effort ${wanted}`], { allowWhileBusy: true });
+    function reconcilePaneModes(): void {
+        if (!tmuxPane) return;
+        // Only fields the pane has actually spoken about are in play, and each
+        // is latched the first time it speaks. A field the pane has never
+        // reported keeps waiting; a field that was reconciled and refused must
+        // not be retyped on the next observation forever.
+        const observed: ModeObservation = {
+            ...(modeReconciled.model ? {} : { model: observedRun.model }),
+            ...(modeReconciled.effort ? {} : { effort: observedRun.effort }),
+            ...(modeReconciled.permissionMode ? {} : { permissionMode: observedPermissionMode }),
+        };
+        if (observedRun.model !== undefined) modeReconciled.model = true;
+        if (observedRun.effort !== undefined) modeReconciled.effort = true;
+        if (observedPermissionMode !== undefined) modeReconciled.permissionMode = true;
+
+        const request = requestedModes();
+        const commands = modeReconcileCommands(request, observed);
+        if (commands.length === 0) {
+            // Everything the pane has spoken about agrees, so nothing is
+            // outstanding on those fields any more.
+            settleModeReapply(observed);
+            return;
+        }
+        logger.debug(`[local]: the pane came up on modes the app did not ask for — queueing ${commands.join(', ')}`);
+        // Record the intent in the same breath, or the next metadata event
+        // would read the pane's value as a fresh pick and fight this.
+        if (commands.some((c) => c.startsWith('/model '))) {
+            paneSelection = { ...paneSelection, modelMode: request.modelMode };
+        }
+        if (commands.some((c) => c.startsWith('/effort '))) {
+            paneSelection = { ...paneSelection, effortLevel: request.effortLevel };
+        }
+        if (commands.some((c) => c.startsWith('#permission-mode '))) {
+            paneSelection = { ...paneSelection, permissionMode: paneModeFor(request.permissionMode) };
+        }
+        for (const command of commands) {
+            paneCommands.request([command], { allowWhileBusy: true });
+        }
         pumpPaneCommands();
     }
 
@@ -1664,6 +1807,20 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
         }
 
         // Run local mode
+        //
+        // DROVE-232: the first spawn is the session starting; every spawn after
+        // it is a REPLACEMENT -- a flip onto another account, or a child that
+        // died and is coming back. Only a replacement needs the pane readings
+        // dropped and the re-apply declared, because only a replacement is a
+        // fresh Claude Code standing in for one that already had the picks.
+        //
+        // DROVE-220's relaunch is a replacement too, and it is the one this
+        // counter cannot see: the whole node process exited and came back, so
+        // its first spawn IS the second child of that pane. The wrapper says so
+        // by setting DROVER_RELAUNCH_HANDOVER, which is why the counter starts
+        // from that rather than from false, and why both relaunches are fixed
+        // here rather than in two places.
+        let spawned = relaunchIsHandover(session.client.sessionId);
         while (true) {
             // If we already have an exit reason, return it
             if (exitReason) {
@@ -1695,6 +1852,8 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
                 // remote (BASED-113). Cleared in `finally` so a parked or
                 // between-spawns pane, which is a shell, never gets typed into.
                 childAlive = true;
+                if (spawned) noteModeReapply();
+                spawned = true;
                 try {
                 await claudeLocal({
                     path: session.path,
@@ -1703,7 +1862,16 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
                     onThinkingChange,
                     abort: processAbortController.signal,
                     claudeEnvVars: session.claudeEnvVars,
-                    claudeArgs: session.claudeArgs,
+                    // DROVE-232: the picks go on the CHILD's argv, not just into
+                    // the queue that types at its prompt. A flip's arrival
+                    // prompt is a positional argument to this very spawn, so
+                    // anything applied after the child is up has already lost a
+                    // turn to the wrong effort -- which is the expensive half of
+                    // "it reset my effort". Derived per spawn and never written
+                    // back to session.claudeArgs: a permission mode this spawn
+                    // had to evict --dangerously-skip-permissions for must not
+                    // stay evicted for the next one.
+                    claudeArgs: modeCarryArgs(session.claudeArgs, requestedModes()),
                     mcpServers: session.mcpServers,
                     allowedTools: session.allowedTools,
                     hookSettingsPath: session.hookSettingsPath,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { buildRelaunchArgv, relaunchExitCode, relaunchFileEnv, relaunchIsSupervised } from './handover'
+import { buildRelaunchArgv, handoverSessionEnv, relaunchExitCode, relaunchFileEnv, relaunchIsHandover, relaunchIsSupervised } from './handover'
 
 const id = '19c2f0a8-f803-4cb8-8bee-c68b6773e412'
 const other = '0a12da8b-1111-4222-8333-444444444444'
@@ -59,5 +59,26 @@ describe('relaunchExitCode', () => {
         // claude exits 0/1/143; 75 means "try again", which is the whole
         // message from the launcher to its wrapper.
         expect(relaunchExitCode).toBe(75)
+    })
+})
+
+describe('relaunchIsHandover (DROVE-232)', () => {
+    it('is only true for the process that replaced another one', () => {
+        // The wrapper deletes the variable on an ordinary start, so its
+        // presence is the whole signal. The launcher uses it to give a
+        // DROVE-220 relaunch the same mode carry a flip gets, from one place.
+        expect(relaunchIsHandover(id, { [handoverSessionEnv]: id })).toBe(true)
+        expect(relaunchIsHandover(id, {})).toBe(false)
+        expect(relaunchIsHandover(id, { [handoverSessionEnv]: '' })).toBe(false)
+        expect(relaunchIsHandover(id, { [relaunchFileEnv]: '/tmp/x' })).toBe(false)
+    })
+
+    it('answers for the named session and no other', () => {
+        // Nothing ever unsets the variable, so the child Claude Code and every
+        // shell it opens inherit it. An unscoped read had a `vitest` run inside
+        // one of Clay's own sessions believe it had just relaunched.
+        expect(relaunchIsHandover(other, { [handoverSessionEnv]: id })).toBe(false)
+        expect(relaunchIsHandover(null, { [handoverSessionEnv]: id })).toBe(false)
+        expect(relaunchIsHandover(undefined, { [handoverSessionEnv]: id })).toBe(false)
     })
 })

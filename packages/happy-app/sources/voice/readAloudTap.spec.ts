@@ -2,6 +2,16 @@ import { describe, expect, it } from 'vitest';
 import { readDetourFromHere, readFromHere, readSentenceFromHere, type ReadAloudTapTarget } from './readAloudTap';
 import type { ReadAloudDetourSentence } from './readAloud';
 
+/**
+ * The two guards every seek passes, whatever gesture asked for it.
+ *
+ * The gesture is a DOUBLE tap on a sentence (DROVE-235, back to what
+ * DROVE-146 asked for). It reaches `readSentenceFromHere` below, and the
+ * block-level `readFromHere` is now only that call's fallback: no surface
+ * binds a gesture to it, which is what keeps exactly one route to the
+ * playhead.
+ */
+
 interface Fake extends ReadAloudTapTarget {
     /** createdAts the block-level seek was asked for. */
     sought: number[];
@@ -35,7 +45,7 @@ function target(over: Partial<ReadAloudTapTarget> & { hasSentence?: boolean } = 
     };
 }
 
-describe('tap a section to read from there (DROVE-146)', () => {
+describe('the block-level seek, now only the sentence seek\'s fallback (DROVE-146)', () => {
     it('moves reading to the tapped section', () => {
         const it1 = target();
         expect(readFromHere(it1, 's1', 42)).toBe(true);
@@ -66,7 +76,7 @@ describe('tap a section to read from there (DROVE-146)', () => {
     });
 });
 
-describe('tap a SENTENCE to read from there (DROVE-163)', () => {
+describe('double tap a SENTENCE to read from there (DROVE-163, DROVE-235)', () => {
     it('starts from the tapped sentence, not the block it is in', () => {
         const it1 = target();
         expect(readSentenceFromHere(it1, 's1', 'm1', 'The tests pass.', 42)).toBe(true);
@@ -105,7 +115,7 @@ describe('tap a SENTENCE to read from there (DROVE-163)', () => {
  * A subagent screen is a surface of the session, so both guards pass, but its
  * transcript is not in the reader's timeline and never can be (DROVE-195).
  */
-describe('tap a sentence on a subagent screen (DROVE-195)', () => {
+describe('double tap a sentence on a subagent screen (DROVE-195)', () => {
     const line = (text: string): ReadAloudDetourSentence => ({ messageId: 'a1', text, createdAt: 7 });
 
     it('hands the borrowed sentences to the reader and never seeks the session', () => {

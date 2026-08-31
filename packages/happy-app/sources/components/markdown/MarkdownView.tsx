@@ -1,12 +1,12 @@
 import { MarkdownSpan, parseMarkdown } from './parseMarkdown';
 import { type HighlightedSpan, highlightSpans } from './sentenceHighlight';
-import { splitIntoSentenceRuns } from './sentenceTargets';
+import { type SentenceRun, splitIntoSentenceRuns } from './sentenceTargets';
 import * as React from 'react';
 import { Image, Pressable, View, Platform } from 'react-native';
 import { HorizontalScrollView } from '../HorizontalScrollView';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { DoubleTap, WrapGlyph } from '../CodeWrapToggle';
+import { DoubleTap, WrapGlyph, useDoubleTapPress } from '../CodeWrapToggle';
 import { useCodeWrap } from '../useCodeWrap';
 import { Text } from '../StyledText';
 import { Typography } from '@/constants/Typography';
@@ -177,6 +177,9 @@ function useHighlightedSpans(spans: MarkdownSpan[], sentence: string | null | un
  * spoken-sentence mark is applied inside each run, so the two splits do not
  * have to know about each other: at most one run contains the spoken sentence
  * and the rest come back unchanged.
+ *
+ * The press is a DOUBLE tap (DROVE-235). A single tap on prose does nothing,
+ * which is what it did before the seek existed.
  */
 function RenderBody(props: {
     spans: MarkdownSpan[],
@@ -197,21 +200,64 @@ function RenderBody(props: {
     }
     return (<>
         {runs.map((run, index) => (
-            <Text
+            <TappableSentence
                 key={index}
+                run={run}
+                baseStyle={props.baseStyle}
                 selectable={props.selectable}
-                style={props.baseStyle}
-                onPress={() => onSentencePress(run.sentence)}
-            >
-                <RenderSpans
-                    spans={highlightSpans(run.spans, props.highlightSentence ?? null) ?? run.spans}
-                    baseStyle={props.baseStyle}
-                    selectable={props.selectable}
-                    onLinkPress={props.onLinkPress}
-                />
-            </Text>
+                onLinkPress={props.onLinkPress}
+                highlightSentence={props.highlightSentence}
+                onSentencePress={onSentencePress}
+            />
         ))}
     </>);
+}
+
+/**
+ * One sentence of prose, and the double tap that reads from it (DROVE-235).
+ *
+ * Clay asked for two taps, and two is also the safer count: a single tap on
+ * body text is what a finger does by accident, dismissing the keyboard or
+ * stopping a scroll, and moving the read head is deliberate.
+ *
+ * Counted by hand rather than with `Gesture.Tap().numberOfTaps(2)`, because a
+ * GestureDetector renders a View and this Text is inline inside the paragraph
+ * Text above it. See `doubleTapPress.ts`. Each sentence keeps its own pending
+ * tap, so a tap on one sentence followed by a tap on the next seeks to
+ * neither.
+ *
+ * A link inside the run keeps its own single press: the innermost Text with an
+ * onPress wins, so one tap still opens a link and never seeks.
+ *
+ * Known cost: VoiceOver activates with one double tap that arrives as a single
+ * onPress, so a screen reader cannot seek this way. Nobody has asked for it
+ * yet, and the fix is an accessibilityAction rather than a different count.
+ */
+function TappableSentence(props: {
+    run: SentenceRun,
+    baseStyle: any,
+    selectable: boolean,
+    onLinkPress: (url: string) => void,
+    highlightSentence?: string | null,
+    onSentencePress: (sentence: string) => void,
+}) {
+    const { onSentencePress, run } = props;
+    const seek = React.useCallback(() => onSentencePress(run.sentence), [onSentencePress, run.sentence]);
+    const onPress = useDoubleTapPress(seek);
+    return (
+        <Text
+            selectable={props.selectable}
+            style={props.baseStyle}
+            onPress={onPress}
+        >
+            <RenderSpans
+                spans={highlightSpans(run.spans, props.highlightSentence ?? null) ?? run.spans}
+                baseStyle={props.baseStyle}
+                selectable={props.selectable}
+                onLinkPress={props.onLinkPress}
+            />
+        </Text>
+    );
 }
 
 function RenderHeaderBlock(props: { level: 1 | 2 | 3 | 4 | 5 | 6, spans: MarkdownSpan[], first: boolean, last: boolean, selectable: boolean, onLinkPress: (url: string) => void, highlightSentence?: string | null, onSentencePress?: (sentence: string) => void }) {
@@ -270,6 +316,12 @@ function RenderCodeBlock(props: { content: string, language: string | null, firs
     // Code blocks arrive wrapped (DROVE-149): the text breaks inside the
     // block. A double-tap flips every code block back to the horizontal
     // ScrollView, for a table or a diff that wrapping ruins.
+    //
+    // This block takes no `onSentencePress` and never has, so the sentence
+    // seek's own double tap (DROVE-235) cannot reach inside a code fence:
+    // there are no sentence runs here to land on. The wrap toggle keeps the
+    // gesture, which is the right way round. Its double tap is older and more
+    // local, and a code block is not something Clay asks to be read aloud.
     const [wrap, toggleWrap] = useCodeWrap('code');
     const { theme } = useUnistyles();
 

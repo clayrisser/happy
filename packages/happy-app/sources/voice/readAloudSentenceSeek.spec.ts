@@ -4,12 +4,17 @@ import { ReadAloudReader, type SpeakOptions, type SpeechEngine } from './readAlo
 import { sameSentence, sentenceKey } from './sentenceMatch';
 
 /**
- * Reading starts at the SENTENCE that was tapped (DROVE-163).
+ * Reading starts at the SENTENCE that was double tapped (DROVE-163).
  *
  * Clay, refining DROVE-146: "Whatever SENTENCE I tap is where you start
  * reading." The block-level seek resolved a tap to the first sayable thing at
  * or after a message's createdAt, which in the middle of a long reply is the
  * top of the block rather than the line under his finger.
+ *
+ * The gesture that gets here is two taps, not one (DROVE-235). What arrives at
+ * the reader is the same either way, so nothing below changes: the count is
+ * counted in `components/doubleTapPress.ts` and the wiring is pinned in
+ * `sentenceTapEndToEnd.spec.ts`.
  */
 
 class FakeEngine implements SpeechEngine {
@@ -59,7 +64,7 @@ describe('matching a tapped sentence to a spoken one', () => {
     });
 });
 
-describe('seeking to a tapped sentence (DROVE-163)', () => {
+describe('seeking to a double-tapped sentence (DROVE-163)', () => {
     function reading(): { reader: ReadAloudReader; engine: FakeEngine } {
         const engine = new FakeEngine();
         const reader = new ReadAloudReader(engine);

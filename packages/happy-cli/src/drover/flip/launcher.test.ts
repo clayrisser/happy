@@ -34,6 +34,8 @@ interface Spawn {
     account: string | undefined
     sessionId: string | null
     initialPrompt: string | undefined
+    /** DROVE-232: what the replacement was told to come up on. */
+    claudeArgs: string[] | undefined
 }
 let spawns: Spawn[] = []
 /** How the NEXT child ends: 'abort' waits for the abort signal, 'exit' returns. */
@@ -53,6 +55,7 @@ vi.mock('@/claude/claudeLocal', () => {
                 account: opts.claudeEnvVars?.DROVER_ACCOUNT,
                 sessionId: opts.sessionId,
                 initialPrompt: opts.initialPrompt,
+                claudeArgs: opts.claudeArgs,
             })
             const mode = childScript.shift() ?? 'exit'
             if (mode === 'exit') return
@@ -129,13 +132,13 @@ interface Harness {
     metadata: () => Record<string, unknown>
 }
 
-function makeSession(opts: { cwd: string; sessionId: string; flip: any; account: string; configDir: string; events?: string[] }): Harness {
+function makeSession(opts: { cwd: string; sessionId: string; flip: any; account: string; configDir: string; events?: string[]; modes?: Record<string, unknown> }): Harness {
     // Passed in so the controller's `announce` and the session's own event sink
     // are ONE list, which is what they are in production: runClaude hands the
     // controller session.sendSessionEvent and nothing else. Two lists here is
     // how a note emitted twice landed once in each and nobody counted (DROVE-187).
     const events: string[] = opts.events ?? []
-    let metadata: Record<string, unknown> = { path: opts.cwd }
+    let metadata: Record<string, unknown> = { path: opts.cwd, ...opts.modes }
     const session: any = {
         path: opts.cwd,
         sessionId: opts.sessionId,
@@ -202,6 +205,8 @@ async function build(
         familyCooldowns?: Record<string, { until: number; family: string }>
         /** Milliseconds between "still parked" notes; tiny so a test can watch one. */
         parkAnnounceMs?: number
+        /** The session's own picks, as the phone's composer would have left them. */
+        modes?: Record<string, unknown>
     } = {},
 ) {
     const mainDir = join(root, 'main')
@@ -244,7 +249,7 @@ async function build(
     // Same seeding runClaude does: say where the session started rather than
     // letting the controller read an environment that goes stale on flip 1.
     flip.startedOn('main')
-    const harness = makeSession({ cwd, sessionId: 'sess-1', flip, account: 'main', configDir: mainDir, events })
+    const harness = makeSession({ cwd, sessionId: 'sess-1', flip, account: 'main', configDir: mainDir, events, ...(opts.modes ? { modes: opts.modes } : {}) })
     writeTranscript(mainDir, cwd, 'sess-1')
 
     const { claudeLocalLauncher } = await import('@/claude/claudeLocalLauncher')
@@ -330,6 +335,71 @@ describe('a flip through the launcher loop', () => {
         expect(spawns[1].sessionId).toBe('sess-1')
         expect(spawns[1].initialPrompt).toContain('Pick up where we left off')
         expect(result).toEqual({ type: 'exit', code: 0 })
+    })
+
+    /**
+     * DROVE-232. Clay: "And damn it did flip but it reset my effort." The move
+     * to jamrizzi worked; the picks did not travel, because the replacement is
+     * a fresh Claude Code and a fresh Claude Code reads its model and effort out
+     * of the config dir it was pointed at.
+     *
+     * On the ARGV rather than typed at the prompt afterwards, and that is the
+     * point of the test: the arrival prompt is a positional argument to this
+     * same spawn, so a pick applied once the child is up has already lost a turn
+     * to the wrong effort -- which is the expensive half of the complaint.
+     */
+    it('brings the session model, effort and permission mode up on the new account', async () => {
+        const h = await build({ modes: { modelMode: 'claude-opus-5[1m]', effortLevel: 'max', permissionMode: 'yolo' } })
+        childScript = ['abort', 'exit']
+
+        const run = h.claudeLocalLauncher(h.session)
+        await waitForSpawns(1)
+        h.flip.request({ account: 'alt', reason: 'manual', by: 'test' })
+        await run
+
+        expect(spawns).toHaveLength(2)
+        expect(spawns[1].claudeArgs).toEqual([
+            '--model', 'claude-opus-5[1m]',
+            '--effort', 'max',
+            '--permission-mode', 'bypassPermissions',
+        ])
+    })
+
+    it('does not make a pick up out of a session that never made one', async () => {
+        const h = await build()
+        childScript = ['abort', 'exit']
+        const run = h.claudeLocalLauncher(h.session)
+        await waitForSpawns(1)
+        h.flip.request({ account: 'alt', reason: 'manual', by: 'test' })
+        await run
+        expect(spawns[1].claudeArgs).toEqual([])
+    })
+
+    it('lets the flag Clay typed win over the pick the phone stored', async () => {
+        const h = await build({ modes: { effortLevel: 'max' } })
+        h.session.claudeArgs = ['--effort', 'low']
+        childScript = ['abort', 'exit']
+        const run = h.claudeLocalLauncher(h.session)
+        await waitForSpawns(1)
+        h.flip.request({ account: 'alt', reason: 'manual', by: 'test' })
+        await run
+        expect(spawns[1].claudeArgs).toEqual(['--effort', 'low'])
+    })
+
+    it('evicts --dangerously-skip-permissions for one spawn so a narrower mode is heard, and puts it back', async () => {
+        // Measured on 2.1.251: the skip flag beats --permission-mode, and
+        // cattle-drover's bin/drover prepends it to every session start. A flip
+        // that left both on would relaunch a plan-mode session into bypass.
+        const h = await build({ modes: { permissionMode: 'plan' } })
+        h.session.claudeArgs = ['--dangerously-skip-permissions']
+        childScript = ['abort', 'exit']
+        const run = h.claudeLocalLauncher(h.session)
+        await waitForSpawns(1)
+        h.flip.request({ account: 'alt', reason: 'manual', by: 'test' })
+        await run
+        expect(spawns[1].claudeArgs).toEqual(['--permission-mode', 'plan'])
+        // For that spawn only. The session's own args are untouched.
+        expect(h.session.claudeArgs).toEqual(['--dangerously-skip-permissions'])
     })
 
     it('carries the transcript into the target account before resuming there', async () => {
