@@ -326,7 +326,34 @@ export default {
                 // Read back by sources/sync/pushRegistration.ts to mint the
                 // Expo push token, so this value decides which account's push
                 // credentials Expo looks for.
-                projectId: easProjectId
+                projectId: easProjectId,
+                // The watch app and its widget are grafted onto the generated
+                // Xcode project by watch/scripts/add-watch-targets.rb, which
+                // runs during prebuild. A cloud build prebuilds from scratch,
+                // and `ios/` is gitignored, so eas-cli never sees those two
+                // targets when it provisions credentials: it set up
+                // com.bitspur.drover alone and the Xcode build then died with
+                // "No profiles for 'com.bitspur.drover.watchkitapp'". Declaring
+                // them here is how a managed project tells EAS an extension
+                // exists. The names and ids must match the graft exactly
+                // (app_name, widget_name, and the ids Apple forces: the host id
+                // plus .watchkitapp, plus .widget).
+                build: {
+                    experimental: {
+                        ios: {
+                            appExtensions: [
+                                {
+                                    targetName: "DroverWatch",
+                                    bundleIdentifier: `${bundleId}.watchkitapp`
+                                },
+                                {
+                                    targetName: "DroverWatchWidget",
+                                    bundleIdentifier: `${bundleId}.watchkitapp.widget`
+                                }
+                            ]
+                        }
+                    }
+                }
             },
             app: {
                 postHogKey: process.env.EXPO_PUBLIC_POSTHOG_API_KEY,
