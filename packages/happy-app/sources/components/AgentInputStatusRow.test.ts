@@ -24,7 +24,10 @@ import type { LiveStatus } from '@/utils/liveStatus';
 // has to be hoisted too.
 const { host, sessions, screen } = vi.hoisted(() => ({
     host: (name: string) => (props: any) => React.createElement(name, props, props.children),
-    sessions: {} as Record<string, { metadata: { liveStatus?: LiveStatus | null } }>,
+    sessions: {} as Record<string, {
+        metadata: { liveStatus?: LiveStatus | null };
+        todos?: { content: string; status: 'pending' | 'in_progress' | 'completed' }[];
+    }>,
     // Wider than the fold threshold by default; the narrow-phone spec moves it.
     screen: { width: 390 },
 }));
@@ -74,6 +77,7 @@ vi.mock('./AnimatedOverlay', () => ({ AnimatedFade: host('AnimatedFade') }));
 // content; UsageAccountBars.test.ts renders the real bars.
 vi.mock('./UsageAccountBarsSheet', () => ({ UsageAccountBarsSheet: host('UsageAccountBarsSheet') }));
 vi.mock('./SessionAgentsSheet', () => ({ SessionAgentsSheet: host('SessionAgentsSheet') }));
+vi.mock('./SessionTasksSheet', () => ({ SessionTasksSheet: host('SessionTasksSheet') }));
 
 // The session store, reduced to the one session the row reads. `storage` is
 // what the tree rows use to find a tool's transcript card; there are none.
@@ -542,5 +546,58 @@ describe('AgentInputStatusRow with nothing to show', () => {
         });
         const renderer = row({ weekPercent: strip.weekPercent, usageBarGroups: strip.usageBarGroups });
         expect(line(renderer)).toEqual(['online']);
+    });
+});
+
+/**
+ * The task segment (DROVE-167). Clay, three times, the last one at midnight:
+ * "why does this not let me see my fucking tasks". The list was in the store
+ * the whole time with nowhere to land.
+ */
+describe('AgentInputStatusRow tasks', () => {
+    it('says how far through the list the session is, and opens the sheet', () => {
+        sessions.withTasks = {
+            metadata: { liveStatus: null },
+            todos: [
+                { content: 'Read the reducer', status: 'completed' },
+                { content: 'Write the sheet', status: 'in_progress' },
+                { content: 'Wire the wrist', status: 'pending' },
+            ],
+        };
+        const renderer = row({ sessionId: 'withTasks' });
+        expect(line(renderer)).toEqual(['1/3 tasks', '·', 'online', '·', '23% week']);
+
+        const sheet = () => renderer.root.findByType('SessionTasksSheet' as any);
+        expect(sheet().props.open).toBe(false);
+        const segment = renderer.root.findAllByType('Pressable' as any)
+            .find((node: any) => node.props.accessibilityLabel === '1 of 3 done');
+        act(() => segment!.props.onPress());
+        expect(sheet().props.open).toBe(true);
+    });
+
+    it('shows no segment at all for a session that never kept a list', () => {
+        const renderer = row({ sessionId: 'idle' });
+        expect(line(renderer)).toEqual(['online', '·', '23% week']);
+    });
+
+    it('opening the quota closes the tasks sheet, since one piece of state holds both', () => {
+        sessions.withTasks2 = {
+            metadata: { liveStatus: null },
+            todos: [{ content: 'Ship it', status: 'pending' }],
+        };
+        const renderer = row({ sessionId: 'withTasks2' });
+        const press = (label: string) => {
+            const node = renderer.root.findAllByType('Pressable' as any)
+                .find((n: any) => n.props.accessibilityLabel === label);
+            act(() => node!.props.onPress());
+        };
+        press('0 of 1 done');
+        expect(renderer.root.findByType('SessionTasksSheet' as any).props.open).toBe(true);
+        // Tasks, connection, week: the quota is the third pressable once the
+        // task segment is on the row.
+        const week = renderer.root.findAllByType('Pressable' as any)[2];
+        act(() => week.props.onPress());
+        expect(renderer.root.findByType('SessionTasksSheet' as any).props.open).toBe(false);
+        expect(renderer.root.findByType('UsageAccountBarsSheet' as any).props.open).toBe(true);
     });
 });

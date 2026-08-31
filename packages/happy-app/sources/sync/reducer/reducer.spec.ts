@@ -3365,6 +3365,53 @@ describe('reducer', () => {
 
             expect(result.todos).toBeUndefined();
         });
+
+        it('falls back to the input list when the result carries no newTodos (DROVE-167)', () => {
+            const state = createReducer();
+            const result = reducer(state, [
+                {
+                    id: 'plain-todo-call',
+                    localId: null,
+                    createdAt: 1000,
+                    role: 'agent',
+                    isSidechain: false,
+                    content: [{
+                        type: 'tool-call',
+                        id: 'tool-plain',
+                        name: 'TodoWrite',
+                        input: {
+                            todos: [
+                                { content: 'Read the reducer', status: 'completed' },
+                                { content: 'Write the sheet', status: 'in_progress' },
+                            ],
+                        },
+                        description: null,
+                        uuid: 'tool-uuid-plain',
+                        parentUUID: null,
+                    }],
+                },
+                {
+                    id: 'plain-todo-result',
+                    localId: null,
+                    createdAt: 1010,
+                    role: 'agent',
+                    isSidechain: false,
+                    content: [{
+                        type: 'tool-result',
+                        tool_use_id: 'tool-plain',
+                        content: 'Todos have been modified successfully',
+                        is_error: false,
+                        uuid: 'tool-uuid-plain',
+                        parentUUID: null,
+                    }],
+                },
+            ]);
+
+            expect(result.todos).toEqual([
+                { content: 'Read the reducer', status: 'completed' },
+                { content: 'Write the sheet', status: 'in_progress' },
+            ]);
+        });
     });
     describe('subagent lifecycle rows', () => {
         function startMessage(id: string, subagent: string, createdAt: number, title?: string): NormalizedMessage {

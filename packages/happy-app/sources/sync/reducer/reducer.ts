@@ -984,7 +984,20 @@ export function reducer(state: ReducerState, messages: NormalizedMessage[], agen
                     }
 
                     if (message.tool.name === 'TodoWrite' && !c.is_error) {
-                        updateLatestTodos(state, message.tool.result?.newTodos, msg.createdAt);
+                        // `newTodos` is Claude Code's structured result and is
+                        // what we want. It is not guaranteed: a provider that
+                        // answers the call with the plain string
+                        // "Todos have been modified successfully" leaves
+                        // nothing to parse, and the session's list then stays
+                        // empty forever while the transcript card, which reads
+                        // the INPUT, shows it perfectly (DROVE-167). So a
+                        // FINISHED write falls back to what it was asked to
+                        // write. A running one still contributes nothing.
+                        updateLatestTodos(
+                            state,
+                            message.tool.result?.newTodos ?? message.tool.input?.todos,
+                            msg.createdAt,
+                        );
                     }
 
                     changed.add(messageId);

@@ -22,6 +22,7 @@ import { demoLog, isDroverDemoId } from './droverDemo';
 import { isSessionArchived } from './sessionArchive';
 import { liveStatusSince, liveStatusWatchLine } from '@/utils/liveStatus';
 import { sessionDisplayTitle } from '@/utils/sessionTitle';
+import { deriveSessionTasks } from '@/utils/sessionTasks';
 import { currentDroverAccountRow } from '@/utils/droverUsage';
 import type { DroverUsageAccountLike } from '@/utils/droverUsage';
 import { droverBindingLimit } from '@/components/agentInputUsage';
@@ -209,6 +210,12 @@ export function collectSessions(): DroverSession[] {
         // so the wrist never shows a timer for a turn that ended.
         const status = liveStatusWatchLine(metadata.liveStatus, now);
         const statusSince = status ? liveStatusSince(metadata.liveStatus, now) : undefined;
+        // The task list, decided here and SENT (DROVE-129, DROVE-167). Swift
+        // cannot import the derivation, so the phone does the sorting and the
+        // trimming and hands over the unfinished lines. `tasksDone` and
+        // `tasksTotal` ride along because "2 of 7" is the sentence the wrist
+        // wants at the top of a scroll it will not finish reading.
+        const tasks = deriveSessionTasks(session.todos);
         out.push({
             id: sessionId,
             title,
@@ -219,6 +226,11 @@ export function collectSessions(): DroverSession[] {
             ...(typeof subagents === 'number' ? { subagents } : {}),
             ...(status ? { status } : {}),
             ...(statusSince ? { statusSince } : {}),
+            ...(tasks.isEmpty ? {} : {
+                tasks: tasks.remaining.map((task) => task.text),
+                tasksDone: tasks.completedCount,
+                tasksTotal: tasks.total,
+            }),
             state,
         });
     }
@@ -268,9 +280,13 @@ function sameSessionSet(a: DroverSession[], b: DroverSession[]): boolean {
     // and a line that only refreshes when something else moved is a stale line
     // dressed as a live one. Neither carries an elapsed time, so
     // they change on a transition and not on a tick.
+    // The task list is in the key too (DROVE-167): a task ticking over to done
+    // moves nothing else about the session, and a wrist list that only
+    // refreshed when the tool changed would show yesterday's tasks.
     const key = (s: DroverSession) =>
         `${s.id}|${s.title}|${s.account ?? ''}|${s.active}|${s.state ?? ''}`
-        + `|${s.subagents ?? ''}|${s.status ?? ''}|${s.statusSince ?? ''}`;
+        + `|${s.subagents ?? ''}|${s.status ?? ''}|${s.statusSince ?? ''}`
+        + `|${s.tasksDone ?? ''}/${s.tasksTotal ?? ''}|${(s.tasks ?? []).join('\u0001')}`;
     const keys = new Set(a.map(key));
     return b.every((s) => keys.has(key(s)));
 }

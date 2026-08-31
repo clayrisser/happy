@@ -179,6 +179,8 @@ function session(options: {
     presence?: 'online' | number;
     /** `metadata.name` — the CLI's own copy of the session's name (DROVE-127). */
     name?: string;
+    /** `Session.todos` — Claude Code's task list, as the reducer wrote it. */
+    todos?: { content: string; status: 'pending' | 'in_progress' | 'completed' }[];
 }) {
     return {
         // Connected unless a test says otherwise: a non-rig session with no
@@ -193,6 +195,7 @@ function session(options: {
         thinking: options.thinking ?? false,
         thinkingAt: options.thinkingAt ?? 0,
         agentState: options.requests ? { requests: options.requests } : undefined,
+        todos: options.todos,
         metadata: {
             path: options.path,
             name: options.name,
@@ -406,6 +409,59 @@ describe('collectSessions', () => {
             path: '/Users/clay/Projects/drover',
             subagents: 3,
         }]);
+    });
+
+    /**
+     * DROVE-167: the wrist gets the task list, decided on the phone.
+     *
+     * Unfinished lines only, and the two counts beside them, because a wrist
+     * is a scroll of short lines and the finished half is the half nobody
+     * reads. The phone sorts and trims in utils/sessionTasks.ts; Swift cannot
+     * import it, so nothing on the wire is left for the watch to work out
+     * (DROVE-129).
+     */
+    it('carries the unfinished tasks and the score', () => {
+        mocks.sessions = {
+            s1: session({
+                path: '/a/work',
+                todos: [
+                    { content: 'Read the reducer', status: 'completed' },
+                    { content: 'Wire the wrist', status: 'pending' },
+                    { content: 'Write the sheet', status: 'in_progress' },
+                ],
+            }),
+        };
+        const [s] = collectSessions();
+        // In progress before pending, the phone's order, not the array's.
+        expect(s.tasks).toEqual(['Write the sheet', 'Wire the wrist']);
+        expect(s.tasksDone).toBe(1);
+        expect(s.tasksTotal).toBe(3);
+    });
+
+    it('sends no task keys at all for a session that never kept a list', () => {
+        mocks.sessions = { s1: session({ path: '/a/work', todos: [] }) };
+        const [s] = collectSessions();
+        // Omitted, never null and never an empty array: WatchConnectivity
+        // rejects NSNull, and a watch binary that predates the keys must be
+        // unaffected.
+        expect('tasks' in s).toBe(false);
+        expect('tasksDone' in s).toBe(false);
+        expect('tasksTotal' in s).toBe(false);
+    });
+
+    it('sends an empty task list, with the score, once every line is done', () => {
+        mocks.sessions = {
+            s1: session({
+                path: '/a/work',
+                todos: [{ content: 'Ship it', status: 'completed' }],
+            }),
+        };
+        const [s] = collectSessions();
+        // The wrist drops this session off the tasks door itself; the score
+        // still rides so its own screen can say "1 of 1 done".
+        expect(s.tasks).toEqual([]);
+        expect(s.tasksTotal).toBe(1);
+        expect(s.tasksDone).toBe(1);
     });
 
     it('omits path and subagents when the session never said', () => {

@@ -144,6 +144,20 @@ export interface DroverSession {
      * off the same publish.
      */
     state?: string;
+    /**
+     * What the session is still working THROUGH: Claude Code's own task list,
+     * unfinished lines only, in the phone's order (DROVE-167).
+     *
+     * Decided on the phone, like `state` and `status` before it (DROVE-129):
+     * `utils/sessionTasks.ts` sorts, trims and picks the subset, and the wrist
+     * draws what it is given. Omitted, never empty, so a watch binary that
+     * predates this key is unaffected and a session with no list costs nothing
+     * on the wire.
+     */
+    tasks?: string[];
+    /** How many of the session's tasks are finished, and how many there are. */
+    tasksDone?: number;
+    tasksTotal?: number;
 }
 
 /**
