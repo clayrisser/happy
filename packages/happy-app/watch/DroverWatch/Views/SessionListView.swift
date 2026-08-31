@@ -62,7 +62,7 @@ private struct SessionRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 4) {
-                StateDot(state: session.resolvedState)
+                StateDot(session: session)
                 // The name the PHONE shows, verbatim (DROVE-127). The wrist
                 // used to be handed the working directory basename instead, so
                 // the same session read `cattle-drover` here and `DROVER` on
@@ -102,12 +102,32 @@ private struct SessionRow: View {
 /// the wrist now draws the same five off the answer the phone sends, so one
 /// glance means the same thing on both.
 private struct StateDot: View {
-    let state: SessionState
+    let session: DroverSession
+
+    /// The pulse, driven by the view rather than by a timer, so it costs
+    /// nothing while nothing is running (DROVE-257).
+    @State private var dim = false
 
     var body: some View {
         Circle()
-            .fill(Color(hex: state.tintHex))
+            .fill(Color(hex: session.dotTint))
             .frame(width: 6, height: 6)
+            // THE SAME TWO SECONDS AS THE PHONE. `STATUS_DOT_BLINK_MS` is
+            // 2000 and the fade reaches 0.3, never 0: a dot that vanishes
+            // reads as gone. The blink says the session is BURNING TOKENS
+            // RIGHT NOW — blue is its turn, purple is the compaction pass —
+            // so a wrist that pulsed on a different rhythm would be a second
+            // dialect of a vocabulary Clay wrote once.
+            .opacity(session.dotBlinks && dim ? 0.3 : 1)
+            .animation(
+                session.dotBlinks
+                    ? .easeInOut(duration: 1).repeatForever(autoreverses: true)
+                    : .default,
+                value: dim
+            )
+            .onAppear { dim = session.dotBlinks }
+            .onChange(of: session.dotBlinks) { _, blinks in dim = blinks }
+            .accessibilityLabel(session.resolvedDot?.label ?? session.resolvedState.label)
     }
 }
 
@@ -255,13 +275,17 @@ struct SessionDetailView: View {
     private var facts: some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 4) {
-                StateDot(state: session.resolvedState)
+                StateDot(session: session)
                 // The phone's own word, not "running"/"idle" (DROVE-129).
                 // `active` says whether the PROCESS is up; the phone's list
                 // answers a different question with its dot, and a session
                 // sitting on a permission prompt is the case where the two
                 // used to disagree most loudly.
-                Text(session.resolvedState.label)
+                //
+                // The DOT's word when the phone sent one (DROVE-257), because
+                // otherwise a compacting session reads `working` beside a
+                // purple dot and the line contradicts the thing next to it.
+                Text(session.resolvedDot?.label ?? session.resolvedState.label)
                     .font(.caption2)
                     .foregroundStyle(session.resolvedState.needsYou ? Color.orange : .primary)
             }

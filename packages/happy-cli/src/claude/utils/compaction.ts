@@ -64,13 +64,27 @@ export interface CompactionState {
     /** `auto` when the context filled, `manual` when someone typed `/compact`. */
     trigger?: 'auto' | 'manual'
     /**
-     * How far along, 0-100, when something can see it.
+     * How far along, 0-100 — and NOTHING FILLS THIS IN TODAY.
      *
-     * The terminal draws a progress bar for this — Clay's shot reads 38% — and
-     * it is drawn nowhere else: no hook payload carries it and nothing is
-     * written to disk until the pass is over. It is therefore OPTIONAL and
-     * best-effort, read off the pane where there is a pane to read. The dot
-     * never waits on it.
+     * Clay asked for the 38% his terminal was showing, so this is what was
+     * looked for and what was found. Claude Code has no compaction progress
+     * figure to give: `compact_start` sets the spinner to `Compacting
+     * conversation…` with an optional hint STRING and no number, the only
+     * counts anywhere (`preTokens`, `postTokens`, `durationMs`) are written
+     * after the pass is over, and the `compact_progress` events that do carry
+     * stages go to the SDK's status channel, which the TUI path this CLI
+     * drives does not emit. The bar at 38% sits beside the spinner for every
+     * long call, not only a compaction; publishing it as "compaction 38% done"
+     * would be inventing a denominator.
+     *
+     * What IS real and is carried instead is the ELAPSED time, off
+     * `startedAt` — the half of the terminal's `(1m 55s, 2.3k tokens)` that
+     * means what it appears to mean.
+     *
+     * The field stays because the app already draws it where present and it
+     * costs one optional number on the wire, so a real source can be wired to
+     * `progress()` later without touching the app. It must not be filled from
+     * a guess.
      */
     percent?: number
 }

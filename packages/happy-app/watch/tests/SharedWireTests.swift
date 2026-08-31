@@ -174,6 +174,8 @@ struct SharedWireTests {
         aSnapshotWithNoTasksSaysSoRatherThanShowingABlank()
         theTaskDoorCountsInEnglish()
         theSessionStateTheWristDrawsIsThePhonesOwn()
+        theDotTheWristDrawsIsThePhonesOwn()
+        theDotFallsBackToTheSessionStateAndThenOverridesIt()
         aStateTheWristDoesNotKnowFallsBackRatherThanThrowing()
         theWristTakesThePhonesTitleVerbatim()
         accountHeadroomSurvivesTheWire()
@@ -730,6 +732,50 @@ struct SharedWireTests {
         )
     }
 
+    /// THE DOT the phone drew, which is a wider question than the session's
+    /// state (DROVE-231, DROVE-257). Six colours against five, and the two it
+    /// adds are the two the wrist could not say: the yellow before the red,
+    /// and the purple Clay asked for and never once saw.
+    static func theDotTheWristDrawsIsThePhonesOwn() {
+        let wire = ["connected", "working", "waiting", "recentlyDisconnected", "disconnected", "compacting"]
+        check(
+            Set(DotState.allCases.map(\.rawValue)) == Set(wire),
+            "the wrist knows exactly the phone's six dot states"
+        )
+        check(
+            DotState.connected.tintHex == "34C759"
+                && DotState.working.tintHex == "007AFF"
+                && DotState.waiting.tintHex == "FF9500"
+                && DotState.recentlyDisconnected.tintHex == "FFCC00"
+                && DotState.disconnected.tintHex == "FF3B30"
+                && DotState.compacting.tintHex == "AF52DE",
+            "every dot is the colour the phone's statusDotColors draws"
+        )
+        check(
+            DotState.working.blinks && DotState.compacting.blinks,
+            "the two states that burn tokens blink, on the wrist as on the phone"
+        )
+        check(
+            !DotState.connected.blinks && !DotState.waiting.blinks
+                && !DotState.disconnected.blinks && !DotState.recentlyDisconnected.blinks,
+            "nothing else blinks: a pulse means burning tokens and nothing else"
+        )
+        check(DotState.compacting.label == "Compacting", "the purple has a word for VoiceOver")
+    }
+
+    /// A phone too old to send the dot draws what it always drew, and a phone
+    /// that sends it wins.
+    static func theDotFallsBackToTheSessionStateAndThenOverridesIt() {
+        let old = session("s1", active: true, state: "thinking")
+        check(old.dotTint == "007AFF", "no dotState: the wrist falls back to the session state's colour")
+        check(!old.dotBlinks, "and it does not invent a pulse the phone is not drawing")
+        let compacting = session("s2", active: true, state: "thinking", dotState: "compacting")
+        check(compacting.dotTint == "AF52DE", "a compacting session is purple, not blue")
+        check(compacting.dotBlinks, "and it pulses")
+        let nonsense = session("s3", active: true, state: "thinking", dotState: "levitating")
+        check(nonsense.dotTint == "007AFF", "an unknown dot state costs the dot, not the session")
+    }
+
     /// A state the wrist has never heard of costs the STATE, not the session.
     /// Same rule as DroverGate.Kind: a Codable enum would throw and take the
     /// whole snapshot with it.
@@ -1053,6 +1099,7 @@ struct SharedWireTests {
         _ id: String,
         active: Bool,
         state: String? = nil,
+        dotState: String? = nil,
         tasks: [String]? = nil,
         tasksDone: Int? = nil,
         tasksTotal: Int? = nil
@@ -1060,6 +1107,7 @@ struct SharedWireTests {
         DroverSession(
             id: id, title: id, account: nil, active: active,
             path: nil, subagents: nil, status: nil, statusSince: nil, state: state,
+            dotState: dotState,
             tasks: tasks, tasksDone: tasksDone, tasksTotal: tasksTotal
         )
     }

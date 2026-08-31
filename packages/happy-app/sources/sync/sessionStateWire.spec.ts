@@ -2,6 +2,12 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
+import {
+    statusDotBlinks,
+    statusDotColors,
+    statusDotLabels,
+    type StatusDotState,
+} from '@/components/statusDotState';
 import { resolveSessionState } from './sessionState';
 import type { SessionState } from './sessionState';
 
@@ -27,9 +33,9 @@ const swift = readFileSync(
 );
 
 /** The `enum SessionState: String` body, and nothing else in the file. */
-function sessionStateBody(source: string): string {
-    const start = source.indexOf('enum SessionState: String');
-    expect(start, 'DroverSnapshot.swift declares enum SessionState').toBeGreaterThan(-1);
+function sessionStateBody(source: string, name = 'SessionState'): string {
+    const start = source.indexOf(`enum ${name}: String`);
+    expect(start, `DroverSnapshot.swift declares enum ${name}`).toBeGreaterThan(-1);
     const rest = source.slice(start);
     // Up to the closing brace of the enum: the first line that is a lone `}`
     // at column zero after the declaration.
@@ -132,5 +138,66 @@ describe('the session state the wrist draws', () => {
         ]);
         expect(produced.size).toBe(4);
         for (const state of produced) expect(swiftStates(body)).toContain(state);
+    });
+});
+
+/**
+ * THE DOT IS A SECOND WIRE, and it drifted before anyone wrote this down
+ * (DROVE-231, DROVE-257).
+ *
+ * `SessionState` above is five words about whether a session wants a human.
+ * The DOT is `StatusDotState`, six, and the two it adds are exactly the two
+ * the wrist could not say: the yellow before the red, and the purple for a
+ * compaction. Clay caught the second one on the PHONE — a terminal reading
+ * `Compacting conversation…` beside a strip drawing idle green — and a wrist
+ * resolving its dot off `SessionState` would have gone on repeating it.
+ *
+ * Same arrangement as the block above, for the same reason: Swift cannot
+ * import `statusDotColors`, so the table is duplicated and pinned here rather
+ * than left to drift. It already had drifted — the watch drew `999999` grey
+ * for a disconnected session while the phone drew red — which is what a
+ * duplicated table does when nothing checks it.
+ */
+const dotBody = sessionStateBody(swift, 'DotState');
+
+const dotStates: StatusDotState[] = [
+    'connected',
+    'working',
+    'waiting',
+    'recentlyDisconnected',
+    'disconnected',
+    'compacting',
+];
+
+describe('the dot the wrist draws', () => {
+    it('is exactly the phone StatusDotState union, no more and no fewer', () => {
+        expect(swiftStates(dotBody).sort()).toEqual([...dotStates].sort());
+    });
+
+    it('draws every state in the phone\'s own hex, statusDotColors digit for digit', () => {
+        const tints = swiftLabels(dotBody, 'tintHex');
+        for (const state of dotStates) {
+            expect(tints[state], state).toBe(statusDotColors[state].replace('#', ''));
+        }
+    });
+
+    it('names every state with the phone\'s own label', () => {
+        const labels = swiftLabels(dotBody, 'label');
+        for (const state of dotStates) {
+            expect(labels[state], state).toBe(statusDotLabels[state]);
+        }
+    });
+
+    /**
+     * The blink is the other half of what Clay asked for — "when compacting
+     * the dot turns purple and blinks" — and a colour that matches while the
+     * motion does not is still two dialects of one vocabulary.
+     */
+    it('pulses on exactly the states the phone pulses on', () => {
+        const blinking = /var blinks: Bool \{ ([^}]*) \}/.exec(dotBody)?.[1] ?? '';
+        expect(blinking, 'DotState declares `var blinks`').not.toBe('');
+        for (const state of dotStates) {
+            expect(blinking.includes(`.${state}`), state).toBe(statusDotBlinks(state));
+        }
     });
 });

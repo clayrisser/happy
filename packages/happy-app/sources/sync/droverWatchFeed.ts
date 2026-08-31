@@ -40,6 +40,7 @@ import { currentDroverAccountRow, droverAccountExpired } from '@/utils/droverUsa
 import type { DroverUsageAccountLike } from '@/utils/droverUsage';
 import { droverBindingLimit, usageFill } from '@/components/agentInputUsage';
 import { resolveSessionState } from './sessionState';
+import { sessionDotFacts, sessionDotState } from '@/components/sessionDot';
 import {
     addDroverAnswerListener,
     addDroverFlipListener,
@@ -263,6 +264,20 @@ export function collectSessions(): DroverSession[] {
         // so the wrist never shows a timer for a turn that ended.
         const status = liveStatusWatchLine(metadata.liveStatus, now);
         const statusSince = status ? liveStatusSince(metadata.liveStatus, now) : undefined;
+        // THE DOT, resolved on the phone and sent whole (DROVE-257).
+        //
+        // `state` above is `SessionState`, five words about whether the
+        // session wants a human. The DOT is `StatusDotState`, six, and the two
+        // it adds are the two the wrist could never say: `recentlyDisconnected`
+        // and `compacting`. Clay's rule is that the wrist may show less than
+        // the phone and must never show something DIFFERENT, and a wrist
+        // drawing green on a session mid-compaction is the phone's own bug
+        // repeated one surface further out.
+        //
+        // Sent beside `state` rather than folded into it, because `state`
+        // answers a question several other things on the wrist ask (needsYou,
+        // the ordering) and widening that union would change all of them.
+        const dotState = sessionDotState(sessionDotFacts(session, now), now);
         // The task list, decided here and SENT (DROVE-129, DROVE-167). Swift
         // cannot import the derivation, so the phone does the sorting and the
         // trimming and hands over the unfinished lines. `tasksDone` and
@@ -285,6 +300,7 @@ export function collectSessions(): DroverSession[] {
                 tasksTotal: tasks.total,
             }),
             state,
+            dotState,
         });
     }
     return out;
@@ -338,6 +354,7 @@ function sameSessionSet(a: DroverSession[], b: DroverSession[]): boolean {
     // refreshed when the tool changed would show yesterday's tasks.
     const key = (s: DroverSession) =>
         `${s.id}|${s.title}|${s.account ?? ''}|${s.active}|${s.state ?? ''}`
+        + `|${s.dotState ?? ''}`
         + `|${s.subagents ?? ''}|${s.status ?? ''}|${s.statusSince ?? ''}`
         + `|${s.tasksDone ?? ''}/${s.tasksTotal ?? ''}|${(s.tasks ?? []).join('\u0001')}`;
     const keys = new Set(a.map(key));

@@ -154,6 +154,20 @@ struct DroverSession: Codable, Identifiable, Equatable, Hashable {
     /// place the words and colours live; sessionStateWire.spec.ts pins it to
     /// the phone's union so a new state cannot land on one side alone.
     let state: String?
+    /// THE DOT the phone is drawing right now (DROVE-257).
+    ///
+    /// `state` above answers "does this want a human", and the wrist reads it
+    /// for the ordering and for `needsYou`. This one is only the dot, and it
+    /// carries the two states that question has no words for:
+    /// `recentlyDisconnected` and `compacting`.
+    ///
+    /// Clay caught the second of those on the phone — a terminal reading
+    /// `Compacting conversation…` beside a strip drawing the idle green — and
+    /// a wrist resolving its dot off `state` alone would have repeated it
+    /// here. `StatusDotState` on the phone decides it; nothing is resolved on
+    /// this side. Optional twice over, like `state`: a phone that predates the
+    /// key sends nothing, and `dotTint` falls back to the older colour.
+    let dotState: String?
     /// What the session is still working THROUGH: Claude Code's task list,
     /// unfinished lines only, in the phone's order (DROVE-167).
     ///
@@ -168,6 +182,20 @@ struct DroverSession: Codable, Identifiable, Equatable, Hashable {
     let tasksTotal: Int?
 
     var resolvedState: SessionState { SessionState(rawValue: state ?? "") ?? (active ? .thinking : .disconnected) }
+
+    /// The dot the phone drew, or the older five-state answer when a phone too
+    /// old to send one is on the other end.
+    var resolvedDot: DotState? { DotState(rawValue: dotState ?? "") }
+
+    /// The colour for the dot: the phone's own, always.
+    var dotTint: String { resolvedDot?.tintHex ?? resolvedState.tintHex }
+
+    /// Whether the dot pulses. `statusDotBlinks` on the phone, and the same
+    /// rule: a blinking dot means the session is BURNING TOKENS RIGHT NOW.
+    /// Blue is your turn, purple is the compaction pass; everything else is
+    /// still, and a phone too old to send the field pulses nothing rather than
+    /// inventing a rhythm the phone is not using.
+    var dotBlinks: Bool { resolvedDot?.blinks ?? false }
 
     /// The unfinished lines, empty when the phone sent none.
     var openTasks: [String] { tasks ?? [] }
@@ -225,6 +253,54 @@ enum SessionState: String, CaseIterable {
     /// Whether this state means the session is waiting on a HUMAN. The wrist
     /// leads with those, the same way the phone's list does.
     var needsYou: Bool { self == .permissionRequired || self == .inputRequired }
+}
+
+/// THE DOT'S OWN STATES, which are not the session's (DROVE-231, DROVE-257).
+///
+/// Six, against `SessionState`'s five, and the extra two are the whole reason
+/// this enum exists: `recentlyDisconnected`, which is the yellow before the
+/// red, and `compacting`, which is the purple Clay asked for and never saw.
+/// The raw values are `StatusDotState` in sources/components/statusDotState.ts
+/// and the hexes are `statusDotColors`, digit for digit;
+/// sessionStateWire.spec.ts pins both so a new state cannot land on one side
+/// alone.
+///
+/// Nothing here is resolved on the wrist. The phone runs `statusDotState` and
+/// sends the answer, exactly as it does for `SessionState`.
+enum DotState: String, CaseIterable {
+    case connected
+    case working
+    case waiting
+    case recentlyDisconnected
+    case disconnected
+    case compacting
+
+    /// `statusDotColors`, character for character.
+    var tintHex: String {
+        switch self {
+        case .connected: return "34C759"
+        case .working: return "007AFF"
+        case .waiting: return "FF9500"
+        case .recentlyDisconnected: return "FFCC00"
+        case .disconnected: return "FF3B30"
+        case .compacting: return "AF52DE"
+        }
+    }
+
+    /// `statusDotBlinks`: exactly the two states that are burning tokens.
+    var blinks: Bool { self == .working || self == .compacting }
+
+    /// `statusDotLabels`, for the detail screen and for VoiceOver.
+    var label: String {
+        switch self {
+        case .connected: return "Connected"
+        case .working: return "Working"
+        case .waiting: return "Waiting for you"
+        case .recentlyDisconnected: return "Disconnected just now"
+        case .disconnected: return "Disconnected"
+        case .compacting: return "Compacting"
+        }
+    }
 }
 
 /// What the wrist's last attempt to get a current snapshot did (DROVE-22).

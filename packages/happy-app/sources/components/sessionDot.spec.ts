@@ -186,6 +186,53 @@ describe('a session lands on Clay\'s table', () => {
             expect(stateOf(after)).toBe('connected');
         });
 
+        /**
+         * THE SNAPSHOT A REAL COMPACTION ACTUALLY PUBLISHED.
+         *
+         * Not written by hand. This is `createLiveStatusReader`'s own output,
+         * copied verbatim, ten seconds into the `/compact` run of
+         * 2026-08-31T23:39 on this machine — a live `claude` in a tmux pane
+         * with the CLI's real `PreCompact` registration, whose hook fired at
+         * 23:39:33.993 with `trigger: "manual"` and whose `compact_boundary`
+         * landed 18.9s later.
+         *
+         * It is here because it is the ONE thing a unit test cannot invent:
+         * what the CLI has to offer mid-pass. Note what is NOT in it — no
+         * `tool`, no `agents`, `tokens.turn` of 0 — which is the whole reason
+         * the old inference drew green.
+         */
+        const realSnapshot = {
+            at: 1788219583993,
+            turnStartedAt: 1788219573952,
+            tokens: {
+                turn: 0,
+                turnMain: 0,
+                session: 117672,
+                sessionMain: 117672,
+                sessionByModel: { 'claude-haiku-4-5-20251001': 117672 },
+            },
+            main: { startedAt: 1788219573952 },
+            compacting: { startedAt: 1788219573993, trigger: 'manual' },
+        };
+
+        it('draws the real snapshot purple, and the same snapshot without the field green', () => {
+            const at = realSnapshot.at;
+            const withField = session({ metadata: { liveStatus: realSnapshot } as never });
+            const dot = sessionDotPresentation(sessionDotFacts(withField, at), at);
+            expect(dot.state).toBe('compacting');
+            expect(dot.color).toBe('#AF52DE');
+            expect(dot.isPulsing).toBe(true);
+
+            // The same session on a CLI that has not picked up DROVE-257.
+            // `main` is present here only because `/compact` counts as a
+            // prompt, so this reads BLUE rather than the green Clay saw — his
+            // auto-compaction had no fresh prompt behind it and no `main` at
+            // all. Either way it is not purple, which is the point.
+            const { compacting, ...old } = realSnapshot;
+            const before = session({ metadata: { liveStatus: old } as never });
+            expect(sessionDotState(sessionDotFacts(before, at), at)).not.toBe('compacting');
+        });
+
         it('is ignored once the snapshot is too old to believe', () => {
             // A CLI that died mid-compaction must not leave the dot purple
             // forever. Same staleness window the clocks use.

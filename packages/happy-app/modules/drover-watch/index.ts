@@ -145,6 +145,23 @@ export interface DroverSession {
      */
     state?: string;
     /**
+     * THE DOT the phone is drawing for this session (DROVE-257), one of
+     * StatusDotState's six: `connected`, `working`, `waiting`, `compacting`,
+     * `recentlyDisconnected`, `disconnected`.
+     *
+     * `state` above is a different question with a different answer set: it is
+     * about whether a human is wanted, and four other things on the wrist read
+     * it. This one is only the dot, and it exists because the two states it
+     * adds are the two the wrist had no way to say. `compacting` is the one
+     * Clay caught: he photographed a terminal mid-compaction beside a phone
+     * drawing the idle colour, and a wrist reading `state` alone would repeat
+     * that green one surface further out.
+     *
+     * Optional, so a watch binary that predates the key falls back to `state`
+     * and draws what it always drew.
+     */
+    dotState?: string;
+    /**
      * What the session is still working THROUGH: Claude Code's own task list,
      * unfinished lines only, in the phone's order (DROVE-167).
      *

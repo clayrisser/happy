@@ -434,9 +434,35 @@ describe('collectSessions', () => {
             title: 'drover',
             active: true,
             state: 'waiting',
+            // The DOT beside the state (DROVE-257). Six states against
+            // `state`'s five, and the wrist draws this one, so a compacting
+            // session goes purple on the wrist the moment it does on the
+            // phone. `connected` here because this session is up and idle.
+            dotState: 'connected',
             path: '/Users/clay/Projects/drover',
             subagents: 3,
         }]);
+    });
+
+    /**
+     * DROVE-257. The state Clay photographed, on the wrist this time.
+     */
+    it('sends the compacting dot, which `state` has no word for', () => {
+        mocks.sessions = {
+            s1: session({
+                running: true,
+                liveStatus: {
+                    at: Date.now(),
+                    compacting: { startedAt: Date.now() - 115_000, trigger: 'auto' },
+                },
+            }),
+        };
+        const [row] = collectSessions();
+        expect(row.dotState).toBe('compacting');
+        // And `state` is unchanged, because it answers a different question
+        // and four other things on the wrist read it.
+        expect(row.state).toBe('waiting');
+        expect(row.status).toBe('compacting');
     });
 
     /**
