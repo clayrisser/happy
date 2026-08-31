@@ -564,7 +564,6 @@ export const it: TranslationStructure = {
             used: ({ percent }: { percent: number }) => `${percent}% usato`,
             back: ({ time }: { time: string }) => `Torna ${time}`,
             familyBack: ({ family, time }: { family: string; time: string }) => `${family} torna ${time}`,
-            otherAccounts: 'Altri account',
             unmeasured: 'non misurato',
             noLogin: 'nessun accesso',
         },

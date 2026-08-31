@@ -566,7 +566,6 @@ export const ca: TranslationStructure = {
             used: ({ percent }: { percent: number }) => `${percent}% usat`,
             back: ({ time }: { time: string }) => `Torna ${time}`,
             familyBack: ({ family, time }: { family: string; time: string }) => `${family} torna ${time}`,
-            otherAccounts: 'Altres comptes',
             unmeasured: 'sense mesurar',
             noLogin: 'sense sessió',
         },

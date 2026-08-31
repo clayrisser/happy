@@ -117,10 +117,12 @@ describe('resolveUsageStrip on a pane session', () => {
         expect(used.rows.map((r) => r.percentText)).toEqual(['49%', '23%', '39%']);
     });
 
-    it('folds every other account under its own heading, with the figures the picker prints', () => {
+    it('lists every other account with no heading over them, with the figures the picker prints', () => {
         const [, others] = resolveUsageStrip(pane).usageBarGroups;
         expect(others.key).toBe('accounts');
-        expect(others.title).toBe('Other accounts');
+        // No heading (DROVE-117). The rows above are quota windows within one
+        // account and earn theirs; this is just the accounts.
+        expect(others.title).toBe('');
         expect(others.rows).toEqual([
             {
                 key: 'account:main',
