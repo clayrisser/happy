@@ -76,8 +76,9 @@ export default function GatesScreen() {
     const topContentInset = Platform.OS === 'ios' ? MOBILE_GLASS_HEADER_HEIGHT : 0;
 
     // Every session's task list, off the same derivation the session sheet and
-    // the wrist read (DROVE-167). Nothing is fetched: the reducer has been
-    // writing `session.todos` on every TodoWrite since long before this ticket.
+    // the wrist read (DROVE-167). Nothing is fetched: the reducer writes
+    // `session.todos` on every task write that lands, in either dialect —
+    // TodoWrite, or the TaskCreate/TaskUpdate family (DROVE-192).
     const sessions = useAllSessions();
     const taskCards = React.useMemo(() => collectSessionTasks(
         sessions
@@ -232,7 +233,9 @@ function EmptyGates({ topContentInset }: { topContentInset: number }) {
             <Text style={styles.emptyBody}>
                 Prompts from every session land here, so does anything an agent
                 has asked you to do, and so does every task list a session is
-                still working through.
+                still working through. Nothing is here because no session is
+                blocked on you and none is holding an unfinished list — Claude
+                writes one when it plans multi-step work.
             </Text>
             <PlaygroundLink />
         </View>

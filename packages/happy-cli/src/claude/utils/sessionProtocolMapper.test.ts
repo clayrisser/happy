@@ -707,6 +707,25 @@ describe('readClaudeActivity', () => {
         expect(readClaudeActivity(state).tasks).toEqual({ pending: 1, inProgress: 0, completed: 0, total: 1 });
     });
 
+    it('counts the list a TaskCreate/TaskUpdate session keeps instead (DROVE-192)', () => {
+        const state: ClaudeSessionProtocolState = { currentTurnId: null };
+        taskTool(state, 'c1', 'TaskCreate', { subject: 'Boot server' }, 'Task #1 created successfully: Boot server');
+        taskTool(state, 'c2', 'TaskCreate', { subject: 'Smoke sign-in' }, 'Task #2 created successfully: Smoke sign-in');
+        expect(readClaudeActivity(state).tasks).toEqual({ pending: 2, inProgress: 0, completed: 0, total: 2 });
+        taskTool(state, 'u1', 'TaskUpdate', { taskId: '1', status: 'completed' }, 'Updated task #1 status');
+        taskTool(state, 'u2', 'TaskUpdate', { taskId: '2', status: 'in_progress' }, 'Updated task #2 status');
+        expect(readClaudeActivity(state).tasks).toEqual({ pending: 0, inProgress: 1, completed: 1, total: 2 });
+    });
+
+    it('ignores a subagent\'s TaskCreate the same way it ignores its TodoWrite', () => {
+        const state: ClaudeSessionProtocolState = { currentTurnId: null };
+        taskTool(state, 'c1', 'TaskCreate', { subject: 'Mine' }, 'Task #1 created successfully: Mine');
+        const agent = runAgentSubagent(state, 'one');
+        agent.start();
+        taskTool(state, 'c2', 'TaskCreate', { subject: 'Theirs' }, 'Task #2 created successfully: Theirs', 'tool-one');
+        expect(readClaudeActivity(state).tasks.total).toBe(1);
+    });
+
     it('ignores a TodoWrite whose input is not a list', () => {
         const state: ClaudeSessionProtocolState = { currentTurnId: null };
         writeTodos(state, [{ content: 'Real', status: 'pending' }]);
@@ -721,6 +740,35 @@ describe('readClaudeActivity', () => {
         expect(readClaudeActivity(state).tasks.total).toBe(1);
     });
 });
+
+/** One task-family call and its prose result, main thread unless told otherwise. */
+function taskTool(
+    state: ClaudeSessionProtocolState,
+    call: string,
+    name: string,
+    input: unknown,
+    result: string,
+    parentToolUseId?: string,
+): void {
+    mapClaudeLogMessageToSessionEnvelopes({
+        type: 'assistant',
+        uuid: `a-task-${call}`,
+        ...(parentToolUseId ? { parent_tool_use_id: parentToolUseId } : {}),
+        message: {
+            role: 'assistant',
+            content: [{ type: 'tool_use', id: call, name, input }],
+        },
+    } as any, state);
+    mapClaudeLogMessageToSessionEnvelopes({
+        type: 'user',
+        uuid: `u-task-${call}`,
+        ...(parentToolUseId ? { parent_tool_use_id: parentToolUseId } : {}),
+        message: {
+            role: 'user',
+            content: [{ type: 'tool_result', tool_use_id: call, content: result }],
+        },
+    } as any, state);
+}
 
 let todoCall = 0;
 

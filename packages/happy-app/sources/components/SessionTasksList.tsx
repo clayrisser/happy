@@ -87,9 +87,11 @@ export function SessionTasksList({ tasks }: { tasks: SessionTasks }) {
                     ...Typography.default(),
                 }}
             >
-                {/* Said in full, because "No tasks yet" on its own reads like a
-                    failure to load. */}
-                No tasks yet. This session has not kept a list.
+                {/* Said in full, and saying what would fill it (DROVE-192).
+                    "No tasks yet" on its own reads like a failure to load, and
+                    leaves you with nothing to do about it. */}
+                No task list yet. Claude writes one when it plans multi-step
+                work, and this session has not.
             </Text>
         );
     }
