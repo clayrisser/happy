@@ -510,6 +510,18 @@ export const ru: TranslationStructure = {
         effort: {
             title: 'УСИЛИЕ',
         },
+        session: {
+            title: 'СЕССИЯ',
+            label: 'Настройки сессии',
+            permission: 'Режим разрешений',
+            model: 'Модель',
+            effort: 'Усилие',
+        },
+        channels: {
+            title: 'КАНАЛЫ',
+            label: 'Каналы',
+            audio: 'Звук',
+        },
         codexPermissionMode: {
             title: 'РЕЖИМ РАЗРЕШЕНИЙ CODEX',
             default: 'Настройки CLI',

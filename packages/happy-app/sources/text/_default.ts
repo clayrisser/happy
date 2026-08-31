@@ -515,6 +515,18 @@ export const en = {
         effort: {
             title: 'EFFORT',
         },
+        session: {
+            title: 'SESSION',
+            label: 'Session settings',
+            permission: 'Permission mode',
+            model: 'Model',
+            effort: 'Effort',
+        },
+        channels: {
+            title: 'CHANNELS',
+            label: 'Channels',
+            audio: 'Audio',
+        },
         codexPermissionMode: {
             title: 'CODEX PERMISSION MODE',
             default: 'default permissions',

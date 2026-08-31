@@ -492,6 +492,18 @@ export const it: TranslationStructure = {
         effort: {
             title: 'IMPEGNO',
         },
+        session: {
+            title: 'SESSIONE',
+            label: 'Impostazioni sessione',
+            permission: 'Modalità permessi',
+            model: 'Modello',
+            effort: 'Impegno',
+        },
+        channels: {
+            title: 'CANALI',
+            label: 'Canali',
+            audio: 'Audio',
+        },
         codexPermissionMode: {
             title: 'MODALITÀ PERMESSI CODEX',
             default: 'Impostazioni CLI',

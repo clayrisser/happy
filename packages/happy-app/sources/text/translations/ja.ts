@@ -495,6 +495,18 @@ export const ja: TranslationStructure = {
         effort: {
             title: 'エフォート',
         },
+        session: {
+            title: 'セッション',
+            label: 'セッション設定',
+            permission: '権限モード',
+            model: 'モデル',
+            effort: '推論の強さ',
+        },
+        channels: {
+            title: 'チャンネル',
+            label: 'チャンネル',
+            audio: '音声',
+        },
         codexPermissionMode: {
             title: 'CODEX権限モード',
             default: 'CLI設定',

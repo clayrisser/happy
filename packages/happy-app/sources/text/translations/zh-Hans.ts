@@ -495,6 +495,18 @@ export const zhHans: TranslationStructure = {
         effort: {
             title: '工作量',
         },
+        session: {
+            title: '会话',
+            label: '会话设置',
+            permission: '权限模式',
+            model: '模型',
+            effort: '推理强度',
+        },
+        channels: {
+            title: '通道',
+            label: '通道',
+            audio: '音频',
+        },
         codexPermissionMode: {
             title: 'CODEX 权限模式',
             default: 'CLI 设置',
