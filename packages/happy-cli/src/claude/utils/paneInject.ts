@@ -39,6 +39,8 @@ import { promisify } from 'node:util'
 import { ambientDataDir } from '@/drover/flip/accounts'
 import { logger } from '@/ui/logger'
 
+import { paneComposerIsEmpty, paneConfirmDialog } from './paneCommandOutcome'
+
 const run = promisify(execFile)
 
 // Commands that mean the pane is NOT showing a Claude TUI right now, so typing
@@ -296,6 +298,87 @@ export async function paneIsIdle(gate: PaneGate): Promise<boolean> {
     }
     if (!(await paneRunningClaude(gate.pane))) {
         logger.debug(`[paneInject] gate: ${gate.pane} is not running Claude — not idle`)
+        return false
+    }
+    return true
+}
+
+/**
+ * Press one named key in `pane` — `Enter`, `Escape`, and nothing else so far.
+ *
+ * Only ever for a dialog the caller has already READ and recognised. A blind
+ * Enter is how a permission prompt gets answered by accident (DROVE-80).
+ */
+export async function pressPaneKey(pane: string, key: string): Promise<boolean> {
+    try {
+        await run('tmux', ['send-keys', '-t', pane, key])
+        return true
+    } catch (e) {
+        logger.debug(`[paneInject] could not press ${key} in ${pane}:`, e)
+        return false
+    }
+}
+
+/** What `tmux capture-pane -p` currently shows, or null when it cannot be read. */
+export async function capturePane(pane: string): Promise<string | null> {
+    try {
+        const { stdout } = await run('tmux', ['capture-pane', '-p', '-t', pane])
+        return stdout
+    } catch (e) {
+        logger.debug(`[paneInject] could not capture ${pane}:`, e)
+        return null
+    }
+}
+
+/**
+ * Is it safe to type a SLASH COMMAND into this pane right now (DROVE-164)?
+ *
+ * Deliberately NOT `paneIsIdle`. That gate waits for the turn to be over, and
+ * in a session that is actually being worked the turn is never over: Clay's own
+ * log for 2026-08-31 has `/effort max` queued at 05:40:59 and still held at
+ * 08:06, 4454 "pane is busy" lines later. An effort pick that can only land
+ * when nothing is running is an effort pick that never lands.
+ *
+ * Waiting for idle was also the WRONG safety property. What a paste can ruin is
+ * a half-typed line and an open dialog, and neither of those is the turn:
+ *
+ *   (a) the drover bus has no permission or question pending — nothing on
+ *       screen is waiting to read the next keystroke as its answer;
+ *   (b) the pane's foreground process is still Claude;
+ *   (c) Claude Code's own registry has a record for this session, so there is
+ *       a live TUI rather than a pane we have lost track of;
+ *   (d) the input box is EMPTY, so the paste cannot join anything Clay typed.
+ *
+ * Measured on 2.1.251: a `/effort` pasted mid-turn is executed immediately, the
+ * turn keeps streaming, and it does NOT raise the "Change effort level?"
+ * confirmation that the same command raises at an idle prompt. So the busy case
+ * is both reachable and the cleaner of the two.
+ *
+ * Same bias to false as the idle gate: every unknown holds the command, which
+ * costs two seconds.
+ */
+export async function paneAcceptsCommand(gate: PaneGate): Promise<boolean> {
+    const status = await registryStatus(gate.configDir, gate.claudeSessionId, gate.pane)
+    if (status === null) {
+        logger.debug(`[paneInject] command gate: no registry record for ${gate.claudeSessionId ?? '(no session id)'}`)
+        return false
+    }
+    if (await busHasPendingFor(gate.busUrl || defaultBusUrl(), sessionIdsOf(gate))) {
+        logger.debug('[paneInject] command gate: a bus event is pending for this session')
+        return false
+    }
+    if (!(await paneRunningClaude(gate.pane))) {
+        logger.debug(`[paneInject] command gate: ${gate.pane} is not running Claude`)
+        return false
+    }
+    const capture = await capturePane(gate.pane)
+    if (capture === null) return false
+    if (paneConfirmDialog(capture) !== null) {
+        logger.debug('[paneInject] command gate: a confirmation is already on screen')
+        return false
+    }
+    if (!paneComposerIsEmpty(capture)) {
+        logger.debug('[paneInject] command gate: something is typed in the input box')
         return false
     }
     return true
