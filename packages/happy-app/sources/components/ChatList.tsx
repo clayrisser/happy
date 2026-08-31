@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { useSession, useSessionMessages, useSetting } from "@/sync/storage";
 import { sync } from '@/sync/sync';
-import { ActivityIndicator, AppState, FlatList, NativeScrollEvent, NativeSyntheticEvent, Platform, Pressable, View } from 'react-native';
+import { ActivityIndicator, AppState, FlatList, NativeScrollEvent, NativeSyntheticEvent, Platform, Pressable, View, type ViewToken } from 'react-native';
 import { useCallback } from 'react';
 import { useHeaderHeight } from '@/utils/responsive';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -17,6 +17,8 @@ import { resolveControlMode } from '@/sync/controlHandoff';
 import { usesControlledSessionUi } from '@/sync/rig';
 import { buildAgentTurnCopyTextByMessageId } from '@/utils/agentTurnCopy';
 import { collectSubagentTaskMessageIds } from '@/utils/subagentTaskLinks';
+import { visibleRangeOf } from './chatVisibleRange';
+import { reportVisibleRange } from '@/voice/readAloudViewport';
 
 const SCROLL_THRESHOLD = 300;
 const DOCK_DETAILS_SHOW_OFFSET = 16;
@@ -27,6 +29,14 @@ const SCROLL_BUTTON_COMPOSER_GAP = 16;
 // Fallback for non-floating layouts (tablet/web/landscape), where the list
 // already ends at the input's top edge.
 const SCROLL_BUTTON_DOCK_GAP = 4;
+// Within this much of the newest message the view counts as being AT the live
+// edge, so read-aloud has no bound and new replies are read as they land
+// (DROVE-114). Same order as the dock's own hysteresis, and it is measured
+// from offset 0 because an inverted list puts the newest message there.
+const LIVE_EDGE_OFFSET = 24;
+// A row counts as on screen once this much of it is. Low, because a reply
+// taller than the phone would otherwise never be visible enough to read.
+const PLAYHEAD_VIEWABILITY = { itemVisiblePercentThreshold: 10, minimumViewTime: 0 };
 
 export const ChatList = React.memo((props: {
     session: Session;
@@ -52,6 +62,7 @@ export const ChatList = React.memo((props: {
             headerOverlayHeight={props.headerOverlayHeight}
             onHeaderBackdropVisibilityChange={props.onHeaderBackdropVisibilityChange}
             onBottomDockVisibilityChange={props.onBottomDockVisibilityChange}
+            trackReadAloudPlayhead
         />
     )
 });
@@ -112,6 +123,13 @@ export const ChatListInternal = React.memo((props: {
     headerOverlayHeight?: number,
     onHeaderBackdropVisibilityChange?: (visible: boolean) => void,
     onBottomDockVisibilityChange?: (visible: boolean) => void,
+    /**
+     * This list is the session's own chat, so what it shows is where
+     * read-aloud reads from (DROVE-114). Off for a list mounted beside it,
+     * such as a subagent transcript, which scrolls on its own and must not
+     * move the voice.
+     */
+    trackReadAloudPlayhead?: boolean,
 }) => {
     const { theme } = useUnistyles();
     const flatListRef = React.useRef<FlatList>(null);
@@ -129,6 +147,38 @@ export const ChatListInternal = React.memo((props: {
         contentHeight: 0,
         viewportHeight: 0,
     });
+    // What read-aloud is told: the rows on screen, and whether the view is
+    // resting at the newest message. Refs because both halves change at 60Hz
+    // and neither draws anything.
+    const visibleItemsRef = React.useRef<DisplayItem[]>([]);
+    const atLiveEdgeRef = React.useRef(true);
+    const trackReadAloudPlayhead = props.trackReadAloudPlayhead === true;
+    const publishVisibleRange = React.useCallback(() => {
+        if (!trackReadAloudPlayhead) return;
+        reportVisibleRange(
+            props.sessionId,
+            visibleRangeOf(visibleItemsRef.current, atLiveEdgeRef.current),
+        );
+    }, [props.sessionId, trackReadAloudPlayhead]);
+    const publishVisibleRangeRef = React.useRef(publishVisibleRange);
+    React.useEffect(() => {
+        publishVisibleRangeRef.current = publishVisibleRange;
+    }, [publishVisibleRange]);
+    // FlatList reads this once, so it has to be the same function forever.
+    const handleViewableItemsChanged = React.useRef((info: { viewableItems: ViewToken[] }) => {
+        const items: DisplayItem[] = [];
+        for (const token of info.viewableItems) {
+            if (token.item) items.push(token.item as DisplayItem);
+        }
+        visibleItemsRef.current = items;
+        publishVisibleRangeRef.current();
+    }).current;
+    // Leaving the chat takes the bound off, or the next session would inherit
+    // a window that belongs to a transcript nobody is looking at.
+    React.useEffect(() => {
+        if (!trackReadAloudPlayhead) return;
+        return () => { reportVisibleRange(props.sessionId, null); };
+    }, [props.sessionId, trackReadAloudPlayhead]);
     const preserveToolGroupAnchor = React.useCallback((anchor: ToolGroupLayoutAnchor) => {
         // Inverted FlatList rows keep their visual bottom edge fixed when their
         // height changes. Measure the pressed header after layout and offset the
@@ -414,7 +464,12 @@ export const ChatListInternal = React.memo((props: {
             showScrollButtonRef.current = next;
             setShowScrollButton(next);
         }
-    }, [updateBottomDockVisibility, updateHeaderBackdropVisibility]);
+        const atLiveEdge = offsetY <= LIVE_EDGE_OFFSET;
+        if (atLiveEdge !== atLiveEdgeRef.current) {
+            atLiveEdgeRef.current = atLiveEdge;
+            publishVisibleRange();
+        }
+    }, [publishVisibleRange, updateBottomDockVisibility, updateHeaderBackdropVisibility]);
 
     const scrollToBottom = useCallback(() => {
         flatListRef.current?.scrollToOffset({ offset: 0, animated: true });
@@ -478,6 +533,8 @@ export const ChatListInternal = React.memo((props: {
                 renderItem={renderItem}
                 onScroll={handleScroll}
                 scrollEventThrottle={16}
+                onViewableItemsChanged={handleViewableItemsChanged}
+                viewabilityConfig={PLAYHEAD_VIEWABILITY}
                 onLayout={(event) => {
                     scrollMetricsRef.current.viewportHeight = event.nativeEvent.layout.height;
                     updateHeaderBackdropVisibility();

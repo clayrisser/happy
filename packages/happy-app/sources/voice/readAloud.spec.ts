@@ -590,3 +590,216 @@ describe('ReadAloudReader interrupt listeners', () => {
         expect(late).toEqual(['typed']);
     });
 });
+
+/**
+ * The transcript as a playhead (DROVE-114).
+ *
+ * Clay: "If I scroll down you would start reading from there, so whatever
+ * you're reading is always visible. When I scroll you jump down to where I
+ * scrolled, or you jump up if I scroll up." And: "Go up to something you
+ * already said, and you just wait till I scroll back down."
+ *
+ * So the reading position and the scroll position are one thing. What is
+ * asserted here is the queue's half of that: it can be moved backwards as
+ * well as forwards, it stops at the bottom of the screen instead of running
+ * past it, and nothing is thrown away when it does.
+ */
+describe('the transcript as a playhead (DROVE-114)', () => {
+    let engine: FakeEngine;
+    let reader: ReadAloudReader;
+
+    /** Three messages, three sentences each, one stamp apart. */
+    function seedThree(into: ReadAloudReader): void {
+        into.onMessages('s1', [
+            agentText('m1', sentences('First', 3).join(' '), 1),
+            agentText('m2', sentences('Second', 3).join(' '), 2),
+            agentText('m3', sentences('Third', 3).join(' '), 3),
+        ]);
+    }
+
+    beforeEach(() => {
+        engine = new FakeEngine();
+        reader = new ReadAloudReader(engine);
+        reader.setEnabled(true);
+        reader.focus('s1');
+    });
+
+    it('seeks forwards: scrolling down reads from what is now visible', async () => {
+        seedThree(reader);
+        await settle();
+        expect(engine.spoken).toEqual(['First sentence 1.']);
+
+        reader.seekTo(3);
+        await settle();
+        expect(engine.spoken).toEqual(['First sentence 1.', 'Third sentence 1.']);
+        expect(reader.playhead?.messageId).toBe('m3');
+    });
+
+    it('seeks backwards: scrolling up re-reads something already said', async () => {
+        seedThree(reader);
+        await settle();
+        reader.seekTo(3);
+        await settle();
+
+        reader.seekTo(1);
+        await settle();
+        expect(engine.spoken).toEqual(['First sentence 1.', 'Third sentence 1.', 'First sentence 1.']);
+        expect(reader.playhead?.messageId).toBe('m1');
+    });
+
+    it('a seek into the message being read does not restart it', async () => {
+        seedThree(reader);
+        await settle();
+        engine.finishOne();
+        await settle();
+        expect(engine.spoken).toEqual(['First sentence 1.', 'First sentence 2.']);
+        const stops = engine.stops;
+
+        // The list reports its top row on every scroll frame. If that could
+        // rewind the message being read, the same sentence would stutter for
+        // ever. This is the reader's half of the no-feedback-loop property.
+        reader.seekTo(1);
+        reader.seekTo(1);
+        await settle();
+        expect(engine.spoken).toEqual(['First sentence 1.', 'First sentence 2.']);
+        expect(engine.stops).toBe(stops);
+    });
+
+    it('reads only as far as the screen reaches, and waits there', async () => {
+        reader.setReadableThrough(1);
+        seedThree(reader);
+        await settle();
+        engine.finishOne();
+        await settle();
+        engine.finishOne();
+        await settle();
+        expect(engine.spoken).toEqual(sentences('First', 3));
+
+        // Parked. The rest is not lost, it is waiting below the fold.
+        engine.finishOne();
+        await settle();
+        expect(engine.spoken).toEqual(sentences('First', 3));
+        expect(reader.pending).toBe(6);
+        expect(reader.playhead).toBeNull();
+    });
+
+    it('resumes from the unread tail when the view comes back down', async () => {
+        reader.setReadableThrough(1);
+        seedThree(reader);
+        await settle();
+        for (let i = 0; i < 3; i++) { engine.finishOne(); await settle(); }
+        expect(engine.spoken).toEqual(sentences('First', 3));
+
+        reader.setReadableThrough(null);
+        await settle();
+        expect(engine.spoken).toEqual([...sentences('First', 3), 'Second sentence 1.']);
+    });
+
+    it('new content arriving while the view is parked in the history does not move reading', async () => {
+        let clock = 1_000_000;
+        const talk = new ReadAloudReader(engine, {
+            now: () => clock,
+            wordsPerMinute: 60,
+            maxBacklogSeconds: () => 4,
+        });
+        talk.setEnabled(true);
+        talk.focus('s1');
+        // The user is looking at the oldest message.
+        talk.setReadableThrough(1);
+        talk.onMessages('s1', [agentText('m1', 'First sentence 1. First sentence 2.', 1)]);
+        await settle();
+        expect(engine.spoken).toEqual(['First sentence 1.']);
+
+        // A reply lands, still streaming, far more than the threshold of it.
+        clock += 3000;
+        talk.onMessages('s1', [agentText('m2', sentences('Second', 4).join(' '), 2)]);
+        engine.finishOne();
+        await settle();
+
+        // No cut, no jump: reading carries on where the user is looking.
+        expect(engine.spoken).toEqual(['First sentence 1.', 'First sentence 2.']);
+        expect(talk.skipCount).toBe(0);
+
+        engine.finishOne();
+        await settle();
+        expect(talk.playhead).toBeNull();
+        expect(talk.pending).toBe(4);
+
+        // And when the view comes down, all four are still there, in order.
+        talk.setReadableThrough(2);
+        await settle();
+        for (let i = 0; i < 3; i++) { engine.finishOne(); await settle(); }
+        expect(engine.spoken).toEqual([
+            'First sentence 1.',
+            'First sentence 2.',
+            ...sentences('Second', 4),
+        ]);
+    });
+
+    it('publishes the sentence at the engine, with the message it came from', async () => {
+        const seen: (string | null)[] = [];
+        reader.addPlayheadListener((playhead) => seen.push(playhead === null ? null : `${playhead.messageId}:${playhead.sentence}`));
+        seedThree(reader);
+        await settle();
+        engine.finishOne();
+        await settle();
+        expect(seen).toEqual(['m1:First sentence 1.', 'm1:First sentence 2.']);
+        expect(reader.playhead?.turn).toBe(0);
+    });
+
+    it('clears the marking the moment speech is interrupted', async () => {
+        seedThree(reader);
+        await settle();
+        expect(reader.playhead).not.toBeNull();
+
+        reader.interrupt('typed');
+        expect(reader.playhead).toBeNull();
+        expect(reader.pending).toBe(0);
+    });
+
+    it('an interrupted transcript can still be scrolled back into and re-read', async () => {
+        seedThree(reader);
+        await settle();
+        reader.interrupt('typed');
+        await settle();
+
+        reader.seekTo(2);
+        await settle();
+        expect(engine.spoken).toEqual(['First sentence 1.', 'Second sentence 1.']);
+    });
+
+    it('marks nothing while it is saying the skip marker', async () => {
+        let clock = 1_000_000;
+        const talk = new ReadAloudReader(engine, {
+            now: () => clock,
+            wordsPerMinute: 60,
+            maxBacklogSeconds: () => 4,
+        });
+        talk.setEnabled(true);
+        talk.focus('s1');
+        talk.onMessages('s1', [agentText('m1', 'Streaming sentence 1. Streaming sentence 2.', 1)]);
+        await settle();
+        clock += 3000;
+        talk.onMessages('s1', [agentText('m2', sentences('Second', 4).join(' '), 2)]);
+        engine.finishOne();
+        await settle();
+        expect(engine.spoken[engine.spoken.length - 1]).toBe('Skipping ahead.');
+        expect(talk.playhead).toBeNull();
+
+        engine.finishOne();
+        await settle();
+        expect(talk.playhead?.messageId).toBe('m2');
+    });
+
+    it('keeps a read position while idle, so a later scroll knows where it was', async () => {
+        seedThree(reader);
+        await settle();
+        expect(reader.readPosition).toBe(1);
+
+        reader.seekTo(3);
+        await settle();
+        reader.interrupt('sent');
+        expect(reader.playhead).toBeNull();
+        expect(reader.readPosition).toBe(3);
+    });
+});

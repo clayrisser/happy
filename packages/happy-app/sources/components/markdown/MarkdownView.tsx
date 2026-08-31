@@ -1,4 +1,5 @@
 import { MarkdownSpan, parseMarkdown } from './parseMarkdown';
+import { type HighlightedSpan, highlightSpans } from './sentenceHighlight';
 import * as React from 'react';
 import { Image, Pressable, View, Platform } from 'react-native';
 import { HorizontalScrollView } from '../HorizontalScrollView';
@@ -34,6 +35,12 @@ export const MarkdownView = React.memo((props: {
      * selection and the built-in copy gesture so only one of them fires.
      */
     externalCopyHandler?: boolean;
+    /**
+     * The sentence read-aloud is speaking out of this message right now
+     * (DROVE-114). Marked where it is found and ignored where it is not; it
+     * changes colour only, never layout, so it cannot move the viewport.
+     */
+    highlightSentence?: string | null;
 }) => {
     const blocks = React.useMemo(() => parseMarkdown(props.markdown), [props.markdown]);
     
@@ -68,15 +75,15 @@ export const MarkdownView = React.memo((props: {
             <View style={{ width: '100%' }}>
                 {blocks.map((block, index) => {
                     if (block.type === 'text') {
-                        return <RenderTextBlock spans={block.content} key={index} first={index === 0} last={index === blocks.length - 1} selectable={selectable} onLinkPress={handleLinkPress} />;
+                        return <RenderTextBlock spans={block.content} key={index} first={index === 0} last={index === blocks.length - 1} selectable={selectable} onLinkPress={handleLinkPress} highlightSentence={props.highlightSentence} />;
                     } else if (block.type === 'header') {
-                        return <RenderHeaderBlock level={block.level} spans={block.content} key={index} first={index === 0} last={index === blocks.length - 1} selectable={selectable} onLinkPress={handleLinkPress} />;
+                        return <RenderHeaderBlock level={block.level} spans={block.content} key={index} first={index === 0} last={index === blocks.length - 1} selectable={selectable} onLinkPress={handleLinkPress} highlightSentence={props.highlightSentence} />;
                     } else if (block.type === 'horizontal-rule') {
                         return <View style={style.horizontalRule} key={index} />;
                     } else if (block.type === 'list') {
-                        return <RenderListBlock items={block.items} key={index} first={index === 0} last={index === blocks.length - 1} selectable={selectable} onLinkPress={handleLinkPress} />;
+                        return <RenderListBlock items={block.items} key={index} first={index === 0} last={index === blocks.length - 1} selectable={selectable} onLinkPress={handleLinkPress} highlightSentence={props.highlightSentence} />;
                     } else if (block.type === 'numbered-list') {
-                        return <RenderNumberedListBlock items={block.items} key={index} first={index === 0} last={index === blocks.length - 1} selectable={selectable} onLinkPress={handleLinkPress} />;
+                        return <RenderNumberedListBlock items={block.items} key={index} first={index === 0} last={index === blocks.length - 1} selectable={selectable} onLinkPress={handleLinkPress} highlightSentence={props.highlightSentence} />;
                     } else if (block.type === 'code-block') {
                         return <RenderCodeBlock content={block.content} language={block.language} key={index} first={index === 0} last={index === blocks.length - 1} selectable={selectable} />;
                     } else if (block.type === 'mermaid') {
@@ -122,46 +129,56 @@ export const MarkdownView = React.memo((props: {
 });
 
 type RenderSpanProps = {
-    spans: MarkdownSpan[];
+    spans: (MarkdownSpan | HighlightedSpan)[];
     baseStyle?: any;
     selectable: boolean;
     onLinkPress: (url: string) => void;
 };
 
-function RenderTextBlock(props: { spans: MarkdownSpan[], first: boolean, last: boolean, selectable: boolean, onLinkPress: (url: string) => void }) {
-    return <Text selectable={props.selectable} style={[style.text, props.first && style.first, props.last && style.last]}><RenderSpans spans={props.spans} baseStyle={style.text} selectable={props.selectable} onLinkPress={props.onLinkPress} /></Text>;
+function RenderTextBlock(props: { spans: MarkdownSpan[], first: boolean, last: boolean, selectable: boolean, onLinkPress: (url: string) => void, highlightSentence?: string | null }) {
+    const spans = useHighlightedSpans(props.spans, props.highlightSentence);
+    return <Text selectable={props.selectable} style={[style.text, props.first && style.first, props.last && style.last]}><RenderSpans spans={spans} baseStyle={style.text} selectable={props.selectable} onLinkPress={props.onLinkPress} /></Text>;
 }
 
-function RenderHeaderBlock(props: { level: 1 | 2 | 3 | 4 | 5 | 6, spans: MarkdownSpan[], first: boolean, last: boolean, selectable: boolean, onLinkPress: (url: string) => void }) {
+/** Split the spans around the spoken sentence, or leave them exactly as they were. */
+function useHighlightedSpans(spans: MarkdownSpan[], sentence: string | null | undefined): (MarkdownSpan | HighlightedSpan)[] {
+    return React.useMemo(
+        () => highlightSpans(spans, sentence ?? null) ?? spans,
+        [spans, sentence],
+    );
+}
+
+function RenderHeaderBlock(props: { level: 1 | 2 | 3 | 4 | 5 | 6, spans: MarkdownSpan[], first: boolean, last: boolean, selectable: boolean, onLinkPress: (url: string) => void, highlightSentence?: string | null }) {
     const s = (style as any)[`header${props.level}`];
     const headerStyle = [style.header, s, props.first && style.first, props.last && style.last];
-    return <Text selectable={props.selectable} style={headerStyle}><RenderSpans spans={props.spans} baseStyle={headerStyle} selectable={props.selectable} onLinkPress={props.onLinkPress} /></Text>;
+    const spans = useHighlightedSpans(props.spans, props.highlightSentence);
+    return <Text selectable={props.selectable} style={headerStyle}><RenderSpans spans={spans} baseStyle={headerStyle} selectable={props.selectable} onLinkPress={props.onLinkPress} /></Text>;
 }
 
 const BULLETS = ['•', '◦', '▪'] as const;
 
-function RenderListBlock(props: { items: { depth: number, spans: MarkdownSpan[] }[], first: boolean, last: boolean, selectable: boolean, onLinkPress: (url: string) => void }) {
+function RenderListBlock(props: { items: { depth: number, spans: MarkdownSpan[] }[], first: boolean, last: boolean, selectable: boolean, onLinkPress: (url: string) => void, highlightSentence?: string | null }) {
     const listStyle = [style.text, style.list];
     return (
         <View style={{ flexDirection: 'column', marginBottom: 8, gap: 6 }}>
             {props.items.map((item, index) => (
                 <View key={index} style={{ flexDirection: 'row', alignItems: 'flex-start', paddingLeft: item.depth * 16 }}>
                     <Text selectable={false} style={[listStyle, { marginRight: 8, marginTop: 1 }]}>{BULLETS[Math.min(item.depth, BULLETS.length - 1)]}</Text>
-                    <Text selectable={props.selectable} style={[listStyle, { flex: 1 }]}><RenderSpans spans={item.spans} baseStyle={listStyle} selectable={props.selectable} onLinkPress={props.onLinkPress} /></Text>
+                    <Text selectable={props.selectable} style={[listStyle, { flex: 1 }]}><RenderSpans spans={highlightSpans(item.spans, props.highlightSentence ?? null) ?? item.spans} baseStyle={listStyle} selectable={props.selectable} onLinkPress={props.onLinkPress} /></Text>
                 </View>
             ))}
         </View>
     );
 }
 
-function RenderNumberedListBlock(props: { items: { number: number, depth: number, spans: MarkdownSpan[] }[], first: boolean, last: boolean, selectable: boolean, onLinkPress: (url: string) => void }) {
+function RenderNumberedListBlock(props: { items: { number: number, depth: number, spans: MarkdownSpan[] }[], first: boolean, last: boolean, selectable: boolean, onLinkPress: (url: string) => void, highlightSentence?: string | null }) {
     const listStyle = [style.text, style.list];
     return (
         <View style={{ flexDirection: 'column', marginBottom: 8, gap: 6 }}>
             {props.items.map((item, index) => (
                 <View key={index} style={{ flexDirection: 'row', alignItems: 'flex-start', paddingLeft: item.depth * 16 }}>
                     <Text selectable={false} style={[listStyle, { marginRight: 8, marginTop: 1 }]}>{item.number}.</Text>
-                    <Text selectable={props.selectable} style={[listStyle, { flex: 1 }]}><RenderSpans spans={item.spans} baseStyle={listStyle} selectable={props.selectable} onLinkPress={props.onLinkPress} /></Text>
+                    <Text selectable={props.selectable} style={[listStyle, { flex: 1 }]}><RenderSpans spans={highlightSpans(item.spans, props.highlightSentence ?? null) ?? item.spans} baseStyle={listStyle} selectable={props.selectable} onLinkPress={props.onLinkPress} /></Text>
                 </View>
             ))}
         </View>
@@ -285,6 +302,10 @@ function RenderOptionsBlock(props: {
     );
 }
 
+function isHighlighted(span: MarkdownSpan | HighlightedSpan): boolean {
+    return 'highlighted' in span && span.highlighted === true;
+}
+
 function RenderSpans(props: RenderSpanProps) {
     return (<>
         {props.spans.map((span, index) => {
@@ -295,7 +316,7 @@ function RenderSpans(props: RenderSpanProps) {
                         key={index}
                         selectable={props.selectable}
                         accessibilityRole={isExternalLink ? 'link' : undefined}
-                        style={[props.baseStyle, isExternalLink && style.link, span.styles.map(s => style[s])]}
+                        style={[props.baseStyle, isExternalLink && style.link, span.styles.map(s => style[s]), isHighlighted(span) && style.spoken]}
                         {...(isExternalLink && Platform.OS === 'web' ? { onClick: () => props.onLinkPress(span.url!) } as any : {})}
                         onPress={isExternalLink && Platform.OS !== 'web'
                             ? () => props.onLinkPress(span.url!)
@@ -305,7 +326,7 @@ function RenderSpans(props: RenderSpanProps) {
                     </Text>
                 );
             } else {
-                return <Text key={index} selectable={props.selectable} style={[props.baseStyle, span.styles.map(s => style[s])]}>{span.text}</Text>
+                return <Text key={index} selectable={props.selectable} style={[props.baseStyle, span.styles.map(s => style[s]), isHighlighted(span) && style.spoken]}>{span.text}</Text>
             }
         })}
     </>)
@@ -417,6 +438,12 @@ const style = StyleSheet.create((theme) => ({
         fontWeight: '400',
     },
 
+    // The sentence read-aloud is on right now (DROVE-114). Background only:
+    // anything that changed the text metrics would reflow the row, and a
+    // reflow is a new viewport, and a new viewport seeks.
+    spoken: {
+        backgroundColor: theme.colors.surfaceSelected,
+    },
     italic: {
         fontStyle: 'italic',
     },

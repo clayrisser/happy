@@ -19,6 +19,7 @@ import { resolveUserMessageBubbleColor } from '@/utils/userMessageBubbleColor';
 import { LongPressCopyable } from './LongPressCopyable';
 import { extractThinkingText, isEmptyThinking } from '@/utils/thinkingText';
 import { useElapsedTime } from '@/hooks/useElapsedTime';
+import { useSpokenSentence } from '@/voice/readAloudPlayhead';
 import { formatWorkDuration } from '@/hooks/useGroupedMessages';
 
 
@@ -207,6 +208,11 @@ function AgentTextBlock(props: {
     sync.sendMessage(props.sessionId, option.title, { source: 'option' });
   }, [props.sessionId]);
 
+  // The sentence read-aloud is speaking out of THIS message, or null
+  // (DROVE-114). A primitive, so a row only re-renders when its own sentence
+  // changes, and read above the early return below because hooks are hooks.
+  const spokenSentence = useSpokenSentence(props.message.id);
+
   // The model's reasoning is folded, never dropped — one muted row that opens
   // to the whole of what the CLI sent.
   if (props.message.isThinking) {
@@ -222,7 +228,12 @@ function AgentTextBlock(props: {
 
   return (
     <View style={styles.agentMessageContainer}>
-      <MarkdownView markdown={props.message.text} onOptionPress={handleOptionPress} sessionId={props.sessionId} />
+      <MarkdownView
+        markdown={props.message.text}
+        onOptionPress={handleOptionPress}
+        sessionId={props.sessionId}
+        highlightSentence={spokenSentence}
+      />
       {props.copyText ? <MessageCopyButton text={props.copyText} /> : null}
     </View>
   );
