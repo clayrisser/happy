@@ -42,6 +42,11 @@ export const lightTheme = {
         textDestructive: Platform.select({ ios: '#FF3B30', default: '#F44336' }),
         textSecondary: Platform.select({ ios: '#8E8E93', default: '#49454F' }),
         textLink: '#2BACCC',
+        // The sentence read-aloud is saying right now (DROVE-125). A violet,
+        // because every other accent in here already means something else:
+        // #007AFF is working / subagent, #2BACCC is a link, green is success,
+        // red is destructive. A reading position is none of those.
+        spokenSentence: '#6D28D9',
         deleteAction: '#FF6B6B', // Delete/remove button color
         warningCritical: '#FF3B30',
         warning: '#8E8E93',
@@ -268,6 +273,8 @@ export const darkTheme = {
         textDestructive: Platform.select({ ios: '#FF453A', default: '#F48FB1' }),
         textSecondary: Platform.select({ ios: '#8E8E93', default: '#CAC4D0' }),
         textLink: '#2BACCC',
+        /** See the light theme: a violet nothing else in the palette claims. */
+        spokenSentence: '#B388FF',
         deleteAction: '#FF6B6B', // Delete/remove button color (same in both themes)
         warningCritical: '#FF453A',
         warning: '#8E8E93',

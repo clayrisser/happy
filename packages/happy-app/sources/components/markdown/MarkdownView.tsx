@@ -438,11 +438,15 @@ const style = StyleSheet.create((theme) => ({
         fontWeight: '400',
     },
 
-    // The sentence read-aloud is on right now (DROVE-114). Background only:
-    // anything that changed the text metrics would reflow the row, and a
-    // reflow is a new viewport, and a new viewport seeks.
+    // The sentence read-aloud is on right now (DROVE-114), coloured rather
+    // than highlighted (DROVE-125): the grey block read as selected text, and
+    // on a dark theme it was heavy. COLOUR ONLY, and this is the constraint
+    // that matters rather than a preference. The mark may not change the text
+    // metrics, because a reflow is a new viewport, and a new viewport seeks
+    // the reader, which would move the mark. Colour does not reflow. Weight,
+    // size, style and family all would, so none of them may be added here.
     spoken: {
-        backgroundColor: theme.colors.surfaceSelected,
+        color: theme.colors.spokenSentence,
     },
     italic: {
         fontStyle: 'italic',
