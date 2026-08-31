@@ -101,8 +101,8 @@ function LiveStatusTreeRow(props: { sessionId: string, row: LiveStatusRow }) {
         return (
             <Pressable
                 onPress={() => router.push({
-                    pathname: `/session/${props.sessionId}/agent/${agentId}`,
-                    params: { label: row.title },
+                    pathname: '/session/[id]/agent/[agentId]',
+                    params: { id: props.sessionId, agentId, label: row.title },
                 })}
                 style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
             >
