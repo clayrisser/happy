@@ -32,11 +32,61 @@ describe('what the collapsed button draws', () => {
         expect(b.fill).toBe('accent');
     });
 
-    it('reads PAUSED as the reading glyph with the disc taken away', () => {
+    /**
+     * PAUSED IS THE ONE STATE YOU CANNOT GUESS (DROVE-258).
+     *
+     * Clay: "When I long press read and it pauses color it I dunno pause
+     * colour maybe yellow or orange and show pause icon." Before this ticket
+     * paused and reading drew the SAME glyph and were told apart by the disc
+     * alone, so the only way to know which one you were in was to remember
+     * what you last did. Read-aloud is the eyes-free feature; remembering is
+     * exactly what it exists to save you.
+     */
+    it('reads PAUSED as a pause glyph on the pause disc', () => {
         const b = audioOutButton({ readAloudEnabled: true, paused: true });
         expect(b.state).toBe('paused');
-        expect(b.glyph).toBe('volume-high');
-        expect(b.fill).toBe('none');
+        expect(b.glyph).toBe('pause');
+        expect(b.fill).toBe('paused');
+    });
+
+    /**
+     * THE RESUME PATH, and it is the one worth a test of its own: a control
+     * stuck showing paused after a resume is worse than no indicator at all,
+     * because it lies rather than being silent. BOTH carriers have to come
+     * back, so both are asserted, and against the reading face rather than
+     * against literals so they cannot drift apart.
+     */
+    it('hands BOTH carriers back on a resume, not just the colour', () => {
+        const reading = audioOutButton({ readAloudEnabled: true });
+        const paused = audioOutButton({ readAloudEnabled: true, paused: true });
+        const resumed = audioOutButton({ readAloudEnabled: true, paused: false });
+        expect(paused.glyph).not.toBe(reading.glyph);
+        expect(paused.fill).not.toBe(reading.fill);
+        expect(resumed.glyph).toBe(reading.glyph);
+        expect(resumed.fill).toBe(reading.fill);
+        expect(resumed.state).toBe('reading');
+        expect(resumed.paused).toBe(false);
+    });
+
+    /**
+     * And the whole round trip through the table that drives it, because the
+     * button is drawn from a state some OTHER surface may have set: a
+     * headphone squeeze and the lock screen land on the same `setPaused`.
+     */
+    it('draws reading again after a long press pauses and a long press resumes', () => {
+        let paused = false;
+        const step = () => {
+            const button = audioOutButton({ readAloudEnabled: true, paused });
+            const effect = transportEffect('long-press', button.state);
+            if (effect === 'pause') paused = true;
+            if (effect === 'resume') paused = false;
+            return button;
+        };
+        expect(step().fill).toBe('accent');
+        expect(step().fill).toBe('paused');
+        const back = step();
+        expect(back.fill).toBe('accent');
+        expect(back.glyph).toBe('volume-high');
     });
 
     it('reads a LIVE CALL as the recording disc', () => {
@@ -45,11 +95,13 @@ describe('what the collapsed button draws', () => {
     });
 
     /**
-     * THE TICKET'S CONSTRAINT, as an assertion rather than as prose: no state
-     * has a colour of its own. Two carriers, four things, and each PAIR differs
-     * in at least one carrier.
+     * DROVE-236's CONSTRAINT, kept: four things read apart on two carriers.
+     *
+     * DROVE-258 spends one hue on paused and the constraint still holds, so
+     * the assertion is unchanged apart from the set below: every PAIR differs
+     * in at least one carrier, and now most pairs differ in both.
      */
-    it('tells all four apart on two carriers, with no hue per state', () => {
+    it('tells all four apart on two carriers', () => {
         const faces = {
             normal: audioOutButton({ readAloudEnabled: false }),
             paused: audioOutButton({ readAloudEnabled: true, paused: true }),
@@ -65,18 +117,20 @@ describe('what the collapsed button draws', () => {
                 expect(differs, `${a} vs ${b}`).toBe(true);
             }
         }
-        // And there are only ever two hues in the whole button, both of which
-        // already meant "happening now" before this ticket (DROVE-215).
+        // Three hues and a bare face, one per LIVE state, and every hue is one
+        // composerControlColour.ts already had (DROVE-215, DROVE-258).
         expect(new Set(names.map((n) => faces[n].fill)))
-            .toEqual(new Set(['none', 'accent', 'recording']));
+            .toEqual(new Set(['none', 'paused', 'accent', 'recording']));
     });
 
-    it('never puts a colour on a state where nothing is happening', () => {
-        // DROVE-215: "a control that merely HOLDS a value is not active". Off
-        // holds nothing and paused holds a place, and neither is a sound coming
-        // out of the phone.
+    it('leaves OFF the one face with no colour, because nothing is happening on it', () => {
+        // DROVE-215's rule, narrowed rather than broken. Read-aloud off is the
+        // only state where the reader is not holding anything: no queue, no
+        // place, no sound. Paused holds a place and is one press from speaking,
+        // which is a live state and is what DROVE-258 gives the amber to.
         expect(audioOutButton({ readAloudEnabled: false }).fill).toBe('none');
-        expect(audioOutButton({ readAloudEnabled: true, paused: true }).fill).toBe('none');
+        expect(audioOutButton({ readAloudEnabled: true, paused: true }).fill).not.toBe('none');
+        expect(audioOutButton({ readAloudEnabled: true }).fill).not.toBe('none');
     });
 
     it('does not turn the glyph into a waveform during a call', () => {
@@ -87,6 +141,10 @@ describe('what the collapsed button draws', () => {
         const on = audioOutButton({ readAloudEnabled: true, bossActive: true });
         expect(off.glyph).toBe('volume-mute-outline');
         expect(on.glyph).toBe('volume-high');
+        // And the pause bars are not a waveform either: a paused reader in a
+        // call still says what its TAP will do to read-aloud.
+        expect(audioOutButton({ readAloudEnabled: true, paused: true, bossActive: true }).glyph)
+            .toBe('pause');
     });
 
     it('refuses a fourth state from a stale paused flag', () => {

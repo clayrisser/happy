@@ -24,10 +24,13 @@ import {
     COMPOSER_IN_FIELD_DISC,
     COMPOSER_IN_FIELD_DISC_OPEN,
     composerControlPalette,
+    composerFillTint,
     composerGaugeContrast,
     composerGaugeMaterials,
     composerGaugeTrack,
     composerGlyphColour,
+    composerPausedFill,
+    composerPausedTint,
     pendingOrSettled,
     composerGlyphLayers,
     micColour,
@@ -511,5 +514,161 @@ describe('what the gauge measures, written down', () => {
             expect(room).toBeGreaterThan(15);
             expect(measured.track * measured.needle).toBeCloseTo(room, 4);
         }
+    });
+});
+
+
+/**
+ * THE PAUSED READER'S DISC (DROVE-258).
+ *
+ * Clay: "When I long press read and it pauses color it I dunno pause colour
+ * maybe yellow or orange and show pause icon."
+ *
+ * Three things to hold. That the amber is the palette's OWN amber rather than
+ * a fourth entry smuggled in beside it. That it clears the bars the composer
+ * already measures fills against, on both themes, over both extremes of chat.
+ * And that the glyph sitting on it is legible, which the white the other two
+ * discs wear is NOT — that is the one number that makes this more than a
+ * colour swap.
+ */
+describe.each(themes)('the pause disc on the $name theme', ({ dark }) => {
+    const palette = composerControlPalette(dark);
+    const bubble = dark ? COMPOSER_BUBBLE_MATERIAL.dark : COMPOSER_BUBBLE_MATERIAL.light;
+    const disc = dark ? COMPOSER_IN_FIELD_DISC.dark : COMPOSER_IN_FIELD_DISC.light;
+    const fill = composerPausedFill(dark);
+
+    it('spends no new hue: it IS the palette amber, reached through the one function', () => {
+        // The point of routing it through `composerGlyphColour` rather than
+        // reading `palette.pending` at the call site is that the amber cannot
+        // be edited here without the palette moving, and the palette cannot
+        // grow an entry without widening `ComposerActiveSignal` in front of a
+        // reviewer. DROVE-258 adds a STATE, not a colour.
+        expect(fill).toBe(composerGlyphColour(palette, 'pending'));
+        expect(Object.keys(palette).sort()).toEqual(['accent', 'foreground', 'pending', 'recording']);
+    });
+
+    it('reads as a disc against the bubble, past the strictest separation bar in this file', () => {
+        // A fill is held to COMPOSER_DISC_SEPARATION_FLOOR (1.3) and a hairline
+        // to the gauge track's 2.3. This is asserted against the HARDER of the
+        // two, because a state indicator that only just clears the bar a
+        // decoration clears is the invisibility this ticket is about, and
+        // because DROVE-254 aliases the gauge floor as the capsule's own.
+        expect(worstContrast(fill, [bubble])).toBeGreaterThanOrEqual(COMPOSER_GAUGE_TRACK_FLOOR);
+    });
+
+    it('reads apart from the resting disc it replaces, which is what OFF wears', () => {
+        // Paused vs off is a LUMINANCE question: one is amber, the other is the
+        // row's neutral grey, so a ratio is the right measure and the disc
+        // floor is the right bar.
+        expect(worstContrast(fill, [disc])).toBeGreaterThanOrEqual(COMPOSER_DISC_SEPARATION_FLOOR);
+    });
+
+    it('reads apart from the two discs it sits beside, by HUE rather than by ratio', () => {
+        // Paused vs reading and paused vs a call are pairs of saturated fills,
+        // and a contrast ratio is luminance only: the light amber and the light
+        // crimson land within 1.23:1 of each other while being obviously
+        // different colours. `colorDistance` is what the rest of this file
+        // already measures a vocabulary collision with, and it is what the
+        // `pending` rows of the collision table above use.
+        expect(colorDistance(fill, palette.accent)).toBeGreaterThanOrEqual(DISTINCT);
+        expect(colorDistance(fill, palette.recording)).toBeGreaterThanOrEqual(DISTINCT);
+        expect(colorDistance(fill, palette.foreground)).toBeGreaterThanOrEqual(DISTINCT);
+    });
+
+    it('carries a glyph that clears 3:1 on it', () => {
+        expect(worstContrast(composerPausedTint(dark), [fill])).toBeGreaterThanOrEqual(CHROME_CONTRAST_FLOOR);
+    });
+});
+
+/**
+ * AND WHY THE TINT IS DERIVED RATHER THAN COPIED, which is the trap this
+ * ticket walked into first, stated per theme because the two themes are where
+ * the whole point of it shows.
+ */
+describe('the pause glyph is not white just because its neighbours are', () => {
+    it('refuses white on the dark theme’s amber, which cannot carry it', () => {
+        const fill = composerPausedFill(true);
+        expect(worstContrast('#FFFFFF', [fill])).toBeLessThan(CHROME_CONTRAST_FLOOR);
+        expect(composerPausedTint(true)).not.toBe('#FFFFFF');
+        expect(worstContrast(composerPausedTint(true), [fill])).toBeGreaterThanOrEqual(CHROME_CONTRAST_FLOOR);
+    });
+
+    it('keeps white on the light theme’s amber, which can', () => {
+        const fill = composerPausedFill(false);
+        expect(worstContrast('#FFFFFF', [fill])).toBeGreaterThanOrEqual(CHROME_CONTRAST_FLOOR);
+        expect(composerPausedTint(false)).toBe('#FFFFFF');
+    });
+});
+
+/**
+ * The tint helper on its own, because its value is that it is not a table.
+ */
+describe('the tint a filled disc gets', () => {
+    it('is one of the two foregrounds the app already has, never a third value', () => {
+        const both = [COMPOSER_CONTROL_PALETTE.dark.foreground, COMPOSER_CONTROL_PALETTE.light.foreground];
+        for (const dark of [true, false]) {
+            const palette = composerControlPalette(dark);
+            for (const fill of [palette.accent, palette.recording, palette.pending, palette.foreground]) {
+                expect(both).toContain(composerFillTint(fill));
+            }
+        }
+    });
+
+    it('reproduces the white the accent and recording discs already ship', () => {
+        // The helper is not a change to those two. If it disagreed with what is
+        // on the phone today it would be a redesign wearing a refactor's
+        // clothes, so the agreement is the assertion.
+        for (const dark of [true, false]) {
+            const palette = composerControlPalette(dark);
+            expect(composerFillTint(palette.accent)).toBe('#FFFFFF');
+            expect(composerFillTint(palette.recording)).toBe('#FFFFFF');
+        }
+    });
+
+    /**
+     * The version of this helper that "picks whichever reads better" is the one
+     * that has to stay out, and it is an easy edit to make by accident. Black
+     * beats white on the dark theme's blue, so a maximiser would have turned
+     * the send disc and the reading disc black on a ticket about pause.
+     */
+    it('is not a maximiser: it keeps the row’s white where black would score higher', () => {
+        const blue = COMPOSER_CONTROL_PALETTE.dark.accent;
+        expect(worstContrast('#000000', [blue])).toBeGreaterThan(worstContrast('#FFFFFF', [blue]));
+        expect(worstContrast('#FFFFFF', [blue])).toBeGreaterThanOrEqual(CHROME_CONTRAST_FLOOR);
+        expect(composerFillTint(blue)).toBe('#FFFFFF');
+    });
+
+    it('picks the one that actually reads, on every fill the row can draw', () => {
+        for (const dark of [true, false]) {
+            const palette = composerControlPalette(dark);
+            for (const fill of [palette.accent, palette.recording, palette.pending]) {
+                expect(worstContrast(composerFillTint(fill), [fill]))
+                    .toBeGreaterThanOrEqual(CHROME_CONTRAST_FLOOR);
+            }
+        }
+    });
+});
+
+/**
+ * What the pause disc measures, written down, so a reader does not have to run
+ * the suite to know what "clears the floor" bought (DROVE-258).
+ */
+describe('what the pause disc measures', () => {
+    it.each([
+        ['dark', true, 5.28, 7.17, 10.22],
+        ['light', false, 4.13, 3.03, 4.61],
+    ] as const)('%s: %s:1 off the bubble, %s:1 off the resting disc, %s:1 under its glyph', (
+        _name, dark, bubble, resting, glyph,
+    ) => {
+        const fill = composerPausedFill(dark);
+        expect(worstContrast(fill, [dark ? COMPOSER_BUBBLE_MATERIAL.dark : COMPOSER_BUBBLE_MATERIAL.light]))
+            .toBeCloseTo(bubble, 2);
+        expect(worstContrast(fill, [dark ? COMPOSER_IN_FIELD_DISC.dark : COMPOSER_IN_FIELD_DISC.light]))
+            .toBeCloseTo(resting, 2);
+        expect(worstContrast(composerPausedTint(dark), [fill])).toBeCloseTo(glyph, 2);
+    });
+
+    it('leaves white on the dark amber at the 2.06:1 that made the tint a function', () => {
+        expect(worstContrast('#FFFFFF', [composerPausedFill(true)])).toBeCloseTo(2.06, 2);
     });
 });

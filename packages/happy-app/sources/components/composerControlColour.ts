@@ -119,6 +119,7 @@
  */
 
 import {
+    CHROME_CONTRAST_FLOOR,
     CHROME_GLASS_TINT,
     CHROME_GROUND,
     compositeOver,
@@ -459,4 +460,83 @@ export function composerGaugeContrast(
     const arc = compositeOver(composerGaugeTrack(dark), bed);
     const needle = parseColor(composerControlPalette(dark).foreground);
     return { track: contrastRatio(arc, bed), needle: contrastRatio(needle, arc) };
+}
+
+
+/**
+ * THE PAUSED READER'S DISC, AND THE TINT THAT READS ON IT (DROVE-258).
+ *
+ * Clay: "When I long press read and it pauses color it I dunno pause colour
+ * maybe yellow or orange and show pause icon."
+ *
+ * WHAT WAS WRONG. DROVE-233 gave read-aloud a pause and DROVE-236 drew it, on
+ * the two carriers the audio-out button already had: the glyph said whether
+ * read-aloud was ON and the fill said whether it was reading RIGHT NOW. Paused
+ * therefore wore the reading glyph on no disc, which is a state you can only
+ * identify by remembering what you last did. Read-aloud is the eyes-free
+ * feature. Remembering is the thing it exists to save.
+ *
+ * NO NEW HUE, AND THAT IS NOT A TECHNICALITY. It is the palette's own amber,
+ * the entry DROVE-217 measured on both themes and held off every reserved
+ * colour, reached through `composerGlyphColour` so it cannot be edited here
+ * without the palette moving. What DROVE-258 adds is a STATE that wears an
+ * existing colour, which is the only kind of addition this file has ever let
+ * through cheaply.
+ *
+ * AND THE AMBER IS THE RIGHT ONE RATHER THAN THE AVAILABLE ONE. It already
+ * means HELD on this row: a pick the pane has not confirmed is asked-for and
+ * not landed, and a paused reader is reading and not running. Both are one
+ * event away from being over, neither is going anywhere on its own, and the
+ * wrist spends orange on the same idea ("look twice", WristPalette.swift). One
+ * amber, one meaning, on two controls that are never confused for each other
+ * because one is a glyph and this one is a disc.
+ *
+ * WHY A DISC AND NOT A COLOURED GLYPH. The fill is the carrier this button
+ * already uses for its live states, so paused reads in the same vocabulary as
+ * reading and a call rather than in a second one. It is also the measurement:
+ * the amber on the RESTING disc clears the floor by 0.03 on the light theme,
+ * which is a pass that would not survive anyone touching either value, and the
+ * amber AS the disc clears it by a margin instead.
+ *
+ * WHAT THIS DOES NOT DO. It does not colour anything else. The `+`, send at
+ * rest, the padlock, the needle, the model's name and the mic are the
+ * foreground exactly as DROVE-215 left them, and the mic still takes no circle
+ * until it is open. This is one hue on one state.
+ */
+export function composerPausedFill(dark: boolean): string {
+    return composerGlyphColour(composerControlPalette(dark), 'pending');
+}
+
+/**
+ * The glyph colour for a control whose disc is a FILL rather than the glass.
+ *
+ * WHITE UNLESS WHITE CANNOT BE READ. A filled disc is its own backdrop, so the
+ * glyph on it belongs to the FILL and not to the theme, and both filled discs
+ * on this row are already drawn with `theme.colors.button.primary.tint`, which
+ * is #FFFFFF on both themes. This keeps that and adds one condition.
+ *
+ * IT IS DELIBERATELY NOT "WHICHEVER READS BETTER", which was the first shape
+ * of this function and was wrong. Black measures 5.76:1 on the dark theme's
+ * blue against white's 3.65:1, so picking the maximum would have flipped the
+ * send disc and the reading disc to black glyphs on a ticket about pause. The
+ * row has ONE tint and this hands back exactly it until the floor says it
+ * cannot, which is a rule about legibility rather than a second opinion about
+ * taste.
+ *
+ * AND THE AMBER IS WHERE THE FLOOR ACTUALLY SAYS SO. White on the dark theme's
+ * amber measures about 2:1. Copying the ternary that was already at the call
+ * site would have shipped a pause icon you cannot read on the disc whose whole
+ * job is to make pause readable.
+ */
+export function composerFillTint(fill: string): string {
+    const bed = parseColor(fill);
+    const tint = COMPOSER_CONTROL_PALETTE.dark.foreground;
+    return contrastRatio(parseColor(tint), bed) >= CHROME_CONTRAST_FLOOR
+        ? tint
+        : COMPOSER_CONTROL_PALETTE.light.foreground;
+}
+
+/** The pause glyph's colour: whichever foreground reads on the amber. */
+export function composerPausedTint(dark: boolean): string {
+    return composerFillTint(composerPausedFill(dark));
 }

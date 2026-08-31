@@ -84,6 +84,8 @@ import {
     COMPOSER_IN_FIELD_DISC_OPEN,
     composerControlPalette,
     composerGlyphColour,
+    composerPausedFill,
+    composerPausedTint,
     micColour,
     primaryActionColour,
 } from './composerControlColour';
@@ -546,6 +548,19 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     // something is happening now, which is DROVE-215's whole rule.
     mobileIconButtonCalling: {
         backgroundColor: composerControlPalette(theme.dark).recording,
+    },
+    /**
+     * A READER HOLDING ITS PLACE (DROVE-258). Clay: "When I long press read and
+     * it pauses color it I dunno pause colour maybe yellow or orange."
+     *
+     * The palette's amber, which already means HELD on this row, and the only
+     * disc here whose glyph is not the white the other two wear: white on this
+     * amber measures about 2:1 on the dark theme, so the tint is derived from
+     * the fill in composerControlColour.ts rather than copied off its
+     * neighbours.
+     */
+    mobileIconButtonPaused: {
+        backgroundColor: composerPausedFill(theme.dark),
     },
     // A control whose sheet is showing reads as held down, the same step the
     // session controls use for an open picker.
@@ -2253,12 +2268,18 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
      * `handleAudioOutLongPress` are the same two handlers the capsule wired;
      * only the box around them changed.
      *
-     * FOUR THINGS ON TWO CARRIERS, NO HUE PER STATE. The GLYPH says whether
-     * read-aloud is on: slashed off, waves on, paused included, which is
-     * DROVE-233's sentence unchanged. The FILL says what is happening NOW and
-     * nothing else: the accent disc while it is reading, the recording disc
-     * while a call is up. That is DROVE-215's rule, and both hues are already
-     * in composerControlColour.ts.
+     * FOUR THINGS ON TWO CARRIERS. The GLYPH says which state you are in:
+     * slashed off, waves reading, pause bars paused. The FILL says it again in
+     * colour: the accent disc while it is reading, the AMBER disc while it is
+     * paused, the recording disc while a call is up. All three hues are already
+     * in composerControlColour.ts, so DROVE-215's rule costs nothing here.
+     *
+     * PAUSED WAS THE ONE STATE YOU HAD TO REMEMBER (DROVE-258). It drew the
+     * reading glyph on no disc, so a paused reader and an actively reading one
+     * differed by a disc and nothing else, and paused and off by a glyph and
+     * nothing else. Clay: "When I long press read and it pauses color it I
+     * dunno pause colour maybe yellow or orange and show pause icon." The amber
+     * is the palette's own and nothing else on this row is coloured by it.
      *
      * AT REST IT WEARS THE ROW'S OWN DISC rather than nothing. On the control
      * row it sat on a glass capsule that drew the button for it; there is no
@@ -2274,6 +2295,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             style={[
                 styles.mobileAudioButton,
                 styles.mobileInFieldDisc,
+                audioOut.fill === 'paused' && styles.mobileIconButtonPaused,
                 audioOut.fill === 'accent' && styles.mobileIconButtonOn,
                 audioOut.fill === 'recording' && styles.mobileIconButtonCalling,
             ]}
@@ -2300,7 +2322,9 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     size={16}
                     color={audioOut.fill === 'none'
                         ? composerGlyphColour(composerPalette)
-                        : theme.colors.button.primary.tint}
+                        : audioOut.fill === 'paused'
+                            ? composerPausedTint(theme.dark)
+                            : theme.colors.button.primary.tint}
                 />
             </BubblePressable>
         </View>

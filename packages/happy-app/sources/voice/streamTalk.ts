@@ -41,11 +41,13 @@ export type StreamTalkToastKey =
  */
 
 /**
- * The glyph, and it says ONE thing: whether read-aloud is on.
+ * The speaker pair, and it says ONE thing: whether read-aloud is on.
  *
- * A speaker with waves on, a slashed speaker off, and PAUSED IS ON, so it wears
- * the waves (DROVE-233). What tells paused from reading is the disc under it,
- * which is the button's business and lives in composerAudioOut.ts.
+ * A speaker with waves on, a slashed speaker off. PAUSED IS ALSO ON and wore
+ * the waves until DROVE-258 gave it pause bars of its own; that third face is
+ * the BUTTON's, not stream-talk's, so it lives in composerAudioOut.ts beside
+ * the disc it is drawn on. This pair is unchanged, and a caller that only
+ * wants the on/off reading still gets exactly it.
  */
 export function streamTalkIcon(on: boolean): StreamTalkIcon {
     return on ? 'volume-high' : 'volume-mute-outline';
