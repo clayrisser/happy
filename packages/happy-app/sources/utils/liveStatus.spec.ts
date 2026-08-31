@@ -218,6 +218,76 @@ describe('summarizeLiveStatus main thread readout', () => {
     });
 });
 
+describe('the tally across main and every subagent (DROVE-184)', () => {
+    /**
+     * Clay: "where's my damn token counter showing tally of all tokens used
+     * across main agent and all subagents". Nine agents at 200k each read as
+     * 51.6k on the row, because the row's number was the MAIN transcript.
+     */
+    const tallied: LiveStatus = {
+        ...busy,
+        main: { startedAt: now - 1_033_000, tokens: 251_200 },
+        tokens: { turn: 1_377_722, turnMain: 251_200, session: 4_012_000, sessionMain: 402_000 },
+    };
+
+    it('is the four numbers the CLI published, and adds up nothing itself', () => {
+        expect(summarizeLiveStatus(tallied, now).tally).toEqual({
+            turn: '1.4M',
+            turnMain: '251.2k',
+            session: '4.0M',
+            sessionMain: '402.0k',
+            // The fan-out's share, which is the session less the main thread.
+            sessionAgents: '3.6M',
+            raw: { turn: 1_377_722, turnMain: 251_200, session: 4_012_000, sessionMain: 402_000 },
+        });
+    });
+
+    it('puts the TALLY in the row\'s one token slot, not the main thread\'s share', () => {
+        const main = summarizeLiveStatus(tallied, now).main!;
+        // The slot is `main.tokens` and it is unchanged in shape, so the strip
+        // gains no term and the width budget is untouched.
+        expect(main.tokens).toBe('1.4M');
+        expect(main.tokens).not.toBe('251.2k');
+        expect(summarizeLiveStatus(tallied, now).tally!.turnMain).toBe('251.2k');
+    });
+
+    it('still shows the spend while the fan-out outlives the turn and main is quiet', () => {
+        // The state Clay was looking at: no tool, main idle, agents burning.
+        // `main` is null, which is what keeps the dot off, so without this the
+        // row draws an agent count and no number at all.
+        const fanOut: LiveStatus = {
+            at: now,
+            turnStartedAt: now - 300_000,
+            agents: [{ id: 'a1', label: 'Sweep the backlog', startedAt: now - 280_000, tokens: 1_800_000 }],
+            tokens: { turn: 1_812_000, turnMain: 12_000, session: 1_812_000, sessionMain: 12_000 },
+        };
+        const summary = summarizeLiveStatus(fanOut, now);
+        expect(summary.main).toBeNull();
+        expect(summary.sideTokens).toBe('1.8M');
+    });
+
+    it('never draws the tally twice: the side number is only there when main is not', () => {
+        expect(summarizeLiveStatus(tallied, now).sideTokens).toBeNull();
+    });
+
+    it('says nothing rather than a zero when a turn has spent nothing yet', () => {
+        const quiet: LiveStatus = {
+            at: now,
+            agents: [{ id: 'a1', label: 'Just launched', startedAt: now - 1_000 }],
+            tokens: { turn: 0, turnMain: 0, session: 900, sessionMain: 900 },
+        };
+        expect(summarizeLiveStatus(quiet, now).sideTokens).toBeNull();
+    });
+
+    it('falls back to the main thread\'s own count on a CLI too old to publish a tally', () => {
+        const older: LiveStatus = { ...busy, main: { startedAt: now - 1_033_000, tokens: 251_200 } };
+        const summary = summarizeLiveStatus(older, now);
+        expect(summary.tally).toBeNull();
+        expect(summary.main!.tokens).toBe('251.2k');
+        expect(summary.sideTokens).toBeNull();
+    });
+});
+
 describe('liveStatusWatchLine', () => {
     it('is one short line: the tool name, the workflow, the count', () => {
         expect(liveStatusWatchLine(busy, now)).toBe('Bash · drover-relaunch 3/5 · 2 agents');

@@ -282,6 +282,12 @@ export default React.memo(() => {
                 rows: childRows,
                 main: null,
                 sideCount: childRows.length,
+                // This screen is scoped to ONE agent, so it has no session
+                // total to show (DROVE-184). The sheet draws no tally line
+                // when there is none, which is the same path a CLI too old
+                // to publish one takes.
+                tally: null,
+                sideTokens: null,
             }
             : null
     ), [childRows, title]);

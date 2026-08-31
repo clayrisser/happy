@@ -322,6 +322,29 @@ describe('AgentGoalStatusSchema', () => {
         expect(malformed.liveStatus).toBeUndefined();
     });
 
+    it('keeps the token tally, and drops the strip rather than the record when it is bad (DROVE-184)', () => {
+        const base = { path: '/tmp/project', host: 'local-machine' };
+        const good = MetadataSchema.parse({
+            ...base,
+            liveStatus: {
+                at: 1_000,
+                main: { startedAt: 500, tokens: 51_600 },
+                tokens: { turn: 1_851_600, turnMain: 51_600, session: 4_012_000, sessionMain: 402_000 },
+            },
+        });
+        expect(good.liveStatus?.tokens).toEqual({
+            turn: 1_851_600,
+            turnMain: 51_600,
+            session: 4_012_000,
+            sessionMain: 402_000,
+        });
+
+        // An older CLI publishes no tally at all, and the rest still lands.
+        const older = MetadataSchema.parse({ ...base, liveStatus: { at: 1_000, main: { startedAt: 500 } } });
+        expect(older.liveStatus?.tokens).toBeUndefined();
+        expect(older.liveStatus?.main?.startedAt).toBe(500);
+    });
+
     it('preserves usage limits in agent state and degrades malformed snapshots', () => {
         const state = AgentStateSchema.parse({
             controlledByUser: true,

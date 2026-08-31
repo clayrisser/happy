@@ -406,6 +406,16 @@ export const MetadataSchema = z.object({
             startedAt: z.number(),
             tokens: z.number().optional(),
         }).passthrough().optional(),
+        // The tally: main thread plus every subagent, added up ONCE on the CLI
+        // where the transcripts are (DROVE-184). The app never adds up the
+        // cards — it cannot, because a finished agent leaves `agents[]` 90s
+        // after its last write and its spend would vanish with it.
+        tokens: z.object({
+            turn: z.number(),
+            turnMain: z.number(),
+            session: z.number(),
+            sessionMain: z.number(),
+        }).passthrough().optional(),
         tool: z.object({
             id: z.string(),
             name: z.string(),

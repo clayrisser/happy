@@ -24,6 +24,7 @@ export type LiveStatus = NonNullable<NonNullable<Metadata['liveStatus']>>;
 export type LiveStatusTool = NonNullable<LiveStatus['tool']>;
 export type LiveStatusAgent = NonNullable<LiveStatus['agents']>[number];
 export type LiveStatusWorkflow = NonNullable<LiveStatus['workflows']>[number];
+export type LiveStatusTokens = NonNullable<LiveStatus['tokens']>;
 
 /**
  * How long a snapshot may sit before we stop drawing timers off it.
@@ -143,8 +144,63 @@ export interface LiveStatusMain {
     working: boolean;
     /** The turn's clock, ticking on this device. */
     elapsed: string;
-    /** `251.2k`, absent until the turn has spent anything. */
+    /**
+     * `251.2k` — the TALLY, main plus every subagent this turn (DROVE-184),
+     * not the main thread's share. It lives in this slot because the row must
+     * not grow a term; `tally.turnMain` is the main-only number, and the sheet
+     * behind the tap draws both.
+     */
     tokens?: string;
+}
+
+/**
+ * The tally: main thread plus every subagent, formatted (DROVE-184).
+ *
+ * Clay: "where's my damn token counter showing tally of all tokens used across
+ * main agent and all subagents". The strip's number was `main.tokens`, the
+ * MAIN transcript alone. Nine subagents at 200k each did not appear in it, so
+ * the row understated the night by an order of magnitude.
+ *
+ * Nothing here ADDS anything up. The CLI does the summing where the
+ * transcripts are, at the same `countTokens` calls that make the cards, and
+ * publishes four numbers; this only formats them. Adding up `status.agents`
+ * on the phone would give a different answer the moment an agent finished,
+ * because a finished agent leaves that array 90s later and takes its spend
+ * with it.
+ */
+export interface LiveStatusTally {
+    /** Main plus every subagent since the last prompt. What the row draws. */
+    turn: string;
+    /** The main thread's share of the turn, so main can be told from the fan-out. */
+    turnMain: string;
+    /** Main plus every subagent for the whole session, finished agents included. */
+    session: string;
+    /** The main thread's share of the session. */
+    sessionMain: string;
+    /** The subagents' share of the session, which is `session` less `sessionMain`. */
+    sessionAgents: string;
+    /** The numbers behind the strings, for anything that needs to compare them. */
+    raw: { turn: number; turnMain: number; session: number; sessionMain: number };
+}
+
+/** The published tally, or null on a CLI too old to publish one. */
+export function liveStatusTally(status: LiveStatus): LiveStatusTally | null {
+    const tokens = status.tokens;
+    if (!tokens) return null;
+    const raw = {
+        turn: tokens.turn,
+        turnMain: tokens.turnMain,
+        session: tokens.session,
+        sessionMain: tokens.sessionMain,
+    };
+    return {
+        turn: formatTokens(raw.turn),
+        turnMain: formatTokens(raw.turnMain),
+        session: formatTokens(raw.session),
+        sessionMain: formatTokens(raw.sessionMain),
+        sessionAgents: formatTokens(Math.max(0, raw.session - raw.sessionMain)),
+        raw,
+    };
 }
 
 export interface LiveStatusSummary {
@@ -190,6 +246,20 @@ export interface LiveStatusSummary {
      * flight, and the question this number answers is how much is out.
      */
     sideCount: number;
+    /**
+     * Main plus every subagent (DROVE-184). Null on a CLI too old to publish
+     * it, and the row falls back to the main thread's own count there.
+     */
+    tally: LiveStatusTally | null;
+    /**
+     * The token text the row draws when the MAIN thread is not what is running.
+     *
+     * A fan-out outlives the turn that launched it, so `main` is null while
+     * nine agents burn — the exact state Clay was looking at. Without this the
+     * row shows a bare agent count and no spend at all. Null when there is
+     * nothing to say, so the row is never given furniture.
+     */
+    sideTokens: string | null;
 }
 
 function agentRow(
@@ -425,13 +495,21 @@ export function summarizeLiveStatus(status: LiveStatus, now: number): LiveStatus
         countPhrase(workflows.length, 'workflow', 'workflows'),
     ].filter((part): part is string => part !== null);
 
+    const tally = liveStatusTally(status);
+    const main = mainReadout(status, now, tally);
+    const sideCount = agents.length + workflows.length;
+
     return {
         headline,
         ...(status.turnStartedAt ? { turnElapsed: formatElapsed(now - status.turnStartedAt) } : {}),
         rows,
         ...(parts.length > 0 ? { subtitle: parts.join(' · ') } : {}),
-        main: mainReadout(status, now),
-        sideCount: agents.length + workflows.length,
+        main,
+        sideCount,
+        tally,
+        // Only when the main thread is NOT carrying the number itself, so the
+        // row never shows the tally twice.
+        sideTokens: !main && sideCount > 0 && tally && tally.raw.turn > 0 ? tally.turn : null,
     };
 }
 
@@ -451,9 +529,16 @@ export function summarizeLiveStatus(status: LiveStatus, now: number): LiveStatus
  * A snapshot that is only background agents stays null rather than guessing,
  * which is the one case where the old CLI shows less than the new one.
  */
-function mainReadout(status: LiveStatus, now: number): LiveStatusMain | null {
+function mainReadout(status: LiveStatus, now: number, tally: LiveStatusTally | null): LiveStatusMain | null {
     const label = status.tool ? status.tool.name : LIVE_STATUS_WORKING_WORD;
     const working = !status.tool;
+    // THE ROW'S NUMBER IS THE TALLY (DROVE-184). It sits in the slot the
+    // main-only count used to hold, so the strip gains no term and the width
+    // budget is untouched — `tokens` is already a rank on
+    // STATUS_ROW_GIVE_WAY (DROVE-223) and this inherits it whole. Falls back
+    // to the main thread's own count on a CLI too old to publish a tally,
+    // which is the old behaviour exactly.
+    const rowTokens = tally ? tally.raw.turn : status.main?.tokens;
     const tokensOf = (tokens: unknown): { tokens?: string } => (
         typeof tokens === 'number' && tokens > 0 ? { tokens: formatTokens(tokens) } : {}
     );
@@ -462,14 +547,14 @@ function mainReadout(status: LiveStatus, now: number): LiveStatusMain | null {
             label,
             working,
             elapsed: formatElapsed(now - status.main.startedAt),
-            ...tokensOf(status.main.tokens),
+            ...tokensOf(rowTokens),
         };
     }
     const sideRunning = (status.agents?.length ?? 0) + (status.workflows?.length ?? 0) > 0;
     if (!status.tool && sideRunning) return null;
     const startedAt = status.turnStartedAt ?? status.tool?.startedAt;
     if (!startedAt) return null;
-    return { label, working, elapsed: formatElapsed(now - startedAt) };
+    return { label, working, elapsed: formatElapsed(now - startedAt), ...tokensOf(rowTokens) };
 }
 
 /**

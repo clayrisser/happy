@@ -290,13 +290,22 @@ function useLiveStatusSummary(sessionId: string | undefined): LiveStatusSummary 
  * thread's state and numbers first, then the agents as a count with the word
  * the row folded away.
  */
-function accessibilityLabelFor(main: LiveStatusMain | null, sideCount: number): string {
+function accessibilityLabelFor(
+    main: LiveStatusMain | null,
+    sideCount: number,
+    sideTokens: string | null,
+): string {
     const parts: string[] = [];
     if (main) {
         parts.push(`Main thread: ${main.label} ${main.elapsed}`);
-        if (main.tokens) parts.push(`${main.tokens} tokens`);
+        // Spelled out as a total, because the glance version is a bare number
+        // and DROVE-184 changed what that number MEANS. A screen reader saying
+        // "251.2k tokens" beside "Main thread" would still describe the old,
+        // main-only reading.
+        if (main.tokens) parts.push(`${main.tokens} tokens across main and agents`);
     }
     if (sideCount > 0) parts.push(`${sideCount} ${sideCount === 1 ? 'agent' : 'agents'}`);
+    if (!main && sideTokens) parts.push(`${sideTokens} tokens across main and agents`);
     return parts.join(', ');
 }
 
@@ -400,13 +409,21 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
     // token count and the clock are folds of their own now, below the account
     // and above the working word in STATUS_ROW_GIVE_WAY, and a fold cannot
     // take a number out of the middle of a finished string.
+    // The tally when the MAIN thread is not the thing running (DROVE-184). A
+    // fan-out outlives the turn that launched it, so `main` is null while nine
+    // agents burn — the state Clay was actually looking at — and the row would
+    // otherwise show a bare agent count and no spend. It takes the SAME slot
+    // and the SAME `tokens` rank on STATUS_ROW_GIVE_WAY, so the strip gains no
+    // term: at most it swaps a label and a clock it is not drawing for a
+    // number it is.
+    const sideTokens = summary?.sideTokens ?? null;
     const liveNumbers = main ? (main.tokens ? `${main.elapsed} ${main.tokens}` : main.elapsed) : null;
     const rowParts: StatusRowParts = {
-        live: main ? `${main.label} ${liveNumbers}` : null,
+        live: main ? `${main.label} ${liveNumbers}` : sideTokens,
         liveWithoutName: liveNumbers,
         liveLabel: main?.label ?? null,
         liveElapsed: main?.elapsed ?? null,
-        liveTokens: main?.tokens ?? null,
+        liveTokens: main?.tokens ?? sideTokens,
         // Whether the label is a TOOL or the working word, read off the
         // summary rather than compared to a string, so the row and
         // liveStatus.ts cannot disagree about which one it is.
@@ -430,6 +447,7 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
             .filter((part): part is string => !!part)
             .join(' ')
         : '';
+    const shownSideTokens = !main && !folds.tokens ? sideTokens : null;
     if (summary && (main || sideCount > 0)) {
         segments.push(
             <Pressable
@@ -440,7 +458,7 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
                 hitSlop={segmentHitSlop}
                 accessibilityRole={canExpand ? 'button' : undefined}
                 accessibilityState={canExpand ? { expanded: openSheet === 'agents' } : undefined}
-                accessibilityLabel={accessibilityLabelFor(main, sideCount)}
+                accessibilityLabel={accessibilityLabelFor(main, sideCount, sideTokens)}
                 style={({ pressed }) => ({
                     flexDirection: 'row',
                     alignItems: 'center',
@@ -481,6 +499,11 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
                             </Text>
                         ) : null}
                     </>
+                ) : null}
+                {shownSideTokens ? (
+                    <Text style={{ fontSize: 11, color: theme.colors.text, ...Typography.default() }}>
+                        {shownSideTokens}
+                    </Text>
                 ) : null}
                 {sideCount > 0 ? (
                     <>
