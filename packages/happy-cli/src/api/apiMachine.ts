@@ -13,6 +13,7 @@ import { backoff } from '@/utils/time';
 import { RpcHandlerManager } from './rpc/RpcHandlerManager';
 import { registerDroverPolicyHandler } from '@/drover/flip/policyRpc';
 import { registerListWorktreesHandler } from '@/daemon/listWorktrees';
+import { registerMachineAccountsHandlers } from '@/drover/machineAccounts';
 import { registerDroverDemoPushHandler } from '@/drover/demo';
 import { PushNotificationClient } from './pushNotifications';
 import { detectCLIAvailability, CLIAvailability } from '@/utils/detectCLI';
@@ -151,6 +152,12 @@ export class ApiMachineClient {
 
         // The repo's worktrees, for the branch sheet in the session header (DROVE-90).
         registerListWorktreesHandler(this.rpcHandlerManager);
+
+        // This machine's Claude accounts, listed and removed from the phone
+        // (DROVE-165). On the DAEMON, like the policy handler and for the same
+        // reason: an account belongs to the machine, not to a session, and the
+        // Accounts screen has to answer with nothing running.
+        registerMachineAccountsHandlers(this.rpcHandlerManager);
         // The channel demo's test push (DROVE-75). On the daemon for the same
         // reason the policy handler is: the phone wants to prove the push path
         // while nothing is running. Its own push client rather than the
