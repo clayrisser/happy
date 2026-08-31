@@ -18,6 +18,18 @@ import { sync } from './sync';
 import { sessionAllow, sessionDeny } from './ops';
 import { collectGateEntries, collectGates } from './droverGates';
 import { newGateEntries, togglesFromSettings, wakeDeserved } from './droverChannels';
+import { getCurrentAppState } from './apiSocket';
+import {
+    claimWristCues,
+    noteWristRelay,
+    releaseWristCues,
+    rememberWristRelayState,
+    seedWristCues,
+    wristCarrierFor,
+    wristCueIds,
+    wristCueStateOf,
+    wristRefusal,
+} from './droverWristRelay';
 import { demoLog, isDroverDemoId } from './droverDemo';
 import { isSessionArchived } from './sessionArchive';
 import { liveStatusSince, liveStatusWatchLine } from '@/utils/liveStatus';
@@ -330,10 +342,10 @@ export function deservesAWake(
     before: { gates: DroverGate[]; sessions: DroverSession[] },
     after: { gates: DroverGate[]; sessions: DroverSession[] },
 ): boolean {
-    const known = new Set(before.gates.map((g) => g.id));
-    if (after.gates.some((g) => !known.has(g.id))) return true;
-    const wasRunning = new Set(before.sessions.filter((s) => s.active).map((s) => s.id));
-    return after.sessions.some((s) => !s.active && wasRunning.has(s.id));
+    // ONE definition of what a cue is, shared with the relay and with the
+    // watch's own WristCueDiff (DROVE-224). A second copy here is how the
+    // phone and the wrist would come to disagree about what a buzz is for.
+    return wristCueIds(wristCueStateOf(before), after).length > 0;
 }
 
 let started = false;
@@ -420,9 +432,29 @@ export function startDroverWatchFeed(): () => void {
         // the field and wakes as before. Read off the card's stamp and the
         // phone's own switch; the wrist keeps its own switch beside these.
         const fresh = newGateEntries(new Set(lastGates.map((g) => g.id)), collectGateEntries());
+        // Every cue this change raises, named the way the WATCH names it, and
+        // claimed here so nothing else carries it twice (DROVE-224). The
+        // background task the silent wake push launches runs in its own JS
+        // context, so only a ledger on disk sees across the two — which is
+        // what makes an event arriving across a foreground or background
+        // transition exactly one buzz rather than two.
+        //
+        // The first publish of a run reads the whole wall as new, so it is
+        // SEEDED rather than claimed: no wake, but recorded, or the next
+        // background wake would carry work that was already up.
+        const cues = wristCueIds(
+            wristCueStateOf({ gates: lastGates, sessions: lastSessions }),
+            { gates, sessions },
+        );
+        let mine: string[] = [];
+        if (publishedOnce) mine = claimWristCues(cues);
+        else seedWristCues(cues);
+        // Which path could reach the wrist at all. With this app frontmost iOS
+        // does not forward a push to the watch, so the direct path is the ONLY
+        // path and a refusal is a wrist that stays silent outright.
+        const carrier = wristCarrierFor(getCurrentAppState());
         const wake =
-            publishedOnce &&
-            deservesAWake({ gates: lastGates, sessions: lastSessions }, { gates, sessions }) &&
+            mine.length > 0 &&
             (fresh.length === 0 || wakeDeserved(fresh, togglesFromSettings(storage.getState().settings)));
         lastGates = gates;
         lastSessions = sessions;
@@ -473,13 +505,29 @@ export function startDroverWatchFeed(): () => void {
         // screen shows, so Console and the screen agree.
         if (wake && !status.reachable) {
             if (status.wakes === 0) {
-                console.log(`[drover-watch] wake skipped: ${describeDroverWakeBudget(status)}, the wrist stays silent until it is opened`);
+                // Claimed a moment ago and given straight back: a cue nobody
+                // felt must stay carryable, or an exhausted budget would turn
+                // into a gate that is silent forever (DROVE-224). The state is
+                // not remembered either, so the next path still reads the cue
+                // as new.
+                releaseWristCues(mine);
+                noteWristRelay(wristRefusal(mine, carrier, describeDroverWakeBudget(status)));
                 return;
             }
             void wakeDroverWatch(snapshot).then((spent) => {
-                if (!spent) console.log(`[drover-watch] wake not spent as a background launch (${describeDroverWakeBudget(status)})`);
+                if (spent) {
+                    rememberWristRelayState({ gates, sessions });
+                    return;
+                }
+                releaseWristCues(mine);
+                noteWristRelay(`${wristRefusal(mine, carrier, describeDroverWakeBudget(status))}; the wake was not spent as a background launch`);
             });
+            return;
         }
+        // Either the wrist was reached (a reachable watch app buzzes off the
+        // publish itself) or there was nothing new to carry. Both are a wrist
+        // that is up to date, so this is what the next reader diffs against.
+        rememberWristRelayState({ gates, sessions });
     };
 
     // Rebuild the open session's rows when THAT session moved, and hand them

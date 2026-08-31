@@ -35,6 +35,7 @@ import { UsageAccountBars } from '@/components/UsageAccountBars';
 import type { UsageBarRow } from '@/components/agentInputUsage';
 import { flipRiskFooter, flipRiskSubtitle, resolveSessionAccount, sessionsLosingRemoteControl } from '@/utils/droverSessionAccount';
 import { describeDroverWakeBudget, getDroverWatchStatus, type DroverWatchStatus } from 'drover-watch';
+import { wristRelayLine } from '@/sync/droverWristRelay';
 import { SessionTasksList, useSessionTasks } from '@/components/SessionTasksList';
 
 // Animated status dot component
@@ -95,6 +96,24 @@ function useDroverWatchStatus(): DroverWatchStatus | null {
         return () => sub.remove();
     }, []);
     return status;
+}
+
+/**
+ * The last cue the phone could not carry to the wrist (DROVE-224).
+ *
+ * Re-read on every return to the foreground, like the budget above and for
+ * the same reason: the refusal that matters most is written during a
+ * background launch whose JS context is gone before anyone looks at a screen.
+ */
+function useWristRefusal(): string | null {
+    const [line, setLine] = React.useState<string | null>(() => wristRelayLine());
+    React.useEffect(() => {
+        const sub = AppState.addEventListener('change', (state) => {
+            if (state === 'active') setLine(wristRelayLine());
+        });
+        return () => sub.remove();
+    }, []);
+    return line;
 }
 
 /**
@@ -188,6 +207,7 @@ function SessionInfoContent({ session }: { session: Session }) {
     const sessionName = getSessionName(session);
     const droverPolicySubtitle = droverPolicySummary(session.metadata?.droverPolicy);
     const watchStatus = useDroverWatchStatus();
+    const wristRefusalLine = useWristRefusal();
     const sessionStatus = useSessionStatus(session);
     // The same derivation the sheet and the wrist read (DROVE-167).
     const sessionTasks = useSessionTasks(session.id);
@@ -584,6 +604,20 @@ function SessionInfoContent({ session }: { session: Session }) {
                                 subtitle={describeDroverWatch(watchStatus)}
                                 subtitleLines={1}
                                 icon={<Ionicons name="watch-outline" size={29} color="#FF9500" />}
+                                showChevron={false}
+                            />
+                        )}
+                        {/* The last cue that could NOT be carried to the wrist
+                            (DROVE-224). With the app open no push can reach
+                            the watch, so a refused wake is a wrist that stayed
+                            silent outright, and a silent refusal is the whole
+                            complaint this line answers. */}
+                        {watchStatus && wristRefusalLine && (
+                            <Item
+                                title="Wrist"
+                                subtitle={wristRefusalLine}
+                                subtitleLines={0}
+                                icon={<Ionicons name="notifications-off-outline" size={29} color="#FF9500" />}
                                 showChevron={false}
                             />
                         )}

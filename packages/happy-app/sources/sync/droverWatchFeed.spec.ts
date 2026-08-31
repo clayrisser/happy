@@ -18,6 +18,8 @@ const mocks = vi.hoisted(() => ({
     reachable: true,
     /** Background wakes left today; undefined is a native module without the key (DROVE-86). */
     wakes: undefined as number | undefined,
+    /** The phone's own foreground state, which decides whether a push could reach the wrist (DROVE-224). */
+    appState: 'active' as 'active' | 'background',
     onAnswer: null as
         ((event: { id: string; allow: boolean; optionId?: string; text?: string }) => void) | null,
     onFlip: null as ((event: { sessionId: string; account?: string }) => void) | null,
@@ -91,6 +93,26 @@ vi.mock('./ops', () => ({
     sessionDeny: (...args: unknown[]) => { mocks.deny(...args); return Promise.resolve(); },
 }));
 
+// The feed reads the phone's own foreground state to know whether a push
+// could have reached the wrist instead (DROVE-224). apiSocket drags the whole
+// socket in, so only the one reader is stubbed.
+vi.mock('./apiSocket', () => ({
+    getCurrentAppState: () => mocks.appState,
+}));
+
+// The carry ledger is on disk, because the foreground feed and the background
+// task run in different JS contexts. react-native-mmkv needs a native backend;
+// back it with a plain map.
+const disk = new Map<string, string>();
+vi.mock('react-native-mmkv', () => ({
+    MMKV: class {
+        getString(key: string) { return disk.get(key); }
+        set(key: string, value: string) { disk.set(key, value); }
+        delete(key: string) { disk.delete(key); }
+        clearAll() { disk.clear(); }
+    },
+}));
+
 vi.mock('drover-watch', () => ({
     isDroverWatchAvailable: () => true,
     getDroverWatchStatus: () => ({
@@ -150,6 +172,7 @@ import {
     deservesAWake,
     startDroverWatchFeed,
 } from './droverWatchFeed';
+import { claimWristCues, resetWristRelay, wristRelayLine, wristRelayState } from './droverWristRelay';
 import { getSessionName } from '@/utils/sessionUtils';
 import { currentDroverAccountRow } from '@/utils/droverUsage';
 import { resolveSessionState } from './sessionState';
@@ -237,6 +260,11 @@ beforeEach(() => {
     mocks.woken = [];
     mocks.reachable = true;
     mocks.wakes = undefined;
+    mocks.appState = 'active';
+    // A cue is claimed at most once EVER, so a ledger left over from the last
+    // test would silence the next one's wake and read as a pass (DROVE-224).
+    disk.clear();
+    resetWristRelay();
     mocks.onAnswer = null;
     mocks.onFlip = null;
     mocks.onRefresh = null;
@@ -1279,6 +1307,146 @@ describe('waking the wrist', () => {
         } finally {
             log.mockRestore();
         }
+    });
+});
+
+/**
+ * The wrist while the phone app is OPEN (DROVE-224).
+ *
+ * iOS does not forward a push to the watch while the app that owns it is
+ * frontmost, so with the app open the direct path is the only path. These pin
+ * that it fires, that it fires exactly once, and that a refusal is on record
+ * rather than silent.
+ */
+describe('carrying a cue to the wrist while the app is open', () => {
+    function withGate() {
+        return { s1: session({ path: '/a', requests: { r1: { tool: 'Bash', arguments: { command: 'ls' } } } }) };
+    }
+
+    it('spends a wake for a gate raised with the app foregrounded', () => {
+        mocks.appState = 'active';
+        mocks.reachable = false;
+        mocks.wakes = 12;
+        mocks.sessions = { s1: session({ path: '/a' }) };
+        start();
+        mocks.sessions = withGate();
+        mocks.onStorage!();
+        expect(mocks.woken).toHaveLength(1);
+    });
+
+    // The event arriving as he backgrounds the app. The feed carried it a
+    // moment before iOS suspended the JS; the background task the silent wake
+    // push launches must publish and stay quiet.
+    it('leaves nothing for the background task to carry a second time', () => {
+        mocks.reachable = false;
+        mocks.wakes = 12;
+        mocks.sessions = { s1: session({ path: '/a' }) };
+        start();
+        mocks.sessions = withGate();
+        mocks.onStorage!();
+        expect(mocks.woken).toHaveLength(1);
+
+        // What the background task does, against the same record on disk.
+        expect(claimWristCues(['s1:r1'])).toEqual([]);
+    });
+
+    // The event arriving as he foregrounds it. The background task carried it
+    // while the app was suspended; a restarted feed re-derives the same cue
+    // against an empty `lastGates`, and must not buzz for it again.
+    it('does not carry a cue the background task already carried', () => {
+        expect(claimWristCues(['s1:r1'])).toEqual(['s1:r1']);
+        mocks.reachable = false;
+        mocks.wakes = 12;
+        mocks.sessions = { s1: session({ path: '/a' }) };
+        start();
+        mocks.sessions = withGate();
+        mocks.onStorage!();
+        expect(mocks.published).toHaveLength(2);
+        expect(mocks.woken).toHaveLength(0);
+    });
+
+    // A cue nobody felt must stay carryable, or an exhausted budget turns into
+    // a gate that is silent forever.
+    it('gives the claim back and says why when the budget is gone', () => {
+        const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+        try {
+            mocks.appState = 'active';
+            mocks.reachable = false;
+            mocks.wakes = 0;
+            mocks.sessions = { s1: session({ path: '/a' }) };
+            start();
+            mocks.sessions = withGate();
+            mocks.onStorage!();
+            expect(mocks.woken).toHaveLength(0);
+            expect(claimWristCues(['s1:r1'])).toEqual(['s1:r1']);
+            expect(wristRelayLine()).toContain('wake budget 0/50 today');
+            // With the app open nothing else could have carried it, and the
+            // line has to say so rather than leaving him to guess.
+            expect(wristRelayLine()).toContain('no push can reach the wrist');
+        } finally {
+            log.mockRestore();
+        }
+    });
+
+    it('says a push may still reach the wrist when the app is not open', () => {
+        const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+        try {
+            mocks.appState = 'background';
+            mocks.reachable = false;
+            mocks.wakes = 0;
+            mocks.sessions = { s1: session({ path: '/a' }) };
+            start();
+            mocks.sessions = withGate();
+            mocks.onStorage!();
+            expect(wristRelayLine()).toContain('a push may still reach the wrist');
+        } finally {
+            log.mockRestore();
+        }
+    });
+
+    // The record both paths diff against. A refused carry must not advance it,
+    // or the background task — whose only `before` this is — would read the
+    // cue as old and never retry it.
+    it('leaves the shared record where it was when the carry was refused', () => {
+        mocks.reachable = false;
+        mocks.wakes = 0;
+        mocks.sessions = { s1: session({ path: '/a' }) };
+        start();
+        const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+        try {
+            mocks.sessions = withGate();
+            mocks.onStorage!();
+        } finally {
+            log.mockRestore();
+        }
+        expect(wristRelayState().gates).toEqual([]);
+        expect(claimWristCues(['s1:r1'])).toEqual(['s1:r1']);
+    });
+
+    it('advances the shared record once the wake was actually spent', async () => {
+        mocks.reachable = false;
+        mocks.wakes = 5;
+        mocks.sessions = { s1: session({ path: '/a' }) };
+        start();
+        mocks.sessions = withGate();
+        mocks.onStorage!();
+        expect(mocks.woken).toHaveLength(1);
+        await Promise.resolve();
+        expect(wristRelayState().gates).toEqual(['s1:r1']);
+    });
+
+    // A reachable watch app is frontmost, so publish's own sendMessage has
+    // already buzzed it. No wake, but the cue IS carried, so the record moves
+    // and nothing carries it again.
+    it('records a cue the watch app was open for, without spending a wake', () => {
+        mocks.reachable = true;
+        mocks.sessions = { s1: session({ path: '/a' }) };
+        start();
+        mocks.sessions = withGate();
+        mocks.onStorage!();
+        expect(mocks.woken).toHaveLength(0);
+        expect(wristRelayState().gates).toEqual(['s1:r1']);
+        expect(claimWristCues(['s1:r1'])).toEqual([]);
     });
 });
 
