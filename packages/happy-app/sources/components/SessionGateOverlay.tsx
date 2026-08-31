@@ -29,7 +29,9 @@ import { layout } from './layout';
 import { describePendingGates, type PendingGatesKind } from './pendingGatesSummary';
 import { sessionGateAction, sessionGateReadOnlyHint } from './sessionGateAction';
 import {
+    focusIndex,
     gateOverlayDismissals,
+    gateOverlayFocus,
     overlayCounter,
     overlayDeck,
     pageForOffset,
@@ -101,6 +103,21 @@ export function SessionGateOverlay({ sessionId }: { sessionId: string }) {
     );
     const [index, setIndex] = React.useState(0);
     const deck = React.useMemo(() => overlayDeck(entries, dismissed, index), [entries, dismissed, index]);
+
+    // A tap on a gate push asked for one card by id (DROVE-94). Page to it
+    // once this session lists it, putting it back if it had been swiped away,
+    // and consume the request so the chevrons work normally afterwards. Until
+    // the store has caught up (a cold start) the request simply waits.
+    const focus = React.useSyncExternalStore(gateOverlayFocus.subscribe, gateOverlayFocus.get, gateOverlayFocus.get);
+    React.useEffect(() => {
+        if (!focus || focus.sessionId !== sessionId) return;
+        const at = focusIndex(entries, dismissed, focus.gateId);
+        if (at < 0) return;
+        const card = entries.find((entry) => entry.gate.id === focus.gateId || entry.requestId === focus.gateId);
+        if (card) gateOverlayDismissals.restore([card.gate.id]);
+        setIndex(at);
+        gateOverlayFocus.clear(focus);
+    }, [dismissed, entries, focus, sessionId]);
     const summary = describePendingGates(deck.cards.map((card) => card.gate));
     const current = deck.cards[deck.index] ?? null;
     const currentId = current?.gate.id ?? null;

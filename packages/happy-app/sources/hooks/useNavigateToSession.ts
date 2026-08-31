@@ -3,13 +3,23 @@ import { useRouter } from "expo-router"
 import { storage } from '@/sync/storage';
 import { trackSessionSwitched } from '@/track';
 
-export function navigateToSession(router: Router, sessionId: string) {
+/**
+ * `gate` is the gate to focus in the session's overlay on arrival, which is
+ * what a tap on a gate push asks for (DROVE-94). The session screen reads it
+ * off its route params.
+ */
+export function navigateToSession(router: Router, sessionId: string, options: { gate?: string | null } = {}) {
     const session = storage.getState().sessions[sessionId];
     if (session) {
         trackSessionSwitched(session);
     }
 
-    router.push(`/session/${encodeURIComponent(sessionId)}`);
+    const route = `/session/${encodeURIComponent(sessionId)}` as const;
+    if (options.gate) {
+        router.push(`${route}?gate=${encodeURIComponent(options.gate)}`);
+        return;
+    }
+    router.push(route);
 }
 
 export function useNavigateToSession() {

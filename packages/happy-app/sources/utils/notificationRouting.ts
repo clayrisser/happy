@@ -99,3 +99,70 @@ export function isGatePushData(data: unknown): boolean {
     const kind = getObjectValue(normalizedData, 'kind');
     return typeof kind === 'string' && foregroundPushKinds.has(kind);
 }
+
+/**
+ * Where a tap on a push lands (DROVE-94).
+ *
+ * A GATE push (one that carries `gateId`) opens the gate that raised it, not
+ * the thread it was mirrored into. The bridge's push used to name the ONE
+ * bridge session every gate on a machine is mirrored into, so a tap opened
+ * that mirror and neither the agent that stopped nor the prompt itself. Now
+ * the push names the RAISING session when the bridge's registry knows it, and
+ * leaves `sessionId` off when it does not, and this reads that:
+ *
+ * - `sessionId` + `gateId`: the raising session, with that gate focused in
+ *   the overlay (`?gate=`).
+ * - `gateId` alone: the inbox, scrolled to that gate (`?focus=`).
+ * - no `gateId`: whatever the push always did, which is the session route
+ *   for a done / turn-finished push and nothing for a wake.
+ *
+ * The same function serves a tap while running and a cold start
+ * (getLastNotificationResponseAsync), so the two cannot drift.
+ */
+export type PushRoute =
+    | `/session/${string}?gate=${string}`
+    | `/gates?focus=${string}`
+    | `/session/${string}`;
+
+export function routeForGatePush(data: unknown): PushRoute | null {
+    const normalizedData = normalizeNotificationData(data);
+    const gateId = getObjectValue(normalizedData, 'gateId');
+    const trimmedGateId = typeof gateId === 'string' ? gateId.trim() : '';
+    if (!trimmedGateId) {
+        return getSessionRouteFromNotificationData(normalizedData);
+    }
+    const sessionRoute = getSessionRouteFromNotificationData(normalizedData);
+    if (sessionRoute) {
+        return `${sessionRoute}?gate=${encodeURIComponent(trimmedGateId)}`;
+    }
+    return `/gates?focus=${encodeURIComponent(trimmedGateId)}`;
+}
+
+export function getRouteFromNotificationResponse(response: unknown): PushRoute | null {
+    const contentData = getObjectValue(getObjectValue(getObjectValue(response, 'notification'), 'request'), 'content');
+    return routeForGatePush(getObjectValue(contentData, 'data'));
+}
+
+/** The pieces of a PushRoute, for a caller that navigates by session id. */
+export type PushDestination =
+    | { kind: 'session'; sessionId: string; gateId: string | null }
+    | { kind: 'inbox'; gateId: string };
+
+export function parsePushRoute(route: PushRoute): PushDestination | null {
+    const decode = (value: string) => {
+        try {
+            return decodeURIComponent(value);
+        } catch {
+            return value;
+        }
+    };
+    const inbox = route.match(/^\/gates\?focus=([^&#]+)$/);
+    if (inbox) {
+        return { kind: 'inbox', gateId: decode(inbox[1]) };
+    }
+    const session = route.match(/^\/session\/([^/?#]+)(?:\?gate=([^&#]+))?$/);
+    if (!session) {
+        return null;
+    }
+    return { kind: 'session', sessionId: decode(session[1]), gateId: session[2] ? decode(session[2]) : null };
+}

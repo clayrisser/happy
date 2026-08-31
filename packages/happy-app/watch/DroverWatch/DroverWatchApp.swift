@@ -44,6 +44,7 @@ final class DroverWatchAppDelegate: NSObject, WKApplicationDelegate {
         // Touching it is what constructs it, which attaches it to the bridge
         // and replays anything the bridge has already been handed.
         _ = store
+        WatchNotificationRouter.shared.install(store: store)
     }
 }
 

@@ -1,6 +1,16 @@
 import * as React from 'react';
-import { ActivityIndicator, Platform, Pressable, Text, TouchableOpacity, View } from 'react-native';
+import {
+    ActivityIndicator,
+    type LayoutChangeEvent,
+    Platform,
+    Pressable,
+    ScrollView,
+    Text,
+    TouchableOpacity,
+    View,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useLocalSearchParams } from 'expo-router';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { ItemList } from '@/components/ItemList';
@@ -51,12 +61,37 @@ export default function GatesScreen() {
     // it. Same inset the settings screen applies for the same header.
     const topContentInset = Platform.OS === 'ios' ? MOBILE_GLASS_HEADER_HEIGHT : 0;
 
+    // `?focus=` is a tap on a gate push whose raising session the bridge did
+    // not know (DROVE-94): the card is lit and scrolled to, once, when it
+    // lays out. Matched on the bus event id the push carries as well as the
+    // store's own card id.
+    const { focus } = useLocalSearchParams<{ focus?: string }>();
+    const focusId = typeof focus === 'string' && focus.trim() ? focus.trim() : null;
+    const listRef = React.useRef<ScrollView>(null);
+    const scrolledTo = React.useRef<string | null>(null);
+    const isFocused = React.useCallback(
+        (entry: DroverGateEntry) => !!focusId && (entry.gate.id === focusId || entry.requestId === focusId),
+        [focusId],
+    );
+    const handleFocusedLayout = React.useCallback((event: LayoutChangeEvent) => {
+        if (!focusId || scrolledTo.current === focusId) return;
+        scrolledTo.current = focusId;
+        listRef.current?.scrollTo({ y: Math.max(0, event.nativeEvent.layout.y), animated: true });
+    }, [focusId]);
+
     if (gates.length === 0) {
         return <EmptyGates topContentInset={topContentInset} />;
     }
 
+    const card = (entry: DroverGateEntry) => (
+        isFocused(entry)
+            ? <View key={entry.gate.id} onLayout={handleFocusedLayout}><GateCard entry={entry} focused={true} /></View>
+            : <GateCard key={entry.gate.id} entry={entry} focused={false} />
+    );
+
     return (
         <ItemList
+            ref={listRef}
             style={{ paddingTop: 0 }}
             containerStyle={{ paddingTop: topContentInset }}
         >
@@ -69,9 +104,7 @@ export default function GatesScreen() {
                         loud={true}
                     />
                 )}
-                {prompts.map((entry) => (
-                    <GateCard key={entry.gate.id} entry={entry} />
-                ))}
+                {prompts.map(card)}
                 {todos.length > 0 && (
                     <SectionHeading
                         icon="checkbox-outline"
@@ -80,9 +113,7 @@ export default function GatesScreen() {
                         loud={false}
                     />
                 )}
-                {todos.map((entry) => (
-                    <GateCard key={entry.gate.id} entry={entry} />
-                ))}
+                {todos.map(card)}
             </View>
         </ItemList>
     );
@@ -133,7 +164,7 @@ function EmptyGates({ topContentInset }: { topContentInset: number }) {
     );
 }
 
-const GateCard = React.memo(({ entry }: { entry: DroverGateEntry }) => {
+const GateCard = React.memo(({ entry, focused }: { entry: DroverGateEntry; focused: boolean }) => {
     const { theme } = useUnistyles();
     const navigateToSession = useNavigateToSession();
     const { gate, sessionId, requestId } = entry;
@@ -203,7 +234,7 @@ const GateCard = React.memo(({ entry }: { entry: DroverGateEntry }) => {
     }, [busy, requestId, sessionId]);
 
     return (
-        <View style={styles.card}>
+        <View style={[styles.card, focused && styles.cardFocused]}>
             <Pressable
                 onPress={() => navigateToSession(sessionId)}
                 style={styles.cardHeader}
@@ -350,6 +381,12 @@ const styles = StyleSheet.create((theme) => ({
         borderWidth: StyleSheet.hairlineWidth,
         borderColor: theme.colors.divider,
         overflow: 'hidden',
+    },
+    cardFocused: {
+        // The card a push tap asked for. The same warning edge the session
+        // overlay draws, so "this one" reads the same on both screens.
+        borderWidth: 1,
+        borderColor: theme.colors.box.warning.text,
     },
     cardHeader: {
         flexDirection: 'row',
