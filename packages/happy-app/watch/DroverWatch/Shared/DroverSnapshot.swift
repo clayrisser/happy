@@ -272,7 +272,33 @@ struct DroverAccount: Codable, Identifiable, Equatable, Hashable {
     /// Percent LEFT on the fullest limit. Optional, and it stays optional all
     /// the way to the label: an account never measured shows no figure rather
     /// than a 0 that reads as "out".
+    ///
+    /// It is no longer what the BAR draws — `used` is (DROVE-230). Headroom
+    /// survives in one place on each surface, the phone's account heading and
+    /// this one's current-account line, and both spell the word "left" and name
+    /// the window so neither can be read backwards.
     let headroom: Int?
+    /// Percent USED, which is what every bar in the product FILLS to
+    /// (DROVE-228, DROVE-230).
+    ///
+    /// Clay, reading a verified-correct quota sheet he specified himself: "Oh
+    /// so 0% means nothing left?" He could not tell which way his own bars ran,
+    /// and no caption fixes that, because the mark is read first and the
+    /// caption is read never. So the bars were turned round to fill toward the
+    /// limit on the phone, and the wrist has to run the same way or the two
+    /// surfaces say opposite things about one account.
+    ///
+    /// SENT, NOT COMPUTED. It is `usageBarFraction`, the single function every
+    /// bar on the phone runs through, evaluated on the phone and put on the
+    /// wire — for the reason `tone` and `limit` are (DROVE-129). Two
+    /// implementations of one direction in two languages is two directions,
+    /// and this watch binary cannot be updated OTA to correct a drift. The
+    /// only arithmetic below is the fallback for a phone that predates the key.
+    ///
+    /// Absent when nothing was measured, and absent when the window had
+    /// already reset. Zero is a real reading now — a fresh session window — so
+    /// it must not share a spelling with "no reading".
+    let used: Int?
     /// False when the account is not logged in, so the wrist can grey it rather
     /// than offering a flip that will bounce.
     let loggedIn: Bool?
@@ -296,6 +322,43 @@ struct DroverAccount: Codable, Identifiable, Equatable, Hashable {
     /// A String, not a Codable enum, for the reason `DroverGate.kind` is one:
     /// a band from a newer phone must cost this one label, not the snapshot.
     let tone: String?
+    /// At least one of this account's windows had already RESET when the phone
+    /// read the cache, so any figure it carries describes a window that was
+    /// thrown away (DROVE-204).
+    ///
+    /// The phone decides this, the way it already decides the band and the
+    /// binding limit, because `droverRowUsable` needs the clock that was in
+    /// the room when the cache was read and the wrist has only its own
+    /// (DROVE-129). Omitted, never false, so a phone that predates the key
+    /// reads as not expired, which is what that phone meant.
+    let expired: Bool?
+
+    /// Written out rather than synthesised so `expired` can arrive last with a
+    /// default. A row this build constructs by hand (GateStore's fallback, the
+    /// wire-test fixtures) is about an account it holds no expiry verdict for.
+    init(
+        name: String,
+        headroom: Int?,
+        loggedIn: Bool?,
+        backAt: Date?,
+        current: Bool?,
+        limit: String?,
+        resetsAt: Date?,
+        tone: String?,
+        expired: Bool? = nil,
+        used: Int? = nil
+    ) {
+        self.name = name
+        self.headroom = headroom
+        self.used = used
+        self.loggedIn = loggedIn
+        self.backAt = backAt
+        self.current = current
+        self.limit = limit
+        self.resetsAt = resetsAt
+        self.tone = tone
+        self.expired = expired
+    }
 
     /// The four bands the phone's `usageBarTone` produces, plus the one it
     /// cannot: a band this build has never heard of.
@@ -308,16 +371,77 @@ struct DroverAccount: Codable, Identifiable, Equatable, Hashable {
 
     /// The band the phone sent. `unknown` covers both "the phone said nothing"
     /// and "the phone said something this build does not know", which draw the
-    /// same: a neutral track, never a healthy-looking one.
-    var band: Tone { Tone(rawValue: tone ?? "") ?? .unknown }
+    /// same: a neutral track, never a healthy-looking one. An expired reading
+    /// has no band either: whatever the phone said was about a window that no
+    /// longer exists.
+    var band: Tone { isExpired ? .unknown : Tone(rawValue: tone ?? "") ?? .unknown }
 
-    /// How much of the track the fill covers, 0...1 — the headroom LEFT, the
-    /// same direction every bar on the phone's sheet fills. An account with no
-    /// figure reads as an EMPTY track rather than a full one: no measurement
-    /// is not a claim of a full tank.
+    /// The window this figure counted had already reset when it was read
+    /// (DROVE-204).
+    var isExpired: Bool { expired == true }
+
+    /// Is there a figure to print at all?
+    ///
+    /// Two ways there is not, and the phone's sheet already says which: nobody
+    /// ever measured this account, or somebody did and the window has since
+    /// reset. NEITHER may draw as a bar, and under fill-as-used that is a
+    /// sharper rule than it was: an empty bar is now the positive claim
+    /// "nothing used yet", which is exactly what an unusable window must not
+    /// say. So the views draw no bar at all for these, not a bar at zero
+    /// (`WristQuotaCapsule`).
+    ///
+    /// The wrist shows ONE figure and cannot qualify it the way the phone's
+    /// rows can, which is why an expired reading loses its number here rather
+    /// than carrying a caveat. The line underneath is what tells the two
+    /// nothings apart, in the phone's own words.
+    var isMeasured: Bool { usedPercent != nil && !isExpired }
+
+    /// Percent USED, 0...100, clamped.
+    ///
+    /// The phone sends it. The `100 - headroom` below is the fallback for a
+    /// phone that predates the key and is the ONLY place the wrist does this
+    /// arithmetic — a build 15 watch paired to a phone whose JS bundle is
+    /// older than this lane. It is the same expression `usageBarFraction`
+    /// evaluates, kept to one line so a future change to the direction is a
+    /// one-line search rather than a hunt.
+    var usedPercent: Int? {
+        if let used { return min(100, max(0, used)) }
+        guard let headroom else { return nil }
+        return 100 - min(100, max(0, headroom))
+    }
+
+    /// How much of the track the fill covers, 0...1: percent USED, the
+    /// direction every bar in the product fills (DROVE-230). Nothing measured
+    /// returns 0 and the views must not draw it — see `isMeasured`.
     var fraction: Double {
-        guard let headroom else { return 0 }
-        return Double(min(100, max(0, headroom))) / 100
+        guard isMeasured, let usedPercent else { return 0 }
+        return Double(usedPercent) / 100
+    }
+
+    /// `98%`, percent USED, or the dash the phone prints where there is no
+    /// figure. One spelling, so the glance and the Limits screen cannot
+    /// disagree about what "nothing to say" looks like.
+    var figure: String {
+        guard isMeasured, let usedPercent else { return "\u{2013}" }
+        return "\(usedPercent)%"
+    }
+
+    /// The same figure with its direction said out loud, for VoiceOver and for
+    /// the one line on this screen wide enough to spell it. A bar carries
+    /// direction to an eye and to nothing else, so a reader that never sees
+    /// the fill has to be told (DROVE-230).
+    var spokenFigure: String {
+        guard isMeasured, let usedPercent else { return "not measured" }
+        return "\(usedPercent)% used"
+    }
+
+    /// `2% left`, the one thing on the wrist that counts DOWN, and the reason
+    /// it is allowed to: it spells the word and the line it sits on names the
+    /// window right after it. The phone keeps headroom in exactly one place
+    /// for the same reason (DROVE-230). Nil when there is no reading.
+    var headroomFigure: String? {
+        guard isMeasured, let headroom else { return nil }
+        return "\(min(100, max(0, headroom)))% left"
     }
 
     /// Is this limit still in force at `now`? A reset time in the past is the

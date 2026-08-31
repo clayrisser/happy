@@ -348,8 +348,16 @@ private struct AccountLabel: View {
         if let backAt = account.backAt, backAt > Date() {
             return "Back \(backAt.formatted(date: .omitted, time: .shortened))"
         }
-        guard let headroom = account.headroom else { return "not measured" }
-        if let limit = account.limit { return "\(headroom)% left · \(limit)" }
-        return "\(headroom)% left"
+        // "window reset" and "not measured" are two different nothings and the
+        // picker must not print a dead percentage as if it were a live one
+        // (DROVE-204). `headroomFigure` is nil for both.
+        if account.isExpired { return "window reset" }
+        guard let left = account.headroomFigure else { return "not measured" }
+        // Spelled and with its window named, which is what lets this one line
+        // count DOWN while every bar counts up (DROVE-230). A flip decided on
+        // a bare figure cannot tell an account out for five hours from one out
+        // for the week.
+        if let limit = account.limit { return "\(left) · \(limit)" }
+        return left
     }
 }

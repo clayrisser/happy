@@ -977,10 +977,6 @@ describe('collectAccountRows', () => {
                 ]),
             }),
         })).toEqual([
-            // `headroom` is the number to READ and `used` the number to DRAW,
-            // and both come out of the phone's single `usageFill` so the
-            // wrist's bar cannot run the other way from the sheet's
-            // (DROVE-230, DROVE-228).
             { name: 'jamrizzi', headroom: 65, used: 35, loggedIn: true },
             { name: 'main', headroom: 4, used: 96, loggedIn: true },
         ]);
@@ -1076,6 +1072,94 @@ describe('collectAccountRows', () => {
         expect('current' in other).toBe(false);
     });
 
+    /**
+     * A window that had already RESET when the CLI read the cache is not a
+     * measurement, and the wrist has to be told so (DROVE-204, DROVE-228).
+     *
+     * `droverBindingLimit` already refuses to name a binding limit on an
+     * account with an expired window, so the row lost `limit`, `tone` and
+     * `resetsAt` — but it kept `headroom`, and the wrist drew a confident bar
+     * from it while the phone, reading the very same rows, drew an empty track
+     * and no percentage. That is the two surfaces disagreeing about one number
+     * (DROVE-129). The verdict cannot be recomputed on the wrist: it is a
+     * comparison against the clock that was in the room at capture, and the
+     * watch has only its own.
+     */
+    it('says when a window had already reset, because the wrist cannot work it out', () => {
+        const rows = collectAccountRows({
+            s1: session({
+                droverUsage: usage(10_000, [
+                    {
+                        name: 'main', headroom: 99, loggedIn: true, current: true,
+                        // Reset three snapshots ago. The 99% is real and about
+                        // a window nobody has looked at since it was thrown away.
+                        limits: [{ kind: 'session', percent: 1, resetsAt: 1_000, scope: null, family: null }],
+                    },
+                    {
+                        name: 'jamrizzi', headroom: 61, loggedIn: true,
+                        limits: [{ kind: 'weekly_all', percent: 39, resetsAt: 90_000, scope: null, family: null }],
+                    },
+                ]),
+            }),
+        });
+        const dead = rows.find((r) => r.name === 'main')!;
+        const live = rows.find((r) => r.name === 'jamrizzi')!;
+        expect(dead.expired).toBe(true);
+        // And the rest of the row is already silent, which is what made the
+        // stray headroom so misleading: nothing else on it said anything.
+        expect('limit' in dead).toBe(false);
+        expect('tone' in dead).toBe(false);
+        // A live window says nothing at all, rather than `expired: false`: one
+        // NSNull or one surplus key is a cost every publish pays.
+        expect('expired' in live).toBe(false);
+        expect(live).toMatchObject({ name: 'jamrizzi', limit: 'Week', tone: 'ample' });
+        // And no fill either. Under fill-as-used an empty bar CLAIMS a fresh
+        // window, so a dead reading must not be given one (DROVE-228).
+        expect('used' in dead).toBe(false);
+        expect(live.used).toBe(39);
+    });
+
+    /**
+     * The wrist's bar fills as usage is consumed, and the number it fills to
+     * is computed HERE (DROVE-228, DROVE-230).
+     *
+     * Clay could not tell which way his own bars ran — "Oh so 0% means nothing
+     * left?" — so the phone's bars were turned round to fill toward the limit.
+     * The wrist has to run the same way or the two surfaces say opposite
+     * things about one account, and the only way that cannot drift is for the
+     * direction to exist once: `usageBarFraction` on the phone, sent as `used`.
+     * Swift does no arithmetic on it.
+     */
+    it('sends the fill, so the wrist cannot run the bar backwards', () => {
+        const rows = collectAccountRows({
+            s1: session({
+                droverUsage: usage(10_000, [
+                    // The account in Clay's photo: 2% left, which under
+                    // fill-as-used is a nearly FULL bar rather than an empty one.
+                    {
+                        name: 'main', headroom: 2, loggedIn: true, current: true,
+                        limits: [{ kind: 'weekly_all', percent: 98, resetsAt: 90_000, scope: null, family: null }],
+                    },
+                    // A fresh window: measured, and zero. Distinct from the
+                    // row below it, which was never measured at all.
+                    {
+                        name: 'risserproperties', headroom: 100, loggedIn: true,
+                        limits: [{ kind: 'session', percent: 0, resetsAt: 90_000, scope: null, family: null }],
+                    },
+                    { name: 'never', loggedIn: true, limits: [] },
+                ]),
+            }),
+        });
+        const byName = Object.fromEntries(rows.map((r) => [r.name, r]));
+        expect(byName.main.used).toBe(98);
+        expect(byName.main.headroom).toBe(2);
+        // Measured at zero used. It is sent, because zero is a reading.
+        expect(byName.risserproperties.used).toBe(0);
+        // Never measured. Nothing is sent, because there is nothing to fill to.
+        expect('used' in byName.never).toBe(false);
+        expect('headroom' in byName.never).toBe(false);
+    });
+
     // The watch is a TestFlight binary and cannot be updated OTA, so a row it
     // has nothing to say about must stay exactly as small as it was — and one
     // NSNull anywhere fails the whole WatchConnectivity publish.
@@ -1084,16 +1168,6 @@ describe('collectAccountRows', () => {
             s1: session({ droverUsage: usage(10, [{ name: 'spare', headroom: 40, loggedIn: true }]) }),
         });
         expect(row).toEqual({ name: 'spare', headroom: 40, used: 60, loggedIn: true });
-    });
-
-    it('omits `used` for an account nobody measured, rather than sending a zero', () => {
-        // A bar with no reading must draw as unmeasured on the wrist too. Zero
-        // used is a FRESH window, which is the opposite fact (DROVE-230).
-        const [row] = collectAccountRows({
-            s1: session({ droverUsage: usage(10, [{ name: 'spare', loggedIn: true }]) }),
-        });
-        expect('used' in row).toBe(false);
-        expect('headroom' in row).toBe(false);
     });
 
     it('is empty when no session has ever carried the registry', () => {

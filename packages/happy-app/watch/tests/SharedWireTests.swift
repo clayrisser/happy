@@ -178,6 +178,7 @@ struct SharedWireTests {
         theWristTakesThePhonesTitleVerbatim()
         accountHeadroomSurvivesTheWire()
         theBindingLimitSurvivesTheWire()
+        anExpiredWindowIsNotAMeasurement()
         anAccountRowWithoutTheLimitKeysStillDecodes()
         theCurrentAccountIsTheOnePhoneMarked()
         aWristDraftAccumulatesAcrossSheets()
@@ -802,10 +803,10 @@ struct SharedWireTests {
         let payload = """
         {"gates":[],"updatedAt":"2026-08-31T12:00:00Z","connected":true,
         "accountRows":[
-        {"name":"promanagerdevteam","headroom":2,"loggedIn":true,"current":true,
+        {"name":"promanagerdevteam","headroom":2,"used":98,"loggedIn":true,"current":true,
          "limit":"Session","resetsAt":"2026-08-31T18:00:00Z","tone":"critical"},
-        {"name":"jamrizzi","headroom":51,"loggedIn":true,"limit":"Fable week","tone":"ample"},
-        {"name":"main","headroom":20,"loggedIn":true,"limit":"Week","tone":"nebulous"}]}
+        {"name":"jamrizzi","headroom":51,"used":49,"loggedIn":true,"limit":"Fable week","tone":"ample"},
+        {"name":"main","headroom":20,"used":80,"loggedIn":true,"limit":"Week","tone":"nebulous"}]}
         """
         guard let snapshot = try? DroverSnapshot.decoder.decode(
             DroverSnapshot.self, from: Data(payload.utf8)
@@ -823,16 +824,36 @@ struct SharedWireTests {
         // A Codable enum would have thrown and taken the whole snapshot with
         // it, which is the failure DroverGate.kind is written the same way for.
         check(rows[2].band == .unknown, "a band this build has never heard of is unknown, not a throw")
-        // The bar fills with what is LEFT, in both directions of the extreme.
-        check(rows[0].fraction < 0.05, "an account nearly out draws a nearly empty track")
-        check(abs(rows[1].fraction - 0.51) < 0.001, "the track is the headroom left, not the amount used")
+        // The bar fills with what is USED, in both directions of the extreme
+        // (DROVE-230). The account in Clay's photo, 2% left, is a nearly FULL
+        // capsule; it used to be a nearly empty one, which is the reading he
+        // could not make sense of.
+        check(rows[0].fraction > 0.95, "an account nearly out draws a nearly FULL bar")
+        check(abs(rows[1].fraction - 0.49) < 0.001, "the fill is what is used, not what is left")
+        check(rows[0].figure == "98%", "a measured account prints percent USED")
+        check(rows[0].spokenFigure == "98% used", "and says the direction out loud")
+        check(rows[0].headroomFigure == "2% left", "headroom survives, spelled, for the one line that names its window")
         // Nothing measured must not look healthy.
         let unmeasured = DroverAccount(
             name: "spare", headroom: nil, loggedIn: true, backAt: nil,
             current: nil, limit: nil, resetsAt: nil, tone: nil
         )
-        check(unmeasured.fraction == 0, "an unmeasured account draws an empty track, never a full one")
+        check(unmeasured.fraction == 0, "an unmeasured account has no fill")
         check(unmeasured.band == .unknown, "an unmeasured account has no band to claim")
+        check(!unmeasured.isMeasured, "an unmeasured account has no figure to print")
+        check(unmeasured.figure == "\u{2013}", "no figure prints as the dash, never as 0%")
+        check(unmeasured.headroomFigure == nil, "and no headroom line either")
+        // A window measured at 0% USED is a FRESH one, and it is a reading.
+        // Under fill-as-used it draws the same empty bar an unmeasured row
+        // would, so `isMeasured` is what has to keep them apart — the views
+        // draw no bar at all for the unmeasured one (DROVE-228, DROVE-230).
+        let fresh = DroverAccount(
+            name: "risserproperties", headroom: 100, loggedIn: true, backAt: nil,
+            current: nil, limit: "Session", resetsAt: nil, tone: "ample", expired: nil, used: 0
+        )
+        check(fresh.isMeasured, "a window measured at zero used is still measured")
+        check(fresh.fraction == 0, "and it fills nothing, because nothing has been used")
+        check(fresh.figure == "0%", "0% used, which is a number and not a dash")
         // A reset time already past is the cache being behind; printing
         // "resets 6 PM" at 9 PM is worse than printing nothing.
         let then = Date(timeIntervalSince1970: 1_000)
@@ -841,6 +862,58 @@ struct SharedWireTests {
             rows[0].resets(after: Date(timeIntervalSince1970: 4_000_000_000)) == nil,
             "a reset time in the past is not printed as a promise"
         )
+    }
+
+    /// A window that had already RESET when the phone read the cache is not a
+    /// measurement, and the wrist must say so exactly the way the phone does
+    /// (DROVE-204, DROVE-228).
+    ///
+    /// This is the failure the phone is named for: a five-hour session window
+    /// that reset three hours before anybody looked, still carrying "99% left"
+    /// on an account that was refusing turns. The phone drops the figure and
+    /// draws an empty track. The wrist could not: `droverRowUsable` needs the
+    /// clock that was in the room at capture and the wrist has only its own,
+    /// so the verdict is sent (DROVE-129) and this is the wrist obeying it.
+    static func anExpiredWindowIsNotAMeasurement() {
+        let payload = """
+        {"gates":[],"updatedAt":"2026-08-31T12:00:00Z","connected":true,
+        "accountRows":[
+        {"name":"main","headroom":99,"loggedIn":true,"current":true,"expired":true},
+        {"name":"jamrizzi","headroom":51,"used":49,"loggedIn":true,"limit":"Week","tone":"ample"}]}
+        """
+        guard let snapshot = try? DroverSnapshot.decoder.decode(
+            DroverSnapshot.self, from: Data(payload.utf8)
+        ) else {
+            check(false, "a snapshot carrying an expired verdict decodes")
+            return
+        }
+        let rows = snapshot.accountRows
+        let dead = rows[0]
+        check(dead.isExpired, "the phone's expiry verdict comes through")
+        check(!dead.isMeasured, "an expired reading is not a measurement")
+        check(dead.figure == "\u{2013}", "an expired window prints no percentage")
+        check(dead.fraction == 0, "an expired window has no fill to draw")
+        check(dead.band == .unknown, "an expired reading has no band to claim either")
+        // AND IT MUST NOT DRAW AS A BAR AT ZERO (DROVE-228). Under fill-as-used
+        // an empty bar is the positive claim "nothing used yet", which is a
+        // FRESH window — the opposite of a dead one. `isMeasured` is the flag
+        // the views branch on, and it is false here, so the capsule is drawn as
+        // a dashed outline with a dash for a figure and "window reset" under it.
+        check(!dead.isMeasured, "an expired window is not drawn as a bar at all")
+        // And the account beside it is untouched: one dead window does not
+        // blank the screen.
+        check(rows[1].isMeasured && rows[1].figure == "49%", "a live account keeps its figure")
+        check(abs(rows[1].fraction - 0.49) < 0.001, "a live account keeps its fill")
+        check(rows[1].headroomFigure == "51% left", "and its one spelled headroom line")
+        // A phone that predates the key means "not expired", which is what
+        // that phone meant. The watch cannot be updated OTA, so the older
+        // pairing has to keep the behaviour it had.
+        check(rows[1].expired == nil, "an absent key is absent, not false")
+        check(!rows[1].isExpired, "an absent key reads as not expired")
+        // The 99 is still ON the wire, deliberately: it is the phone's own
+        // reading and a later build may find a use for it. What is settled is
+        // that nothing DRAWS it.
+        check(dead.headroom == 99, "the figure the phone read is still carried, just not drawn")
     }
 
     /// The watch is a TestFlight binary and cannot be updated OTA, so a phone
@@ -862,6 +935,15 @@ struct SharedWireTests {
         check(row?.limit == nil, "a missing limit is absent, not a decode failure")
         check(row?.current == nil, "a missing current flag is absent, not a decode failure")
         check(row?.band == .unknown, "no band sent reads as unknown")
+        check(row?.isExpired == false, "no expiry verdict sent reads as not expired")
+        check(row?.isMeasured == true, "an older phone's figure is still a figure")
+        // A phone whose JS predates `used` sends only headroom, and the bar
+        // still has to run the right way. This is the one place on the wrist
+        // that does the arithmetic, and it does it in the same direction
+        // (DROVE-230).
+        check(row?.used == nil, "an absent fill is absent, not zero")
+        check(row?.usedPercent == 60, "an older phone's headroom still becomes a fill, filled as USED")
+        check(row?.figure == "60%", "and prints as percent used like every other row")
     }
 
     /// Which account the glance is about. The phone's `current` flag decides

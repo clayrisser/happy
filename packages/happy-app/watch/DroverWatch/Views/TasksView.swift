@@ -144,6 +144,11 @@ struct TasksRow: View {
             Label(label, systemImage: "checklist")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
         }
+        // Plain for the reason the Playground door is: outside a `List`
+        // watchOS fills a NavigationLink with the accent, and a door has to
+        // read as quieter than the quota capsule above it (DROVE-228).
+        .buttonStyle(.plain)
     }
 }

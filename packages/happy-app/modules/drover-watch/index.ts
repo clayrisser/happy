@@ -208,19 +208,41 @@ export interface DroverAccountRow {
      */
     tone?: 'ample' | 'low' | 'critical' | 'unknown';
     /**
-     * Percent USED on that same binding window, which is what a BAR on the
-     * wrist draws (DROVE-230, DROVE-228).
+     * How much of the track the wrist's bar FILLS, as a whole percent 0..100 —
+     * percent USED, the direction every bar in the product now runs
+     * (DROVE-230).
      *
-     * `headroom` is the number to READ ("4% left") and this is the number to
-     * DRAW, and they are the two ends of one figure. It is sent rather than
-     * derived on the wrist for the reason `tone` is: Swift doing its own
-     * `100 - headroom` is a second place the direction lives, and a direction
-     * with two homes is how the phone's bars ran backwards for a release.
-     * Both come out of the phone's single `usageFill`. Omitted, never null,
-     * when the account was never measured — a bar with no reading must draw as
-     * unmeasured on the wrist too, not as a window sitting at zero.
+     * The wrist does not compute this. It is `usageBarFraction`, the single
+     * function every bar on the phone runs through, evaluated here and sent,
+     * for exactly the reason `tone` and `limit` are sent: two implementations
+     * of one rule in two languages is two rules (DROVE-129). Reversing the
+     * direction then means editing one TypeScript function, and the wrist
+     * follows without a rebuild.
+     *
+     * It is also the figure the wrist PRINTS. `headroom` is still on the wire
+     * and still counts the other way, and it survives in exactly one place on
+     * each surface: the phone's account heading and the wrist's current-account
+     * line, both of which spell the word "left" and name the window. Nothing
+     * else on either surface counts down.
+     *
+     * Omitted when nothing was measured, never zero: zero is now a real and
+     * common reading — a fresh session window — and it must not share a
+     * spelling with "no reading at all".
      */
     used?: number;
+    /**
+     * At least one of this account's windows had already RESET when the CLI
+     * read the cache (DROVE-204), so `headroom` and `tone` describe a window
+     * that no longer exists.
+     *
+     * Decided here rather than on the wrist for the reason `tone` is: the
+     * verdict needs the clock that was in the room when the cache was read,
+     * and the watch has only its own (DROVE-129). The wrist draws an empty
+     * track and no percentage on it, which is what the phone's own rows do
+     * with the same reading. Omitted, never false, so an older watch binary
+     * decodes the row unchanged and simply keeps the behaviour it had.
+     */
+    expired?: boolean;
 }
 
 /**

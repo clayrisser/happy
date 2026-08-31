@@ -35,7 +35,7 @@ import { isSessionArchived } from './sessionArchive';
 import { liveStatusSince, liveStatusWatchLine } from '@/utils/liveStatus';
 import { sessionDisplayTitle } from '@/utils/sessionTitle';
 import { deriveSessionTasks } from '@/utils/sessionTasks';
-import { currentDroverAccountRow } from '@/utils/droverUsage';
+import { currentDroverAccountRow, droverAccountExpired } from '@/utils/droverUsage';
 import type { DroverUsageAccountLike } from '@/utils/droverUsage';
 import { droverBindingLimit, usageFill } from '@/components/agentInputUsage';
 import { resolveSessionState } from './sessionState';
@@ -157,21 +157,31 @@ export function collectAccountRows(
         // Its percentLeft is the same number `headroom` is — both are 100
         // minus the fullest row — so the bar and the label always agree.
         const binding = droverBindingLimit(account, freshest.modelFamily, freshest.capturedAt);
-        // The wrist's bar fills as usage is consumed, same as the phone's, and
-        // it fills to a number the PHONE derived (DROVE-230). `usageFill` is
-        // the one place headroom becomes a mark; sending its output rather
-        // than the input is what keeps the two surfaces from running opposite
-        // ways, which is DROVE-129's rule applied to a direction.
+        // A window that had already reset when the cache was read (DROVE-204).
+        // The wrist cannot work this out: `droverRowUsable` compares against
+        // the clock that was in the room at capture, and the watch has only
+        // its own (DROVE-129).
+        const expired = droverAccountExpired(account, freshest.capturedAt);
+        // The FILL. `usageFill` is the one place headroom becomes a mark
+        // (DROVE-230), and sending its output rather than its input is what
+        // keeps the two surfaces from running opposite ways.
+        //
+        // Withheld when nothing was measured AND when the window had already
+        // reset, so the wrist cannot draw a dead reading as a fresh window.
+        // Under fill-as-used an empty bar is a real claim, "nothing used yet",
+        // which is exactly the claim an unusable window must not make.
         const fill = usageFill(headroom === undefined ? null : headroom);
+        const used = expired ? null : fill.percentUsed;
         rows.push({
             name: account.name,
             // Omitted, never null: WatchConnectivity payloads take
             // property-list types only and one NSNull fails the whole publish.
             ...(headroom === undefined ? {} : { headroom }),
-            ...(fill.percentUsed === null ? {} : { used: fill.percentUsed }),
+            ...(used === null ? {} : { used }),
             ...(account.loggedIn === false ? { loggedIn: false } : { loggedIn: true }),
             ...(until ? { backAt: new Date(until).toISOString() } : {}),
             ...(account.current ? { current: true } : {}),
+            ...(expired ? { expired: true } : {}),
             ...(binding
                 ? {
                     limit: binding.label,
@@ -328,7 +338,8 @@ function sameAccountRows(a: DroverAccountRow[], b: DroverAccountRow[]): boolean 
     // leave the wrist naming yesterday's limit.
     const key = (r: DroverAccountRow) =>
         `${r.name}|${r.headroom ?? ''}|${r.used ?? ''}|${r.loggedIn}|${r.backAt ?? ''}`
-        + `|${r.current === true}|${r.limit ?? ''}|${r.resetsAt ?? ''}|${r.tone ?? ''}`;
+        + `|${r.current === true}|${r.limit ?? ''}|${r.resetsAt ?? ''}|${r.tone ?? ''}`
+        + `|${r.expired === true}`;
     return a.every((row, i) => key(row) === key(b[i]));
 }
 
