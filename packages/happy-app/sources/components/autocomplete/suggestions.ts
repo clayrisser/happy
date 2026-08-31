@@ -12,16 +12,17 @@ export async function getCommandSuggestions(sessionId: string, query: string): P
     const searchTerm = query.slice(1);
 
     try {
-        // Use the command search cache with fuzzy matching
+        // Commands and skills the session actually has (DROVE-170).
         const commands = await searchCommands(sessionId, searchTerm, { limit: 50 });
 
         // Convert CommandItem to suggestion format
         return commands.map((cmd: CommandItem) => ({
-            key: `cmd-${cmd.command}`,
+            key: `cmd-${cmd.kind}-${cmd.command}`,
             text: `/${cmd.command}`,
             component: () => React.createElement(CommandSuggestion, {
                 command: cmd.command,
-                description: cmd.description
+                description: cmd.description,
+                kind: cmd.kind
             })
         }));
     } catch (error) {

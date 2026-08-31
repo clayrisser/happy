@@ -573,6 +573,8 @@ export const zhHant: TranslationStructure = {
         suggestion: {
             fileLabel: '檔案',
             folderLabel: '資料夾',
+            commandLabel: '命令',
+            skillLabel: '技能',
         },
         noMachinesAvailable: '無裝置',
     },

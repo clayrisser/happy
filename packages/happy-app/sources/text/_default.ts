@@ -605,6 +605,8 @@ export const en = {
         suggestion: {
             fileLabel: 'FILE',
             folderLabel: 'FOLDER',
+            commandLabel: 'CMD',
+            skillLabel: 'SKILL',
         },
         noMachinesAvailable: 'No machines',
     },

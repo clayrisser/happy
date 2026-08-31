@@ -1,153 +1,149 @@
 /**
- * Suggestion commands functionality for slash commands
- * Reads commands directly from session metadata storage
+ * The `/` autocomplete's source of entries (DROVE-170).
+ *
+ * The derivation, the fallback and the filter are in sessionInventory.ts and
+ * are pure. This file is the part with a clock in it: one in-memory cache per
+ * session, refreshed off the `sessionInventory` RPC.
+ *
+ * The cache never blocks a keystroke. A cold session answers immediately from
+ * the snapshot's flat lists (or the five, when there are none) and kicks off
+ * the refresh; the next keystroke has the real inventory. That keeps the
+ * dropdown synchronous the way it has always been while the round trip to the
+ * machine happens behind it.
  */
 
-import Fuse from 'fuse.js';
 import { storage } from './storage';
+import { sessionInventory as sessionInventoryRpc } from './ops';
+import {
+    commandFallback,
+    inventoryFromMetadata,
+    inventoryFromPayload,
+    mergeInventory,
+    searchInventory,
+    type InventoryEntry,
+    type InventoryKind,
+} from './sessionInventory';
+
+export type { InventoryEntry, InventoryKind };
 
 export interface CommandItem {
-    command: string;        // The command without slash (e.g., "compact")
-    description?: string;   // Optional description of what the command does
+    /** The command without its slash, e.g. "compact" or "superpowers--brainstorming". */
+    command: string;
+    description?: string;
+    kind: InventoryKind;
+    origin?: string;
 }
 
 interface SearchOptions {
     limit?: number;
-    threshold?: number;
 }
 
-// Commands to ignore/filter out
-export const IGNORED_COMMANDS = [
-    "add-dir",
-    "agents",
-    "config",
-    "statusline",
-    "bashes",
-    "settings",
-    "cost",
-    "doctor",
-    "exit",
-    "help",
-    "ide",
-    "init",
-    "install-github-app",
-    "memory",
-    "migrate-installer",
-    "model",
-    "pr-comments",
-    "release-notes",
-    "resume",
-    "status",
-    "bug",
-    "review",
-    "security-review",
-    "terminal-setup",
-    "upgrade",
-    "vim",
-    "permissions",
-    "hooks",
-    "export",
-    "logout",
-    "login"
-];
+interface SessionCache {
+    entries: InventoryEntry[] | null;
+    lastRefresh: number;
+    inFlight: Promise<void> | null;
+}
 
-// Default commands always available
-const DEFAULT_COMMANDS: CommandItem[] = [
-    { command: 'compact', description: 'Compact the conversation history' },
-    { command: 'clear', description: 'Clear the conversation' },
-    { command: 'goal', description: 'Set a session goal' },
-    { command: 'mcp', description: 'Show connected MCP servers' },
-    { command: 'skills', description: 'Show available skills' },
-];
+/**
+ * Long enough that typing never triggers a round trip, short enough that a
+ * skill added on the machine shows up without restarting the app. The RPC is
+ * answered by a directory walk, so a miss costs milliseconds on the host.
+ */
+const refreshIntervalMs = 2 * 60 * 1000;
 
-// Command descriptions for known tools/commands
-const COMMAND_DESCRIPTIONS: Record<string, string> = {
-    // Default commands
-    compact: 'Compact the conversation history',
-    goal: 'Set a session goal',
-    
-    // Common tool commands
-    help: 'Show available commands',
-    clear: 'Clear the conversation',
-    reset: 'Reset the session',
-    export: 'Export conversation',
-    debug: 'Show debug information',
-    status: 'Show connection status',
-    stop: 'Stop current operation',
-    abort: 'Abort current operation',
-    cancel: 'Cancel current operation',
-    
-    // Add more descriptions as needed
-};
+const caches = new Map<string, SessionCache>();
 
-// Get commands from session metadata
-function getCommandsFromSession(sessionId: string): CommandItem[] {
-    const state = storage.getState();
-    const session = state.sessions[sessionId];
-    if (!session || !session.metadata) {
-        return DEFAULT_COMMANDS;
+function cacheFor(sessionId: string): SessionCache {
+    let cache = caches.get(sessionId);
+    if (!cache) {
+        cache = { entries: null, lastRefresh: 0, inFlight: null };
+        caches.set(sessionId, cache);
     }
+    return cache;
+}
 
-    const commands: CommandItem[] = [...DEFAULT_COMMANDS];
+/** The snapshot's own lists, plus the five. Always available, never a round trip. */
+function snapshotEntries(sessionId: string): InventoryEntry[] {
+    const metadata = storage.getState().sessions[sessionId]?.metadata;
+    return mergeInventory(inventoryFromMetadata(metadata), commandFallback);
+}
 
-    const metadataCommands = [
-        ...(session.metadata.slashCommands ?? []),
-        ...(session.metadata.skills ?? []),
-    ];
+function refresh(sessionId: string): Promise<void> {
+    const cache = cacheFor(sessionId);
+    if (cache.inFlight) return cache.inFlight;
 
-    for (const cmd of metadataCommands) {
-        // Skip if in ignore list
-        if (IGNORED_COMMANDS.includes(cmd)) continue;
-
-        // Check if it's already in default commands or slash commands
-        if (!commands.find(c => c.command === cmd)) {
-            commands.push({
-                command: cmd,
-                description: COMMAND_DESCRIPTIONS[cmd]  // Optional description
-            });
+    const run = (async () => {
+        try {
+            const response = await sessionInventoryRpc(sessionId);
+            const fetched = response.success ? inventoryFromPayload(response.inventory) : [];
+            if (fetched.length > 0) {
+                // The snapshot's lists stay in the merge behind the scan: a
+                // remote Claude session's `system.init` knows about built-ins
+                // no directory walk can see, and the two together are strictly
+                // more than either.
+                cache.entries = mergeInventory(
+                    fetched,
+                    inventoryFromMetadata(storage.getState().sessions[sessionId]?.metadata),
+                    commandFallback,
+                );
+                cache.lastRefresh = Date.now();
+            } else {
+                // Nothing to enumerate — an older CLI, an offline session, a
+                // harness with no such handler. Hold the snapshot answer and
+                // try again after the interval rather than emptying the list.
+                cache.entries = null;
+                cache.lastRefresh = Date.now();
+            }
+        } catch {
+            cache.entries = null;
+            cache.lastRefresh = Date.now();
+        } finally {
+            cache.inFlight = null;
         }
-    }
-    
-    return commands;
+    })();
+
+    cache.inFlight = run;
+    return run;
 }
 
-// Main export: search commands with fuzzy matching
+function entriesFor(sessionId: string): InventoryEntry[] {
+    const cache = cacheFor(sessionId);
+    if (Date.now() - cache.lastRefresh > refreshIntervalMs && !cache.inFlight) {
+        void refresh(sessionId);
+    }
+    return cache.entries ?? snapshotEntries(sessionId);
+}
+
+function toItem(entry: InventoryEntry): CommandItem {
+    return {
+        command: entry.name,
+        description: entry.description,
+        kind: entry.kind,
+        origin: entry.origin,
+    };
+}
+
+/** Warm a session's inventory before the user types, e.g. when a composer mounts. */
+export function primeCommands(sessionId: string): void {
+    const cache = cacheFor(sessionId);
+    if (cache.entries === null && !cache.inFlight) void refresh(sessionId);
+}
+
 export async function searchCommands(
     sessionId: string,
     query: string,
-    options: SearchOptions = {}
+    options: SearchOptions = {},
 ): Promise<CommandItem[]> {
-    const { limit = 10, threshold = 0.3 } = options;
-    
-    // Get commands from session metadata (no caching)
-    const commands = getCommandsFromSession(sessionId);
-    
-    // If query is empty, return all commands
-    if (!query || query.trim().length === 0) {
-        return commands.slice(0, limit);
-    }
-    
-    // Setup Fuse for fuzzy search
-    const fuseOptions = {
-        keys: [
-            { name: 'command', weight: 0.7 },
-            { name: 'description', weight: 0.3 }
-        ],
-        threshold,
-        includeScore: true,
-        shouldSort: true,
-        minMatchCharLength: 1,
-        ignoreLocation: true,
-        useExtendedSearch: true
-    };
-    
-    const fuse = new Fuse(commands, fuseOptions);
-    const results = fuse.search(query, { limit });
-    
-    return results.map(result => result.item);
+    const { limit = 50 } = options;
+    return searchInventory(entriesFor(sessionId), query, limit).map(toItem);
 }
 
-// Get all available commands for a session
+/** Everything this session offers, in the order the dropdown shows it. */
 export function getAllCommands(sessionId: string): CommandItem[] {
-    return getCommandsFromSession(sessionId);
+    return entriesFor(sessionId).map(toItem);
+}
+
+/** Test seam: drop every cached inventory. */
+export function resetCommandCache(): void {
+    caches.clear();
 }

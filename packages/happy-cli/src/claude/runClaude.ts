@@ -36,7 +36,8 @@ import { findCustomTitle } from './utils/customTitle';
 import { applySandboxPermissionPolicy, normalizeRemotePermissionMode, resolveInitialClaudePermissionMode, resolveRemoteClaudePermissionMode } from './utils/permissionMode';
 import { decodeBase64, encodeBase64 } from '@/api/encryption';
 import type { Session as ApiSession } from '@/api/types';
-import { getProjectPath } from './utils/path';
+import { getProjectPath, resolveClaudeConfigDir } from './utils/path';
+import { discoverSessionInventory, type SessionInventoryResponse } from '@/utils/sessionInventory';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { RawJSONLinesSchema, type RawJSONLines } from './types';
@@ -652,6 +653,36 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
     // scanner until a local launch registers its own (which follows a flip).
     session.rpcHandlerManager.registerHandler('subagentTranscript', async (params: unknown) =>
         remoteScanner.readSubagentTranscript((params ?? {}) as Parameters<typeof remoteScanner.readSubagentTranscript>[0]));
+
+    // DROVE-170: what THIS session can be asked to run. registerCommonHandlers
+    // already answered it from the ambient environment; this replaces it with
+    // one that reads the account the session is on right now. A drover flip
+    // (BASED-98) rewrites CLAUDE_CONFIG_DIR on the Session and never on this
+    // process's env, and each account is its own commands/ and skills/ tree, so
+    // asking the environment would keep answering with the account we left.
+    session.rpcHandlerManager.registerHandler<Record<string, never>, SessionInventoryResponse>(
+        'sessionInventory',
+        async () => {
+            try {
+                return {
+                    success: true,
+                    inventory: await discoverSessionInventory({
+                        flavor: 'claude',
+                        cwd: workingDirectory,
+                        configDir: resolveClaudeConfigDir(
+                            (currentSession as Session | null)?.claudeEnvVars?.CLAUDE_CONFIG_DIR,
+                        ),
+                    }),
+                };
+            } catch (error) {
+                logger.debug('[INVENTORY] Failed to read session inventory:', error);
+                return {
+                    success: false,
+                    error: error instanceof Error ? error.message : 'Failed to read session inventory',
+                };
+            }
+        },
+    );
 
     // Start Happy MCP server
     const happyServer = await startHappyServer(session);

@@ -574,6 +574,8 @@ export const zhHans: TranslationStructure = {
         suggestion: {
             fileLabel: '文件',
             folderLabel: '文件夹',
+            commandLabel: '命令',
+            skillLabel: '技能',
         },
         noMachinesAvailable: '无设备',
     },
