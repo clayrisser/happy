@@ -223,6 +223,23 @@ function place(node: FlexNode, x: number, y: number, width: number, height: numb
     return frame;
 }
 
+/**
+ * What a node's CONTENT measures at inside `available`, without placing it.
+ *
+ * The same `measureWidth` the placement pass runs, exported so a caller can
+ * ask one subtree's width without resolving the tree it belongs to
+ * (DROVE-250). The strip needs that to size the account's truncation cap: the
+ * cap is what the centre leaves, and measuring the centre by resolving the
+ * whole strip would be circular, because the account leaf is IN that strip.
+ *
+ * It is the resolver's own measurement, not arithmetic restated beside it,
+ * which is the whole reason this module exists.
+ */
+export function measureFlexWidth(node: FlexNode, available: number): number {
+    assertSupported(node);
+    return measureWidth(node, available);
+}
+
 /** Finds a frame by name anywhere in the tree. */
 export function findFrame(frame: FlexFrame, name: string): FlexFrame {
     if (frame.name === name) return frame;
