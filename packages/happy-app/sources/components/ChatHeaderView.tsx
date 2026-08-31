@@ -9,7 +9,7 @@ import { layout } from '@/components/layout';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { MobileGlassSurface } from './MobileGlass';
 import { BubblePressable } from './BubblePressable';
-import { NativeGlassIconButton, supportsNativeGlassIconButton } from './NativeGlassIconButton';
+import { GlassChromeButton, GlassChromeSurface } from './GlassChromeControl';
 import {
     MOBILE_GLASS_CONTROL_RADIUS,
     MOBILE_GLASS_CONTROL_SIZE,
@@ -69,11 +69,6 @@ export const ChatHeaderView: React.FC<ChatHeaderViewProps> = ({
     const showBackButton = !isTablet && !!onBackPress;
     const hasExtra = !!extraPathSegment;
     const glassEnabled = !isTablet && Platform.OS === 'ios' && !isRunningOnMac();
-    // The back button is one SF Symbol and nothing else, so it can be a real
-    // SwiftUI button (DROVE-133). Its two neighbours cannot: the avatar is a
-    // generated React Native image with a badge and the pill is two lines of
-    // measured text, and @expo/ui's Button only takes SwiftUI children.
-    const nativeBackButton = glassEnabled && supportsNativeGlassIconButton();
     const contentHeight = glassEnabled ? Math.max(headerHeight, MOBILE_GLASS_HEADER_HEIGHT) : headerHeight;
     const showFolderSubtitle = !!folderName && folderName !== title;
     // The file-view overlay owns the subtitle while it is open.
@@ -291,14 +286,21 @@ export const ChatHeaderView: React.FC<ChatHeaderViewProps> = ({
             disabled={!onTitlePress}
             scaleFeedback={false}
         >
-            <MobileGlassSurface
-                nativeEffect
-                material="static"
-                intensity={76}
+            {/* Two lines of measured React Native text, in the real material
+                (DROVE-153). DROVE-133 left the pill and the avatar behind
+                because @expo/ui's SwiftUI Button renders SwiftUI children only,
+                and read that as "the material cannot hold RN content". It is
+                the BUTTON that cannot. GlassView is an ExpoView whose
+                mountChildComponentView inserts each child into a
+                UIVisualEffectView's contentView, so ordinary RN views mount
+                inside the glass; keep the gesture in RN and use the glass only
+                as the surface. */}
+            <GlassChromeSurface
+                radius={MOBILE_GLASS_CONTROL_RADIUS}
                 style={styles.mobileTitlePillGlass}
             >
                 {titleBody}
-            </MobileGlassSurface>
+            </GlassChromeSurface>
         </BubblePressable>
     ) : (
         <BubblePressable
@@ -332,16 +334,26 @@ export const ChatHeaderView: React.FC<ChatHeaderViewProps> = ({
             )}
             <View style={styles.contentWrapper}>
                 <View style={[styles.content, { height: contentHeight }]}>
-                    {showBackButton && (nativeBackButton ? (
-                        <NativeGlassIconButton
-                            systemImage="chevron.backward"
-                            accessibilityLabel="Back"
+                    {/* The back chevron is the same material as the pill and the
+                        avatar beside it now (DROVE-153). It was a SwiftUI
+                        `.glass` button, which looked right on its own and did
+                        not match its two neighbours, because those were on the
+                        `static` blur path. One material across the row beats a
+                        better material on one third of it. */}
+                    {showBackButton && (glassEnabled ? (
+                        <GlassChromeButton
                             onPress={onBackPress}
                             size={MOBILE_GLASS_CONTROL_SIZE}
-                            iconSize={19}
-                            tintColor={theme.colors.header.tint}
+                            accessibilityRole="button"
+                            accessibilityLabel="Back"
                             style={styles.backButton}
-                        />
+                        >
+                            <Ionicons
+                                name="chevron-back"
+                                size={24}
+                                color={theme.colors.header.tint}
+                            />
+                        </GlassChromeButton>
                     ) : (
                         <Pressable
                             onPress={onBackPress}
@@ -397,18 +409,34 @@ export const ChatHeaderView: React.FC<ChatHeaderViewProps> = ({
                         </View>
                     )}
                     {rightSlot ? (
-                        <MobileGlassSurface
-                            enabled={glassEnabled}
-                            nativeEffect
-                            material="static"
-                            intensity={76}
-                            style={styles.rightControlGlass}
-                            onLayout={(event) => setRightSlotWidth(event.nativeEvent.layout.width)}
-                        >
-                            <View style={styles.rightSlot}>
-                                {rightSlot}
-                            </View>
-                        </MobileGlassSurface>
+                        glassEnabled ? (
+                            // The avatar's capsule, the other control DROVE-133
+                            // could not convert. Same answer as the pill: the
+                            // material hosts RN children, the SwiftUI button
+                            // was the thing that could not.
+                            <GlassChromeSurface
+                                radius={MOBILE_GLASS_CONTROL_RADIUS}
+                                style={styles.rightControlGlass}
+                                onLayout={(event) => setRightSlotWidth(event.nativeEvent.layout.width)}
+                            >
+                                <View style={styles.rightSlot}>
+                                    {rightSlot}
+                                </View>
+                            </GlassChromeSurface>
+                        ) : (
+                            <MobileGlassSurface
+                                enabled={glassEnabled}
+                                nativeEffect
+                                material="static"
+                                intensity={76}
+                                style={styles.rightControlGlass}
+                                onLayout={(event) => setRightSlotWidth(event.nativeEvent.layout.width)}
+                            >
+                                <View style={styles.rightSlot}>
+                                    {rightSlot}
+                                </View>
+                            </MobileGlassSurface>
+                        )
                     ) : null}
                 </View>
             </View>
@@ -477,8 +505,8 @@ const styles = StyleSheet.create((theme) => ({
         borderRadius: MOBILE_GLASS_CONTROL_RADIUS,
     },
     // Deliberately identical to backButtonGlass but for the horizontal padding:
-    // same material, same rim, same shadow, same height. The capsule is
-    // only wider because its content is.
+    // same material, same shadow, same height. The capsule is only wider
+    // because its content is.
     mobileTitlePillGlass: {
         width: '100%',
         height: '100%',
@@ -493,8 +521,11 @@ const styles = StyleSheet.create((theme) => ({
             android: theme.colors.glass.backgroundStrong,
             default: 'transparent',
         }),
-        borderWidth: Platform.select({ ios: 1, default: 0 }),
-        borderColor: theme.dark ? 'rgba(255, 255, 255, 0.18)' : '#FFFFFF',
+        // No hand-drawn rim on iOS (DROVE-153). UIGlassEffect draws its own
+        // specular edge; a 1pt white border on top of it reads as two edges.
+        // The fallback surface adds a hairline of its own where there is no
+        // material to draw one.
+        borderWidth: 0,
         shadowColor: '#000000',
         shadowOffset: { width: 0, height: 4 },
         shadowOpacity: Platform.select({ ios: theme.dark ? 0.24 : 0.06, default: 0 }),
@@ -619,8 +650,11 @@ const styles = StyleSheet.create((theme) => ({
             android: 'transparent',
             default: 'transparent',
         }),
-        borderWidth: Platform.select({ ios: 1, default: 0 }),
-        borderColor: theme.dark ? 'rgba(255, 255, 255, 0.18)' : '#FFFFFF',
+        // No hand-drawn rim on iOS (DROVE-153). UIGlassEffect draws its own
+        // specular edge; a 1pt white border on top of it reads as two edges.
+        // The fallback surface adds a hairline of its own where there is no
+        // material to draw one.
+        borderWidth: 0,
         shadowColor: '#000000',
         shadowOffset: { width: 0, height: 4 },
         shadowOpacity: Platform.select({ ios: theme.dark ? 0.24 : 0.06, default: 0 }),
@@ -657,6 +691,8 @@ const styles = StyleSheet.create((theme) => ({
             android: 'transparent',
             default: 'transparent',
         }),
+        // This one keeps its rim: it is only reached when glass is off
+        // (web, Android, tablet, Mac), where nothing else draws an edge.
         borderWidth: Platform.select({ ios: 1, default: 0 }),
         borderColor: theme.dark ? 'rgba(255, 255, 255, 0.18)' : '#FFFFFF',
         shadowColor: '#000000',

@@ -1,9 +1,10 @@
 import * as React from 'react';
-import { View } from 'react-native';
+import { StyleSheet as RNStyleSheet, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Ionicons } from '@expo/vector-icons';
 import Svg, { Circle, Line, Path } from 'react-native-svg';
 import { BubblePressable } from './BubblePressable';
+import { GlassChromeSurface } from './GlassChromeControl';
 import { NativeSettingsMenu, type NativeSettingsMenuGroup } from './NativeSettingsMenu';
 import {
     effortAccessibility,
@@ -19,32 +20,33 @@ import {
 } from './sessionPillLabel';
 
 /**
- * Permission mode and effort, as two glyphs on the composer's button row
- * (DROVE-111, DROVE-138, DROVE-141).
+ * Permission mode, effort and model, folded into the composer's button row
+ * (DROVE-111).
  *
- * DROVE-83 gave mode, model and effort a row of their own, one pill reading
+ * DROVE-83 gave the three a row of their own, one pill reading
  * `Yolo · Opus 5 1M · High` that opened a sheet listing them again. Clay drew
  * an arrow from that row down into the button row, then said of the sheet:
  * "I don't like this extra menu, then I have to click twice." So the row is
  * the menu: each control opens its own picker on the first tap, and there is
  * no intermediate menu anywhere in the path.
  *
- * THE MODEL IS NOT HERE ANY MORE (DROVE-138). Clay: "keep the full model name
- * and slide it down there, that way it's more compact and fits." A name
- * squeezed between six 38-to-42pt buttons had 63pt to live in, which is
- * `Opus 5 1M` and nothing longer, so `Opus 5 1M` was showing as `Opus 5...`.
- * The status line under the composer is text all the way across and has room
- * for the whole name, so that is where it went. Tapping it there opens the
- * same model picker on the same first tap.
+ * ONE CAPSULE (DROVE-153). Clay sent the Screenshot markup toolbar as a
+ * reference and the thing to take from it is not the pixel size, it is that
+ * related actions share ONE capsule rather than sitting in separate circles.
+ * Mode and effort are the same idea twice over: how this session is being run.
+ * So they are one glass capsule with a hairline between them, not two discs
+ * with air between them. Each segment is its own 44pt-tall, 44pt-wide press
+ * target with its own picker, so pressing effort cannot open the mode list.
  *
- * GEOMETRY. Two 38pt controls with 3pt of slop a side is exactly the 44pt
- * target and exactly the 6pt gap between them, so no two hit boxes overlap:
- * pressing effort cannot open the mode list. What the model used to occupy is
- * now slack on the row, which is DROVE-153's to spend on the glass capsule.
+ * THE MODEL IS NOT IN THE CAPSULE ANY MORE (DROVE-138). Clay: "keep the full
+ * model name and slide it down there, that way it's more compact and fits."
+ * Even at DROVE-153's 121pt a name is a name among buttons, and `Opus 5 1M`
+ * was still the longest one that fit. The status line under the composer is
+ * text all the way across and has room for the whole name, so that is where it
+ * went; tapping it there opens the same model picker on the same first tap.
+ * The capsule is two segments now and the width the name held is slack the row
+ * gives back to the chat.
  */
-
-/** 38 + 3 + 3. Sized so neighbouring slop meets but never overlaps. */
-const controlHitSlop = { top: 8, bottom: 8, left: 3, right: 3 } as const;
 
 export type ComposerSessionPicker = 'permission' | 'model' | 'effort';
 
@@ -84,13 +86,13 @@ export interface ComposerSessionControlsProps {
  * picker, and in the accessibility value without one.
  */
 export function EffortGauge(props: { index: number; count: number; color: string; dim: string }) {
-    const size = 17;
-    const strokeWidth = 1.75;
+    const size = 20;
+    const strokeWidth = 2;
     const centre = size / 2;
     const angle = effortGaugeAngle(props.index, props.count);
     // Stops short of the track so the needle reads as pointing AT a position
     // rather than as another piece of the ring.
-    const tip = effortGaugePoint(centre, (size - strokeWidth) / 2 - 2.5, angle);
+    const tip = effortGaugePoint(centre, (size - strokeWidth) / 2 - 3, angle);
     return (
         <Svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
             <Path
@@ -106,28 +108,46 @@ export function EffortGauge(props: { index: number; count: number; color: string
                 x2={tip.x}
                 y2={tip.y}
                 stroke={props.color}
-                strokeWidth={2}
+                strokeWidth={2.25}
                 strokeLinecap="round"
             />
-            <Circle cx={centre} cy={centre} r={1.6} fill={props.color} />
+            <Circle cx={centre} cy={centre} r={1.8} fill={props.color} />
         </Svg>
     );
 }
 
 const styles = StyleSheet.create((theme) => ({
+    // The capsule the two segments share. The material is the surface's, so
+    // this carries only shape and flex. It no longer shrinks: with the model's
+    // name gone (DROVE-138) there is no text in here to give way, and two 44pt
+    // segments are the whole of it.
+    capsule: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        flexShrink: 0,
+        height: COMPOSER_SESSION_CONTROL_SIZE,
+    },
     control: {
         width: COMPOSER_SESSION_CONTROL_SIZE,
         height: COMPOSER_SESSION_CONTROL_SIZE,
-        borderRadius: COMPOSER_SESSION_CONTROL_SIZE / 2,
         alignItems: 'center',
         justifyContent: 'center',
         flexShrink: 0,
-        // The same surface the speaker and the mic gained in DROVE-118, so
-        // the row is buttons all the way across.
-        backgroundColor: theme.colors.surfaceHigh,
     },
+    // Pressed and open read as a wash on the glass rather than as a different
+    // fill, so the material underneath is still doing the drawing.
     controlOpen: {
-        backgroundColor: theme.colors.surfaceHighest,
+        backgroundColor: theme.colors.glass.backgroundSubtle,
+    },
+    /**
+     * The hairline between segments. Apple's grouped capsules separate their
+     * halves with a divider rather than a gap, which is what keeps the capsule
+     * reading as one object while the halves stay obviously separate.
+     */
+    segmentDivider: {
+        width: RNStyleSheet.hairlineWidth,
+        height: 20,
+        backgroundColor: theme.colors.glass.divider,
     },
 }));
 
@@ -154,7 +174,7 @@ function Control(props: {
                 groups={groups}
                 style={{ width: COMPOSER_SESSION_CONTROL_SIZE, height: COMPOSER_SESSION_CONTROL_SIZE }}
             >
-                <View style={styles.control}>{props.children}</View>
+                <View style={[styles.control, props.open && styles.controlOpen]}>{props.children}</View>
             </NativeSettingsMenu>
         );
     }
@@ -162,7 +182,6 @@ function Control(props: {
         <BubblePressable
             onPress={props.onPress ? () => props.onPress?.(props.picker) : undefined}
             disabled={!props.onPress}
-            hitSlop={controlHitSlop}
             style={(p) => [
                 styles.control,
                 props.open && styles.controlOpen,
@@ -203,8 +222,15 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
     }
     const mode = permissionModeAccessibility(label.mode);
     const effort = effortAccessibility(label.effort, effortIndex ?? 0, effortCount);
+    // A divider goes between two drawn segments, never at either end, so a
+    // session with no effort scale does not leave a hairline floating in the
+    // capsule.
+    const effortNeedsDivider = showEffort && showMode;
     return (
-        <>
+        <GlassChromeSurface
+            radius={COMPOSER_SESSION_CONTROL_SIZE / 2}
+            style={styles.capsule}
+        >
             {showMode ? (
                 <Control
                     picker="permission"
@@ -217,11 +243,12 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                 >
                     <Ionicons
                         name={permissionModeGlyph(modeKind, modeKey)}
-                        size={17}
+                        size={20}
                         color={theme.colors.text}
                     />
                 </Control>
             ) : null}
+            {effortNeedsDivider ? <View style={styles.segmentDivider} /> : null}
             {showEffort ? (
                 <Control
                     picker="effort"
@@ -240,6 +267,6 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                     />
                 </Control>
             ) : null}
-        </>
+        </GlassChromeSurface>
     );
 });

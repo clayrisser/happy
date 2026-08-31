@@ -16,6 +16,18 @@ import type { StyleProp, ViewStyle } from 'react-native';
  * generated avatar, the two-line title pill — cannot use this, because
  * `@expo/ui`'s Button only accepts SwiftUI children. That wall is the same one
  * DROVE-107 hit, and deciding the app-wide rule is DROVE-134, not this.
+ *
+ * SUPERSEDED, AND NOTHING USES IT (DROVE-153). Kept as the record of a wrong
+ * turn worth not taking twice. The SwiftUI button really does render SwiftUI
+ * children only, and the mistake was reading that as "the material cannot hold
+ * React Native content". It can: `GlassView` from `expo-glass-effect` is an
+ * `ExpoView` whose `mountChildComponentView` inserts children into a
+ * `UIVisualEffectView.contentView`, so a two-line pill, a generated avatar and
+ * a `Pressable` all mount inside the real `UIGlassEffect`. Use
+ * `GlassChromeButton` / `GlassChromeSurface` in `GlassChromeControl.tsx`
+ * instead; a second glass implementation in the same header drew a visibly
+ * different surface from its neighbours, which was the other half of what Clay
+ * was looking at.
  */
 export type NativeGlassIconButtonProps = {
     /** SF Symbol name, e.g. `chevron.backward`. */

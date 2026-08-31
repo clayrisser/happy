@@ -55,7 +55,7 @@ export function SessionActionsNativeMenu({
                         DropdownMenu has no nested-menu primitive.
                     */}
                     {canFlipAccount && (
-                        <Button onPress={flipAccount} systemImage={iosSymbol('arrow.left.arrow.right')} label="Move to another account" />
+                        <Button onPress={flipAccount} systemImage={iosSymbol('arrow.left.arrow.right')} label="Switch account" />
                     )}
                     {canCopySessionMetadata && (
                         <Button onPress={copySessionMetadata} systemImage={iosSymbol('ladybug')} label={t('sessionInfo.copyMetadata')} />

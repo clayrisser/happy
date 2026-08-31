@@ -1,17 +1,25 @@
 import * as React from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { Pressable, Text, useWindowDimensions, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Svg, { Circle } from 'react-native-svg';
 import { useUnistyles } from 'react-native-unistyles';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 import { useSession } from '@/sync/storage';
-import { isLiveStatusFresh, summarizeLiveStatus, type LiveStatusSummary } from '@/utils/liveStatus';
+import { confirmDroverSwitch } from '@/utils/droverAccountSwitch';
+import {
+    isLiveStatusFresh,
+    summarizeLiveStatus,
+    type LiveStatusMain,
+    type LiveStatusSummary,
+} from '@/utils/liveStatus';
 import { STATUS_ROW_TAP_SLOP_BOTTOM, STATUS_ROW_TAP_SLOP_TOP } from './agentDockLayout';
+import { MOBILE_COMPOSER_LAYOUT, MOBILE_COMPOSER_METRICS } from './agentInputLayout';
+import { COMPOSER_STRIP_MIN_HEIGHT, COMPOSER_STRIP_PADDING_TOP } from './composerStripLayout';
 import { AnimatedFade } from './AnimatedOverlay';
-import { NativeSettingsMenu, type NativeSettingsMenuGroup } from './NativeSettingsMenu';
 import { UsageAccountBarsSheet } from './UsageAccountBarsSheet';
 import type { UsageBarGroup } from './agentInputUsage';
+import { NativeSettingsMenu, type NativeSettingsMenuGroup } from './NativeSettingsMenu';
 import { SessionAgentsSheet } from './SessionAgentsSheet';
 import { StatusDot } from './StatusDot';
 import {
@@ -19,6 +27,7 @@ import {
     statusRowMetrics,
     statusRowQuotaText,
     statusRowShrink,
+    statusRowFits,
     STATUS_ROW_MODEL_TRUNCATION,
 } from './statusRowLayout';
 import { useTickingNow } from './useTickingNow';
@@ -33,39 +42,71 @@ import { useTickingNow } from './useTickingNow';
  * week quota on its own line below (DROVE-47). Forty characters spread over
  * three lines of a phone screen. This is all of it on one line:
  *
- *     ● Bash 1m 1s ˄ · Opus 5 1M · jamrizzi 23% ˄ · ◔
+ *     ● Bash 1m 2s 251.2k ⚇3 ˄ · Opus 5 1M · jamrizzi 23% ˄ · ◔
  *
- * Left to right: what the session is doing and for how long, the model it is
- * doing it on, the account it is spending, and the context gauge. The branch
- * was here too until DROVE-90 moved it under the session title, where tapping
- * it lists the repo's worktrees; Clay found the row too full. Nothing was
- * dropped, only folded: the working segment opens the agent tree, the DOT
- * opens session info, the model opens the model picker, the quota opens a bar
- * per account and per window (DROVE-107), the gauge swaps to exact tokens.
+ * Left to right: what the MAIN thread is doing, for how long, and what it has
+ * spent (DROVE-155); how many background agents are out; then the model it is
+ * doing it on, the account it is spending, and the context gauge (DROVE-138).
+ * The branch was here too until DROVE-90 moved it under the session title,
+ * where tapping it lists the repo's worktrees; Clay found the row too full.
+ * Nothing was dropped, only folded: the working segment opens the agent tree,
+ * the DOT opens session info, the model opens the model picker, the quota
+ * opens a bar per account and per window (DROVE-107), the gauge swaps to exact
+ * tokens.
  *
  * THE DOT IS THE CONNECTION, AND THE WORD IS GONE (DROVE-138). Clay: "where it
  * says online that should just be a little dot." The dot's colour already WAS
- * the state (working blue, online green, gone grey, waiting orange), so the
- * word beside it repeated it and cost the width the account needed. The dot
- * inherits the word's tap target and its accessibility label, so session info
- * is still one tap from here and a screen reader still hears "online".
+ * the state, so the word beside it repeated it and cost the width the account
+ * needed. The dot inherits the word's tap target and its accessibility label,
+ * so session info is still one tap from here and a screen reader still hears
+ * "online".
  *
  * THE MODEL AND THE ACCOUNT MOVED IN (DROVE-138). The model came down off the
- * button row, where 63pt between six buttons cut `Opus 5 1M` to `Opus 5...`;
- * here it has the room to be read. The account was invisible everywhere except
- * the flip menu, and it heads the quota because the quota is that account's.
- * Both are named by the derivations the rest of the app already uses, never a
- * second one (DROVE-129): `resolveSessionAccount` for the account, which the
- * session info screen also reads, and `shortModelName` for the model.
- *
- * What was folded to pay for them, and why, is written down in
- * statusRowLayout.ts along with the arithmetic.
+ * button row, where a name among six buttons was showing `Opus 5 1M` as
+ * `Opus 5...`; here it has the room to be read. The account was invisible
+ * everywhere except the switch menu, and it heads the quota because the quota
+ * is that account's and the sheet behind that tap is the list of accounts to
+ * switch to (DROVE-160). It is read off `usageBarGroups`, the same list the
+ * sheet draws and the same value a switch sends as its `from`, so the row and
+ * the sheet cannot call one account by two names (DROVE-129).
  *
  * Every fold that EXPANDS opens its own list on the first tap, never an
  * intermediate menu (DROVE-111). Clay, twice: "it shouldn't be opening a menu
  * that then opens the list of options." The two sheets (DROVE-117 for the
  * quota, DROVE-111 for the tree) share one piece of state, so opening one
  * closes the other rather than stacking them.
+ *
+ * THE DOT IS THE MAIN THREAD (DROVE-155). Clay: "Is the pulsing blue dot next
+ * to the agent blinking when the agents are running or when we're actually
+ * thinking in the main chat". It used to be neither on purpose: it went blue
+ * whenever a live snapshot existed, which included a session whose only
+ * activity was a background fan-out. The rule now, and do not let it drift
+ * back:
+ *
+ *   the DOT says whether the MAIN thread is working, in the working blue.
+ *   the COUNT beside the fold says how many agents are out.
+ *   nothing else on the row speaks for either.
+ *
+ * The main thread's numbers and the agents' count never share a segment or a
+ * clock, because "3 agents 29s" reading as the agents' time is the confusion
+ * this replaced.
+ *
+ * Five things are FOLDED to keep one line on the narrowest phone with a model,
+ * an account and a quota on it too, and nothing is truncated:
+ *
+ *   - the word "agents" is a glyph and a count; the tree spells it out.
+ *   - the word "online" is gone entirely; the dot's colour is the state.
+ *   - the word "week" goes when an account heads the quota, because
+ *     `jamrizzi 23%` is one fact about one account and the sheet spells the
+ *     window out. With no account to head it the window keeps its name.
+ *   - the context gauge drops its percent text while the main thread works, or
+ *     whenever the account is on the row: the ring beside it fills with the
+ *     same number and a tap still opens the exact figure.
+ *   - the tool NAME goes and the numbers stay whenever the row would not
+ *     otherwise fit. That was a 360pt constant before the model and the
+ *     account were here; it is now asked of statusRowLayout's estimator with
+ *     the row's real content, because the width it fires at depends on how
+ *     long the tool, the model and the account happen to be.
  *
  * Renders nothing at all when there is nothing to say, so an empty session
  * does not gain a blank strip. Its own module so a test can mount it without
@@ -85,12 +126,24 @@ const workingColor = '#007AFF';
  * on the indicator's top edge. Change it and change
  * STATUS_ROW_TAP_SLOP_BOTTOM with it: the gap under the row is derived from
  * it, and agentDockLayout.test.ts asserts the two agree.
+ *
+ * The box is 30pt tall, not 44, and DROVE-153 works out why in
+ * agentDockLayout's note on STATUS_ROW_TAP_SLOP_TOP: with the home indicator
+ * below and the composer's own 44pt buttons above, there are 30 points between
+ * them and the last 14 cost chat height whichever end they are taken from.
+ * These segments are status TEXT rather than chrome buttons, and every chrome
+ * button on the screen is drawn at 44 or larger now, so the trade went to the
+ * space Clay asked for three times.
+ *
+ * The horizontal reach goes up instead, since it is free. A segment is 60 to
+ * 110pt wide, so widening it 4pt a side buys more real hittability than the two
+ * vertical points that were available.
  */
 const segmentHitSlop = {
     top: STATUS_ROW_TAP_SLOP_TOP,
     bottom: STATUS_ROW_TAP_SLOP_BOTTOM,
-    left: 6,
-    right: 6,
+    left: 10,
+    right: 10,
 } as const;
 
 // Grayscale ring that fills and darkens with context usage. Reads at a
@@ -153,11 +206,12 @@ export type StatusRowProps = {
     contextStatus: { percent: number; detailText: string; color: string } | null;
     weekPercent: number | null;
     /**
-     * The account this session runs on, from `resolveSessionAccount` and not a
-     * second derivation of it (DROVE-129, DROVE-138). Heads the quota, because
-     * the quota is this account's.
+     * The week popup's bar rows: this account's session, week and family
+     * windows, then every other drover account folded under a second heading
+     * (DROVE-47). One thin row each, name and track and number on one line
+     * (DROVE-107).
      */
-    accountName?: string | null;
+    usageBarGroups: UsageBarGroup[];
     /**
      * The model's short name, spelled in full here rather than truncated on
      * the button row (DROVE-138).
@@ -174,14 +228,7 @@ export type StatusRowProps = {
     nativeMenus?: boolean;
     /** Whether the model picker is the one currently open. */
     modelPickerOpen?: boolean;
-    /**
-     * The week popup's bar rows: this account's session, week and family
-     * windows, then every other drover account folded under a second heading
-     * (DROVE-47). One thin row each, name and track and number on one line
-     * (DROVE-107).
-     */
-    usageBarGroups: UsageBarGroup[];
-    /** Opens the session info screen; the connection segment taps into it. */
+    /** Opens the session info screen; the DOT taps into it (DROVE-138). */
     onSessionInfoPress?: () => void;
     /**
      * The composer fades its detail rows while the chat is scrolled off the
@@ -209,6 +256,23 @@ function useLiveStatusSummary(sessionId: string | undefined): LiveStatusSummary 
     );
 }
 
+/**
+ * What a screen reader hears for the live segment.
+ *
+ * Spelled out, because the row itself is a glyph and a number: the main
+ * thread's state and numbers first, then the agents as a count with the word
+ * the row folded away.
+ */
+function accessibilityLabelFor(main: LiveStatusMain | null, sideCount: number): string {
+    const parts: string[] = [];
+    if (main) {
+        parts.push(`Main thread: ${main.label} ${main.elapsed}`);
+        if (main.tokens) parts.push(`${main.tokens} tokens`);
+    }
+    if (sideCount > 0) parts.push(`${sideCount} ${sideCount === 1 ? 'agent' : 'agents'}`);
+    return parts.join(', ');
+}
+
 function Separator() {
     const { theme } = useUnistyles();
     return (
@@ -230,11 +294,25 @@ function CliCheck(props: { name: string; ok: boolean | null }) {
 
 export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: StatusRowProps) {
     const { theme } = useUnistyles();
+    const { width } = useWindowDimensions();
     // One value, not two flags: what makes opening the quota close the tree.
     const [openSheet, setOpenSheet] = React.useState<'agents' | 'usage' | null>(null);
     const [showPreciseContext, setShowPreciseContext] = React.useState(false);
     const summary = useLiveStatusSummary(p.sessionId);
     const closeSheet = React.useCallback(() => setOpenSheet(null), []);
+
+    // Tapping an account block in the quota sheet moves the session onto it
+    // (DROVE-160). The sheet is closed first and the confirm is raised on the
+    // next tick, so the alert is not presented into a sheet still tearing down.
+    // Nothing new is sent: confirmDroverSwitch is the `/flip` message every
+    // other surface already sends.
+    const sessionId = p.sessionId;
+    const currentAccount = p.usageBarGroups.find((group) => group.active)?.account ?? null;
+    const onSwitchAccount = React.useCallback((account: string) => {
+        if (!sessionId) return;
+        setOpenSheet(null);
+        confirmDroverSwitch({ sessionId, account, from: currentAccount, always: true });
+    }, [currentAccount, sessionId]);
 
     const hasUsage = p.weekPercent != null || p.contextStatus != null;
     if (!summary && !p.connectionStatus && !hasUsage && !p.modelName) {
@@ -245,7 +323,35 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
     const canOpenUsage = p.usageBarGroups.length > 0;
     const segments: React.ReactNode[] = [];
 
-    if (summary) {
+    const main = summary?.main ?? null;
+    const sideCount = summary?.sideCount ?? 0;
+
+    // The quota's text, and the account that heads it. Both are read off the
+    // same `usageBarGroups` the sheet draws, so the row's name, the sheet's
+    // heading and the `from` a switch sends are one value (DROVE-129,
+    // DROVE-160).
+    const quotaText = statusRowQuotaText(
+        currentAccount,
+        p.weekPercent,
+        p.weekPercent == null
+            ? ''
+            : t('agentInput.context.percentWeek', { percent: Math.round(p.weekPercent) }),
+    );
+
+    // Whether the tool name fits, asked of the row's real content rather than
+    // taken from a width constant (DROVE-155, DROVE-138). The width it folds at
+    // depends on how long this tool, this model and this account happen to be,
+    // so a constant could only ever be right for one of them.
+    const showLabel = !main || statusRowFits({
+        live: main.tokens ? `${main.label} ${main.elapsed} ${main.tokens}` : `${main.label} ${main.elapsed}`,
+        agentCount: sideCount,
+        liveExpands: canExpand,
+        model: p.modelName,
+        quota: quotaText,
+        quotaExpands: canOpenUsage,
+        contextGauge: !!p.contextStatus,
+    }, width);
+    if (summary && (main || sideCount > 0)) {
         segments.push(
             <Pressable
                 key="live"
@@ -255,28 +361,50 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
                 hitSlop={segmentHitSlop}
                 accessibilityRole={canExpand ? 'button' : undefined}
                 accessibilityState={canExpand ? { expanded: openSheet === 'agents' } : undefined}
-                accessibilityLabel={`Working: ${summary.headline}`}
+                accessibilityLabel={accessibilityLabelFor(main, sideCount)}
                 style={({ pressed }) => ({
                     flexDirection: 'row',
                     alignItems: 'center',
                     gap: 3,
-                    // The last of the three that shrink, after the account and
-                    // the model: a long tool name must not push the quota off
-                    // the line, but the numbers beside it are what Clay is
-                    // watching (statusRowShrink).
-                    flexShrink: statusRowShrink.live,
-                    maxWidth: '45%',
+                    // The one segment that gives way, and only in its name:
+                    // a long tool name must not push the quota off the line.
+                    flexShrink: 1,
+                    maxWidth: '60%',
                     opacity: pressed && canExpand ? 0.6 : 1,
                 })}
             >
-                <Text
-                    numberOfLines={1}
-                    style={{ fontSize: 11, color: theme.colors.text, flexShrink: 1, ...Typography.default() }}
-                >
-                    {summary.compact.elapsed
-                        ? `${summary.compact.label} ${summary.compact.elapsed}`
-                        : summary.compact.label}
-                </Text>
+                {main ? (
+                    <>
+                        {/* The only text on the row allowed to shrink, and the
+                            first thing to fold on a narrow phone. A
+                            30-character MCP tool name gives way; the clock and
+                            the token count never do, because they are what
+                            Clay is watching. */}
+                        {showLabel ? (
+                            <Text
+                                numberOfLines={1}
+                                style={{ fontSize: 11, color: theme.colors.text, flexShrink: 1, ...Typography.default() }}
+                            >
+                                {main.label}
+                            </Text>
+                        ) : null}
+                        <Text style={{ fontSize: 11, color: theme.colors.text, ...Typography.default() }}>
+                            {main.tokens ? `${main.elapsed} ${main.tokens}` : main.elapsed}
+                        </Text>
+                    </>
+                ) : null}
+                {sideCount > 0 ? (
+                    <>
+                        {/* The agents, and the whole of what the row says
+                            about them: a glyph and a number, in the secondary
+                            colour so they never read as the main thread's own.
+                            The word and every name are behind the fold. */}
+                        <Ionicons name="people" size={11} color={theme.colors.textSecondary} />
+                        <Text style={{ fontSize: 11, color: theme.colors.textSecondary, ...Typography.default() }}>
+                            {sideCount}
+                        </Text>
+                    </>
+                ) : null}
                 {canExpand ? (
                     <Ionicons
                         name={openSheet === 'agents' ? 'chevron-down' : 'chevron-up'}
@@ -288,10 +416,10 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
         );
     }
 
-    // The model, in full, off the button row where it was being cut to
-    // `Opus 5...` (DROVE-138). One tap opens the model list, on iOS as the
-    // native menu anchored here and everywhere else as the picker: never a
-    // menu that then lists the three controls (DROVE-111).
+    // The model, in full, off the button row where a name among six buttons was
+    // being cut to `Opus 5...` (DROVE-138). One tap opens the model list, on
+    // iOS as the native menu anchored here and everywhere else as the picker:
+    // never a menu that then lists the controls (DROVE-111).
     if (p.modelName) {
         const modelText = (
             <Text
@@ -340,21 +468,13 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
         );
     }
 
-    // The account heads the quota, because the quota IS this account's, and
-    // the sheet behind the tap is the list of accounts (DROVE-138). The word
-    // `week` folds away when it does: `jamrizzi 23%` is one fact about one
-    // account and the sheet spells the window out. With no account there is
-    // nothing to head it, so the window keeps its name.
-    const quotaText = statusRowQuotaText(
-        p.accountName,
-        p.weekPercent,
-        p.weekPercent == null
-            ? ''
-            : t('agentInput.context.percentWeek', { percent: Math.round(p.weekPercent) }),
-    );
+    // The account heads the quota, because the quota IS this account's and the
+    // sheet behind the tap is the list of accounts to switch to (DROVE-160).
+    // The word `week` folds away when it does: `jamrizzi 23%` is one fact
+    // about one account and the sheet spells the window out. With no account
+    // there is nothing to head it, so the window keeps its name.
     if (quotaText != null) {
-        const account = p.accountName?.trim() || null;
-        const quotaBody = account ? (
+        const quotaBody = currentAccount ? (
             <>
                 {/* The account is the only thing in this segment allowed to
                     give way, and it gives way first of everything on the row:
@@ -370,7 +490,7 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
                         ...Typography.default(),
                     }}
                 >
-                    {account}
+                    {currentAccount}
                 </Text>
                 <Text style={{
                     fontSize: statusRowMetrics.fontSize,
@@ -400,14 +520,14 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
                     key="week"
                     onPress={() => setOpenSheet((open) => (open === 'usage' ? null : 'usage'))}
                     accessibilityRole="button"
-                    accessibilityLabel={account ? `Quota, ${quotaText}` : undefined}
+                    accessibilityLabel={currentAccount ? `Quota, ${quotaText}` : undefined}
                     accessibilityState={{ expanded: openSheet === 'usage' }}
                     hitSlop={segmentHitSlop}
                     style={({ pressed }) => ({
                         flexDirection: 'row',
                         alignItems: 'center',
                         gap: 3,
-                        flexShrink: account ? 1 : 0,
+                        flexShrink: currentAccount ? 1 : 0,
                         minWidth: 0,
                         opacity: pressed ? 0.6 : 1,
                     })}
@@ -429,10 +549,12 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
 
     if (p.contextStatus) {
         const context = p.contextStatus;
-        // The ring alone once the account is on the row: it fills with the
-        // same number the text was printing, and the tap still prints the
-        // exact tokens. The cheapest thing on a full row to lose.
-        const showPercent = showsContextPercent(p.accountName, showPreciseContext);
+        // The ring alone while the main thread works (DROVE-155: the live token
+        // count is the cost readout at that moment) and equally once the
+        // account is on the row (DROVE-138). Either way the ring fills with the
+        // same number the text was printing, and the tap still opens the exact
+        // figure, so it is the cheapest thing on a full row to lose.
+        const showPercent = showsContextPercent(currentAccount, showPreciseContext, main !== null);
         segments.push(
             <Pressable
                 key="context"
@@ -455,15 +577,21 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
         );
     }
 
-    // One dot, and its colour is the state: the working blue while the CLI
-    // reports a live turn, otherwise whatever the connection says (green
-    // online, grey gone, orange waiting on you).
-    const dotColor = summary ? workingColor : p.connectionStatus?.dotColor;
+    // THE DOT IS THE MAIN THREAD (DROVE-155). See the rule at the top of this
+    // file. Blue and pulsing exactly while the MAIN thread is working;
+    // otherwise whatever the connection says (green online, grey gone, orange
+    // waiting on you). It was `summary ? ...` — any live snapshot at all — and
+    // that is what made it blue for a session whose only activity was a
+    // background fan-out.
+    const mainWorking = main !== null;
+    const dotColor = mainWorking ? workingColor : p.connectionStatus?.dotColor;
     // The word `online` is gone, so the dot inherits everything it carried:
     // the tap into session info, and the state IN WORDS for a screen reader
-    // (DROVE-138). The screen says it in colour; this says it out loud.
+    // (DROVE-138). The screen says it in colour; this says it out loud. The
+    // two states never contradict: the blue is the MAIN thread (DROVE-155) and
+    // the colour under it is the connection, so both are named.
     const dotLabel = [
-        summary ? 'Working' : null,
+        mainWorking ? 'Working' : null,
         p.connectionStatus?.text,
     ].filter((part): part is string => !!part).join(', ');
 
@@ -472,19 +600,29 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
             <View style={{
                 flexDirection: 'row',
                 alignItems: 'center',
-                // 18 = 10pt shell inset + 8pt action inset: lines the row up
-                // with the composer card's controls.
-                paddingHorizontal: statusRowMetrics.paddingHorizontal,
-                paddingTop: 6,
-                minHeight: 18,
+                // 19 = 10pt shell inset + 9pt action inset: lines the row up
+                // with the composer card's controls. The action inset moved
+                // from 8 to 9 when the row's buttons went 42 -> 44 (DROVE-153),
+                // because it is half the difference between the button and its
+                // 26pt glyph.
+                paddingHorizontal: MOBILE_COMPOSER_METRICS.shellInset
+                    + MOBILE_COMPOSER_LAYOUT.addGlyphOffset,
+                // The strip's box, shared with the recording banner that sits
+                // over it (DROVE-157), so the two cannot drift and a mic
+                // cannot resize the dock.
+                paddingTop: COMPOSER_STRIP_PADDING_TOP,
+                minHeight: COMPOSER_STRIP_MIN_HEIGHT,
             }}>
                 {dotColor ? (
                     <Pressable
                         onPress={p.onSessionInfoPress}
                         disabled={!p.onSessionInfoPress}
                         // Wider on the left than a segment, because the dot is
-                        // 7pt of target at the very start of the row.
-                        hitSlop={{ ...segmentHitSlop, left: 14, right: 8 }}
+                        // 7pt of target at the very start of the row. The
+                        // vertical stays the strip's, which is the one target
+                        // under the 44pt floor and is argued for in
+                        // agentDockLayout and glassChrome.test.ts.
+                        hitSlop={{ ...segmentHitSlop, left: 16, right: 10 }}
                         accessibilityRole={p.onSessionInfoPress ? 'button' : undefined}
                         accessibilityLabel={dotLabel || undefined}
                         style={({ pressed }) => ({
@@ -495,7 +633,7 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
                     >
                         <StatusDot
                             color={dotColor}
-                            isPulsing={summary ? true : p.connectionStatus?.isPulsing}
+                            isPulsing={mainWorking ? true : p.connectionStatus?.isPulsing}
                             // A point bigger than DROVE-82's 6, now that it is
                             // the only thing saying which state the connection
                             // is in: grey and orange have to be told apart at
@@ -527,6 +665,7 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
                     groups={p.usageBarGroups}
                     open={openSheet === 'usage'}
                     onClose={closeSheet}
+                    onSwitchAccount={sessionId ? onSwitchAccount : undefined}
                 />
             ) : null}
             {canExpand && p.sessionId ? (

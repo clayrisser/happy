@@ -19,7 +19,8 @@
  *     out, including when the caller flips `open` off;
  *   - dragged by a real grabber, dismissed by a drag down on the gate
  *     overlay's thresholds or by a tap outside;
- *   - scrolled inside itself once the content passes the cap.
+ *   - exactly as tall as its content, and scrolled inside itself ONLY once
+ *     that content passes the cap (DROVE-158).
  *
  * It rides the keyboard rather than hiding behind it, which the anchored
  * version got for free by living inside the dock.
@@ -42,16 +43,11 @@ import Animated, {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useUnistyles } from 'react-native-unistyles';
 import { MobileGlassSurface } from './MobileGlass';
+import { composerSheetBody, composerSheetMaxHeight } from './composerSheetLayout';
 import { swipeDismisses } from './sessionGateDeck';
 
-/**
- * Tall enough for the current account's three windows plus five accounts at
- * 20pt a row, or for a dozen agents, and short enough that the transcript is
- * still there behind it. Past that the content scrolls, which is the point: a
- * sixth account or a thirteenth agent is reachable instead of pushing the
- * sheet off the top of the screen.
- */
-export const COMPOSER_SHEET_MAX_HEIGHT = 320;
+/** @see composerSheetMaxHeight, which is where the number and its reasons live. */
+export const COMPOSER_SHEET_MAX_HEIGHT = composerSheetMaxHeight;
 
 /**
  * Where the sheet parks before anything has measured it. Taller than any
@@ -61,9 +57,6 @@ const parked = 900;
 
 /** A phone gets the whole width; a desktop window gets a sheet, not a wall. */
 const maxSheetWidth = 640;
-
-/** The sheet never eats the transcript entirely, however long the content is. */
-const maxHeightFraction = 0.7;
 
 export function ComposerSheet(props: {
     open: boolean;
@@ -94,8 +87,30 @@ export function ComposerSheet(props: {
     // length of the slide down. Unmounting on the flag would snap the sheet
     // away, which is the half of "slides up" nobody notices until it is gone.
     const [mounted, setMounted] = React.useState(false);
-    const translateY = useSharedValue(parked);
+    /**
+     * How far down the sheet is as a FRACTION of its own height: 1 is exactly
+     * offscreen, 0 is at rest.
+     *
+     * It used to be a pixel offset taken from the first layout, latched, and
+     * never revisited. That is the DROVE-158 measurement bug: a sheet whose
+     * content settles a frame later parked at the old number and then jumped.
+     * A fraction multiplied by the LIVE height cannot park short, because rest
+     * is 0 whatever the height turns out to be, and a late layout only changes
+     * how far the sheet still has to travel.
+     */
+    const progress = useSharedValue(1);
     const sheetHeight = useSharedValue(parked);
+    const [contentHeight, setContentHeight] = React.useState<number | null>(null);
+    /**
+     * Measuring stops for the length of the slide down.
+     *
+     * Several callers render their children behind the same flag they pass as
+     * `open` (AgentInput's two pickers do), so the body empties the instant
+     * the sheet starts leaving. Letting that re-measure would shrink the card
+     * to a stub halfway out. Whatever it was when the exit began is what it
+     * leaves as.
+     */
+    const frozen = React.useRef(false);
     const entered = React.useRef(false);
     const onClosed = props.onClosed;
     const unmount = React.useCallback(() => {
@@ -106,26 +121,48 @@ export function ComposerSheet(props: {
     React.useEffect(() => {
         if (props.open) {
             entered.current = false;
-            translateY.value = parked;
+            frozen.current = false;
+            progress.value = 1;
             setMounted(true);
             return;
         }
-        translateY.value = withTiming(sheetHeight.value, { duration: 180 }, (finished) => {
+        frozen.current = true;
+        progress.value = withTiming(1, { duration: 180 }, (finished) => {
             if (finished) runOnJS(unmount)();
         });
-    }, [props.open, sheetHeight, translateY, unmount]);
+    }, [props.open, progress, unmount]);
 
-    // The slide starts from the height the sheet turned out to be, so a
-    // three-row sheet travels three rows and not a screenful.
+    // The sheet's own height, kept current. Nothing latches it: a list that
+    // grows, a keyboard that changes the safe area, or children that measure a
+    // frame late all just move the number the fraction is multiplied by.
     const handleLayout = React.useCallback((event: { nativeEvent: { layout: { height: number } } }) => {
         const height = event.nativeEvent.layout.height;
-        if (height <= 0) return;
-        sheetHeight.value = height;
-        if (entered.current) return;
+        if (height > 0 && !frozen.current) sheetHeight.value = height;
+    }, [sheetHeight]);
+
+    // What the children actually came to, which is what decides whether this
+    // sheet scrolls at all. A zero is kept rather than dropped: it is what a
+    // sheet whose caller drew nothing measures, and the slide up is waiting on
+    // this number, not on a truthy one. It is NOT cleared when the sheet
+    // reopens, because a reopen inside the slide down re-renders the same
+    // children at the same size and would never fire a second layout.
+    const handleContentLayout = React.useCallback((event: { nativeEvent: { layout: { height: number } } }) => {
+        const height = event.nativeEvent.layout.height;
+        if (height < 0 || frozen.current) return;
+        setContentHeight((current) => (current === height ? current : height));
+    }, []);
+
+    // The slide up waits for the content to have measured, so it starts from
+    // the height the sheet is going to be rather than from a guess.
+    React.useEffect(() => {
+        if (!mounted || contentHeight === null || entered.current) return;
         entered.current = true;
-        translateY.value = height;
-        translateY.value = withSpring(0, { damping: 26, stiffness: 300, mass: 0.7 });
-    }, [sheetHeight, translateY]);
+        progress.value = withSpring(0, { damping: 26, stiffness: 300, mass: 0.7 });
+    }, [mounted, contentHeight, progress]);
+
+    const freeze = React.useCallback(() => {
+        frozen.current = true;
+    }, []);
 
     // Only the grabber drags. The body is a scroll view holding a list, and a
     // pan over the whole sheet would eat its vertical touches.
@@ -133,33 +170,36 @@ export function ComposerSheet(props: {
         .activeOffsetY([-12, 12])
         .failOffsetX([-16, 16])
         .onUpdate((event) => {
-            translateY.value = Math.max(0, event.translationY);
+            const travel = Math.max(0, event.translationY);
+            progress.value = Math.min(1, travel / Math.max(1, sheetHeight.value));
         })
         .onEnd((event) => {
             if (swipeDismisses(event.translationY, event.velocityY)) {
-                translateY.value = withTiming(sheetHeight.value, { duration: 180 }, (finished) => {
+                runOnJS(freeze)();
+                progress.value = withTiming(1, { duration: 180 }, (finished) => {
                     if (finished) runOnJS(onClose)();
                 });
             } else {
-                translateY.value = withSpring(0, { damping: 24, stiffness: 260 });
+                progress.value = withSpring(0, { damping: 24, stiffness: 260 });
             }
-        }), [onClose, sheetHeight, translateY]);
+        }), [freeze, onClose, progress, sheetHeight]);
 
     const sheetStyle = useAnimatedStyle(() => ({
         // The keyboard's height is negative while it is up, so this lifts.
-        transform: [{ translateY: translateY.value + keyboard.height.value }],
+        transform: [{ translateY: progress.value * sheetHeight.value + keyboard.height.value }],
     }));
 
     const backdropStyle = useAnimatedStyle(() => ({
-        opacity: 1 - Math.min(1, translateY.value / Math.max(1, sheetHeight.value)),
+        opacity: 1 - progress.value,
     }));
 
     if (!mounted) return null;
 
-    const scrollMaxHeight = Math.min(
-        props.maxHeight ?? COMPOSER_SHEET_MAX_HEIGHT,
-        Math.round(window.height * maxHeightFraction),
-    );
+    const body = composerSheetBody({
+        contentHeight,
+        maxHeight: props.maxHeight,
+        windowHeight: window.height,
+    });
 
     return (
         <Modal
@@ -225,12 +265,23 @@ export function ComposerSheet(props: {
                                     }} />
                                 </View>
                             </GestureDetector>
+                            {/* An EXPLICIT height, not a maxHeight. A scroll
+                                view inside an auto-height card sizes itself,
+                                and what it sized itself to was short enough to
+                                slice the Add context tiles through their
+                                labels (DROVE-158). Below the cap this is the
+                                content's own height, so there is nothing to
+                                scroll and nothing left over. */}
                             <Animated.ScrollView
-                                style={{ maxHeight: scrollMaxHeight }}
+                                style={{ height: body.height, maxHeight: body.cap }}
+                                scrollEnabled={body.scrolls}
+                                bounces={body.scrolls}
                                 keyboardShouldPersistTaps={props.keyboardShouldPersistTaps ?? 'handled'}
-                                showsVerticalScrollIndicator
+                                showsVerticalScrollIndicator={body.scrolls}
                             >
-                                {props.children}
+                                <View onLayout={handleContentLayout}>
+                                    {props.children}
+                                </View>
                             </Animated.ScrollView>
                             {/* The home indicator, not padding for its own sake. */}
                             <View style={{ height: safeArea.bottom + 8 }} />

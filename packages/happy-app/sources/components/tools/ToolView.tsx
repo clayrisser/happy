@@ -24,6 +24,7 @@ import { useSetting } from '@/sync/storage';
 import { InlineImage } from '@/components/InlineImage';
 import { toolResultImage } from '@/utils/imageResult';
 import { getToolRowRoute } from '@/utils/toolRowRoute';
+import { useSubagentScope } from '@/sync/subagentMessages';
 
 interface ToolViewProps {
     metadata: Metadata | null;
@@ -39,11 +40,14 @@ export const ToolView = React.memo<ToolViewProps>((props) => {
     const router = useRouter();
     const { theme } = useUnistyles();
     const compactToolCalls = useSetting('compactToolCalls');
+    // Null in the session's own transcript, the agent's id on an agent screen
+    // (DROVE-166).
+    const agentId = useSubagentScope();
 
     // A card and a row inside a consolidated group open the same detail, so
     // both ask the same function where that is (DROVE-152). That function also
     // owns the file-editing special case this used to inline.
-    const route = getToolRowRoute({ sessionId, messageId, tool });
+    const route = getToolRowRoute({ sessionId, agentId, messageId, tool });
 
     // When a tool reads an image the image IS the result, so it belongs in the
     // transcript rather than two taps inside the detail screen (DROVE-151).

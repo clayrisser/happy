@@ -79,6 +79,86 @@ export const streamTalkDefaults: Required<StreamTalk> = {
     pitch: 1.0,
     maxBacklogSeconds: 15,
 };
+
+// The eyes-free audio cue system (DROVE-112): the ambient heartbeat, the
+// one-shot earcons, and the spoken one-line titles of tool calls, terminal
+// calls and agent spawns. One nested object, like streamTalk and codeWrap, so
+// a partial from another app version merges instead of failing the parse.
+//
+// `muted` is a bag of cue ids rather than a switch per cue, because the cue
+// table grows and a schema that has to grow with it turns every new sound into
+// a settings migration. An id nothing recognises is simply never looked up.
+export const AudioCuesSchema = z.object({
+    on: z.boolean().optional(),
+    heartbeat: z.boolean().optional(),
+    volume: z.number().optional(),
+    workingIntervalSeconds: z.number().optional(),
+    waitingIntervalSeconds: z.number().optional(),
+    muted: z.array(z.string()).optional(),
+    speakTitles: z.boolean().optional(),
+    speakAgentTitles: z.boolean().optional(),
+    speakToolTitles: z.boolean().optional(),
+    titlesPerRun: z.number().optional(),
+    toolCuesPerMinute: z.number().optional(),
+    agentCuesPerMinute: z.number().optional(),
+});
+export type AudioCues = z.infer<typeof AudioCuesSchema>;
+
+/** Cue loudness, on top of each cue's own gain in the table. */
+export const audioCueVolumeRange = { min: 0, max: 1 } as const;
+/**
+ * How often the ordinary WORKING pulse repeats. The floor is two seconds
+ * because anything faster stops being ambient and starts being an alarm; the
+ * ceiling is a minute, which is "tell me it is still alive" and little more.
+ */
+export const audioCueWorkingIntervalRange = { min: 2, max: 60 } as const;
+/** How often a WAITING pulse repeats. Faster than working, by design. */
+export const audioCueWaitingIntervalRange = { min: 1, max: 30 } as const;
+/**
+ * How many tool titles inside one RUN of consecutive tool calls are spoken
+ * before the rest of the run goes unnamed. A run of thirty greps must not
+ * become thirty spoken lines; two or three is enough to know what is going on.
+ * Agent spawns are exempt, because that is the one Clay most wants to hear.
+ */
+export const audioCueTitlesPerRunRange = { min: 0, max: 10 } as const;
+/** Cap on EARCONS per minute, per lane, with the excess dropped silently. */
+export const audioCueRateRange = { min: 1, max: 60 } as const;
+
+export const audioCuesDefaults: Required<AudioCues> = {
+    on: true,
+    heartbeat: true,
+    volume: 0.35,
+    workingIntervalSeconds: 6,
+    waitingIntervalSeconds: 3,
+    muted: [],
+    speakTitles: true,
+    speakAgentTitles: true,
+    speakToolTitles: true,
+    titlesPerRun: 3,
+    toolCuesPerMinute: 6,
+    agentCuesPerMinute: 12,
+};
+
+/**
+ * How much faster and higher a spoken TITLE is read than reply prose
+ * (DROVE-112).
+ *
+ * Not a setting, and deliberately: the point is that a tool call never sounds
+ * like Claude talking, and a slider that can be dragged back to 1.0 would let
+ * that distinction be silently switched off. Volume would have been the
+ * obvious third axis and is not available — DroverSpeechModule takes a rate,
+ * a pitch and a voice, and no per-utterance volume — so rate and pitch carry
+ * it, with the earcon in front doing the rest.
+ */
+export const asideRateScale = 1.22;
+export const asidePitchScale = 1.18;
+/**
+ * The absolute rate an aside may reach, above the speed slider's own maximum.
+ * The slider bounds what the USER picks for prose; it should not stop a title
+ * being read as the quick footnote it is. Same argument DROVE-116 makes about
+ * the catch-up clamp, and the same engine-safe ceiling.
+ */
+export const asideRateCeiling = 0.75;
 // The three feedback channels and how audio may answer (DROVE-72). Clay's
 // four ways of working (silent haptic, eyes-free audio, direct, hands-free
 // voice) are saved COMBINATIONS of these four keys, never code paths, and a
@@ -137,6 +217,7 @@ export const SettingsSchema = z.object({
     codeScroll: CodeScrollSchema.describe('Which monospace kinds scroll horizontally instead of wrapping, toggled by double-tap'),
     streamTalk: StreamTalkSchema.describe('Read-aloud voice: chosen voice identifier, rate, pitch and how much unspoken audio may pile up before skipping ahead'),
     speakReplies: SpeakRepliesSchema.describe('Which device speaks replies aloud: phone, watch, or auto (the one whose audio route has headphones, else the phone)'),
+    audioCues: AudioCuesSchema.describe('Eyes-free audio cues: the ambient heartbeat, the one-shot earcons, and the spoken titles of tool calls and agent spawns'),
     droverAnnounceVisual: z.boolean().describe('Visual channel: the alert push and the gum client announce a Cattle Drover prompt'),
     droverAnnounceHaptic: z.boolean().describe('Haptic channel: the phone taps and the wrist buzzes when a Cattle Drover prompt arrives'),
     droverAnnounceAudio: z.boolean().describe('Audio channel: a Cattle Drover prompt is spoken aloud when it arrives'),
@@ -228,6 +309,7 @@ export const settingsDefaults: Settings = {
     codeScroll: {},
     streamTalk: { ...streamTalkDefaults },
     speakReplies: { on: speakRepliesDefault },
+    audioCues: { ...audioCuesDefaults },
     // Visual and haptic on, matching the bus's built-in defaults: the push and
     // the wrist buzz are what Clay already has. Audio off until DROVE-73's
     // measurements say what answering by click costs.
@@ -374,6 +456,71 @@ export function resolveStreamTalk(settings: Pick<Settings, 'streamTalk'>): Requi
 /** The delta that changes some stream-talk fields and keeps the rest. */
 export function updateStreamTalk(settings: Pick<Settings, 'streamTalk'>, patch: Partial<StreamTalk>): Pick<Settings, 'streamTalk'> {
     return { streamTalk: { ...resolveStreamTalk(settings), ...patch } };
+}
+
+//
+// Eyes-free audio cues (DROVE-112)
+//
+
+/**
+ * The cue settings with every field present and inside its range.
+ *
+ * `muted` is filtered to strings and deduped rather than trusted: it is the
+ * one field another app version can put arbitrary content in, and a bad entry
+ * there would otherwise reach the mixer's lookup.
+ */
+export function resolveAudioCues(settings: Pick<Settings, 'audioCues'>): Required<AudioCues> {
+    const raw = settings.audioCues ?? {};
+    const muted = Array.isArray(raw.muted)
+        ? [...new Set(raw.muted.filter((id): id is string => typeof id === 'string'))]
+        : [];
+    return {
+        on: raw.on ?? audioCuesDefaults.on,
+        heartbeat: raw.heartbeat ?? audioCuesDefaults.heartbeat,
+        volume: clamp(raw.volume, audioCuesDefaults.volume, audioCueVolumeRange),
+        workingIntervalSeconds: clamp(
+            raw.workingIntervalSeconds,
+            audioCuesDefaults.workingIntervalSeconds,
+            audioCueWorkingIntervalRange,
+        ),
+        waitingIntervalSeconds: clamp(
+            raw.waitingIntervalSeconds,
+            audioCuesDefaults.waitingIntervalSeconds,
+            audioCueWaitingIntervalRange,
+        ),
+        muted,
+        speakTitles: raw.speakTitles ?? audioCuesDefaults.speakTitles,
+        speakAgentTitles: raw.speakAgentTitles ?? audioCuesDefaults.speakAgentTitles,
+        speakToolTitles: raw.speakToolTitles ?? audioCuesDefaults.speakToolTitles,
+        titlesPerRun: Math.round(clamp(raw.titlesPerRun, audioCuesDefaults.titlesPerRun, audioCueTitlesPerRunRange)),
+        toolCuesPerMinute: Math.round(
+            clamp(raw.toolCuesPerMinute, audioCuesDefaults.toolCuesPerMinute, audioCueRateRange),
+        ),
+        agentCuesPerMinute: Math.round(
+            clamp(raw.agentCuesPerMinute, audioCuesDefaults.agentCuesPerMinute, audioCueRateRange),
+        ),
+    };
+}
+
+/** The delta that changes some cue fields and keeps the rest. */
+export function updateAudioCues(
+    settings: Pick<Settings, 'audioCues'>,
+    patch: Partial<AudioCues>,
+): Pick<Settings, 'audioCues'> {
+    return { audioCues: { ...resolveAudioCues(settings), ...patch } };
+}
+
+/** The delta that silences one cue, or un-silences it. */
+export function muteAudioCue(
+    settings: Pick<Settings, 'audioCues'>,
+    id: string,
+    muted: boolean,
+): Pick<Settings, 'audioCues'> {
+    const current = resolveAudioCues(settings).muted;
+    const next = muted
+        ? [...new Set([...current, id])]
+        : current.filter((entry) => entry !== id);
+    return updateAudioCues(settings, { muted: next });
 }
 
 //

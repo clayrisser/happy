@@ -22,9 +22,9 @@ export function droverPolicySummary(policy: DroverPolicy | undefined): string {
     const onFamilyExhausted = policy.effective?.onFamilyExhausted ?? null;
 
     const limit =
-        onLimit === 'auto' ? 'Flips on its own'
+        onLimit === 'auto' ? 'Switches on its own'
         : onLimit === 'prompt' ? 'Asks which account'
-        : 'Flip behaviour unknown';
+        : 'Switching behaviour unknown';
     const family =
         onFamilyExhausted === 'fallback' ? 'falls back to another model'
         : onFamilyExhausted === 'stop' ? 'stops when your model is out'

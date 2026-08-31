@@ -126,23 +126,76 @@ describe('summarizeLiveStatus', () => {
         expect(summary.rows).toEqual([]);
     });
 
-    it('folds to a state word and the turn clock for the one-line composer row (DROVE-82)', () => {
-        expect(summarizeLiveStatus(busy, now).compact).toEqual({ label: 'Bash', elapsed: '17m 13s' });
-        expect(summarizeLiveStatus({ ...busy, tool: undefined }, now).compact.label).toBe('drover-relaunch 3/5');
-        expect(summarizeLiveStatus({ ...busy, tool: undefined, workflows: [] }, now).compact.label).toBe('2 agents');
-        expect(summarizeLiveStatus({ at: now, turnStartedAt: now - 1_033_000 }, now).compact)
-            .toEqual({ label: 'working', elapsed: '17m 13s' });
-    });
-
-    it('falls back to the running thing\'s own clock when the CLI never saw the prompt', () => {
-        expect(summarizeLiveStatus({ ...busy, turnStartedAt: undefined }, now).compact.elapsed).toBe('1m 5s');
-        expect(summarizeLiveStatus({ at: now }, now).compact).toEqual({ label: 'working' });
-    });
-
     it('keeps every row key stable across ticks so the tree does not remount each second', () => {
         const first = summarizeLiveStatus(busy, now).rows.map((r) => r.key);
         const later = summarizeLiveStatus(busy, now + 4_000).rows.map((r) => r.key);
         expect(later).toEqual(first);
+    });
+});
+
+/**
+ * The main thread's own line on the composer row (DROVE-155).
+ *
+ * Clay: "Where is the live token counter for the main thread as it's
+ * thinking". The row used to fold the tool name, the workflow and the agent
+ * count into one label with the turn's clock behind it, which is how
+ * "3 agents 29s" came to sit there reading as the agents' own time.
+ */
+describe('summarizeLiveStatus main thread readout', () => {
+    /** The same state, from a CLI that publishes the main thread's own block. */
+    const mainBusy: LiveStatus = { ...busy, main: { startedAt: now - 1_033_000, tokens: 251_200 } };
+
+    it('is the tool it is blocked on, the turn clock and the turn tokens', () => {
+        expect(summarizeLiveStatus(mainBusy, now).main)
+            .toEqual({ label: 'Bash', elapsed: '17m 13s', tokens: '251.2k' });
+    });
+
+    it('never lets the agents into that line, and counts them on their own', () => {
+        const summary = summarizeLiveStatus(mainBusy, now);
+        expect(summary.sideCount).toBe(3);
+        expect(summary.main!.label).not.toMatch(/agent|drover-relaunch/);
+    });
+
+    it('says "working" while the model composes and puts nothing on disk', () => {
+        const composing: LiveStatus = {
+            at: now,
+            turnStartedAt: now - 1_033_000,
+            main: { startedAt: now - 1_033_000, tokens: 9_400 },
+        };
+        expect(summarizeLiveStatus(composing, now).main)
+            .toEqual({ label: 'working', elapsed: '17m 13s', tokens: '9.4k' });
+        expect(summarizeLiveStatus(composing, now).sideCount).toBe(0);
+    });
+
+    it('has no token count until the turn has spent one', () => {
+        const fresh: LiveStatus = { at: now, main: { startedAt: now - 4_000 } };
+        expect(summarizeLiveStatus(fresh, now).main).toEqual({ label: 'working', elapsed: '4s' });
+    });
+
+    it('is null while only background agents are out, which is what keeps the dot off', () => {
+        const fanOut: LiveStatus = {
+            at: now,
+            turnStartedAt: now - 300_000,
+            agents: [{ id: 'a1', label: 'Sweep the backlog', startedAt: now - 280_000, tokens: 1_000 }],
+        };
+        const summary = summarizeLiveStatus(fanOut, now);
+        expect(summary.main).toBeNull();
+        expect(summary.sideCount).toBe(1);
+    });
+
+    it('infers the main thread from an older CLI that publishes no block for it', () => {
+        // A running tool IS the main thread waiting, whatever else is out.
+        expect(summarizeLiveStatus(busy, now).main).toEqual({ label: 'Bash', elapsed: '17m 13s' });
+        // Nothing else running: the snapshot can only be about the main thread.
+        expect(summarizeLiveStatus({ at: now, turnStartedAt: now - 65_000 }, now).main)
+            .toEqual({ label: 'working', elapsed: '1m 5s' });
+        // Only agents, and no way to tell: it stays null rather than guessing.
+        expect(summarizeLiveStatus({ ...busy, tool: undefined }, now).main).toBeNull();
+    });
+
+    it('falls back to the tool\'s own clock when the CLI never saw the prompt', () => {
+        expect(summarizeLiveStatus({ ...busy, turnStartedAt: undefined }, now).main?.elapsed).toBe('1m 5s');
+        expect(summarizeLiveStatus({ at: now }, now).main).toBeNull();
     });
 });
 

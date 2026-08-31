@@ -42,7 +42,7 @@ const foldedToolName = { ...mainThreadRow, live: '1m 2s 251.2k' } as const;
 
 describe('the row at 375pt, the narrowest phone still supported', () => {
     it('draws the whole of it, with the model and the account both on', () => {
-        expect(statusRowUsableWidth(375)).toBe(339);
+        expect(statusRowUsableWidth(375)).toBe(337);
         expect(estimateStatusRowWidth(workingRow)).toBe(291);
         expect(statusRowFits(workingRow, 375)).toBe(true);
     });
@@ -65,10 +65,11 @@ describe('the row at 375pt, the narrowest phone still supported', () => {
 /**
  * The widest the row ever gets, and where the three folds are load-bearing.
  *
- * DROVE-155's readout costs 62pt more than the segment it replaces, which is
- * more than the slack left at 375. Its own fold covers it, but only if the
- * width it fires at rises from 360 to 375: measured here so the two lanes
- * agree on one number rather than each guessing.
+ * DROVE-155's readout costs 62pt more than the segment it replaced, which is
+ * more than the slack left at 375. Its own tool-name fold covers it, and the
+ * row asks these functions when to fire it rather than comparing the width to
+ * a constant: with a model and an account on the line, the width the name
+ * stops fitting at depends on how long all three happen to be.
  */
 describe('the row once the main thread reports its own numbers (DROVE-155)', () => {
     it('needs the tool name folded away at 375, and fits once it is', () => {
@@ -143,16 +144,20 @@ describe('the quota segment', () => {
 
 describe('the context gauge', () => {
     it('drops its percent once the account is on the row; the ring still fills', () => {
-        expect(showsContextPercent('jamrizzi', false)).toBe(false);
+        expect(showsContextPercent('jamrizzi', false, false)).toBe(false);
     });
 
-    it('keeps the percent when there is no account taking the width', () => {
-        expect(showsContextPercent(null, false)).toBe(true);
-        expect(showsContextPercent('   ', false)).toBe(true);
+    it('drops it while the main thread works too, where the token count is the cost readout (DROVE-155)', () => {
+        expect(showsContextPercent(null, false, true)).toBe(false);
+    });
+
+    it('keeps the percent on an idle session with no account taking the width', () => {
+        expect(showsContextPercent(null, false, false)).toBe(true);
+        expect(showsContextPercent('   ', false, false)).toBe(true);
     });
 
     it('always prints the exact figure once it has been tapped', () => {
-        expect(showsContextPercent('jamrizzi', true)).toBe(true);
+        expect(showsContextPercent('jamrizzi', true, true)).toBe(true);
     });
 });
 

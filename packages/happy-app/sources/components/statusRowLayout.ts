@@ -35,12 +35,13 @@
  * never shrink, because a truncated number is useless while a truncated
  * account name is still recognisable.
  *
- * ONE NUMBER FOR THE LANE NEXT DOOR. DROVE-155's main-thread readout costs
- * 62pt more than the segment it replaces, which is more than the slack these
- * folds leave at 375. Its own fold covers that, but the width it fires at has
- * to be 375 rather than the 360 it was measured at before the model and the
- * account were here. statusRowLayout.spec.ts pins it, so the two lanes agree
- * on one number instead of each guessing at a constant.
+ * AND ONE MORE FOLD, WHICH IS DROVE-155's. Its main-thread readout costs 62pt
+ * more than the segment it replaced, which is more than the slack the folds
+ * above leave at 375, so the tool NAME gives way. That fold used to fire under
+ * a 360pt constant; with a model and an account on the row the width it should
+ * fire at depends on how long this tool, this model and this account happen to
+ * be, so the row asks `statusRowFits` with its real content instead. A
+ * constant could only ever have been right for one row.
  *
  * Pure, so the budget can be pinned at 375 and 320 without a renderer.
  * AgentInputStatusRow.tsx draws it.
@@ -63,7 +64,8 @@ export const statusRowMetrics = {
      * phone; the estimate only ever errs toward "does not fit".
      */
     glyphWidth: 6,
-    paddingHorizontal: 18,
+    /** 10pt shell inset + 9pt action inset, matching the row's own style (DROVE-153). */
+    paddingHorizontal: 19,
     dot: 7,
     dotMarginRight: 5,
     separator: 16,
@@ -155,12 +157,19 @@ export function statusRowQuotaText(
 /**
  * Whether the context gauge still prints its percent.
  *
- * Folded once the account is on the row: the ring carries the same number and
- * a tap prints the exact tokens, so the text is the cheapest thing on the row
+ * Folded while the main thread works, because the live token count beside it
+ * is the cost readout at that moment (DROVE-155), and equally once the account
+ * is on the row (DROVE-138). Either way the ring carries the same number and a
+ * tap prints the exact tokens, so the text is the cheapest thing on a full row
  * to lose.
  */
-export function showsContextPercent(account: string | null | undefined, precise: boolean): boolean {
+export function showsContextPercent(
+    account: string | null | undefined,
+    precise: boolean,
+    mainWorking: boolean,
+): boolean {
     if (precise) return true;
+    if (mainWorking) return false;
     return !account?.trim();
 }
 

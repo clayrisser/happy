@@ -5,8 +5,8 @@
  * DROVE-83 read the three as one pill, `Yolo · Opus 5 1M · High`, on a row of
  * its own. DROVE-111 folded them into the button row: the mode a glyph, the
  * effort a glyph, the model the only one still spelled out. DROVE-138 then
- * moved the model down to the status line, because 63pt between six buttons
- * was showing `Opus 5 1M` as `Opus 5...`.
+ * moved the model down to the status line, because a name sharing a row with
+ * six buttons was showing `Opus 5 1M` as `Opus 5...`.
  *
  * So this file is now just the naming. The glyph controls read `mode` and
  * `effort` to know they have something to draw, the status row reads `model`,
@@ -19,8 +19,16 @@
 
 export const SESSION_PILL_SEPARATOR = ' · ';
 
-/** Half a step under the 42pt action buttons, so the row still fits. */
-export const COMPOSER_SESSION_CONTROL_SIZE = 38;
+/**
+ * The mode and effort segments inside the session capsule.
+ *
+ * 44, up from 38 (DROVE-153). They were half a step under the row's buttons
+ * because seven separate discs had to fit across 357pt. They no longer have
+ * to: the mode and the effort are one capsule now, the primary has moved into
+ * the input, and DROVE-138 took the model off the row entirely, so the capsule
+ * is two 44pt segments with nothing to squeeze.
+ */
+export const COMPOSER_SESSION_CONTROL_SIZE = 44;
 
 export interface SessionPillModelLike {
     key?: string | null;

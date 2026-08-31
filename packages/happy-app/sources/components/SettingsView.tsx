@@ -230,7 +230,7 @@ export const SettingsView = React.memo(function SettingsView({
                     Reachable without a session, because the case it exists for
                     is setting what the NEXT session starts with. */}
                 <Item
-                    title="Flip policy"
+                    title="Account switching"
                     subtitle="What a session does when an account runs out"
                     icon={<Ionicons name="swap-horizontal-outline" size={29} color="#FF9500" />}
                     onPress={() => router.push('/settings/flip-policy' as any)}

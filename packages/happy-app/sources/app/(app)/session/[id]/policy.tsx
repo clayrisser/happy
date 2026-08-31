@@ -80,7 +80,7 @@ export default function SessionPolicyScreen() {
     if (!session) {
         return (
             <>
-                <Stack.Screen options={{ title: 'Flip policy' }} />
+                <Stack.Screen options={{ title: 'Account switching' }} />
                 <ItemList>
                     <ItemGroup>
                         <Item title="Session not found" showChevron={false} />
@@ -94,7 +94,7 @@ export default function SessionPolicyScreen() {
 
     return (
         <>
-            <Stack.Screen options={{ title: 'Flip policy' }} />
+            <Stack.Screen options={{ title: 'Account switching' }} />
             <ItemList
                 containerStyle={{ paddingTop: Platform.OS === 'ios' ? MOBILE_GLASS_HEADER_HEIGHT : 0 }}
             >
@@ -102,7 +102,7 @@ export default function SessionPolicyScreen() {
                     saying that is better than showing controls that write into
                     nothing. */}
                 {!policy && (
-                    <ItemGroup title="Flip policy">
+                    <ItemGroup title="Account switching">
                         <Item
                             title="Nothing reported yet"
                             subtitle="This session has not sent a policy. It only does when Cattle Drover has a registry of accounts on that machine."

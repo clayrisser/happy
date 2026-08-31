@@ -251,6 +251,20 @@ describe('resolveUsageStrip on a pane session', () => {
         expect(strip.usageBarGroups.map((g) => g.key))
             .toEqual(['account:jamrizzi', 'account:main', 'account:bitspur.com', 'account:spare']);
     });
+    it('marks which blocks can take the session and which cannot (DROVE-160)', () => {
+        const groups = resolveUsageStrip(pane).usageBarGroups;
+        expect(groups.map((g) => [g.account, g.active === true, g.switchable])).toEqual([
+            // The one in use is not a target: switching to where you already
+            // are is a teardown for nothing.
+            ['jamrizzi', true, false],
+            ['main', false, true],
+            ['bitspur.com', false, true],
+            // No login means the account cannot take the session, so the tap
+            // is refused here rather than by a switch that bounces a minute
+            // later on the Mac.
+            ['spare', false, false],
+        ]);
+    });
 });
 
 describe('resolveUsageStrip on a remote session', () => {

@@ -94,6 +94,27 @@ export interface LiveStatusWorkflow {
 }
 
 /**
+ * The MAIN thread's own turn (DROVE-155).
+ *
+ * Clay: "Where is the live token counter for the main thread as it's thinking".
+ * Every agent card already carried an elapsed time and a token count and the
+ * main session carried neither, so the only numbers on the status row belonged
+ * to the agents.
+ *
+ * Present only while the main thread is ACTUALLY working — blocked on a tool,
+ * an API call in flight, or the transcript still moving. A fan-out of
+ * background agents can outlive the turn that launched it, and this block is
+ * what lets the phone tell the two apart instead of calling the pane busy
+ * because something, somewhere, is running.
+ */
+export interface LiveStatusMain {
+    /** The turn's start, epoch ms; the tool's or the newest record's when we never saw the prompt. */
+    startedAt: number
+    /** Tokens this turn has spent on the MAIN transcript, counted exactly as an agent's are. */
+    tokens?: number
+}
+
+/**
  * One compact snapshot, published over the metadata channel the droverAccount
  * and paneModel stamps already ride (DROVE-45, DROVE-47).
  *
@@ -107,6 +128,8 @@ export interface LiveStatus {
     at: number
     /** The last real user prompt, epoch ms. Absent when we never saw one. */
     turnStartedAt?: number
+    /** The main thread's own clock and tokens, absent while only agents are out. */
+    main?: LiveStatusMain
     tool?: LiveStatusTool
     agents?: LiveStatusAgent[]
     workflows?: LiveStatusWorkflow[]
@@ -353,6 +376,8 @@ export function createLiveStatusReader(opts: {
     let transcript: Tail = { offset: 0, carry: '' }
     let openTools = new Map<string, LiveStatusTool>()
     let turnStartedAt = 0
+    /** Tokens the MAIN transcript has spent since that prompt (DROVE-155). */
+    let turnTokens = 0
     let lastRecordAt = 0
     let lastKind: RecordKind = 'other'
     let agents = new Map<string, AgentState>()
@@ -361,6 +386,7 @@ export function createLiveStatusReader(opts: {
         transcript = { offset: 0, carry: '' }
         openTools = new Map()
         turnStartedAt = 0
+        turnTokens = 0
         lastRecordAt = 0
         lastKind = 'other'
         agents = new Map()
@@ -391,6 +417,18 @@ export function createLiveStatusReader(opts: {
             if (kind !== 'other') lastKind = kind
             if (kind === 'prompt' && at > 0) {
                 turnStartedAt = at
+                // A new prompt is a new turn, so the count starts over. Without
+                // this the row would show the whole session's spend and never
+                // go back down, which is the stale reading the app refuses to
+                // draw on an idle session.
+                turnTokens = 0
+            }
+            // The same three fields, through the same countTokens, that give an
+            // agent card its "251.2k tokens" (DROVE-155) — the difference is
+            // only which transcript they are read from. Sidechain records were
+            // dropped above, so this is the main thread and nothing else.
+            if (record.type === 'assistant') {
+                turnTokens += countTokens(usageOf(record))
             }
 
             const message = record.message
@@ -630,7 +668,6 @@ export function createLiveStatusReader(opts: {
             const workflows = readWorkflows(sessionDir, now)
             const tool = openTools.size > 0 ? Array.from(openTools.values()).pop() : undefined
 
-            const moving = agentRows.length > 0 || workflows.length > 0 || !!tool
             const thinking = opts.isThinking?.() === true
             // How long the transcript may stay quiet before the turn is over.
             //
@@ -643,13 +680,31 @@ export function createLiveStatusReader(opts: {
             // back on in the middle of a turn.
             const quietMs = lastKind === 'assistant-text' ? settleGraceMs : idleGraceMs
             const quiet = lastRecordAt === 0 || now - lastRecordAt > quietMs
-            if (!moving && !thinking && quiet) {
+            // What the MAIN thread is doing, decided without the agents
+            // (DROVE-155). Blocked on a tool, an API call in flight, or the
+            // transcript still moving. Six background agents out on their own
+            // are NOT the main thread working, and the phone's dot means this
+            // and only this.
+            const mainWorking = !!tool || thinking || !quiet
+            const moving = mainWorking || agentRows.length > 0 || workflows.length > 0
+            if (!moving) {
                 return null
             }
+            const mainStartedAt = turnStartedAt > 0
+                ? turnStartedAt
+                : (tool?.startedAt ?? lastRecordAt)
 
             return {
                 at: now,
                 ...(turnStartedAt > 0 ? { turnStartedAt } : {}),
+                ...(mainWorking && mainStartedAt > 0
+                    ? {
+                        main: {
+                            startedAt: mainStartedAt,
+                            ...(turnTokens > 0 ? { tokens: turnTokens } : {}),
+                        },
+                    }
+                    : {}),
                 ...(tool ? { tool } : {}),
                 ...(agentRows.length > 0
                     ? { agents: agentRows.sort((a, b) => a.startedAt - b.startedAt) }
@@ -688,7 +743,8 @@ export function createLiveStatusReader(opts: {
  *    from a `startedAt` that does not change, so its clocks tick between
  *    publishes and a long tool call needs no writes at all.
  *  - A SLOWER LANE FOR TOKEN COUNTS (`slowIntervalMs`, 2s). Token totals move
- *    on every response of every running agent, so with six agents out they are
+ *    on every response of the main thread and of every running agent, so with
+ *    six agents out they are
  *    the only thing changing and they would pin the fast lane at one write a
  *    second for the whole fan-out. Nothing on screen jumps because of it: the
  *    counters are read at a glance and the elapsed clocks beside them still
@@ -737,6 +793,7 @@ export class LiveStatusPublisher {
         return JSON.stringify({
             ...status,
             at: 0,
+            main: status.main ? { ...status.main, tokens: 0 } : undefined,
             agents: status.agents?.map((agent) => ({ ...agent, tokens: 0 })),
             workflows: status.workflows?.map((workflow) => ({ ...workflow, tokens: 0 })),
         })

@@ -25,6 +25,7 @@ const { host } = vi.hoisted(() => ({
 
 vi.mock('react-native', () => ({
     Platform: { OS: 'ios' },
+    Pressable: host('Pressable'),
     Text: host('Text'),
     View: host('View'),
 }));
@@ -38,6 +39,7 @@ vi.mock('react-native-unistyles', () => ({
                 textSecondary: 'secondary',
                 divider: 'divider',
                 success: 'green',
+                textLink: 'link',
                 warningCritical: 'critical',
             },
         },
@@ -222,7 +224,7 @@ describe('UsageAccountBarRow holds its columns when a field is absent', () => {
                     key: 'account:jamrizzi',
                     title: 'jamrizzi · 51% left',
                     active: true,
-                    rows: [bar({ key: 'jamrizzi:five_hour', name: 'Session' })],
+                    rows: [bar({ key: 'jamrizzi:five_hour', name: 'Session', fullName: 'Session' })],
                 },
                 {
                     key: 'account:main',
@@ -302,5 +304,83 @@ describe('the sheet at five accounts times three bars (DROVE-148)', () => {
         expect(head.props.ellipsizeMode).toBe('tail');
         // Shrinks inside the heading row instead of widening it.
         expect(head.props.style.flexShrink).toBe(1);
+    });
+});
+
+/**
+ * The blocks as the control, not only the readout (DROVE-160).
+ *
+ * Clay: "So this should let me change the account, flip the account, from
+ * here." Tapping a block sends the session to that account, which puts a
+ * one-tap teardown next to four other blocks in a column being read for
+ * numbers. So these pin the three things that keep a mis-tap from happening:
+ * the block in use is not a target, an account with no login is not a target,
+ * and every block that IS one says so on its heading. The confirm that catches
+ * the mis-tap anyway is in AgentInputStatusRow.
+ */
+describe('switching account from a block (DROVE-160)', () => {
+    const groups = [
+        {
+            key: 'account:jamrizzi',
+            title: 'jamrizzi · 51% left',
+            active: true,
+            account: 'jamrizzi',
+            switchable: false,
+            rows: [bar({ key: 'jamrizzi:five_hour', name: 'Session', fullName: 'Session' })],
+        },
+        {
+            key: 'account:main',
+            title: 'main · 20% left',
+            account: 'main',
+            switchable: true,
+            rows: [bar({ key: 'main:five_hour', name: 'Session', fullName: 'Session' })],
+        },
+        {
+            key: 'account:bitspur.com',
+            title: 'bitspur.com · no login',
+            account: 'bitspur.com',
+            switchable: false,
+            rows: [bar({ key: 'bitspur.com:five_hour', name: 'Session', fullName: 'Session', disabled: true })],
+        },
+    ];
+
+    it('makes only the accounts that can take the session pressable', () => {
+        const onSwitchAccount = vi.fn();
+        const renderer = mount(React.createElement(UsageAccountBars, { width: 393, groups, onSwitchAccount }));
+        const pressables = renderer.root.findAllByType('Pressable' as any);
+        expect(pressables).toHaveLength(1);
+        // One focusable element carrying what its three rows said, so a
+        // screen reader is not left stepping past bars it cannot press.
+        expect(pressables[0].props.accessible).toBe(true);
+        expect(pressables[0].props.accessibilityRole).toBe('button');
+        expect(pressables[0].props.accessibilityLabel)
+            .toBe('Switch to main. main · 20% left. Session, 43%, Fable back Sep 2');
+        act(() => {
+            pressables[0].props.onPress();
+        });
+        expect(onSwitchAccount).toHaveBeenCalledWith('main');
+    });
+
+    it('says which block you are on and which will take you', () => {
+        const renderer = mount(React.createElement(UsageAccountBars, {
+            width: 393,
+            groups,
+            onSwitchAccount: () => {},
+        }));
+        const words = renderer.root.findAllByType('Text' as any)
+            .map((node: any) => node.props.children)
+            .filter((text: unknown) => text === 'current' || text === 'Switch ›');
+        // One word per block, never both, and nothing at all on the account
+        // that cannot take the session.
+        expect(words).toEqual(['current', 'Switch ›']);
+    });
+
+    it('draws no affordance at all when nothing can be switched to', () => {
+        const renderer = mount(React.createElement(UsageAccountBars, { width: 393, groups }));
+        expect(renderer.root.findAllByType('Pressable' as any)).toHaveLength(0);
+        const words = renderer.root.findAllByType('Text' as any)
+            .map((node: any) => node.props.children)
+            .filter((text: unknown) => text === 'Switch ›');
+        expect(words).toEqual([]);
     });
 });

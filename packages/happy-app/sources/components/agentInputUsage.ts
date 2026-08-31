@@ -101,6 +101,19 @@ export type UsageBarGroup = {
     title: string;
     /** The account the session is on, so one block reads as yours (DROVE-148). */
     active?: boolean;
+    /**
+     * The bare account name behind the block, which is what a switch sends
+     * (DROVE-160). Null on the block that stands for a session the registry
+     * does not know, and on the bare rows the info screen draws.
+     */
+    account?: string | null;
+    /**
+     * The block can be tapped to move the session onto it: it names a real
+     * account, it is not the one already in use, and that account is logged
+     * in. An account with no login cannot take the session, so it is refused
+     * here rather than by a switch that bounces a minute later on the Mac.
+     */
+    switchable?: boolean;
     rows: UsageBarRow[];
 };
 
@@ -379,6 +392,10 @@ export function usageAccountBarGroup(
         key: account.name ? `account:${account.name}` : 'usage',
         title: back && title ? `${title} · ${back}` : title,
         active: account.current,
+        account: account.name || null,
+        // The sheet is the screen where the choice is made, so it is the
+        // screen the move happens from (DROVE-160).
+        switchable: !!account.name && !account.current && account.loggedIn !== false,
         rows,
     };
 }

@@ -30,7 +30,8 @@ import { t } from '@/text';
 import { Metadata } from '@/sync/storageTypes';
 import { isRunningOnMac } from '@/utils/platform';
 import { MobileGlassSurface } from './MobileGlass';
-import { AnimatedFade } from './AnimatedOverlay';
+import { GlassChromeButton, GlassChromeSurface } from './GlassChromeControl';
+import { AnimatedClickAwayBackdrop, AnimatedFade } from './AnimatedOverlay';
 import { BubblePressable } from './BubblePressable';
 import { resolveAgentInputPrimaryAction } from './agentInputPrimaryAction';
 import { resolveComposerPrimaryPress, type ComposerPrimaryGesture } from './composerPrimaryPress';
@@ -48,6 +49,7 @@ import {
     resolveMobileComposerActionGeometry,
     resolveMobileComposerActionRowGeometry,
 } from './agentInputLayout';
+import { COMPOSER_STRIP_HEIGHT } from './composerStripLayout';
 import { shouldUseExpoNativeSettingsMenu } from './glassInteractionPolicy';
 import { LiveMicBanner } from './LiveMicBanner';
 import { TalkButton } from './TalkButton';
@@ -56,7 +58,6 @@ import type { DictationCaptureState } from '@/voice/dictationCapture';
 import { DroverChannelsSheet } from './DroverChannelsSheet';
 import { buildSessionPillLabel } from './sessionPillLabel';
 import { permissionModeGlyph } from './sessionControlGlyphs';
-import { resolveSessionAccount } from '@/utils/droverSessionAccount';
 import { ComposerSessionControls, type ComposerSessionPicker } from './ComposerSessionControls';
 
 interface AgentInputProps {
@@ -258,12 +259,24 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         // add glyph below. The previous 60pt slot left a full blank line below
         // an empty input on phones.
         minHeight: MOBILE_COMPOSER_METRICS.inputMinHeight,
-        // 18pt from the outer edge: 10pt shell inset plus the 8pt inset from
+        // 19pt from the outer edge: 10pt shell inset plus the 9pt inset from
         // the add button edge to the 26pt glyph.
         paddingLeft: MOBILE_COMPOSER_LAYOUT.inputContainerPaddingLeft,
-        paddingRight: MOBILE_COMPOSER_LAYOUT.inputContainerPaddingRight,
+        // The trailing side is not symmetric any more: the send/voice button
+        // sits inside the field at that edge (DROVE-153), so the text has to
+        // stop short of it rather than run underneath.
+        paddingRight: MOBILE_COMPOSER_LAYOUT.inputTrailingActionPadding,
         paddingTop: MOBILE_COMPOSER_METRICS.inputPaddingTop,
         paddingBottom: MOBILE_COMPOSER_METRICS.inputPaddingBottom,
+    },
+    /**
+     * Where the in-field primary sits: hard against the capsule's trailing
+     * edge, and pinned to the BOTTOM so it stays put as the field grows.
+     */
+    mobilePrimaryAnchor: {
+        position: 'absolute',
+        right: MOBILE_COMPOSER_METRICS.primaryActionInset,
+        bottom: MOBILE_COMPOSER_METRICS.primaryActionInset,
     },
 
     // Overlay styles
@@ -379,19 +392,25 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     },
     mobileActionButtonsContainer: MOBILE_ACTION_ROW_GEOMETRY,
     mobileIconButton: MOBILE_ICON_ACTION_GEOMETRY,
-    /*
-     * The speaker and the mic are buttons, not labels (DROVE-118).
+    /**
+     * The audio pair's shared capsule (DROVE-153).
      *
-     * Clay: "these should be shown as buttons." They were bare glyphs sitting
-     * beside the filled primary, so the row read as one control and two
-     * decorations, and the two decorations are the ones he presses most. Same
-     * diameter and radius as the primary already (42pt from
-     * MOBILE_ICON_ACTION_GEOMETRY), so what was missing was the surface. It is
-     * one step below the primary's surfaceHighest rather than equal to it, so
-     * the row reads as three buttons with the primary still leading.
+     * DROVE-118 gave the speaker and the mic a filled surface each so they read
+     * as buttons rather than as decoration beside the primary. That was right
+     * and this keeps it; what changes is that the surface is now one capsule
+     * around both, in the material, instead of two flat discs. Clay's
+     * Screenshot-toolbar reference is exactly this shape.
      */
-    mobileIconButtonSurface: {
-        backgroundColor: theme.colors.surfaceHigh,
+    mobileAudioCapsule: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        flexShrink: 0,
+        height: MOBILE_COMPOSER_METRICS.actionSize,
+    },
+    mobileAudioDivider: {
+        width: StyleSheet.hairlineWidth,
+        height: 20,
+        backgroundColor: theme.colors.glass.divider,
     },
     // Stream-talk on: the surface carries it, not just the glyph, which is
     // what a blue icon on nothing could never say at a glance.
@@ -703,19 +722,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         contextStatus != null,
     ]);
 
-    // The account this session runs on, for the status row (DROVE-138). Same
-    // derivation the session info screen reads (DROVE-137), so the two
-    // surfaces cannot call one account by two names (DROVE-129).
-    const sessionAccountName = React.useMemo(() => resolveSessionAccount({
-        droverUsage: props.sessionStatusDroverUsage ?? null,
-        droverAccount: props.sessionStatusDroverAccount,
-        showRemaining: usageLimitShowRemaining,
-    }).name, [
-        props.sessionStatusDroverUsage,
-        props.sessionStatusDroverAccount,
-        usageLimitShowRemaining,
-    ]);
-
     const agentInputEnterToSend = useSetting('agentInputEnterToSend');
 
 
@@ -1013,6 +1019,12 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     // button row (DROVE-111).
     const handleSessionControlPress = React.useCallback((picker: ComposerSessionPicker) => {
         handlePickerPress(picker);
+    }, [handlePickerPress]);
+
+    // The model's name lives on the status row now (DROVE-138); its tap opens
+    // the same picker the capsule's segments do, on the first tap.
+    const handleModelPress = React.useCallback(() => {
+        handlePickerPress('model');
     }, [handlePickerPress]);
 
     // Long-press on the primary button opens the channel sheet (DROVE-72):
@@ -1663,6 +1675,106 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     const mobilePickerOpen = compactMobileComposer && !!openPicker
         && openPicker !== 'channels' && openPicker !== 'attach';
 
+
+    /**
+     * Send, voice or stop, INSIDE the input capsule at its trailing edge
+     * (DROVE-153).
+     *
+     * Clay's second reference is Messages' New Message screen: one capsule
+     * field with the primary affordance inside it at the trailing edge, and a
+     * single + outside. It was the end of a row of separate discs under the
+     * field. Moving it is what makes the row below read as furniture rather
+     * than as a sixth equal button, and it is what pays for the mode, effort
+     * and model getting bigger without the name losing room.
+     *
+     * Pinned to the bottom, not centred: the field grows upward as the message
+     * gets longer and the button has to stay where the thumb left it.
+     */
+    const mobilePrimaryAction = (
+        <Shaker ref={shakerRef} style={styles.mobilePrimaryAnchor}>
+            <View
+                style={[
+                    styles.sendButton,
+                    styles.mobilePrimaryButton,
+                    // Stop is checked first: a blank composer on a
+                    // non-steerable agent is both blocked and abortable, and it
+                    // must not look locked.
+                    shouldShowStopButton ? styles.mobileStopButton
+                        : isSendBlocked ? styles.sendButtonLocked
+                            : canSendMessage || shouldShowVoiceButton ? styles.mobilePrimaryButtonActive
+                                : styles.mobilePrimaryButtonInactive,
+                ]}
+            >
+                <BubblePressable
+                    style={(p) => ({
+                        width: '100%',
+                        height: '100%',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        opacity: p.pressed ? 0.7 : 1,
+                    })}
+                    // 36 drawn plus 6 a side is a 48pt target, above the floor.
+                    hitSlop={MOBILE_COMPOSER_METRICS.primaryActionSlop}
+                    onPress={handleMobilePrimaryPress}
+                    // Long-press: the channel sheet (DROVE-83).
+                    onLongPress={handleMobilePrimaryLongPress}
+                    disabled={!canPressSendButton}
+                    accessibilityRole="button"
+                    accessibilityLabel={shouldShowStopButton ? 'Stop'
+                        : shouldShowVoiceButton ? 'Voice'
+                            : 'Send'}
+                >
+                    {isAborting ? (
+                        <ActivityIndicator
+                            size="small"
+                            color={shouldShowStopButton && theme.dark ? '#000000' : activeSendIconColor}
+                        />
+                    ) : shouldShowStopButton ? (
+                        <Octicons
+                            name="stop"
+                            size={16}
+                            color={theme.dark ? '#000000' : '#FFFFFF'}
+                        />
+                    ) : isSendBlocked ? (
+                        <Ionicons
+                            name="lock-closed"
+                            size={14}
+                            color={theme.colors.textSecondary}
+                        />
+                    ) : shouldShowVoiceButton ? (
+                        props.isMicActive ? (
+                            <Ionicons name="mic" size={20} color={activeSendIconColor} />
+                        ) : (
+                            <Image
+                                source={require('@/assets/images/icon-voice-white.png')}
+                                style={{ width: 22, height: 22 }}
+                                tintColor={activeSendIconColor}
+                            />
+                        )
+                    ) : (
+                        <Octicons
+                            name="arrow-up"
+                            size={16}
+                            color={canPressSendButton ? activeSendIconColor : theme.colors.textSecondary}
+                            // The color has to travel in `style`, not just the
+                            // `color` prop: @expo/vector-icons builds
+                            // `[styleDefaults, style, ...]` (create-icon-set.js),
+                            // so a `style` entry always wins over `color`. With
+                            // styles.sendButtonIcon here — it hardcodes the
+                            // primary tint (white) — the computed color was
+                            // discarded and the arrow painted white on the
+                            // near-white glass composer, i.e. invisible.
+                            style={{
+                                color: canPressSendButton ? activeSendIconColor : theme.colors.textSecondary,
+                                marginTop: Platform.OS === 'web' ? 2 : 0,
+                            }}
+                        />
+                    )}
+                </BubblePressable>
+            </View>
+        </Shaker>
+    );
+
     return (
         <View style={[
             styles.container,
@@ -1995,10 +2107,23 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         compactMobileComposer && styles.unifiedPanelShadow,
                         compactMobileComposer && styles.mobileUnifiedPanelShadow,
                     ]}>
+                        {/* The slab is real Liquid Glass now, not a blur with a
+                            flat colour over it (DROVE-153). `frosted` painted
+                            rgba(20,20,22,0.82) on top of a blur, and a blur of a
+                            black chat is black, so what Clay photographed was
+                            the overlay: a flat dark grey slab. `liquid` renders
+                            GlassView, which is a UIVisualEffectView carrying a
+                            UIGlassEffect, and `regular` is the style the system
+                            uses for its own floating controls. Legibility does
+                            not depend on the material: the dock paints an opaque
+                            scrim behind itself (resolveDockScrimHeight), so the
+                            glass has a known surface under it rather than
+                            whatever the chat is showing. */}
                         <MobileGlassSurface
                             enabled={compactMobileComposer}
                             nativeEffect
-                            material="frosted"
+                            material="liquid"
+                            glassEffectStyle="regular"
                             intensity={92}
                             style={[
                                 styles.unifiedPanel,
@@ -2010,15 +2135,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         <AgentInputAttachmentStrip
                             images={props.selectedImages}
                             onRemove={props.onRemoveImage ?? (() => {})}
-                        />
-                    )}
-                    {/* The mic is open: red, pulsing, level moving (DROVE-74).
-                        The words land in the input below as they are heard. */}
-                    {compactMobileComposer && props.talk?.active && (
-                        <LiveMicBanner
-                            talk={props.talk}
-                            cancelArmed={props.talkCancelArmed}
-                            sendArmed={props.talkSendArmed}
                         />
                     )}
                     {/* Input field */}
@@ -2043,6 +2159,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                             maxHeight={Platform.OS === 'web' ? 480 : MOBILE_COMPOSER_METRICS.inputMaxHeight}
                             lineHeight={compactMobileComposer ? MOBILE_COMPOSER_METRICS.inputLineHeight : undefined}
                         />
+                        {compactMobileComposer ? mobilePrimaryAction : null}
                     </View>
 
                     {compactMobileComposer ? (
@@ -2050,7 +2167,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         session's mode and effort glyphs, then the voice
                         cluster (stream-talk, talk, then send/boss/stop) on the
                         right (DROVE-98 put the speaker back). The model's name
-                        moved to the status row in DROVE-138. DROVE-83's
+                        went down to the status row (DROVE-138). DROVE-83's
                         dedicated pill row is gone, which is the row of
                         composer furniture MOBILE_COMPOSER_BASE_HEIGHT never
                         counted (DROVE-105) and therefore the end of
@@ -2063,17 +2180,14 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         {/* The plus opens the Add context sheet (DROVE-128)
                             rather than jumping straight into the photo
                             library, and it finally gets the surface every
-                            other control on this row got in DROVE-118. */}
+                            other control on this row got in DROVE-118. It was
+                            already 42pt wide, so the model name's 63pt budget
+                            is untouched. */}
                         {!props.zenMode && canAddContext && (
-                            <BubblePressable
+                            <GlassChromeButton
                                 onPress={handleAddContextPress}
-                                hitSlop={6}
-                                style={[
-                                    styles.mobileIconButton,
-                                    openPicker === 'attach'
-                                        ? styles.mobileIconButtonOpen
-                                        : styles.mobileIconButtonSurface,
-                                ]}
+                                size={MOBILE_COMPOSER_METRICS.actionSize}
+                                style={openPicker === 'attach' ? styles.mobileIconButtonOpen : undefined}
                                 accessibilityRole="button"
                                 accessibilityLabel={t('imageUpload.addContextTitle')}
                                 accessibilityState={{ expanded: openPicker === 'attach' }}
@@ -2085,12 +2199,13 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                         ? theme.colors.radio.active
                                         : theme.colors.text}
                                 />
-                            </BubblePressable>
+                            </GlassChromeButton>
                         )}
 
-                        {/* Mode and effort: two glyphs, two pickers, one tap
-                            each (DROVE-111). The model went down to the status
-                            row where its name fits (DROVE-138). */}
+                        {/* Mode and effort: two segments in one glass capsule
+                            (DROVE-153), two pickers, one tap each (DROVE-111).
+                            The model's name moved down to the status row in
+                            DROVE-138, where it fits whole. */}
                         {!props.zenMode && (
                             <ComposerSessionControls
                                 label={sessionPillLabel}
@@ -2102,7 +2217,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                 nativeMenus={useNativeSettingsMenus}
                                 modeGroups={permissionSettingsGroups}
                                 effortGroup={effortSettingsGroup}
-                                openPicker={openPicker === 'permission' || openPicker === 'model' || openPicker === 'effort'
+                                openPicker={openPicker === 'permission' || openPicker === 'effort'
                                     ? openPicker
                                     : null}
                             />
@@ -2110,17 +2225,23 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
 
                         <View style={{ flex: 1 }} />
 
+                        {/* Speaker and mic share ONE capsule (DROVE-153).
+                            Clay's Screenshot-toolbar reference groups two
+                            related actions into a single capsule rather than
+                            two circles, and these two are the audio pair:
+                            what the session says out loud, and what it hears.
+                            Each half is still its own 44pt target. */}
+                        {(streamTalk.shown || props.onTalkPressIn) ? (
+                        <GlassChromeSurface
+                            radius={MOBILE_COMPOSER_METRICS.actionSize / 2}
+                            style={styles.mobileAudioCapsule}
+                        >
                         {streamTalk.shown && (
                             <BubblePressable
                                 onPress={handleStreamTalkPress}
-                                // 42pt of surface plus 6 of slop: past the
-                                // 44pt floor a bare glyph never had.
-                                hitSlop={6}
                                 style={[
                                     styles.mobileIconButton,
-                                    streamTalk.on
-                                        ? styles.mobileIconButtonOn
-                                        : styles.mobileIconButtonSurface,
+                                    streamTalk.on && styles.mobileIconButtonOn,
                                 ]}
                                 accessibilityRole="button"
                                 accessibilityState={{ selected: streamTalk.on }}
@@ -2135,6 +2256,9 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                 />
                             </BubblePressable>
                         )}
+                        {streamTalk.shown && props.onTalkPressIn ? (
+                            <View style={styles.mobileAudioDivider} />
+                        ) : null}
 
                         {props.onTalkPressIn && (
                             // The gesture and the slide-off live in
@@ -2145,95 +2269,15 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                 onPressIn={() => props.onTalkPressIn?.()}
                                 onPressOut={() => props.onTalkPressOut?.()}
                                 onSlide={(inside) => props.onTalkSlide?.(inside)}
-                                style={[styles.mobileIconButton, styles.mobileIconButtonSurface]}
+                                style={styles.mobileIconButton}
                                 heldStyle={styles.talkButtonHeld}
                                 latchedStyle={styles.talkButtonLatched}
                                 idleColor={theme.colors.text}
                                 activeColor={TALK_RED}
                             />
                         )}
-
-                        <Shaker ref={shakerRef}>
-                            <View
-                                style={[
-                                    styles.sendButton,
-                                    styles.mobilePrimaryButton,
-                                    // Stop is checked first: a blank composer on a
-                                    // non-steerable agent is both blocked and
-                                    // abortable, and it must not look locked.
-                                    shouldShowStopButton ? styles.mobileStopButton
-                                        : isSendBlocked ? styles.sendButtonLocked
-                                            : canSendMessage || shouldShowVoiceButton ? styles.mobilePrimaryButtonActive
-                                                : styles.mobilePrimaryButtonInactive,
-                                ]}
-                            >
-                                <BubblePressable
-                                    style={(p) => ({
-                                        width: '100%',
-                                        height: '100%',
-                                        alignItems: 'center',
-                                        justifyContent: 'center',
-                                        opacity: p.pressed ? 0.7 : 1,
-                                    })}
-                                    hitSlop={6}
-                                    onPress={handleMobilePrimaryPress}
-                                    // Long-press: the channel sheet (DROVE-83).
-                                    onLongPress={handleMobilePrimaryLongPress}
-                                    disabled={!canPressSendButton}
-                                    accessibilityRole="button"
-                                    accessibilityLabel={shouldShowStopButton ? 'Stop'
-                                        : shouldShowVoiceButton ? 'Voice'
-                                            : 'Send'}
-                                >
-                                    {isAborting ? (
-                                        <ActivityIndicator
-                                            size="small"
-                                            color={shouldShowStopButton && theme.dark ? '#000000' : activeSendIconColor}
-                                        />
-                                    ) : shouldShowStopButton ? (
-                                        <Octicons
-                                            name="stop"
-                                            size={16}
-                                            color={theme.dark ? '#000000' : '#FFFFFF'}
-                                        />
-                                    ) : isSendBlocked ? (
-                                        <Ionicons
-                                            name="lock-closed"
-                                            size={14}
-                                            color={theme.colors.textSecondary}
-                                        />
-                                    ) : shouldShowVoiceButton ? (
-                                        props.isMicActive ? (
-                                            <Ionicons name="mic" size={20} color={activeSendIconColor} />
-                                        ) : (
-                                            <Image
-                                                source={require('@/assets/images/icon-voice-white.png')}
-                                                style={{ width: 22, height: 22 }}
-                                                tintColor={activeSendIconColor}
-                                            />
-                                        )
-                                    ) : (
-                                        <Octicons
-                                            name="arrow-up"
-                                            size={16}
-                                            color={canPressSendButton ? activeSendIconColor : theme.colors.textSecondary}
-                                            // The color has to travel in `style`, not just the
-                                            // `color` prop: @expo/vector-icons builds
-                                            // `[styleDefaults, style, ...]` (create-icon-set.js),
-                                            // so a `style` entry always wins over `color`. With
-                                            // styles.sendButtonIcon here — it hardcodes the
-                                            // primary tint (white) — the computed color was
-                                            // discarded and the arrow painted white on the
-                                            // near-white glass composer, i.e. invisible.
-                                            style={{
-                                                color: canPressSendButton ? activeSendIconColor : theme.colors.textSecondary,
-                                                marginTop: Platform.OS === 'web' ? 2 : 0,
-                                            }}
-                                        />
-                                    )}
-                                </BubblePressable>
-                            </View>
-                        </Shaker>
+                        </GlassChromeSurface>
+                        ) : null}
                     </View>
                     </>
                     ) : desktopActionControls}
@@ -2241,29 +2285,52 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     </View>
                 </Shaker>
 
-                {/* Every status fact on one line under the card (DROVE-82):
-                    working state and timer, connection, quota. Clay, seeing it
-                    in place: "this is great, keep that shit down there." It
-                    owns its own two sheets (DROVE-117, DROVE-111), so nothing
-                    here has to route them. */}
-                <AgentInputStatusRow
-                    sessionId={props.sessionId}
-                    connectionStatus={props.connectionStatus}
-                    contextStatus={contextStatus}
-                    weekPercent={weekPercent}
-                    usageBarGroups={usageBarGroups}
-                    accountName={props.zenMode ? null : sessionAccountName}
-                    // Only the phone's composer sent its model down here; the
-                    // desktop row still spells it out beside the input, and
-                    // two copies of one name says nothing twice.
-                    modelName={compactMobileComposer && !props.zenMode ? sessionPillLabel.model : null}
-                    onModelPress={() => handleSessionControlPress('model')}
-                    modelGroup={modelSettingsGroup}
-                    nativeMenus={useNativeSettingsMenus}
-                    modelPickerOpen={openPicker === 'model'}
-                    onSessionInfoPress={props.onSessionInfoPress}
-                    showDetails={props.showStatusDetails !== false}
-                />
+                {/* The strip under the card, and both things that live in it.
+                    Every status fact on one line (DROVE-82): working state and
+                    timer, connection, quota. Clay, seeing it in place: "this is
+                    great, keep that shit down there." It owns its own two
+                    sheets (DROVE-117, DROVE-111), so nothing here has to route
+                    them.
+
+                    The live-mic banner sits over it while dictation runs
+                    (DROVE-157). It was a child of the card, above the text
+                    field, so starting to talk grew the composer and shoved the
+                    transcript up. Here it is absolutely positioned, so it adds
+                    no height and the dock cannot move; the status row stays
+                    mounted underneath, covered rather than unmounted, so its
+                    timer and its sheets survive the recording. The mic button
+                    on the action row is still the only control that stops or
+                    sends (DROVE-105) and it has not moved. */}
+                <View style={compactMobileComposer && props.talk?.active
+                    ? { minHeight: COMPOSER_STRIP_HEIGHT }
+                    : undefined}
+                >
+                    <AgentInputStatusRow
+                        sessionId={props.sessionId}
+                        connectionStatus={props.connectionStatus}
+                        contextStatus={contextStatus}
+                        weekPercent={weekPercent}
+                        usageBarGroups={usageBarGroups}
+                        // Only the phone's composer sent its model down here
+                        // (DROVE-138); the desktop row still spells it out
+                        // beside the input, and two copies of one name says
+                        // nothing twice.
+                        modelName={compactMobileComposer && !props.zenMode ? sessionPillLabel.model : null}
+                        onModelPress={handleModelPress}
+                        modelGroup={modelSettingsGroup}
+                        nativeMenus={useNativeSettingsMenus}
+                        modelPickerOpen={openPicker === 'model'}
+                        onSessionInfoPress={props.onSessionInfoPress}
+                        showDetails={props.showStatusDetails !== false}
+                    />
+                    {compactMobileComposer && props.talk?.active && (
+                        <LiveMicBanner
+                            talk={props.talk}
+                            cancelArmed={props.talkCancelArmed}
+                            sendArmed={props.talkSendArmed}
+                        />
+                    )}
+                </View>
             </View>
         </View>
     );

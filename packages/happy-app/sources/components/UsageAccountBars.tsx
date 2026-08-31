@@ -28,9 +28,16 @@
  * here and no second one for the account list. A block is a heading and its
  * measures; the current account's block is marked with a dot, not built
  * differently.
+ *
+ * DROVE-160 made the blocks the control as well as the readout. Clay: "So this
+ * should let me change the account, flip the account, from here." This is the
+ * screen where the choice is made, so it is the screen the move happens from.
+ * The heading carries the answer to both questions a tap raises before it is
+ * made: "current" on the one in use, "Switch" on every one that can take the
+ * session. An account with no login gets neither, because it cannot.
  */
 import * as React from 'react';
-import { LayoutChangeEvent, Text, View } from 'react-native';
+import { LayoutChangeEvent, Pressable, Text, View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 import { Typography } from '@/constants/Typography';
 import {
@@ -157,8 +164,97 @@ export function UsageAccountBarRow(props: { row: UsageBarRow; trackWidth?: numbe
     );
 }
 
-export function UsageAccountBars(props: { groups: UsageBarGroup[]; width?: number }) {
+/** The heading and its measures. Wrapped in a Pressable when it can be moved to. */
+function UsageAccountBlock(props: {
+    group: UsageBarGroup;
+    trackWidth: number;
+    onSwitch?: (account: string) => void;
+}) {
     const { theme } = useUnistyles();
+    const group = props.group;
+    const account = group.account ?? null;
+    const canSwitch = !!(props.onSwitch && group.switchable && account);
+    const body = (
+        <>
+            {/* Every account is headed the same way, so the current one is
+                told apart by a dot, a brighter name and the word rather than
+                by a different row shape below it. The dot's slot is always
+                there, so the names line up down the sheet. */}
+            {group.title ? (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 2 }}>
+                    <View style={{
+                        width: activeDot,
+                        height: activeDot,
+                        borderRadius: activeDot / 2,
+                        backgroundColor: group.active ? theme.colors.text : 'transparent',
+                    }} />
+                    <Text
+                        numberOfLines={1}
+                        ellipsizeMode="tail"
+                        style={{
+                            flexShrink: 1,
+                            fontSize: 10,
+                            color: group.active ? theme.colors.text : theme.colors.textSecondary,
+                            ...Typography.default(),
+                        }}
+                    >
+                        {group.title}
+                    </Text>
+                    {/* Trailing, so it never pushes the name's truncation
+                        around. One word per block and never both: which one
+                        you are on, or that this one will take you. */}
+                    {group.active || canSwitch ? (
+                        <Text
+                            numberOfLines={1}
+                            style={{
+                                marginLeft: 'auto',
+                                paddingLeft: 6,
+                                fontSize: 10,
+                                color: group.active ? theme.colors.textSecondary : theme.colors.textLink,
+                                ...Typography.default(),
+                            }}
+                        >
+                            {group.active ? 'current' : 'Switch ›'}
+                        </Text>
+                    ) : null}
+                </View>
+            ) : null}
+            {group.rows.map((row) => (
+                <UsageAccountBarRow key={row.key} row={row} trackWidth={props.trackWidth} />
+            ))}
+        </>
+    );
+    if (!canSwitch) {
+        return body;
+    }
+    // One focusable element, not four. The rows below are each accessible in
+    // their own right, and a screen reader stepping through three bars with no
+    // way to press the block around them is the version of this that cannot be
+    // used, so the block takes the focus and carries what the rows said.
+    const label = [
+        `Switch to ${account}`,
+        group.title,
+        ...group.rows.map((row) => [row.fullName, row.percentText, row.trailing].filter(Boolean).join(', ')),
+    ].filter(Boolean).join('. ');
+    return (
+        <Pressable
+            accessible
+            accessibilityRole="button"
+            accessibilityLabel={label}
+            onPress={() => props.onSwitch?.(account!)}
+            style={({ pressed }: { pressed: boolean }) => ({ opacity: pressed ? 0.5 : 1 })}
+        >
+            {body}
+        </Pressable>
+    );
+}
+
+export function UsageAccountBars(props: {
+    groups: UsageBarGroup[];
+    width?: number;
+    /** Tapping a block moves the session onto that account (DROVE-160). */
+    onSwitchAccount?: (account: string) => void;
+}) {
     const [measured, setMeasured] = React.useState<number | null>(null);
     const onLayout = React.useCallback((event: LayoutChangeEvent) => {
         const width = event.nativeEvent.layout.width;
@@ -176,35 +272,11 @@ export function UsageAccountBars(props: { groups: UsageBarGroup[]; width?: numbe
         >
             {props.groups.map((group, index) => (
                 <View key={group.key} style={{ marginTop: index > 0 ? 8 : 2 }}>
-                    {/* Every account is headed the same way, so the current one
-                        is told apart by a dot and a brighter name rather than
-                        by a different row shape below it. The dot's slot is
-                        always there, so the names line up down the sheet. */}
-                    {group.title ? (
-                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 2 }}>
-                            <View style={{
-                                width: activeDot,
-                                height: activeDot,
-                                borderRadius: activeDot / 2,
-                                backgroundColor: group.active ? theme.colors.text : 'transparent',
-                            }} />
-                            <Text
-                                numberOfLines={1}
-                                ellipsizeMode="tail"
-                                style={{
-                                    flexShrink: 1,
-                                    fontSize: 10,
-                                    color: group.active ? theme.colors.text : theme.colors.textSecondary,
-                                    ...Typography.default(),
-                                }}
-                            >
-                                {group.title}
-                            </Text>
-                        </View>
-                    ) : null}
-                    {group.rows.map((row) => (
-                        <UsageAccountBarRow key={row.key} row={row} trackWidth={trackWidth} />
-                    ))}
+                    <UsageAccountBlock
+                        group={group}
+                        trackWidth={trackWidth}
+                        onSwitch={props.onSwitchAccount}
+                    />
                 </View>
             ))}
         </View>
