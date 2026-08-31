@@ -219,6 +219,8 @@ export type StatusRowProps = {
      * (DROVE-107).
      */
     usageBarGroups: UsageBarGroup[];
+    /** The zone and the model the sheet's numbers are for (DROVE-173). */
+    usageBarFooter?: string;
     /**
      * The model's short name, spelled in full here rather than truncated on
      * the button row (DROVE-138).
@@ -732,6 +734,7 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
             {canOpenUsage ? (
                 <UsageAccountBarsSheet
                     groups={p.usageBarGroups}
+                    footer={p.usageBarFooter}
                     open={openSheet === 'usage'}
                     onClose={closeSheet}
                     onSwitchAccount={sessionId ? onSwitchAccount : undefined}

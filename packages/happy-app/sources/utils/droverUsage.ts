@@ -41,10 +41,76 @@ export type DroverUsageAccountLike = {
 
 export type DroverUsageLike = {
     capturedAt: number;
+    /** The model family the session is running ("opus"); null when unknown (DROVE-173). */
+    modelFamily?: string | null;
     accounts: DroverUsageAccountLike[];
 } | null | undefined;
 
-function rows(account: DroverUsageAccountLike | null | undefined): DroverUsageRowLike[] {
+/**
+ * Does this window bind a session running `modelFamily`? (DROVE-173)
+ *
+ * The app's copy of the CLI's `rowApplies` (happy-cli
+ * src/drover/flip/usage.ts), and it has to stay its copy: the CLI computes
+ * `headroom` with that rule and the wrist's binding limit is derived here from
+ * the same rows, so the two would print different windows the moment they
+ * disagreed (DROVE-129).
+ *
+ * An unscoped window binds every model. A family window binds only a session
+ * in that family. An unreadable scope binds, and an unknown model is bound by
+ * everything — the conservative reading on both sides.
+ */
+export function droverRowApplies(
+    row: Pick<DroverUsageRowLike, 'scope' | 'family'>,
+    modelFamily: string | null | undefined,
+): boolean {
+    if (!row.scope) return true;
+    if (!modelFamily) return true;
+    if (!row.family) return true;
+    return row.family === modelFamily;
+}
+
+/**
+ * How old a per-account reading may be before the sheet says so (DROVE-173).
+ *
+ * Claude Code refreshes an account's cache as a session starts, so an hour
+ * without one means nobody has looked. Under that the numbers move slowly
+ * enough that a label would be noise.
+ */
+export const droverStaleAfterMs = 60 * 60_000;
+
+/**
+ * Is this account's reading old enough that the sheet must not show it as
+ * current? (DROVE-173)
+ *
+ * Measured against the SNAPSHOT's own `capturedAt`, not the wall clock. The
+ * CLI reads every account's cache in one pass, so `capturedAt` is when the
+ * question was last asked and `fetchedAt` is when THIS account last answered;
+ * the gap between them is the only staleness the snapshot can be honest about.
+ * Using the phone's clock instead would call a snapshot stale for having been
+ * in flight, and would make this untestable without freezing time.
+ *
+ * Two ways to be stale, and the second is the one that bites. Age is the
+ * obvious one. The other is a window that had already RESET when the snapshot
+ * was taken: the session window is five hours, so a cache one window old
+ * prints LAST window's reset as if it were the next one, and a reset time in
+ * the past is the proof rather than a guess.
+ */
+export function droverAccountStale(
+    account: Pick<DroverUsageAccountLike, 'fetchedAt' | 'limits'> | null | undefined,
+    capturedAt: number,
+): boolean {
+    if (!account || !Number.isFinite(capturedAt)) return false;
+    for (const row of rows(account)) {
+        if (typeof row.resetsAt === 'number' && Number.isFinite(row.resetsAt) && row.resetsAt <= capturedAt) {
+            return true;
+        }
+    }
+    const fetchedAt = account.fetchedAt;
+    if (typeof fetchedAt !== 'number' || !Number.isFinite(fetchedAt)) return false;
+    return capturedAt - fetchedAt >= droverStaleAfterMs;
+}
+
+function rows(account: Pick<DroverUsageAccountLike, 'limits'> | null | undefined): DroverUsageRowLike[] {
     return Array.isArray(account?.limits) ? account.limits : [];
 }
 
@@ -174,6 +240,8 @@ export function droverFamilyRows(usage: DroverUsageLike, droverAccount?: string 
 export type DroverOtherAccountRow = {
     name: string;
     loggedIn: boolean;
+    /** The reading is old enough to say so rather than show as current (DROVE-173). */
+    stale?: boolean;
     /** Percent left, the picker's own number; null when never measured. */
     headroom: number | null;
     /** When it is back, when it is out right now. */
@@ -194,7 +262,7 @@ export function droverOtherAccounts(usage: DroverUsageLike, droverAccount?: stri
     const current = currentDroverUsageAccount(usage, droverAccount);
     return usage.accounts
         .filter((a) => a && typeof a.name === 'string' && a !== current)
-        .map(toAccountRow);
+        .map((a) => toAccountRow(a, usage.capturedAt));
 }
 
 /**
@@ -203,7 +271,7 @@ export function droverOtherAccounts(usage: DroverUsageLike, droverAccount?: stri
  * drift). The composer popup lists the others with this shape; the session
  * info screen shows the current one with it (DROVE-137).
  */
-function toAccountRow(a: DroverUsageAccountLike): DroverOtherAccountRow {
+function toAccountRow(a: DroverUsageAccountLike, capturedAt = Number.NaN): DroverOtherAccountRow {
     const cooling = a.cooling && typeof a.cooling.until === 'number' ? a.cooling : null;
     const family = cooling?.family
         ? droverFamilyLabel({ family: cooling.family })
@@ -211,6 +279,7 @@ function toAccountRow(a: DroverUsageAccountLike): DroverOtherAccountRow {
     return {
         name: a.name,
         loggedIn: a.loggedIn !== false,
+        ...(droverAccountStale(a, capturedAt) ? { stale: true } : {}),
         headroom: typeof a.headroom === 'number' && Number.isFinite(a.headroom)
             ? Math.round(Math.min(100, Math.max(0, a.headroom)))
             : null,
@@ -244,7 +313,7 @@ export function droverAccountsUsage(usage: DroverUsageLike, droverAccount?: stri
     const named = usage.accounts.filter((a) => a && typeof a.name === 'string');
     const ordered = current ? [current, ...named.filter((a) => a !== current)] : named;
     return ordered.map((a) => ({
-        ...toAccountRow(a),
+        ...toAccountRow(a, usage.capturedAt),
         current: a === current,
         windows: droverAccountWindows(a),
     }));
@@ -262,7 +331,7 @@ export function currentDroverAccountRow(
     droverAccount?: string | null,
 ): DroverOtherAccountRow | null {
     const account = currentDroverUsageAccount(usage, droverAccount);
-    if (account && typeof account.name === 'string') return toAccountRow(account);
+    if (account && typeof account.name === 'string') return toAccountRow(account, usage?.capturedAt ?? Number.NaN);
     const name = droverAccount?.trim();
     if (!name) return null;
     return { name, loggedIn: true, headroom: null, back: null, family: null };

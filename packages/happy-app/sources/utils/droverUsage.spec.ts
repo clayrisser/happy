@@ -13,7 +13,10 @@ import {
     droverAccountsUsage,
     droverAccountWindows,
     droverFamilyRows,
+    droverAccountStale,
     droverOtherAccounts,
+    droverRowApplies,
+    droverStaleAfterMs,
     droverWindowId,
     usageLimitsFromDroverUsage,
     type DroverUsageLike,
@@ -188,5 +191,81 @@ describe('droverAccountsUsage', () => {
         expect(droverAccountsUsage(unmarked, null).some((a) => a.current)).toBe(false);
         // The older stamp still names it when the snapshot marked nothing.
         expect(droverAccountsUsage(unmarked, 'bitspur.com')[0]).toMatchObject({ name: 'bitspur.com', current: true });
+    });
+});
+
+/**
+ * Which windows bind THIS session (DROVE-173).
+ *
+ * The app's copy of the CLI's `rowApplies`. Clay read "bitspur.com · 0% left"
+ * on an account whose session was 1% used, because Fable's week was exhausted
+ * and he was on Opus; at 3:25am the same arithmetic told the flip logic every
+ * other account was out and it stayed put. These pin the rule on the app's
+ * side of the wire so the sheet and the wrist cannot disagree with the number
+ * the CLI computed (DROVE-129).
+ */
+describe('droverRowApplies', () => {
+    const unscoped = { scope: null, family: null };
+    const fable = { scope: 'Fable', family: 'fable' };
+    const unreadable = { scope: 'surface:web', family: null };
+
+    it('lets an unscoped window bind every model', () => {
+        expect(droverRowApplies(unscoped, 'opus')).toBe(true);
+        expect(droverRowApplies(unscoped, null)).toBe(true);
+    });
+
+    it('lets a family window bind only a session in that family', () => {
+        expect(droverRowApplies(fable, 'fable')).toBe(true);
+        expect(droverRowApplies(fable, 'opus')).toBe(false);
+    });
+
+    it('binds on everything when the model is unknown, as it did before families', () => {
+        expect(droverRowApplies(fable, null)).toBe(true);
+        expect(droverRowApplies(fable, undefined)).toBe(true);
+        expect(droverRowApplies(fable, '')).toBe(true);
+    });
+
+    it('binds on a scope it cannot read, so a dead account never looks alive', () => {
+        expect(droverRowApplies(unreadable, 'opus')).toBe(true);
+    });
+});
+
+/**
+ * A reading old enough to say so (DROVE-173).
+ *
+ * Measured against the snapshot's own capturedAt rather than the wall clock,
+ * so it is the same answer on every device and testable without freezing time.
+ */
+describe('droverAccountStale', () => {
+    const captured = 10_000_000;
+
+    it('is not stale when the cache was read just now and nothing has reset', () => {
+        expect(droverAccountStale({
+            fetchedAt: captured - 1_000,
+            limits: [{ kind: 'session', percent: 1, resetsAt: captured + 60_000, scope: null, family: null }],
+        }, captured)).toBe(false);
+    });
+
+    // The five-hour session window: a cache one window old prints LAST
+    // window's reset as if it were the next one, which is what read as a
+    // wrong clock next to /usage.
+    it('is stale when a window had already reset before the snapshot', () => {
+        expect(droverAccountStale({
+            fetchedAt: captured - 1_000,
+            limits: [{ kind: 'session', percent: 1, resetsAt: captured - 1, scope: null, family: null }],
+        }, captured)).toBe(true);
+    });
+
+    it('is stale when nobody has refreshed the cache in an hour', () => {
+        expect(droverAccountStale({ fetchedAt: captured - droverStaleAfterMs, limits: [] }, captured)).toBe(true);
+        expect(droverAccountStale({ fetchedAt: captured - droverStaleAfterMs + 1, limits: [] }, captured)).toBe(false);
+    });
+
+    it('says nothing about an account that was never fetched at all', () => {
+        // "not measured" is already on the row; "stale" on top would be two
+        // words for one absence.
+        expect(droverAccountStale({ fetchedAt: null, limits: [] }, captured)).toBe(false);
+        expect(droverAccountStale(null, captured)).toBe(false);
+        expect(droverAccountStale({ fetchedAt: 1, limits: [] }, Number.NaN)).toBe(false);
     });
 });

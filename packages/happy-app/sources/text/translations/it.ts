@@ -567,6 +567,10 @@ export const it: TranslationStructure = {
             familyBack: ({ family, time }: { family: string; time: string }) => `${family} torna ${time}`,
             unmeasured: 'non misurato',
             noLogin: 'nessun accesso',
+            stale: 'stale',
+            barsShow: ({ direction }: { direction: string }) => `Bars show ${direction}`,
+            zoneNote: ({ zone }: { zone: string }) => `Times in ${zone}`,
+            forModel: ({ family }: { family: string }) => `headroom for ${family}`,
         },
         suggestion: {
             fileLabel: 'FILE',

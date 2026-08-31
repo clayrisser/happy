@@ -569,6 +569,10 @@ export const zhHant: TranslationStructure = {
             familyBack: ({ family, time }: { family: string; time: string }) => `${family} ${time} 恢復`,
             unmeasured: '未測量',
             noLogin: '未登入',
+            stale: 'stale',
+            barsShow: ({ direction }: { direction: string }) => `Bars show ${direction}`,
+            zoneNote: ({ zone }: { zone: string }) => `Times in ${zone}`,
+            forModel: ({ family }: { family: string }) => `headroom for ${family}`,
         },
         suggestion: {
             fileLabel: '檔案',

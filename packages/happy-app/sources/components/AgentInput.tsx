@@ -706,7 +706,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         : null;
     // The week figure and its popup, from agent state or, on a pane session,
     // from drover's snapshot (DROVE-47); resolveUsageStrip says which.
-    const { weekPercent, usageBarGroups } = React.useMemo(() => resolveUsageStrip({
+    const { weekPercent, usageBarGroups, usageBarFooter } = React.useMemo(() => resolveUsageStrip({
         usageLimits: props.sessionStatusUsageLimits ?? null,
         droverUsage: props.sessionStatusDroverUsage,
         droverAccount: props.sessionStatusDroverAccount,
@@ -2314,6 +2314,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         contextStatus={contextStatus}
                         weekPercent={weekPercent}
                         usageBarGroups={usageBarGroups}
+                        usageBarFooter={usageBarFooter}
                         // Zen mode strips the account's name off the quota,
                         // as it strips the model below; the groups still go
                         // down whole, because the sheet and the switch behind

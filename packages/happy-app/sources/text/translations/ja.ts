@@ -570,6 +570,10 @@ export const ja: TranslationStructure = {
             familyBack: ({ family, time }: { family: string; time: string }) => `${family} は ${time} に復帰`,
             unmeasured: '未計測',
             noLogin: '未ログイン',
+            stale: 'stale',
+            barsShow: ({ direction }: { direction: string }) => `Bars show ${direction}`,
+            zoneNote: ({ zone }: { zone: string }) => `Times in ${zone}`,
+            forModel: ({ family }: { family: string }) => `headroom for ${family}`,
         },
         suggestion: {
             fileLabel: 'ファイル',

@@ -174,9 +174,35 @@ export function getUsageLimitDisplayPercentage(utilization: number, showRemainin
 }
 
 /** Short reset moment: a clock time within a day, a date beyond that. */
-export function formatUsageLimitResetTime(ms: number): string {
+/**
+ * A reset time, in the phone's OWN zone, saying which zone that is (DROVE-173).
+ *
+ * The instant was always right and the zone was never wrong: Clay read "7:49
+ * AM" on the sheet beside /usage's "1:49pm (Europe/London)" and they are the
+ * same minute — the phone was five hours behind the Mac. Two clocks with no
+ * label on either is unreadable side by side, and a DATE is worse: the same
+ * instant printed "Sep 2" here and "Sep 3" in /usage, which looks like a
+ * different week rather than a different zone.
+ *
+ * So the zone is NAMED, the way Claude Code names its own. It is said once
+ * under the bars rather than on every row: the trailing column is 88pt at
+ * 10pt and " BST" on the end of "Resets 7:49 AM" truncates the time away,
+ * which trades one confusion for a worse one. Nothing converts — converting
+ * to the Mac's zone would print a clock that matches no clock the phone can
+ * show.
+ */
+export function usageLimitZoneLabel(): string {
+    try {
+        const parts = new Intl.DateTimeFormat([], { timeZoneName: 'short' }).formatToParts(new Date());
+        return parts.find((part) => part.type === 'timeZoneName')?.value ?? '';
+    } catch {
+        return '';
+    }
+}
+
+export function formatUsageLimitResetTime(ms: number, now = Date.now()): string {
     const d = new Date(ms);
-    if (ms - Date.now() < 22 * 3600_000) {
+    if (ms - now < 22 * 3600_000) {
         return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     }
     return d.toLocaleDateString([], { month: 'short', day: 'numeric' });

@@ -569,6 +569,10 @@ export const ca: TranslationStructure = {
             familyBack: ({ family, time }: { family: string; time: string }) => `${family} torna ${time}`,
             unmeasured: 'sense mesurar',
             noLogin: 'sense sessió',
+            stale: 'stale',
+            barsShow: ({ direction }: { direction: string }) => `Bars show ${direction}`,
+            zoneNote: ({ zone }: { zone: string }) => `Times in ${zone}`,
+            forModel: ({ family }: { family: string }) => `headroom for ${family}`,
         },
         suggestion: {
             fileLabel: 'FITXER',

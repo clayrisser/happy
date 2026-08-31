@@ -585,6 +585,10 @@ export const pl: TranslationStructure = {
             familyBack: ({ family, time }: { family: string; time: string }) => `${family} wraca ${time}`,
             unmeasured: 'nie zmierzono',
             noLogin: 'brak logowania',
+            stale: 'stale',
+            barsShow: ({ direction }: { direction: string }) => `Bars show ${direction}`,
+            zoneNote: ({ zone }: { zone: string }) => `Times in ${zone}`,
+            forModel: ({ family }: { family: string }) => `headroom for ${family}`,
         },
         suggestion: {
             fileLabel: 'PLIK',

@@ -269,6 +269,31 @@ describe('the usage reporter', () => {
         ])
     })
 
+    // DROVE-173. A mid-session /model from Fable to Opus re-decides which
+    // windows bind with no file on disk moving, so the family is in the stamp
+    // or the phone keeps the headroom for the model he left.
+    it('republishes when the session changes model, with no file having changed', async () => {
+        const dirs = writeAccounts(['bitspur.com'])
+        writeCache(dirs['bitspur.com'], [
+            { kind: 'weekly_all', percent: 58, resets_at: '2026-09-03T03:59:59.603572+00:00', scope: null },
+            { kind: 'weekly_scoped', percent: 100, resets_at: '2026-09-03T03:59:59.603838+00:00', scope: fable },
+        ])
+        let family = 'fable'
+        const published: DroverUsage[] = []
+        const { UsageReporter } = await usageModule()
+        const reporter = new UsageReporter({
+            current: () => 'bitspur.com',
+            family: () => family,
+            publish: (u) => published.push(u),
+        })
+        reporter.tick()
+        expect(published[0].accounts[0].headroom).toBe(0)
+        family = 'opus'
+        expect(reporter.tick()).toBe(true)
+        expect(published[1].modelFamily).toBe('opus')
+        expect(published[1].accounts[0].headroom).toBe(42)
+    })
+
     it('re-stamps unchanged data once the snapshot is old enough to misreport freshness', async () => {
         writeAccounts(['main'])
         let clock = Date.parse('2026-08-30T18:00:00Z')
@@ -296,5 +321,95 @@ describe('the usage reporter', () => {
         expect(published).toHaveLength(2)
         expect(published[1].accounts[0].headroom).toBe(23)
         reporter.stop()
+    })
+})
+
+/**
+ * Headroom for the model this session is actually running (DROVE-173).
+ *
+ * Clay, with the sheet next to Claude Code's /usage: "bitspur.com · 0% left"
+ * on an account whose session was 1% used and whose week had 42% left. The
+ * account was out for Fable and he was on Opus, and `100 - max(percent)` over
+ * EVERY window read Fable's exhausted week as his wall. At 3:25am the same
+ * arithmetic told the flip logic every other account was out of headroom and
+ * it stayed on main, which is DROVE-187's half of this.
+ */
+describe('model-aware headroom', () => {
+    // Clay's bitspur.com as measured 2026-08-31, the exact rows behind the
+    // screenshot on the ticket.
+    const bitspur = [
+        { kind: 'session', percent: 1, resets_at: '2026-08-31T12:49:59.603545+00:00', scope: null },
+        { kind: 'weekly_all', percent: 58, resets_at: '2026-09-03T03:59:59.603572+00:00', scope: null },
+        { kind: 'weekly_scoped', percent: 100, resets_at: '2026-09-03T03:59:59.603838+00:00', scope: fable },
+    ]
+    const now = Date.parse('2026-08-31T08:00:00Z')
+
+    it('ignores a family window the session is not in', async () => {
+        const dirs = writeAccounts(['bitspur.com'])
+        writeCache(dirs['bitspur.com'], bitspur)
+        const { usageSnapshot } = await usageModule()
+        const snap = usageSnapshot('bitspur.com', now, 'opus')
+        expect(snap.modelFamily).toBe('opus')
+        // The week at 58% used is the wall for Opus, not Fable's dead one.
+        expect(snap.accounts[0].headroom).toBe(42)
+    })
+
+    it('lets that window bind a session that IS in the family', async () => {
+        const dirs = writeAccounts(['bitspur.com'])
+        writeCache(dirs['bitspur.com'], bitspur)
+        const { usageSnapshot } = await usageModule()
+        expect(usageSnapshot('bitspur.com', now, 'fable').accounts[0].headroom).toBe(0)
+    })
+
+    it('stays model-blind with no model known, byte for byte what it was', async () => {
+        const dirs = writeAccounts(['bitspur.com'])
+        writeCache(dirs['bitspur.com'], bitspur)
+        const { usageSnapshot } = await usageModule()
+        const snap = usageSnapshot('bitspur.com', now)
+        expect(snap.modelFamily).toBeNull()
+        expect(snap.accounts[0].headroom).toBe(0)
+    })
+
+    it('keeps every window on the snapshot, whichever ones it counted', async () => {
+        // The rows still all go to the phone: the sheet draws Fable week for
+        // an Opus session too, it just does not head the account with it.
+        const dirs = writeAccounts(['bitspur.com'])
+        writeCache(dirs['bitspur.com'], bitspur)
+        const { usageSnapshot } = await usageModule()
+        const rows = usageSnapshot('bitspur.com', now, 'opus').accounts[0].limits
+        expect(rows.map((r) => r.kind)).toEqual(['session', 'weekly_all', 'weekly_scoped'])
+        expect(rows[2]).toMatchObject({ percent: 100, scope: 'Fable', family: 'fable' })
+    })
+})
+
+describe('headroomOf', () => {
+    const rows = [
+        { kind: 'session', percent: 1, resetsAt: 1, scope: null, family: null },
+        { kind: 'weekly_all', percent: 58, resetsAt: 2, scope: null, family: null },
+        { kind: 'weekly_scoped', percent: 100, resetsAt: 3, scope: 'Fable', family: 'fable' },
+    ]
+
+    it('is the fullest applying window, and DROVE-187 can ask it directly', async () => {
+        const { headroomOf } = await usageModule()
+        const { modelDemand, unknownModel, anyModel } = await import('./accounts')
+        expect(headroomOf(rows, modelDemand('opus'))).toBe(42)
+        expect(headroomOf(rows, modelDemand('fable'))).toBe(0)
+        expect(headroomOf(rows, unknownModel)).toBe(0)
+        // "is there ANY model left here", the last look before parking: only
+        // the unscoped windows count.
+        expect(headroomOf(rows, anyModel)).toBe(42)
+    })
+
+    it('clamps a cache that overshoots and says nothing with no rows', async () => {
+        const { headroomOf } = await usageModule()
+        expect(headroomOf([{ kind: 'session', percent: 120, resetsAt: null, scope: null, family: null }])).toBe(0)
+        expect(headroomOf([])).toBeNull()
+    })
+
+    it('counts an unreadable scope, so a dead account never reads as alive', async () => {
+        const { headroomOf } = await usageModule()
+        const { modelDemand } = await import('./accounts')
+        const odd = [{ kind: 'weekly_scoped', percent: 100, resetsAt: null, scope: 'surface:web', family: null }]
+        expect(headroomOf(odd, modelDemand('opus'))).toBe(0)
     })
 })
