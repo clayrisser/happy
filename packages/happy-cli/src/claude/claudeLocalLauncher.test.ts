@@ -1672,6 +1672,55 @@ describe('claudeLocalLauncher in a tmux pane', () => {
             await expect(launcher).resolves.toEqual({ type: 'exit', code: 0 });
         });
 
+        /**
+         * DROVE-80. Stop over an open permission dialog used to type Escape
+         * into it, which is a deny. interruptPane withdraws the prompt on the
+         * bus instead, and the outcome has to reach the phone: the turn is not
+         * stopped by that, so a silent Stop would read as one that worked.
+         */
+        it('says so when Stop withdrew an open prompt instead of pressing Escape', async () => {
+            mockInterruptPane.mockResolvedValue('gate-cancelled');
+            const runs = trackRuns();
+            const { session } = paneSession();
+
+            const launcher = claudeLocalLauncher(session as any);
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+
+            await abortHandler(session)();
+
+            expect(runs[0].opts.abort.aborted).toBe(false);
+            expect(session.client.sendSessionEvent).toHaveBeenCalledWith(
+                expect.objectContaining({ message: expect.stringContaining('withdrew it') }),
+            );
+            expect(session.client.closeClaudeSessionTurn).toHaveBeenCalledWith('cancelled');
+
+            runs[0].run.resolve();
+            await expect(launcher).resolves.toEqual({ type: 'exit', code: 0 });
+        });
+
+        it('leaves the turn open, and says why, when the bus could not be asked', async () => {
+            // Nothing was typed and nothing was withdrawn, so the turn really
+            // is still running: closing it would take the Stop button off the
+            // screen the message just asked him to press again.
+            mockInterruptPane.mockResolvedValue('unknown');
+            const runs = trackRuns();
+            const { session } = paneSession();
+
+            const launcher = claudeLocalLauncher(session as any);
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+
+            await abortHandler(session)();
+
+            expect(runs[0].opts.abort.aborted).toBe(false);
+            expect(session.client.sendSessionEvent).toHaveBeenCalledWith(
+                expect.objectContaining({ message: expect.stringContaining('did not answer') }),
+            );
+            expect(session.client.closeClaudeSessionTurn).not.toHaveBeenCalled();
+
+            runs[0].run.resolve();
+            await expect(launcher).resolves.toEqual({ type: 'exit', code: 0 });
+        });
+
         it('leaves a message that is still queued alone', async () => {
             // Stop is about the turn in flight. A message held for the next
             // child never ran, so cancelling does not un-send it.

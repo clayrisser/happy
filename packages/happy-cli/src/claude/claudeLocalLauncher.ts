@@ -627,10 +627,37 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
                             'Cattle Drover: nothing is running in the terminal right now, '
                             + 'so there was no turn to stop.',
                     });
+                } else if (outcome === 'gate-cancelled') {
+                    // A prompt was open, so Stop withdrew it rather than typing
+                    // over it (DROVE-80). Said out loud because the outcome is
+                    // not the one the button implies: the tool call is refused
+                    // by its own producer, and the turn goes on from there.
+                    logger.debug('[local]: Stop withdrew an open prompt on the bus instead of pressing Escape');
+                    session.client.sendSessionEvent({
+                        type: 'message',
+                        message:
+                            'Cattle Drover: a prompt was waiting for you, so Stop withdrew it '
+                            + 'on the bus. Escape into an open dialog is a no, not a stop.',
+                    });
+                } else if (outcome === 'unknown') {
+                    // The bus could not say whether a dialog is open. Escape
+                    // sent blind is exactly the defect DROVE-80 closed, so
+                    // nothing was sent and nothing is guessed behind it.
+                    logger.debug('[local]: the bus could not say whether a prompt is open — Stop sent nothing');
+                    session.client.sendSessionEvent({
+                        type: 'message',
+                        message:
+                            'Cattle Drover: the drover bus did not answer, so Stop sent nothing '
+                            + 'rather than risk answering a prompt you have open. Try again once '
+                            + 'the bus is back.',
+                    });
                 }
                 // Closed either way, or the app keeps showing a turn that the
-                // person watching has already stopped.
-                session.client.closeClaudeSessionTurn('cancelled');
+                // person watching has already stopped. NOT on 'unknown': there
+                // nothing was typed and nothing was withdrawn, so the turn is
+                // still running and the Stop button has to stay on screen for
+                // the retry that message asks for.
+                if (outcome !== 'unknown') session.client.closeClaudeSessionTurn('cancelled');
                 // The queue is deliberately NOT reset here. A pane session
                 // takes each message OFF the queue as it delivers it, so
                 // anything still on it is waiting for the next child and never
