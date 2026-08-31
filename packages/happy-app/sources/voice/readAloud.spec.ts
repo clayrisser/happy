@@ -213,3 +213,64 @@ describe('ReadAloudReader', () => {
         expect((flaky as any).spoken).toEqual(['One.', 'Two.']);
     });
 });
+
+/**
+ * Every way speech can be cut has to reach a capture listener, with the
+ * reason (DROVE-30). The mic hangs off this, so a path that cut speech
+ * without notifying would be a latched mic left hot.
+ */
+describe('ReadAloudReader interrupt listeners', () => {
+    let engine: FakeEngine;
+    let reader: ReadAloudReader;
+    let heard: string[];
+
+    beforeEach(() => {
+        engine = new FakeEngine();
+        reader = new ReadAloudReader(engine);
+        heard = [];
+        reader.addInterruptListener((reason) => heard.push(reason));
+    });
+
+    it('hears a direct interrupt even while nothing is speaking', () => {
+        reader.interrupt('typed');
+        reader.interrupt('sent');
+        expect(heard).toEqual(['typed', 'sent']);
+        // And the engine was never asked to stop, because it never started.
+        expect(engine.stops).toBe(0);
+    });
+
+    it('hears focus moving, losing focus, and the toggle going off', () => {
+        reader.setEnabled(true);
+        reader.focus('s1');
+        reader.focus('s2');
+        reader.blur('s2');
+        reader.setEnabled(false);
+        expect(heard).toEqual(['switched-session', 'switched-session', 'left-session', 'toggled-off']);
+        // Turning it off when it is already off cuts nothing and says nothing.
+        reader.setEnabled(false);
+        expect(heard).toHaveLength(4);
+    });
+
+    it('carries the reason a call started and the mic was pressed', () => {
+        reader.interrupt('call-started');
+        reader.interrupt('mic');
+        expect(heard).toEqual(['call-started', 'mic']);
+    });
+
+    it('keeps notifying the rest when one listener throws', () => {
+        const after: string[] = [];
+        reader.addInterruptListener(() => { throw new Error('boom'); });
+        reader.addInterruptListener((reason) => after.push(reason));
+        reader.interrupt('typed');
+        expect(after).toEqual(['typed']);
+    });
+
+    it('stops notifying after the unsubscribe', () => {
+        const late: string[] = [];
+        const off = reader.addInterruptListener((reason) => late.push(reason));
+        reader.interrupt('typed');
+        off();
+        reader.interrupt('sent');
+        expect(late).toEqual(['typed']);
+    });
+});

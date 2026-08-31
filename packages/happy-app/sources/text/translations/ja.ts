@@ -462,10 +462,14 @@ export const ja: TranslationStructure = {
             settingsSubtitle: '届いた返信をそのつど読み上げます。コード、差分、ツール出力は読みません。',
         },
         dictate: {
-            label: '長押しで話す',
-            settingsTitle: '長押しで話す',
-            settingsSubtitle: '入力欄の長押しボタン。この端末で文字起こしします。',
-            listening: '聞いています…',
+            label: '長押しで話す、タップで固定',
+            settingsTitle: 'トークボタン',
+            settingsSubtitle: '入力欄のマイクボタン。長押しで話し、タップでオンのままにします。この端末上で文字起こしします。',
+            listening: '聞き取り中…',
+            latched: 'マイクオン',
+            releaseToSend: '離すと送信',
+            tapToStop: 'タップで停止',
+            stop: '停止',
             failed: '音声入力に失敗しました',
         },
         permissionMode: {

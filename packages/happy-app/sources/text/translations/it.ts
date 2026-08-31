@@ -459,10 +459,14 @@ export const it: TranslationStructure = {
             settingsSubtitle: 'Pronuncia ogni risposta appena arriva. Codice, diff e output degli strumenti vengono saltati.',
         },
         dictate: {
-            label: 'Tieni premuto per parlare',
-            settingsTitle: 'Tieni premuto per parlare',
-            settingsSubtitle: 'Un pulsante da tenere premuto nel campo del messaggio. Trascrizione su questo dispositivo.',
+            label: 'Tieni premuto per parlare, tocca per bloccare',
+            settingsTitle: 'Pulsante parla',
+            settingsSubtitle: 'Un pulsante microfono nel campo messaggio: tieni premuto per parlare, tocca per lasciarlo aperto. Trascritto su questo dispositivo.',
             listening: 'In ascolto…',
+            latched: 'Microfono attivo',
+            releaseToSend: 'Rilascia per inviare',
+            tapToStop: 'Tocca per fermare',
+            stop: 'Ferma',
             failed: 'Dettatura non riuscita',
         },
         permissionMode: {

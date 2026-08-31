@@ -59,6 +59,9 @@ public final class DroverSpeechModule: Module {
     private var recognitionTask: SFSpeechRecognitionTask?
     private var latestTranscript = ""
     private var pendingStop: Promise?
+    /// When the last `onDictationLevel` went out. The tap fires around ninety
+    /// times a second; JS wants at most twenty (DROVE-74).
+    private var lastLevelSentAt: TimeInterval = 0
 
     /// The session as it was before dictation took it over, put back when
     /// dictation lets go. Nil while nobody is dictating.
@@ -80,7 +83,7 @@ public final class DroverSpeechModule: Module {
     public func definition() -> ModuleDefinition {
         Name("DroverSpeech")
 
-        Events("onDictationPartial")
+        Events("onDictationPartial", "onDictationEnded", "onDictationLevel")
 
         OnCreate {
             self.synthesizer.delegate = self.speechDelegate
@@ -381,24 +384,54 @@ public final class DroverSpeechModule: Module {
 
         self.recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
             guard let self else { return }
+            // A callback after teardown (the cancel itself reports an error)
+            // belongs to a task that is already gone.
+            guard self.recognitionTask != nil else { return }
             if let result {
                 self.latestTranscript = result.bestTranscription.formattedString
                 self.sendEvent("onDictationPartial", ["text": self.latestTranscript])
-                if result.isFinal {
-                    self.settleStop(with: self.latestTranscript)
-                }
             }
-            if error != nil {
+            let final = result?.isFinal ?? false
+            guard final || error != nil else { return }
+            if self.pendingStop != nil {
                 self.settleStop(with: self.latestTranscript)
+                return
             }
+            // The recogniser ended on its own: Apple finalised after a long
+            // silence, or gave up ("no speech detected"). Nobody asked it to,
+            // so nobody is waiting on a promise; tell JS instead, or a
+            // latched mic looks live over a dead task (DROVE-30).
+            let transcript = self.latestTranscript
+            let reason = final ? "final" : (error?.localizedDescription ?? "error")
+            self.teardownDictation()
+            self.latestTranscript = ""
+            self.sendEvent("onDictationEnded", ["text": transcript, "reason": reason])
         }
 
         // A second tap on a bus is the other thing AVFAudio raises on. The
         // engine is fresh so there is none, but the removal is free and the
         // alternative is an abort.
         inputNode.removeTap(onBus: 0)
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
+        inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
             request.append(buffer)
+            // The level behind the waveform (DROVE-74): RMS of the first
+            // channel, at most twenty a second. The tap runs on the audio
+            // thread, so the event hops to main.
+            guard let self else { return }
+            let now = Date().timeIntervalSinceReferenceDate
+            guard now - self.lastLevelSentAt >= 0.05 else { return }
+            self.lastLevelSentAt = now
+            let frames = Int(buffer.frameLength)
+            guard frames > 0, let channel = buffer.floatChannelData?[0] else { return }
+            var sum: Float = 0
+            for i in 0..<frames {
+                let sample = channel[i]
+                sum += sample * sample
+            }
+            let rms = Double((sum / Float(frames)).squareRoot())
+            DispatchQueue.main.async {
+                self.sendEvent("onDictationLevel", ["level": rms])
+            }
         }
         inputTapInstalled = true
 

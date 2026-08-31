@@ -477,10 +477,14 @@ export const pl: TranslationStructure = {
             settingsSubtitle: 'Wypowiada każdą odpowiedź, gdy nadejdzie. Kod, diffy i wyniki narzędzi są pomijane.',
         },
         dictate: {
-            label: 'Przytrzymaj, aby mówić',
-            settingsTitle: 'Przytrzymaj, aby mówić',
-            settingsSubtitle: 'Przycisk z przytrzymaniem w polu wiadomości. Transkrypcja na tym urządzeniu.',
+            label: 'Przytrzymaj, aby mówić, dotknij, aby zablokować',
+            settingsTitle: 'Przycisk mówienia',
+            settingsSubtitle: 'Przycisk mikrofonu w polu wiadomości: przytrzymaj, aby mówić, dotknij, aby zostawić włączony. Transkrypcja na tym urządzeniu.',
             listening: 'Słucham…',
+            latched: 'Mikrofon włączony',
+            releaseToSend: 'Puść, aby wysłać',
+            tapToStop: 'Dotknij, aby zatrzymać',
+            stop: 'Zatrzymaj',
             failed: 'Dyktowanie nie powiodło się',
         },
         permissionMode: {

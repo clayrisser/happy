@@ -29,10 +29,13 @@ type DroverSpeechModuleType = {
     /** Resolves with the final transcript. */
     stopDictation: () => Promise<string>;
     cancelDictation: () => Promise<void>;
-    addListener: (
-        eventName: 'onDictationPartial',
-        listener: (event: { text: string }) => void,
-    ) => EventSubscription;
+    addListener: {
+        (eventName: 'onDictationPartial', listener: (event: { text: string }) => void): EventSubscription;
+        /** The recogniser stopped with no stop pending (DROVE-30). Build 10 and later. */
+        (eventName: 'onDictationEnded', listener: (event: { text: string; reason: string }) => void): EventSubscription;
+        /** Input RMS 0..1 per PCM buffer, at most 20 a second (DROVE-74). Build 10 and later. */
+        (eventName: 'onDictationLevel', listener: (event: { level: number }) => void): EventSubscription;
+    };
 };
 
 const native = requireOptionalNativeModule<DroverSpeechModuleType>('DroverSpeech');
@@ -138,4 +141,36 @@ export async function cancelDictation(): Promise<void> {
 export function addDictationPartialListener(listener: (text: string) => void) {
     if (!native) return { remove: () => {} };
     return native.addListener('onDictationPartial', (event) => listener(event.text));
+}
+
+/**
+ * The recogniser stopped on its own, Apple finalised after a long silence
+ * or gave up with "no speech detected", while nobody had asked it to
+ * (DROVE-30). A latched mic has to hear this, or it sits there looking live
+ * over a dead task until its idle clock runs out. A binary whose module
+ * predates the event simply never fires it; subscribing costs nothing.
+ */
+export function addDictationEndedListener(listener: (text: string, reason: string) => void) {
+    if (!native) return { remove: () => {} };
+    try {
+        return native.addListener('onDictationEnded', (event) => listener(event.text, event.reason));
+    } catch {
+        return { remove: () => {} };
+    }
+}
+
+/**
+ * The input level while dictation runs, for the waveform (DROVE-74). Raw RMS
+ * of each PCM buffer in 0..1, throttled to twenty a second in the tap. On a
+ * build without the event nothing arrives and the strip stays a flat line,
+ * which is the honest picture: it means "no level is being measured", not
+ * "you are silent".
+ */
+export function addDictationLevelListener(listener: (level: number) => void) {
+    if (!native) return { remove: () => {} };
+    try {
+        return native.addListener('onDictationLevel', (event) => listener(event.level));
+    } catch {
+        return { remove: () => {} };
+    }
 }
