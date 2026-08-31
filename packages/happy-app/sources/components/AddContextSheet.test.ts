@@ -98,15 +98,22 @@ describe('AddContextSheet', () => {
         expect(typeof shell.props.onClose).toBe('function');
     });
 
-    it('closes itself before the system picker comes up over it', () => {
+    it('waits for the sheet to be off the screen before opening the picker', () => {
+        // The regression: the sheet is a Modal and holds the presentation
+        // context for the length of its slide down, so a picker launched on
+        // the press came up behind it or not at all. Clay: "when I try to
+        // select photos it's not opening the photos."
         const order: string[] = [];
         const renderer = mount({
             onClose: () => order.push('close'),
             onSelect: (source: AddContextSource) => order.push(source),
         });
+        const shell = renderer.root.findByType('ComposerSheet' as any);
         act(() => {
             renderer.root.findAllByType('Pressable' as any)[0].props.onPress();
         });
+        expect(order).toEqual(['close']);
+        act(() => shell.props.onClosed());
         expect(order).toEqual(['close', 'camera']);
     });
 
@@ -114,12 +121,47 @@ describe('AddContextSheet', () => {
         const chosen: AddContextSource[] = [];
         const renderer = mount({ onSelect: (source: AddContextSource) => chosen.push(source) });
         const tiles = renderer.root.findAllByType('Pressable' as any);
-        act(() => {
-            tiles[0].props.onPress();
-            tiles[1].props.onPress();
-            tiles[2].props.onPress();
-        });
+        const shell = renderer.root.findByType('ComposerSheet' as any);
+        for (const tile of tiles) {
+            act(() => tile.props.onPress());
+            act(() => shell.props.onClosed());
+        }
         expect(chosen).toEqual(['camera', 'photos', 'files']);
+    });
+
+    it('drops the banked tile when the sheet is reopened before it fired', () => {
+        // He tapped, changed his mind, and opened the sheet again inside the
+        // 180ms slide. The old tile must not fire under the new sheet.
+        const chosen: AddContextSource[] = [];
+        let renderer: ReturnType<typeof create>;
+        act(() => {
+            renderer = create(React.createElement(AddContextSheet, {
+                open: true,
+                onClose: () => {},
+                onSelect: (source: AddContextSource) => chosen.push(source),
+                available: allAvailable,
+            }));
+        });
+        const shell = renderer!.root.findByType('ComposerSheet' as any);
+        act(() => renderer!.root.findAllByType('Pressable' as any)[1].props.onPress());
+        act(() => {
+            renderer!.update(React.createElement(AddContextSheet, {
+                open: false,
+                onClose: () => {},
+                onSelect: (source: AddContextSource) => chosen.push(source),
+                available: allAvailable,
+            }));
+        });
+        act(() => {
+            renderer!.update(React.createElement(AddContextSheet, {
+                open: true,
+                onClose: () => {},
+                onSelect: (source: AddContextSource) => chosen.push(source),
+                available: allAvailable,
+            }));
+        });
+        act(() => shell.props.onClosed());
+        expect(chosen).toEqual([]);
     });
 
     it('does not draw a tile with nothing behind it', () => {

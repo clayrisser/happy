@@ -72,6 +72,17 @@ export function ComposerSheet(props: {
     maxHeight?: number;
     /** A sheet with switches in it must not lose the first tap to the keyboard. */
     keyboardShouldPersistTaps?: 'always' | 'never' | 'handled';
+    /**
+     * After the slide down has finished AND the Modal has come off the screen.
+     *
+     * This exists because `onClose` is far too early for anything that presents
+     * a SYSTEM modal of its own. The sheet is a react-native `Modal`, so it
+     * still owns the presentation context for the 180ms it spends animating
+     * out, and a picker launched inside that window either comes up behind it
+     * or never comes up at all. Anything opening the camera, the photo library
+     * or the document browser has to wait for this, not for `onClose`.
+     */
+    onClosed?: () => void;
 }) {
     const { theme } = useUnistyles();
     const safeArea = useSafeAreaInsets();
@@ -86,7 +97,11 @@ export function ComposerSheet(props: {
     const translateY = useSharedValue(parked);
     const sheetHeight = useSharedValue(parked);
     const entered = React.useRef(false);
-    const unmount = React.useCallback(() => setMounted(false), []);
+    const onClosed = props.onClosed;
+    const unmount = React.useCallback(() => {
+        setMounted(false);
+        onClosed?.();
+    }, [onClosed]);
 
     React.useEffect(() => {
         if (props.open) {
