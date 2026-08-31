@@ -24,6 +24,14 @@ export const LocalSettingsSchema = z.object({
     // almost never should.
     readAloudEnabled: z.boolean().describe('Read assistant replies aloud as they arrive'),
     voiceDictationEnabled: z.boolean().describe('Show the press-and-hold talk button in the composer'),
+    // Haptics on THIS handset, off by default (DROVE-190). The wrist is the
+    // surface meant to tap Clay; the phone buzzing for the same events is
+    // duplicate noise, and it fires in his pocket while a reply is read
+    // aloud. Device-local on purpose: the watch buzzes off the synced
+    // droverAnnounceHaptic channel and no watch code reads this key. One
+    // switch covers both notification and interaction haptics; see
+    // utils/hapticKinds.ts for why there is not a second one.
+    phoneHaptics: z.boolean().describe('Let this phone buzz: session announcements and touch feedback alike. The watch is unaffected'),
     // The channel demo doubles as onboarding (DROVE-75): shown once, on the
     // first authenticated launch, then reachable from Settings. Device-local
     // because the thing being learned is what THIS phone's buzz feels like.
@@ -59,6 +67,7 @@ export const localSettingsDefaults: LocalSettings = {
     zenMode: false,
     readAloudEnabled: false,
     voiceDictationEnabled: true,
+    phoneHaptics: false,
     droverDemoSeenAt: null,
     sidebarPanelsOpen: [],
     sidebarPanelActive: null,

@@ -20,6 +20,7 @@ const switchRowTitles: Record<string, string> = {
     showHarnessIconsInSessionList: en.settingsAppearance.showHarnessIconsInSessionList,
     readReplies: en.agentInput.channels.readReplies,
     talkButton: en.agentInput.dictate.settingsTitle,
+    phoneHaptics: en.agentInput.channels.phoneHaptics,
     audioCuesOn: en.settingsVoice.cues.on,
     heartbeat: en.settingsVoice.cues.heartbeat,
     speakTitles: en.settingsVoice.cues.speakTitles,

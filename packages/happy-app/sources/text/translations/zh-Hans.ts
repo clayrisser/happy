@@ -518,6 +518,10 @@ export const zhHans: TranslationStructure = {
             speakPromptsSubtitle: 'Cattle Drover 的提示及其选项在到达时朗读。',
             readReplies: '朗读回复',
             readRepliesSubtitle: '每条助手回复到达时朗读。代码、差异和工具输出会被跳过。',
+            phoneHaptics: '手机触感',
+            phoneHapticsSubtitle: '让这台手机震动：到达的提示，以及指下的轻触反馈。关闭时手表照常震动，手机保持安静。',
+            phoneHapticsTitle: '这台手机',
+            phoneHapticsFooter: '手腕才是用来提醒你的那一面。手机是你看和听的那一面，朗读回复时它就在口袋里，所以默认保持安静。一个开关管两种：会话提醒和触碰反馈。打开它不影响手表，关闭它也不会从手表拿走什么。',
         },
         codexPermissionMode: {
             title: 'CODEX 权限模式',

@@ -35,6 +35,9 @@ export default function ChannelsScreen() {
     // Stream-talk is local to this handset; the drover audio channel is
     // synced. Two settings, one Audio group, one row each (DROVE-100).
     const [readAloudEnabled, setReadAloudEnabled] = useLocalSettingMutable('readAloudEnabled');
+    // Device-local and off by default (DROVE-190): the wrist taps him, the
+    // phone does not.
+    const [phoneHaptics, setPhoneHaptics] = useLocalSettingMutable('phoneHaptics');
     const rows = audioRows({ announceAudio: channels.toggles.announceAudio, readAloudEnabled });
 
     return (
@@ -100,6 +103,34 @@ export default function ChannelsScreen() {
                                 value={channels.toggles.announceHaptic}
                                 onValueChange={(value) => { void channels.setToggle('announceHaptic', value); }}
                                 accessibilityLabel="Haptic"
+                            />
+                        )}
+                    />
+                </ItemGroup>
+
+                {/*
+                    DROVE-190. The row above is the CHANNEL: whether a prompt
+                    is announced by buzz at all, mirrored to every Mac and
+                    read by the wrist. This one is THIS HANDSET, device-local,
+                    and it ships off. With the channel on and this off the
+                    watch buzzes and the phone does not, which is what Clay
+                    asked for in one sentence and its follow-up.
+                */}
+                <ItemGroup
+                    title={t('agentInput.channels.phoneHapticsTitle')}
+                    footer={t('agentInput.channels.phoneHapticsFooter')}
+                >
+                    <Item
+                        title={t('agentInput.channels.phoneHaptics')}
+                        subtitle={t('agentInput.channels.phoneHapticsSubtitle')}
+                        subtitleLines={0}
+                        icon={<Ionicons name={phoneHaptics ? 'phone-portrait-outline' : 'notifications-off-outline'} size={29} color="#FF9500" />}
+                        showChevron={false}
+                        rightElement={(
+                            <Switch
+                                value={phoneHaptics}
+                                onValueChange={setPhoneHaptics}
+                                accessibilityLabel={t('agentInput.channels.phoneHaptics')}
                             />
                         )}
                     />

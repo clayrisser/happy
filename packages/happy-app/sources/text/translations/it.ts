@@ -515,6 +515,10 @@ export const it: TranslationStructure = {
             speakPromptsSubtitle: 'Una richiesta di Cattle Drover e le sue opzioni vengono lette ad alta voce all\'arrivo.',
             readReplies: 'Leggi le risposte ad alta voce',
             readRepliesSubtitle: 'Pronuncia ogni risposta appena arriva. Codice, diff e output degli strumenti vengono saltati.',
+            phoneHaptics: 'Feedback aptico',
+            phoneHapticsSubtitle: 'Lascia vibrare questo telefono: le richieste che arrivano e i piccoli tocchi sotto il dito. Spento, l\'orologio vibra ancora e il telefono resta fermo.',
+            phoneHapticsTitle: 'QUESTO TELEFONO',
+            phoneHapticsFooter: 'Il polso è la superficie pensata per avvisarti. Il telefono è quello che guardi e ascolti, ed è in tasca mentre una risposta viene letta, quindi arriva silenzioso. Un solo interruttore per entrambi: gli avvisi di sessione e il ritorno tattile. Accenderlo non tocca l\'orologio, e spegnerlo non gli toglie nulla.',
         },
         codexPermissionMode: {
             title: 'MODALITÀ PERMESSI CODEX',

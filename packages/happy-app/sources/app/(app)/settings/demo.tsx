@@ -296,7 +296,7 @@ function PhoneTapticSection() {
                     showChevron={false}
                     onPress={() => {
                         demoLog(`phone taptic ${spec.id}`);
-                        playPhoneTaptic(spec.id);
+                        playPhoneTaptic(spec.id, true);
                     }}
                 />
             ))}
@@ -315,7 +315,7 @@ function HapticSection() {
         if (playing) return;
         setPlaying(spec.cue);
         demoLog(`phone haptic ${spec.cue}: ${spec.beats.join(' ')}`);
-        await playWristCue(spec);
+        await playWristCue(spec, true);
         if (alive.current) setPlaying(null);
     }, [playing]);
 
@@ -328,7 +328,7 @@ function HapticSection() {
         for (const spec of wristCues) {
             if (!alive.current) return;
             demoLog(`phone haptic ${spec.cue}: ${spec.beats.join(' ')}`);
-            await playWristCue(spec);
+            await playWristCue(spec, true);
             await new Promise<void>((resolve) => setTimeout(resolve, wristCueDurationMs(spec) + BETWEEN_CUES_MS));
         }
         if (alive.current) setPlaying(null);
@@ -422,7 +422,7 @@ function AudioSection() {
     }, []);
 
     const confirm = React.useCallback(async () => {
-        hapticsConfirm();
+        hapticsConfirm(true);
         await say('confirm', ['Got it.']);
     }, [say]);
 

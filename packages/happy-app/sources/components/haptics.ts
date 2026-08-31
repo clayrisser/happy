@@ -1,18 +1,60 @@
+/**
+ * Every phone haptic goes through here, and every one of them answers to the
+ * `phoneHaptics` switch, which ships OFF (DROVE-190).
+ *
+ * The gate lives in this module rather than at the thirty call sites so that
+ * a component added tomorrow cannot forget it. The taxonomy and the reasoning
+ * for one switch instead of two are in utils/hapticKinds.ts.
+ *
+ * The WRIST does not read any of this. The watch buzzes off the synced
+ * `droverAnnounceHaptic` channel (DROVE-124), which this file never touches.
+ */
+
 import * as Haptics from 'expo-haptics';
 import { wristBeatGap, type WristBeat, type WristCueSpec } from '@/utils/wristCues';
 import type { PhoneTapticId } from '@/utils/phoneTaptics';
+import { hapticAllowed, type HapticKind } from '@/utils/hapticKinds';
+import { storage } from '@/sync/storage';
 
-export function hapticsError() {
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+/**
+ * Read the switch live rather than subscribing: a haptic is fired from an
+ * event handler, so the store is always there to ask, and a stale copy would
+ * buzz once after he turned it off. Tolerant of a store not built yet (a
+ * headless background launch, a test that mocked nothing): silence is the
+ * default, and silence is what an unknown state should be.
+ */
+function phoneHapticsOn(): boolean {
+    try {
+        return storage.getState().localSettings.phoneHaptics === true;
+    } catch {
+        return false;
+    }
 }
 
-export function hapticsLight() {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+/** The one place the policy is applied. Returns whether the fire happened. */
+function fire(kind: HapticKind, preview: boolean, play: () => void): boolean {
+    if (!hapticAllowed(kind, phoneHapticsOn(), preview)) return false;
+    play();
+    return true;
+}
+
+export function hapticsError(preview: boolean = false) {
+    fire('interaction', preview, () => {
+        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    });
+}
+
+export function hapticsLight(preview: boolean = false) {
+    fire('interaction', preview, () => {
+        void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    });
 }
 
 /** The short tick of a picker moving one notch; the wrap toggle uses it (DROVE-95). */
-export function hapticsSelection() {
-    Haptics.selectionAsync();
+export function hapticsSelection(preview: boolean = false) {
+    fire('interaction', preview, () => {
+        void Haptics.selectionAsync();
+    });
 }
 
 /**
@@ -20,8 +62,22 @@ export function hapticsSelection() {
  * this is the taptic half of "the confirmation sound"; the demo screen pairs
  * it with a spoken "Got it" where the speech module exists.
  */
-export function hapticsConfirm() {
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+export function hapticsConfirm(preview: boolean = false) {
+    fire('interaction', preview, () => {
+        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    });
+}
+
+/**
+ * The phone's own announce tap: a Cattle Drover gate arrived and wants a
+ * human. The NOTIFICATION kind, and the one Clay was actually complaining
+ * about, because it fires while the phone is in his pocket and the wrist has
+ * already buzzed for the same gate.
+ */
+export function hapticsAnnounce(): boolean {
+    return fire('notification', false, () => {
+        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+    });
 }
 
 /**
@@ -47,8 +103,12 @@ function playBeat(beat: WristBeat): Promise<void> {
 /**
  * Play one wrist pattern on the phone, beat by beat, the same gap apart the
  * watch uses (DROVE-75). Resolves when the last beat has been asked for.
+ *
+ * Only the demo screen calls this, and only because a finger pressed the row
+ * asking to feel it, so it passes `preview`.
  */
-export async function playWristCue(spec: WristCueSpec): Promise<void> {
+export async function playWristCue(spec: WristCueSpec, preview: boolean = false): Promise<void> {
+    if (!hapticAllowed('interaction', phoneHapticsOn(), preview)) return;
     for (let index = 0; index < spec.beats.length; index++) {
         if (index > 0) {
             await new Promise<void>((resolve) => setTimeout(resolve, wristBeatGap * 1000));
@@ -67,11 +127,11 @@ export async function playWristCue(spec: WristCueSpec): Promise<void> {
  * Exhaustive over `PhoneTapticId`, so a row added to utils/phoneTaptics.ts
  * without a beat here is a compile error, not a silent no-op.
  */
-export function playPhoneTaptic(id: PhoneTapticId): void {
+export function playPhoneTaptic(id: PhoneTapticId, preview: boolean = false): void {
     switch (id) {
-        case 'light': return hapticsLight();
-        case 'selection': return hapticsSelection();
-        case 'confirm': return hapticsConfirm();
-        case 'error': return hapticsError();
+        case 'light': return hapticsLight(preview);
+        case 'selection': return hapticsSelection(preview);
+        case 'confirm': return hapticsConfirm(preview);
+        case 'error': return hapticsError(preview);
     }
 }
