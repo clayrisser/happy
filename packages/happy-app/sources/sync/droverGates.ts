@@ -18,6 +18,7 @@
 import { storage } from './storage';
 import type { DroverGate, DroverGateOption } from 'drover-watch';
 import type { DroverDelivery } from './droverChannels';
+import { withoutWithdrawn } from './droverWithdrawn';
 
 const PREVIEW_LIMIT = 240;
 
@@ -345,7 +346,11 @@ export function collectGateEntries(
             if (!live.has(id)) firstSeenAt.delete(id);
         }
     }
-    return entries;
+    // A card Clay withdrew himself is gone from every surface at once, not
+    // just the one he was looking at (DROVE-218). Filtered here rather than in
+    // each hook so the wrist feed, which reads this same collector, drops it
+    // too. See droverWithdrawn: this is a withdrawal, never an approval.
+    return withoutWithdrawn(entries);
 }
 
 /** Every pending request in storage, flattened into wrist-sized gates. */

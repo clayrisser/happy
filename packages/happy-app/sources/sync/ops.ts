@@ -7,6 +7,7 @@ import { apiSocket } from './apiSocket';
 import { sync } from './sync';
 import { storage } from './storage';
 import { describeDemoInput, isDroverDemoId, recordDemoAnswer } from './droverDemo';
+import { withdrawnGates } from './droverWithdrawn';
 import type { AgentQuestionAnswer, MachineMetadata, SessionAgentModesPatch } from './storageTypes';
 import type { SessionInventoryPayload } from './sessionInventory';
 import { markAgentModePushPending, clearAgentModePushPending, type AgentModeField } from './agentModesPending';
@@ -944,6 +945,35 @@ export async function sessionCancelCommunication(
     }
     const reply: SessionCommunicationReply = { id, kind, status: 'cancelled' };
     await apiSocket.sessionRPC(sessionId, 'communication', reply);
+}
+
+/**
+ * WITHDRAW a prompt Clay does not want to answer, and drop its card (DROVE-218).
+ *
+ * "get the ability for me to get things unstuck like prompts stuck." A card
+ * that will not come down is not a thing to wait out — this is the control
+ * that clears it, from the phone, with nobody diagnosing anything first.
+ *
+ * It is a withdrawal and it cannot be an approval. The bridge answers this RPC
+ * with `POST /v1/events/:id/cancel`, which is the one terminal transition that
+ * leaves `resolution` NULL, and there is no branch from here to `/resolve`. So
+ * a dismissal cannot allow the command the gate was raised to stop, which is
+ * DROVE-203 and is the one thing a fix for a stuck card must not widen. If the
+ * gate genuinely is still pending, cancelling it is the honest outcome and the
+ * producer learns its gate went away.
+ *
+ * The card is dropped locally FIRST and whatever the bus says. A cancel that
+ * 404s (the event is already gone) or 409s (another surface ended it) are both
+ * reasons the card should not still be on the screen, and a bridge that cannot
+ * answer at all is the very condition this control exists for.
+ */
+export async function sessionDismissGate(sessionId: string, id: string): Promise<void> {
+    withdrawnGates.withdraw([`${sessionId}:${id}`, id]);
+    if (isDroverDemoId(sessionId) || isDroverDemoId(id)) {
+        recordDemoAnswer({ sessionId, requestId: id, verdict: 'cancel', detail: 'dismissed' });
+        return;
+    }
+    await apiSocket.sessionRPC(sessionId, 'drover-dismiss', { id });
 }
 
 /**
