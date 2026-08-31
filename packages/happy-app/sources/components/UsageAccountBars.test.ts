@@ -26,9 +26,12 @@ const { host } = vi.hoisted(() => ({
 vi.mock('react-native', () => ({
     Platform: { OS: 'ios' },
     Pressable: host('Pressable'),
+    StyleSheet: { hairlineWidth: 1 },
     Text: host('Text'),
     View: host('View'),
 }));
+
+vi.mock('@expo/vector-icons', () => ({ Ionicons: host('Ionicons') }));
 
 vi.mock('react-native-unistyles', () => ({
     useUnistyles: () => ({
@@ -420,5 +423,103 @@ describe('switching account from a block (DROVE-160)', () => {
         expect(order).toEqual(['close']);
         act(() => renderer!.root.findByType('Shell' as any).props.onClosed());
         expect(order).toEqual(['close', 'switch:main']);
+    });
+});
+
+/**
+ * The add row that ends the list (DROVE-208).
+ *
+ * Clay, on this exact sheet: "Where is the button for me to add an account."
+ * The risk in answering it here is that the answer becomes a sixth account
+ * with an empty bar, in a column whose whole job is that bar lengths are
+ * comparable. So these pin the two halves: the row is present and says which
+ * machine it adds to, and it is NOT a bar: no track, no number column, a rule
+ * above it, and it does not change how many bars the sheet drew. Plus the
+ * ordering, because it navigates and everything that navigates from a sheet
+ * closes first (DROVE-183).
+ */
+describe('adding an account from the quota sheet (DROVE-208)', () => {
+    const groups = [
+        {
+            key: 'account:jamrizzi',
+            title: 'jamrizzi · 51% left',
+            active: true,
+            account: 'jamrizzi',
+            rows: [bar({ key: 'jamrizzi:five_hour', name: 'Session', fullName: 'Session' })],
+        },
+        {
+            key: 'account:main',
+            title: 'main · 20% left',
+            account: 'main',
+            rows: [bar({ key: 'main:five_hour', name: 'Session', fullName: 'Session' })],
+        },
+    ];
+    const addAccount = { machineName: 'drogon', onPress: () => {} };
+
+    it('ends the list with one row that names the machine it adds to', () => {
+        const renderer = mount(React.createElement(UsageAccountBars, {
+            width: 393,
+            groups,
+            footer: 'Times in BST · headroom for Opus',
+            addAccount,
+        }));
+        const words = texts(renderer);
+        expect(words).toContain('Add an account');
+        expect(words).toContain('on drogon ›');
+        // Last, after the accounts and after the caption that explains their
+        // numbers. The end of the list is where an add row belongs.
+        expect(words.indexOf('Add an account')).toBeGreaterThan(words.indexOf('main · 20% left'));
+        expect(words.indexOf('Add an account')).toBeGreaterThan(words.indexOf('Times in BST · headroom for Opus'));
+    });
+
+    it('sends a different machine to Settings → Accounts rather than growing a picker', () => {
+        // A quota sheet is one session on one machine. The screen that lists
+        // every machine already exists, and it is where this row goes anyway.
+        const renderer = mount(React.createElement(UsageAccountBars, { width: 393, groups, addAccount }));
+        expect(texts(renderer)).toContain('Other machines in Settings → Accounts');
+    });
+
+    it('is a row and not a sixth account: no track, no number, a rule above it', () => {
+        const without = mount(React.createElement(UsageAccountBars, { width: 393, groups }));
+        const with_ = mount(React.createElement(UsageAccountBars, { width: 393, groups, addAccount }));
+        // The count of BARS is unchanged, so nothing was added to the column
+        // being compared.
+        expect(with_.root.findAllByType(UsageAccountBarRow as any))
+            .toHaveLength(without.root.findAllByType(UsageAccountBarRow as any).length);
+        const press = with_.root.findAllByType('Pressable' as any);
+        expect(press).toHaveLength(1);
+        const style = press[0].props.style({ pressed: false });
+        expect(style.borderTopWidth).toBeGreaterThan(0);
+        // One focusable element that says the whole thing, target included.
+        expect(press[0].props.accessibilityRole).toBe('button');
+        expect(press[0].props.accessibilityLabel)
+            .toBe('Add a Claude account on drogon. Other machines in Settings, Accounts.');
+    });
+
+    it('draws nothing where there is no session behind the bars', () => {
+        // The session info screen renders one account with no machine to name,
+        // so it stays a readout.
+        const renderer = mount(React.createElement(UsageAccountBars, { width: 393, groups }));
+        expect(texts(renderer)).not.toContain('Add an account');
+        expect(renderer.root.findAllByType('Pressable' as any)).toHaveLength(0);
+    });
+
+    it('closes the sheet and only then navigates (DROVE-183)', () => {
+        const order: string[] = [];
+        let renderer: ReturnType<typeof create>;
+        act(() => {
+            renderer = create(React.createElement(SheetShell, {
+                onClose: () => order.push('close'),
+                children: React.createElement(UsageAccountBars, {
+                    width: 393,
+                    groups,
+                    addAccount: { machineName: 'drogon', onPress: () => order.push('push') },
+                }),
+            }));
+        });
+        act(() => renderer!.root.findAllByType('Pressable' as any)[0].props.onPress());
+        expect(order).toEqual(['close']);
+        act(() => renderer!.root.findByType('Shell' as any).props.onClosed());
+        expect(order).toEqual(['close', 'push']);
     });
 });

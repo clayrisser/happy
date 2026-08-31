@@ -12,10 +12,14 @@ import { describe, expect, it } from 'vitest';
 
 import {
     addAccountBusy,
+    addAccountEntry,
+    addAccountHref,
     addAccountIdle,
+    addAccountMachineParam,
     addAccountStatus,
     addAccountWatchMs,
     advanceAddAccount,
+    autoStartAddAccount,
     pendingAccountLoginFor,
     pendingAccountLogins,
     accountHeadroomLabel,
@@ -309,5 +313,80 @@ describe('accountSubtitle', () => {
     it('drops the address when there is none rather than printing an empty field', () => {
         expect(accountSubtitle(account({ login: null, loggedIn: false, headroom: null })))
             .toBe('no login yet');
+    });
+});
+
+/**
+ * Getting into the flow from the quota sheet (DROVE-208).
+ *
+ * The sheet is scoped to a session and a session runs on exactly one machine,
+ * so the add row targets that machine and asks nothing. What has to hold is
+ * that it never targets a machine it does not have, and that arriving here
+ * cannot start a login before the list it will be measured against is read.
+ */
+describe('the quota sheet\'s way into the flow (DROVE-208)', () => {
+    it('targets the session\'s machine and names it, so the target is never implied', () => {
+        const entry = addAccountEntry({ machineId: 'm-drogon', machineName: 'drogon' });
+        expect(entry).toEqual({
+            machineId: 'm-drogon',
+            machineName: 'drogon',
+            href: `/settings/accounts?${addAccountMachineParam}=m-drogon`,
+        });
+    });
+
+    it('falls back to the same short id the Accounts screen shows, not to two names', () => {
+        // One machine called two things on two screens is how "which Mac did
+        // that land on" becomes unanswerable.
+        expect(addAccountEntry({ machineId: 'abcdef0123456789' })?.machineName).toBe('abcdef01');
+        expect(addAccountEntry({ machineId: 'abcdef0123456789', machineName: '  ' })?.machineName)
+            .toBe('abcdef01');
+    });
+
+    it('draws no row at all when the session has no machine stamped on it', () => {
+        // An add row that cannot say where it is adding is the flat-pool lie
+        // DROVE-165 refused. Settings → Accounts is still there.
+        expect(addAccountEntry({ machineId: null })).toBeNull();
+        expect(addAccountEntry({ machineId: undefined })).toBeNull();
+        expect(addAccountEntry({ machineId: '   ' })).toBeNull();
+    });
+
+    it('escapes the id it puts in the route', () => {
+        expect(addAccountHref('a b&c')).toBe(`/settings/accounts?${addAccountMachineParam}=a%20b%26c`);
+    });
+
+    it('waits for that machine\'s account list before starting anything', () => {
+        // `before` is the whole basis of "a new name appeared, so it worked".
+        // Started on an empty list, the first account ever read back would
+        // look like the one just added.
+        expect(autoStartAddAccount({
+            requested: 'm-drogon', started: false, online: true, accounts: null,
+        })).toBeNull();
+        expect(autoStartAddAccount({
+            requested: 'm-drogon', started: false, online: true, accounts: ['main', 'jamrizzi'],
+        })).toEqual(['main', 'jamrizzi']);
+    });
+
+    it('starts once per arrival, never twice', () => {
+        expect(autoStartAddAccount({
+            requested: 'm-drogon', started: true, online: true, accounts: ['main'],
+        })).toBeNull();
+    });
+
+    it('does nothing when nobody named a machine, which is the plain visit', () => {
+        expect(autoStartAddAccount({
+            requested: null, started: false, online: true, accounts: ['main'],
+        })).toBeNull();
+    });
+
+    it('does not prompt in front of a refusal when that machine is offline', () => {
+        expect(autoStartAddAccount({
+            requested: 'm-drogon', started: false, online: false, accounts: ['main'],
+        })).toBeNull();
+    });
+
+    it('carries an empty list through, because a machine with no accounts is the point', () => {
+        expect(autoStartAddAccount({
+            requested: 'm-drogon', started: false, online: true, accounts: [],
+        })).toEqual([]);
     });
 });

@@ -14,6 +14,10 @@
  * The chrome moved out to ComposerSheet when DROVE-111 gave the agent
  * tree the same treatment, so the two are one sheet rather than two that look
  * alike. This is now just what goes in it.
+ *
+ * DROVE-208 added the way in at the end of it: an add row, on the machine this
+ * session runs on. The row is drawn by UsageAccountBars and the machine is
+ * decided by the caller, which is the only place a session is known.
  */
 import * as React from 'react';
 import { ComposerSheet } from './ComposerSheet';
@@ -28,6 +32,8 @@ export function UsageAccountBarsSheet(props: {
     onClose: () => void;
     /** Tapping an account block switches the session onto it (DROVE-160). */
     onSwitchAccount?: (account: string) => void;
+    /** The add row that ends the list (DROVE-208). */
+    addAccount?: { machineName: string; onPress: () => void } | null;
 }) {
     return (
         <ComposerSheet
@@ -38,6 +44,7 @@ export function UsageAccountBarsSheet(props: {
                 groups={props.groups}
                 footer={props.footer}
                 onSwitchAccount={props.onSwitchAccount}
+                addAccount={props.addAccount}
             />
         </ComposerSheet>
     );

@@ -35,9 +35,19 @@
  * The heading carries the answer to both questions a tap raises before it is
  * made: "current" on the one in use, "Switch" on every one that can take the
  * session. An account with no login gets neither, because it cannot.
+ *
+ * DROVE-208 put the way IN at the end of the way out. Clay, looking at five
+ * accounts here: "Where is the button for me to add an account." Adding one
+ * existed, on Settings -> Accounts only, and this is the screen where he
+ * notices one is missing. So the list ends in a row that starts that same
+ * flow. A row, not a block: no track, no percent column, a rule above it and
+ * a machine named on it, so it cannot be read as a sixth account with an
+ * empty bar. Which machine it targets and why it does not ask is argued in
+ * sync/machineAccountsFlow.ts.
  */
 import * as React from 'react';
-import { LayoutChangeEvent, Pressable, Text, View } from 'react-native';
+import { LayoutChangeEvent, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useUnistyles } from 'react-native-unistyles';
 import { Typography } from '@/constants/Typography';
 import { useComposerSheetNavigate } from './composerSheetNavigation';
@@ -255,6 +265,87 @@ function UsageAccountBlock(props: {
     );
 }
 
+/**
+ * The end of the list: add an account, on the machine this session runs on
+ * (DROVE-208).
+ *
+ * Deliberately unlike a block. The bars are a comparison and this is not a
+ * thing to compare, so it gets a rule above it, no track, no number column and
+ * a green glyph the account headings do not have. The machine is on the row
+ * rather than in the flow it starts, because a login lands somewhere and the
+ * one thing worth saying before the tap is where.
+ *
+ * It navigates, so it goes through the sheet's exit: close, wait for the Modal
+ * to be off the screen, then push (DROVE-183). Outside a sheet the same hook
+ * just runs it.
+ */
+function UsageAddAccountRow(props: { machineName: string; onPress: () => void }) {
+    const { theme } = useUnistyles();
+    const leave = useComposerSheetNavigate();
+    return (
+        <Pressable
+            accessible
+            accessibilityRole="button"
+            accessibilityLabel={`Add a Claude account on ${props.machineName}. `
+                + 'Other machines in Settings, Accounts.'}
+            onPress={() => leave(props.onPress)}
+            style={({ pressed }: { pressed: boolean }) => ({
+                marginTop: 10,
+                paddingTop: 8,
+                borderTopWidth: StyleSheet.hairlineWidth,
+                borderTopColor: theme.colors.divider,
+                opacity: pressed ? 0.5 : 1,
+            })}
+        >
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+                <Ionicons name="add-circle-outline" size={13} color={theme.colors.success} />
+                <Text
+                    numberOfLines={1}
+                    style={{
+                        fontSize: 11,
+                        color: theme.colors.textLink,
+                        ...Typography.default(),
+                    }}
+                >
+                    Add an account
+                </Text>
+                {/* Trailing, like the "Switch" word above it, so a long
+                    machine name truncates instead of wrapping the row. */}
+                <Text
+                    numberOfLines={1}
+                    ellipsizeMode="tail"
+                    style={{
+                        marginLeft: 'auto',
+                        paddingLeft: 6,
+                        flexShrink: 1,
+                        fontSize: 10,
+                        color: theme.colors.textSecondary,
+                        ...Typography.default(),
+                    }}
+                >
+                    {`on ${props.machineName} ›`}
+                </Text>
+            </View>
+            {/* The answer to "and if I meant the other Mac". A quota sheet is
+                one session on one machine, so the picker lives where every
+                machine already does rather than being grown in here. */}
+            <Text
+                numberOfLines={1}
+                ellipsizeMode="tail"
+                style={{
+                    marginTop: 1,
+                    marginLeft: 18,
+                    fontSize: 10,
+                    color: theme.colors.textSecondary,
+                    ...Typography.default(),
+                }}
+            >
+                Other machines in Settings → Accounts
+            </Text>
+        </Pressable>
+    );
+}
+
 export function UsageAccountBars(props: {
     groups: UsageBarGroup[];
     width?: number;
@@ -266,6 +357,12 @@ export function UsageAccountBars(props: {
     footer?: string;
     /** Tapping a block moves the session onto that account (DROVE-160). */
     onSwitchAccount?: (account: string) => void;
+    /**
+     * The add row that ends the list (DROVE-208). Absent where there is no
+     * session behind the bars, so the session info screen, which draws one
+     * account and has no machine to name, stays a readout.
+     */
+    addAccount?: { machineName: string; onPress: () => void } | null;
 }) {
     const { theme } = useUnistyles();
     const [measured, setMeasured] = React.useState<number | null>(null);
@@ -304,6 +401,15 @@ export function UsageAccountBars(props: {
                 >
                     {props.footer}
                 </Text>
+            ) : null}
+            {/* After the caption, because the caption explains the NUMBERS and
+                belongs with them. Last in the sheet, which is where the end of
+                the list is and where the thumb already is. */}
+            {props.addAccount ? (
+                <UsageAddAccountRow
+                    machineName={props.addAccount.machineName}
+                    onPress={props.addAccount.onPress}
+                />
             ) : null}
         </View>
     );
