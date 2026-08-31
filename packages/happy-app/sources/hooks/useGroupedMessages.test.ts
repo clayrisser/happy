@@ -624,3 +624,60 @@ describe('useGroupedMessages', () => {
         expect(items[0].messages.map((message) => message.id)).toEqual(['tool-only']);
     });
 });
+
+describe('groupMessagesForDisplay: phone attachments (DROVE-234)', () => {
+    const uploadRow = (ref: string, name: string, createdAt: number): ToolCallMessage => ({
+        kind: 'tool-call',
+        id: `file-${ref}`,
+        localId: null,
+        createdAt,
+        children: [],
+        tool: {
+            name: 'file',
+            state: 'completed',
+            input: { ref, name, size: 10 },
+            createdAt,
+            startedAt: createdAt,
+            completedAt: createdAt,
+            description: `Attached image: ${name}`,
+        },
+    });
+
+    const envelope = (id: string, createdAt: number, path: string): Message => ({
+        kind: 'user-text',
+        id,
+        localId: null,
+        createdAt,
+        text: '<cross-session-message from-name="phone" from-mode="bypass">\n'
+            + 'look\n'
+            + '\n'
+            + 'An image was attached from the phone. Read it with the Read tool before answering:\n'
+            + `[Image 1: ${path}]\n`
+            + '</cross-session-message>',
+    });
+
+    // Storage keeps the transcript newest-first.
+    it('drops the upload row whose picture the message now draws itself', () => {
+        const messages: Message[] = [
+            envelope('m1', 2, '/u/d82a4d2f1e1c-IMG_0483.jpg'),
+            uploadRow('ref-483', 'IMG_0483.jpg', 1),
+        ];
+        const ids = groupMessagesForDisplay(messages, false).map((item) => item.id);
+        expect(ids).toEqual(['m1']);
+    });
+
+    it('keeps the upload row when no marker resolved to it', () => {
+        const messages: Message[] = [
+            {
+                kind: 'user-text',
+                id: 'm1',
+                localId: null,
+                createdAt: 2,
+                text: 'here is a screenshot',
+            },
+            uploadRow('ref-483', 'IMG_0483.jpg', 1),
+        ];
+        const ids = groupMessagesForDisplay(messages, false).map((item) => item.id);
+        expect(ids).toEqual(['m1', 'file-ref-483']);
+    });
+});

@@ -10,7 +10,7 @@ import { Metadata } from "@/sync/storageTypes";
 import { ToolView } from "./tools/ToolView";
 import { AgentEvent } from "@/sync/typesRaw";
 import { sync } from '@/sync/sync';
-import { useSetting } from '@/sync/storage';
+import { useCrossSessionMessage, useSetting } from '@/sync/storage';
 import { Option } from './markdown/MarkdownView';
 import { layout } from "./layout";
 import { parseLocalCommandMessage, isUserSlashCommandEcho } from './parseLocalCommandMessage';
@@ -25,6 +25,10 @@ import { formatWorkDuration } from '@/hooks/useGroupedMessages';
 import { agentLongPressCopyText } from '@/utils/agentTurnCopy';
 import { DisclosureFooter, useInlineDisclosure } from './DisclosureFooter';
 import { edgeClearance, tapSlopFor } from './scrollIndicatorInset';
+import { useAttachmentImage } from '@/hooks/useAttachmentImage';
+import { thumbhashToDataUri } from '@/utils/thumbhash';
+import { InlineImage } from './InlineImage';
+import type { CrossSessionImage, CrossSessionRender } from '@/utils/crossSessionAttachments';
 
 
 export const MessageView = React.memo((props: {
@@ -125,6 +129,11 @@ function UserTextBlock(props: {
     sync.sendMessage(props.sessionId, option.title, { source: 'option' });
   }, [props.sessionId]);
 
+  // The envelope a phone message arrives in, already read apart (DROVE-234).
+  // Null for every message that is not exactly that envelope, which is nearly
+  // all of them.
+  const crossSession = useCrossSessionMessage(props.sessionId, props.message.id);
+
   const userMessageBubbleColor = useSetting('userMessageBubbleColor');
   const { theme } = useUnistyles();
   const bubblePalette = resolveUserMessageBubbleColor(userMessageBubbleColor, theme.dark);
@@ -147,6 +156,17 @@ function UserTextBlock(props: {
   const isClaudeFlavor = !props.metadata?.flavor || props.metadata.flavor === 'claude';
   if (isClaudeFlavor && isUserSlashCommandEcho(props.message.text, props.message.localId != null)) {
     return null;
+  }
+
+  if (crossSession) {
+    return (
+      <CrossSessionBlock
+        render={crossSession}
+        sessionId={props.sessionId}
+        bubbleStyle={bubbleStyle}
+        onOptionPress={handleOptionPress}
+      />
+    );
   }
 
   const parsed = parseLocalCommandMessage(props.message.displayText || props.message.text);
@@ -198,6 +218,105 @@ function UserTextBlock(props: {
           <MarkdownView externalCopyHandler markdown={parsed.text} onOptionPress={handleOptionPress} sessionId={props.sessionId} />
         </View>
       </LongPressCopyable>
+    </View>
+  );
+}
+
+/**
+ * A message the phone sent, drawn as what it means (DROVE-234).
+ *
+ * The wrapper becomes a line of attribution under the bubble, the "read it
+ * with the Read tool" sentence is gone because it was addressed to the model,
+ * and each `[Image N: ...]` marker draws its picture. Everything else in the
+ * body is still ordinary markdown, angle brackets and all.
+ */
+function CrossSessionBlock(props: {
+  render: CrossSessionRender;
+  sessionId: string;
+  bubbleStyle: { backgroundColor: string; borderColor: string };
+  onOptionPress: (option: Option) => void;
+}) {
+  const { render, sessionId } = props;
+  const attribution = render.sender
+    ? (render.sender.mode
+      ? t('message.sentFromWithMode', { name: render.sender.name, mode: render.sender.mode })
+      : t('message.sentFrom', { name: render.sender.name }))
+    : null;
+
+  // The pictures and the attribution sit OUTSIDE the copy target, as siblings
+  // of the bubble. The copy target's width is its content, and a picture asked
+  // to fill it would measure zero on a message that is nothing but pictures.
+  return (
+    <View style={styles.userMessageContainer}>
+      {render.body.length > 0 ? (
+        <LongPressCopyable style={styles.userCopyTarget} text={render.body}>
+          <View style={[styles.userMessageBubble, styles.userMessageBubbleSolid, props.bubbleStyle]}>
+            <MarkdownView externalCopyHandler markdown={render.body} onOptionPress={props.onOptionPress} sessionId={sessionId} />
+          </View>
+        </LongPressCopyable>
+      ) : null}
+      {render.images.map((image) => (
+        <CrossSessionImageView key={`${image.marker.index}:${image.marker.path}`} image={image} sessionId={sessionId} />
+      ))}
+      {attribution ? (
+        <View style={styles.crossSessionRow}>
+          <Ionicons name="phone-portrait-outline" size={14} color={styles.crossSessionText.color} />
+          <Text style={styles.crossSessionText}>{attribution}</Text>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+/**
+ * One marker, drawn.
+ *
+ * The bytes come back the way they went out: the app uploaded this image
+ * encrypted and the blob is still on the server, so the ref off the matching
+ * `file` event is all that is needed. The absolute Mac path in the marker is
+ * never opened. The phone could not open it, and after a `/flip` it does not
+ * even name the directory it used to.
+ *
+ * A marker nothing matched keeps its literal line. Losing a picture silently
+ * would be worse than showing the text that was there before.
+ */
+function CrossSessionImageView(props: { image: CrossSessionImage; sessionId: string }) {
+  const attachment = props.image.attachment;
+  const { uri, error } = useAttachmentImage(props.sessionId, attachment?.ref);
+  const { theme } = useUnistyles();
+
+  const placeholder = React.useMemo(() => {
+    if (!attachment?.thumbhash) return undefined;
+    const dataUri = thumbhashToDataUri(attachment.thumbhash);
+    return dataUri ? { uri: dataUri } : undefined;
+  }, [attachment?.thumbhash]);
+
+  if (!attachment) {
+    return (
+      <View style={styles.crossSessionMarkerRow}>
+        <View style={[styles.userMessageBubble, styles.userMessageBubbleSolid, styles.crossSessionMarkerBubble]}>
+          <Text style={styles.crossSessionMarkerText}>{props.image.marker.raw}</Text>
+        </View>
+      </View>
+    );
+  }
+
+  const broken = (
+    <Ionicons name="alert-circle-outline" size={18} color={theme.colors.textSecondary} />
+  );
+
+  return (
+    <View style={styles.crossSessionImage}>
+      {error && !uri ? broken : (
+        <InlineImage
+          uri={uri ?? undefined}
+          width={attachment.width}
+          height={attachment.height}
+          placeholder={placeholder}
+          fallback={broken}
+          align="flex-end"
+        />
+      )}
     </View>
   );
 }
@@ -564,6 +683,37 @@ const styles = StyleSheet.create((theme) => ({
   },
   commandMessageBubble: {
     marginBottom: 6,
+  },
+  crossSessionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 4,
+    maxWidth: '100%',
+    opacity: 0.72,
+  },
+  crossSessionText: {
+    color: theme.colors.agentEventText,
+    fontSize: 13,
+  },
+  crossSessionImage: {
+    width: '100%',
+    alignItems: 'flex-end',
+    marginBottom: 6,
+  },
+  crossSessionMarkerRow: {
+    width: '100%',
+    alignItems: 'flex-end',
+  },
+  crossSessionMarkerBubble: {
+    backgroundColor: 'transparent',
+    borderColor: theme.colors.divider,
+    marginBottom: 6,
+  },
+  crossSessionMarkerText: {
+    color: theme.colors.agentEventText,
+    fontSize: 13,
+    paddingVertical: 4,
   },
   goalSentRow: {
     flexDirection: 'row',

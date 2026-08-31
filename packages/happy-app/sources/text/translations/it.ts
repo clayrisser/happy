@@ -1069,6 +1069,8 @@ export const it: TranslationStructure = {
         unknownEvent: 'Evento sconosciuto',
         usageLimitUntil: ({ time }: { time: string }) => `Limite di utilizzo raggiunto fino a ${time}`,
         sentAsGoal: 'Sent as goal',
+        sentFrom: ({ name }: { name: string }) => `From ${name}`,
+        sentFromWithMode: ({ name, mode }: { name: string; mode: string }) => `From ${name} · ${mode}`,
         unknownTime: 'ora sconosciuta',
         thoughtProcess: 'Processo di pensiero',
         thinkingNow: 'Sta pensando…',
