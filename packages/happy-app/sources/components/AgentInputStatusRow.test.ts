@@ -1088,6 +1088,55 @@ describe('AgentInputStatusRow dot rule', () => {
     });
 
     /**
+     * DROVE-257, on the mounted row, in the exact shape Clay photographed.
+     *
+     * The snapshot below is what a compacting session really publishes: no
+     * `main`, no `tool`, and three agents. Claude Code writes nothing to the
+     * transcript for the whole pass, so the CLI has no turn to report — which
+     * is why the strip drew a flat GREEN dot beside three workers while the
+     * terminal read `Compacting conversation… (1m 55s, 2.3k tokens)`.
+     */
+    it('goes purple and blinks on the snapshot that drew green, once the CLI says so', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(now + 1_000);
+        try {
+            const threeWorkers = [1, 2, 3].map((n) => ({
+                id: `a${n}`, label: `Agent ${n}`, startedAt: now - 300_000,
+            }));
+            // Before: the state he photographed. Green, on a session that is
+            // rewriting its own history.
+            sessions.midCompactionOldCli = {
+                metadata: { liveStatus: { at: now, agents: threeWorkers } },
+            };
+            const before = row({
+                sessionId: 'midCompactionOldCli',
+                contextUsage: { contextSize: 199_000, contextWindow: 200_000 },
+            }).root.findByType('StatusDot' as any);
+            expect(before.props.color).toBe(statusDotColors.connected);
+            expect(before.props.isPulsing).toBe(false);
+
+            // After: the same snapshot with the one field the CLI now writes.
+            sessions.midCompaction = {
+                metadata: {
+                    liveStatus: {
+                        at: now,
+                        agents: threeWorkers,
+                        compacting: { startedAt: now - 115_000, trigger: 'auto' },
+                    },
+                },
+            };
+            const after = row({
+                sessionId: 'midCompaction',
+                contextUsage: { contextSize: 199_000, contextWindow: 200_000 },
+            }).root.findByType('StatusDot' as any);
+            expect(after.props.color).toBe(statusDotColors.compacting);
+            expect(after.props.isPulsing).toBe(true);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    /**
      * The strip and a LIST ROW answer "is it working" the same way (DROVE-243).
      *
      * A session that reports `thinking` and publishes no snapshot used to draw
