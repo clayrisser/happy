@@ -58,6 +58,15 @@ const PolicyValuesSchema = z.object({
     onLimitPromptTtlMs: z.number().nullish(),
     onFamilyExhausted: z.enum(['stop', 'fallback']).nullish(),
     familyFallback: z.record(z.string(), z.array(z.string())).nullish(),
+    // The delivery channels ride the same store and the same RPC (DROVE-72):
+    // three announce switches, how audio may answer, and the saved modes. A
+    // PATCH of `mode` is a macro the bus expands into the four keys.
+    announceVisual: z.boolean().nullish(),
+    announceHaptic: z.boolean().nullish(),
+    announceAudio: z.boolean().nullish(),
+    answerAudio: z.enum(['off', 'click', 'speech', 'both']).nullish(),
+    mode: z.string().nullish(),
+    modes: z.record(z.string(), z.any()).nullish(),
 }).passthrough();
 
 const DroverPolicySchema = z.object({
@@ -544,6 +553,14 @@ export type CompletedAgentCommunication = z.infer<typeof CompletedAgentCommunica
 
 export const AgentStateSchema = z.object({
     controlledByUser: z.boolean().nullish(),
+    // The Cattle Drover machine settings, mirrored by the drover bridge from
+    // the bus's `settings` frame after every write (DROVE-72). The channel
+    // sheet reads its toggles out of this when a bridge is up, so a switch
+    // moved in a terminal shows here without polling a bus the phone cannot
+    // reach. Loose on purpose: the keys are the bus's and it may grow them.
+    droverSettings: z.object({
+        capturedAt: z.number(),
+    }).passthrough().nullish(),
     // Ephemeral runtime state. A malformed snapshot must not invalidate
     // permission requests or the rest of the agent state.
     usageLimits: UsageLimitsSchema,
@@ -588,6 +605,15 @@ export const AgentStateSchema = z.object({
             reason: z.string().nullish(),
             command: z.string().nullish(),
             createdAt: z.number().nullish(),
+            // Which channels ANNOUNCE this prompt and which may ANSWER it,
+            // stamped by the bus (DROVE-72). The phone buzzes and speaks off
+            // this field, never off a setting of its own. Absent on a card
+            // from a bus older than the field; see droverChannels.deliveryOf.
+            delivery: z.object({
+                announce: z.array(z.string()),
+                answer: z.array(z.string()),
+                audioInput: z.string().nullish(),
+            }).nullish(),
         }).nullish()
     })).nullish(),
     completedRequests: z.record(z.string(), z.object({

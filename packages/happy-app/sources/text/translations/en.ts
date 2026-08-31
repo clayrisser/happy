@@ -475,10 +475,14 @@ export const en: TranslationStructure = {
             settingsSubtitle: 'Speaks each assistant reply as it arrives. Code, diffs and tool output are skipped.',
         },
         dictate: {
-            label: 'Hold to talk',
-            settingsTitle: 'Hold to talk',
-            settingsSubtitle: 'A press-and-hold button in the composer. Transcribed on this device.',
+            label: 'Hold to talk, tap to latch',
+            settingsTitle: 'Talk button',
+            settingsSubtitle: 'A mic button in the composer: hold to talk, tap to keep it open. Transcribed on this device.',
             listening: 'Listening…',
+            latched: 'Mic on',
+            releaseToSend: 'Release to send',
+            tapToStop: 'Tap to stop',
+            stop: 'Stop',
             failed: 'Dictation failed',
         },
         permissionMode: {

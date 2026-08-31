@@ -523,7 +523,7 @@ export class PushNotificationClient {
      * @param body - Notification body
      * @param data - Additional data to send with the notification
      */
-    sendToAllDevices(title: string, body?: string, data?: Record<string, any>): void {
+    sendToAllDevices(title: string, body?: string, data?: Record<string, any>, sound: boolean = true): void {
         logger.debug(`[PUSH] sendToAllDevices called with title: "${title}", body: "${body ?? ''}"`);
         
         // Execute async operations without awaiting
@@ -555,7 +555,12 @@ export class PushNotificationClient {
                         // TODO: For brutalist session artwork, attach rich media via a public HTTPS image URL.
                         // Bundled app asset paths / require(...) / local file paths will not work in push payloads.
                         // iOS also needs a Notification Service Extension to render richContent.image reliably.
-                        sound: 'default',
+                        //
+                        // The sound is the AUDIO channel's half of an alert
+                        // (DROVE-72), so the caller decides it off the event's
+                        // delivery; a visual-only announcement lights the
+                        // screen and says nothing. No decision is made here.
+                        ...(sound ? { sound: 'default' as const } : {}),
                         priority: 'high'
                     }
                 })
@@ -588,6 +593,13 @@ export class PushNotificationClient {
         kind: SessionNotificationKind
         metadata: Metadata | null | undefined
         data?: Record<string, any>
+        /**
+         * Whether the alert carries a sound (DROVE-72). Set by the caller off
+         * the event's delivery.announce, never decided here. Honoured on the
+         * direct Expo path; the server's push-event route has no sound field
+         * of its own, so there the server's default stands.
+         */
+        sound?: boolean
     }): void {
         const { title, body } = getSessionNotificationCopy(params.kind, params.metadata)
         const sessionTitle = getSessionNotificationBody(params.metadata)
@@ -600,9 +612,10 @@ export class PushNotificationClient {
         }
 
         const sessionId = typeof params.data?.sessionId === 'string' ? params.data.sessionId : null
+        const sound = params.sound !== false
         if (!sessionId) {
             logger.debug('[PUSH] sendSessionNotification: missing sessionId, falling back to direct send')
-            this.sendToAllDevices(title, body, payloadData)
+            this.sendToAllDevices(title, body, payloadData, sound)
             return
         }
         // A kind the route will refuse never gets handed to it (DROVE-70). It
@@ -613,7 +626,7 @@ export class PushNotificationClient {
         // something" was the one card that could never buzz his phone.
         if (!serverPushEventKinds.has(params.kind)) {
             logger.debug(`[PUSH] kind=${params.kind} is not on the push-event route; sending direct to Expo`)
-            this.sendToAllDevices(title, body, payloadData)
+            this.sendToAllDevices(title, body, payloadData, sound)
             return
         }
 

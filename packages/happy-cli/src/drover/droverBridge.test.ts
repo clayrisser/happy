@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+    announcePlanFor,
     busResolutionFor,
     completedReasonFor,
+    deliveryOf,
     completedStatusFor,
     gatePushData,
     pushMetadata,
@@ -172,7 +174,7 @@ describe('busResolutionFor', () => {
             id: 'ev-1',
             approved: true,
             updatedInput: { answers: { 'What happened on the Mac right after the tap?': 'Popup stayed open' } },
-        })).toEqual({ action: 'option', optionId: 'stayed', by: 'happy' })
+        })).toEqual({ action: 'option', optionId: 'stayed', by: 'phone', channel: 'visual' })
     })
 
     it('takes an option id straight through, which is what the wrist sends', () => {
@@ -180,7 +182,7 @@ describe('busResolutionFor', () => {
             id: 'ev-1',
             approved: true,
             updatedInput: { optionId: 'closed' },
-        })).toEqual({ action: 'option', optionId: 'closed', by: 'happy' })
+        })).toEqual({ action: 'option', optionId: 'closed', by: 'phone', channel: 'visual' })
     })
 
     it('never answers a question with allow — the bus 409s that on purpose', () => {
@@ -193,7 +195,7 @@ describe('busResolutionFor', () => {
             id: 'ev-1',
             approved: true,
             updatedInput: { answers: { q: 'something nobody offered' } },
-        })).toEqual({ action: 'text', text: 'something nobody offered', by: 'happy' })
+        })).toEqual({ action: 'text', text: 'something nobody offered', by: 'phone', channel: 'visual' })
     })
 
     it('matches a whole multi-select value before splitting it on commas', () => {
@@ -205,14 +207,14 @@ describe('busResolutionFor', () => {
             id: 'ev-1',
             approved: true,
             updatedInput: { answers: { q: 'Popup closed, nothing else' } },
-        })).toEqual({ action: 'option', optionId: 'both', by: 'happy' })
+        })).toEqual({ action: 'option', optionId: 'both', by: 'phone', channel: 'visual' })
     })
 
     it('leaves a permission on allow and deny', () => {
         expect(busResolutionFor(permission, { id: 'ev-2', approved: true }))
-            .toEqual({ action: 'allow', by: 'happy' })
+            .toEqual({ action: 'allow', by: 'phone', channel: 'visual' })
         expect(busResolutionFor(permission, { id: 'ev-2', approved: false, reason: 'no' }))
-            .toEqual({ action: 'deny', by: 'happy', text: 'no' })
+            .toEqual({ action: 'deny', by: 'phone', channel: 'visual', text: 'no' })
     })
 
     it('keeps every pick on a multi-select instead of the first one', () => {
@@ -223,7 +225,7 @@ describe('busResolutionFor', () => {
             id: 'ev-3',
             approved: true,
             updatedInput: { answers: { q: 'Alpha, Gamma' } },
-        })).toEqual({ action: 'option', optionId: 'a', optionIds: ['a', 'c'], by: 'happy' })
+        })).toEqual({ action: 'option', optionId: 'a', optionIds: ['a', 'c'], by: 'phone', channel: 'visual' })
     })
 
     it("takes the wrist's optionIds array, and still fills optionId", () => {
@@ -231,7 +233,7 @@ describe('busResolutionFor', () => {
             id: 'ev-3',
             approved: true,
             updatedInput: { optionIds: ['b', 'c'], optionId: 'b' },
-        })).toEqual({ action: 'option', optionId: 'b', optionIds: ['b', 'c'], by: 'happy' })
+        })).toEqual({ action: 'option', optionId: 'b', optionIds: ['b', 'c'], by: 'phone', channel: 'visual' })
     })
 
     it('sends one pick as one optionId even on a multi-select question', () => {
@@ -241,17 +243,17 @@ describe('busResolutionFor', () => {
             id: 'ev-3',
             approved: true,
             updatedInput: { answers: { q: 'Beta' } },
-        })).toEqual({ action: 'option', optionId: 'b', by: 'happy' })
+        })).toEqual({ action: 'option', optionId: 'b', by: 'phone', channel: 'visual' })
     })
 
     it('closes a to-do only when a button on it was actually named', () => {
         expect(busResolutionFor(todo, {
             id: 'ev-4', approved: true, updatedInput: { optionId: 'done' },
-        })).toEqual({ action: 'option', optionId: 'done', by: 'happy' })
+        })).toEqual({ action: 'option', optionId: 'done', by: 'phone', channel: 'visual' })
         // By LABEL too: the phone submits labels, the wrist submits ids.
         expect(busResolutionFor(todo, {
             id: 'ev-4', approved: true, updatedInput: { optionId: 'Drop it' },
-        })).toEqual({ action: 'option', optionId: 'drop', by: 'happy' })
+        })).toEqual({ action: 'option', optionId: 'drop', by: 'phone', channel: 'visual' })
     })
 
     it('leaves a to-do PENDING when the answer names no button at all', () => {
@@ -285,27 +287,27 @@ describe('busResolutionFor', () => {
             id: 'ev-2',
             approved: true,
             allowTools: ['Bash(make clean)'],
-        })).toEqual({ action: 'allow', by: 'happy', scope: 'session' })
+        })).toEqual({ action: 'allow', by: 'phone', channel: 'visual', scope: 'session' })
         expect(busResolutionFor(permission, {
             id: 'ev-2',
             approved: true,
             decision: 'approved_for_session',
-        })).toEqual({ action: 'allow', by: 'happy', scope: 'session' })
+        })).toEqual({ action: 'allow', by: 'phone', channel: 'visual', scope: 'session' })
     })
 
     it('does not invent a scope on a plain allow or on a deny', () => {
         expect(busResolutionFor(permission, { id: 'ev-2', approved: true, allowTools: [] }))
-            .toEqual({ action: 'allow', by: 'happy' })
+            .toEqual({ action: 'allow', by: 'phone', channel: 'visual' })
         expect(busResolutionFor(permission, {
             id: 'ev-2',
             approved: false,
             allowTools: ['Bash(make clean)'],
-        })).toEqual({ action: 'deny', by: 'happy' })
+        })).toEqual({ action: 'deny', by: 'phone', channel: 'visual' })
     })
 
     it('falls back to allow/deny for an event the bridge never saw', () => {
         expect(busResolutionFor(undefined, { id: 'gone', approved: true }))
-            .toEqual({ action: 'allow', by: 'happy' })
+            .toEqual({ action: 'allow', by: 'phone', channel: 'visual' })
     })
 })
 
@@ -414,7 +416,7 @@ describe('the account-login card', () => {
             id: 'ev-3',
             approved: true,
             updatedInput: { code: 'AbC,123#state' },
-        })).toEqual({ action: 'text', text: 'AbC,123#state', by: 'happy' })
+        })).toEqual({ action: 'text', text: 'AbC,123#state', by: 'phone', channel: 'visual' })
     })
 
     it('sends Cancel back as the option it is, so the login ends now', () => {
@@ -422,7 +424,7 @@ describe('the account-login card', () => {
             id: 'ev-3',
             approved: true,
             updatedInput: { optionId: 'cancel' },
-        })).toEqual({ action: 'option', optionId: 'cancel', by: 'happy' })
+        })).toEqual({ action: 'option', optionId: 'cancel', by: 'phone', channel: 'visual' })
     })
 })
 
@@ -456,5 +458,50 @@ describe('the push data', () => {
     it('stamps the bus kind, not the card tool: a to-do is a to-do and a question a question', () => {
         expect(gatePushData(todo, 'DroverTodo', null).kind).toBe('todo')
         expect(gatePushData(question, 'AskUserQuestion', 'happy-a').kind).toBe('question')
+    })
+})
+
+describe('delivery channels (DROVE-72)', () => {
+    const eyesFree: DroverEvent = {
+        ...question,
+        id: 'ev-audio',
+        delivery: { announce: ['audio'], answer: ['visual', 'audio'], audioInput: 'click' },
+    }
+
+    it('gates the alert push on visual and the sound on audio, off the event alone', () => {
+        expect(announcePlanFor({ delivery: { announce: ['visual', 'haptic'], answer: ['visual'], audioInput: null } }))
+            .toEqual({ alert: true, sound: false })
+        expect(announcePlanFor({ delivery: { announce: ['visual', 'audio'], answer: ['visual'], audioInput: null } }))
+            .toEqual({ alert: true, sound: true })
+        expect(announcePlanFor({ delivery: { announce: ['haptic'], answer: ['visual'], audioInput: null } }))
+            .toEqual({ alert: false, sound: false })
+        expect(announcePlanFor({ delivery: { announce: [], answer: ['visual'], audioInput: null } }))
+            .toEqual({ alert: false, sound: false })
+    })
+
+    it('reads an event with no delivery as announced on a screen, which is what every old bus did', () => {
+        expect(deliveryOf({})).toEqual({ announce: ['visual'], answer: ['visual'], audioInput: null })
+        expect(announcePlanFor({ delivery: null })).toEqual({ alert: true, sound: false })
+    })
+
+    it('carries delivery onto the card verbatim, so the phone reads one field and no setting', () => {
+        const card = requestForEvent(eyesFree) as { droverEvent?: { delivery?: unknown } }
+        expect(card.droverEvent?.delivery).toEqual(eyesFree.delivery)
+        const legacy = requestForEvent(question) as { droverEvent?: { delivery?: unknown } }
+        expect(legacy.droverEvent).not.toHaveProperty('delivery')
+    })
+
+    it('names the wrist when the answer says via watch, and the phone otherwise', () => {
+        expect(busResolutionFor(permission, { id: 'ev-2', approved: true, updatedInput: { via: 'watch' } }))
+            .toEqual({ action: 'allow', by: 'watch', channel: 'visual' })
+        expect(busResolutionFor(permission, { id: 'ev-2', approved: true }))
+            .toEqual({ action: 'allow', by: 'phone', channel: 'visual' })
+    })
+
+    it('passes an audio answer through as channel audio, on a question too', () => {
+        expect(busResolutionFor(eyesFree, { id: 'ev-audio', approved: true, updatedInput: { optionId: 'closed', channel: 'audio' } }))
+            .toEqual({ action: 'option', optionId: 'closed', by: 'phone', channel: 'audio' })
+        expect(busResolutionFor(question, { id: 'ev-1', approved: true, updatedInput: { optionId: 'closed' } }))
+            .toEqual({ action: 'option', optionId: 'closed', by: 'phone', channel: 'visual' })
     })
 })

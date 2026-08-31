@@ -16,7 +16,8 @@
 import { storage } from './storage';
 import { sync } from './sync';
 import { sessionAllow, sessionDeny } from './ops';
-import { collectGates, questionTextFor } from './droverGates';
+import { collectGateEntries, collectGates, questionTextFor } from './droverGates';
+import { newGateEntries, togglesFromSettings, wakeDeserved } from './droverChannels';
 import { demoLog, isDroverDemoId } from './droverDemo';
 import { isSessionArchived } from './sessionArchive';
 import { liveStatusSince, liveStatusWatchLine } from '@/utils/liveStatus';
@@ -345,9 +346,16 @@ export function startDroverWatchFeed(): () => void {
         ) return;
         // Computed against the PREVIOUS sets, so it has to happen before they
         // are replaced below (DROVE-62).
+        // A wake exists to BUZZ, so it is spent only when some new gate is
+        // announced on haptic and this phone's haptic switch is on
+        // (DROVE-72). A gate with no `delivery` came off a bus older than
+        // the field and wakes as before. Read off the card's stamp and the
+        // phone's own switch; the wrist keeps its own switch beside these.
+        const fresh = newGateEntries(new Set(lastGates.map((g) => g.id)), collectGateEntries());
         const wake =
             publishedOnce &&
-            deservesAWake({ gates: lastGates, sessions: lastSessions }, { gates, sessions });
+            deservesAWake({ gates: lastGates, sessions: lastSessions }, { gates, sessions }) &&
+            (fresh.length === 0 || wakeDeserved(fresh, togglesFromSettings(storage.getState().settings)));
         lastGates = gates;
         lastSessions = sessions;
         lastAccountRows = accountRows;
@@ -491,6 +499,13 @@ export function startDroverWatchFeed(): () => void {
         // `optionIds` array. Dropping it here is where three ticks would have
         // become one word, since this function copies the fields it names.
         const many = event.optionIds?.filter((id) => !!id) ?? [];
+        // WHO answered, for the bus's ledger (DROVE-72). Only on a card the
+        // drover bridge mirrored, where `updatedInput` is read by
+        // busResolutionFor and nothing else; on a native permission it is the
+        // tool's replacement input, and a stray key there would be typed into
+        // the tool call.
+        const mirrored = collectGateEntries().some((entry) => entry.gate.id === event.id && !!entry.event);
+        const via = mirrored ? { via: 'watch' } : {};
         const call = event.allow
             ? sessionAllow(
                 sessionId,
@@ -502,8 +517,9 @@ export function startDroverWatchFeed(): () => void {
                 // bus event to it, not a Bash call. happy-cli's busResolutionFor
                 // accepts either spelling and turns both into scope 'session'.
                 event.scope === 'session' ? 'approved_for_session' : undefined,
-                answered || many.length
+                answered || many.length || mirrored
                     ? {
+                        ...via,
                         ...(answered ? { optionId: answered } : {}),
                         ...(many.length > 1 ? { optionIds: many } : {}),
                     }

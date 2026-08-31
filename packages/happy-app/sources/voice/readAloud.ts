@@ -62,12 +62,23 @@ interface QueuedSentence {
     arrivedAt: number;
 }
 
+/**
+ * Told every time speech is cut, and why.
+ *
+ * This is how "anything that stops speech also stops capture" is made true
+ * by construction rather than by remembering to (DROVE-30): the composer's
+ * mic listens here, so a new reason to cut speech added later cuts capture
+ * with it.
+ */
+export type ReadAloudInterruptListener = (reason: ReadAloudInterruption) => void;
+
 export class ReadAloudReader {
     private readonly engine: SpeechEngine;
     private readonly now: () => number;
     private readonly maxLagSeconds: () => number;
     private readonly skipMarker: string;
     private readonly holdMs: number;
+    private readonly interruptListeners = new Set<ReadAloudInterruptListener>();
     private enabled = false;
     private focused: string | null = null;
     private queue: QueuedSentence[] = [];
@@ -187,8 +198,13 @@ export class ReadAloudReader {
         if (added) this.pump();
     }
 
-    /** Cut speech now, mid-word, not at the end of the sentence. */
-    interrupt(_reason: ReadAloudInterruption): void {
+    /**
+     * Cut speech now, mid-word, not at the end of the sentence, and tell
+     * every capture that it is over too. Listeners hear about EVERY call,
+     * including one made while nothing was speaking: a latched mic with
+     * read-aloud off is still a mic that has to stop when the user types.
+     */
+    interrupt(reason: ReadAloudInterruption): void {
         this.generation += 1;
         this.queue = [];
         this.pendingTails.clear();
@@ -198,6 +214,20 @@ export class ReadAloudReader {
             this.started = false;
             void this.engine.stop();
         }
+        for (const listener of this.interruptListeners) {
+            try {
+                listener(reason);
+            } catch {
+                // One controller failing to stop must not keep the next one
+                // from hearing that it should.
+            }
+        }
+    }
+
+    /** Returns the unsubscribe. */
+    addInterruptListener(listener: ReadAloudInterruptListener): () => void {
+        this.interruptListeners.add(listener);
+        return () => { this.interruptListeners.delete(listener); };
     }
 
     private enqueue(sentences: string[]): void {

@@ -461,10 +461,14 @@ export const zhHant: TranslationStructure = {
             settingsSubtitle: '每則助理回覆抵達時朗讀。程式碼、差異與工具輸出會略過。',
         },
         dictate: {
-            label: '按住說話',
-            settingsTitle: '按住說話',
-            settingsSubtitle: '輸入框中的按住說話按鈕。在本機轉寫。',
+            label: '按住說話，輕點鎖定',
+            settingsTitle: '說話按鈕',
+            settingsSubtitle: '輸入框中的麥克風按鈕：按住說話，輕點保持開啟。在本裝置上轉寫。',
             listening: '正在聆聽…',
+            latched: '麥克風已開啟',
+            releaseToSend: '放開傳送',
+            tapToStop: '輕點停止',
+            stop: '停止',
             failed: '聽寫失敗',
         },
         permissionMode: {

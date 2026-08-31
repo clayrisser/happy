@@ -582,6 +582,8 @@ type ChatComposerHandle = {
     clearMessage: () => void;
     /** Drop dictated text into the draft, after whatever is already typed. */
     appendMessage: (text: string) => void;
+    /** Dictation writing the composer (DROVE-74): replaces the text without counting as typing. */
+    setDictatedMessage: (text: string) => void;
 };
 
 type ChatComposerProps = Omit<
@@ -615,11 +617,16 @@ const ChatComposer = React.memo(function ChatComposer(props: ChatComposerProps) 
 
     const { clearDraft } = useDraft(sessionId, message, applyDraft);
 
+    // True while dictation is writing the composer itself (DROVE-74). Those
+    // writes come back through onChangeText like keystrokes, and a keystroke
+    // is what stops the mic, so they must not read as one.
+    const dictatingRef = React.useRef(false);
+
     const handleChangeText = React.useCallback((text: string) => {
         // Typing means the user has stopped listening and started writing, so
         // read-aloud is cut here rather than at the end of the sentence
         // (DROVE-30). Idempotent: only the first keystroke reaches the engine.
-        readAloud.interrupt('typed');
+        if (!dictatingRef.current) readAloud.interrupt('typed');
         // Transition keeps the textarea responsive even when the draft
         // autosave / re-render takes longer than a frame.
         React.startTransition(() => setMessage(text));
@@ -637,6 +644,15 @@ const ChatComposer = React.memo(function ChatComposer(props: ChatComposerProps) 
             const next = current.trimEnd().length > 0 ? `${current.trimEnd()} ${text}` : text;
             inputHandleRef.current?.setTextAndSelection(next, { start: next.length, end: next.length });
             setMessage(next);
+        },
+        setDictatedMessage: (text: string) => {
+            dictatingRef.current = true;
+            try {
+                inputHandleRef.current?.setTextAndSelection(text, { start: text.length, end: text.length });
+                setMessage(text);
+            } finally {
+                dictatingRef.current = false;
+            }
         },
     }), [clearDraft]);
 
@@ -1039,8 +1055,9 @@ export function SessionViewLoaded({
     const handleVoiceError = React.useCallback((message: string) => {
         Modal.alert(t('agentInput.dictate.failed'), message);
     }, []);
-    const appendDictatedText = React.useCallback((text: string) => {
-        composerHandleRef.current?.appendMessage(text);
+    const getComposerText = React.useCallback(() => composerHandleRef.current?.getMessage() ?? '', []);
+    const setComposerText = React.useCallback((text: string) => {
+        composerHandleRef.current?.setDictatedMessage(text);
     }, []);
     const voiceComposer = useVoiceComposer({
         sessionId,
@@ -1048,7 +1065,8 @@ export function SessionViewLoaded({
         // that must stay silent (DROVE-30).
         active: !embedded && !isDisconnected,
         voiceCallActive: realtimeStatus === 'connected' || realtimeStatus === 'connecting',
-        appendToComposer: appendDictatedText,
+        getComposerText,
+        setComposerText,
         send: handleSend,
         onError: handleVoiceError,
     });
@@ -1146,10 +1164,12 @@ export function SessionViewLoaded({
                 isMicActive={(embedded || isDisconnected) ? false : micButtonState.isMicActive}
                 readAloudEnabled={voiceComposer.readAloudEnabled}
                 onReadAloudToggle={voiceComposer.onReadAloudToggle}
-                onTalkStart={voiceComposer.onTalkStart}
-                onTalkEnd={voiceComposer.onTalkEnd}
+                onTalkPressIn={voiceComposer.onTalkPressIn}
+                onTalkPressOut={voiceComposer.onTalkPressOut}
+                onTalkStop={voiceComposer.onTalkStop}
                 onTalkCancel={voiceComposer.onTalkCancel}
-                isTalking={voiceComposer.isTalking}
+                talkState={voiceComposer.talkState}
+                talk={voiceComposer.talk}
                 onAbort={isDisconnected || !rigCanAbort(session.metadata) ? undefined : handleAbort}
                 showAbortButton={rigCanAbort(session.metadata) && (
                     sessionStatus.state === 'thinking'

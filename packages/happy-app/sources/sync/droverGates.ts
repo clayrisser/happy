@@ -17,6 +17,7 @@
 
 import { storage } from './storage';
 import type { DroverGate, DroverGateOption } from 'drover-watch';
+import type { DroverDelivery } from './droverChannels';
 
 const PREVIEW_LIMIT = 240;
 
@@ -210,6 +211,11 @@ export interface DroverGateEvent {
     reason?: string | null;
     command?: string | null;
     createdAt?: number | null;
+    /**
+     * Which channels announce this prompt and which may answer it, as the bus
+     * stamped it (DROVE-72). Absent from a bus older than the field.
+     */
+    delivery?: DroverDelivery | null;
 }
 
 /** Written by happy-cli's droverBridge; see requestForEvent (DROVE-19). */

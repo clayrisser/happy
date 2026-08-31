@@ -462,10 +462,14 @@ export const zhHans: TranslationStructure = {
             settingsSubtitle: '每条助手回复到达时朗读。代码、差异和工具输出会被跳过。',
         },
         dictate: {
-            label: '按住说话',
-            settingsTitle: '按住说话',
-            settingsSubtitle: '输入框中的按住说话按钮。在本机转写。',
+            label: '按住说话，轻点锁定',
+            settingsTitle: '说话按钮',
+            settingsSubtitle: '输入框中的麦克风按钮：按住说话，轻点保持开启。在本设备上转写。',
             listening: '正在聆听…',
+            latched: '麦克风已开启',
+            releaseToSend: '松开发送',
+            tapToStop: '轻点停止',
+            stop: '停止',
             failed: '听写失败',
         },
         permissionMode: {

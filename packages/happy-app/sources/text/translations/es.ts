@@ -461,10 +461,14 @@ export const es: TranslationStructure = {
             settingsSubtitle: 'Pronuncia cada respuesta a medida que llega. Se omiten el código, los diffs y la salida de herramientas.',
         },
         dictate: {
-            label: 'Mantén pulsado para hablar',
-            settingsTitle: 'Mantén pulsado para hablar',
-            settingsSubtitle: 'Un botón de mantener pulsado en el campo de mensaje. Se transcribe en este dispositivo.',
+            label: 'Mantén pulsado para hablar, toca para fijar',
+            settingsTitle: 'Botón de hablar',
+            settingsSubtitle: 'Un botón de micrófono en el campo de mensaje: mantén pulsado para hablar, toca para dejarlo abierto. Se transcribe en este dispositivo.',
             listening: 'Escuchando…',
+            latched: 'Micrófono activo',
+            releaseToSend: 'Suelta para enviar',
+            tapToStop: 'Toca para detener',
+            stop: 'Detener',
             failed: 'Error al dictar',
         },
         permissionMode: {

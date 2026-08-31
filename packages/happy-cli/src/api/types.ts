@@ -521,6 +521,14 @@ export type AgentGoalStatus = {
 export type AgentState = {
   controlledByUser?: boolean | null | undefined
   /**
+   * The Cattle Drover machine settings, mirrored by the drover bridge from the
+   * bus's `settings` frame after every write (DROVE-72), so the phone sees a
+   * channel toggle move without polling a bus it cannot reach. The keys are
+   * the bus's own (announceVisual, announceHaptic, announceAudio, answerAudio,
+   * mode, modes); `capturedAt` is when the bridge saw the frame.
+   */
+  droverSettings?: { capturedAt: number; [key: string]: unknown }
+  /**
    * Ephemeral plan rate-limit windows reported by the agent backend.
    * Apps must tolerate window ids they don't recognize.
    */

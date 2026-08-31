@@ -46,7 +46,11 @@ import {
 } from './agentInputLayout';
 import { shouldUseExpoNativeSettingsMenu } from './glassInteractionPolicy';
 import { ComposerSessionPill } from './ComposerSessionPill';
+import { LiveMicBanner } from './LiveMicBanner';
+import type { MicButtonState } from '@/voice/micButton';
+import type { DictationCaptureState } from '@/voice/dictationCapture';
 import { ComposerSheetRow } from './ComposerSheetRow';
+import { DroverChannelsSheet } from './DroverChannelsSheet';
 import { buildSessionPillLabel, buildSessionSheetRows, type SessionSheetRowKey } from './sessionPillLabel';
 
 interface AgentInputProps {
@@ -70,15 +74,20 @@ interface AgentInputProps {
     readAloudEnabled?: boolean;
     onReadAloudToggle?: () => void;
     /**
-     * Push-to-talk dictation (DROVE-30, mode A). Press and hold to record,
-     * release to transcribe into the composer. Separate from `onMicPress`,
-     * which starts the meta voice conversation and on the compact composer
-     * already owns the send button.
+     * Dictation (DROVE-30 mode A, DROVE-74). One button, two ergonomics:
+     * press and hold to talk, released to send; tap to latch the mic open,
+     * tap again to stop and send. Separate from `onMicPress`, which starts
+     * boss mode and on the compact composer already owns the send button.
      */
-    onTalkStart?: () => void;
-    onTalkEnd?: () => void;
+    onTalkPressIn?: () => void;
+    onTalkPressOut?: () => void;
+    /** The live banner's Stop: ends a latched mic and sends. */
+    onTalkStop?: () => void;
     onTalkCancel?: () => void;
-    isTalking?: boolean;
+    /** What the button draws. Absent when there is no button. */
+    talkState?: MicButtonState;
+    /** What the live banner draws. */
+    talk?: DictationCaptureState;
     permissionMode?: PermissionMode | null;
     availableModes?: PermissionMode[];
     onPermissionModeChange?: (mode: PermissionMode) => void;
@@ -160,6 +169,8 @@ function permissionKindIcon(kind: string | null | undefined): React.ComponentPro
 
 const MOBILE_ACTION_ROW_GEOMETRY = resolveMobileComposerActionRowGeometry();
 const MOBILE_ICON_ACTION_GEOMETRY = resolveMobileComposerActionGeometry('icon');
+/** iOS system red: the colour of a live microphone everywhere else on the phone. */
+const TALK_RED = '#FF3B30';
 const MOBILE_PRIMARY_ACTION_GEOMETRY = resolveMobileComposerActionGeometry('primary');
 
 // Shared with the action-area offset reported to onActionAreaOffsetChange —
@@ -363,6 +374,19 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     },
     mobileActionButtonsContainer: MOBILE_ACTION_ROW_GEOMETRY,
     mobileIconButton: MOBILE_ICON_ACTION_GEOMETRY,
+    // The talk button's two live states (DROVE-74). Held is a solid red disc
+    // with a white glyph; latched is a red ring with a red glyph, so a mic
+    // that will stay open after the lift looks different from one that will
+    // not, and both look different from idle.
+    talkButtonHeld: {
+        backgroundColor: TALK_RED,
+        borderRadius: 999,
+    },
+    talkButtonLatched: {
+        borderWidth: 2,
+        borderColor: TALK_RED,
+        borderRadius: 999,
+    },
     actionButtonsLeft: {
         flexDirection: 'row',
         gap: 8,
@@ -916,12 +940,14 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         setOpenPicker(row);
     }, []);
 
-    // Long-press on the primary button opens the channel sheet, where the
-    // audio channel (read aloud) lives now that its icon is off the composer.
+    // Long-press on the primary button opens the channel sheet (DROVE-72):
+    // the mode picker and the three channel switches, with DROVE-30's
+    // read-aloud switch kept inside the audio channel. DROVE-83 put audio
+    // here first because the sheet did not exist yet; the long-press stays as
+    // the shortcut and the sheet is DroverChannelsSheet.
     const handleChannelsLongPress = React.useCallback(() => {
-        if (!props.onReadAloudToggle) return;
         handlePickerPress('channels');
-    }, [handlePickerPress, props.onReadAloudToggle]);
+    }, [handlePickerPress]);
 
     // Handle settings selection
     const handleSettingsSelect = React.useCallback((mode: PermissionMode) => {
@@ -1614,21 +1640,12 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                         })}
                                     </View>
                                 ) : openPicker === 'channels' ? (
-                                    <View style={styles.overlaySection}>
-                                        <Text style={styles.overlaySectionTitle}>
-                                            {t('agentInput.channels.title')}
-                                        </Text>
-                                        <ComposerSheetRow
-                                            kind="toggle"
-                                            icon={props.readAloudEnabled ? 'volume-high-outline' : 'volume-mute-outline'}
-                                            title={t('agentInput.channels.audio')}
-                                            value={!!props.readAloudEnabled}
-                                            onValueChange={() => {
-                                                hapticsLight();
-                                                props.onReadAloudToggle?.();
-                                            }}
-                                        />
-                                    </View>
+                                    <DroverChannelsSheet
+                                        readAloudEnabled={props.readAloudEnabled}
+                                        onReadAloudToggle={props.onReadAloudToggle}
+                                        sectionStyle={styles.overlaySection}
+                                        titleStyle={styles.overlaySectionTitle}
+                                    />
                                 ) : openPicker === 'permission' ? (
                                     <View style={styles.overlaySection}>
                                         <Text style={styles.overlaySectionTitle}>
@@ -1911,6 +1928,14 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                             onRemove={props.onRemoveImage ?? (() => {})}
                         />
                     )}
+                    {/* The mic is open: red, pulsing, level moving (DROVE-74).
+                        The words land in the input below as they are heard. */}
+                    {compactMobileComposer && props.talk?.active && (
+                        <LiveMicBanner
+                            talk={props.talk}
+                            onStop={() => props.onTalkStop?.()}
+                        />
+                    )}
                     {/* Input field */}
                     <View style={[
                         styles.inputContainer,
@@ -1972,31 +1997,41 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
 
                         <View style={{ flex: 1 }} />
 
-                        {props.onTalkStart && (
+                        {props.onTalkPressIn && (
                             <BubblePressable
-                                // Press and hold, not tap: releasing is the
-                                // signal that the sentence is finished, which
-                                // is what lets the transcript go straight into
-                                // the composer without a second gesture.
-                                onPressIn={() => {
-                                    hapticsLight();
-                                    props.onTalkStart?.();
-                                }}
-                                onPressOut={() => props.onTalkEnd?.()}
+                                // Press-in opens the mic; the lift decides
+                                // (DROVE-74): inside the tap window it latches,
+                                // after it the words are sent. The haptics
+                                // come from the gesture reducer, one per
+                                // transition, so none is added here.
+                                onPressIn={() => props.onTalkPressIn?.()}
+                                onPressOut={() => props.onTalkPressOut?.()}
                                 onLongPress={() => { }}
                                 delayLongPress={100000}
-                                hitSlop={6}
-                                style={styles.mobileIconButton}
+                                hitSlop={10}
+                                scaleFeedback={props.talkState === 'idle'}
+                                style={[
+                                    styles.mobileIconButton,
+                                    props.talkState === 'held' && styles.talkButtonHeld,
+                                    props.talkState === 'latched' && styles.talkButtonLatched,
+                                ]}
                                 accessibilityRole="button"
-                                accessibilityState={{ busy: !!props.isTalking }}
-                                accessibilityLabel={t('agentInput.dictate.label')}
+                                accessibilityState={{
+                                    busy: props.talkState === 'held',
+                                    selected: props.talkState === 'latched',
+                                }}
+                                accessibilityLabel={props.talkState === 'latched'
+                                    ? t('agentInput.dictate.tapToStop')
+                                    : t('agentInput.dictate.label')}
                             >
                                 <Ionicons
-                                    name={props.isTalking ? 'mic' : 'mic-outline'}
-                                    size={16}
-                                    color={props.isTalking
-                                        ? theme.colors.radio.active
-                                        : theme.colors.text}
+                                    name={props.talkState === 'idle' ? 'mic-outline' : 'mic'}
+                                    size={props.talkState === 'idle' ? 16 : 17}
+                                    color={props.talkState === 'held'
+                                        ? '#FFFFFF'
+                                        : props.talkState === 'latched'
+                                            ? TALK_RED
+                                            : theme.colors.text}
                                 />
                             </BubblePressable>
                         )}

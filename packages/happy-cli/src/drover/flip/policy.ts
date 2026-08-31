@@ -48,10 +48,25 @@ const DROVER_URL = () => process.env.DROVER_URL || 'http://127.0.0.1:7970'
 export type OnLimit = 'auto' | 'prompt'
 export type OnLimitTimeout = 'auto' | 'stop'
 export type OnFamilyExhausted = 'stop' | 'fallback'
+export type AnswerAudio = 'off' | 'click' | 'speech' | 'both'
+
+/** One saved delivery combination (DROVE-72): a row in `modes`. */
+export interface DeliveryMode {
+    announceVisual: boolean
+    announceHaptic: boolean
+    announceAudio: boolean
+    answerAudio: AnswerAudio
+}
 
 /**
- * The five keys the store takes. Every one optional: a layer holds only what it
+ * The keys the store takes. Every one optional: a layer holds only what it
  * sets, and `effective` is the merge the bus did, not one done here.
+ *
+ * The delivery keys (DROVE-72) ride the same store and the same RPC: the
+ * phone's three channel toggles PATCH `announce*`, and `mode` is a macro the
+ * bus expands into the four channel keys. `values()` below used to keep only
+ * the five flip keys, which would have stripped these on the read side and
+ * left a phone toggle looking like it did nothing.
  */
 export interface PolicyValues {
     onLimit?: OnLimit
@@ -59,6 +74,12 @@ export interface PolicyValues {
     onLimitPromptTtlMs?: number
     onFamilyExhausted?: OnFamilyExhausted
     familyFallback?: Record<string, string[]>
+    announceVisual?: boolean
+    announceHaptic?: boolean
+    announceAudio?: boolean
+    answerAudio?: AnswerAudio
+    mode?: string | null
+    modes?: Record<string, DeliveryMode | null>
 }
 
 /** A patch may also clear a key with an explicit null — "use the default". */
@@ -95,9 +116,15 @@ const KEYS: (keyof PolicyValues)[] = [
     'onLimitPromptTtlMs',
     'onFamilyExhausted',
     'familyFallback',
+    'announceVisual',
+    'announceHaptic',
+    'announceAudio',
+    'answerAudio',
+    'mode',
+    'modes',
 ]
 
-/** Keep only the five known keys; the bus block also carries updatedAt/updatedBy. */
+/** Keep only the known keys; the bus block also carries updatedAt/updatedBy. */
 function values(raw: unknown): PolicyValues {
     const src = (raw ?? {}) as Record<string, unknown>
     const out: PolicyValues = {}
