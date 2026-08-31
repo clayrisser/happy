@@ -144,7 +144,7 @@ export function collectAccountRows(
         // ranking rather than re-derived on the wrist (DROVE-131, DROVE-129).
         // Its percentLeft is the same number `headroom` is — both are 100
         // minus the fullest row — so the bar and the label always agree.
-        const binding = droverBindingLimit(account, freshest.modelFamily);
+        const binding = droverBindingLimit(account, freshest.modelFamily, freshest.capturedAt);
         rows.push({
             name: account.name,
             // Omitted, never null: WatchConnectivity payloads take

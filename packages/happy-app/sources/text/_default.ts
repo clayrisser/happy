@@ -609,6 +609,14 @@ export const en = {
             unmeasured: 'not measured',
             noLogin: 'no login',
             stale: 'stale',
+            /**
+             * A window whose own reset has already passed (DROVE-204). The row
+             * keeps its slot and loses its bar and its number, because the
+             * honest answer is that nobody knows what is in that window now.
+             */
+            windowReset: 'window reset',
+            /** Said on the account heading when no figure survives that rule. */
+            headroomUnknown: 'headroom unknown',
             /** "Bars show used" — the direction the bare figures count in. */
             barsShow: ({ direction }: { direction: string }) => `Bars show ${direction}`,
             /** Said once under the bars, never per row: the column is too narrow. */

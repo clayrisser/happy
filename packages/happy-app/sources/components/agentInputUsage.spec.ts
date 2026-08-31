@@ -558,3 +558,95 @@ describe('a stale account block', () => {
         expect(block.title).toBe('jamrizzi · 49% used');
     });
 });
+
+/**
+ * No bar and no number for a window that has already reset (DROVE-204).
+ *
+ * Clay, at the sheet: "I know for a fact it was expired on most of these, so
+ * what is wrong with your graphs." The arithmetic was right and the input was
+ * a reading of a window that no longer existed. DROVE-173 labelled it `stale`,
+ * which is the right instinct and not enough — a bar and a percentage next to
+ * the word `stale` still reads as data. The honest answer is unknown, and
+ * unknown has no bar.
+ */
+describe('an expired window on the sheet', () => {
+    const captured = 10_000;
+    const expired: DroverUsageLike = {
+        capturedAt: captured,
+        modelFamily: null,
+        accounts: [{
+            name: 'risserproperties',
+            current: true,
+            loggedIn: true,
+            fetchedAt: captured - 41 * 60 * 60_000,
+            headroom: null,
+            cooling: null,
+            limits: [
+                { kind: 'session', percent: 1, resetsAt: captured - 1, scope: null, family: null, usable: false },
+                { kind: 'weekly_all', percent: 58, resetsAt: captured + 1, scope: null, family: null, usable: true },
+            ],
+        }],
+    };
+
+    it('draws the row with an empty track, no figure, and the reason', () => {
+        const strip = resolveUsageStrip({
+            usageLimits: null,
+            droverUsage: expired,
+            showRemaining: false,
+        });
+        const [session, week] = strip.usageBarGroups[0].rows;
+        // 99% left on a window that reset is the screenshot. Now: nothing.
+        expect(session.percentText).toBeNull();
+        expect(session.fraction).toBe(0);
+        expect(session.tone).toBe('unknown');
+        expect(session.trailing).toBe('window reset');
+        // The window that is still open keeps its bar and its number.
+        expect(week.percentText).toBe('58%');
+    });
+
+    it('heads the account with headroom unknown, not with "not measured"', () => {
+        const strip = resolveUsageStrip({
+            usageLimits: null,
+            droverUsage: expired,
+            showRemaining: false,
+        });
+        // Two different nothings. "not measured" means nobody ever asked.
+        expect(strip.usageBarGroups[0].title).toContain('headroom unknown');
+        expect(strip.usageBarGroups[0].title).not.toContain('not measured');
+    });
+
+    it('leaves the composer strip without a week figure rather than a stale one', () => {
+        const stale: DroverUsageLike = {
+            capturedAt: captured,
+            modelFamily: null,
+            accounts: [{
+                name: 'main', current: true, loggedIn: true, fetchedAt: captured - 1,
+                headroom: null, cooling: null,
+                limits: [
+                    { kind: 'weekly_all', percent: 58, resetsAt: captured - 1, scope: null, family: null, usable: false },
+                ],
+            }],
+        };
+        expect(resolveUsageStrip({ usageLimits: null, droverUsage: stale, showRemaining: false }).weekPercent)
+            .toBeNull();
+    });
+
+    it('gives the wrist no binding limit at all, because it has room for only one', () => {
+        // The wrist shows one figure and cannot qualify it. The window nobody
+        // has measured is exactly the one that could be full, so there is no
+        // honest single answer (DROVE-129: it must agree with headroom, and
+        // headroom is null here).
+        expect(droverBindingLimit(expired.accounts[0], null, captured)).toBeNull();
+    });
+
+    it('still answers when every applying window is inside its own reset', () => {
+        const fresh = {
+            name: 'jamrizzi',
+            limits: [
+                { kind: 'session', percent: 1, resetsAt: captured + 1, scope: null, family: null, usable: true },
+                { kind: 'weekly_all', percent: 58, resetsAt: captured + 1, scope: null, family: null, usable: true },
+            ],
+        };
+        expect(droverBindingLimit(fresh, null, captured)).toMatchObject({ id: 'seven_day', percentLeft: 42 });
+    });
+});
