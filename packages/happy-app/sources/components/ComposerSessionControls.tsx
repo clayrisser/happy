@@ -5,8 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 import Svg, { Circle, Line, Path } from 'react-native-svg';
 import { Typography } from '@/constants/Typography';
 import { BubblePressable } from './BubblePressable';
-import { GlassChromeSurface } from './GlassChromeControl';
-import { shouldDrawPressedFallback } from './glassInteractionPolicy';
+import { getGlassSurfaceOverflow, shouldDrawPressedFallback } from './glassInteractionPolicy';
 import { useNativeGlassPress } from './glassPress';
 import {
     effortAccessibility,
@@ -17,9 +16,11 @@ import {
     permissionModeGlyph,
 } from './sessionControlGlyphs';
 import {
+    composerCapsuleDivider,
     composerControlPalette,
     composerGaugeTrack,
     composerGlyphColour,
+    composerSessionCapsuleFill,
     pendingOrSettled,
 } from './composerControlColour';
 import {
@@ -43,9 +44,18 @@ import {
  * reference and the thing to take from it is not the pixel size, it is that
  * related actions share ONE capsule rather than sitting in separate circles.
  * Mode and effort are the same idea twice over: how this session is being run.
- * So they are one glass capsule with a hairline between them, not two discs
- * with air between them. Each segment is its own 44pt-tall, 44pt-wide press
- * target with its own picker, so pressing effort cannot open the mode list.
+ * So they are one capsule with a hairline between them, not two discs with air
+ * between them. Each segment is its own 44pt-tall, 44pt-wide press target with
+ * its own picker, so pressing effort cannot open the mode list.
+ *
+ * AND SINCE DROVE-254 IT IS AN OPAQUE FILL RATHER THAN GLASS. DROVE-153 gave
+ * it a `GlassChromeSurface` because it sat outside the bubble on the dock
+ * scrim, where glass over the chat was the right material. DROVE-236 moved it
+ * inside the bubble, which is itself a `UIGlassEffect`, and a glass effect
+ * nested in a glass effect has nothing left to refract. Clay: "This blends in
+ * which is annoying." It wears the same fill as the three discs on the row now
+ * and the hairlines inside it are measured against that fill;
+ * composerControlColour.ts holds both numbers and the argument.
  *
  * AND THE MODEL IS THE THIRD SEGMENT (DROVE-178). It was here, DROVE-138 took
  * it to the status row because six 63pt buttons were cutting `Opus 5 1M` to
@@ -235,6 +245,12 @@ const styles = StyleSheet.create((theme) => ({
         alignItems: 'center',
         flexShrink: 1,
         minWidth: 0,
+        // An open segment's wash is clipped to the capsule's round ends, which
+        // is what `GlassChromeSurface` did for this off the material
+        // (`getGlassSurfaceOverflow(false)`). There is no press swell to clip
+        // any more, because there is no material to swell (DROVE-202,
+        // DROVE-254).
+        overflow: getGlassSurfaceOverflow(false),
     },
     control: {
         alignItems: 'center',
@@ -259,8 +275,11 @@ const styles = StyleSheet.create((theme) => ({
         color: theme.colors.text,
         ...Typography.default('semiBold'),
     },
-    // Pressed and open read as a wash on the glass rather than as a different
-    // fill, so the material underneath is still doing the drawing.
+    // Pressed and open read as a WASH over the capsule's fill rather than as a
+    // second fill, so the segment lightens where a finger is instead of
+    // becoming a different object. Unchanged by DROVE-254 taking the glass
+    // away: it composites over an opaque fill now, and the gauge's floors are
+    // asserted on that washed surface too.
     controlOpen: {
         backgroundColor: theme.colors.glass.backgroundSubtle,
     },
@@ -268,11 +287,16 @@ const styles = StyleSheet.create((theme) => ({
      * The hairline between segments. Apple's grouped capsules separate their
      * halves with a divider rather than a gap, which is what keeps the capsule
      * reading as one object while the halves stay obviously separate.
+     *
+     * KEPT, and re-measured (DROVE-254). `theme.colors.glass.divider` is a
+     * list-row rule and measures 1.28:1 on the capsule's fill, which is not a
+     * faint line, it is no line. The colour comes from the call site so it can
+     * read the theme, exactly as the gauge's track does; the value and the
+     * reason are on `composerCapsuleDivider`.
      */
     segmentDivider: {
         width: RNStyleSheet.hairlineWidth,
         height: 20,
-        backgroundColor: theme.colors.glass.divider,
     },
 }));
 
@@ -362,11 +386,29 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
     // answer with it, which is how the system draws a grouped control. The
     // model segment is inside the same surface, so it takes part rather than
     // needing a press animation of its own (DROVE-178).
+    const divider = composerCapsuleDivider(theme.dark);
     return (
-        <GlassChromeSurface
-            radius={size / 2}
-            interactive
-            style={[styles.capsule, { height: size }, style]}
+        // AN OPAQUE FILL, NOT GLASS (DROVE-254). It was a `GlassChromeSurface`
+        // while it lived outside the bubble, which is where DROVE-153 put it.
+        // Inside the bubble that is a glass effect nested in a glass effect,
+        // and the inner one has nothing left to refract, which is Clay's "this
+        // blends in". It is the same plain view with the same opaque fill the
+        // three discs on this row already are, and the reasoning and the
+        // measurement are on `COMPOSER_SESSION_CAPSULE_FILL`.
+        //
+        // The press response follows the surface. With no material under them
+        // the segments draw the 0.7 fade `shouldDrawPressedFallback` keeps for
+        // exactly this case, which is what the discs either side of them do.
+        //
+        // No rim either. The fallback surface drew a hairline border, and the
+        // three discs on this row do not: one separation mechanism, measured,
+        // rather than a fill plus an edge covering for it.
+        <View
+            style={[
+                styles.capsule,
+                { height: size, borderRadius: size / 2, backgroundColor: composerSessionCapsuleFill(theme.dark) },
+                style,
+            ]}
         >
             {showMode ? (
                 <Control
@@ -390,7 +432,7 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                     />
                 </Control>
             ) : null}
-            {effortNeedsDivider ? <View style={styles.segmentDivider} /> : null}
+            {effortNeedsDivider ? <View style={[styles.segmentDivider, { backgroundColor: divider }]} /> : null}
             {showEffort ? (
                 <Control
                     picker="effort"
@@ -417,7 +459,7 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                     />
                 </Control>
             ) : null}
-            {modelNeedsDivider ? <View style={styles.segmentDivider} /> : null}
+            {modelNeedsDivider ? <View style={[styles.segmentDivider, { backgroundColor: divider }]} /> : null}
             {showModel ? (
                 <Control
                     picker="model"
@@ -442,6 +484,6 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                     </Text>
                 </Control>
             ) : null}
-        </GlassChromeSurface>
+        </View>
     );
 });

@@ -62,10 +62,14 @@ vi.mock('react-native-unistyles', () => ({
 
 vi.mock('@/constants/Typography', () => ({ Typography: { default: () => ({}) } }));
 vi.mock('./BubblePressable', () => ({ BubblePressable: host('BubblePressable') }));
-vi.mock('./GlassChromeControl', () => ({ GlassChromeSurface: host('GlassChromeSurface') }));
 
 const { ComposerSessionControls } = await import('./ComposerSessionControls');
-const { COMPOSER_CONTROL_PALETTE, composerGaugeTrack } = await import('./composerControlColour');
+const {
+    COMPOSER_CONTROL_PALETTE,
+    composerCapsuleDivider,
+    composerGaugeTrack,
+    composerSessionCapsuleFill,
+} = await import('./composerControlColour');
 
 const palette = COMPOSER_CONTROL_PALETTE.dark;
 
@@ -98,16 +102,48 @@ function press(renderer: any, label: string) {
 }
 
 describe('the session capsule', () => {
-    it('is mode, effort and model in that order, inside one glass surface (DROVE-178)', () => {
+    it('is mode, effort and model in that order, inside one surface (DROVE-178)', () => {
         const renderer = mount();
-        const surface = renderer.root.findByType('GlassChromeSurface' as any);
-        // One interactive surface for the whole capsule, so DROVE-169's press
-        // response covers the model segment without a second animation.
-        expect(surface.props.interactive).toBe(true);
         const labels = renderer.root.findAll(
             (node: any) => typeof node.type === 'string' && !!node.props?.accessibilityLabel,
         ).map((node: any) => node.props.accessibilityLabel);
         expect(labels).toEqual(['Permission mode', 'Reasoning effort', 'Model']);
+    });
+
+    /**
+     * THE CAPSULE IS AN OPAQUE FILL, NOT GLASS (DROVE-254).
+     *
+     * DROVE-153 gave it a `GlassChromeSurface`, which was right while it sat
+     * outside the bubble on the dock scrim. DROVE-236 moved it inside the
+     * bubble, which is itself a `UIGlassEffect`, and glass nested in glass has
+     * nothing left to refract. Clay: "This blends in which is annoying."
+     * composerControlColour.spec.ts measures the value; this is the half only
+     * a render can show, that the call site does not put the glass back.
+     */
+    it('draws itself on the row\u2019s own fill rather than on a second glass surface', () => {
+        const renderer = mount();
+        expect(renderer.root.findAllByType('GlassChromeSurface' as any)).toEqual([]);
+        const capsule = renderer.root.findAllByType('View' as any)
+            .find((node: any) => {
+                const parts = Array.isArray(node.props.style) ? node.props.style : [node.props.style];
+                return parts.some((part: any) => part?.backgroundColor === composerSessionCapsuleFill(true));
+            });
+        expect(capsule).toBeTruthy();
+    });
+
+    it('draws its dividers in the measured hairline, never the list rule (DROVE-254)', () => {
+        // `theme.colors.glass.divider` measures 1.28:1 on that fill, which is
+        // DROVE-227's gauge track again: not a dim line, no line.
+        const renderer = mount();
+        const rules = renderer.root.findAllByType('View' as any)
+            .filter((node: any) => (Array.isArray(node.props.style) ? node.props.style : [node.props.style])
+                .some((part: any) => part?.width === 1));
+        expect(rules).toHaveLength(2);
+        for (const rule of rules) {
+            const parts = Array.isArray(rule.props.style) ? rule.props.style : [rule.props.style];
+            const colour = parts.reduce((found: any, part: any) => part?.backgroundColor ?? found, undefined);
+            expect(colour).toBe(composerCapsuleDivider(true));
+        }
     });
 
     it('spells the model out in full, and never gains an ellipsis (DROVE-138, DROVE-178)', () => {
@@ -225,7 +261,8 @@ describe('the session capsule', () => {
         // Two segments and the one hairline between them, never a divider
         // floating at the end where a third used to be.
         expect(renderer.root.findAllByType('View' as any)
-            .filter((node: any) => node.props.style?.width === 1)).toHaveLength(1);
+            .filter((node: any) => (Array.isArray(node.props.style) ? node.props.style : [node.props.style])
+                .some((part: any) => part?.width === 1))).toHaveLength(1);
     });
 });
 

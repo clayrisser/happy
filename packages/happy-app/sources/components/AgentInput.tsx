@@ -84,6 +84,7 @@ import {
     COMPOSER_IN_FIELD_DISC_OPEN,
     composerControlPalette,
     composerGlyphColour,
+    composerPrimarySurface,
     micColour,
     primaryActionColour,
 } from './composerControlColour';
@@ -921,6 +922,21 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     const canSendMessage = primaryAction === 'send';
     /** The primary button is the microphone right now (DROVE-236). */
     const primaryIsMic = primaryAction === 'mic';
+    /**
+     * WHICH SURFACE THAT BUTTON WEARS (DROVE-254).
+     *
+     * Clay: "No circle on this icon unless pressed as mic." The table is in
+     * composerControlColour.ts with the argument for every face, including why
+     * the `+` and send keep their discs while the mic at rest loses one. Read
+     * from the same three flags the glyph below is drawn from, so the fill and
+     * the glyph cannot disagree about which face this is.
+     */
+    const primarySurface = composerPrimarySurface({
+        stop: shouldShowStopButton,
+        blocked: isSendBlocked,
+        mic: primaryIsMic,
+        micLive,
+    });
     /**
      * The in-field send glyph: the accent once there is something to send, the
      * theme's neutral when there is not (DROVE-176). It no longer wears a
@@ -2050,6 +2066,12 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
      * the row that grows, so a wrapped message dragged it down the side of a
      * tall capsule. It is on a row that cannot grow, at that row's trailing
      * end, centred in it.
+     *
+     * AND ITS SURFACE IS A TABLE, NOT A TERNARY (DROVE-254). Clay: "No circle
+     * on this icon unless pressed as mic." So the mic face at rest is a bare
+     * glyph on the bubble and gains a disc the moment the mic is open. Every
+     * face and the argument for it, including why the `+` and send keep theirs,
+     * is on `composerPrimarySurface` in composerControlColour.ts.
      */
     const mobilePrimaryAction = (
         <Shaker ref={shakerRef}>
@@ -2057,26 +2079,30 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 style={[
                     styles.sendButton,
                     styles.mobilePrimaryButton,
+                    // ONE TABLE, FIVE FACES, and it is in
+                    // composerControlColour.ts rather than in this ternary
+                    // (DROVE-214, DROVE-236, DROVE-254).
+                    //
                     // Stop is checked first: a blank composer on a
                     // non-steerable agent is both blocked and abortable, and it
-                    // must not look locked.
-                    // ONE DISC, whether or not there is something to send
-                    // (DROVE-214). It used to change fill with state, and the
-                    // resting value measured 1.05:1 on the composer's glass,
-                    // so what actually changed was invisible. The glyph
-                    // carries the state now, which is DROVE-215's rule, and
-                    // the fill is the same circle the `+` wears at the other
-                    // rim. Stop and the gate's lock keep their own surfaces:
-                    // those are other things, not other states of send.
-                    shouldShowStopButton ? styles.mobileStopButton
-                        : isSendBlocked ? styles.sendButtonLocked
-                            : styles.mobileInFieldDisc,
-                    // A LIVE CAPTURE FILLS THE DISC RED (DROVE-236), the same
-                    // surface the row's talk button wears when it is held, so
-                    // an open mic looks the same wherever it was opened from.
-                    // Off, the mic face is the resting disc: an offer, not a
-                    // state, so it carries no colour (DROVE-215).
-                    primaryIsMic && micLive && styles.talkButtonHeld,
+                    // must not look locked. Send keeps ONE disc whether or not
+                    // there is something to send, because the GLYPH carries
+                    // that state (DROVE-214, DROVE-215). A live mic fills the
+                    // disc with the row's recording red, the same surface the
+                    // talk button wears, so an open mic looks the same wherever
+                    // it was opened from (DROVE-236).
+                    //
+                    // AND A MIC AT REST WEARS NOTHING (DROVE-254). Clay: "No
+                    // circle on this icon unless pressed as mic." The box is
+                    // untouched, only the fill goes, so the name's budget on
+                    // this row does not move. The glyph clears 10.9:1 on the
+                    // dark bubble and 18.8:1 on the light one bare, measured in
+                    // composerControlColour.spec.ts.
+                    primarySurface === 'stop' ? styles.mobileStopButton
+                        : primarySurface === 'locked' ? styles.sendButtonLocked
+                            : primarySurface === 'recording' ? styles.talkButtonHeld
+                                : primarySurface === 'disc' ? styles.mobileInFieldDisc
+                                    : undefined,
                 ]}
             >
                 <BubblePressable
