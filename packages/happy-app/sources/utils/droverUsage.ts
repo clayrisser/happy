@@ -158,19 +158,45 @@ export function droverOtherAccounts(usage: DroverUsageLike, droverAccount?: stri
     const current = currentDroverUsageAccount(usage, droverAccount);
     return usage.accounts
         .filter((a) => a && typeof a.name === 'string' && a !== current)
-        .map((a) => {
-            const cooling = a.cooling && typeof a.cooling.until === 'number' ? a.cooling : null;
-            const family = cooling?.family
-                ? droverFamilyLabel({ family: cooling.family })
-                : null;
-            return {
-                name: a.name,
-                loggedIn: a.loggedIn !== false,
-                headroom: typeof a.headroom === 'number' && Number.isFinite(a.headroom)
-                    ? Math.round(Math.min(100, Math.max(0, a.headroom)))
-                    : null,
-                back: cooling?.until ?? null,
-                family,
-            };
-        });
+        .map(toAccountRow);
+}
+
+/**
+ * One account as a row. Extracted so the CURRENT account and every other one
+ * are described by the same code (DROVE-129: one derivation, not two that
+ * drift). The composer popup lists the others with this shape; the session
+ * info screen shows the current one with it (DROVE-137).
+ */
+function toAccountRow(a: DroverUsageAccountLike): DroverOtherAccountRow {
+    const cooling = a.cooling && typeof a.cooling.until === 'number' ? a.cooling : null;
+    const family = cooling?.family
+        ? droverFamilyLabel({ family: cooling.family })
+        : null;
+    return {
+        name: a.name,
+        loggedIn: a.loggedIn !== false,
+        headroom: typeof a.headroom === 'number' && Number.isFinite(a.headroom)
+            ? Math.round(Math.min(100, Math.max(0, a.headroom)))
+            : null,
+        back: cooling?.until ?? null,
+        family,
+    };
+}
+
+/**
+ * The account this session is running on, in that same row shape (DROVE-137).
+ *
+ * Falls back to the `droverAccount` stamp when there is no usage snapshot at
+ * all: a session on a machine whose CLI predates DROVE-47 still knows WHICH
+ * account it is on, and the name with no bar beats no line at all.
+ */
+export function currentDroverAccountRow(
+    usage: DroverUsageLike,
+    droverAccount?: string | null,
+): DroverOtherAccountRow | null {
+    const account = currentDroverUsageAccount(usage, droverAccount);
+    if (account && typeof account.name === 'string') return toAccountRow(account);
+    const name = droverAccount?.trim();
+    if (!name) return null;
+    return { name, loggedIn: true, headroom: null, back: null, family: null };
 }
