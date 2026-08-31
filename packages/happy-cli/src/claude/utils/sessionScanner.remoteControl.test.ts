@@ -20,7 +20,7 @@
  * format is a test of the fake.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
@@ -66,6 +66,23 @@ function slashRemoteControl(uuid: string) {
     }) + '\n'
 }
 
+/**
+ * An ordinary turn, used only as a marker (DROVE-68).
+ *
+ * A pass that is meant to report NOTHING leaves no trace to wait for, and
+ * sleeping through it cannot tell "read it and stayed quiet" from "has not
+ * looked yet". Appending one of these gives that pass something the scanner
+ * hands straight to onMessage, so the quiet is provably a decision.
+ */
+function turn(uuid: string) {
+    return JSON.stringify({
+        type: 'assistant',
+        uuid,
+        sessionId,
+        message: { role: 'assistant', model: 'claude-opus-5', content: [{ type: 'text', text: 'ok' }] },
+    }) + '\n'
+}
+
 /** The DROVE-37 teardown notice that precedes the empty record. */
 function accountChangedNotice(uuid: string) {
     return JSON.stringify({
@@ -77,14 +94,30 @@ function accountChangedNotice(uuid: string) {
     }) + '\n'
 }
 
-const settle = (ms = 200) => new Promise((r) => setTimeout(r, ms))
-
 describe('sessionScanner reports whether Remote Control is on', () => {
     let testDir: string
     let projectDir: string
     let file: string
     let states: boolean[]
+    let seen: number
     let scanner: Awaited<ReturnType<typeof createSessionScanner>> | null = null
+
+    /**
+     * Wait for the scanner to have reported exactly this (DROVE-68).
+     *
+     * It used to sleep 200 ms after each write and read `states` once, so a
+     * poll that had not come round yet failed as a wrong answer rather than a
+     * late one. Same assertion, waited for instead of guessed at: an extra
+     * report or a missing one still fails, with the same diff.
+     */
+    async function reports(expected: boolean[]): Promise<void> {
+        await vi.waitFor(() => expect(states).toEqual(expected), { timeout: 2_000, interval: 10 })
+    }
+
+    /** Wait for the scanner to have delivered n records to onMessage. */
+    async function delivered(n: number): Promise<void> {
+        await vi.waitFor(() => expect(seen).toBeGreaterThanOrEqual(n), { timeout: 2_000, interval: 10 })
+    }
 
     beforeEach(async () => {
         // Nothing here may reach the real drover bus.
@@ -95,6 +128,7 @@ describe('sessionScanner reports whether Remote Control is on', () => {
         await mkdir(projectDir, { recursive: true })
         file = join(projectDir, `${sessionId}.jsonl`)
         states = []
+        seen = 0
     })
 
     afterEach(async () => {
@@ -111,7 +145,7 @@ describe('sessionScanner reports whether Remote Control is on', () => {
         scanner = await createSessionScanner({
             sessionId,
             workingDirectory: testDir,
-            onMessage: () => { },
+            onMessage: () => { seen += 1 },
             onRemoteControlObserved: (active) => states.push(active),
         })
     }
@@ -122,9 +156,7 @@ describe('sessionScanner reports whether Remote Control is on', () => {
         // after the next toggle.
         await writeFile(file, bridgeUp('cse_016JvrzhFqBofbFYxKr2kewj'))
         await start()
-        await settle()
-
-        expect(states).toEqual([true])
+        await reports([true])
     })
 
     it('says nothing at all when the transcript has no bridge record', async () => {
@@ -133,8 +165,13 @@ describe('sessionScanner reports whether Remote Control is on', () => {
         // guess and the launcher refuses to act.
         await writeFile(file, slashRemoteControl('u1'))
         await start()
-        await settle()
 
+        // A marker turn behind the bare /remote-control line, so the pass that
+        // had nothing to go on is one this test can wait for instead of sleep
+        // through. Still empty afterwards is the assertion: the scanner did
+        // not guess "off" from a command with no record after it.
+        await writeFile(file, slashRemoteControl('u1') + turn('u9'))
+        await delivered(1)
         expect(states).toEqual([])
     })
 
@@ -143,28 +180,23 @@ describe('sessionScanner reports whether Remote Control is on', () => {
         // command in the pane has to reach the app without a restart.
         await writeFile(file, bridgeUp('cse_016JvrzhFqBofbFYxKr2kewj'))
         await start()
-        await settle()
-        expect(states).toEqual([true])
+        await reports([true])
 
         await writeFile(file,
             bridgeUp('cse_016JvrzhFqBofbFYxKr2kewj')
             + slashRemoteControl('u1')
             + bridgeDown())
-        await settle()
-
-        expect(states).toEqual([true, false])
+        await reports([true, false])
     })
 
     it('reports it coming back on, which a per-record dedupe would have eaten', async () => {
         await writeFile(file, bridgeUp('cse_01aaa'))
         await start()
-        await settle()
+        await reports([true])
         await writeFile(file, bridgeUp('cse_01aaa') + bridgeDown())
-        await settle()
+        await reports([true, false])
         await writeFile(file, bridgeUp('cse_01aaa') + bridgeDown() + bridgeUp('cse_01bbb'))
-        await settle()
-
-        expect(states).toEqual([true, false, true])
+        await reports([true, false, true])
     })
 
     it('reads a reconnect as still on, not as a disconnect', async () => {
@@ -173,11 +205,15 @@ describe('sessionScanner reports whether Remote Control is on', () => {
         // FIRST record in the pass rather than the newest would report off.
         await writeFile(file, bridgeUp('cse_01aaa'))
         await start()
-        await settle()
+        await reports([true])
 
-        await writeFile(file, bridgeUp('cse_01aaa') + bridgeDown() + bridgeUp('cse_01bbb'))
-        await settle()
-
+        // The reconnect arrives in ONE write, as it does on the wire, with a
+        // marker turn behind it: waiting for that turn to be delivered is
+        // waiting for the pass that read the pair, so `[true]` here is the
+        // scanner having looked and stayed quiet rather than not having looked.
+        await writeFile(file,
+            bridgeUp('cse_01aaa') + bridgeDown() + bridgeUp('cse_01bbb') + turn('u9'))
+        await delivered(1)
         expect(states).toEqual([true])
     })
 
@@ -188,15 +224,13 @@ describe('sessionScanner reports whether Remote Control is on', () => {
         // has gone quiet.
         await writeFile(file, bridgeUp('cse_01aaa'))
         await start()
-        await settle()
+        await reports([true])
 
         await writeFile(file,
             bridgeUp('cse_01aaa')
             + accountChangedNotice('u1')
             + bridgeDown())
-        await settle()
-
-        expect(states).toEqual([true, false])
+        await reports([true, false])
     })
 
     it('does not repeat itself while the bridge keeps rewriting its own record', async () => {
@@ -205,10 +239,12 @@ describe('sessionScanner reports whether Remote Control is on', () => {
         // to be taught not to do (DROVE-15).
         await writeFile(file, bridgeUp('cse_01aaa'))
         await start()
-        await settle()
-        await writeFile(file, bridgeUp('cse_01aaa') + bridgeUp('cse_01aaa') + bridgeUp('cse_01aaa'))
-        await settle()
-
+        await reports([true])
+        // The rewrites go in with a marker turn behind them, so the pass that
+        // read all three is one this test waits for. Still a single report
+        // afterwards is the proof none of them was repeated.
+        await writeFile(file, bridgeUp('cse_01aaa').repeat(3) + turn('u9'))
+        await delivered(1)
         expect(states).toEqual([true])
     })
 })

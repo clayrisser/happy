@@ -9,7 +9,7 @@
 
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { injectIntoPane } from './paneInject'
 
@@ -25,7 +25,34 @@ async function hasTmux(): Promise<boolean> {
 async function killSession(): Promise<void> {
     try { await run('tmux', ['kill-session', '-t', SESSION]) } catch { /* not there */ }
 }
-const settle = (ms = 300) => new Promise((r) => setTimeout(r, ms))
+/**
+ * Wait for the pane's foreground process to be what the test needs (DROVE-68).
+ *
+ * tmux starts a pane and then execs into it, so a fresh session's
+ * `pane_current_command` is whatever it happens to be for the first few
+ * milliseconds. This used to be a 300 ms sleep, which on a loaded box is a
+ * coin toss on a test whose whole subject is which command tmux reports.
+ */
+async function waitForPaneCommand(pane: string, want: (cmd: string) => boolean): Promise<void> {
+    await vi.waitFor(async () => {
+        const cmd = (await tmux(['display-message', '-p', '-t', pane, '#{pane_current_command}'])).trim()
+        if (!want(cmd)) throw new Error(`pane is running "${cmd}"`)
+    }, { timeout: 5_000, interval: 25 })
+}
+
+/** Wait for what was pasted to come back out of the pane. */
+async function waitForPaneBody(pane: string, ...needles: string[]): Promise<string> {
+    return await vi.waitFor(async () => {
+        const body = await tmux(['capture-pane', '-p', '-t', pane])
+        for (const needle of needles) {
+            if (!body.includes(needle)) throw new Error(`pane has not shown "${needle}" yet:\n${body}`)
+        }
+        return body
+    }, { timeout: 5_000, interval: 25 })
+}
+
+/** The commands paneInject treats as "not Claude", so a pane at one is refused. */
+const shells = new Set(['zsh', 'bash', 'sh', 'fish'])
 
 const maybe = (await hasTmux()) ? describe : describe.skip
 
@@ -36,38 +63,47 @@ maybe('injectIntoPane against real tmux', () => {
         // `cat` echoes stdin, so a delivered inject shows up in the pane, and
         // its foreground command is "cat" — not one of the refused shells.
         await run('tmux', ['new-session', '-d', '-s', SESSION, '-x', '80', '-y', '24', 'cat'])
-        await settle()
         const pane = (await tmux(['list-panes', '-t', SESSION, '-F', '#{pane_id}'])).trim()
+        await waitForPaneCommand(pane, (cmd) => cmd === 'cat')
 
         const delivered = await injectIntoPane(pane, 'hello from the phone')
-        await settle()
 
         expect(delivered).toBe(true)
-        expect(await tmux(['capture-pane', '-p', '-t', pane])).toContain('hello from the phone')
+        expect(await waitForPaneBody(pane, 'hello from the phone')).toContain('hello from the phone')
     })
 
     it('delivers a multi-line message as ONE paste, not a line at a time', async () => {
         await run('tmux', ['new-session', '-d', '-s', SESSION, '-x', '80', '-y', '24', 'cat'])
-        await settle()
         const pane = (await tmux(['list-panes', '-t', SESSION, '-F', '#{pane_id}'])).trim()
+        await waitForPaneCommand(pane, (cmd) => cmd === 'cat')
 
         const delivered = await injectIntoPane(pane, 'line-one\nline-two')
-        await settle()
 
         expect(delivered).toBe(true)
-        const body = await tmux(['capture-pane', '-p', '-t', pane])
+        const body = await waitForPaneBody(pane, 'line-one', 'line-two')
         expect(body).toContain('line-one')
         expect(body).toContain('line-two')
     })
 
     it('REFUSES a pane sitting at a shell prompt, and types nothing into it', async () => {
-        await run('tmux', ['new-session', '-d', '-s', SESSION, '-x', '80', '-y', '24']) // default shell
-        await settle(400)
+        // `sh` by name rather than the box's default shell. The refusal is
+        // about what tmux reports as `pane_current_command`, and an
+        // interactive login shell reports whatever its rc happens to be
+        // running for the first moment or two. On a loaded box that was
+        // still true when the inject went in, so the pane was not "at a shell"
+        // and nothing was refused. A pane started on sh reports sh and keeps
+        // reporting it.
+        await run('tmux', ['new-session', '-d', '-s', SESSION, '-x', '80', '-y', '24', 'sh'])
         const pane = (await tmux(['list-panes', '-t', SESSION, '-F', '#{pane_id}'])).trim()
+        // The refusal is ABOUT this command, so waiting for it is the
+        // precondition, not a delay. A sleep that came up short tested nothing
+        // and still passed.
+        await waitForPaneCommand(pane, (cmd) => shells.has(cmd))
 
         const delivered = await injectIntoPane(pane, 'should NOT be typed')
-        await settle()
 
+        // Nothing is in flight to wait for: a refusal returns before any
+        // set-buffer or paste-buffer is issued, so the pane can be read now.
         expect(delivered).toBe(false)
         expect(await tmux(['capture-pane', '-p', '-t', pane])).not.toContain('should NOT be typed')
     })
