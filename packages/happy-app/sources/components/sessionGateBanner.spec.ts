@@ -17,8 +17,9 @@ import { hasAnswerableOptions, questionCards } from './tools/views/askUserQuesti
  * decided by the TOOL on the card.
  *
  * happy-app has no render harness for a component, so this pins the two pure
- * decisions SessionGateBanner is built from: sessionGateAction picks the card
- * body per entry, and describePendingGates writes the heading. The requests
+ * decisions the session gate card is built from (SessionGateBanner then, the
+ * SessionGateOverlay since DROVE-88): sessionGateAction picks the card body
+ * per entry, and describePendingGates writes the heading. The requests
  * below are the exact shapes happy-cli's requestForEvent writes for a to-do,
  * a question and a permission (packages/happy-cli/src/drover/droverBridge.ts),
  * fed through the same gatesForSession the banner's hook reads.

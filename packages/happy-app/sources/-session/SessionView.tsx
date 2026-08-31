@@ -2,7 +2,7 @@ import { AgentContentView } from '@/components/AgentContentView';
 import { MobileGlassBackdrop } from '@/components/MobileGlass';
 import { AgentGoalBar, type AgentGoalAction } from '@/components/AgentGoalBar';
 import { AgentQuestionBanner } from '@/components/AgentQuestionBanner';
-import { SessionGateBanner } from '@/components/SessionGateBanner';
+import { SessionGateOverlay } from '@/components/SessionGateOverlay';
 import { PushPermissionNotice } from '@/components/PushPermissionNotice';
 import { AgentInput } from '@/components/AgentInput';
 import { readAloud } from '@/voice/readAloudService';
@@ -1231,11 +1231,14 @@ export function SessionViewLoaded({
                 Deliberately NOT inside the showBottomDockDetails fade every
                 other row here uses. That flag goes false on a phone as soon as
                 the chat is scrolled off the bottom, which is precisely when a
-                pending prompt is hardest to find — fading it out there would
-                rebuild the bug this banner exists to kill (BASED-113).
+                pending prompt is hardest to find; fading it out there would
+                rebuild the bug this overlay exists to kill (BASED-113). It is
+                absolutely positioned off the top of this dock, so it floats
+                over the chat and rides the dock's keyboard animation without
+                adding to the dock's measured height (DROVE-88).
             */}
+            <SessionGateOverlay sessionId={sessionId} />
             <CenteredInputWidth horizontalPadding={sessionInputHorizontalPadding}>
-                <SessionGateBanner sessionId={sessionId} />
                 <PushPermissionNotice />
             </CenteredInputWidth>
             <AnimatedFade visible={showBottomDockDetails}>
