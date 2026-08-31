@@ -75,6 +75,61 @@ describe('agent input compact mobile layout', () => {
         expect(resolveHeight?.(30, true)).toBe(176);
     });
 
+    /**
+     * DROVE-106. Clay photographed an empty composer standing roughly four
+     * lines tall and asked for one. The pill row DROVE-83 put inside the card
+     * is gone (DROVE-111) and the send button moved into the field
+     * (DROVE-153), so the empty capsule is a single line again. This locks
+     * that, because it is exactly the kind of number that drifts back.
+     */
+    it('opens one line tall when the composer is empty', () => {
+        const metrics = agentInputLayout.MOBILE_COMPOSER_METRICS;
+        const resolveHeight = agentInputLayout.resolveMobileComposerHeight;
+
+        // What a native multiline TextInput measures with no text in it: one
+        // line and its own vertical padding. Nothing sets numberOfLines or a
+        // height on the field itself, so this is the whole story.
+        const emptyInputHeight = metrics.inputLineHeight
+            + metrics.inputPaddingTop
+            + metrics.inputPaddingBottom;
+        expect(emptyInputHeight).toBe(30);
+
+        // The capsule's 44pt floor is the in-field send button plus its inset
+        // at each end (DROVE-153), not a spare line held open. A second line
+        // would cost inputLineHeight on top of this.
+        expect(metrics.inputMinHeight)
+            .toBe(metrics.primaryActionSize + metrics.primaryActionInset * 2);
+        expect(metrics.inputMinHeight).toBeLessThan(emptyInputHeight + metrics.inputLineHeight);
+
+        // So an empty composer is the base card and nothing more, and typing
+        // onto a second line is the first thing that makes it taller.
+        expect(resolveHeight(emptyInputHeight)).toBe(agentInputLayout.MOBILE_COMPOSER_BASE_HEIGHT);
+        expect(resolveHeight(emptyInputHeight + metrics.inputLineHeight))
+            .toBeGreaterThan(resolveHeight(emptyInputHeight));
+    });
+
+    /**
+     * Height does not read the screen width anywhere, so the narrowest phone
+     * the status row is tested at (320) and a 393pt one open identically. The
+     * only width-sensitive thing left is the placeholder wrapping, and it has
+     * 245pt of room on the narrow one for `Type a message ...`.
+     */
+    it('opens the same height on a 320pt phone as on a 393pt one', () => {
+        const metrics = agentInputLayout.MOBILE_COMPOSER_METRICS;
+        const layout = agentInputLayout.MOBILE_COMPOSER_LAYOUT;
+
+        const textWidth = (screenWidth: number) => screenWidth
+            - metrics.shellInset * 2
+            - layout.inputContainerPaddingLeft
+            - layout.inputTrailingActionPadding;
+
+        expect(textWidth(320)).toBe(245);
+        expect(textWidth(393)).toBe(318);
+        // Comfortably wider than the placeholder at 16pt, which is what would
+        // have to wrap for either width to open a second line.
+        expect(textWidth(320)).toBeGreaterThan(metrics.inputFontSize * 10);
+    });
+
     it.each([
         ['icon',
             { width: 44, height: 44, flexShrink: 0 },
