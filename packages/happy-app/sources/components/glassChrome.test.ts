@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { TRANSCRIPT_GLASS_ALPHA } from './agentDockLayout';
 import {
     CHROME_BACKDROP_EXTREMES,
     CHROME_CONTRAST_FLOOR,
@@ -10,6 +11,7 @@ import {
     chromeGlassTint,
     chromeGround,
     chromeSurfaceSeparation,
+    minimumChromeTintAlpha,
     colorAlpha,
     compositeSurface,
     contrastRatio,
@@ -160,15 +162,48 @@ describe('legibility, measured rather than eyeballed', () => {
         },
     );
 
-    it('holds the floor through the dock scrim the composer glass sits on', () => {
-        // The dock paints an opaque backdrop before the glass, so the material
-        // never samples raw chat. Even at a generous 45% pass-through of the
-        // scrim's own colour, the white glyph clears the bar over either
-        // extreme, which is what makes the composer safe over a light diff.
-        for (const backdrop of CHROME_BACKDROP_EXTREMES) {
-            expect(glyphContrast(glyphOnDark, backdrop, ['rgba(22, 22, 22, 1)', 'rgba(255, 255, 255, 0.14)']))
-                .toBeGreaterThanOrEqual(CHROME_CONTRAST_FLOOR);
-        }
+    it('holds the floor with the CHAT ITSELF behind the composer glass', () => {
+        // WAS: an opaque dock backdrop under the glass, "so the material never
+        // samples raw chat". It samples raw chat now (DROVE-180): the
+        // transcript runs behind the composer at TRANSCRIPT_GLASS_ALPHA and
+        // the material blurs it. So this is the same assertion against the
+        // real stack, which is the transcript at that alpha over the page,
+        // then the card's tint, then the button's own.
+        //
+        // It is the measurement that SETS TRANSCRIPT_GLASS_ALPHA. Every step
+        // above 0.42 fails it, which is why the alpha is 0.4 and not 1.
+        const behind = (alpha: number) => `rgba(255, 255, 255, ${alpha})`;
+        const darkStack = (alpha: number) => [
+            behind(alpha), chromeGlassTint(true), chromeGlassTint(true),
+        ];
+        expect(glyphContrast(glyphOnDark, '#000000', darkStack(TRANSCRIPT_GLASS_ALPHA)))
+            .toBeGreaterThanOrEqual(CHROME_CONTRAST_FLOOR);
+        // The light theme's worst case is the mirror: a black block under a
+        // dark glyph on the light page.
+        const lightStack = [
+            `rgba(0, 0, 0, ${TRANSCRIPT_GLASS_ALPHA})`,
+            chromeGlassTint(false),
+            chromeGlassTint(false),
+        ];
+        expect(glyphContrast(glyphOnLight, chromeGround(false), lightStack))
+            .toBeGreaterThanOrEqual(CHROME_CONTRAST_FLOOR);
+        // And the ceiling is real: a step past it and the dark theme fails.
+        expect(glyphContrast(glyphOnDark, '#000000', darkStack(0.5)))
+            .toBeLessThan(CHROME_CONTRAST_FLOOR);
+        expect(glyphContrast(glyphOnDark, '#000000', darkStack(1)))
+            .toBeLessThan(CHROME_CONTRAST_FLOOR);
+    });
+
+    it('says how much of that the app owns and how much the material carries', () => {
+        // Stated rather than assumed. The model treats UIGlassEffect as a
+        // plain translucent tint; the real `regular` material also blurs,
+        // desaturates and clamps what it samples, all of which can only help.
+        // Holding the pessimistic bound is the point: legibility does not
+        // depend on a private Apple adaptation that changes between releases,
+        // and if it ever looks wrong on device the lever is this alpha.
+        const owned = 1 - (1 - colorAlpha(chromeGlassTint(true))) ** 2;
+        expect(owned).toBeLessThan(minimumFillAlpha(glyphOnDark, '#000000'));
+        expect(owned).toBeCloseTo(0.2775, 4);
     });
 
     it('says how opaque a fill has to be to survive ANY backdrop unaided', () => {
@@ -233,15 +268,43 @@ describe('the composer has an edge against its own ground (DROVE-171)', () => {
             .toBeLessThan(minimumFillAlpha('#FFFFFF', '#1C1C1E'));
     });
 
-    it('holds over a light code block because DROVE-168 never lets one get behind it', () => {
-        // The fade masks the transcript to nothing before the glass edge, so
-        // the ground is the page at every scroll position. A tint chosen to
-        // lift off black would wash out against a white block, and this is the
-        // clause that says it never has to.
+    it('is the measured minimum now that content is behind it (DROVE-180)', () => {
+        // WAS: "holds over a light code block because DROVE-168 never lets one
+        // get behind it" — the ground was the page at every scroll position,
+        // so tint could only ever help and DROVE-171 spent it freely.
+        //
+        // A light code block gets behind it now. Every point of tint is a
+        // point of content the material stops showing, so the right tint is
+        // the smallest that still draws an edge over an EMPTY black chat,
+        // which is what the ground constants still describe. Within one 1%
+        // step of the search, so raising one means moving the FLOOR and
+        // saying why.
         expect(chromeGround(true)).toBe('#000000');
         expect(chromeGround(false)).toBe('#F2F2F7');
-        for (const backdrop of CHROME_BACKDROP_EXTREMES) {
-            expect(() => compositeSurface(backdrop, [chromeGlassTint(true)])).not.toThrow();
-        }
+        expect(colorAlpha(chromeGlassTint(true)))
+            .toBeCloseTo(minimumChromeTintAlpha(true), 2);
+        expect(colorAlpha(chromeGlassTint(false)))
+            .toBeCloseTo(minimumChromeTintAlpha(false), 2);
+        // The numbers, so the diff can be read without running anything.
+        expect(minimumChromeTintAlpha(true)).toBeCloseTo(0.15, 5);
+        expect(minimumChromeTintAlpha(false)).toBeCloseTo(0.09, 5);
+    });
+
+    it('came DOWN from DROVE-171’s tint rather than up, and says by how much', () => {
+        // DROVE-171 shipped 0.16 dark / 0.10 light, at 1.440:1 and 1.251:1.
+        const wasDark = contrastRatio(
+            compositeSurface(chromeGround(true), ['rgba(255, 255, 255, 0.16)']),
+            parseColor(chromeGround(true)),
+        );
+        const wasLight = contrastRatio(
+            compositeSurface(chromeGround(false), ['rgba(0, 0, 0, 0.10)']),
+            parseColor(chromeGround(false)),
+        );
+        expect(wasDark).toBeCloseTo(1.44, 2);
+        expect(wasLight).toBeCloseTo(1.25, 2);
+        expect(chromeSurfaceSeparation(true)).toBeLessThan(wasDark);
+        expect(chromeSurfaceSeparation(false)).toBeLessThan(wasLight);
+        expect(chromeSurfaceSeparation(true)).toBeCloseTo(1.392, 3);
+        expect(chromeSurfaceSeparation(false)).toBeCloseTo(1.222, 3);
     });
 });

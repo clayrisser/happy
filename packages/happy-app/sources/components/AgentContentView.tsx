@@ -3,7 +3,7 @@ import * as React from 'react';
 import { LayoutChangeEvent, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import {
-    TRANSCRIPT_FADE_HEIGHT,
+    DOCK_SCRIM_FADE_HEIGHT,
     resolveDockBottomOffset,
     resolveDockInset,
     resolveDockScrimHeight,
@@ -86,12 +86,16 @@ export const AgentContentView: React.FC<AgentContentViewProps> = React.memo(({
                     </ScrollView>
                 )}
                 {/* Android and web keep the painted backdrop (DROVE-113):
-                    fades in over the top TRANSCRIPT_FADE_HEIGHT and is the
-                    chat's own surface from there down. iOS masks the
-                    transcript instead (DROVE-168), because it is the only
-                    platform where the composer is real Liquid Glass and a
-                    slab behind it costs something. Same ramp length either
-                    way so the two cannot drift. Sits below the dock's zIndex
+                    fades in over the top DOCK_SCRIM_FADE_HEIGHT and is the
+                    chat's own surface from there down. These are the platforms
+                    with NO Liquid Glass, so there is nothing for the chat to
+                    be seen through and the backdrop is the only thing keeping
+                    live text out from under a flat dock. iOS lets the
+                    transcript run behind the material at full alpha instead
+                    (DROVE-180) and masks only the status strip. The two paths
+                    diverge on purpose now, and DROVE-168's 32pt derivation
+                    stayed on this one, where it still holds. Sits below the
+                    dock's zIndex
                     so the DROVE-88 gate overlay, a child of the dock at
                     bottom: '100%', still paints over it and is not clipped. */}
                 {dockScrimHeight > 0 && (
@@ -111,7 +115,7 @@ export const AgentContentView: React.FC<AgentContentViewProps> = React.memo(({
                             locations={[0, 1]}
                             start={{ x: 0.5, y: 0 }}
                             end={{ x: 0.5, y: 1 }}
-                            style={{ height: TRANSCRIPT_FADE_HEIGHT }}
+                            style={{ height: DOCK_SCRIM_FADE_HEIGHT }}
                         />
                         <View style={{ flex: 1, backgroundColor: dockSurface }} />
                     </View>

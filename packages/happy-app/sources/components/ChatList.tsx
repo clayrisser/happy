@@ -487,13 +487,13 @@ export const ChatListInternal = React.memo((props: {
                 // The measured dock inset lets the newest message scroll above
                 // the floating composer instead of stopping underneath it.
                 //
-                // Over the dock inset the floating layout keeps the fade's own
-                // height rather than a flat 8pt gap (DROVE-168). The transcript
-                // now runs behind the composer and is masked to nothing over
-                // that band, so a newest line parked inside it would sit
-                // half-dissolved at rest. Costs 24pt of resting reading area,
-                // 32 in place of 8, and it is the price of the fade: every
-                // point of ramp is a point the list has to hold clear.
+                // Over the dock inset the floating layout keeps 8pt again
+                // (DROVE-180). DROVE-168 raised it to 32 to match a ramp that
+                // sat ABOVE the composer, so the newest line could not park
+                // inside the ramp and sit half dissolved at rest. There is no
+                // ramp above the composer now: the transcript runs behind the
+                // glass at full alpha and the material blurs it. Nothing to
+                // hold clear of, so the 24pt goes back to the reading area.
                 contentContainerStyle={{
                     paddingTop: (props.bottomContentInset != null
                         ? resolveTranscriptBottomClearance()

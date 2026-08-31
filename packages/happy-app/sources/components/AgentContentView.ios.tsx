@@ -4,8 +4,6 @@ import { LayoutChangeEvent, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import MaskedView from '@react-native-masked-view/masked-view';
 import {
-    TRANSCRIPT_FADE_LOCATIONS,
-    TRANSCRIPT_FADE_MASK_COLORS,
     resolveDockBottomOffset,
     resolveDockInset,
     resolveTranscriptMask,
@@ -51,11 +49,19 @@ export const AgentContentView: React.FC<AgentContentViewProps> = React.memo(({
     // keyboard uses this same number, so a dock at `bottom: B` translated by
     // `-keyboardHeight + B * progress` lands exactly on the keyboard.
     const dockBottomOffset = resolveDockBottomOffset(safeArea.bottom, floatingDock);
-    // The transcript runs behind the composer and is faded to nothing before
-    // it reaches it (DROVE-168). A mask rather than a painted scrim: it takes
-    // the chat's OWN alpha down, so a white code block and body prose fade
-    // identically and on either theme, and the glass keeps the real screen
-    // behind it instead of a slab of `groupped.background`.
+    // The transcript runs behind the composer and is SEEN THROUGH it
+    // (DROVE-180). It arrives at the capsule over a short ramp and then holds
+    // TRANSCRIPT_GLASS_ALPHA for the whole height of the card, so the material
+    // has real content to blur and refract the way a Liquid Glass tab bar
+    // does. DROVE-168 masked that same band to nothing; the alpha is the
+    // measured ceiling that keeps every composer glyph at 3:1 over both a
+    // white and a black scroll, which is the one thing that stopped it being
+    // 1. Only the status strip under the card is cleared, because that strip
+    // is bare 11pt text with no material of its own.
+    //
+    // A mask rather than a painted scrim, still: it takes the chat's OWN alpha
+    // down, so a white code block and body prose behave identically on either
+    // theme, and the glass keeps the real screen behind it.
     const transcriptMask = resolveTranscriptMask(dockHeight, safeArea.bottom);
 
     React.useEffect(() => {
@@ -104,11 +110,11 @@ export const AgentContentView: React.FC<AgentContentViewProps> = React.memo(({
                                     <View pointerEvents="none" style={{ flex: 1 }}>
                                         <View style={{ flex: 1, backgroundColor: '#000000' }} />
                                         <LinearGradient
-                                            colors={TRANSCRIPT_FADE_MASK_COLORS}
-                                            locations={TRANSCRIPT_FADE_LOCATIONS}
+                                            colors={transcriptMask.colors as [string, string, ...string[]]}
+                                            locations={transcriptMask.locations as [number, number, ...number[]]}
                                             start={{ x: 0.5, y: 0 }}
                                             end={{ x: 0.5, y: 1 }}
-                                            style={{ height: transcriptMask.fadeHeight }}
+                                            style={{ height: transcriptMask.gradientHeight }}
                                         />
                                         <View style={{ height: transcriptMask.clearHeight }} />
                                     </View>
@@ -138,13 +144,15 @@ export const AgentContentView: React.FC<AgentContentViewProps> = React.memo(({
                         {placeholder}
                     </Animated.ScrollView>
                 )}
-                {/* No backdrop behind the dock any more (DROVE-168). DROVE-113
+                {/* No backdrop behind the dock (DROVE-168), and now nothing
+                    masked behind the card either (DROVE-180). DROVE-113
                     painted `groupped.background` solid from the fade down,
-                    past the dock and through the home indicator gap. That
-                    stopped chat text reading through, and it also gave the
-                    composer's glass a flat slab to sit on, which is half of
-                    why it had no edge (DROVE-171). The mask above does the
-                    same job on the transcript instead. */}
+                    past the dock and through the home indicator gap; DROVE-168
+                    replaced the slab with a mask that took the transcript to
+                    nothing before it reached the glass. Both left the material
+                    with a uniform ground and no content to refract, which is
+                    what a grey slab looks like and is what DROVE-171 was
+                    reacting to. The glass has the real chat behind it now. */}
                 <Animated.View
                     onLayout={handleDockLayout}
                     pointerEvents="box-none"

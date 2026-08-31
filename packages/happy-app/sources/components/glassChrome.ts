@@ -222,44 +222,59 @@ export function minimumFillAlpha(
 
 //
 // Separation: why the composer had no edge, and the number that fixes it
-// (DROVE-171).
+// (DROVE-171), re-measured with content behind the glass (DROVE-180).
 //
 // Clay, on a close-up of the composer against the black chat: "There's no
 // contrast here". The cause is arithmetic rather than taste. The dark theme's
-// glass tint is `rgba(16, 16, 16, 0.08)`, which is a NEAR-BLACK wash at 8%
-// over a `#000000` chat: composited it lands on rgb(1, 1, 1), a contrast ratio
-// of 1.008:1 against the ground. The material was tinted TOWARD the background
-// it was meant to float over.
+// glass tint was `rgba(16, 16, 16, 0.08)`, a NEAR-BLACK wash at 8% over a
+// `#000000` chat: composited it lands on rgb(1, 1, 1), a contrast ratio of
+// 1.008:1 against the ground. The material was tinted TOWARD the background it
+// was meant to float over.
 //
-// The other half of the answer is DROVE-168's fade, and the two decide each
-// other. Once the transcript is taken to nothing before it reaches the glass,
-// the ground behind the composer is the page background at every scroll
-// position, on both themes. That is what makes a fixed tint safe: it only ever
-// has to separate from ONE colour per theme, not from whatever message happens
-// to be underneath. A tint chosen to lift off black would wash out against a
-// white code block, and that pair is exactly what the fade removes.
+// DROVE-171 fixed the direction and then overshot the amount, and the reason
+// is written into the version of this comment it replaced: it assumed
+// DROVE-168's fade, which took the transcript to nothing before it reached the
+// composer, so the ground behind the glass was the page background at every
+// scroll position and the tint was the ONLY thing that could separate. On that
+// assumption more tint is strictly safer, and 0.16 was picked with room to
+// spare.
 //
-// It is worth being blunt about the direction, because the obvious reading of
-// DROVE-171 is the opposite one: letting content run behind the glass does NOT
-// give it more to refract here. DROVE-168 requires nothing legible under the
-// composer, so the fade makes the ground MORE uniform, not less. The
-// separation has to come from the material's own tint.
+// The assumption is gone. DROVE-180 lets the transcript pass behind the
+// composer at full alpha, so the ground is usually live content the material
+// can refract, and the empty black chat with nothing scrolled under it is now
+// the WORST case rather than the only case. Tint past what that worst case
+// needs and every other case pays for it: an over-tinted surface is the grey
+// slab again, just a lighter one.
+//
+// So the tints are the measured minimum that clears each theme's floor, found
+// by `minimumChromeTintAlpha` at the same 1% steps `minimumFillAlpha` uses:
+//
+//   dark   0.16 -> 0.15   1.440:1 -> 1.392:1   floor 1.35
+//   light  0.10 -> 0.09   1.251:1 -> 1.222:1   floor 1.20
+//
+// A test asserts each shipped tint is within one step of that minimum, so the
+// next person to raise one has to move the FLOOR and say why, rather than
+// nudging the alpha.
 //
 
-/** The chat behind the composer, once the fade has taken the transcript out. */
+/**
+ * The chat behind the composer with nothing scrolled under it: an empty
+ * session. It is the worst case for separation, not the only one (DROVE-180).
+ */
 export const CHROME_GROUND = { dark: '#000000', light: '#F2F2F7' } as const;
 
 /**
  * `UIGlassEffect.tintColor` for chrome, per theme.
  *
- * A translucent wash, not a fill: at 16% and 10% the material still refracts
+ * A translucent wash, not a fill: at 15% and 9% the material still refracts
  * and blurs what is behind it, which is the difference between a glass surface
- * and a grey rectangle. `chromeTintOpacity` is asserted below the fill bar for
- * exactly that reason.
+ * and a grey rectangle. That matters more since DROVE-180 than it did when
+ * these were chosen, because there is now real content back there to refract.
+ * Asserted below the fill bar, and within one step of the measured minimum.
  */
 export const CHROME_GLASS_TINT = {
-    dark: 'rgba(255, 255, 255, 0.16)',
-    light: 'rgba(0, 0, 0, 0.10)',
+    dark: 'rgba(255, 255, 255, 0.15)',
+    light: 'rgba(0, 0, 0, 0.09)',
 } as const;
 
 export function chromeGlassTint(dark: boolean): string {
@@ -275,9 +290,10 @@ export function chromeGround(dark: boolean): string {
  * from the ground. This is the number DROVE-171 asks to be stated rather than
  * eyeballed.
  *
- * dark  rgba(255,255,255,0.16) over #000000 -> rgb(41, 41, 41),    1.44:1
- * light rgba(0,0,0,0.10)       over #F2F2F7 -> rgb(218, 218, 222), 1.25:1
- * was   rgba(16,16,16,0.08)    over #000000 -> rgb(1, 1, 1),       1.01:1
+ * dark  rgba(255,255,255,0.15) over #000000 -> rgb(38, 38, 38),    1.39:1
+ * light rgba(0,0,0,0.09)       over #F2F2F7 -> rgb(220, 220, 225), 1.22:1
+ * was   rgba(255,255,255,0.16) over #000000 -> rgb(41, 41, 41),    1.44:1  (DROVE-171)
+ * was   rgba(16,16,16,0.08)    over #000000 -> rgb(1, 1, 1),       1.01:1  (before it)
  */
 export function chromeSurfaceSeparation(dark: boolean): number {
     const ground = chromeGround(dark);
@@ -305,3 +321,31 @@ export const CHROME_SEPARATION_FLOOR = { dark: 1.35, light: 1.2 } as const;
  * through the surface.
  */
 export const CHROME_TINT_MAX_ALPHA = 0.25;
+
+/**
+ * The least tint a theme can carry and still clear its separation floor.
+ *
+ * Searched, for the same reason `minimumFillAlpha` is searched: compositing is
+ * linear in sRGB channel values and the contrast ratio is not, so the closed
+ * form is easy to get subtly wrong, and stepping the alpha through the same
+ * `chromeSurfaceSeparation` the assertions use cannot disagree with them.
+ *
+ * This is the DROVE-180 direction of travel, and it is the opposite of
+ * DROVE-171's. With the transcript masked out, tint could only help. With the
+ * transcript running behind the glass, every point of tint is a point of
+ * content the material stops showing, so the right tint is the smallest one
+ * that still draws an edge over an EMPTY black chat.
+ */
+export function minimumChromeTintAlpha(dark: boolean): number {
+    const ground = chromeGround(dark);
+    const channels = dark ? '255, 255, 255' : '0, 0, 0';
+    const floor = dark ? CHROME_SEPARATION_FLOOR.dark : CHROME_SEPARATION_FLOOR.light;
+    for (let step = 0; step <= 100; step += 1) {
+        const alpha = step / 100;
+        const surface = compositeSurface(ground, [`rgba(${channels}, ${alpha})`]);
+        if (contrastRatio(surface, parseColor(ground)) >= floor) {
+            return alpha;
+        }
+    }
+    return 1;
+}
