@@ -1177,6 +1177,13 @@ export const ca: TranslationStructure = {
             : `No s'han pogut pujar ${count} imatges i no s'han enviat.`,
         notSupportedTitle: 'Imatges no compatibles',
         notSupportedMessage: 'Aquest agent no admet fitxers adjunts d\'imatge. Les imatges no s\'han enviat.',
+        // The Add context sheet the plus opens (DROVE-128).
+        addContextTitle: 'Afegeix context',
+        sourceCamera: 'Càmera',
+        sourcePhotos: 'Fotos',
+        sourceFiles: 'Fitxers',
+        cameraPermissionTitle: 'Accés a la càmera',
+        cameraPermissionMessage: 'Permet l’accés a la càmera per adjuntar fotos als missatges.',
     },
 
     feed: {

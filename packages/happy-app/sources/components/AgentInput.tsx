@@ -38,6 +38,7 @@ import { ComposerToast } from './ComposerToast';
 import { flipStreamTalk, streamTalkButton } from '@/voice/streamTalk';
 import { NativeSettingsMenu, type NativeSettingsMenuGroup } from './NativeSettingsMenu';
 import { AgentInputStatusRow } from './AgentInputStatusRow';
+import { AddContextSheet, type AddContextSource } from './AddContextSheet';
 import { resolveUsageStrip } from './agentInputUsage';
 import { ProviderIcon } from './ProviderIcon';
 import { isRigMetadata } from '@/sync/rig';
@@ -163,6 +164,10 @@ interface AgentInputProps {
     /** Image attachments waiting to be sent. */
     selectedImages?: AttachmentPreview[];
     onPickImages?: () => void;
+    /** The camera tile of the Add context sheet (DROVE-128). */
+    onTakePhoto?: () => void;
+    /** The files tile of the Add context sheet (DROVE-128). */
+    onPickFiles?: () => void;
     onRemoveImage?: (id: string) => void;
     onAddImages?: (images: AttachmentPreview[]) => void;
 }
@@ -399,6 +404,11 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     // what a blue icon on nothing could never say at a glance.
     mobileIconButtonOn: {
         backgroundColor: theme.colors.radio.active,
+    },
+    // A control whose sheet is showing reads as held down, the same step the
+    // session controls use for an open picker.
+    mobileIconButtonOpen: {
+        backgroundColor: theme.colors.surfaceHighest,
     },
     // The talk button's two live states (DROVE-74). Held is a solid red disc
     // with a white glyph; latched is the resting surface inside a red ring
@@ -906,12 +916,17 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
      * model are three controls in the button row now and each opens its own
      * picker on the first tap.
      *
+     * 'attach' is the plus (DROVE-128). It is in the union rather than a
+     * flag of its own so that opening it closes a picker, and so it inherits
+     * handlePickerPress's keyboard dance: a sheet that opens under a keyboard
+     * that is still on its way out lands in the wrong place.
+     *
      * The status row's two expanders are deliberately NOT here. They open
      * ComposerAnchoredSheet from the row itself (DROVE-117's mechanism), and
      * that sheet's own click-away backdrop is what keeps them from stacking
      * with these pickers.
      */
-    type ComposerPicker = 'channels' | 'permission' | 'model' | 'effort';
+    type ComposerPicker = 'channels' | 'attach' | 'permission' | 'model' | 'effort';
     const [openPicker, setOpenPicker] = React.useState<ComposerPicker | null>(null);
     const pickerOpeningRef = React.useRef<ComposerPicker | null>(null);
     const pickerKeyboardSubscriptionRef = React.useRef<ReturnType<typeof Keyboard.addListener> | null>(null);
@@ -964,6 +979,29 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     const handleSettingsPress = React.useCallback(() => {
         handlePickerPress('permission');
     }, [handlePickerPress]);
+
+    /*
+     * The Add context sheet (DROVE-128). A tile with no handler behind it is
+     * not drawn rather than drawn dead: a rig that cannot take attachments at
+     * all leaves SessionView passing none of the three, and then the plus
+     * itself is gone, exactly as it was before this sheet existed.
+     */
+    const addContextAvailable = React.useMemo(() => ({
+        camera: !!props.onTakePhoto,
+        photos: !!props.onPickImages,
+        files: !!props.onPickFiles,
+    }), [props.onPickFiles, props.onPickImages, props.onTakePhoto]);
+    const canAddContext = addContextAvailable.camera
+        || addContextAvailable.photos
+        || addContextAvailable.files;
+    const handleAddContextPress = React.useCallback(() => {
+        handlePickerPress('attach');
+    }, [handlePickerPress]);
+    const handleAddContextSelect = React.useCallback((source: AddContextSource) => {
+        if (source === 'camera') props.onTakePhoto?.();
+        else if (source === 'photos') props.onPickImages?.();
+        else props.onPickFiles?.();
+    }, [props.onPickFiles, props.onPickImages, props.onTakePhoto]);
 
     // Mode, effort and model each open their own picker, straight from the
     // button row (DROVE-111).
@@ -1652,13 +1690,23 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     horizontalInset={screenWidth > 700 ? 0 : 16}
                 />
 
+                {/* Camera, Photos, Files (DROVE-128), on the same shell. */}
+                <AddContextSheet
+                    open={compactMobileComposer && openPicker === 'attach'}
+                    onClose={closePicker}
+                    onSelect={handleAddContextSelect}
+                    available={addContextAvailable}
+                    horizontalInset={screenWidth > 700 ? 0 : 16}
+                />
+
                 {/* On Android, the permission, model and effort pickers the
                     three session controls open (DROVE-111). On iOS those three
                     are native menus anchored to the controls themselves, so
                     nothing renders here at all. DROVE-83's intermediate
                     session sheet is gone, and DROVE-123 took channels out to
                     its own sheet. */}
-                {compactMobileComposer && openPicker && openPicker !== 'channels' && (
+                {compactMobileComposer && openPicker
+                    && openPicker !== 'channels' && openPicker !== 'attach' && (
                     <>
                         <AnimatedClickAwayBackdrop
                             onPress={closePicker}
@@ -2004,13 +2052,25 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         styles.actionButtonsContainer,
                         styles.mobileActionButtonsContainer,
                     ]}>
-                        {!props.zenMode && props.onPickImages && (
+                        {/* The plus opens the Add context sheet (DROVE-128)
+                            rather than jumping straight into the photo
+                            library, and it finally gets the surface every
+                            other control on this row got in DROVE-118. It was
+                            already 42pt wide, so the model name's 63pt budget
+                            is untouched. */}
+                        {!props.zenMode && canAddContext && (
                             <BubblePressable
-                                onPress={props.onPickImages}
+                                onPress={handleAddContextPress}
                                 hitSlop={6}
-                                style={styles.mobileIconButton}
+                                style={[
+                                    styles.mobileIconButton,
+                                    openPicker === 'attach'
+                                        ? styles.mobileIconButtonOpen
+                                        : styles.mobileIconButtonSurface,
+                                ]}
                                 accessibilityRole="button"
-                                accessibilityLabel="Add photo"
+                                accessibilityLabel={t('imageUpload.addContextTitle')}
+                                accessibilityState={{ expanded: openPicker === 'attach' }}
                             >
                                 <Ionicons
                                     name="add"

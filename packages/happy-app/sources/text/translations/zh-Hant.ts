@@ -1177,6 +1177,13 @@ export const zhHant: TranslationStructure = {
             : `${count} 張圖片上傳失敗，未傳送。`,
         notSupportedTitle: '不支援圖片',
         notSupportedMessage: '此代理不支援圖片附件。圖片未傳送。',
+        // The Add context sheet the plus opens (DROVE-128).
+        addContextTitle: '新增內容',
+        sourceCamera: '相機',
+        sourcePhotos: '照片',
+        sourceFiles: '檔案',
+        cameraPermissionTitle: '相機存取權',
+        cameraPermissionMessage: '允許存取相機以將照片附加至訊息中。',
     },
 
     feed: {

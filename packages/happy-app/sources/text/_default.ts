@@ -250,6 +250,13 @@ export const en = {
             : `${count} images could not be uploaded and were not sent.`,
         notSupportedTitle: 'Images Not Supported',
         notSupportedMessage: 'This agent does not support image attachments. Images were not sent.',
+        // The Add context sheet the plus opens (DROVE-128).
+        addContextTitle: 'Add context',
+        sourceCamera: 'Camera',
+        sourcePhotos: 'Photos',
+        sourceFiles: 'Files',
+        cameraPermissionTitle: 'Camera Access',
+        cameraPermissionMessage: 'Allow access to your camera to attach photos to messages.',
     },
 
     errors: {

@@ -1206,6 +1206,13 @@ export const ru: TranslationStructure = {
             : `${count} изображений не удалось загрузить — они не были отправлены.`,
         notSupportedTitle: 'Изображения не поддерживаются',
         notSupportedMessage: 'Этот агент не поддерживает вложения изображений. Изображения не были отправлены.',
+        // The Add context sheet the plus opens (DROVE-128).
+        addContextTitle: 'Добавить контекст',
+        sourceCamera: 'Камера',
+        sourcePhotos: 'Фото',
+        sourceFiles: 'Файлы',
+        cameraPermissionTitle: 'Доступ к камере',
+        cameraPermissionMessage: 'Разрешите доступ к камере, чтобы прикреплять фото к сообщениям.',
     },
 
     feed: {

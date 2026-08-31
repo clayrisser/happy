@@ -859,7 +859,7 @@ export function SessionViewLoaded({
     const resumeCommandBlock = getResumeCommandBlock(session);
 
     // Attachment availability is capability-driven by the active session.
-    const { selectedImages, pickImages, removeImage, clearImages, addImages } = useImagePicker();
+    const { selectedImages, pickImages, takePhoto, pickFiles, removeImage, clearImages, addImages } = useImagePicker();
     const canUseAttachments = isRigMetadataV1(session.metadata)
         ? rigCanUseAttachments(session.metadata)
         : supportsImageAttachmentsForFlavor(session.metadata?.flavor);
@@ -1202,6 +1202,8 @@ export function SessionViewLoaded({
                 onFileViewerPress={experiments && !isTablet && rigCanBrowseFiles(session.metadata) && rigCanReadFiles(session.metadata) ? handleFileViewerPress : undefined}
                 selectedImages={canUseAttachments ? selectedImages : undefined}
                 onPickImages={canUseAttachments ? pickImages : undefined}
+                onTakePhoto={canUseAttachments ? takePhoto : undefined}
+                onPickFiles={canUseAttachments ? pickFiles : undefined}
                 onRemoveImage={canUseAttachments ? removeImage : undefined}
                 onAddImages={canUseAttachments ? addImages : undefined}
                 autocompletePrefixes={AGENT_INPUT_AUTOCOMPLETE_PREFIXES}
