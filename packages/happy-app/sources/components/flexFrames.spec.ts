@@ -93,6 +93,47 @@ describe('flexFrames agrees with Yoga', () => {
         ]);
     });
 
+    it('sizes a container with no width to its CONTENT, as a flex item does', () => {
+        // DROVE-231's addition, and the branch DROVE-214's tree never reached:
+        // every node in the composer carries a width or a flex, so a row that
+        // had to measure itself did not exist there. The status strip's zones
+        // do, and a zone that took `available` would swallow the whole line.
+        expect(shape({
+            name: 'row',
+            style: { flexDirection: 'row', alignItems: 'center' },
+            children: [
+                { name: 'auto', style: { flexDirection: 'row', gap: 3 }, children: [
+                    { name: 'a', style: { width: 24, height: 11 } },
+                    { name: 'b', style: { width: 36, height: 11 } },
+                ] },
+                { name: 'spacer', style: { flex: 1 } },
+                { name: 'end', style: { width: 10, height: 11 } },
+            ],
+        }, 200)).toEqual([
+            'row 0,0 200x11',
+            'auto 0,0 63x11',
+            'a 0,0 24x11',
+            'b 27,0 36x11',
+            'spacer 63,5.5 127x0',
+            'end 190,0 10x11',
+        ]);
+    });
+
+    it('lets a content-sized row OVERFLOW, because flexShrink is 0 in RN', () => {
+        // Clamping to what is available would report every zone as fitting,
+        // which is the measurement the strip's give-way order is driven by.
+        const frames = shape({
+            name: 'row',
+            style: { flexDirection: 'row' },
+            children: [
+                { name: 'wide', style: { flexDirection: 'row' }, children: [
+                    { name: 'a', style: { width: 300, height: 11 } },
+                ] },
+            ],
+        }, 100);
+        expect(frames).toContain('wide 0,0 300x11');
+    });
+
     it('refuses a style it does not model rather than ignoring it', () => {
         expect(() => resolveFlexFrames(
             { name: 'x', style: { position: 'absolute' } as never },

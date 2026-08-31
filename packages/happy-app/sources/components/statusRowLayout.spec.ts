@@ -432,25 +432,47 @@ describe("the row's real width (DROVE-223)", () => {
 /**
  * The order itself, as a rule the next fact added to the line inherits.
  */
-describe('the order the row gives way in (DROVE-223)', () => {
-    it('puts the working word last, behind both of the numbers beside it', () => {
-        expect(STATUS_ROW_GIVE_WAY[STATUS_ROW_GIVE_WAY.length - 1]).toBe('workingWord');
-        for (const earlier of ['contextPercent', 'quotaWindow', 'toolName', 'account', 'tokens', 'elapsed'] as const) {
+describe('the order the row gives way in (DROVE-223, DROVE-231)', () => {
+    it('has no working word on it at all, because the strip has none', () => {
+        // DROVE-223's rule was "the working word goes last". DROVE-231 took
+        // the word off the line entirely and gave the state to the dot, which
+        // never gives way, so the rule is now kept by construction. A rank for
+        // a fact the strip cannot draw would be a rank nothing can honour.
+        expect(STATUS_ROW_GIVE_WAY).not.toContain('workingWord');
+    });
+
+    it('puts the tally LAST, because Clay put it on the centre of the line', () => {
+        expect(STATUS_ROW_GIVE_WAY[STATUS_ROW_GIVE_WAY.length - 1]).toBe('tokens');
+        for (const earlier of ['contextPercent', 'quotaWindow', 'toolName', 'elapsed', 'tasks', 'account'] as const) {
             expect(statusRowGiveWayRank(earlier), earlier)
-                .toBeLessThan(statusRowGiveWayRank('workingWord'));
+                .toBeLessThan(statusRowGiveWayRank('tokens'));
         }
     });
 
-    it('puts a tool name ahead of the account, and both numbers behind it', () => {
+    it('keeps every pair DROVE-223 fixed, except the one Clay moved', () => {
+        // Untouched: a tool's name folds before the account, and the account
+        // truncates before the number beside it.
         expect(statusRowGiveWayRank('toolName')).toBeLessThan(statusRowGiveWayRank('account'));
         expect(statusRowGiveWayRank('account')).toBeLessThan(statusRowGiveWayRank('tokens'));
-        expect(statusRowGiveWayRank('tokens')).toBeLessThan(statusRowGiveWayRank('elapsed'));
+        // Moved: 223 had the tally give way before the clock. The tally is now
+        // one of the three zones and the clock is not, so they swapped.
+        expect(statusRowGiveWayRank('elapsed')).toBeLessThan(statusRowGiveWayRank('tokens'));
+    });
+
+    it('protects the task badge above the tool name, which is DROVE-167s rule', () => {
+        // That ticket ruled the tool name folds to PAY for the badge, so the
+        // badge is the more protected of the two. It sits under the clock
+        // because Clay has asked for the task list by name three times and has
+        // never asked for the clock, and because the badge is the only tap on
+        // the strip that opens the list at all.
+        expect(statusRowGiveWayRank('toolName')).toBeLessThan(statusRowGiveWayRank('tasks'));
+        expect(statusRowGiveWayRank('elapsed')).toBeLessThan(statusRowGiveWayRank('tasks'));
     });
 
     it('is the same order the flex weights say, so the two cannot disagree', () => {
         // A bigger weight gives more, so the weights run against the ranks.
         expect(statusRowShrink.account).toBeGreaterThan(statusRowShrink.live);
-        expect(statusRowGiveWayRank('account')).toBeLessThan(statusRowGiveWayRank('elapsed'));
+        expect(statusRowGiveWayRank('toolName')).toBeLessThan(statusRowGiveWayRank('account'));
         expect(statusRowShrink.quota).toBe(0);
         expect(statusRowShrink.context).toBe(0);
     });

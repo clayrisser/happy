@@ -59,6 +59,7 @@ import {
     type UsageBarRow,
     type UsageBarTone,
 } from './agentInputUsage';
+import { usageToneColor } from './usageTone';
 
 /**
  * Thin enough that eight rows cost less than the three-line block did for two,
@@ -77,20 +78,10 @@ const activeDot = 5;
  */
 export const usageBarFallbackWidth = 345;
 
-function toneColor(tone: UsageBarTone, theme: ReturnType<typeof useUnistyles>['theme']): string {
-    switch (tone) {
-        case 'critical':
-            return theme.colors.warningCritical;
-        // The theme's own `warning` is grey, which is the one thing this row
-        // must not be: grey is what "never measured" looks like.
-        case 'low':
-            return theme.dark ? '#FF9F0A' : '#FF9500';
-        case 'ample':
-            return theme.colors.success;
-        default:
-            return theme.colors.textSecondary;
-    }
-}
+// The ramp moved to usageTone.ts (DROVE-231) so the status strip's percentage
+// colours by the same function rather than a second copy of this switch. Same
+// thresholds, same hues; `usageBarTone` still says where the bands sit.
+const toneColor = usageToneColor;
 
 export function UsageAccountBarRow(props: { row: UsageBarRow; trackWidth?: number }) {
     const { theme } = useUnistyles();

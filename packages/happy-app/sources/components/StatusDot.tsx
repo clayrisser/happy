@@ -1,6 +1,17 @@
 import * as React from 'react';
 import { ViewStyle } from 'react-native';
-import Animated, { useSharedValue, useAnimatedStyle, withRepeat, withTiming } from 'react-native-reanimated';
+import Animated, {
+    ReduceMotion,
+    useAnimatedStyle,
+    useReducedMotion,
+    useSharedValue,
+    withRepeat,
+    withTiming,
+} from 'react-native-reanimated';
+import {
+    STATUS_DOT_BLINK_HALF_MS,
+    STATUS_DOT_BLINK_MIN_OPACITY,
+} from './statusDotState';
 
 export interface StatusDotProps {
     color: string;
@@ -9,20 +20,40 @@ export interface StatusDotProps {
     style?: ViewStyle;
 }
 
+/**
+ * The blinking dot.
+ *
+ * ONE PERIOD, from statusDotState.ts (DROVE-231). Two states blink now,
+ * working and compacting, so the blink cannot be what tells them apart; the
+ * hue is. That only holds if both blink identically, which is why the period
+ * is a shared constant rather than a literal here.
+ *
+ * REDUCED MOTION STOPS IT DEAD, at full opacity. A dot that pulses is saying
+ * "busy" with movement, and the hue says the same thing on its own, since blue
+ * and purple are not colours this strip uses for anything else, so a still dot
+ * loses nothing but the animation. `ReduceMotion.System` is belt and braces
+ * for a setting that changes while the dot is on screen.
+ */
 export const StatusDot = React.memo(({ color, isPulsing, size = 6, style }: StatusDotProps) => {
     const opacity = useSharedValue(1);
+    const reduceMotion = useReducedMotion();
 
     React.useEffect(() => {
-        if (isPulsing) {
+        if (isPulsing && !reduceMotion) {
             opacity.value = withRepeat(
-                withTiming(0.3, { duration: 1000 }),
+                withTiming(STATUS_DOT_BLINK_MIN_OPACITY, {
+                    duration: STATUS_DOT_BLINK_HALF_MS,
+                    reduceMotion: ReduceMotion.System,
+                }),
                 -1, // infinite
-                true // reverse
+                true, // reverse, so the full period is twice the half
+                undefined,
+                ReduceMotion.System,
             );
         } else {
-            opacity.value = withTiming(1, { duration: 200 });
+            opacity.value = withTiming(1, { duration: 200, reduceMotion: ReduceMotion.System });
         }
-    }, [isPulsing]);
+    }, [isPulsing, reduceMotion]);
 
     const animatedStyle = useAnimatedStyle(() => {
         return {
