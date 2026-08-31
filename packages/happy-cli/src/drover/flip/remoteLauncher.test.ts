@@ -705,7 +705,7 @@ describe('warning about the Remote Control it will sever', () => {
 })
 
 describe('the in-flight gate in remote mode', () => {
-    it('holds a flip while subagents are running, and takes it on the repeat', async () => {
+    it('flips on the first ask while subagents are running (DROVE-240)', async () => {
         const h = await build()
         const run = h.start()
         await waitForEngines(1)
@@ -715,28 +715,23 @@ describe('the in-flight gate in remote mode', () => {
         live.onMessage(sdkLaunchMessage('agent0002'))
 
         h.flip.request({ account: 'alt', reason: 'manual', by: 'app' })
-
-        // Nothing was stopped, and nothing was queued for later either. Both
-        // of those are decided inside the call above. The gate reads the
-        // probe, warns, and returns without setting `pending`, so this is the
-        // answer already, not a snapshot of a race still running.
-        expect(h.flip.hasPending()).toBe(false)
-        expect(engines).toHaveLength(1)
-        expect(h.said.join('\n')).toContain('2 subagents still running')
-        expect(h.said.join('\n')).toContain('Ask again within')
-
-        // The repeat means "do it anyway".
-        h.flip.request({ account: 'alt', reason: 'manual', by: 'app' })
         await waitForEngines(2)
+
+        // One ask, one engine on the new account. The gate used to refuse here
+        // and wait to be asked again.
         expect(engines).toHaveLength(2)
         expect(engines[1].account).toBe('alt')
-        expect(h.said.join('\n')).toContain('confirmed')
+        const said = h.said.join('\n')
+        expect(said).toContain('2 subagents still running')
+        expect(said).not.toContain('Ask again within')
+        // It is a handover, not a promise their work continues by itself.
+        expect(said).toContain('RE-DISPATCH')
 
         h.handlers.switch()
         await run
     })
 
-    it('flips anyway on a usage limit, after saying what it costs', async () => {
+    it('flips on a usage limit too, after saying what it costs', async () => {
         const h = await build()
         const run = h.start()
         await waitForEngines(1)
@@ -748,35 +743,31 @@ describe('the in-flight gate in remote mode', () => {
         expect(engines).toHaveLength(2)
         expect(engines[1].account).toBe('alt')
         expect(h.said.join('\n')).toContain('1 subagent still running')
-        expect(h.said.join('\n')).toContain('tasks/<agentId>.output')
+        expect(h.said.join('\n')).toContain('no headroom left')
 
         h.handlers.switch()
         await run
     })
 
-    it('forgets the count when the engine restarts, so it cannot jam the gate', async () => {
+    it('forgets the count when the engine restarts, so a dead agent cannot be handed over twice', async () => {
         const h = await build()
         const run = h.start()
         await waitForEngines(1)
         live.onMessage(sdkLaunchMessage('agent0001'))
 
-        // Confirmed flip: the agent is abandoned with the engine that held it.
-        // Two requests in one tick, and they are meant to read as gate then
-        // confirm and cost exactly ONE new engine. Asserted directly rather
-        // than inferred from a count that a leftover loop could inflate: the
-        // first is held, the second sets it going.
-        h.flip.request({ account: 'alt', reason: 'manual', by: 'app' })
-        expect(h.flip.hasPending()).toBe(false)
+        // The agent is abandoned with the engine that held it.
         h.flip.request({ account: 'alt', reason: 'manual', by: 'app' })
         await waitForEngines(2)
         expect(engines).toHaveLength(2)
 
-        // The next flip must not be gated by an agent that died two engines
-        // ago — the entry belonged to a process that no longer exists.
+        // The next flip must not name an agent that died two engines ago --
+        // the entry belonged to a process that no longer exists.
+        const before = h.said.length
         h.flip.request({ account: 'main', reason: 'back', by: 'app' })
         await waitForEngines(3)
         expect(engines).toHaveLength(3)
         expect(engines[2].account).toBe('main')
+        expect(h.said.slice(before).join('\n')).not.toContain('still running')
 
         h.handlers.switch()
         await run

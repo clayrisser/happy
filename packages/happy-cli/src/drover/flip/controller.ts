@@ -650,7 +650,14 @@ export class FlipController {
         // to end up where he started, and a third press refused as a no-op.
         const busy = this.busy()
         const stale = this.exhaustedTarget(req)
-        if ((busy.count > 0 || stale) && !this.confirmed(req, busy, stale)) return
+        if (stale && !this.confirmed(req, stale)) return
+
+        // The flip is going, so the cost is said at the moment it is actually
+        // paid rather than on an ask that might still be refused above. Every
+        // path reaches here -- Clay's keypress, the bus, and the auto flip a
+        // usage limit fires at 4am -- so the flip nobody is watching announces
+        // and hands over exactly like the one he pressed (DROVE-240).
+        if (busy.count > 0) this.announceHandover(req, busy)
 
         this.pending = req
         this.releasePark()
@@ -687,80 +694,85 @@ export class FlipController {
     /**
      * May this flip stop the child, given what it would cost?
      *
-     * Two answers, split on WHO asked, because the alternatives are different:
+     * RUNNING SUBAGENTS NO LONGER HOLD IT (DROVE-240). They used to: the first
+     * ask named them and refused, and a second ask inside 30s went anyway.
+     * Clay replaced that design before it grew a drain. His words: "I'm ok flipping
+     * dropping them and then when it flips the prompt tells it how to resume".
+     * So the flip goes at once, the agents die, and the loss is repaired at
+     * the OTHER end by a handover: the arrival prompt tells the new session
+     * what each one was doing, where its transcript is, and whether it had
+     * already pushed a lane. See handover.ts. What the guard was spending on a
+     * refusal is now spent on the handover instead, which is the same
+     * information put to better use.
      *
-     *   by === 'auto'   a real usage limit. The account is dead, so there is
-     *                   no version of this where the agents finish — staying
-     *                   put just means they fail one API call later. Flip, but
-     *                   announce the loss FIRST so it is on the record instead
-     *                   of being discovered an hour afterwards.
-     *   anything else   a person or the bus asked. There IS an alternative:
-     *                   wait, or switch models. So the first request only says
-     *                   what it would cost; a second request inside the window
-     *                   means "do it anyway" and the second one wins.
-     *
-     * The costs are FOLDED into one hold rather than queued as two: one
-     * warning names everything this move would spend, and one repeat pays for
-     * all of it. Two holds in a row would mean pressing the key three times,
-     * which is not a way out of a trap.
+     * A hold remains for exactly one thing, and it is not about subagents.
+     * DROVE-64: a flip onto an account the ledger already knows is out of
+     * headroom hits the same wall on its first turn and auto-flips straight
+     * back, which is two relaunches to end up where it started. Waiting cannot
+     * save a killed subagent, but it CAN save those two relaunches, so that
+     * one is still worth a second press.
      */
-    private confirmed(req: FlipRequest, busy: InFlightSnapshot, stale: Exhaustion | null): boolean {
+    private confirmed(req: FlipRequest, stale: Exhaustion): boolean {
         const now = Date.now()
         if (req.by === 'auto') {
             this.heldFlip = null
-            logger.debug(`[flip] usage limit flip abandoning ${busy.count} subagent(s): ${busy.ids.join(', ')}`)
-            this.announce(
-                `Cattle Drover: flipping on a usage limit with ${describeInFlight(busy)}. ` +
-                    'They will not report back — this account has no headroom left, so waiting ' +
-                    'for them only fails them one call later. Their partial work is under ' +
-                    'tasks/<agentId>.output, and the arrival prompt points the new session at it.',
-            )
             return true
         }
 
         if (this.heldFlip && this.heldFlip.until > now) {
             this.heldFlip = null
-            const going: string[] = []
-            if (stale) {
-                logger.debug(`[flip] confirmed onto ${stale.account.name} with ${noHeadroom(stale, now)}`)
-                going.push(`onto ${stale.account.name} with ${noHeadroom(stale, now)}.${modelRemedy(stale)}`)
-            }
-            if (busy.count > 0) {
-                logger.debug(`[flip] confirmed, abandoning ${busy.count} subagent(s): ${busy.ids.join(', ')}`)
-                going.push(
-                    `with ${describeInFlight(busy)}. Their partial work is under tasks/<agentId>.output.`,
-                )
-            }
-            this.warn(`Cattle Drover: confirmed — flipping ${going.join(' ')}`)
+            logger.debug(`[flip] confirmed onto ${stale.account.name} with ${noHeadroom(stale, now)}`)
+            this.warn(
+                `Cattle Drover: confirmed — flipping onto ${stale.account.name} with ` +
+                    `${noHeadroom(stale, now)}.${modelRemedy(stale)}`,
+            )
             return true
         }
 
         this.heldFlip = { until: now + this.flipConfirmMs, req }
-        const why: string[] = []
-        if (stale) {
-            logger.debug(
-                `[flip] held: ${stale.account.name} has ${noHeadroom(stale, now)} — waiting for a repeat`,
-            )
-            why.push(
-                `it has ${noHeadroom(stale, now)}: ${stale.reason}. Landing there hits the same wall ` +
-                    'on the first turn and auto-flips straight back, which is two relaunches to end ' +
-                    `up here.${modelRemedy(stale)}`,
-            )
-        }
-        if (busy.count > 0) {
-            logger.debug(`[flip] held: ${busy.count} subagent(s) in flight — waiting for a repeat`)
-            why.push(
-                `${describeInFlight(busy)}. Moving accounts stops this Claude, which kills them and ` +
-                    'loses their results silently.',
-            )
-        }
+        logger.debug(
+            `[flip] held: ${stale.account.name} has ${noHeadroom(stale, now)} — waiting for a repeat`,
+        )
         this.warn(
-            `Cattle Drover: not flipping${stale ? ` to ${stale.account.name}` : ''} yet — ` +
-                why.join(' Also: ') +
-                ` Ask again within ${Math.round(this.flipConfirmMs / 1000)}s to flip anyway` +
-                (busy.count > 0 ? ', or wait for them to finish.' : '.'),
+            `Cattle Drover: not flipping to ${stale.account.name} yet — it has ` +
+                `${noHeadroom(stale, now)}: ${stale.reason}. Landing there hits the same wall on the ` +
+                'first turn and auto-flips straight back, which is two relaunches to end up here.' +
+                `${modelRemedy(stale)} Ask again within ` +
+                `${Math.round(this.flipConfirmMs / 1000)}s to flip anyway.`,
         )
         return false
+    }
+
+    /**
+     * Say what this flip is about to drop, on the way past (DROVE-240).
+     *
+     * Not a question and not a refusal. By the time this runs the flip is
+     * going, so the only job left is to put the cost on the record at the
+     * moment it is paid rather than leaving Clay to notice an hour later that
+     * five agents never reported.
+     *
+     * It says RE-DISPATCH, and it has to. A session resumes and a subagent
+     * cannot, so promising a resume here would be a lie that costs someone an
+     * afternoon of waiting for agents that are never coming back.
+     */
+    private announceHandover(req: FlipRequest, busy: InFlightSnapshot): void {
+        logger.debug(
+            `[flip] ${req.by === 'auto' ? 'usage limit flip' : 'flip'} stranding ` +
+                `${busy.count} subagent(s): ${busy.ids.join(', ')}`,
+        )
+        const why =
+            req.by === 'auto'
+                ? 'This account has no headroom left, so waiting for them would only fail them one ' +
+                  'API call later.'
+                : ''
+        this.announce(
+            `Cattle Drover: flipping with ${describeInFlight(busy)}. ${why}` +
+                'They are killed by the restart and cannot be resumed, because a subagent has no ' +
+                'resume. ' +
+                'The arrival prompt hands the new session what each was doing, where its transcript ' +
+                'is, and whether it had already pushed a lane, so it can RE-DISPATCH them from where ' +
+                'they stopped.',
+        )
     }
 
     /**
@@ -1062,6 +1074,10 @@ export class FlipController {
         // so this call still has the list to hand.
         const stranded = this.busy().agents
 
+        // The config dirs go with it so the handover can name the agent's own
+        // `subagents/agent-<id>.jsonl` -- carryTranscript has just copied that
+        // directory into the target, so the path handed over is one the new
+        // session still owns rather than a symlink into the account it left.
         const prompt = resolveFlipPrompt({
             from: from?.name,
             to: target.name,
@@ -1071,6 +1087,8 @@ export class FlipController {
             override: req.prompt,
             account: target,
             stranded,
+            configDir: target.configDir,
+            ...(from?.configDir ? { fromConfigDir: from.configDir } : {}),
         })
 
         // We are on the target from here on. Recorded BEFORE the caller acts,
@@ -1092,7 +1110,14 @@ export class FlipController {
             note:
                 `Cattle Drover: ${from?.name ?? 'this session'} → ${target.name} (${req.reason}, by ${req.by}), ` +
                 (resume
-                    ? `resuming ${basename(this.cwd)}${carried.subagents ? ' with subagents' : ''}.`
+                    ? `resuming ${basename(this.cwd)}` +
+                      // The SESSION resumes; the subagents do not, and saying
+                      // "with subagents" here read as though they did
+                      // (DROVE-240). They are re-dispatched by the new session
+                      // off the transcripts the arrival prompt points at.
+                      (stranded.length > 0
+                          ? `, with ${stranded.length} subagent${stranded.length === 1 ? '' : 's'} to re-dispatch.`
+                          : '.')
                     : `starting fresh in ${basename(this.cwd)} — nothing had been said yet.`) +
                 switchHint,
         }
