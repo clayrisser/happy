@@ -68,6 +68,18 @@ export const dictationRestoresDraft = {
      * about what he said, so his words stay.
      */
     preview: false,
+    /**
+     * The app went to the background (DROVE-179). The capture is over because
+     * the recogniser is, but he was mid-sentence when the push arrived and
+     * those words are his. They are waiting when he comes back.
+     */
+    backgrounded: false,
+    /**
+     * The session's transport dropped (DROVE-179). There is nothing to dictate
+     * INTO for a moment, which is why the capture ends, but a reconnect says
+     * nothing about what he had already said. His words stay.
+     */
+    disconnected: false,
 } satisfies Record<DictationEndReason, boolean>;
 
 /**

@@ -2,6 +2,7 @@ import type { Message } from '@/sync/typesMessage';
 import { chunkStreamed } from './sentenceStream';
 import { sameSentence } from './sentenceMatch';
 import { stripToSpeakableProse } from './speakable';
+import { stopsSpeech, type ReadAloudInterruption } from './readAloudGate';
 
 /**
  * The read-aloud queue (DROVE-30, mode B).
@@ -134,20 +135,14 @@ import { stripToSpeakableProse } from './speakable';
  */
 
 /**
- * Why speech stopped, or in the case of `typed` and `sent`, why every CAPTURE
- * stopped while reading carried on. Carried for logs and for the tests.
+ * Why speech stopped, or why every CAPTURE stopped while reading carried on.
+ *
+ * The union and the decision both moved to `readAloudGate.ts` in DROVE-179,
+ * re-exported here so every existing importer is unchanged. That file is the
+ * table: a reason is either one that stops the voice or one that does not,
+ * and the compiler will not let a new caller skip saying which.
  */
-export type ReadAloudInterruption =
-    | 'typed'
-    | 'sent'
-    | 'mic'
-    | 'left-session'
-    | 'switched-session'
-    | 'toggled-off'
-    | 'call-started'
-    | 'headphones-unplugged'
-    /** A voice preview in settings wants the speaker to itself. */
-    | 'preview';
+export type { ReadAloudInterruption } from './readAloudGate';
 
 /** Per-utterance knobs: the catch-up rate (DROVE-108) and asides (DROVE-112). */
 export interface SpeakOptions {
@@ -567,6 +562,13 @@ export class ReadAloudReader {
      */
     focus(sessionId: string | null, reason: ReadAloudInterruption = 'switched-session'): void {
         if (this.focused === sessionId) return;
+        // Moving the focus throws a transcript away, so it may only ever be
+        // driven by a reason the gate calls a real stop (DROVE-179). A caller
+        // that means "this surface went away" wants `blur`.
+        if (!stopsSpeech(reason)) {
+            this.notifyInterrupted(reason);
+            return;
+        }
         this.focused = sessionId;
         this.queuedChunks.clear();
         this.latestCreatedAt = 0;
@@ -590,6 +592,17 @@ export class ReadAloudReader {
      */
     blur(sessionId: string, reason: ReadAloudInterruption = 'left-session'): void {
         if (this.focused !== sessionId) return;
+        // DROVE-179. A surface going away is not the session going away. He
+        // opened the agent screen, a sheet took the route, the transport
+        // blipped, the tablet's side panel had its turn: in every one of them
+        // the session being read is still the session he is in, so focus, the
+        // timeline and the playhead all stay exactly where they are and the
+        // sentence in flight keeps playing. Only a reason the gate calls a
+        // real stop gives the session up.
+        if (!stopsSpeech(reason)) {
+            this.notifyInterrupted(reason);
+            return;
+        }
         this.focus(null, reason);
     }
 
@@ -756,6 +769,15 @@ export class ReadAloudReader {
      * reading, so the position goes to the end and the marking clears.
      */
     interrupt(reason: ReadAloudInterruption): void {
+        // THE gate (DROVE-179). Every path that wants the voice to stop comes
+        // through here and names its reason, and one table decides. A reason
+        // that does not stop the voice still tells the captures: a latched mic
+        // really does have to stop when he types, and that half of this method
+        // was never the half that was wrong.
+        if (!stopsSpeech(reason)) {
+            this.notifyInterrupted(reason);
+            return;
+        }
         this.generation += 1;
         this.cursor = this.timeline.length;
         this.pendingTails.clear();
@@ -785,7 +807,7 @@ export class ReadAloudReader {
      * reader rests, which is the right kind of silence.
      */
     userSent(): void {
-        this.notifyInterrupted('sent');
+        this.interrupt('sent');
     }
 
     /**
@@ -808,7 +830,7 @@ export class ReadAloudReader {
      * reading away, and only the first of them was ever wanted here.
      */
     userTyped(): void {
-        this.notifyInterrupted('typed');
+        this.interrupt('typed');
     }
 
     private notifyInterrupted(reason: ReadAloudInterruption): void {

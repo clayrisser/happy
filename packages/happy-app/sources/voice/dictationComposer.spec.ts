@@ -132,8 +132,10 @@ describe('the dictation invariant: a capture ending never costs words', () => {
         // Derived from a `satisfies Record<DictationEndReason, boolean>`
         // table, so this list cannot fall behind the union.
         expect(dictationEndReasons.sort()).toEqual([
+            'backgrounded',
             'call-started',
             'cancel',
+            'disconnected',
             'headphones-unplugged',
             'idle',
             'left-session',
@@ -202,6 +204,8 @@ describe('read-aloud interrupts arriving mid-hold', () => {
         'call-started',
         'headphones-unplugged',
         'preview',
+        'backgrounded',
+        'disconnected',
     ] as const;
 
     // Fails to compile if ReadAloudInterruption grows or shrinks, so a new

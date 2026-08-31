@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { AppState } from 'react-native';
 import * as Application from 'expo-application';
 import {
     addDictationEndedListener,
@@ -43,11 +44,28 @@ import { dictationBlock, unknownBuild } from './dictationCapability';
 export interface VoiceComposerOptions {
     sessionId: string;
     /**
-     * False for a surface that must never speak, an embedded side chat, a
-     * disconnected session, so a background pane cannot narrate over the one
-     * the user is actually looking at.
+     * False for a surface that must never speak: an embedded side chat, so a
+     * background pane cannot narrate over the one the user is actually
+     * looking at.
+     *
+     * DROVE-179 took the session's CONNECTEDNESS out of this. It used to be
+     * `!embedded && !isDisconnected`, and `isDisconnected` flips true for a
+     * second or two on every daemon reconnect, websocket blip and foreground
+     * resync. Through `setEnabled` below that reached `interrupt('toggled-off')`,
+     * which is the one reason the gate calls a real stop, so a blip read as
+     * the user having pressed the button. That was the last silencer left
+     * after DROVE-146, DROVE-162 and DROVE-122, and it is the reason he was
+     * still hitting this. A dropped transport now stops the CAPTURES and
+     * leaves the voice alone, see `disconnected` below.
      */
     active: boolean;
+    /**
+     * The session's transport is down. Not a reason to go quiet (DROVE-179):
+     * the sentences already in the timeline are still worth saying and the
+     * reconnect is usually over before the sentence is. It IS a reason to
+     * close the mic, since there is nothing to dictate to.
+     */
+    sessionDisconnected?: boolean;
     /** A boss-mode call is up. B and C cannot share the audio session, and neither can A. */
     voiceCallActive: boolean;
     /** What the composer holds right now. Read once when the mic opens. */
@@ -104,7 +122,7 @@ const idleTalk: DictationCaptureState = {
 };
 
 export function useVoiceComposer(options: VoiceComposerOptions): VoiceComposerState {
-    const { sessionId, active, voiceCallActive, getComposerText, setComposerText, send, onError } = options;
+    const { sessionId, active, sessionDisconnected = false, voiceCallActive, getComposerText, setComposerText, send, onError } = options;
     const [readAloudEnabled, setReadAloudEnabled] = useLocalSettingMutable('readAloudEnabled');
     const [dictationEnabled] = useLocalSettingMutable('voiceDictationEnabled');
     const [talk, setTalk] = React.useState<DictationCaptureState>(idleTalk);
@@ -179,8 +197,30 @@ export function useVoiceComposer(options: VoiceComposerOptions): VoiceComposerSt
     // AVAudioSession category is the pitfall the ticket names, so read-aloud
     // goes quiet for the duration rather than fighting it.
     React.useEffect(() => {
-        readAloud.setEnabled(active && readAloudEnabled && !voiceCallActive);
+        // Only the surface that FOCUSES may drive the global flag (DROVE-179).
+        // Two of these hooks can be mounted at once, the chat and an embedded
+        // side chat, and the embedded one writing `false` here would silence
+        // whatever the user is actually looking at.
+        if (!active) return;
+        readAloud.setEnabled(readAloudEnabled && !voiceCallActive);
     }, [active, readAloudEnabled, voiceCallActive]);
+
+    // The transport dropped, or the app went to the background. Neither takes
+    // the audio route away, so neither stops the voice; both end a capture,
+    // because there is nothing to dictate into (DROVE-179). The gate decides
+    // that, not this file: all these do is name what happened.
+    React.useEffect(() => {
+        if (!active || !sessionDisconnected) return;
+        readAloud.interrupt('disconnected');
+    }, [active, sessionDisconnected]);
+
+    React.useEffect(() => {
+        if (!active) return;
+        const subscription = AppState.addEventListener('change', (next) => {
+            if (next === 'background' || next === 'inactive') readAloud.interrupt('backgrounded');
+        });
+        return () => { subscription.remove(); };
+    }, [active]);
 
     // Headphones coming out mid-reply stops it and turns it off (DROVE-119).
     // Watched only over exactly the window where a leak is possible: this
