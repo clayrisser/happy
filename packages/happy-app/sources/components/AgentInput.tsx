@@ -50,7 +50,7 @@ import {
     resolveMobileComposerControlRowGeometry,
     resolveMobileComposerLineGeometry,
 } from './agentInputLayout';
-import { COMPOSER_STRIP_HEIGHT } from './composerStripLayout';
+import { COMPOSER_STRIP_BOX } from './composerStripLayout';
 import { shouldUseExpoNativeSettingsMenu } from './glassInteractionPolicy';
 import { LiveMicBanner } from './LiveMicBanner';
 import { TalkButton } from './TalkButton';
@@ -2563,8 +2563,16 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 {/* The strip under the composer, and both things that live
                     in it. It is under the CONTROL ROW now rather than under
                     the card (DROVE-196) and its box did not move a point for
-                    it: 6pt of padding over an 18pt line, 24 in total, with the
-                    row keeping its own 8pt clear above.
+                    it: 6pt of padding over the status text's 14pt line, 20 in
+                    total, with the row keeping its own 8pt clear above.
+
+                    That 20 is `COMPOSER_STRIP_BOX`, and the floor here is the
+                    same object's `minHeight` rather than a second number
+                    (DROVE-221). This wrapper used to say 24 while the row said
+                    20, so speaking pushed the whole composer up 4pt and
+                    DROVE-219's fade went with it. The band cannot change
+                    height on a recording now, because there is nothing left
+                    for it to change TO.
                     Every status fact on one line (DROVE-82): working state and
                     timer, connection, quota. Clay, seeing it in place: "this is
                     great, keep that shit down there." It owns its own two
@@ -2581,7 +2589,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     on the action row is still the only control that stops or
                     sends (DROVE-105) and it has not moved. */}
                 <View style={compactMobileComposer && props.talk?.active
-                    ? { minHeight: COMPOSER_STRIP_HEIGHT }
+                    ? { minHeight: COMPOSER_STRIP_BOX.minHeight }
                     : undefined}
                 >
                     <AgentInputStatusRow
