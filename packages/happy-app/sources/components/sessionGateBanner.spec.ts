@@ -149,9 +149,12 @@ describe('SessionGateBanner, per tool', () => {
         expect(summary?.title).toBe('1 to-do for you');
     });
 
-    it('leaves a DroverAccountLogin on the path it had', () => {
-        // Not this ticket's card. It renders today as it did before, so the
-        // action for it is unchanged and only the three kinds above moved.
+    it('gives a DroverAccountLogin its link and code field', () => {
+        // It used to sit on the generic path, and this test pinned that.
+        // DROVE-212 is what that looked like on the phone: "Run
+        // DroverAccountLogin", Deny and Allow, and the raw JSON of these
+        // arguments for a body. Allow sends no code, so the login on the Mac
+        // went on waiting and Clay said "it's not doing anything".
         const { actions } = bannerFor({
             l1: {
                 tool: 'DroverAccountLogin',
@@ -160,6 +163,6 @@ describe('SessionGateBanner, per tool', () => {
                 droverOrigin: { sessionId: claudeSessionId },
             },
         });
-        expect(actions).toEqual(['allow-deny']);
+        expect(actions).toEqual(['account-login']);
     });
 });

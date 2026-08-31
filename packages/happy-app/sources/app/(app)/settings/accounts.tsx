@@ -82,6 +82,18 @@ import { hostOf } from '@/components/tools/views/droverAccountLogin';
 /** How often a machine with a login in flight is asked again. */
 const watchPollMs = 4_000;
 
+/**
+ * How often the clock is moved on, whatever the machine is doing (DROVE-212).
+ *
+ * Separate from the poll, and that separation is the fix. The deadlines used
+ * to advance only when a `drover-accounts` read came back OK, so a phone that
+ * was backgrounded, reconnecting, or looking at a machine that had stopped
+ * answering never reached the sixty-second sentence: `machineRPC` throws, the
+ * result is `{ ok: false }`, no event is dispatched, and the spinner runs
+ * forever. A tick costs nothing and cannot fail.
+ */
+const watchTickMs = 1_000;
+
 type Loaded = { loading: boolean; result: MachineAccountsResult | null };
 
 function machineName(machine: { id: string; metadata?: { displayName?: string; host?: string } | null }): string {
@@ -127,6 +139,10 @@ export default function AccountsScreen() {
         // row, which it only does once Claude Code says it is logged in.
         if (result.ok) {
             dispatch(machineId, { type: 'accounts', at: Date.now(), names: result.accounts.map((a) => a.name) });
+        } else {
+            // A read that failed still tells the truth about the time. Only
+            // the account list is unknown, not the clock.
+            dispatch(machineId, { type: 'tick', at: Date.now() });
         }
         return result;
     }, [dispatch]);
@@ -198,6 +214,25 @@ export default function AccountsScreen() {
         const timer = setInterval(() => { for (const id of ids) void load(id); }, watchPollMs);
         return () => clearInterval(timer);
     }, [watching, load]);
+
+    /**
+     * The clock, which never depends on the machine answering (DROVE-212).
+     *
+     * `load` can hang, throw, or come back `{ ok: false }` for as long as the
+     * socket is down, and every one of those used to stop the deadlines dead.
+     * This one only reads `Date.now()`, so "no sign-in link came back" and
+     * "stopped watching" arrive on time or, after the phone has been asleep,
+     * on the first tick after it wakes.
+     */
+    React.useEffect(() => {
+        if (!watching) return;
+        const ids = watching.split(',');
+        const timer = setInterval(() => {
+            const at = Date.now();
+            for (const id of ids) dispatch(id, { type: 'tick', at });
+        }, watchTickMs);
+        return () => clearInterval(timer);
+    }, [watching, dispatch]);
 
     const refresh = React.useCallback(async () => {
         setRefreshing(true);

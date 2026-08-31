@@ -18,6 +18,41 @@ describe('sessionGateAction', () => {
         expect(sessionGateAction('question', questionArgs)).toBe('answer-question');
     });
 
+    // DROVE-212. Clay's phone drew this card as "Run DroverAccountLogin" with
+    // Deny and Allow, its body the literal JSON of the arguments. He pressed
+    // Allow and nothing happened, because a bare allow carries no code and the
+    // `claude auth login` on the Mac was waiting for one.
+    it('gives an account login its link and code field, never Allow and Deny', () => {
+        const args = {
+            url: 'https://claude.com/cai/oauth/authorize?code=true&state=x',
+            header: 'Log in to Claude for ~/.claude-accounts/account-1',
+            reason: 'Open this in a browser, sign in, then send back the code.',
+            cancelLabel: 'Cancel the login',
+        };
+        expect(sessionGateAction('question', args, 'DroverAccountLogin')).toBe('account-login');
+        // The tool alone is enough: a bridge that mirrored this card without a
+        // kind still must not get Allow and Deny.
+        expect(sessionGateAction('permission', args, 'DroverAccountLogin')).toBe('account-login');
+    });
+
+    it('never reads a WebFetch as a login just because it has a url', () => {
+        // The tool decides, not the shape of the arguments. A fetch permission
+        // offering a sign-in link and a code field would be this same bug
+        // pointing the other way.
+        expect(sessionGateAction('permission', { url: 'https://example.com/x' }, 'WebFetch'))
+            .toBe('allow-deny');
+        expect(sessionGateAction('permission', { url: 'https://example.com/x' }))
+            .toBe('allow-deny');
+    });
+
+    it('leaves a login with no usable link on the generic path', () => {
+        // accountLoginCard refuses anything that is not https, and drawing a
+        // sign-in button onto an unknown scheme is the one outcome worth
+        // refusing outright.
+        expect(sessionGateAction('permission', { url: 'file:///etc/passwd' }, 'DroverAccountLogin'))
+            .toBe('allow-deny');
+    });
+
     it('gives a permission Allow and Deny', () => {
         expect(sessionGateAction('permission', { command: 'rm -rf build' })).toBe('allow-deny');
         expect(sessionGateAction('permission', { command: 'rm -rf build' }, 'Bash')).toBe('allow-deny');
