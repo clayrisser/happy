@@ -49,7 +49,6 @@ import {
     MOBILE_COMPOSER_METRICS,
     resolveMobileComposerActionGeometry,
     resolveMobileComposerControlRowGeometry,
-    resolveMobileComposerEffortLayerGeometry,
     resolveMobileComposerLineGeometry,
 } from './agentInputLayout';
 import {
@@ -69,7 +68,6 @@ import { buildSessionPillLabel } from './sessionPillLabel';
 import type { AgentModePendingFlags } from '@/sync/useAgentModePending';
 import { permissionModeGlyph } from './sessionControlGlyphs';
 import { ComposerSessionControls, type ComposerSessionPicker } from './ComposerSessionControls';
-import { EffortSliderPopover, useEffortSlider } from './EffortSliderPopover';
 import { effortSliderScaleFromLevels } from './effortSlider';
 import {
     composerPickerClosed,
@@ -262,7 +260,6 @@ function permissionKindIcon(kind: string | null | undefined): React.ComponentPro
 
 const MOBILE_COMPOSER_LINE_GEOMETRY = resolveMobileComposerLineGeometry();
 const MOBILE_CONTROL_ROW_GEOMETRY = resolveMobileComposerControlRowGeometry();
-const MOBILE_EFFORT_LAYER_GEOMETRY = resolveMobileComposerEffortLayerGeometry();
 
 /**
  * How long a deferred picker waits for `keyboardDidHide` before opening
@@ -359,11 +356,6 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
      * frame, and each of them carries glass of its own already.
      */
     mobileControlRow: MOBILE_CONTROL_ROW_GEOMETRY,
-    /**
-     * Where the effort readout is laid out (DROVE-229). The rule and the
-     * reasoning are on `resolveMobileComposerEffortLayerGeometry`.
-     */
-    mobileEffortLayer: MOBILE_EFFORT_LAYER_GEOMETRY,
     /**
      * Thumbnails inside a card with no padding would sit on its rim, so the
      * strip brings the air the card used to. 64pt thumb plus this is the 72
@@ -1472,23 +1464,15 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         return effortScale.keys.length > 0 ? effortScale.keys.length - 1 : -1;
     }, [effortScale, props.effortLevel]);
     /*
-     * A tap on the effort segment is the effort PICKER (DROVE-229), through
-     * the same handler the mode and the model use. A drag is still a drag; a
-     * press that never moved is what lands here.
+     * THE EFFORT DRAG IS GONE (DROVE-242). The segment was a raw JS responder
+     * that raised a readout above the row on touch-DOWN and slid along it.
+     * Clay, with a screenshot of that readout over his field: "Why does it
+     * show the old shitty slider when I hold down effort?" So effort presses
+     * like the mode and the model: one press, `handleSessionControlPress`, the
+     * same sheet. `useEffortSlider`, `EffortSliderPopover` and the layer that
+     * placed it are deleted; effortSlider.ts keeps the SCALE above, which the
+     * dial and the sheet both read and always did.
      */
-    const handleEffortTap = React.useCallback(() => {
-        handlePickerPress('effort');
-    }, [handlePickerPress]);
-    const effortSlider = useEffortSlider({
-        scale: effortScale,
-        currentKey: props.effortLevel?.key ?? null,
-        onCommit: props.onEffortKeyChange,
-        onTap: handleEffortTap,
-        enabled: compactMobileComposer && !!props.onEffortKeyChange,
-    });
-    const effortSliderOn = compactMobileComposer && !!props.onEffortKeyChange
-        && effortScale.keys.length > 1;
-
 
     // Handle keyboard navigation
     const handleKeyPress = React.useCallback((event: KeyPressEvent): boolean => {
@@ -2723,12 +2707,11 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         the card's old bottom padding still holding the status
                         row's tap targets off these buttons. */
                     <>
-                    {/* The stack the row and the effort readout share
-                        (DROVE-229). It carries no padding of its own, so the
-                        readout's `left: 0, right: 0` means the composer's full
-                        width and nothing else; the gutter comes back inside
-                        the layer, in normal flow, from the same token the
-                        bubble line uses. Nothing else about the row moved. */}
+                    {/* The stack the row and the effort readout shared
+                        (DROVE-229). The readout is deleted (DROVE-242) and the
+                        wrapper stays: it is what the row's own absolute
+                        children measure against, and collapsing it would move
+                        the row. It carries no padding, so it is inert. */}
                     <View>
                     <View style={styles.mobileControlRow}>
                         {/* Mode, effort and model: three segments in one glass
@@ -2748,7 +2731,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                     effort: availableEffortLevels.length > 0 && !!props.onEffortLevelChange,
                                     model: availableModels.length > 0 && !!props.onModelModeChange,
                                 }}
-                                effortSlider={effortSliderOn ? effortSlider : null}
                                 openPicker={engagedPicker === 'permission' || engagedPicker === 'effort'
                                     || engagedPicker === 'model'
                                     ? engagedPicker
@@ -2862,24 +2844,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         </GlassChromeSurface>
                         ) : null}
                     </View>
-                    {/* THE EFFORT READOUT, above the row and as wide as the
-                        composer (DROVE-229). It is not a picker: it is up only
-                        while a finger is on the effort segment, and it takes
-                        no touches, so there is nothing here to dismiss. A TAP
-                        on that segment opens the effort sheet instead, which
-                        is where every dismissal route lives.
-
-                        The layer is `left: 0, right: 0` on a stack with no
-                        padding, so the strip inside it is exactly as wide as
-                        the bubble above. That is the one placement rule, and
-                        it is the layout's, not a number computed here: the old
-                        popover pinned itself at `left: -shellInset` and
-                        centred a narrow capsule on the touch. */}
-                    {effortSliderOn ? (
-                        <View style={styles.mobileEffortLayer} pointerEvents="none">
-                            <EffortSliderPopover handle={effortSlider} scale={effortScale} />
-                        </View>
-                    ) : null}
                     </View>
                     </>
                     ) : null}

@@ -114,7 +114,7 @@
  * clear 3:1 does not get in.
  *
  * Pure, so the numbers can be pinned without a renderer.
- * ComposerSessionControls.tsx, EffortSliderPopover.tsx and AgentInput.tsx
+ * ComposerSessionControls.tsx and AgentInput.tsx
  * read it.
  */
 

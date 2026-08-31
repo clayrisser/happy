@@ -3,9 +3,10 @@
  * (DROVE-216).
  *
  * Clay: "when trying to slide a slider instead it swipes the screen." The
- * effort slider was the one he hit, but a control that loses its pan to the
- * navigator is a shape, not an incident, so this is the whole list rather than
- * one patch. `backSwipeOwners.test.ts` beside this file scans the tree and
+ * effort slider was the one he hit, and it is deleted now (DROVE-242), so its
+ * entry is gone from the list below. The list is not: a control that loses its
+ * pan to the navigator is a shape, not an incident, which is why this was the
+ * whole inventory rather than one patch on the control he happened to hit. `backSwipeOwners.test.ts` beside this file scans the tree and
  * fails BOTH ways: a file that owns a horizontal drag and is not listed here,
  * and a listed file whose reason has stopped matching the code.
  *
@@ -60,14 +61,6 @@ export const backSwipeOwners: BackSwipeOwner[] = [
         lockedIn: 'components/AudioCueSettings.tsx',
         reason: 'UISlider on a pushed settings screen, so its drag races the '
             + 'same recogniser the effort slider lost to.',
-    },
-    {
-        source: 'components/ComposerSessionControls.tsx',
-        control: 'the effort slider, a raw JS responder reading pageX',
-        lockedIn: 'components/EffortSliderPopover.tsx',
-        reason: 'The responder is here but the gesture state is the hook\'s, so '
-            + 'the hold is taken and dropped where press-in and press-out '
-            + 'already live. This is the control Clay photographed.',
     },
     {
         source: 'components/ComposerSheet.tsx',

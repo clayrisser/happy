@@ -118,11 +118,14 @@ describe('back swipe owners', () => {
         expect(callers).toEqual([]);
     });
 
-    test('the slider Clay hit is covered by the hook behind it', () => {
-        const slider = backSwipeOwners.find((owner) => owner.source === 'components/ComposerSessionControls.tsx');
-
-        expect(slider?.lockedIn).toBe('components/EffortSliderPopover.tsx');
-        expect(read('components/EffortSliderPopover.tsx')).toContain('backSwipe.begin()');
-        expect(read('components/EffortSliderPopover.tsx')).toContain('backSwipe.end()');
+    test('the slider Clay hit is gone, and so is its entry (DROVE-242)', () => {
+        // It was the composer's effort drag, a raw JS responder reading pageX,
+        // and it is deleted rather than locked: effort is a press that opens a
+        // sheet now, and a press has no pan for the navigator to steal. The
+        // rest of the inventory stands, which is the point of keeping a list
+        // instead of patching the one control that got reported.
+        expect(backSwipeOwners.find((owner) => owner.source === 'components/ComposerSessionControls.tsx'))
+            .toBeUndefined();
+        expect(backSwipeOwners.length).toBeGreaterThan(5);
     });
 });

@@ -63,10 +63,6 @@ vi.mock('react-native-unistyles', () => ({
 vi.mock('@/constants/Typography', () => ({ Typography: { default: () => ({}) } }));
 vi.mock('./BubblePressable', () => ({ BubblePressable: host('BubblePressable') }));
 vi.mock('./GlassChromeControl', () => ({ GlassChromeSurface: host('GlassChromeSurface') }));
-// The capsule imports the handle's TYPE from here and nothing else since
-// DROVE-229 moved the readout out to the control row, but the module still
-// reaches haptics and the store, which reach expo-modules-core.
-vi.mock('./EffortSliderPopover', () => ({ EffortSliderPopover: host('EffortSliderPopover') }));
 
 const { ComposerSessionControls } = await import('./ComposerSessionControls');
 const { COMPOSER_CONTROL_PALETTE, composerGaugeTrack } = await import('./composerControlColour');
@@ -297,98 +293,68 @@ describe('the colour each glyph is drawn in (DROVE-176, DROVE-215)', () => {
 });
 
 /**
- * The effort segment as a SLIDER (DROVE-200). The rules live in
- * effortSlider.spec.ts; these are the ones only a render can show.
+ * The effort segment is a PRESS, like the two beside it (DROVE-242).
+ *
+ * DROVE-200 made it a raw JS responder driving a drag, and DROVE-229 left that
+ * drag alongside the sheet a tap opened. Clay, with a screenshot of the drag's
+ * readout over his field: "Why does it show the old shitty slider when I hold
+ * down effort?" The responder entered its drag on touch-DOWN, so a hold raised
+ * it. It is deleted; what a render can show is that nothing of it is left.
  */
-describe('the effort segment when it is a slider', () => {
-    const scale = { keys: ['low', 'medium', 'high', 'xhigh', 'max', 'ultracode'], names: ['Low', 'Medium', 'High', 'xHigh', 'Max', 'Ultracode'] };
-    function slider(overrides: Record<string, unknown> = {}) {
-        return {
-            active: false,
-            index: 3,
-            onPressIn: () => {},
-            onMove: () => {},
-            onRelease: () => {},
-            step: () => {},
-            dismiss: () => {},
-            state: { phase: 'closed', anchorX: 0, anchorIndex: 3, index: 3, grabbed: false },
-            count: 6,
-            ...overrides,
-        } as any;
-    }
-
-    it('takes the touch for the whole gesture rather than letting the scroll view have it back', () => {
-        const renderer = mount({ effortSlider: slider(), effortScale: scale });
-        const segment = press(renderer, 'Reasoning effort');
-        expect(segment.props.onResponderGrant).toBeTypeOf('function');
-        expect(segment.props.onResponderMove).toBeTypeOf('function');
-        expect(segment.props.onResponderRelease).toBeTypeOf('function');
-        expect(segment.props.onResponderTerminationRequest()).toBe(false);
-    });
-
-    it('is adjustable, and moves a notch per VoiceOver action', () => {
-        const moves: number[] = [];
-        const renderer = mount({
-            effortSlider: slider({ step: (delta: number) => moves.push(delta) }),
-            effortScale: scale,
+describe('the effort segment after the drag was deleted', () => {
+    it('opens the sheet on a press, exactly as the mode and the model do', () => {
+        const opened: string[] = [];
+        const renderer = mount({ onPress: (picker: string) => opened.push(picker) });
+        act(() => {
+            press(renderer, 'Reasoning effort').props.onPress();
         });
-        const segment = press(renderer, 'Reasoning effort');
-        expect(segment.props.accessibilityRole).toBe('adjustable');
-        segment.props.onAccessibilityAction({ nativeEvent: { actionName: 'increment' } });
-        segment.props.onAccessibilityAction({ nativeEvent: { actionName: 'decrement' } });
-        expect(moves).toEqual([1, -1]);
+        expect(opened).toEqual(['effort']);
     });
 
-    it('points the needle at the thumb while a drag runs, so the two cannot disagree', () => {
-        const needle = (renderer: any) => renderer.root.findByType('Line' as any).props;
-        // At rest the needle reads the session's own level, the fourth of six.
-        const resting = needle(mount({ effortSlider: slider(), effortScale: scale }));
-        // Mid-drag it reads the THUMB, which is at the ceiling: hard right.
-        // The ANGLE is the whole of it now (DROVE-215): the stroke is the
-        // foreground at either end, so the drag has to move the line to say
-        // anything, which is the reading the dial was chosen for (DROVE-101).
-        const dragging = needle(mount({
-            effortSlider: slider({ active: true, index: 5 }),
-            effortScale: scale,
-        }));
-        expect(dragging.x2).toBeGreaterThan(resting.x2);
-        expect(dragging.stroke).toBe(palette.foreground);
-        expect(resting.stroke).toBe(palette.foreground);
+    it('has no responder left, so no gesture can raise a second surface', () => {
+        // The exact handlers that made a hold draw the readout. A press cannot
+        // raise anything now, which is the guarantee the whole ticket rests on:
+        // no gesture on any picker leaves a surface up that a second press
+        // cannot dismiss.
+        const segment = press(mount(), 'Reasoning effort');
+        for (const handler of [
+            'onResponderGrant',
+            'onResponderMove',
+            'onResponderRelease',
+            'onResponderTerminate',
+            'onResponderTerminationRequest',
+            'onStartShouldSetResponder',
+            'onMoveShouldSetResponder',
+            'onAccessibilityAction',
+        ]) {
+            expect(segment.props[handler], handler).toBeUndefined();
+        }
+        // A button, not an adjustable: there is no slider to adjust, and the
+        // levels are radio rows on the sheet (AgentInput).
+        expect(segment.props.accessibilityRole).toBe('button');
     });
 
-    it('lets a finger on the slider outrank a wait (DROVE-217): the thumb is not a request yet', () => {
-        const needle = (renderer: any) => renderer.root.findByType('Line' as any).props.stroke;
-        // Dragging over the top of a pick that is still in flight: the needle
-        // follows the thumb in the row's own foreground, because the drag is
-        // where Clay's finger is and the wait is about a value he has left
-        // behind. The ramp this used to check is gone (DROVE-215): a level is
-        // a value the control holds, not something it is doing, so it is not
-        // a colour any more and the needle's ANGLE carries it.
-        expect(needle(mount({
-            effortSlider: slider({ active: true, index: 5 }),
-            effortScale: scale,
-            pending: { effort: true },
-        }))).toBe(palette.foreground);
-        // Let go, and the wait is what is left to draw.
-        expect(needle(mount({
-            effortSlider: slider({ active: false, index: 5 }),
-            effortScale: scale,
-            pending: { effort: true },
-        }))).toBe(palette.pending);
-    });
-
-    it('draws no readout of its own: the control row places it (DROVE-229)', () => {
-        // The readout spans the composer, which is wider than this capsule, so
-        // it cannot be laid out from in here. It used to hang off a wrapper
-        // around the capsule and pin itself back to the screen's edge with a
-        // negative left, which is the anchor Clay was looking at.
-        const renderer = mount({ effortSlider: slider({ active: true }), effortScale: scale });
+    it('draws no readout of its own, and there is none left to draw', () => {
+        // DROVE-229 moved the readout out to the control row because it spans
+        // the composer; DROVE-242 deleted it there. Neither surface has one.
+        const renderer = mount();
         expect(renderer.root.findAllByType('EffortSliderPopover' as any)).toEqual([]);
     });
 
-    it('keeps the picker when no slider is handed in, so a desktop still lists it', () => {
-        const renderer = mount();
-        const segment = press(renderer, 'Reasoning effort');
-        expect(segment.props.onResponderGrant).toBeUndefined();
+    it('points the needle at the session\u2019s own level, with no thumb to follow', () => {
+        // The dial was never the slider. It still reads the level as an ANGLE
+        // (DROVE-101, DROVE-141), and it no longer has a live drag index that
+        // could disagree with it.
+        const needle = (index: number) => mount({ effortIndex: index }).root.findByType('Line' as any).props;
+        expect(needle(5).x2).toBeGreaterThan(needle(0).x2);
+    });
+
+    it('draws a pending effort as pending, with no drag left to outrank it', () => {
+        // This used to be conditional: a finger on the slider outranked the
+        // wait, because the thumb was a value nobody had asked for yet. With
+        // no drag there is one rule, the same one mode and model follow.
+        const needle = (pending: any) => mount({ pending }).root.findByType('Line' as any).props.stroke;
+        expect(needle({ effort: true })).toBe(palette.pending);
+        expect(needle(null)).toBe(palette.foreground);
     });
 });

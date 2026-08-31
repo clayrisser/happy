@@ -26,9 +26,9 @@
  *   - a tap outside, which is ComposerSheet's backdrop Pressable;
  *   - the back gesture, which is that same sheet's `Modal onRequestClose`.
  * Every composer picker is a ComposerSheet, so all three come as a set. The
- * effort readout is the one surface that is not a sheet, and it is not a
- * picker any more either: it lives as long as the finger and takes no touches
- * (effortSlider.ts).
+ * effort readout was the one surface that was not, kept alive as long as the
+ * finger for the drag; it is deleted (DROVE-242), so the set has no exception
+ * left.
  */
 
 export type ComposerPickerKind = 'channels' | 'attach' | 'permission' | 'model' | 'effort';
@@ -163,6 +163,28 @@ export function composerPickerDismiss(): ComposerPickerStep {
  * HAPTICS are NOT lost, which is worth saying because it is the first guess.
  * `handlePickerPress` taps on open and every row taps on commit, so both ends
  * of the gesture are still felt.
+ *
+ * ## AND THE EFFORT DRAG, WHICH IS THE OTHER SURFACE THIS COST
+ *
+ * Clay, with a screenshot of the drag's readout over his field: "Why does it
+ * show the old shitty slider when I hold down effort?" DROVE-200 built effort
+ * as a slider; DROVE-229 gave a TAP the sheet and left the readout for a drag,
+ * and the responder raised it on touch-DOWN, so a hold showed him the surface
+ * the sheet had just replaced. It is deleted, so all four pickers now answer
+ * every gesture the same way and nothing on the composer is drawn outside a
+ * sheet.
+ *
+ * WHAT THAT COST: a flick that moved effort one notch without looking, which
+ * on an eyes-free app is worth something. It was deleted rather than narrowed
+ * to a real move because nothing announced it and a press, the only thing
+ * anyone tries, opens a sheet. A gesture reachable only by a move nobody is
+ * told about, on a control whose press does something else, is a trap rather
+ * than a fast path.
+ *
+ * WITH IT WENT VOICEOVER'S INCREMENT AND DECREMENT on the effort segment: it
+ * was an `adjustable` because a drag existed to be an alternative to. It is a
+ * button now, like the two beside it, and the levels are radio rows on the
+ * sheet with a checked state, which is a list rather than a value to nudge.
  */
 export type ComposerPickerSheet = 'list' | 'channels' | 'attach' | 'settings' | null;
 
