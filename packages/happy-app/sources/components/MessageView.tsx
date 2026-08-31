@@ -189,8 +189,8 @@ function UserTextBlock(props: {
 
   return (
     <View style={styles.userMessageContainer}>
-      {/* Long-press copies the whole message through our own menu rather than the
-          OS selection callout. Rewind remains in session actions. */}
+      {/* Hold raises the platform context menu at the finger. Rewind remains in
+          session actions. */}
       <LongPressCopyable style={styles.userCopyTarget} text={parsed.text}>
         <View style={[styles.userMessageBubble, styles.userMessageBubbleSolid, bubbleStyle]}>
           <MarkdownView externalCopyHandler markdown={parsed.text} onOptionPress={handleOptionPress} sessionId={props.sessionId} />
@@ -245,7 +245,7 @@ function AgentTextBlock(props: {
   return (
     <View style={styles.agentMessageContainer}>
       {copyText !== null ? (
-        <LongPressCopyable style={styles.agentCopyTarget} text={copyText}>
+        <LongPressCopyable fill style={styles.agentCopyTarget} text={copyText}>
           {body}
         </LongPressCopyable>
       ) : body}
