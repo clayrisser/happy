@@ -26,6 +26,7 @@ import { AvatarBrutalist } from '@/components/AvatarBrutalist';
 import { AvatarSkia } from '@/components/AvatarSkia';
 import { AvatarGradient } from '@/components/AvatarGradient';
 import { AVATAR_STYLES, normalizeAvatarStyle, type AvatarStyle } from '@/utils/avatarStyle';
+import { isRunningOnMac } from '@/utils/platform';
 
 const getUserMessageBubbleColorLabel = (color: UserMessageBubbleColor): string => {
     switch (color) {
@@ -300,10 +301,13 @@ export default function AppearanceSettingsScreen() {
 
             {/* Language Settings */}
             <ItemGroup title={t('settingsLanguage.title')} footer={t('settingsLanguage.description')}>
+                {/* The language name sits under the title rather than beside it:
+                    "Current Language" plus "Automatic (English)" on one row is
+                    wider than a 375pt phone and one of them lost letters. */}
                 <Item
-                    title={t('settingsLanguage.currentLanguage')}
+                    title={t('settingsLanguage.title')}
+                    subtitle={getLanguageDisplayText()}
                     icon={<Ionicons name="language-outline" size={29} color="#007AFF" />}
-                    detail={getLanguageDisplayText()}
                     onPress={() => router.push('/settings/language')}
                 />
             </ItemGroup>
@@ -322,6 +326,7 @@ export default function AppearanceSettingsScreen() {
                 />
                 <Item
                     title={t('settingsAppearance.userMessageBubbleColor')}
+                    titleLines={2}
                     subtitle={t('settingsAppearance.userMessageBubbleColorDescription')}
                     icon={<Ionicons name="chatbubble-ellipses-outline" size={29} color={displayBubblePalette.indicator} />}
                     rightElement={
@@ -358,6 +363,7 @@ export default function AppearanceSettingsScreen() {
             <ItemGroup title={t('settingsAppearance.avatars')} footer={t('settingsAppearance.avatarsDescription')}>
                 <Item
                     title={t('settingsAppearance.avatarStyle')}
+                    titleLines={2}
                     icon={<Ionicons name="person-circle-outline" size={29} color={theme.colors.status.connecting} />}
                     rightElement={
                         <AvatarStyleDropdownValue
@@ -468,7 +474,18 @@ export default function AppearanceSettingsScreen() {
                 )}
             </ItemGroup>
 
-            <ItemGroup title={t('settingsAppearance.display')} footer={t('settingsAppearance.displayDescription')}>
+            {/* What the two transcript switches do NOT control is written on the
+                group, because the transcript shows one-line shell rows and
+                "Ran 25 shell commands" cards with both of them off (DROVE-175).
+                Shell calls are drawn as one line whatever is set (ToolView), and
+                a run of the same tool always folds into one row (DROVE-84). Each
+                switch drives what is left: Compact folds the edit diffs and agent
+                cards too; Fold Finished Turns wraps a finished turn in one
+                "Worked 2m" row (useGroupedMessages). */}
+            <ItemGroup
+                title={t('settingsAppearance.display')}
+                footer={'Whatever is set here, a shell call is drawn as one line and a run of the same tool folds into one row like "Ran 25 shell commands". Those are Cattle Drover\'s transcript rules, not settings, and every row opens onto the full call.'}
+            >
                 {/* Same setting the home filter menu drives; two values, so a
                     tap flips between them like the theme row does. */}
                 <Item
@@ -491,18 +508,6 @@ export default function AppearanceSettingsScreen() {
                     }
                 />
                 <Item
-                    title="File Diffs Sidebar"
-                    subtitle="Show git changes next to the chat on desktop"
-                    icon={<Ionicons name="git-branch-outline" size={29} color="#5AC8FA" />}
-                    rightElement={
-                        <Switch
-                            value={fileDiffsSidebar}
-                            onValueChange={setFileDiffsSidebar}
-                        />
-                    }
-                    showChevron={false}
-                />
-                <Item
                     title={t('settingsFeatures.groupToolCalls')}
                     subtitle={t('settingsFeatures.groupToolCallsSubtitle')}
                     icon={<Ionicons name="layers-outline" size={29} color="#AF52DE" />}
@@ -514,6 +519,23 @@ export default function AppearanceSettingsScreen() {
                     }
                     showChevron={false}
                 />
+                {/* The sidebar only ever renders on the web and the Mac build
+                    (SessionView, newSessionSidebarLayout), so on a phone the switch
+                    changed a synced value and nothing else. */}
+                {(Platform.OS === 'web' || isRunningOnMac()) && (
+                    <Item
+                        title="File Diffs Sidebar"
+                        subtitle="Show git changes next to the chat"
+                        icon={<Ionicons name="git-branch-outline" size={29} color="#5AC8FA" />}
+                        rightElement={
+                            <Switch
+                                value={fileDiffsSidebar}
+                                onValueChange={setFileDiffsSidebar}
+                            />
+                        }
+                        showChevron={false}
+                    />
+                )}
                 <Item
                     title={t('settingsAppearance.showLineNumbersInToolViews')}
                     subtitle={t('settingsAppearance.showLineNumbersInToolViewsDescription')}

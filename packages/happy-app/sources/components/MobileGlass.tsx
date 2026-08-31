@@ -28,7 +28,10 @@ type MobileGlassSurfaceProps = ViewProps & {
 const STATIC_MATERIAL_BLUR_CAP = 44;
 
 /**
- * Performance-aware material surface. Interactive controls and explicit
+ * Performance-aware material surface. `nativeControls.ts` Rule 6 is the short
+ * version of which material to ask for and why; this is the implementation.
+ *
+ * Interactive controls and explicit
  * `nativeEffect` surfaces use Liquid Glass/material blur; `material="static"`
  * opts into a calm, non-refractive blur without the Liquid Glass highlight.
  * `material="frosted"` adds a denser tint and blur for writing surfaces where

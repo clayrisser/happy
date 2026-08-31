@@ -89,6 +89,21 @@ const INTERACTIVE_QUESTION_TOOL_NAMES = new Set([
     'request_user_input',
 ]);
 
+/**
+ * Tools whose card is a gate the user acts on: the todo list, the account
+ * login card, a plan waiting for approval. They never fold into a run
+ * (toolRunGroups) and never shrink to a one-line row under Compact Tool
+ * Calls (DROVE-175): a one-line "DroverAccountLogin" with the sign-in link
+ * out of reach is the card failing at the one moment it exists for.
+ */
+const GATE_TOOL_NAMES = new Set([
+    'TodoWrite',
+    'DroverTodo',
+    'DroverAccountLogin',
+    'ExitPlanMode',
+    'exit_plan_mode',
+]);
+
 export type ToolSummaryCategory = 'terminal' | 'edit' | 'read' | 'search' | 'web' | 'task' | 'other';
 
 /** Formats `mcp__linear__create_issue` as `MCP: Linear Create Issue`. */
@@ -108,8 +123,14 @@ export function shouldRenderToolCardHeader(toolName: string, platformOS: string)
 
 /**
  * Compact mode is deliberately name-agnostic so newly introduced provider
- * tools do not fall back to a half-screen raw JSON card. User attachments and
- * controls that require inline context stay expanded.
+ * tools do not fall back to a half-screen raw JSON card. User attachments,
+ * questions and gate cards stay expanded.
+ *
+ * This is only half of what decides a one-line row. ToolView also draws every
+ * terminal call and every tool marked minimal (reads, searches, MCP calls
+ * with no card) as one line whatever this returns, so on Cattle Drover the
+ * switch reaches the tools that HAVE a card: edit diffs, agent cards,
+ * SendMessage. The Appearance screen says so (DROVE-175).
  */
 export function shouldUseCompactToolRow(
     tool: Pick<ToolCall, 'name' | 'permission'>,
@@ -119,12 +140,22 @@ export function shouldUseCompactToolRow(
         return false;
     }
 
+    // A plan proposal is a gate only while it waits; once answered it is a
+    // record like any other call and may fold.
     const isPlanProposal = tool.name === 'ExitPlanMode' || tool.name === 'exit_plan_mode';
-    if (isPlanProposal && tool.permission?.status === 'pending') {
+    if (isPlanProposal) {
+        return tool.permission?.status !== 'pending';
+    }
+
+    if (isGateToolName(tool.name)) {
         return false;
     }
 
     return true;
+}
+
+export function isGateToolName(name: string): boolean {
+    return GATE_TOOL_NAMES.has(name);
 }
 
 export function isInteractiveQuestionToolName(name: string): boolean {

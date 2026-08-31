@@ -27,10 +27,10 @@ import { sessionTasksBadge } from '@/utils/sessionTasks';
 import { StatusDot } from './StatusDot';
 import {
     showsContextPercent,
+    statusRowFolds,
     statusRowMetrics,
     statusRowQuotaText,
     statusRowShrink,
-    statusRowFits,
     STATUS_ROW_MODEL_TRUNCATION,
 } from './statusRowLayout';
 import { useTickingNow } from './useTickingNow';
@@ -110,6 +110,11 @@ import { useTickingNow } from './useTickingNow';
  *     account were here; it is now asked of statusRowLayout's estimator with
  *     the row's real content, because the width it fires at depends on how
  *     long the tool, the model and the account happen to be.
+ *   - the MODEL goes whole when the name alone did not save the row, which is
+ *     a working session with a task list (DROVE-167) on a 393pt phone. The
+ *     estimator counts the tasks segment, so it says so; before it did, the
+ *     account and the model were being cut to `jam…` and `Opus…` around a
+ *     badge that held its width. Idle, the model is back.
  *
  * Renders nothing at all when there is nothing to say, so an empty session
  * does not gain a blank strip. Its own module so a test can mount it without
@@ -192,7 +197,6 @@ function ContextGaugeIcon(props: { percent: number }) {
 
 export type StatusRowConnection = {
     text: string;
-    color: string;
     dotColor: string;
     isPulsing?: boolean;
     cliStatus?: {
@@ -231,6 +235,16 @@ export type StatusRowProps = {
     nativeMenus?: boolean;
     /** Whether the model picker is the one currently open. */
     modelPickerOpen?: boolean;
+    /**
+     * Zen mode hides everything non-essential, and the account's NAME is one
+     * of those: the quota reads `23% week` instead of `jamrizzi 23%`, and the
+     * context percent stays printed, since the account is not taking its
+     * width. A flag rather than a second account value, because the account
+     * itself is still derived once, from `usageBarGroups`: the sheet still
+     * lists it and a switch still sends it as `from` (DROVE-129, DROVE-160).
+     * The name only stops being printed on the strip.
+     */
+    hideAccount?: boolean;
     /** Opens the session info screen; the DOT taps into it (DROVE-138). */
     onSessionInfoPress?: () => void;
     /**
@@ -315,6 +329,9 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
     // other surface already sends.
     const sessionId = p.sessionId;
     const currentAccount = p.usageBarGroups.find((group) => group.active)?.account ?? null;
+    // What the strip prints. In zen mode that is nothing, while the switch
+    // above still knows which account it is leaving.
+    const shownAccount = p.hideAccount ? null : currentAccount;
     const onSwitchAccount = React.useCallback((account: string) => {
         if (!sessionId) return;
         setOpenSheet(null);
@@ -338,26 +355,32 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
     // heading and the `from` a switch sends are one value (DROVE-129,
     // DROVE-160).
     const quotaText = statusRowQuotaText(
-        currentAccount,
+        shownAccount,
         p.weekPercent,
         p.weekPercent == null
             ? ''
             : t('agentInput.context.percentWeek', { percent: Math.round(p.weekPercent) }),
     );
 
-    // Whether the tool name fits, asked of the row's real content rather than
-    // taken from a width constant (DROVE-155, DROVE-138). The width it folds at
-    // depends on how long this tool, this model and this account happen to be,
-    // so a constant could only ever be right for one of them.
-    const showLabel = !main || statusRowFits({
-        live: main.tokens ? `${main.label} ${main.elapsed} ${main.tokens}` : `${main.label} ${main.elapsed}`,
+    // Which folds the row needs, asked of its real content rather than taken
+    // from a width constant (DROVE-155, DROVE-138). The width the tool name
+    // folds at depends on how long this tool, this model, this account and
+    // the task badge happen to be, so a constant could only ever be right for
+    // one of them. The model folds whole after the name, when the name alone
+    // was not enough (statusRowLayout says when, and why the model).
+    const liveNumbers = main ? (main.tokens ? `${main.elapsed} ${main.tokens}` : main.elapsed) : null;
+    const folds = statusRowFolds({
+        live: main ? `${main.label} ${liveNumbers}` : null,
+        liveWithoutName: liveNumbers,
         agentCount: sideCount,
         liveExpands: canExpand,
+        tasks: p.sessionId ? tasksBadge : null,
         model: p.modelName,
         quota: quotaText,
         quotaExpands: canOpenUsage,
         contextGauge: !!p.contextStatus,
     }, width);
+    const showLabel = !folds.toolName;
     if (summary && (main || sideCount > 0)) {
         segments.push(
             <Pressable
@@ -373,10 +396,14 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
                     flexDirection: 'row',
                     alignItems: 'center',
                     gap: 3,
-                    // The one segment that gives way, and only in its name:
-                    // a long tool name must not push the quota off the line.
-                    flexShrink: 1,
-                    maxWidth: '60%',
+                    // The last of the three that shrink, after the account and
+                    // the model: a long tool name must not push the quota off
+                    // the line, but the numbers beside it are what Clay is
+                    // watching (statusRowShrink). The cap is what keeps a
+                    // 30-character MCP name from squeezing the model and the
+                    // account before it has given way itself.
+                    flexShrink: statusRowShrink.live,
+                    maxWidth: '45%',
                     opacity: pressed && canExpand ? 0.6 : 1,
                 })}
             >
@@ -459,8 +486,10 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
     // The model, in full, off the button row where a name among six buttons was
     // being cut to `Opus 5...` (DROVE-138). One tap opens the model list, on
     // iOS as the native menu anchored here and everywhere else as the picker:
-    // never a menu that then lists the controls (DROVE-111).
-    if (p.modelName) {
+    // never a menu that then lists the controls (DROVE-111). Folded whole
+    // while a working row with a task list would not otherwise fit; back the
+    // moment the main thread is idle.
+    if (p.modelName && !folds.model) {
         const modelText = (
             <Text
                 numberOfLines={1}
@@ -514,7 +543,7 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
     // about one account and the sheet spells the window out. With no account
     // there is nothing to head it, so the window keeps its name.
     if (quotaText != null) {
-        const quotaBody = currentAccount ? (
+        const quotaBody = shownAccount ? (
             <>
                 {/* The account is the only thing in this segment allowed to
                     give way, and it gives way first of everything on the row:
@@ -530,7 +559,7 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
                         ...Typography.default(),
                     }}
                 >
-                    {currentAccount}
+                    {shownAccount}
                 </Text>
                 <Text style={{
                     fontSize: statusRowMetrics.fontSize,
@@ -560,14 +589,14 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
                     key="week"
                     onPress={() => setOpenSheet((open) => (open === 'usage' ? null : 'usage'))}
                     accessibilityRole="button"
-                    accessibilityLabel={currentAccount ? `Quota, ${quotaText}` : undefined}
+                    accessibilityLabel={shownAccount ? `Quota, ${quotaText}` : undefined}
                     accessibilityState={{ expanded: openSheet === 'usage' }}
                     hitSlop={segmentHitSlop}
                     style={({ pressed }) => ({
                         flexDirection: 'row',
                         alignItems: 'center',
                         gap: 3,
-                        flexShrink: currentAccount ? 1 : 0,
+                        flexShrink: shownAccount ? 1 : 0,
                         minWidth: 0,
                         opacity: pressed ? 0.6 : 1,
                     })}
@@ -594,7 +623,7 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
         // account is on the row (DROVE-138). Either way the ring fills with the
         // same number the text was printing, and the tap still opens the exact
         // figure, so it is the cheapest thing on a full row to lose.
-        const showPercent = showsContextPercent(currentAccount, showPreciseContext, main !== null);
+        const showPercent = showsContextPercent(shownAccount, showPreciseContext, main !== null);
         segments.push(
             <Pressable
                 key="context"

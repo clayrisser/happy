@@ -136,19 +136,14 @@ export type DroverUsageWindow = {
  * them. A row this cannot place is still passed through under its own kind.
  */
 export function droverAccountWindows(account: DroverUsageAccountLike | null | undefined): DroverUsageWindow[] {
-    return rows(account).map((row) => {
-        const scoped = !!(row.scope || row.family);
-        return {
-            id: scoped
-                ? droverFamilyWindowId(row)
-                : row.kind === 'session' ? 'five_hour'
-                    : row.kind === 'weekly_all' ? 'seven_day'
-                        : row.kind,
-            family: scoped ? droverFamilyLabel(row) : null,
-            utilization: row.percent,
-            resetsAt: row.resetsAt ?? null,
-        };
-    });
+    return rows(account).map((row) => ({
+        // The one spelling of a window's id (DROVE-131): the wrist's binding
+        // row and the strip's bars name a window with this same string.
+        id: droverWindowId(row),
+        family: row.scope || row.family ? droverFamilyLabel(row) : null,
+        utilization: row.percent,
+        resetsAt: row.resetsAt ?? null,
+    }));
 }
 
 export type DroverFamilyRow = {

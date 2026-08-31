@@ -31,7 +31,7 @@ import { Metadata } from '@/sync/storageTypes';
 import { isRunningOnMac } from '@/utils/platform';
 import { MobileGlassSurface } from './MobileGlass';
 import { GlassChromeButton, GlassChromeSurface } from './GlassChromeControl';
-import { AnimatedClickAwayBackdrop, AnimatedFade } from './AnimatedOverlay';
+import { AnimatedFade } from './AnimatedOverlay';
 import { BubblePressable } from './BubblePressable';
 import { resolveAgentInputPrimaryAction } from './agentInputPrimaryAction';
 import { resolveComposerPrimaryPress, type ComposerPrimaryGesture } from './composerPrimaryPress';
@@ -115,7 +115,6 @@ interface AgentInputProps {
     showAbortButton?: boolean;
     connectionStatus?: {
         text: string;
-        color: string;
         dotColor: string;
         isPulsing?: boolean;
         cliStatus?: {
@@ -2315,6 +2314,11 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         contextStatus={contextStatus}
                         weekPercent={weekPercent}
                         usageBarGroups={usageBarGroups}
+                        // Zen mode strips the account's name off the quota,
+                        // as it strips the model below; the groups still go
+                        // down whole, because the sheet and the switch behind
+                        // the quota are not what zen hides (DROVE-160).
+                        hideAccount={!!props.zenMode}
                         // Only the phone's composer sent its model down here
                         // (DROVE-138); the desktop row still spells it out
                         // beside the input, and two copies of one name says

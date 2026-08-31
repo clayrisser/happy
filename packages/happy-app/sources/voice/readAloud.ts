@@ -65,6 +65,28 @@ import { stripToSpeakableProse } from './speakable';
  * reply. The mic gate below is untouched, because the mic really does need
  * the audio route and a keyboard does not.
  *
+ * DROVE-177, an hour after DROVE-116 shipped. Clay: "why are you talking so
+ * fast when not behind". The ramp was applied to every sentence whose backlog
+ * was over the speed-up threshold, with no regard for whether anything was
+ * still arriving, while the jump next to it had that guard from the start. So
+ * a finished reply of forty-odd words, which is most replies, was read faster
+ * from its first sentence to somewhere near its last. Nobody heard it before
+ * because the engine clamped the product back into the speed slider's range
+ * and the ramp topped out at 1.15x; DROVE-116 lifted both, and the leak
+ * became the whole reply at the catch-up rate. Now the ramp and the cut share
+ * one question, `stillArriving()`: behind means there is newer PROSE the
+ * voice is falling further from, and only then does it read faster. A reply
+ * that has landed whole, a stream that has stopped, or a turn the agent has
+ * finished is read at exactly the normal rate, however long it is.
+ *
+ * The same ticket settled how a spoken title (DROVE-112) counts. Toward the
+ * backlog's LENGTH, yes: it takes air time like any sentence, and a title is
+ * a few words with a per-run cap, so it cannot inflate the measure for long.
+ * As an ARRIVAL, no: a title landing means the agent is working, not writing,
+ * and there is nothing in it to catch up to. Before this a run of tool calls
+ * kept the arrival window open on its own, so the ramp stayed up (and the cut
+ * stayed armed) through a whole tool run with no new prose in sight.
+ *
  * DROVE-114 turned the private cursor into a PLAYHEAD. The queue is no longer
  * a queue that forgets what it said: every sentence stays in `timeline` and
  * `cursor` is a position in it, so reading can be moved backwards as well as
@@ -174,9 +196,10 @@ export interface ReadAloudOptions {
     /** Clock, injectable for the tests. */
     now?: () => number;
     /**
-     * How many seconds of UNSPOKEN AUDIO may pile up before the voice starts
-     * reading FASTER. Read at every pump rather than once, so a slider in
-     * settings takes effect on the next sentence instead of the next launch.
+     * How many seconds of UNSPOKEN AUDIO may pile up, while newer prose is
+     * still arriving, before the voice starts reading FASTER. Read at every
+     * pump rather than once, so a slider in settings takes effect on the next
+     * sentence instead of the next launch.
      */
     maxBacklogSeconds?: () => number;
     /**
@@ -290,6 +313,28 @@ export const defaultArrivalWindowMs = 4000;
  */
 export const defaultMaxRateScale = 1.5;
 const defaultHoldMs = 1500;
+
+/**
+ * The catch-up multiplier for a backlog, as a pure function so the shape can
+ * be checked with the real numbers (DROVE-177).
+ *
+ * Exactly 1 at and below `speedUp`, then linear across the band to `maxScale`
+ * at `jump`, and `maxScale` beyond it; the tail is dropped there instead. The
+ * whole band between the two thresholds is spent reading faster, which is
+ * what Clay asked for: "instead of just jumping to the newest stuff, could
+ * you first start talking faster, and then only if you get too far behind
+ * you jump". Before DROVE-116 the ramp ended at twice `speedUp` while the
+ * cut fired at `speedUp` itself, so it had no band to run in at all.
+ *
+ * Whether the ramp APPLIES is the reader's decision, not this function's: it
+ * is only ever used while newer prose is still arriving (DROVE-177).
+ */
+export function catchUpScale(backlogSeconds: number, speedUp: number, jump: number, maxScale: number): number {
+    if (speedUp <= 0 || backlogSeconds <= speedUp) return 1;
+    const band = jump - speedUp;
+    const over = band > 0 ? Math.min(1, (backlogSeconds - speedUp) / band) : 1;
+    return 1 + over * (maxScale - 1);
+}
 
 interface QueuedSentence {
     text: string;
@@ -635,6 +680,9 @@ export class ReadAloudReader {
 
         const ordered = [...messages].sort((a, b) => a.createdAt - b.createdAt);
         let added = false;
+        // Only PROSE is an arrival. A title says the agent is working, not
+        // writing, and is no reason to speed up or cut (DROVE-177).
+        let proseAdded = false;
         for (const message of ordered) {
             // A message from the user opens the next turn (DROVE-108). It is
             // the one boundary that is visible from here: agent text arrives
@@ -674,7 +722,7 @@ export class ReadAloudReader {
             // A newer message means every older one is over: their tails are
             // spoken as they stand, and before this message's sentences.
             if (message.createdAt > this.latestCreatedAt) {
-                if (this.flushTails((id) => id !== message.id)) added = true;
+                if (this.flushTails((id) => id !== message.id)) added = proseAdded = true;
                 this.latestCreatedAt = message.createdAt;
             }
 
@@ -684,7 +732,7 @@ export class ReadAloudReader {
             if (complete.length > already) {
                 this.enqueue(complete.slice(already), this.turn, message.id, message.createdAt);
                 this.queuedChunks.set(message.id, complete.length);
-                added = true;
+                added = proseAdded = true;
             }
             if (pending !== null) {
                 this.pendingTails.set(message.id, { text: pending, turn: this.turn, createdAt: message.createdAt });
@@ -692,7 +740,7 @@ export class ReadAloudReader {
                 this.pendingTails.delete(message.id);
             }
         }
-        if (added) this.noteArrival();
+        if (proseAdded) this.noteArrival();
         this.armHold();
         if (added) this.pump();
     }
@@ -898,7 +946,15 @@ export class ReadAloudReader {
         return this.now() - this.previousArrivalAt <= this.arrivalWindowMs;
     }
 
-    /** Seconds of audio left to say, from word count and the speaking rate. */
+    /**
+     * Seconds of audio left to say, from word count and the speaking rate.
+     *
+     * A spoken title (DROVE-112) counts like any sentence: it takes the
+     * speaker's time, which is what this measures. It is read a little
+     * faster than prose, so the estimate is slightly high for it, by a
+     * second at most per title, and the titles-per-run cap keeps the sum
+     * small (DROVE-177).
+     */
     private backlogSeconds(): number {
         let words = 0;
         for (let i = this.cursor; i < this.timeline.length; i++) {
@@ -908,24 +964,11 @@ export class ReadAloudReader {
     }
 
     /**
-     * Read faster rather than cut (DROVE-108, corrected by DROVE-116).
-     *
-     * Flat 1 until the backlog passes `speedUp`, then linear to
-     * `maxRateScale()` at `jump`, which is where the tail is dropped instead.
-     * The whole band between the two thresholds is therefore spent reading
-     * faster, which is what Clay asked for: "instead of just jumping to the
-     * newest stuff, could you first start talking faster, and then only if you
-     * get too far behind you jump".
-     *
-     * Before DROVE-116 the ramp ended at twice `speedUp` while the cut fired
-     * at `speedUp` itself, so the ramp had no band to run in at all and the
-     * voice went straight to the jump every time.
+     * Read faster rather than cut (DROVE-108, corrected by DROVE-116). The
+     * shape is `catchUpScale`; this only supplies the live ceiling.
      */
     private catchUpRate(backlogSeconds: number, speedUp: number, jump: number): number {
-        if (speedUp <= 0 || backlogSeconds <= speedUp) return 1;
-        const band = jump - speedUp;
-        const over = band > 0 ? Math.min(1, (backlogSeconds - speedUp) / band) : 1;
-        return 1 + over * (this.maxRateScale() - 1);
+        return catchUpScale(backlogSeconds, speedUp, jump, this.maxRateScale());
     }
 
     private armHold(): void {
@@ -986,6 +1029,10 @@ export class ReadAloudReader {
         // it, firing before the ramp had any room to run.
         const jump = Math.max(speedUp, this.jumpBacklogSeconds());
         const backlog = this.backlogSeconds();
+        // One answer to "is the voice behind?" for both the cut and the ramp
+        // (DROVE-177). Behind means newer prose is still landing; a reply
+        // that has finished is read at the normal rate however long it is.
+        const arriving = this.stillArriving();
 
         // The cut (DROVE-108, moved out to its own threshold by DROVE-116).
         // Three things have to hold at once: there is something newer to skip
@@ -996,7 +1043,7 @@ export class ReadAloudReader {
         // thrown away and the voice simply reads faster.
         if (this.timeline.length - this.cursor > 1
             && backlog > jump
-            && this.stillArriving()) {
+            && arriving) {
             this.cursor = this.timeline.length - 1;
             this.markerDue = true;
         }
@@ -1025,7 +1072,7 @@ export class ReadAloudReader {
             return;
         }
         this.cursor += 1;
-        this.speakNow(next.text, next.turn, this.catchUpRate(backlog, speedUp, jump), next);
+        this.speakNow(next.text, next.turn, arriving ? this.catchUpRate(backlog, speedUp, jump) : 1, next);
     }
 
     private speakNow(text: string, turn: number, rateScale: number, at: QueuedSentence | null): void {

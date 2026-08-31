@@ -301,8 +301,12 @@ export const SettingsSchema = z.object({
     // newer fork/duplicate RPC on older daemons.
     expResumeSession: z.boolean().describe('Enable session fork and duplicate actions'),
     fileDiffsSidebar: z.boolean().describe('Show the file diffs sidebar next to the chat on desktop'),
-    groupToolCalls: z.boolean().describe('Collapse consecutive tool calls into grouped containers in chat'),
-    compactToolCalls: z.boolean().describe('Render non-interactive tool calls as compact one-line rows'),
+    // Runs of one tool fold into one row whatever this says (DROVE-84); on
+    // it also wraps each finished turn in one "Worked 2m" row.
+    groupToolCalls: z.boolean().describe('Fold each finished turn into one expandable work row in chat'),
+    // Shell rows and minimal tools are one line whatever this says; on it
+    // folds the tools that have a card (edit diffs, agent cards) as well.
+    compactToolCalls: z.boolean().describe('Render tool calls that have a card as compact one-line rows too'),
     reviewPromptAnswered: z.boolean().describe('Whether the review prompt has been answered'),
     reviewPromptLikedApp: z.boolean().nullish().describe('Whether user liked the app when asked'),
     voiceAssistantLanguage: z.string().nullable().describe('Preferred language for voice assistant (null for auto-detect)'),
