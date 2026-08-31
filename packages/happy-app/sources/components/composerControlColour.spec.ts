@@ -16,6 +16,7 @@ import {
     effortColour,
     effortPosition,
     micColour,
+    pendingOrSettled,
     permissionModeColour,
     primaryActionColour,
 } from './composerControlColour';
@@ -57,6 +58,7 @@ function everyGlyphColour(dark: boolean): Array<[string, string]> {
     const entries: Array<[string, string]> = [
         ['neutral', palette.neutral],
         ['accent', palette.accent],
+        ['pending', palette.pending],
         ['warning', palette.warning],
         ['shield', palette.shield],
         ['eye', palette.eye],
@@ -261,5 +263,65 @@ describe('the mic and the in-field primary', () => {
     it('turns the primary the accent only once there is something to send', () => {
         expect(primaryActionColour(palette, true)).toBe(palette.accent);
         expect(primaryActionColour(palette, false)).toBe(palette.neutral);
+    });
+});
+
+
+/**
+ * The pending colour (DROVE-217).
+ *
+ * Clay asked for yellow. The two tests below are why it is not yellow: the
+ * amber `warning` is already the open padlock and the top of the effort dial,
+ * and the reading mark is a gold on both themes, so on the LIGHT theme there is
+ * no gold left that clears the glass without landing on the reading mark. The
+ * accent is what the vocabulary already spends on "the app doing something",
+ * which is exactly what a request in flight is, so pending costs no new colour
+ * at all — the test DROVE-206 set for a change to this file.
+ */
+describe('a pick the pane has not confirmed yet', () => {
+    it('is the accent on both themes, deliberately the same colour and the same meaning', () => {
+        expect(COMPOSER_CONTROL_PALETTE.dark.pending).toBe(COMPOSER_CONTROL_PALETTE.dark.accent);
+        expect(COMPOSER_CONTROL_PALETTE.light.pending).toBe(COMPOSER_CONTROL_PALETTE.light.accent);
+    });
+
+    it('overrides whatever the control is set to, and hands it straight back when the pick lands', () => {
+        const palette = COMPOSER_CONTROL_PALETTE.dark;
+        // The padlock at yolo, the dial at its ceiling and the model's name:
+        // three different settled colours, one pending colour.
+        for (const settled of [palette.warning, palette.shield, palette.eye, palette.neutral, effortColour(palette, 5, 6)]) {
+            expect(pendingOrSettled(palette, true, settled)).toBe(palette.pending);
+            expect(pendingOrSettled(palette, false, settled)).toBe(settled);
+        }
+    });
+
+    it('never has to be the only carrier: the glyph under it still has its own shape', () => {
+        // DROVE-141's rule, restated for the state DROVE-217 adds. The padlock
+        // keeps its silhouette, the needle keeps its angle and the model keeps
+        // its name while the colour is saying "not yet".
+        const shapes = ['yolo', 'safe-yolo', 'read-only', 'default'].map((mode) => permissionModeGlyph(null, mode));
+        expect(new Set(shapes).size).toBe(shapes.length);
+        expect(effortGaugeAngle(0, 6)).not.toBe(effortGaugeAngle(5, 6));
+    });
+});
+
+describe('why pending is not the yellow Clay asked for, measured', () => {
+    it('shows the amber already spoken for: it is the open padlock and the top of the dial', () => {
+        for (const dark of [true, false]) {
+            const palette = composerControlPalette(dark);
+            expect(permissionModeColour(palette, 'yolo')).toBe(palette.warning);
+            expect(effortColour(palette, 5, 6)).toBe(palette.warning);
+        }
+    });
+
+    it('shows the light theme has no gold left: every one that clears the glass lands on the reading mark', () => {
+        // A sweep of the golds a light glyph could plausibly be. The floor is
+        // 3:1 over the glass and the vocabulary's own separation is DISTINCT;
+        // no candidate clears both, which is the whole argument.
+        const golds = ['#8A6A00', '#7A5C00', '#9A7B00', '#6B5200', '#A38200', '#8F6B1A', '#CC9900', '#B8860B'];
+        for (const gold of golds) {
+            const legible = worstContrast(gold, composerGlyphLayers(false)) >= CHROME_CONTRAST_FLOOR;
+            const distinct = colorDistance(gold, reserved.light.reading) >= DISTINCT;
+            expect(legible && distinct, `${gold} clears the glass AND the reading mark`).toBe(false);
+        }
     });
 });

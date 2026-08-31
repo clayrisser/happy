@@ -77,6 +77,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import type { ModelMode, PermissionMode } from '@/components/PermissionModeSelector';
 import { resolveAgentDefaultConfig } from '@/sync/agentDefaults';
+import { useAgentModePending } from '@/sync/useAgentModePending';
 import { performAgentGoalAction } from './agentGoalActionHandler';
 import { MOBILE_GLASS_CONTROL_SIZE, MOBILE_GLASS_HEADER_HEIGHT } from '@/components/navigation/headerMetrics';
 import {
@@ -844,8 +845,22 @@ export function SessionViewLoaded({
         )
     ), [flavor, session.metadata, session.permissionMode, panePermissionKey]);
 
+    /**
+     * A pick this phone made that the pane has not confirmed yet (DROVE-217).
+     *
+     * It changes TWO things below, and they are the same thing said twice: the
+     * control takes the pending colour, and — because the pick is optimistic —
+     * the app's own REQUEST outranks the pane for as long as the wait lasts.
+     * Outside a wait the order is the DROVE-45/DROVE-36 one, pane first, so a
+     * `/model` or a shift+tab typed at the keyboard still wins and still
+     * reaches the phone. Nothing here is a new source of truth; it is a
+     * question about which of two existing ones is fresher.
+     */
+    const pendingModes = useAgentModePending(session);
+
     const permissionMode = React.useMemo<PermissionMode | null>(() => (
         resolveCurrentOption(availableModes, [
+            ...(pendingModes.permissionMode ? [session.permissionMode] : []),
             panePermissionKey,
             session.permissionMode,
             ...(isRig ? [
@@ -857,16 +872,17 @@ export function SessionViewLoaded({
                 session.metadata?.currentOperatingModeCode,
             ]),
         ])
-    ), [availableModes, panePermissionKey, session.permissionMode, effectiveAgentDefaults.permissionMode, session.metadata?.currentOperatingModeCode, session.metadata?.permissionMode, session.metadata?.session?.permissionMode, isRig]);
+    ), [availableModes, panePermissionKey, session.permissionMode, effectiveAgentDefaults.permissionMode, session.metadata?.currentOperatingModeCode, session.metadata?.permissionMode, session.metadata?.session?.permissionMode, isRig, pendingModes.permissionMode]);
 
     const modelMode = React.useMemo<ModelMode | null>(() => (
         resolveCurrentOption(availableModels, [
+            ...(pendingModes.modelMode ? [session.modelMode] : []),
             paneModelKey,
             session.modelMode,
             isRig ? getRigCurrentModelOptionKey(session.metadata) : effectiveAgentDefaults.modelMode,
             isRig ? undefined : session.metadata?.currentModelCode,
         ])
-    ), [availableModels, paneModelKey, session.modelMode, effectiveAgentDefaults.modelMode, session.metadata, isRig]);
+    ), [availableModels, paneModelKey, session.modelMode, effectiveAgentDefaults.modelMode, session.metadata, isRig, pendingModes.modelMode]);
 
     // Effort level state
     const modelKey = modelMode?.key ?? 'default';
@@ -890,11 +906,12 @@ export function SessionViewLoaded({
     const paneEffortKey = session.metadata?.hasPane ? session.metadata?.paneEffort ?? null : null;
     const effortLevel = React.useMemo<EffortLevel | null>(() => (
         resolveCurrentOption(availableEffortLevels, [
+            ...(pendingModes.effortLevel ? [session.effortLevel] : []),
             paneEffortKey,
             session.effortLevel,
             isRig ? getRigReasoningSelection(session.metadata, modelKey) : effectiveAgentDefaults.effortLevel,
         ])
-    ), [availableEffortLevels, paneEffortKey, session.effortLevel, effectiveAgentDefaults.effortLevel, session.metadata, modelKey, isRig]);
+    ), [availableEffortLevels, paneEffortKey, session.effortLevel, effectiveAgentDefaults.effortLevel, session.metadata, modelKey, isRig, pendingModes.effortLevel]);
 
     const sessionStatus = useSessionStatus(session);
     const sessionUsage = useSessionUsage(sessionId);
@@ -1244,6 +1261,7 @@ export function SessionViewLoaded({
                 availableEffortLevels={pickerEffortLevels}
                 onEffortLevelChange={isRigReasoningSelectionEnabled(session.metadata) ? updateEffortLevel : undefined}
                 onEffortKeyChange={isRigReasoningSelectionEnabled(session.metadata) ? updateEffortKey : undefined}
+                pendingModes={pendingModes}
                 metadata={session.metadata}
                 connectionStatus={connectionStatus}
                 blockSend={isRig && session.thinking && session.metadata?.capabilities?.steering !== true}

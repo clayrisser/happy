@@ -59,6 +59,7 @@ import type { MicButtonState } from '@/voice/micButton';
 import type { DictationCaptureState } from '@/voice/dictationCapture';
 import { DroverChannelsSheet } from './DroverChannelsSheet';
 import { buildSessionPillLabel } from './sessionPillLabel';
+import type { AgentModePendingFlags } from '@/sync/useAgentModePending';
 import { permissionModeGlyph } from './sessionControlGlyphs';
 import { ComposerSessionControls, type ComposerSessionPicker } from './ComposerSessionControls';
 import { useEffortSlider } from './EffortSliderPopover';
@@ -125,6 +126,12 @@ interface AgentInputProps {
     effortLevel?: EffortLevel | null;
     availableEffortLevels?: EffortLevel[];
     onEffortLevelChange?: (level: EffortLevel) => void;
+    /**
+     * Which of the three picks the terminal has not confirmed yet (DROVE-217).
+     * Derived in SessionView from the request/observed pair DROVE-199 already
+     * tracks; drawn by ComposerSessionControls.
+     */
+    pendingModes?: AgentModePendingFlags | null;
     /**
      * The effort slider's write (DROVE-200). A wire key, or `null` for `auto`,
      * which is a mode rather than a level and so has no key: paneModelSync
@@ -2428,6 +2435,11 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                     || openPicker === 'model'
                                     ? openPicker
                                     : null}
+                                pending={props.pendingModes ? {
+                                    permission: props.pendingModes.permissionMode,
+                                    effort: props.pendingModes.effortLevel,
+                                    model: props.pendingModes.modelMode,
+                                } : null}
                             />
                         )}
 

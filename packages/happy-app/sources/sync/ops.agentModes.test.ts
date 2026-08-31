@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { getAgentModeRequest, resetAgentModeRequests } from './agentModeRequests';
 
 const { emitWithAck, updateSessionAgentModes, sessions } = vi.hoisted(() => ({
     emitWithAck: vi.fn(),
@@ -61,6 +62,7 @@ describe('sessionSetAgentModes when the pane has moved under the app', () => {
         emitWithAck.mockReset();
         emitWithAck.mockResolvedValue({ result: 'success', version: 2 });
         updateSessionAgentModes.mockReset();
+        resetAgentModeRequests();
     });
 
     it('sends a pick that equals the stored request but not the pane', async () => {
@@ -145,6 +147,29 @@ describe('sessionSetAgentModes when the pane has moved under the app', () => {
         sessionSetAgentModes('s1', { permissionMode: 'yolo' });
 
         expect(updateSessionAgentModes).not.toHaveBeenCalled();
+    });
+
+    it('writes down what was asked for, and what the pane held when it was asked (DROVE-217)', async () => {
+        paneSession({ effortLevel: 'high', paneEffort: 'high' });
+        const { sessionSetAgentModes } = await import('./ops');
+
+        sessionSetAgentModes('s1', { effortLevel: 'max' });
+
+        // This is what makes the composer show `max` at once and draw it as
+        // unconfirmed: the ask, and the value it has to beat.
+        const request = getAgentModeRequest('s1', 'effortLevel');
+        expect(request?.value).toBe('max');
+        expect(request?.observedWhenAsked).toBe('high');
+    });
+
+    it('starts no wait for a tap that sends nothing', async () => {
+        paneSession({ effortLevel: 'high', paneEffort: 'high' });
+        const { sessionSetAgentModes } = await import('./ops');
+
+        sessionSetAgentModes('s1', { effortLevel: 'high' });
+
+        expect(updateSessionAgentModes).not.toHaveBeenCalled();
+        expect(getAgentModeRequest('s1', 'effortLevel')).toBeUndefined();
     });
 
     it('leaves a session with no pane alone', async () => {
