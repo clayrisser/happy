@@ -12,6 +12,7 @@ import { knownTools } from '@/components/tools/knownTools';
 import { Metadata } from '@/sync/storageTypes';
 import { useRouter } from 'expo-router';
 import { PermissionFooter } from './PermissionFooter';
+import { toolOwnsItsAnswer } from './toolOwnsItsAnswer';
 import { parseToolUseError } from '@/utils/toolErrorParser';
 import {
     formatMCPTitle,
@@ -194,8 +195,14 @@ export const ToolView = React.memo<ToolViewProps>((props) => {
     const activityLabel = getToolActivityLabel(tool);
     const isInlineCodexPatch = Platform.OS === 'web' && tool.name === 'CodexPatch';
     const renderCardHeader = isCompactActivityTool || shouldRenderToolCardHeader(tool.name, Platform.OS);
+    // A card that answers for itself gets no permission footer (DROVE-238).
+    // This used to name AskUserQuestion alone, so the drover login card drew
+    // its link, its code field and its Send code button and then Yes / Yes,
+    // don't ask again / No underneath — two sets of buttons for one question,
+    // and the generic Yes sends an approval with no code in it. See
+    // toolOwnsItsAnswer.ts for the list and why it is a list.
     const renderPermissionFooter = () => (
-        tool.permission && sessionId && tool.name !== 'AskUserQuestion'
+        tool.permission && sessionId && !toolOwnsItsAnswer(tool.name)
             ? <PermissionFooter permission={tool.permission} sessionId={sessionId} toolName={tool.name} toolInput={tool.input} metadata={props.metadata} />
             : null
     );
@@ -320,7 +327,7 @@ export const ToolView = React.memo<ToolViewProps>((props) => {
             })()}
 
             {/* Permission footer - always renders when permission exists to maintain consistent height */}
-            {/* AskUserQuestion has its own Submit button UI - no permission footer needed */}
+            {/* Except for the cards that carry their own answer UI - toolOwnsItsAnswer */}
             {!isInlineCodexPatch ? renderPermissionFooter() : null}
         </View>
     );

@@ -188,6 +188,59 @@ export function accountConfigFile(a: DroverAccount): string {
 }
 
 /**
+ * WHAT `claude auth status` LAST SAID, for the accounts it was asked about.
+ *
+ * DROVE-238. `isLoggedIn` below reads a FILE, and the file holds an address,
+ * not a token — the two are separate writes and on macOS the second one goes
+ * to the Keychain. So a config dir can name `promanagerdevteam@gmail.com` and
+ * hold nothing that can run, which is the state Clay's four phone-added
+ * accounts were in: "it actually showed they added ... it wasn't ACTUALLY
+ * authenticated."
+ *
+ * Asking Claude Code costs a process, and every reader here is synchronous, so
+ * the probe lives in credential.ts, runs where there is already an await, and
+ * leaves its answer here. Two rules keep a record from doing harm of its own:
+ *
+ *   ONLY A "NO" IS KEPT. A yes deletes the entry, so the common case carries
+ *   nothing and an account is never demoted by a probe that did not run.
+ *
+ *   A "NO" EXPIRES. Ten minutes. If Clay fixes a login at the terminal — which
+ *   is exactly what he had to do — the record cannot outlive it by long, and
+ *   the next probe clears it outright.
+ */
+const credentialDenied = new Map<string, number>()
+
+/** How long a "this cannot run" is believed without being re-asked. */
+const credentialDeniedTtlMs = 10 * 60_000
+
+/** The key a probe is recorded under: the login's location, not its name. */
+function credentialKey(a: DroverAccount): string {
+    return a.ambient ? 'ambient' : a.configDir
+}
+
+/** Record what a probe found. Called by credential.ts, nowhere else. */
+export function noteCredentialProbe(a: DroverAccount, ok: boolean, at = Date.now()): void {
+    if (ok) credentialDenied.delete(credentialKey(a))
+    else credentialDenied.set(credentialKey(a), at)
+}
+
+/** Did a probe recently say this account has no usable credential? */
+export function credentialDeniedRecently(a: DroverAccount, now = Date.now()): boolean {
+    const at = credentialDenied.get(credentialKey(a))
+    if (at === undefined) return false
+    if (now - at >= credentialDeniedTtlMs) {
+        credentialDenied.delete(credentialKey(a))
+        return false
+    }
+    return true
+}
+
+/** Tests only: forget every probe. */
+export function forgetCredentialProbes(): void {
+    credentialDenied.clear()
+}
+
+/**
  * Has this account ever been logged in?
  *
  * Checked by PRESENCE, never by value: `oauthAccount` is written by Claude
@@ -200,8 +253,14 @@ export function accountConfigFile(a: DroverAccount): string {
  * which a wrapped session cannot answer — so from the outside the flip looks
  * like it silently failed. Measured on Clay's machine: BOTH registry accounts
  * were in this state, which is why every flip appeared to do nothing useful.
+ *
+ * AND THE FILE CAN LIE (DROVE-238). Presence of `oauthAccount` says a login
+ * was once written here; it does not say the secret behind it still exists.
+ * When a probe has actually asked Claude Code and been told no, that answer
+ * wins over the file — otherwise this is the same read it always was.
  */
 export function isLoggedIn(a: DroverAccount): boolean {
+    if (credentialDeniedRecently(a)) return false
     try {
         if (existsSync(join(a.configDir, '.credentials.json'))) return true
         const cfg = accountConfigFile(a)

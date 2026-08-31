@@ -40,6 +40,7 @@ import { FeedItem } from "./feedTypes";
 import { getRigActivityIndicators, getRigGitSummary, getRigIdentity, isRigMetadata } from './rig';
 import { indexSessionsById } from './sessionIdentity';
 import { isSessionArchived } from './sessionArchive';
+import { isDroverBridgeSession } from './droverBridgeSession';
 import { t } from '@/text';
 import type { Project } from './projectTypes';
 import { getSessionProjectId, isHappyAgentSession } from './projectTypes';
@@ -386,6 +387,15 @@ function buildSessionListViewData(
         // Side chats are hidden children of another session — they render only
         // inside the parent's sidebar panel, never in the top-level list.
         if (session.metadata?.isSideChat) {
+            return;
+        }
+        // The Cattle Drover bridge is a mailbox for gate cards, not a
+        // conversation (DROVE-238). It is never active, so without this it
+        // lands in the archive tail as "Cattle Drover — pending…" and opening
+        // it says "This session is inactive." Clay was sent into that row from
+        // the Accounts screen to type his login code. The cards it holds are
+        // read elsewhere, straight off `sessions`; only the row goes.
+        if (isDroverBridgeSession(session)) {
             return;
         }
         // The archive is a flat chronological tail, not part of any project.

@@ -32,6 +32,7 @@ import {
 } from './droverWristRelay';
 import { demoLog, isDroverDemoId } from './droverDemo';
 import { isSessionArchived } from './sessionArchive';
+import { isDroverBridgeSession } from './droverBridgeSession';
 import { liveStatusSince, liveStatusWatchLine } from '@/utils/liveStatus';
 import { sessionDisplayTitle } from '@/utils/sessionTitle';
 import { deriveSessionTasks } from '@/utils/sessionTasks';
@@ -91,20 +92,6 @@ export { collectGates };
  */
 const HEARTBEAT_MS = 60_000;
 
-/**
- * Live sessions the wrist may flip.
- *
- * The drover bridge's own session is excluded: it holds no Claude
- * conversation, so flipping it means nothing, and it would sit at the top of
- * the wrist list being the most tempting thing to tap.
- *
- * A session's id is what the wrist holds onto, and it survives a flip: the CLI
- * keeps the Happy session when it moves onto another account, the title comes
- * off the working directory rather than the account, and the watch's list is
- * keyed on the id. So a flip moves the account line on a row that stays put,
- * which is what makes flipping from the wrist and then watching the same row
- * possible at all.
- */
 /**
  * The accounts the wrist can flip ONTO, most headroom first (DROVE-28's watch
  * half).
@@ -211,6 +198,20 @@ export function collectAccountRows(
     });
 }
 
+/**
+ * Live sessions the wrist may flip.
+ *
+ * The drover bridge's own session is excluded: it holds no Claude
+ * conversation, so flipping it means nothing, and it would sit at the top of
+ * the wrist list being the most tempting thing to tap.
+ *
+ * A session's id is what the wrist holds onto, and it survives a flip: the CLI
+ * keeps the Happy session when it moves onto another account, the title comes
+ * off the working directory rather than the account, and the watch's list is
+ * keyed on the id. So a flip moves the account line on a row that stays put,
+ * which is what makes flipping from the wrist and then watching the same row
+ * possible at all.
+ */
 export function collectSessions(): DroverSession[] {
     const sessions = storage.getState().sessions ?? {};
     const out: DroverSession[] = [];
@@ -218,7 +219,11 @@ export function collectSessions(): DroverSession[] {
     for (const [sessionId, session] of Object.entries(sessions)) {
         const metadata = session?.metadata;
         if (!metadata) continue;
-        if (metadata.summary?.text?.startsWith('Cattle Drover —')) continue;
+        // The bridge is a mailbox, not a session (DROVE-238). This used to
+        // match the summary string here and nowhere else, which is how the
+        // phone's own list went on showing the row the wrist had already
+        // learned to skip. One reader now, and it reads the CLI's flag first.
+        if (isDroverBridgeSession(session)) continue;
         // Dead work is not wrist work. The same rule the phone's own list
         // uses, called rather than restated, because a second copy is how the
         // wrist ended up carrying every retired and test session `drover

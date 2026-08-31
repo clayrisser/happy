@@ -313,6 +313,17 @@ export const MetadataSchema = z.object({
      */
     isSideChat: z.boolean().optional(),
     /**
+     * This session IS the Cattle Drover bridge, not a conversation (DROVE-238).
+     *
+     * happy-cli keeps one Happy session per machine for gate cards to be
+     * mirrored into. It has no transcript, never sends a keepalive and answers
+     * no message, so it rendered as a permanently inactive row titled "Cattle
+     * Drover — pending…" among Clay's real sessions, and the Accounts screen
+     * sent him into it to type a login code. Marked at the source and filtered
+     * out of the list here; the gates it holds are read as they always were.
+     */
+    droverBridge: z.boolean().optional(),
+    /**
      * Per-session permission / model / effort picks made in any client.
      * Synced through session metadata so every device shows the same
      * selection (#1492). Explicit null means "reset to default"; absent

@@ -333,10 +333,48 @@ describe('pendingAccountLogins', () => {
         });
         expect(found).toEqual([{
             sessionId: 'bridgeA',
+            requestId: 'r1',
+            args: { url: 'https://claude.com/cai/oauth/authorize?x=1' },
             machineId: 'mac-1',
             url: 'https://claude.com/cai/oauth/authorize?x=1',
             createdAt: null,
         }]);
+    });
+
+    it('carries the request id and the raw arguments, so Accounts can answer in place (DROVE-238)', () => {
+        // Clay: "Why did it make me enter the code in a question prompt instead
+        // of in the same accounts page where we clicked the link." It did that
+        // because this walked Object.values and threw the key away, so the
+        // screen knew a login was waiting and had no address to reply to — all
+        // it could offer was a push into the session holding the card. The id
+        // and the arguments are what let the code box live on the row.
+        const found = pendingAccountLogins({
+            bridge: {
+                metadata: { machineId: 'mac-1' },
+                agentState: {
+                    requests: {
+                        'req-7': {
+                            tool: 'DroverAccountLogin',
+                            arguments: {
+                                url: 'https://claude.com/cai/oauth/authorize?x=1',
+                                header: 'Log in to Claude for ~/.claude-accounts/account-2',
+                                reason: 'Open this in a browser, sign in, then send back the code it shows.',
+                                cancelLabel: 'Cancel the login',
+                            },
+                        },
+                    },
+                },
+            },
+        });
+        expect(found[0].requestId).toBe('req-7');
+        // Whole, not unpicked: DroverAccountLoginBody reads the heading, the
+        // reason and the cancel label itself.
+        expect(found[0].args).toEqual({
+            url: 'https://claude.com/cai/oauth/authorize?x=1',
+            header: 'Log in to Claude for ~/.claude-accounts/account-2',
+            reason: 'Open this in a browser, sign in, then send back the code it shows.',
+            cancelLabel: 'Cancel the login',
+        });
     });
 
     it('keeps a card whose url has not arrived yet, with url null', () => {
