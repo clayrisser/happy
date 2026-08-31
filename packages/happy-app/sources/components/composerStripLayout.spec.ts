@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { micOutcome } from '@/voice/micButton';
 import {
     MOBILE_COMPOSER_BASE_HEIGHT,
+    MOBILE_COMPOSER_BUBBLE_BASE_HEIGHT,
     MOBILE_COMPOSER_METRICS,
     resolveMobileComposerControlRowGeometry,
     resolveMobileComposerHeight,
@@ -62,18 +63,18 @@ describe('the layout does not move when a recording starts', () => {
     });
 
     it('never lets the banner into the composer that the input and buttons size', () => {
-        // The block is the field plus its furniture and nothing else. If the
+        // The block is the bubble plus its furniture and nothing else. If the
         // banner is ever put back above the text field, this is the number
-        // that grows. DROVE-196 rewrote the decomposition, so it is restated
-        // here rather than carried over: bubble, gap, control row, and the
-        // row's clearance over this strip.
+        // that grows. DROVE-214 put the `+` and send on a row inside the
+        // bubble, so the bubble is 90 rather than 44 and the block is 148; the
+        // decomposition around it did not change.
         expect(composerBlockHeight).toBe(
-            MOBILE_COMPOSER_METRICS.inputMinHeight
+            MOBILE_COMPOSER_BUBBLE_BASE_HEIGHT
             + MOBILE_COMPOSER_METRICS.controlGap
             + MOBILE_COMPOSER_METRICS.actionRowHeight
             + MOBILE_COMPOSER_METRICS.controlsBottomGap,
         );
-        expect(composerBlockHeight).toBe(102);
+        expect(composerBlockHeight).toBe(148);
     });
 
     it('opens the strip only when a silent session has a recording to show', () => {
@@ -121,11 +122,10 @@ describe('where the recording banner lives', () => {
         expect(COMPOSER_STRIP_HEIGHT).toBe(20);
         expect(resolveComposerStripHeight(true, true)).toBe(resolveComposerStripHeight(false, true));
 
-        // And the bar is now the bubble's own two rims rather than the `+`'s
-        // leading edge at one end and the bubble's rim at the other, because
-        // the `+` is inside the field. Same two columns, one fewer thing they
-        // depend on.
-        expect(MOBILE_COMPOSER_BASE_HEIGHT).toBe(102);
+        // And the bar is the bubble's own two rims, whatever is inside it.
+        // DROVE-214 made the bubble two rows and 46pt taller; the strip's box
+        // is unchanged, which is the guarantee this test exists for.
+        expect(MOBILE_COMPOSER_BASE_HEIGHT).toBe(148);
     });
 
     it('leaves the bar tall enough to hold the dot, clock, level and glyph', () => {

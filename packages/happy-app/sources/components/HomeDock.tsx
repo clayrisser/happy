@@ -306,6 +306,14 @@ const styles = StyleSheet.create((theme) => ({
     },
     sendButton: {
         ...MOBILE_PRIMARY_ACTION_GEOMETRY,
+        // HOME'S OWN SPACING, moved here from the shared disc (DROVE-214).
+        // The disc used to carry `marginLeft` so the chat's text would stop
+        // short of it inside the field; the chat's send button is on a row of
+        // its own now and the margin went with the arrangement. Home still
+        // wants air between its send and whatever precedes it, so it keeps the
+        // number rather than inheriting it, and the collapsed dock's field and
+        // the focused row both read the same 6.
+        marginLeft: MOBILE_COMPOSER_METRICS.controlGap,
         backgroundColor: theme.colors.surfaceHighest,
     },
     sendButtonActive: {

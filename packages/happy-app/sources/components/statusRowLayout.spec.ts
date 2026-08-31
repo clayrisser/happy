@@ -306,16 +306,15 @@ describe('the estimate itself', () => {
     });
 
     it('takes the row\'s inset off the composer\'s metrics, the same expression the row draws with', () => {
-        // The composer's glyph column, which is where the `+`'s ink starts.
-        // DROVE-206 moved the `+` inside the field and this still indents to
-        // it, because it reads `textInset` rather than rebuilding the number
-        // from a button size the `+` no longer has.
+        // The composer's text column, and it still lands on 19 after DROVE-214
+        // rebuilt the bubble as two rows. It is now the gutter plus the
+        // bubble's own padding, so the strip lines up with where the caret
+        // actually starts rather than with a glyph offset that no longer
+        // exists.
         expect(statusRowMetrics.paddingHorizontal).toBe(MOBILE_COMPOSER_LAYOUT.textInset);
         expect(statusRowMetrics.paddingHorizontal).toBe(19);
         expect(MOBILE_COMPOSER_LAYOUT.textInset)
-            .toBe(MOBILE_COMPOSER_METRICS.shellInset
-                + MOBILE_COMPOSER_METRICS.primaryActionInset
-                + MOBILE_COMPOSER_LAYOUT.inFieldAddGlyphOffset);
+            .toBe(MOBILE_COMPOSER_METRICS.shellInset + MOBILE_COMPOSER_METRICS.bubbleInset);
         expect(statusRowUsableWidth(393)).toBe(355);
     });
 });

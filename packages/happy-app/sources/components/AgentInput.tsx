@@ -50,6 +50,12 @@ import {
     resolveMobileComposerControlRowGeometry,
     resolveMobileComposerLineGeometry,
 } from './agentInputLayout';
+import {
+    COMPOSER_BUBBLE_ACTION_ROW_GEOMETRY,
+    COMPOSER_BUBBLE_GEOMETRY,
+    COMPOSER_BUBBLE_SPACER_GEOMETRY,
+    COMPOSER_BUBBLE_TEXT_ROW_GEOMETRY,
+} from './composerBubbleLayout';
 import { COMPOSER_STRIP_BOX } from './composerStripLayout';
 import { shouldUseExpoNativeSettingsMenu } from './glassInteractionPolicy';
 import { LiveMicBanner } from './LiveMicBanner';
@@ -265,38 +271,34 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
             android: theme.colors.glass.backgroundStrong,
             default: theme.colors.input.background,
         }),
-        borderRadius: MOBILE_COMPOSER_METRICS.shellRadius,
         borderWidth: StyleSheet.hairlineWidth,
         borderColor: theme.colors.glass.border,
-        // NO PADDING, and that is the ticket (DROVE-196). Clay: "the second
-        // row buttons should sit outside the speech bubble." The card is the
-        // message he is writing, so it holds the field and nothing else, and
-        // it hugs it: the in-field send button's own 4pt inset is the only air
-        // inside this card. The gutter that used to live here is on the
-        // composer line and the control row now, and 30pt of radius over a
-        // 44pt field draws the 22pt capsule that makes the bubble a bubble.
+        // THE BUBBLE'S OWN LAYOUT, and it comes from `composerBubbleLayout`
+        // rather than being written here (DROVE-214). Clay: "probably we
+        // should put everything in the speech bubble with the buttons on the
+        // bottom and the text input one row above it?" So it is a column of
+        // two rows with one padding all round, and that padding is the only
+        // air anywhere inside it: the discs' margin, the text's, the lot.
         //
-        // AND IT IS WRITTEN DOWN NOW RATHER THAN ONLY SAID (DROVE-214). The
-        // comment above shipped for two tickets over a style that overrode the
-        // desktop panel's colour and radius and nothing else, so `unifiedPanel`
-        // went on applying paddingHorizontal 8, paddingVertical 2 and
-        // paddingBottom 8 underneath it. Every in-field number DROVE-206
-        // pinned was measured from a rim 8pt out from the real one, and 2 over
-        // 8 is not centred, so the field sat 3pt high in its own capsule.
-        // Four longhands, because a shorthand loses to the base's
-        // `paddingBottom` however it is ordered.
-        paddingTop: MOBILE_COMPOSER_METRICS.bubblePadding,
-        paddingBottom: MOBILE_COMPOSER_METRICS.bubblePadding,
-        paddingLeft: MOBILE_COMPOSER_METRICS.bubblePadding,
-        paddingRight: MOBILE_COMPOSER_METRICS.bubblePadding,
+        // Four padding LONGHANDS, still, because the desktop `unifiedPanel`
+        // underneath sets `paddingVertical` / `paddingBottom` /
+        // `paddingHorizontal` and a shorthand here loses to them however it is
+        // ordered. That leak shipped for two tickets as a comment claiming
+        // zero padding over a style that never wrote one.
+        ...COMPOSER_BUBBLE_GEOMETRY,
+        paddingTop: MOBILE_COMPOSER_METRICS.bubbleInset,
+        paddingBottom: MOBILE_COMPOSER_METRICS.bubbleInset,
+        paddingLeft: MOBILE_COMPOSER_METRICS.bubbleInset,
+        paddingRight: MOBILE_COMPOSER_METRICS.bubbleInset,
     },
     /**
-     * The composer's first line (DROVE-196): the `+` at the leading edge, the
-     * bubble taking the rest. Messages exactly, and the half of it DROVE-153
-     * left undone when it put the primary inside the field.
+     * The composer's first line, which carries the gutter and holds the
+     * bubble. It has had the `+` beside it (DROVE-196) and inside the field
+     * (DROVE-206); since DROVE-214 the `+` is on the bubble's own bottom row
+     * and this line has one child and one job.
      */
     mobileComposerLine: MOBILE_COMPOSER_LINE_GEOMETRY,
-    /** The bubble takes whatever the `+` leaves. */
+    /** The bubble takes the whole line. */
     mobileBubbleShell: {
         flex: 1,
         minWidth: 0,
@@ -329,60 +331,35 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         paddingVertical: 4,
         minHeight: 40,
     },
+    /**
+     * THE BUBBLE'S TEXT ROW: the full interior width, one line tall when the
+     * composer is empty, and nothing beside it (DROVE-214).
+     *
+     * Every leading and trailing reservation is gone, because the `+` and send
+     * are on the row below now. That is what removes the caret's dependence on
+     * what is drawn: it starts at the bubble's interior edge in every state,
+     * zen mode included, so there is nothing left for the pinned text widths
+     * to protect.
+     *
+     * The base `inputContainer` under this sets `paddingLeft: 2`,
+     * `paddingRight: 8` and `minHeight: 40`, so all three are overridden here
+     * rather than left to a shorthand.
+     */
     mobileInputContainer: {
         alignItems: 'center',
-        // The bubble's whole height when the composer is empty (DROVE-196):
-        // the card has no padding of its own, so this floor is the card's
-        // floor, and it is already derived from what it holds — the 36pt send
-        // button inset 4 at each end.
-        minHeight: MOBILE_COMPOSER_METRICS.inputMinHeight,
-        // Symmetric again, and for the opposite reason to before (DROVE-206).
-        // The field holds a control at EACH rim now, so the text stops short
-        // of both: 4 off the rim, a 36pt disc, 6 of air. 46 a side.
-        paddingLeft: MOBILE_COMPOSER_LAYOUT.inputLeadingActionPadding,
-        // The send button sits inside the field at this edge (DROVE-153), so
-        // the text stops short of it rather than running underneath. Reserved
-        // whether or not the button can fire, because the button is always
-        // drawn: that is what keeps the text's width off the composer's state.
-        paddingRight: MOBILE_COMPOSER_LAYOUT.inputTrailingActionPadding,
-        paddingTop: MOBILE_COMPOSER_METRICS.inputPaddingTop,
-        paddingBottom: MOBILE_COMPOSER_METRICS.inputPaddingBottom,
+        ...COMPOSER_BUBBLE_TEXT_ROW_GEOMETRY,
     },
     /**
-     * The field with no `+` in it: zen mode, or a session that takes no
-     * context (DROVE-206). The text falls back to the glyph column the `+`
-     * would have stood in rather than to the bubble's rim, so the caret is in
-     * the same place either way and only the gap in front of it changes.
-     */
-    mobileInputContainerNoAdd: {
-        paddingLeft: MOBILE_COMPOSER_LAYOUT.inputContainerPaddingLeft,
-    },
-    /**
-     * Where the in-field primary sits: hard against the capsule's trailing
-     * edge, and pinned to the BOTTOM so it stays put as the field grows.
-     */
-    mobilePrimaryAnchor: {
-        position: 'absolute',
-        right: MOBILE_COMPOSER_METRICS.primaryActionInset,
-        bottom: MOBILE_COMPOSER_METRICS.primaryActionInset,
-    },
-    /**
-     * And where the `+` sits: the mirror of it, at the leading rim
-     * (DROVE-206).
+     * THE BUBBLE'S BUTTON ROW: the `+`, a spacer, send (DROVE-214).
      *
-     * Same 4pt inset and the same bottom pin, for the same reason. The field
-     * grows upward as the message wraps and both controls have to stay on the
-     * last line where the thumb left them, rather than one of them riding up
-     * the side of a tall capsule.
-     *
-     * The BOX is the mirror and stays one (DROVE-214). What is not mirrored is
-     * what fills it, so the glyph inside takes the ink offset instead.
+     * `alignItems: 'center'` is the whole of what three passes of arithmetic
+     * were standing in for. It holds at 36 and it would hold at any other
+     * height this row were given, which is exactly what the offsets it
+     * replaces could not do.
      */
-    mobileAddAnchor: {
-        position: 'absolute',
-        left: MOBILE_COMPOSER_METRICS.primaryActionInset,
-        bottom: MOBILE_COMPOSER_METRICS.primaryActionInset,
-    },
+    mobileBubbleActionRow: COMPOSER_BUBBLE_ACTION_ROW_GEOMETRY,
+    /** Holds send at the trailing end even in zen mode, where no `+` is drawn. */
+    mobileBubbleActionSpacer: COMPOSER_BUBBLE_SPACER_GEOMETRY,
     mobileAddButton: MOBILE_ADD_ACTION_GEOMETRY,
 
     // Overlay styles
@@ -1880,26 +1857,21 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     const showMobileAddButton = compactMobileComposer && !props.zenMode && canAddContext;
 
     /**
-     * THE `+`, inside the input capsule at its LEADING edge, and a DISC
+     * THE `+`, a DISC at the leading end of the bubble's button row
      * (DROVE-206, DROVE-214).
      *
      * Clay, settling three passes of argument in one sentence: "the plus to
      * add images and stuff should be a circle just like on the right hand side
-     * send button." So it is the same 36pt circle, the same 4pt inset, the
-     * same bottom pin and the same surface. The two ends are one object drawn
-     * at two rims, and every question about how to place a bare glyph against
-     * a rounded end stops existing.
+     * send button." So it is the same object as send, drawn at the other end
+     * of the same row: identical geometry, identical resting surface, no
+     * mirrored offsets between them.
      *
-     * WHY THAT IS THE RIGHT ANSWER AND NOT JUST THE ONE HE PICKED. A 44pt
-     * capsule ends in a semicircle of radius 22, and a 36pt disc inset 4 is
-     * CONCENTRIC with it: its clearance is 4 the whole way round the arc
-     * rather than 4 at one point, which is why the send button has always
-     * looked deliberate there. A 16pt cross has no such relationship at any
-     * inset. DROVE-214 tried it flush at 4 ("is still wrong it looks like
-     * shit") and centred at 13.875, and the centred one was better only
-     * because centring is the closest a bare glyph gets to the property the
-     * disc has for free. Give it the disc and it HAS the property. Both ends
-     * are now concentric with the end they sit in. See `capsuleEndRadius`.
+     * WHY A DISC AND NOT A BARE GLYPH. A disc nests inside the shape that
+     * holds it, so its clearance is even everywhere rather than at a handful
+     * of points; a bare glyph has that at no offset, which is why every
+     * attempt to place one by arithmetic looked wrong however exactly the
+     * numbers matched. That is a reason to draw a circle, not a number to
+     * compute, and the row places it now.
      *
      * DROVE-206 ARGUED AGAINST THIS FILL and the argument does not survive.
      * It said the fill was already the OPEN state so spending it at rest would
@@ -1925,29 +1897,24 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
      * 44pt floor, which is the same bargain the send button strikes.
      */
     const mobileAddAction = (
-        <View style={styles.mobileAddAnchor}>
-            <View
-                style={[
-                    styles.mobileAddButton,
-                    // The same disc the send button wears at rest, so the two
-                    // ends are one object at two rims (DROVE-214). Open still
-                    // steps off it: `mobileIconButtonOpen` is a different
-                    // surface from this one, so the held-down read survives
-                    // the control gaining a resting fill.
-                    styles.mobileInFieldDisc,
-                    openPicker === 'attach' ? styles.mobileInFieldDiscOpen : undefined,
-                ]}
-            >
+        <View
+            style={[
+                styles.mobileAddButton,
+                // The same disc the send button wears at rest, so the two ends
+                // of the row are one object (DROVE-214). Open still steps off
+                // it: `mobileIconButtonOpen` is a different surface from this
+                // one, so the held-down read survives the control gaining a
+                // resting fill.
+                styles.mobileInFieldDisc,
+                openPicker === 'attach' ? styles.mobileInFieldDiscOpen : undefined,
+            ]}
+        >
                 <BubblePressable
                     style={(p) => ({
                         width: '100%',
                         height: '100%',
-                        // CENTRE, on both axes, and the horizontal one is
-                        // load-bearing (DROVE-214). The box is 36 inset 4 in a
-                        // 44pt field, so its centre is 22 from the rim on both
-                        // axes, which is the centre of the capsule's rounded
-                        // end. Centring the glyph in it therefore centres the
-                        // glyph in that end.
+                        // The glyph is centred in the disc by the layout
+                        // engine, which is all it ever needed (DROVE-214).
                         alignItems: 'center',
                         justifyContent: 'center',
                         opacity: p.pressed ? 0.7 : 1,
@@ -1976,13 +1943,12 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         color={composerGlyphColour(composerPalette)}
                     />
                 </BubblePressable>
-            </View>
         </View>
     );
 
     /**
-     * THE SEND BUTTON, inside the input capsule at its trailing edge
-     * (DROVE-153, DROVE-206).
+     * THE SEND BUTTON, inside the bubble at the trailing end of its button row
+     * (DROVE-153, DROVE-206, moved out of the field in DROVE-214).
      *
      * Clay: "we should have a send button, proper button." It used to turn
      * into the waveform on an empty composer, so the same spot did two
@@ -1997,16 +1963,17 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
      * no send button, and it draws a paper plane now.
      *
      * On an empty composer it is DRAWN AND DISABLED. It is not hidden, because
-     * the field reserves its 46pt at that rim either way, and a control that
-     * came and went would reflow the caret on the first keystroke and flicker
-     * every time Stop borrowed the slot. The reasoning is in full on
-     * `AgentInputPrimaryAction`.
+     * a control that came and went would make the row twitch every time Stop
+     * borrowed the slot. The reasoning is in full on `AgentInputPrimaryAction`.
      *
-     * Pinned to the bottom, not centred: the field grows upward as the message
-     * gets longer and the button has to stay where the thumb left it.
+     * NOT PINNED TO ANYTHING ANY MORE (DROVE-214). It used to be
+     * `position: absolute` against the bottom of the text's own row, which is
+     * the row that grows, so a wrapped message dragged it down the side of a
+     * tall capsule. It is on a row that cannot grow, at that row's trailing
+     * end, centred in it.
      */
     const mobilePrimaryAction = (
-        <Shaker ref={shakerRef} style={styles.mobilePrimaryAnchor}>
+        <Shaker ref={shakerRef}>
             <View
                 style={[
                     styles.sendButton,
@@ -2484,12 +2451,12 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                             />
                         </View>
                     )}
-                    {/* Input field */}
+                    {/* THE TEXT ROW. On mobile it is the bubble's top row and
+                        holds nothing but the field; the `+` and send are on
+                        the row below (DROVE-214). */}
                     <View style={[
                         styles.inputContainer,
                         compactMobileComposer && styles.mobileInputContainer,
-                        compactMobileComposer && !showMobileAddButton
-                            && styles.mobileInputContainerNoAdd,
                         props.minHeight ? { minHeight: props.minHeight } : undefined,
                     ]}>
                         <MultiTextInput
@@ -2508,12 +2475,21 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                             maxHeight={Platform.OS === 'web' ? 480 : MOBILE_COMPOSER_METRICS.inputMaxHeight}
                             lineHeight={compactMobileComposer ? MOBILE_COMPOSER_METRICS.inputLineHeight : undefined}
                         />
-                        {/* One control at each rim of the field, both
-                            absolutely positioned against it and both pinned to
-                            its bottom (DROVE-206). */}
-                        {showMobileAddButton ? mobileAddAction : null}
-                        {compactMobileComposer ? mobilePrimaryAction : null}
                     </View>
+
+                    {/* THE BUTTON ROW, inside the bubble and under the text
+                        (DROVE-214). Clay: "put everything in the speech bubble
+                        with the buttons on the bottom and the text input one
+                        row above it". Only what acts on the MESSAGE is here;
+                        what acts on the session stays on the control row
+                        outside, which is DROVE-196 unchanged. */}
+                    {compactMobileComposer ? (
+                        <View style={styles.mobileBubbleActionRow}>
+                            {showMobileAddButton ? mobileAddAction : null}
+                            <View style={styles.mobileBubbleActionSpacer} />
+                            {mobilePrimaryAction}
+                        </View>
+                    ) : null}
 
                     {compactMobileComposer ? null : desktopActionControls}
                         </MobileGlassSurface>
