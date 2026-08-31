@@ -143,6 +143,14 @@ describe('the session capsule', () => {
     });
 });
 
+/** The model's name is styled with an array now (DROVE-217), so flatten before reading it. */
+function modelColour(renderer: any): string | undefined {
+    const text = renderer.root.findAllByType('Text' as any)
+        .find((node: any) => node.props.children === 'Opus 5 1M');
+    const style = [text.props.style].flat(Infinity).filter(Boolean);
+    return style.reduce((colour: string | undefined, entry: any) => entry?.color ?? colour, undefined);
+}
+
 describe('the colour each glyph is drawn in (DROVE-176)', () => {
     it('gives the open padlock the warning hue and the shut one the neutral', () => {
         const open = mount({ modeKind: 'yolo' }).root.findByType('Ionicons' as any);
@@ -169,9 +177,49 @@ describe('the colour each glyph is drawn in (DROVE-176)', () => {
     });
 
     it('leaves the model neutral, because a name is not a state', () => {
-        const text = mount().root.findAllByType('Text' as any)
-            .find((node: any) => node.props.children === 'Opus 5 1M');
-        expect(text.props.style.color).toBe('text');
+        expect(modelColour(mount())).toBe('text');
+    });
+});
+
+/**
+ * A pick the terminal has not confirmed yet (DROVE-217).
+ *
+ * The rule for WHEN is pinned in sync/agentModeRequests.spec.ts and the colour
+ * in composerControlColour.spec.ts. These are the three the render has to show:
+ * that all three segments take it, that it OVERRIDES the settled colour rather
+ * than sitting beside it, and that a finger on the slider outranks it.
+ */
+describe('a pick still on its way to the terminal (DROVE-217)', () => {
+    it('draws the padlock, the needle and the name in the pending colour, one rule for three controls', () => {
+        const renderer = mount({
+            modeKind: 'yolo',
+            effortIndex: 5,
+            pending: { permission: true, effort: true, model: true },
+        });
+        expect(renderer.root.findByType('Ionicons' as any).props.color).toBe(palette.pending);
+        expect(renderer.root.findByType('Line' as any).props.stroke).toBe(palette.pending);
+        expect(modelColour(renderer)).toBe(palette.pending);
+    });
+
+    it('overrides the settled colour rather than sitting beside it: the open padlock is not the amber while it waits', () => {
+        const waiting = mount({ modeKind: 'yolo', pending: { permission: true } });
+        expect(waiting.root.findByType('Ionicons' as any).props.color).not.toBe(palette.warning);
+        const landed = mount({ modeKind: 'yolo', pending: { permission: false } });
+        expect(landed.root.findByType('Ionicons' as any).props.color).toBe(palette.warning);
+    });
+
+    it('leaves the other two alone: one control waiting is not the whole row waiting', () => {
+        const renderer = mount({ modeKind: 'yolo', effortIndex: 5, pending: { effort: true } });
+        expect(renderer.root.findByType('Ionicons' as any).props.color).toBe(palette.warning);
+        expect(renderer.root.findByType('Line' as any).props.stroke).toBe(palette.pending);
+        expect(modelColour(renderer)).toBe('text');
+    });
+
+    it('says so to VoiceOver, which colour never reaches', () => {
+        const renderer = mount({ nativeMenus: true, pending: { permission: true } });
+        const menus = renderer.root.findAllByType('NativeSettingsMenu' as any);
+        expect(menus[0].props.accessibilityLabel).toBe('Permission mode, Yolo, not confirmed by the terminal yet');
+        expect(menus[1].props.accessibilityLabel).toBe('Reasoning effort, High, 4 of 6');
     });
 });
 
@@ -233,6 +281,24 @@ describe('the effort segment when it is a slider', () => {
         expect(dragging.stroke).toBe(palette.effort[2]);
         expect(dragging.x2).toBeGreaterThan(resting.x2);
         expect(dragging.stroke).not.toBe(resting.stroke);
+    });
+
+    it('lets a finger on the slider outrank a wait (DROVE-217): the thumb is not a request yet', () => {
+        const needle = (renderer: any) => renderer.root.findByType('Line' as any).props.stroke;
+        // Dragging over the top of a pick that is still in flight: the needle
+        // follows the thumb in the ramp's colour, because the drag is where
+        // Clay's finger is and the wait is about a value he has left behind.
+        expect(needle(mount({
+            effortSlider: slider({ active: true, index: 5 }),
+            effortScale: scale,
+            pending: { effort: true },
+        }))).toBe(palette.effort[2]);
+        // Let go, and the wait is what is left to draw.
+        expect(needle(mount({
+            effortSlider: slider({ active: false, index: 5 }),
+            effortScale: scale,
+            pending: { effort: true },
+        }))).toBe(palette.pending);
     });
 
     it('hangs the popover off a wrapper that clips nothing, outside the glass', () => {

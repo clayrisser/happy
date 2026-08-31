@@ -42,6 +42,27 @@
  *              and the bar under it are one signal. Also a live voice turn on
  *              the waveform beside it (DROVE-206), because a live mic is a
  *              live mic wherever it is drawn.
+ *   pending    a pick made on the phone that the pane has not confirmed yet
+ *              (DROVE-217). It is the ACCENT, deliberately, and that is the
+ *              whole entry: "the app doing something" is exactly what a request
+ *              in flight is, and the accent already means that here. Spending a
+ *              second colour on the same meaning is what this file exists to
+ *              stop. Clay asked for yellow and yellow is measurably not
+ *              available: the amber `warning` is already the open padlock and
+ *              the top of the effort dial, and the reading mark (DROVE-125) is
+ *              #FFD54F on dark and #946200 on light, so on the LIGHT theme
+ *              every gold that clears 3:1 on the glass lands within 0.10 of the
+ *              reading mark, under the 0.12 this file holds its colours apart
+ *              by. The spec measures that rather than asserting it. Pending is
+ *              also an axis of its own — every other entry answers "what is
+ *              this control set to", pending answers "is that settled" — so it
+ *              OVERRIDES the control's colour for the couple of seconds it
+ *              lasts, and the glyph's own shape keeps carrying the value
+ *              underneath, which is the DROVE-141 rule this file has followed
+ *              from the start. It is also why it survives DROVE-215, which is
+ *              making the row's icons neutral at rest in parallel: whatever
+ *              that lands on for the RESTING colours, pending sits on top of
+ *              them and keeps meaning one thing.
  *   neutral    the theme's text colour: the shut padlock (asks first, nothing
  *              to flag), the mic at rest, the waveform at rest, the speaker
  *              off, the in-field send button with nothing to send, and the
@@ -77,6 +98,8 @@ import { CHROME_GLASS_TINT, CHROME_GROUND } from './glassChrome';
 export interface ComposerControlPalette {
     neutral: string;
     accent: string;
+    /** A pick the pane has not confirmed yet. The accent, on purpose — see the header. */
+    pending: string;
     warning: string;
     shield: string;
     eye: string;
@@ -95,6 +118,7 @@ export const COMPOSER_CONTROL_PALETTE: { dark: ComposerControlPalette; light: Co
         neutral: '#FFFFFF',
         // iOS system blue, dark variant: the theme's radio.active.
         accent: '#0A84FF',
+        pending: '#0A84FF',
         // iOS system orange, dark variant.
         warning: '#FF9F0A',
         shield: '#8A88FF',
@@ -108,6 +132,7 @@ export const COMPOSER_CONTROL_PALETTE: { dark: ComposerControlPalette; light: Co
         // System blue is 2.88:1 on the light glass; this is the same hue at
         // the darkness the glass demands.
         accent: '#0A5FD6',
+        pending: '#0A5FD6',
         // System orange is under 2:1 on the light glass; darkened, and held
         // off the light theme's brown reading mark.
         warning: '#CC4A0A',
@@ -172,6 +197,22 @@ export function effortColour(palette: ComposerControlPalette, index: number, cou
     const [cool, mid, hot] = palette.effort;
     if (position <= 0.5) return mixHex(cool, mid, position * 2);
     return mixHex(mid, hot, (position - 0.5) * 2);
+}
+
+/**
+ * The colour a composer control is drawn in, given what it is SET to and
+ * whether that setting has landed (DROVE-217).
+ *
+ * One rule, three controls: the padlock, the effort needle and the model's
+ * name all go through here, so a pick that has not reached the terminal reads
+ * the same whichever of them it was.
+ */
+export function pendingOrSettled(
+    palette: ComposerControlPalette,
+    pending: boolean,
+    settled: string,
+): string {
+    return pending ? palette.pending : settled;
 }
 
 export type MicColourState = 'idle' | 'held' | 'latched';

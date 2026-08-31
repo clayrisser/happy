@@ -10,7 +10,13 @@ import { describeDemoInput, isDroverDemoId, recordDemoAnswer } from './droverDem
 import type { AgentQuestionAnswer, MachineMetadata, SessionAgentModesPatch } from './storageTypes';
 import type { SessionInventoryPayload } from './sessionInventory';
 import { markAgentModePushPending, clearAgentModePushPending, type AgentModeField } from './agentModesPending';
-import { resolvePaneModelKey, toClaudePermissionMode } from '@/components/modelModeOptions';
+import {
+    AGENT_MODE_CONTROLS,
+    noteAgentModeRequest,
+    paneDisagreesWithRequest,
+    paneObservedMode,
+    type AgentModeControl,
+} from './agentModeRequests';
 import {
     isRigMetadata,
     rigCanAbort,
@@ -810,25 +816,20 @@ export function sessionSetAgentModes(sessionId: string, patch: SessionAgentModes
     // the app shows then matched the stale request and sent nothing, so the
     // picker was dead from the phone. A pick the PANE disagrees with is always
     // a change, whatever the mirror says.
-    const paneDisagrees = (value: string | null, field: 'modelMode' | 'effortLevel' | 'permissionMode'): boolean => {
-        if (field === 'modelMode') {
-            const paneModel = session?.metadata?.paneModel;
-            return !!paneModel && resolvePaneModelKey(paneModel, value) !== value;
-        }
-        // DROVE-199: the third field, and the one Clay moves by hand most —
-        // shift+tab is a key on his own keyboard, so the pane leaves the
-        // stored request behind every time he presses it. The composer
-        // correctly showed the pane's mode (resolveCurrentOption prefers
-        // panePermissionMode), so the row he tapped was the row already
-        // displayed, `isChanged` compared it against a request that had not
-        // moved, and the pick was dropped before it ever reached the wire.
-        if (field === 'permissionMode') {
-            const paneMode = session?.metadata?.panePermissionMode;
-            return !!paneMode && paneMode !== toClaudePermissionMode(value);
-        }
-        const paneEffort = session?.metadata?.paneEffort;
-        return !!paneEffort && paneEffort !== value;
-    };
+    //
+    // DROVE-199: the third field is the one Clay moves by hand most — shift+tab
+    // is a key on his own keyboard, so the pane leaves the stored request
+    // behind every time he presses it. The composer correctly showed the pane's
+    // mode (resolveCurrentOption prefers panePermissionMode), so the row he
+    // tapped was the row already displayed, `isChanged` compared it against a
+    // request that had not moved, and the pick was dropped before it ever
+    // reached the wire.
+    //
+    // DROVE-217 moved the comparison itself into agentModeRequests.ts, because
+    // the composer now needs the SAME question answered to colour a pick that
+    // has not landed yet. One rule, two readers.
+    const paneDisagrees = (value: string | null, field: AgentModeControl): boolean =>
+        paneDisagreesWithRequest(session?.metadata, field, value);
     const changed: SessionAgentModesPatch = {};
     if (patch.permissionMode !== undefined && (isChanged(patch.permissionMode, 'permissionMode') || paneDisagrees(patch.permissionMode, 'permissionMode'))) {
         changed.permissionMode = patch.permissionMode;
@@ -847,6 +848,19 @@ export function sessionSetAgentModes(sessionId: string, patch: SessionAgentModes
     }
 
     state.updateSessionAgentModes(sessionId, changed);
+
+    // Write down what was asked for, and what the pane held when it was asked
+    // (DROVE-217). This is what lets the composer show the pick AT ONCE and
+    // draw it as unconfirmed until the pane catches up — measured at a median
+    // under two seconds and a tail past a minute, which is why it has to be
+    // drawn at all. Only the three fields the composer's capsule has a control
+    // for; `remoteControl` is a toggle in a sheet, not a value in that row.
+    const askedAt = Date.now();
+    for (const field of AGENT_MODE_CONTROLS) {
+        const value = changed[field];
+        if (value === undefined) continue;
+        noteAgentModeRequest(sessionId, field, value, paneObservedMode(session?.metadata, field), askedAt);
+    }
 
     // While the push is in flight, inbound updates still carry the OLD
     // metadata; mark the fields pending so applySessions keeps the fresher

@@ -20,6 +20,7 @@ import {
 import {
     composerControlPalette,
     effortColour,
+    pendingOrSettled,
     permissionModeColour,
 } from './composerControlColour';
 import {
@@ -72,6 +73,16 @@ import type { EffortSliderScale } from './effortSlider';
  * a name is not a state and a coloured word beside coloured glyphs would
  * compete with the state they carry. composerControlColour.ts decides and
  * measures every one of those; nothing here picks a colour.
+ *
+ * AND A PICK THAT HAS NOT LANDED IS DRAWN AS ONE (DROVE-217). The value moves
+ * the instant it is tapped, and the control takes the `pending` colour until
+ * the terminal confirms it. Clay: "It seems that the effort is actually
+ * updating now but there's like a huge delay so it feels weird." It is a median
+ * of about two seconds and a tail past a minute, measured off his own logs, and
+ * a two-second change and a sixty-second change used to look identical. All
+ * three segments, one rule — model and permission mode lag exactly as effort
+ * does. The rule for WHEN a pick is pending is in sync/agentModeRequests.ts;
+ * this file only draws it.
  */
 
 export type ComposerSessionPicker = 'permission' | 'model' | 'effort';
@@ -103,6 +114,18 @@ export interface ComposerSessionControlsProps {
      */
     effortSlider?: EffortSliderHandle | null;
     effortScale?: EffortSliderScale | null;
+    /**
+     * Which segments hold a pick the terminal has not confirmed yet
+     * (DROVE-217). Absent means everything shown is what the session is
+     * actually running, which is the ordinary state.
+     */
+    pending?: { permission?: boolean; effort?: boolean; model?: boolean } | null;
+}
+
+/** What VoiceOver adds while a pick is in flight, since colour reaches nobody there. */
+export function unconfirmedAccessibilityValue(value: string | undefined, pending: boolean): string | undefined {
+    if (!pending) return value;
+    return value ? `${value}, not confirmed by the terminal yet` : 'not confirmed by the terminal yet';
 }
 
 /**
@@ -303,8 +326,15 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
         openPicker,
         effortSlider,
         effortScale,
+        pending,
     } = props;
     const palette = composerControlPalette(theme.dark);
+    const permissionPending = !!pending?.permission;
+    const modelPending = !!pending?.model;
+    // A drag in progress outranks a wait: while the finger is on the slider the
+    // needle is following the thumb, and that is a value nobody has asked for
+    // yet, so there is nothing outstanding to draw.
+    const effortPending = !!pending?.effort && !effortSlider?.active;
     const showMode = !!label.mode;
     const showEffort = !!label.effort && effortCount > 0 && effortIndex != null && effortIndex >= 0;
     const showModel = !!label.model;
@@ -337,7 +367,7 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                 <Control
                     picker="permission"
                     accessibilityLabel={mode.label}
-                    accessibilityValue={mode.value}
+                    accessibilityValue={unconfirmedAccessibilityValue(mode.value, permissionPending)}
                     groups={modeGroups}
                     nativeMenus={nativeMenus}
                     open={openPicker === 'permission'}
@@ -346,7 +376,11 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                     <Ionicons
                         name={permissionModeGlyph(modeKind, modeKey)}
                         size={20}
-                        color={permissionModeColour(palette, modeKind, modeKey)}
+                        color={pendingOrSettled(
+                            palette,
+                            permissionPending,
+                            permissionModeColour(palette, modeKind, modeKey),
+                        )}
                     />
                 </Control>
             ) : null}
@@ -365,7 +399,10 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                         accessible
                         accessibilityRole="adjustable"
                         accessibilityLabel={effort.label}
-                        accessibilityValue={effort.value ? { text: effort.value } : undefined}
+                        accessibilityValue={(() => {
+                            const text = unconfirmedAccessibilityValue(effort.value, effortPending);
+                            return text ? { text } : undefined;
+                        })()}
                         accessibilityActions={ADJUSTABLE_ACTIONS}
                         onAccessibilityAction={(event) => {
                             if (event.nativeEvent.actionName === 'increment') effortSlider.step(1);
@@ -384,11 +421,11 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                         <EffortGauge
                             index={effortSlider.active ? effortSlider.index : effortIndex!}
                             count={effortCount}
-                            color={effortColour(
+                            color={pendingOrSettled(palette, effortPending, effortColour(
                                 palette,
                                 effortSlider.active ? effortSlider.index : effortIndex!,
                                 effortCount,
-                            )}
+                            ))}
                             dim={theme.colors.divider}
                         />
                     </View>
@@ -396,7 +433,7 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                     <Control
                         picker="effort"
                         accessibilityLabel={effort.label}
-                        accessibilityValue={effort.value}
+                        accessibilityValue={unconfirmedAccessibilityValue(effort.value, effortPending)}
                         group={effortGroup}
                         nativeMenus={nativeMenus}
                         open={openPicker === 'effort'}
@@ -405,7 +442,7 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                         <EffortGauge
                             index={effortIndex!}
                             count={effortCount}
-                            color={effortColour(palette, effortIndex!, effortCount)}
+                            color={pendingOrSettled(palette, effortPending, effortColour(palette, effortIndex!, effortCount))}
                             dim={theme.colors.divider}
                         />
                     </Control>
@@ -416,7 +453,7 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                 <Control
                     picker="model"
                     accessibilityLabel="Model"
-                    accessibilityValue={label.model!}
+                    accessibilityValue={unconfirmedAccessibilityValue(label.model!, modelPending)}
                     group={modelGroup}
                     nativeMenus={nativeMenus}
                     open={openPicker === 'model'}
@@ -424,7 +461,7 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                     wide
                 >
                     <Text
-                        style={styles.model}
+                        style={[styles.model, modelPending && { color: palette.pending }]}
                         numberOfLines={1}
                         // Smaller before shorter: the name scales rather than
                         // gaining an ellipsis, because `Opus 5...` is the
