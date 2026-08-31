@@ -8,7 +8,8 @@ import { t } from '@/text';
 import { useSession } from '@/sync/storage';
 import { isLiveStatusFresh, summarizeLiveStatus, type LiveStatusSummary } from '@/utils/liveStatus';
 import { AnimatedFade } from './AnimatedOverlay';
-import { NativeSettingsMenu, type NativeSettingsMenuGroup } from './NativeSettingsMenu';
+import { UsageAccountBars } from './UsageAccountBars';
+import type { UsageBarGroup } from './agentInputUsage';
 import { SessionLiveStatusTree } from './SessionLiveStatus';
 import { StatusDot } from './StatusDot';
 import { useTickingNow } from './useTickingNow';
@@ -30,8 +31,8 @@ import { useTickingNow } from './useTickingNow';
  * too until DROVE-90 moved it under the session title, where tapping it
  * lists the repo's worktrees; Clay found the row too full. Nothing was
  * dropped, only folded: the working segment unfolds the agent tree under the
- * row, the connection opens session info, the quota opens the usage popup,
- * the gauge swaps to exact tokens.
+ * row, the connection opens session info, the quota unfolds a bar per account
+ * and per window (DROVE-107), the gauge swaps to exact tokens.
  *
  * Renders nothing at all when there is nothing to say, so an empty session
  * does not gain a blank strip. Its own module so a test can mount it without
@@ -101,10 +102,12 @@ export type StatusRowProps = {
     contextStatus: { percent: number; detailText: string; color: string } | null;
     weekPercent: number | null;
     /**
-     * Prebuilt "Session · 32% · resets 6 PM" rows for the week popup, then a
-     * second group with every other drover account folded under it (DROVE-47).
+     * The week popup's bar rows: this account's session, week and family
+     * windows, then every other drover account folded under a second heading
+     * (DROVE-47). One thin row each, name and track and number on one line
+     * (DROVE-107).
      */
-    usageMenuGroups: NativeSettingsMenuGroup[];
+    usageBarGroups: UsageBarGroup[];
     /** Opens the session info screen; the connection segment taps into it. */
     onSessionInfoPress?: () => void;
     /**
@@ -156,6 +159,7 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
     const { theme } = useUnistyles();
     const [expanded, setExpanded] = React.useState(false);
     const [showPreciseContext, setShowPreciseContext] = React.useState(false);
+    const [usageOpen, setUsageOpen] = React.useState(false);
     const summary = useLiveStatusSummary(p.sessionId);
 
     const hasUsage = p.weekPercent != null || p.contextStatus != null;
@@ -164,6 +168,7 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
     }
 
     const canExpand = !!summary && summary.rows.length > 0;
+    const canOpenUsage = p.usageBarGroups.length > 0;
     const segments: React.ReactNode[] = [];
 
     if (summary) {
@@ -237,15 +242,32 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
                 {t('agentInput.context.percentWeek', { percent: Math.round(p.weekPercent) })}
             </Text>
         );
+        // The quota unfolds in place rather than opening a native menu
+        // (DROVE-107). A UIMenu row is a string, so it can hold a sentence but
+        // never a bar; unfolding under the row is what the working segment
+        // already does and it lets the rows be drawn.
         segments.push(
-            p.usageMenuGroups.length > 0 ? (
-                <NativeSettingsMenu key="week" anchor="bottom" groups={p.usageMenuGroups}>
-                    {/* Native menu triggers hit only their own bounds, so
-                        pad the target out and pull the layout back in. */}
-                    <View style={{ padding: 10, margin: -10 }}>
-                        {weekText}
-                    </View>
-                </NativeSettingsMenu>
+            canOpenUsage ? (
+                <Pressable
+                    key="week"
+                    onPress={() => setUsageOpen((open) => !open)}
+                    accessibilityRole="button"
+                    accessibilityState={{ expanded: usageOpen }}
+                    hitSlop={{ top: 12, bottom: 14, left: 6, right: 6 }}
+                    style={({ pressed }) => ({
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        gap: 3,
+                        opacity: pressed ? 0.6 : 1,
+                    })}
+                >
+                    {weekText}
+                    <Ionicons
+                        name={usageOpen ? 'chevron-down' : 'chevron-up'}
+                        size={10}
+                        color={theme.colors.textSecondary}
+                    />
+                </Pressable>
             ) : <React.Fragment key="week">{weekText}</React.Fragment>,
         );
     }
@@ -301,6 +323,9 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
                     </React.Fragment>
                 ))}
             </View>
+            {usageOpen && canOpenUsage ? (
+                <UsageAccountBars groups={p.usageBarGroups} />
+            ) : null}
             {expanded && canExpand && p.sessionId ? (
                 <SessionLiveStatusTree sessionId={p.sessionId} rows={summary!.rows} />
             ) : null}

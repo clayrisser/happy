@@ -10,8 +10,15 @@
  *
  * Pure so the choice between the two, the gate on the week figure and the
  * popup's rows can be pinned by a test without mounting the composer.
+ *
+ * The popup's rows are BARS, not sentences (DROVE-107). Each account used to
+ * cost three text lines - "bitspur.com · 0% left", then "Fable back Sep 2",
+ * and a long name wrapped again - so five accounts filled the screen and the
+ * one number Clay scans for was buried in prose. A row is now a name, a track
+ * filled to the headroom LEFT, the number, and the reset time trailing behind
+ * it, all on one line. The fill is coloured by how much headroom is left, never
+ * by which account it is, so 43% and 0% compare down the column at a glance.
  */
-import type { NativeSettingsMenuGroup, NativeSettingsMenuOption } from './NativeSettingsMenu';
 import {
     currentDroverUsageAccount,
     droverFamilyRows,
@@ -44,6 +51,43 @@ export type UsageStripInput = {
     contextShown: boolean;
 };
 
+/**
+ * Colour classes for the fill, by how much headroom is LEFT. Four, not a
+ * gradient: the row has to be readable at 6pt tall from across a desk.
+ */
+export type UsageBarTone = 'ample' | 'low' | 'critical' | 'unknown';
+
+/** One thin row: a name, a track, a number, and the reset time behind it. */
+export type UsageBarRow = {
+    key: string;
+    /** The name as it renders, already cut to the row's name column. */
+    name: string;
+    /** The whole name, for the accessibility label a cut one would lose. */
+    fullName: string;
+    /** True when `name` is shorter than `fullName`. */
+    nameTruncated: boolean;
+    /**
+     * How much of the track the fill covers, 0..1. Always the headroom LEFT,
+     * whatever the "% left" setting says, so every row in the popup fills the
+     * same direction and the column can be read down.
+     */
+    fraction: number;
+    /** The number the setting asks for, "43%"; null when nothing was measured. */
+    percentText: string | null;
+    /** "Resets 6 PM", "Fable back Sep 4", "no login". Empty when there is none. */
+    trailing: string;
+    tone: UsageBarTone;
+    /** Nothing behind the row to flip to. */
+    disabled: boolean;
+};
+
+export type UsageBarGroup = {
+    key: string;
+    /** "jamrizzi · 51% left" / "Other accounts". */
+    title: string;
+    rows: UsageBarRow[];
+};
+
 export type UsageStrip = {
     /** The number on the strip, already flipped for the "% left" setting; null hides it. */
     weekPercent: number | null;
@@ -53,8 +97,65 @@ export type UsageStrip = {
      * The popup: this account's session, week and family rows under its own
      * headroom, then every other account folded under a second heading.
      */
-    usageMenuGroups: NativeSettingsMenuGroup[];
+    usageBarGroups: UsageBarGroup[];
 };
+
+/** How wide the name column is, in characters, before a name is cut. */
+export const usageBarNameLimit = 14;
+
+/**
+ * Percent left to a track fraction. Nothing measured reads as an empty track
+ * rather than a full one: a row with no figure must not look healthy.
+ */
+export function usageBarFraction(percentLeft: number | null | undefined): number {
+    if (typeof percentLeft !== 'number' || !Number.isFinite(percentLeft)) return 0;
+    return Math.min(100, Math.max(0, percentLeft)) / 100;
+}
+
+/**
+ * The fill colour, by headroom left and nothing else. Deliberately not per
+ * account: the point of the column is that two accounts at the same percent
+ * look the same.
+ */
+export function usageBarTone(percentLeft: number | null | undefined): UsageBarTone {
+    if (typeof percentLeft !== 'number' || !Number.isFinite(percentLeft)) return 'unknown';
+    const left = Math.min(100, Math.max(0, percentLeft));
+    if (left < 10) return 'critical';
+    if (left < 35) return 'low';
+    return 'ample';
+}
+
+/**
+ * Cut a name to the column. `risserproperties` is wider than the column and
+ * used to wrap the whole row onto a third line; it now ends in an ellipsis and
+ * the full name stays on the row for VoiceOver.
+ */
+export function truncateUsageName(name: string, limit = usageBarNameLimit): { name: string; truncated: boolean } {
+    if (name.length <= limit) return { name, truncated: false };
+    return { name: `${name.slice(0, Math.max(1, limit - 1))}\u2026`, truncated: true };
+}
+
+function barRow(input: {
+    key: string;
+    name: string;
+    percentLeft: number | null;
+    percentText: string | null;
+    trailing: string;
+    disabled?: boolean;
+}): UsageBarRow {
+    const cut = truncateUsageName(input.name);
+    return {
+        key: input.key,
+        name: cut.name,
+        fullName: input.name,
+        nameTruncated: cut.truncated,
+        fraction: usageBarFraction(input.percentLeft),
+        percentText: input.percentText,
+        trailing: input.trailing,
+        tone: usageBarTone(input.percentLeft),
+        disabled: input.disabled === true,
+    };
+}
 
 export function resolveUsageStrip(input: UsageStripInput): UsageStrip {
     // Agent state first, because it is live from the SDK; the drover snapshot
@@ -74,15 +175,22 @@ export function resolveUsageStrip(input: UsageStripInput): UsageStrip {
         ? getUsageLimitDisplayPercentage(week.utilization, input.showRemaining)
         : null;
 
-    const options: NativeSettingsMenuOption[] = [];
+    const mine: UsageBarRow[] = [];
     const push = (key: string, label: string, row: { utilization: number | null; resetsAt: number | null } | null) => {
         if (!row || row.utilization == null) return;
+        // `utilization` is percent USED on the wire; the track fills with what
+        // is left of it either way, only the printed number follows the setting.
+        const left = 100 - row.utilization;
         const percent = getUsageLimitDisplayPercentage(row.utilization, input.showRemaining);
-        // The newline renders as a second line inside the native menu row.
-        const reset = row.resetsAt != null
-            ? `\n${t('agentInput.usagePopup.resets', { time: formatUsageLimitResetTime(row.resetsAt) })}`
-            : '';
-        options.push({ key, label: `${label} · ${Math.round(percent)}%${reset}` });
+        mine.push(barRow({
+            key,
+            name: label,
+            percentLeft: left,
+            percentText: `${Math.round(percent)}%`,
+            trailing: row.resetsAt != null
+                ? t('agentInput.usagePopup.resets', { time: formatUsageLimitResetTime(row.resetsAt) })
+                : '',
+        }));
     };
     push('session', t('agentInput.usagePopup.session'), session);
     push('week', t('agentInput.usagePopup.week'), week);
@@ -92,10 +200,10 @@ export function resolveUsageStrip(input: UsageStripInput): UsageStrip {
     for (const row of droverFamilyRows(input.droverUsage, input.droverAccount)) {
         push(row.id, t('agentInput.usagePopup.familyWeek', { family: row.family }), row);
     }
-    const groups: NativeSettingsMenuGroup[] = [];
-    if (options.length > 0) {
-        // The heading carries the picker's own number for THIS account —
-        // "jamrizzi · 65% left" — so the popup and `drover accounts` agree at
+    const groups: UsageBarGroup[] = [];
+    if (mine.length > 0) {
+        // The heading carries the picker's own number for THIS account -
+        // "jamrizzi · 65% left" - so the popup and `drover accounts` agree at
         // a glance.
         const current = currentDroverUsageAccount(input.droverUsage, input.droverAccount);
         const headroom = current?.headroom;
@@ -104,36 +212,51 @@ export function resolveUsageStrip(input: UsageStripInput): UsageStrip {
                 ? t('agentInput.usagePopup.left', { percent: Math.round(headroom) })
                 : t('agentInput.usagePopup.used', { percent: Math.round(100 - headroom) })}`
             : current?.name ?? '';
-        groups.push({ key: 'usage', label: '', title, options, selectedKey: null, onSelect: () => { } });
+        groups.push({ key: 'usage', title, rows: mine });
     }
     // Every OTHER account, folded under its own heading rather than dropped
     // (DROVE-47): the phone has to answer "where can I flip to" without a
     // terminal. Same figures the flip picker prints.
     const others = droverOtherAccounts(input.droverUsage, input.droverAccount)
         .map((a) => {
-            const state = !a.loggedIn
-                ? t('agentInput.usagePopup.noLogin')
-                : a.headroom == null
-                    ? t('agentInput.usagePopup.unmeasured')
-                    : input.showRemaining
-                        ? t('agentInput.usagePopup.left', { percent: a.headroom })
-                        : t('agentInput.usagePopup.used', { percent: 100 - a.headroom });
+            // An account that is out says WHEN it is back; that is the fact
+            // worth the trailing slot. With no figure at all the trailing text
+            // is the reason there is none, so the empty track is explained.
             const back = a.back != null
-                ? `\n${a.family
+                ? a.family
                     ? t('agentInput.usagePopup.familyBack', { family: a.family, time: formatUsageLimitResetTime(a.back) })
-                    : t('agentInput.usagePopup.back', { time: formatUsageLimitResetTime(a.back) })}`
+                    : t('agentInput.usagePopup.back', { time: formatUsageLimitResetTime(a.back) })
                 : '';
-            return { key: `account:${a.name}`, label: `${a.name} · ${state}${back}`, disabled: !a.loggedIn };
+            if (!a.loggedIn) {
+                return barRow({
+                    key: `account:${a.name}`,
+                    name: a.name,
+                    percentLeft: null,
+                    percentText: null,
+                    trailing: t('agentInput.usagePopup.noLogin'),
+                    disabled: true,
+                });
+            }
+            if (a.headroom == null) {
+                return barRow({
+                    key: `account:${a.name}`,
+                    name: a.name,
+                    percentLeft: null,
+                    percentText: null,
+                    trailing: back || t('agentInput.usagePopup.unmeasured'),
+                });
+            }
+            const percent = input.showRemaining ? a.headroom : 100 - a.headroom;
+            return barRow({
+                key: `account:${a.name}`,
+                name: a.name,
+                percentLeft: a.headroom,
+                percentText: `${percent}%`,
+                trailing: back,
+            });
         });
     if (others.length > 0) {
-        groups.push({
-            key: 'accounts',
-            label: '',
-            title: t('agentInput.usagePopup.otherAccounts'),
-            options: others,
-            selectedKey: null,
-            onSelect: () => { },
-        });
+        groups.push({ key: 'accounts', title: t('agentInput.usagePopup.otherAccounts'), rows: others });
     }
-    return { weekPercent, usageFromDrover, usageMenuGroups: groups };
+    return { weekPercent, usageFromDrover, usageBarGroups: groups };
 }

@@ -47,6 +47,7 @@ vi.mock('react-native-unistyles', () => ({
                 divider: 'divider',
                 success: 'green',
                 textDestructive: 'red',
+                warningCritical: 'critical',
                 gitAddedText: 'added',
                 gitRemovedText: 'removed',
             },
@@ -55,10 +56,6 @@ vi.mock('react-native-unistyles', () => ({
 }));
 
 vi.mock('@/constants/Typography', () => ({ Typography: { default: () => ({}), mono: () => ({}) } }));
-
-vi.mock('./NativeSettingsMenu', () => ({
-    NativeSettingsMenu: host('NativeSettingsMenu'),
-}));
 
 vi.mock('./StatusDot', () => ({ StatusDot: host('StatusDot') }));
 
@@ -86,6 +83,7 @@ vi.mock('@/text', async () => {
 
 import { AgentInputStatusRow, type StatusRowProps } from './AgentInputStatusRow';
 import { resolveUsageStrip } from './agentInputUsage';
+import { UsageAccountBarRow } from './UsageAccountBars';
 
 const originalConsoleError = console.error;
 
@@ -149,7 +147,7 @@ function row(overrides: Partial<StatusRowProps> = {}) {
         connectionStatus: online,
         contextStatus: null,
         weekPercent: strip.weekPercent,
-        usageMenuGroups: strip.usageMenuGroups,
+        usageBarGroups: strip.usageBarGroups,
         showDetails: true,
         ...overrides,
     }));
@@ -198,27 +196,34 @@ describe('AgentInputStatusRow on an idle pane session', () => {
         const onSessionInfoPress = vi.fn();
         const renderer = row({ onSessionInfoPress });
         const pressables = renderer.root.findAllByType('Pressable' as any);
-        expect(pressables).toHaveLength(1);
+        // The connection, then the week figure that unfolds the bars.
+        expect(pressables).toHaveLength(2);
         pressables[0].props.onPress();
         expect(onSessionInfoPress).toHaveBeenCalledTimes(1);
     });
 
-    it('puts the usage popup behind the week figure, this account first and the others folded', () => {
+    it('unfolds a bar per window and per account under the week figure (DROVE-107)', () => {
         const strip = paneStrip(true);
-        const renderer = row({ weekPercent: strip.weekPercent, usageMenuGroups: strip.usageMenuGroups });
-        const menu = renderer.root.findByType('NativeSettingsMenu' as any);
-        expect(menu.props.anchor).toBe('bottom');
-        expect(menu.props.groups.map((g: any) => [g.key, g.title])).toEqual([
-            ['usage', 'jamrizzi · 51% left'],
-            ['accounts', 'Other accounts'],
+        const renderer = row({ weekPercent: strip.weekPercent, usageBarGroups: strip.usageBarGroups });
+        // Folded by default: the row is still one line until it is asked for.
+        expect(renderer.root.findAllByType(UsageAccountBarRow as any)).toHaveLength(0);
+        const week = renderer.root.findAllByType('Pressable' as any)[1];
+        act(() => {
+            week.props.onPress();
+        });
+        const bars = renderer.root.findAllByType(UsageAccountBarRow as any);
+        expect(bars.map((node: any) => [node.props.row.name, node.props.row.percentText])).toEqual([
+            ['Session', '51%'],
+            ['Week', '77%'],
+            ['Fable week', '61%'],
+            ['main', '0%'],
         ]);
-        expect(menu.props.groups[0].options.map((o: any) => o.label.split('\n')[0])).toEqual([
-            'Session · 51%',
-            'Week · 77%',
-            'Fable week · 61%',
-        ]);
-        expect(menu.props.groups[1].options.map((o: any) => o.label.split('\n')[0])).toEqual(['main · 0% left']);
-        expect(menu.findAllByType('Text' as any).map((node: any) => node.props.children)).toEqual(['77% week']);
+        // Every row is the same height, current account included, and the
+        // track is drawn even for the account at zero.
+        const main = bars[3].props.row;
+        expect(main.fraction).toBe(0);
+        expect(main.tone).toBe('critical');
+        expect(line(renderer)).toContain('77% week');
     });
 
     it('keeps the context gauge after the week figure when the session has one', () => {
@@ -286,7 +291,7 @@ describe('AgentInputStatusRow with nothing to show', () => {
         const renderer = row({
             connectionStatus: undefined,
             weekPercent: strip.weekPercent,
-            usageMenuGroups: strip.usageMenuGroups,
+            usageBarGroups: strip.usageBarGroups,
         });
         expect(renderer.toJSON()).toBeNull();
     });
@@ -298,7 +303,7 @@ describe('AgentInputStatusRow with nothing to show', () => {
             showRemaining: false,
             contextShown: false,
         });
-        const renderer = row({ weekPercent: strip.weekPercent, usageMenuGroups: strip.usageMenuGroups });
+        const renderer = row({ weekPercent: strip.weekPercent, usageBarGroups: strip.usageBarGroups });
         expect(line(renderer)).toEqual(['online']);
     });
 });

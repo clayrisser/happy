@@ -662,7 +662,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         : null;
     // The week figure and its popup, from agent state or, on a pane session,
     // from drover's snapshot (DROVE-47); resolveUsageStrip says which.
-    const { weekPercent, usageMenuGroups } = React.useMemo(() => resolveUsageStrip({
+    const { weekPercent, usageBarGroups } = React.useMemo(() => resolveUsageStrip({
         usageLimits: props.sessionStatusUsageLimits ?? null,
         droverUsage: props.sessionStatusDroverUsage,
         droverAccount: props.sessionStatusDroverAccount,
@@ -2213,7 +2213,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     connectionStatus={props.connectionStatus}
                     contextStatus={contextStatus}
                     weekPercent={weekPercent}
-                    usageMenuGroups={usageMenuGroups}
+                    usageBarGroups={usageBarGroups}
                     onSessionInfoPress={props.onSessionInfoPress}
                     showDetails={props.showStatusDetails !== false}
                 />
