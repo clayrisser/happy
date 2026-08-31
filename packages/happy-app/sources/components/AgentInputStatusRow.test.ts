@@ -22,9 +22,11 @@ import type { LiveStatus } from '@/utils/liveStatus';
 
 // vi.mock factories are hoisted above every import, so what they close over
 // has to be hoisted too.
-const { host, sessions } = vi.hoisted(() => ({
+const { host, sessions, screen } = vi.hoisted(() => ({
     host: (name: string) => (props: any) => React.createElement(name, props, props.children),
     sessions: {} as Record<string, { metadata: { liveStatus?: LiveStatus | null } }>,
+    // Wider than the fold threshold by default; the narrow-phone spec moves it.
+    screen: { width: 390 },
 }));
 
 vi.mock('react-native', () => ({
@@ -33,6 +35,7 @@ vi.mock('react-native', () => ({
     ScrollView: host('ScrollView'),
     Text: host('Text'),
     View: host('View'),
+    useWindowDimensions: () => screen,
 }));
 
 vi.mock('react-native-svg', () => ({ default: host('Svg'), Circle: host('Circle') }));
@@ -172,13 +175,32 @@ function line(renderer: ReturnType<typeof create>): string[] {
 
 const now = 1_700_000_000_000;
 sessions.idle = { metadata: { liveStatus: null } };
+/** The main thread thinking, with one background agent out beside it. */
 sessions.busy = {
     metadata: {
         liveStatus: {
             at: now,
             turnStartedAt: now - 61_000,
+            main: { startedAt: now - 61_000, tokens: 251_200 },
             agents: [
                 { id: 'a1', label: 'Sweep the backlog', startedAt: now - 20_000 },
+            ],
+        },
+    },
+};
+
+/**
+ * The case the dot used to get wrong (DROVE-155): the turn is over, the main
+ * thread is idle, and a background fan-out is still running.
+ */
+sessions.agentsOnly = {
+    metadata: {
+        liveStatus: {
+            at: now,
+            turnStartedAt: now - 400_000,
+            agents: [
+                { id: 'a1', label: 'Sweep the backlog', startedAt: now - 380_000, tokens: 274_622 },
+                { id: 'a2', label: 'Chase the flake', startedAt: now - 40_000 },
             ],
         },
     },
@@ -263,12 +285,14 @@ describe('AgentInputStatusRow on an idle pane session', () => {
 });
 
 describe('AgentInputStatusRow while the session is working', () => {
-    it('leads with the state and the turn clock, in the working colour, ahead of the connection', () => {
+    it('leads with the main thread\'s own state, clock and tokens, ahead of the agent count', () => {
         vi.useFakeTimers();
         vi.setSystemTime(now + 1_000);
         try {
             const renderer = row({ sessionId: 'busy' });
-            expect(line(renderer)).toEqual(['1 agent 1m 2s', '·', 'online', '·', '23% week']);
+            // The main thread first, then the agents as a bare count: the two
+            // never share a number (DROVE-155).
+            expect(line(renderer)).toEqual(['working', '1m 2s 251.2k', '1', '·', 'online', '·', '23% week']);
             expect(renderer.root.findByType('StatusDot' as any).props.color).toBe('#007AFF');
         } finally {
             vi.useRealTimers();
@@ -283,7 +307,79 @@ describe('AgentInputStatusRow while the session is working', () => {
             act(() => {
                 vi.advanceTimersByTime(3_000);
             });
-            expect(line(renderer)[0]).toBe('1 agent 1m 5s');
+            expect(line(renderer)[1]).toBe('1m 5s 251.2k');
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('names the tool the main thread is blocked on, and only the tool (DROVE-155)', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(now + 1_000);
+        try {
+            sessions.tooling = {
+                metadata: {
+                    liveStatus: {
+                        at: now,
+                        turnStartedAt: now - 61_000,
+                        main: { startedAt: now - 61_000, tokens: 1_530_411 },
+                        tool: { id: 't1', name: 'Bash', arg: 'Run the unit suite', startedAt: now - 5_000 },
+                    },
+                },
+            };
+            const renderer = row({ sessionId: 'tooling' });
+            expect(line(renderer)).toEqual(['Bash', '1m 2s 1.5M', '·', 'online', '·', '23% week']);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('lets only the tool name shrink, so the numbers can never truncate', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(now + 1_000);
+        try {
+            const renderer = row({ sessionId: 'busy' });
+            const shrinking = renderer.root.findAllByType('Text' as any)
+                .filter((node: any) => node.props.numberOfLines === 1);
+            expect(shrinking).toHaveLength(1);
+            expect(shrinking[0].props.children).toBe('working');
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('folds the tool name away on a 320pt phone and keeps the numbers (DROVE-155)', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(now + 1_000);
+        screen.width = 320;
+        try {
+            const renderer = row({ sessionId: 'busy' });
+            // The name is what the tree behind the fold carries in full; the
+            // clock and the token count are what Clay is watching.
+            expect(line(renderer)).toEqual(['1m 2s 251.2k', '1', '·', 'online', '·', '23% week']);
+        } finally {
+            screen.width = 390;
+            vi.useRealTimers();
+        }
+    });
+
+    it('folds the context percent onto its ring while the main thread works, and a tap unfolds it', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(now + 1_000);
+        try {
+            const contextStatus = { percent: 42, detailText: '84k / 200k context', color: 'ok' };
+            // Idle, the percent is on the row as before.
+            expect(line(row({ contextStatus }))).toContain('42% context');
+            // Working, the ring carries it alone: the live token count is the
+            // cost readout at that moment, and the row has to fit.
+            const renderer = row({ sessionId: 'busy', contextStatus });
+            expect(line(renderer)).not.toContain('42% context');
+            expect(renderer.root.findAllByType('Svg' as any)).toHaveLength(1);
+            const gauge = renderer.root.findAllByType('Pressable' as any).at(-1);
+            act(() => {
+                gauge!.props.onPress();
+            });
+            expect(line(renderer)).toContain('84k / 200k context');
         } finally {
             vi.useRealTimers();
         }
@@ -300,7 +396,7 @@ describe('AgentInputStatusRow while the session is working', () => {
             expect(agents().props.open).toBe(false);
             expect(renderer.root.findAllByType('ScrollView' as any)).toHaveLength(0);
             const working = renderer.root.findAllByType('Pressable' as any)[0];
-            expect(working.props.accessibilityLabel).toBe('Working: 1 agent running');
+            expect(working.props.accessibilityLabel).toBe('Main thread: working 1m 2s, 251.2k tokens, 1 agent');
             act(() => {
                 working.props.onPress();
             });
@@ -340,6 +436,86 @@ describe('AgentInputStatusRow while the session is working', () => {
                 renderer.root.findAllByType('Pressable' as any)[2].props.onPress();
             });
             expect([agents().props.open, usage().props.open]).toEqual([false, true]);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+});
+
+/**
+ * The rule DROVE-155 settled, asserted so it cannot drift back.
+ *
+ * Clay: "Is the pulsing blue dot next to the agent blinking when the agents
+ * are running or when we're actually thinking in the main chat". The dot means
+ * the MAIN thread. The count means the agents.
+ */
+describe('AgentInputStatusRow dot rule', () => {
+    it('is the working blue only while the MAIN thread is working', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(now + 1_000);
+        try {
+            expect(row({ sessionId: 'busy' }).root.findByType('StatusDot' as any).props.color)
+                .toBe('#007AFF');
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('keeps the connection colour while only background agents are out', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(now + 1_000);
+        try {
+            const renderer = row({ sessionId: 'agentsOnly' });
+            const dot = renderer.root.findByType('StatusDot' as any);
+            expect(dot.props.color).toBe('green');
+            expect(dot.props.isPulsing).toBeUndefined();
+            // The agents still say how many they are, and nothing else.
+            expect(line(renderer)).toEqual(['2', '·', 'online', '·', '23% week']);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('is the connection colour on an idle session', () => {
+        expect(row().root.findByType('StatusDot' as any).props.color).toBe('green');
+    });
+});
+
+describe('AgentInputStatusRow going idle', () => {
+    it('drops the clock and the token count rather than leaving last turn\'s on the row', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(now + 1_000);
+        try {
+            sessions.turning = {
+                metadata: {
+                    liveStatus: {
+                        at: now,
+                        turnStartedAt: now - 61_000,
+                        main: { startedAt: now - 61_000, tokens: 251_200 },
+                    },
+                },
+            };
+            const renderer = row({ sessionId: 'turning' });
+            expect(line(renderer)).toEqual(['working', '1m 2s 251.2k', '·', 'online', '·', '23% week']);
+            // The CLI writes an explicit null the moment the turn ends.
+            sessions.turning.metadata.liveStatus = null;
+            act(() => {
+                vi.advanceTimersByTime(1_000);
+            });
+            expect(line(renderer)).toEqual(['online', '·', '23% week']);
+            expect(renderer.root.findByType('StatusDot' as any).props.color).toBe('green');
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('stops trusting a snapshot the CLI stopped refreshing, instead of ticking on forever', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(now + 200_000);
+        try {
+            const renderer = row({ sessionId: 'busy' });
+            expect(line(renderer)).toEqual(['online', '·', '23% week']);
+            expect(renderer.root.findByType('StatusDot' as any).props.color).toBe('green');
         } finally {
             vi.useRealTimers();
         }

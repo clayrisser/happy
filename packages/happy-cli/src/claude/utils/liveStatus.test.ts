@@ -59,6 +59,15 @@ const assistantTextRecord = (at: number, text: string) => JSON.stringify({
     message: { role: 'assistant', content: [{ type: 'text', text }] },
 })
 
+/** An assistant record on the MAIN transcript, carrying the turn's usage. */
+const assistantUsageRecord = (at: number, usage: Record<string, number>) => JSON.stringify({
+    type: 'assistant',
+    isSidechain: false,
+    timestamp: iso(at),
+    uuid: `au-${at}`,
+    message: { role: 'assistant', content: [{ type: 'text', text: 'thinking' }], usage },
+})
+
 const agentRecord = (at: number, usage?: Record<string, number>) => JSON.stringify({
     type: usage ? 'assistant' : 'user',
     isSidechain: true,
@@ -295,6 +304,81 @@ describe('createLiveStatusReader', () => {
             arg: '/tmp/next.ts',
             startedAt: now - 500,
         })
+    })
+
+    /**
+     * The main thread's own clock and tokens (DROVE-155). Clay: "Where is the
+     * live token counter for the main thread as it's thinking".
+     */
+    it('reports the main thread\'s own start and the tokens the turn has spent', () => {
+        const now = Date.now()
+        writeFixture(now)
+        const status = createLiveStatusReader({ projectDir, sessionId }).read(now)
+        expect(status!.main).toEqual({ startedAt: now - 300_000 })
+        appendFileSync(transcript, `${assistantUsageRecord(now - 2_000, {
+            input_tokens: 12,
+            output_tokens: 30,
+            cache_creation_input_tokens: 1958,
+            cache_read_input_tokens: 240_000,
+        })}\n`)
+        const reader = createLiveStatusReader({ projectDir, sessionId })
+        // The same three fields an agent's count uses, and cache reads left
+        // out of it for the same reason.
+        expect(reader.read(now)!.main).toEqual({ startedAt: now - 300_000, tokens: 2000 })
+    })
+
+    it('starts the token count over on the next prompt, so the row never shows the last turn\'s', () => {
+        const now = Date.now()
+        writeFileSync(transcript, [
+            promptRecord(now - 600_000, 'first'),
+            assistantUsageRecord(now - 590_000, { input_tokens: 500_000, output_tokens: 0 }),
+            assistantTextRecord(now - 580_000, 'Done.'),
+            promptRecord(now - 60_000, 'second'),
+            assistantUsageRecord(now - 4_000, { input_tokens: 40, output_tokens: 60 }),
+            '',
+        ].join('\n'))
+        const status = createLiveStatusReader({ projectDir, sessionId }).read(now)
+        expect(status!.main).toEqual({ startedAt: now - 60_000, tokens: 100 })
+    })
+
+    it('leaves the main block out while only background agents are out (DROVE-155)', () => {
+        const now = Date.now()
+        // The turn ended long ago: no open tool, nothing thinking, the
+        // transcript quiet. An agent it launched is still writing.
+        writeFileSync(transcript, [
+            promptRecord(now - 400_000, 'go'),
+            toolUseRecord(now - 390_000, 'toolu_agent_a', 'Agent', { description: 'Sweep the backlog' }),
+            toolResultRecord(now - 389_000, 'toolu_agent_a'),
+            assistantTextRecord(now - 300_000, 'Launched it.'),
+            '',
+        ].join('\n'))
+        writeFileSync(join(subagents, 'agent-a1.meta.json'), JSON.stringify({
+            description: 'Sweep the backlog',
+            toolUseId: 'toolu_agent_a',
+        }))
+        writeFileSync(join(subagents, 'agent-a1.jsonl'), [
+            agentRecord(now - 380_000),
+            agentRecord(now - 10_000, { input_tokens: 8, output_tokens: 42, cache_creation_input_tokens: 950 }),
+            '',
+        ].join('\n'))
+        touch(join(subagents, 'agent-a1.jsonl'), now - 5_000)
+
+        const status = createLiveStatusReader({ projectDir, sessionId }).read(now)
+        expect(status!.agents).toHaveLength(1)
+        // This is what keeps the phone's dot off: the pane is not idle, but
+        // the MAIN thread is.
+        expect(status!.main).toBeUndefined()
+    })
+
+    it('calls the main thread busy while the model composes, which writes nothing to disk', () => {
+        const now = Date.now()
+        writeFileSync(transcript, [
+            promptRecord(now - 900_000, 'sketch it'),
+            assistantTextRecord(now - 880_000, 'Thinking about it.'),
+            '',
+        ].join('\n'))
+        const busy = createLiveStatusReader({ projectDir, sessionId, isThinking: () => true }).read(now)
+        expect(busy!.main).toEqual({ startedAt: now - 900_000 })
     })
 
     it('ignores a subagent\'s own tool calls, which are written into the parent transcript too', () => {

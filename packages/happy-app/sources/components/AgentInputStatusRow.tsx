@@ -1,12 +1,17 @@
 import * as React from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { Pressable, Text, useWindowDimensions, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Svg, { Circle } from 'react-native-svg';
 import { useUnistyles } from 'react-native-unistyles';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 import { useSession } from '@/sync/storage';
-import { isLiveStatusFresh, summarizeLiveStatus, type LiveStatusSummary } from '@/utils/liveStatus';
+import {
+    isLiveStatusFresh,
+    summarizeLiveStatus,
+    type LiveStatusMain,
+    type LiveStatusSummary,
+} from '@/utils/liveStatus';
 import { STATUS_ROW_TAP_SLOP_BOTTOM, STATUS_ROW_TAP_SLOP_TOP } from './agentDockLayout';
 import { MOBILE_COMPOSER_LAYOUT, MOBILE_COMPOSER_METRICS } from './agentInputLayout';
 import { COMPOSER_STRIP_MIN_HEIGHT, COMPOSER_STRIP_PADDING_TOP } from './composerStripLayout';
@@ -27,10 +32,11 @@ import { useTickingNow } from './useTickingNow';
  * week quota on its own line below (DROVE-47). Forty characters spread over
  * three lines of a phone screen. This is all of it on one line:
  *
- *     ● Bash 1m 1s ˄ · online · 65% week
+ *     ● Bash 1m 2s 251.2k · ⚇3 ˄ · online · 65% week
  *
- * Left to right: what the session is doing and for how long, then the
- * connection, then the quota and the context gauge. The branch was here
+ * Left to right: what the MAIN thread is doing, for how long, and what it has
+ * spent (DROVE-155); how many background agents are out; then the connection,
+ * the quota and the context gauge. The branch was here
  * too until DROVE-90 moved it under the session title, where tapping it
  * lists the repo's worktrees; Clay found the row too full. Nothing was
  * dropped, only folded: the working segment opens the agent tree, the
@@ -44,6 +50,31 @@ import { useTickingNow } from './useTickingNow';
  * piece of state holds which is open, so opening one closes the other rather
  * than stacking them.
  *
+ * THE DOT IS THE MAIN THREAD (DROVE-155). Clay: "Is the pulsing blue dot next
+ * to the agent blinking when the agents are running or when we're actually
+ * thinking in the main chat". It used to be neither on purpose: it went blue
+ * whenever a live snapshot existed, which included a session whose only
+ * activity was a background fan-out. The rule now, and do not let it drift
+ * back:
+ *
+ *   the DOT says whether the MAIN thread is working, in the working blue.
+ *   the COUNT beside the fold says how many agents are out.
+ *   nothing else on the row speaks for either.
+ *
+ * The main thread's numbers and the agents' count never share a segment or a
+ * clock, because "3 agents 29s" reading as the agents' time is the confusion
+ * this replaced.
+ *
+ * Three things are FOLDED to keep one line on the narrowest phone with a quota
+ * on it too, and nothing is truncated:
+ *
+ *   - the word "agents" is a glyph and a count; the tree spells it out.
+ *   - the context gauge drops its percent text while the main thread works,
+ *     because the live token count is the cost readout at that moment. A tap
+ *     still opens the exact figure.
+ *   - under 360pt the tool NAME goes and the numbers stay, which is the one
+ *     that only a 320pt phone ever sees.
+ *
  * Renders nothing at all when there is nothing to say, so an empty session
  * does not gain a blank strip. Its own module so a test can mount it without
  * the composer around it.
@@ -51,6 +82,18 @@ import { useTickingNow } from './useTickingNow';
 
 /** The working colour, the same blue the thinking dot and the old strip used. */
 const workingColor = '#007AFF';
+
+/**
+ * Under this width the row folds the tool name away (DROVE-155).
+ *
+ * Measured at 11pt against the widest working row — dot, state, clock, tokens,
+ * agent count, chevron, connection, quota and the gauge. At 375pt (SE 2nd/3rd
+ * gen, 13 mini, and everything wider) it all fits with room. At 320pt (SE 1st
+ * gen) it is about a dozen points over, so the NAME goes and the numbers stay:
+ * the numbers are what Clay is watching, and the tree behind the fold spells
+ * the tool out in full. Nothing is truncated at either width.
+ */
+const narrowRowWidth = 360;
 
 /**
  * Touch area around each segment's 11pt text.
@@ -176,6 +219,23 @@ function useLiveStatusSummary(sessionId: string | undefined): LiveStatusSummary 
     );
 }
 
+/**
+ * What a screen reader hears for the live segment.
+ *
+ * Spelled out, because the row itself is a glyph and a number: the main
+ * thread's state and numbers first, then the agents as a count with the word
+ * the row folded away.
+ */
+function accessibilityLabelFor(main: LiveStatusMain | null, sideCount: number): string {
+    const parts: string[] = [];
+    if (main) {
+        parts.push(`Main thread: ${main.label} ${main.elapsed}`);
+        if (main.tokens) parts.push(`${main.tokens} tokens`);
+    }
+    if (sideCount > 0) parts.push(`${sideCount} ${sideCount === 1 ? 'agent' : 'agents'}`);
+    return parts.join(', ');
+}
+
 function Separator() {
     const { theme } = useUnistyles();
     return (
@@ -197,6 +257,7 @@ function CliCheck(props: { name: string; ok: boolean | null }) {
 
 export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: StatusRowProps) {
     const { theme } = useUnistyles();
+    const { width } = useWindowDimensions();
     // One value, not two flags: what makes opening the quota close the tree.
     const [openSheet, setOpenSheet] = React.useState<'agents' | 'usage' | null>(null);
     const [showPreciseContext, setShowPreciseContext] = React.useState(false);
@@ -212,7 +273,10 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
     const canOpenUsage = p.usageBarGroups.length > 0;
     const segments: React.ReactNode[] = [];
 
-    if (summary) {
+    const main = summary?.main ?? null;
+    const sideCount = summary?.sideCount ?? 0;
+    const showLabel = width >= narrowRowWidth;
+    if (summary && (main || sideCount > 0)) {
         segments.push(
             <Pressable
                 key="live"
@@ -222,27 +286,50 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
                 hitSlop={segmentHitSlop}
                 accessibilityRole={canExpand ? 'button' : undefined}
                 accessibilityState={canExpand ? { expanded: openSheet === 'agents' } : undefined}
-                accessibilityLabel={`Working: ${summary.headline}`}
+                accessibilityLabel={accessibilityLabelFor(main, sideCount)}
                 style={({ pressed }) => ({
                     flexDirection: 'row',
                     alignItems: 'center',
                     gap: 3,
-                    // Shrinks after the branch does: a long tool name must
-                    // not push the quota off the line, but the branch is
-                    // the segment with a tail worth keeping.
+                    // The one segment that gives way, and only in its name:
+                    // a long tool name must not push the quota off the line.
                     flexShrink: 1,
-                    maxWidth: '45%',
+                    maxWidth: '60%',
                     opacity: pressed && canExpand ? 0.6 : 1,
                 })}
             >
-                <Text
-                    numberOfLines={1}
-                    style={{ fontSize: 11, color: theme.colors.text, flexShrink: 1, ...Typography.default() }}
-                >
-                    {summary.compact.elapsed
-                        ? `${summary.compact.label} ${summary.compact.elapsed}`
-                        : summary.compact.label}
-                </Text>
+                {main ? (
+                    <>
+                        {/* The only text on the row allowed to shrink, and the
+                            first thing to fold on a narrow phone. A
+                            30-character MCP tool name gives way; the clock and
+                            the token count never do, because they are what
+                            Clay is watching. */}
+                        {showLabel ? (
+                            <Text
+                                numberOfLines={1}
+                                style={{ fontSize: 11, color: theme.colors.text, flexShrink: 1, ...Typography.default() }}
+                            >
+                                {main.label}
+                            </Text>
+                        ) : null}
+                        <Text style={{ fontSize: 11, color: theme.colors.text, ...Typography.default() }}>
+                            {main.tokens ? `${main.elapsed} ${main.tokens}` : main.elapsed}
+                        </Text>
+                    </>
+                ) : null}
+                {sideCount > 0 ? (
+                    <>
+                        {/* The agents, and the whole of what the row says
+                            about them: a glyph and a number, in the secondary
+                            colour so they never read as the main thread's own.
+                            The word and every name are behind the fold. */}
+                        <Ionicons name="people" size={11} color={theme.colors.textSecondary} />
+                        <Text style={{ fontSize: 11, color: theme.colors.textSecondary, ...Typography.default() }}>
+                            {sideCount}
+                        </Text>
+                    </>
+                ) : null}
                 {canExpand ? (
                     <Ionicons
                         name={openSheet === 'agents' ? 'chevron-down' : 'chevron-up'}
@@ -325,20 +412,26 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
                 hitSlop={{ ...segmentHitSlop, right: 14 }}
                 style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}
             >
-                <Text style={{ fontSize: 11, color: context.color, ...Typography.default() }}>
-                    {showPreciseContext
-                        ? context.detailText
-                        : t('agentInput.context.percentContext', { percent: context.percent })}
-                </Text>
+                {showPreciseContext || !main ? (
+                    <Text style={{ fontSize: 11, color: context.color, ...Typography.default() }}>
+                        {showPreciseContext
+                            ? context.detailText
+                            : t('agentInput.context.percentContext', { percent: context.percent })}
+                    </Text>
+                ) : null}
                 <ContextGaugeIcon percent={context.percent} />
             </Pressable>,
         );
     }
 
-    // One dot, and its colour is the state: the working blue while the CLI
-    // reports a live turn, otherwise whatever the connection says (green
-    // online, grey gone, orange waiting on you).
-    const dotColor = summary ? workingColor : p.connectionStatus?.dotColor;
+    // THE DOT IS THE MAIN THREAD (DROVE-155). See the rule at the top of this
+    // file. Blue and pulsing exactly while the MAIN thread is working;
+    // otherwise whatever the connection says (green online, grey gone, orange
+    // waiting on you). It was `summary ? ...` — any live snapshot at all — and
+    // that is what made it blue for a session whose only activity was a
+    // background fan-out.
+    const mainWorking = main !== null;
+    const dotColor = mainWorking ? workingColor : p.connectionStatus?.dotColor;
 
     return (
         <AnimatedFade visible={p.showDetails || summary !== null}>
@@ -361,7 +454,7 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
                 {dotColor ? (
                     <StatusDot
                         color={dotColor}
-                        isPulsing={summary ? true : p.connectionStatus?.isPulsing}
+                        isPulsing={mainWorking ? true : p.connectionStatus?.isPulsing}
                         size={6}
                         // Optically centres the dot against the 11pt text baseline.
                         style={{ marginTop: 1, marginRight: 5 }}
