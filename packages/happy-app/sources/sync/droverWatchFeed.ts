@@ -607,6 +607,14 @@ export function startDroverWatchFeed(): () => void {
     // it.
     const flips = addDroverFlipListener((event) => {
         if (!event.sessionId) return;
+        // The demo stages a session on the wrist so "Session finished" can play
+        // by the real diff (DROVE-222). It is on the wall for under a second,
+        // but a flip aimed at it must not reach sync: the same refusal the
+        // demo GATE already gets below, for the other demo-namespaced id.
+        if (isDroverDemoId(event.sessionId)) {
+            demoLog(`wrist asked to flip demo session ${event.sessionId}; dropped, nothing sent`);
+            return;
+        }
         const text = event.account ? `/flip ${event.account}` : '/flip';
         void Promise.resolve(sync.sendMessage(event.sessionId, text)).catch(() => {});
     });
@@ -621,6 +629,10 @@ export function startDroverWatchFeed(): () => void {
     const says = addDroverSayListener((event) => {
         const text = (event.text ?? '').trim();
         if (!event.sessionId || !text) return;
+        if (isDroverDemoId(event.sessionId)) {
+            demoLog(`wrist dictated into demo session ${event.sessionId}; dropped, nothing sent`);
+            return;
+        }
         readAloud.userSent();
         void Promise.resolve(sync.sendMessage(event.sessionId, text, { source: 'voice' })).catch(() => {});
     });
