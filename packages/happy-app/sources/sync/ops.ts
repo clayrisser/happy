@@ -6,6 +6,7 @@
 import { apiSocket } from './apiSocket';
 import { sync } from './sync';
 import { storage } from './storage';
+import { describeDemoInput, isDroverDemoId, recordDemoAnswer } from './droverDemo';
 import type { AgentQuestionAnswer, MachineMetadata, SessionAgentModesPatch } from './storageTypes';
 import { markAgentModePushPending, clearAgentModePushPending, type AgentModeField } from './agentModesPending';
 import {
@@ -775,6 +776,11 @@ async function sessionUpdateAgentModesMetadata(
  * metadata update reconciles the UI.
  */
 export function sessionSetAgentModes(sessionId: string, patch: SessionAgentModesPatch): void {
+    // PermissionFooter follows an "allow all edits" with a mode change for the
+    // session. On a demo card there is no session to change, and without this
+    // the write below would mint a metadata update for a session id that does
+    // not exist (DROVE-75).
+    if (isDroverDemoId(sessionId)) return;
     const state = storage.getState();
     const session = state.sessions[sessionId];
 
@@ -840,6 +846,19 @@ export async function sessionAbort(sessionId: string): Promise<void> {
  * Allow a permission request
  */
 export async function sessionAllow(sessionId: string, id: string, mode?: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan', allowedTools?: string[], decision?: 'approved' | 'approved_for_session', updatedInput?: Record<string, unknown>): Promise<void> {
+    // THE DEMO WALL (DROVE-75). Every card in the app answers through this
+    // function and sessionDeny below, so this is the one place a demo card's
+    // button can be turned aside. A demo id goes to the local sink and is
+    // logged as a demo; it never reaches the socket, the bridge or the bus.
+    if (isDroverDemoId(sessionId) || isDroverDemoId(id)) {
+        recordDemoAnswer({
+            sessionId,
+            requestId: id,
+            verdict: updatedInput ? 'answer' : 'allow',
+            detail: describeDemoInput(updatedInput) ?? (decision === 'approved_for_session' || allowedTools?.length ? 'for session' : mode),
+        });
+        return;
+    }
     const request: SessionPermissionRequest = { id, approved: true, mode, allowTools: allowedTools, decision, updatedInput };
     await apiSocket.sessionRPC(sessionId, 'permission', request);
 }
@@ -854,6 +873,12 @@ export async function sessionAnswerQuestion(
     answers: Record<string, AgentQuestionAnswer>,
     kind: string = 'form',
 ): Promise<void> {
+    // No demo card uses the communication channel today, but a demo id must
+    // not be able to reach ANY session RPC, so the wall covers it (DROVE-75).
+    if (isDroverDemoId(sessionId) || isDroverDemoId(id)) {
+        recordDemoAnswer({ sessionId, requestId: id, verdict: 'answer', detail: kind });
+        return;
+    }
     const reply: SessionCommunicationReply = { id, kind, status: 'answered', answers };
     await apiSocket.sessionRPC(sessionId, 'communication', reply);
 }
@@ -866,6 +891,10 @@ export async function sessionCancelCommunication(
     id: string,
     kind: string = 'form',
 ): Promise<void> {
+    if (isDroverDemoId(sessionId) || isDroverDemoId(id)) {
+        recordDemoAnswer({ sessionId, requestId: id, verdict: 'cancel', detail: kind });
+        return;
+    }
     const reply: SessionCommunicationReply = { id, kind, status: 'cancelled' };
     await apiSocket.sessionRPC(sessionId, 'communication', reply);
 }
@@ -874,6 +903,11 @@ export async function sessionCancelCommunication(
  * Deny a permission request
  */
 export async function sessionDeny(sessionId: string, id: string, mode?: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan', allowedTools?: string[], decision?: 'denied' | 'abort'): Promise<void> {
+    // The other half of the demo wall; see sessionAllow (DROVE-75).
+    if (isDroverDemoId(sessionId) || isDroverDemoId(id)) {
+        recordDemoAnswer({ sessionId, requestId: id, verdict: 'deny', detail: decision });
+        return;
+    }
     const request: SessionPermissionRequest = { id, approved: false, mode, allowTools: allowedTools, decision };
     await apiSocket.sessionRPC(sessionId, 'permission', request);
 }

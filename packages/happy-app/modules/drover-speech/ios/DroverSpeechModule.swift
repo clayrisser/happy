@@ -14,6 +14,12 @@ import Speech
 /// voice turns out too robotic the same speak/stop pair fronts a cloud voice
 /// later; nothing above this file would change.
 ///
+/// Which voice speaks is not left to the OS (DROVE-97): unasked, iOS uses the
+/// compact voice for the locale, the robotic one. `speak` takes a voice
+/// identifier from JS, which picks over `listVoices()`, and when none is
+/// given or the one given is not installed it falls back to the best quality
+/// installed for the language: premium, then enhanced, then compact.
+///
 /// Speech IN is SFSpeechRecognizer with `requiresOnDeviceRecognition = true`.
 /// When a locale has no on-device model this FAILS, loudly, rather than
 /// quietly shipping the microphone to Apple's servers — the alternative is a
@@ -44,6 +50,19 @@ final class DroverSpeechDelegate: NSObject, AVSpeechSynthesizerDelegate {
         onUtteranceEnded = nil
         ended?(false)
     }
+}
+
+/// What JS passes with each utterance. Defaults match the JS side so an old
+/// bundle that sends fewer fields still speaks.
+struct SpeakOptions: Record {
+    /// AVSpeechUtterance.rate, 0 to 1. 0.5 is AVSpeechUtteranceDefaultSpeechRate.
+    @Field var rate: Double = 0.52
+    /// AVSpeechUtterance.pitchMultiplier, 0.5 to 2.0.
+    @Field var pitch: Double = 1.0
+    /// An identifier from `listVoices()`; nil or unknown falls back by quality.
+    @Field var voiceId: String? = nil
+    /// BCP 47 tag the text is in; nil means the synthesiser's current language.
+    @Field var language: String? = nil
 }
 
 public final class DroverSpeechModule: Module {
@@ -94,7 +113,7 @@ public final class DroverSpeechModule: Module {
         /// Speak one utterance and resolve when it is over — finished or cut.
         /// One at a time: the JS queue speaks sentence by sentence so that
         /// stopping lands mid-sentence instead of at the end of a paragraph.
-        AsyncFunction("speak") { (text: String, rate: Double, promise: Promise) in
+        AsyncFunction("speak") { (text: String, options: SpeakOptions, promise: Promise) in
             if self.isDictating {
                 promise.reject(
                     "DroverSpeech",
@@ -124,9 +143,33 @@ public final class DroverSpeechModule: Module {
             }
 
             let utterance = AVSpeechUtterance(string: text)
-            utterance.rate = Float(rate)
-            utterance.prefersAssistiveTechnologySettings = true
+            utterance.rate = Float(min(max(options.rate, 0.0), 1.0))
+            utterance.pitchMultiplier = Float(min(max(options.pitch, 0.5), 2.0))
+            utterance.voice = self.bestVoice(language: options.language, chosenId: options.voiceId)
+            // With this on, iOS swaps in the Spoken Content voice and rate from
+            // Accessibility and ignores the ones set here, which is how build
+            // 10 ended up in the compact voice whatever was picked.
+            utterance.prefersAssistiveTechnologySettings = false
             self.synthesizer.speak(utterance)
+        }
+
+        /// Every voice installed on the device, with the fields JS picks on.
+        /// Quality is the string JS types against: "default", "enhanced" or
+        /// "premium". A Personal Voice (iOS 17) is flagged so the picker can
+        /// label it; it is listed only once the user has authorised it.
+        AsyncFunction("listVoices") { () -> [[String: Any]] in
+            AVSpeechSynthesisVoice.speechVoices().map { voice in
+                var entry: [String: Any] = [
+                    "identifier": voice.identifier,
+                    "name": voice.name,
+                    "language": voice.language,
+                    "quality": DroverSpeechModule.qualityName(voice.quality),
+                ]
+                if #available(iOS 17.0, *), voice.voiceTraits.contains(.isPersonalVoice) {
+                    entry["personal"] = true
+                }
+                return entry
+            }
         }
 
         /// Cut whatever is speaking, mid-word, and hand the audio session back
@@ -222,6 +265,53 @@ public final class DroverSpeechModule: Module {
             self.teardownDictation()
             self.latestTranscript = ""
             self.pendingStop = nil
+        }
+    }
+
+    //
+    // Voice choice (DROVE-97)
+    //
+
+    private static func qualityName(_ quality: AVSpeechSynthesisVoiceQuality) -> String {
+        if #available(iOS 16.0, *), quality == .premium { return "premium" }
+        if quality == .enhanced { return "enhanced" }
+        return "default"
+    }
+
+    private static func qualityRank(_ quality: AVSpeechSynthesisVoiceQuality) -> Int {
+        if #available(iOS 16.0, *), quality == .premium { return 3 }
+        if quality == .enhanced { return 2 }
+        return 1
+    }
+
+    private static func normalizedTag(_ tag: String) -> String {
+        tag.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "_", with: "-").lowercased()
+    }
+
+    private static func primarySubtag(_ tag: String) -> String {
+        normalizedTag(tag).split(separator: "-").first.map(String.init) ?? ""
+    }
+
+    /// The same rule as pickVoice in sources/voice/voicePick.ts: the chosen
+    /// voice when it is installed, else the best quality for the language,
+    /// exact region first and the wider language when the region has none.
+    /// Nil hands the choice back to the synthesiser, which is what happened
+    /// for every utterance before DROVE-97.
+    private func bestVoice(language: String?, chosenId: String?) -> AVSpeechSynthesisVoice? {
+        if let chosenId, !chosenId.isEmpty, let chosen = AVSpeechSynthesisVoice(identifier: chosenId) {
+            return chosen
+        }
+        let wanted = language ?? AVSpeechSynthesisVoice.currentLanguageCode()
+        let all = AVSpeechSynthesisVoice.speechVoices()
+        let exact = all.filter { Self.normalizedTag($0.language) == Self.normalizedTag(wanted) }
+        let primary = Self.primarySubtag(wanted)
+        let candidates = exact.isEmpty
+            ? all.filter { Self.primarySubtag($0.language) == primary }
+            : exact
+        return candidates.max { a, b in
+            let rank = Self.qualityRank(a.quality) - Self.qualityRank(b.quality)
+            // max() wants "a < b"; on a tie the name decides so a pick is stable.
+            return rank != 0 ? rank < 0 : a.name > b.name
         }
     }
 

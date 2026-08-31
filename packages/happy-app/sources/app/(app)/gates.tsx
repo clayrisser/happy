@@ -10,7 +10,7 @@ import {
     View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { ItemList } from '@/components/ItemList';
@@ -20,6 +20,7 @@ import { Typography } from '@/constants/Typography';
 import { usePendingGates, type DroverGateEntry } from '@/hooks/usePendingGates';
 import { useNavigateToSession } from '@/hooks/useNavigateToSession';
 import { ageLabel, splitInbox } from '@/sync/droverGates';
+import { isDroverDemoId } from '@/sync/droverDemo';
 import { sessionAllow, sessionDeny } from '@/sync/ops';
 import {
     hasAnswerableOptions,
@@ -114,6 +115,7 @@ export default function GatesScreen() {
                     />
                 )}
                 {todos.map(card)}
+                <PlaygroundLink />
             </View>
         </ItemList>
     );
@@ -160,14 +162,24 @@ function EmptyGates({ topContentInset }: { topContentInset: number }) {
                 Prompts from every session land here, and so does anything an
                 agent has asked you to do.
             </Text>
+            <PlaygroundLink />
         </View>
     );
 }
 
-const GateCard = React.memo(({ entry, focused }: { entry: DroverGateEntry; focused: boolean }) => {
+/**
+ * One inbox card. Exported for the channel demo (DROVE-75), which renders it
+ * from a fixture so the inbox shapes can be judged beside the transcript ones.
+ * A demo entry answers into the demo sink through the same sessionAllow /
+ * sessionDeny below; nothing here knows the difference, which is the point.
+ */
+export const GateCard = React.memo(({ entry, focused }: { entry: DroverGateEntry; focused: boolean }) => {
     const { theme } = useUnistyles();
     const navigateToSession = useNavigateToSession();
     const { gate, sessionId, requestId } = entry;
+    // A demo card has no session to open. Left live, the header would push a
+    // session route for an id that exists nowhere.
+    const demo = isDroverDemoId(sessionId);
     const [busy, setBusy] = React.useState<'allow' | 'deny' | null>(null);
 
     const cards = React.useMemo(() => questionCards(entry.args), [entry.args]);
@@ -236,7 +248,8 @@ const GateCard = React.memo(({ entry, focused }: { entry: DroverGateEntry; focus
     return (
         <View style={[styles.card, focused && styles.cardFocused]}>
             <Pressable
-                onPress={() => navigateToSession(sessionId)}
+                onPress={demo ? undefined : () => navigateToSession(sessionId)}
+                disabled={demo}
                 style={styles.cardHeader}
                 accessibilityRole="button"
                 accessibilityLabel={`Open the session asking: ${gate.title}`}
@@ -346,7 +359,57 @@ const GateCard = React.memo(({ entry, focused }: { entry: DroverGateEntry; focus
 
 GateCard.displayName = 'GateCard';
 
+/**
+ * The way into the channel playground from the longhorn menu (DROVE-75):
+ * every wrist buzz, voice and card shape on demand, and a real push. Here as
+ * well as under Settings because this is the screen Clay opens when he is
+ * wondering what a buzz meant.
+ */
+function PlaygroundLink() {
+    const { theme } = useUnistyles();
+    const router = useRouter();
+    return (
+        <Pressable
+            onPress={() => router.push('/settings/demo' as any)}
+            style={styles.playground}
+            accessibilityRole="button"
+            accessibilityLabel="Open the channel playground"
+        >
+            <Ionicons name="pulse-outline" size={18} color={theme.colors.textSecondary} />
+            <View style={styles.playgroundText}>
+                <Text style={styles.playgroundLabel}>Playground</Text>
+                <Text style={styles.playgroundNote}>Try every buzz, voice and card, and send yourself a test push</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color={theme.colors.textSecondary} />
+        </Pressable>
+    );
+}
+
 const styles = StyleSheet.create((theme) => ({
+    playground: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+        paddingHorizontal: 14,
+        paddingVertical: 12,
+        borderRadius: 12,
+        backgroundColor: theme.colors.surface,
+        alignSelf: 'stretch',
+    },
+    playgroundText: {
+        flex: 1,
+        gap: 2,
+    },
+    playgroundLabel: {
+        ...Typography.default('semiBold'),
+        fontSize: 15,
+        color: theme.colors.text,
+    },
+    playgroundNote: {
+        ...Typography.default(),
+        fontSize: 12,
+        color: theme.colors.textSecondary,
+    },
     list: {
         width: '100%',
         maxWidth: layout.maxWidth,

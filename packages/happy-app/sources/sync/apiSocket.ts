@@ -4,6 +4,7 @@ import Constants from 'expo-constants';
 import { TokenStorage } from '@/auth/tokenStorage';
 import { Encryption } from './encryption/encryption';
 import { storage } from './storage';
+import { isDroverDemoId } from './droverDemo';
 
 export function getHappyClientId(): string {
     let platform: string = Platform.OS; // 'ios' | 'android' | 'web'
@@ -178,6 +179,15 @@ class ApiSocket {
      * RPC call for sessions - uses session-specific encryption
      */
     async sessionRPC<R, A>(sessionId: string, method: string, params: A): Promise<R> {
+        // A demo session never has encryption, so this would already fail one
+        // line down, but by accident. Refusing it by name is the guarantee the
+        // demo screen is built on: no caller, present or future, can put a
+        // `demo:` id on the wire (DROVE-75). ops.ts turns demo answers aside
+        // before they get here; this is for anything that does not go through
+        // ops.
+        if (isDroverDemoId(sessionId)) {
+            throw new Error(`refused: ${sessionId} is a demo session and never reaches the wire (${method})`);
+        }
         const sessionEncryption = this.encryption!.getSessionEncryption(sessionId);
         if (!sessionEncryption) {
             throw new Error(`Session encryption not found for ${sessionId}`);

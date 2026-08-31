@@ -28,6 +28,38 @@ export const CodeWrapSchema = z.object({
 });
 export type CodeWrap = z.infer<typeof CodeWrapSchema>;
 
+// Stream-talk voice (DROVE-97): which installed voice reads replies aloud,
+// how fast and how high, and how far behind the text the voice may fall
+// before it skips ahead. One nested value, like codeWrap, so a partial
+// object from another app version merges instead of failing the parse. The
+// voice identifier is per-device in practice (an iPad may not have the
+// iPhone's voice installed), so a missing voice falls back to the best
+// installed one rather than to silence.
+export const StreamTalkSchema = z.object({
+    voiceId: z.string().nullable().optional(),
+    rate: z.number().optional(),
+    pitch: z.number().optional(),
+    maxLagSeconds: z.number().optional(),
+});
+export type StreamTalk = z.infer<typeof StreamTalkSchema>;
+
+/**
+ * AVSpeechUtterance takes a rate from 0 to 1 and the default of 0.5 reads
+ * slower than most people want for prose they are half-listening to. The
+ * slider covers the range that still sounds like a person.
+ */
+export const streamTalkRateRange = { min: 0.4, max: 0.6 } as const;
+/** AVSpeechUtterance.pitchMultiplier accepts 0.5 to 2.0. */
+export const streamTalkPitchRange = { min: 0.5, max: 2.0 } as const;
+/** Seconds the voice may lag the text before it drops the backlog. */
+export const streamTalkLagRange = { min: 10, max: 30 } as const;
+
+export const streamTalkDefaults: Required<StreamTalk> = {
+    voiceId: null,
+    rate: 0.52,
+    pitch: 1.0,
+    maxLagSeconds: 15,
+};
 // The three feedback channels and how audio may answer (DROVE-72). Clay's
 // four ways of working (silent haptic, eyes-free audio, direct, hands-free
 // voice) are saved COMBINATIONS of these four keys, never code paths, and a
@@ -75,6 +107,7 @@ export const SettingsSchema = z.object({
     userMessageBubbleColor: z.string().describe('User message bubble color preset'),
     usageLimitShowRemaining: z.boolean().describe('Show plan rate limits as quota remaining instead of quota used'),
     codeWrap: CodeWrapSchema.describe('Soft-wrap monospace text in terminal cards and code blocks, toggled by double-tap'),
+    streamTalk: StreamTalkSchema.describe('Read-aloud voice: chosen voice identifier, rate, pitch and the lag threshold before skipping ahead'),
     droverAnnounceVisual: z.boolean().describe('Visual channel: the alert push and the gum client announce a Cattle Drover prompt'),
     droverAnnounceHaptic: z.boolean().describe('Haptic channel: the phone taps and the wrist buzzes when a Cattle Drover prompt arrives'),
     droverAnnounceAudio: z.boolean().describe('Audio channel: a Cattle Drover prompt is spoken aloud when it arrives'),
@@ -164,6 +197,7 @@ export const settingsDefaults: Settings = {
     userMessageBubbleColor: DEFAULT_USER_MESSAGE_BUBBLE_COLOR,
     usageLimitShowRemaining: false,
     codeWrap: { terminal: false, code: false },
+    streamTalk: { ...streamTalkDefaults },
     // Visual and haptic on, matching the bus's built-in defaults: the push and
     // the wrist buzz are what Clay already has. Audio off until DROVE-73's
     // measurements say what answering by click costs.
@@ -278,4 +312,33 @@ export function toggleCodeWrap(settings: Pick<Settings, 'codeWrap'>, kind: CodeW
             [kind]: !isCodeWrapOn(settings, kind),
         },
     };
+}
+
+//
+// Stream-talk voice (DROVE-97)
+//
+
+function clamp(value: number | undefined, fallback: number, range: { min: number; max: number }): number {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+    return Math.min(range.max, Math.max(range.min, value));
+}
+
+/**
+ * The stream-talk settings with every field present and inside its range,
+ * whatever a synced partial object from another app version left out or
+ * pushed past the slider.
+ */
+export function resolveStreamTalk(settings: Pick<Settings, 'streamTalk'>): Required<StreamTalk> {
+    const raw = settings.streamTalk ?? {};
+    return {
+        voiceId: typeof raw.voiceId === 'string' && raw.voiceId.length > 0 ? raw.voiceId : null,
+        rate: clamp(raw.rate, streamTalkDefaults.rate, streamTalkRateRange),
+        pitch: clamp(raw.pitch, streamTalkDefaults.pitch, streamTalkPitchRange),
+        maxLagSeconds: clamp(raw.maxLagSeconds, streamTalkDefaults.maxLagSeconds, streamTalkLagRange),
+    };
+}
+
+/** The delta that changes some stream-talk fields and keeps the rest. */
+export function updateStreamTalk(settings: Pick<Settings, 'streamTalk'>, patch: Partial<StreamTalk>): Pick<Settings, 'streamTalk'> {
+    return { streamTalk: { ...resolveStreamTalk(settings), ...patch } };
 }

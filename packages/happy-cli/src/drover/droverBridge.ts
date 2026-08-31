@@ -24,6 +24,7 @@ import { projectPath } from '@/projectPath'
 import { logger } from '@/ui/logger'
 import { getOrCreateBridgeSession } from './bridgeSession'
 import { createOriginRegistry } from './originSession'
+import { isDroverDemoId } from './demo'
 import packageJson from '../../package.json'
 
 const DROVER_URL = process.env.DROVER_URL || 'http://127.0.0.1:7970'
@@ -400,6 +401,11 @@ export function busResolutionFor(
     ev: DroverEvent | undefined,
     answer: PermissionAnswer
 ): Record<string, unknown> | null {
+    // A demo card's answer means nothing the bus will take, by construction
+    // (DROVE-75). The phone already refuses to send one; this is the Mac's
+    // own refusal for the same namespace, so no event and no answer shape can
+    // make a demo id resolve anything.
+    if (isDroverDemoId(answer.id) || isDroverDemoId(ev?.id)) return null
     // WHO and OVER WHICH CHANNEL (DROVE-72). This sent `...who` for every
     // answer, so the bus could not tell a wrist from a thumb on the phone —
     // which made "two channels answering the same event" unprovable on the
@@ -619,6 +625,14 @@ export async function runDroverBridge(): Promise<void> {
     client.rpcHandlerManager.registerHandler<PermissionAnswer, void>(
         'permission',
         async (message) => {
+            // The demo wall, Mac side (DROVE-75). Named in the log as a demo
+            // so a refused demo answer is never read as a real answer that
+            // went missing. busResolutionFor refuses it too; this is so the
+            // line says WHY rather than "answered with nothing the bus takes".
+            if (isDroverDemoId(message.id)) {
+                logger.debug(`[drover-demo] refused app answer for demo card ${message.id}; nothing resolved`)
+                return
+            }
             const body = busResolutionFor(mirrored.get(message.id), message)
             if (!body) {
                 // Named, because for a to-do this is now a REFUSAL rather than
