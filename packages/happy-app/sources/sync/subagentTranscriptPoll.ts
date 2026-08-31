@@ -18,8 +18,10 @@
  *
  * 2. THE PHONE'S SIDE COUNTS TOO. A phone off the network fails in exactly
  *    the same place as a Mac that is rebooting, so the cause is classified
- *    from the socket's own status rather than from the words in the error,
- *    and both recover through the same loop.
+ *    from what is observable rather than from the words in the error, and
+ *    both recover through the same loop. DROVE-211 narrowed what counts as
+ *    observable: a phone with a socket to the SERVER knows nothing about the
+ *    Mac, so only the session's own presence may name the far end.
  *
  * 3. THE TRANSPORT'S WORDS ARE NOT THE USER'S. `RPC target disconnected` is
  *    kept as `detail` for a log line and never shown as the headline; the
@@ -43,6 +45,12 @@ export const SUBAGENT_POLL_MS = 2_000;
 export const SUBAGENT_RETRY_MIN_MS = 2_000;
 /** The ceiling. A restart is over long before this, an outage is not. */
 export const SUBAGENT_RETRY_MAX_MS = 30_000;
+/**
+ * Between pages of one transcript (DROVE-211). The CLI is answering and it
+ * has already said there is more, so waiting out the two-second tick would
+ * draw a megabyte transcript over half a minute for no reason.
+ */
+export const SUBAGENT_PAGE_MS = 0;
 
 /**
  * Why the transcript could not be read. `offline` is this phone, `computer`
@@ -50,6 +58,18 @@ export const SUBAGENT_RETRY_MAX_MS = 30_000;
  * retrying, they differ only in what the screen says.
  */
 export type SubagentTroubleCause = 'offline' | 'computer' | 'unknown';
+
+/**
+ * What we can actually observe about the two ends of the call. Both are
+ * `undefined` when nothing has said yet, and `undefined` is never treated as
+ * a verdict.
+ */
+export interface SubagentReach {
+    /** This phone's socket to the server. */
+    phoneOnline: boolean | undefined;
+    /** The server's own presence for the session behind the RPC. */
+    sessionOnline: boolean | undefined;
+}
 
 export interface SubagentTrouble {
     cause: SubagentTroubleCause;
@@ -69,6 +89,8 @@ export interface SubagentPollSnapshot {
     loaded: boolean;
     /** Consecutive polls that produced no transcript; drives the ladder. */
     failures: number;
+    /** The CLI capped the last page and there is more past the cursor. */
+    more: boolean;
 }
 
 export function createSubagentPollSnapshot(): SubagentPollSnapshot {
@@ -79,21 +101,36 @@ export function createSubagentPollSnapshot(): SubagentPollSnapshot {
         refusal: null,
         loaded: false,
         failures: 0,
+        more: false,
     };
 }
 
 /**
- * The cause, from the socket rather than the sentence.
+ * The cause, from what we can actually see (DROVE-211).
  *
- * A phone with no connection and a Mac that is restarting both surface as an
- * rpc error, and the error text is the server's, not something to parse for
- * meaning. So: no socket means it is us, a socket means it is the computer,
- * and an error raised with no socket answer either way is left unnamed rather
- * than blamed on the wrong end.
+ * This used to read "phone has a socket, therefore the Mac is gone", which is
+ * not an inference the phone is entitled to make: its socket goes to the
+ * SERVER and says nothing about the machine at the other end. So when a call
+ * failed for any other reason, a dropped frame or a timeout or a handler
+ * that never registered, the screen told Clay his computer was restarting
+ * while it sat there answering him.
+ *
+ * The only evidence about the far end is the session's presence, which the
+ * server maintains and the session list already draws. So:
+ *
+ *   phone offline                    -> `offline`, it is us
+ *   phone online, session offline    -> `computer`, it really is gone
+ *   phone online, session online     -> `unknown`, we do not know
+ *   anything not yet known           -> `unknown`
+ *
+ * `unknown` says so on screen instead of naming a cause. A header reading
+ * `State unknown` over a body asserting a specific cause is worse than either
+ * alone.
  */
-export function classifySubagentFailure(online: boolean | undefined): SubagentTroubleCause {
-    if (online === false) return 'offline';
-    return online === true ? 'computer' : 'unknown';
+export function classifySubagentFailure(reach: SubagentReach): SubagentTroubleCause {
+    if (reach.phoneOnline === false) return 'offline';
+    if (reach.phoneOnline === true && reach.sessionOnline === false) return 'computer';
+    return 'unknown';
 }
 
 export function errorDetail(error: unknown): string {
@@ -118,6 +155,7 @@ export function applyPollResponse(
             refusal: null,
             loaded: true,
             failures: 0,
+            more: response.more === true,
         };
     }
     // The CLI answered. That is a working connection, so the ladder resets
@@ -133,6 +171,7 @@ export function applyPollResponse(
         refusal: response.reason,
         loaded: true,
         failures: knowsAgent ? 0 : snapshot.failures + 1,
+        more: false,
     };
 }
 
@@ -140,11 +179,11 @@ export function applyPollResponse(
 export function applyPollFailure(
     snapshot: SubagentPollSnapshot,
     detail: string,
-    online: boolean | undefined,
+    reach: SubagentReach,
 ): SubagentPollSnapshot {
     return {
         ...snapshot,
-        trouble: { cause: classifySubagentFailure(online), detail },
+        trouble: { cause: classifySubagentFailure(reach), detail },
         refusal: null,
         loaded: true,
         failures: snapshot.failures + 1,
@@ -157,14 +196,20 @@ export function applyPollFailure(
  */
 export function shouldPollAgain(snapshot: SubagentPollSnapshot): boolean {
     if (snapshot.trouble) return true;
+    // A finished agent with a long transcript still owes us the rest of it
+    // (DROVE-211). Stopping on `done` mid-paging would leave the screen
+    // holding the first 512 KB and nothing else, permanently.
+    if (snapshot.more) return true;
     const state = snapshot.agent?.state;
     return state !== 'done' && state !== 'failed';
 }
 
 export function pollDelayMs(snapshot: SubagentPollSnapshot): number {
-    if (snapshot.failures <= 0) return SUBAGENT_POLL_MS;
-    const step = SUBAGENT_RETRY_MIN_MS * 2 ** (snapshot.failures - 1);
-    return Math.min(SUBAGENT_RETRY_MAX_MS, step);
+    if (snapshot.failures > 0) {
+        const step = SUBAGENT_RETRY_MIN_MS * 2 ** (snapshot.failures - 1);
+        return Math.min(SUBAGENT_RETRY_MAX_MS, step);
+    }
+    return snapshot.more ? SUBAGENT_PAGE_MS : SUBAGENT_POLL_MS;
 }
 
 export interface SubagentPollDeps {
@@ -176,8 +221,8 @@ export interface SubagentPollDeps {
      * than at the far end of the ladder.
      */
     wait(ms: number): Promise<void>;
-    /** Whether the phone currently has a server connection; undefined if unknown. */
-    isOnline(): boolean | undefined;
+    /** What is known about both ends, read fresh at the moment of a failure. */
+    reach(): SubagentReach;
     isCancelled(): boolean;
     onSnapshot(snapshot: SubagentPollSnapshot): void;
 }
@@ -197,7 +242,7 @@ export async function runSubagentTranscriptPoll(
             snapshot = applyPollResponse(snapshot, response);
         } catch (error) {
             if (deps.isCancelled()) break;
-            snapshot = applyPollFailure(snapshot, errorDetail(error), deps.isOnline());
+            snapshot = applyPollFailure(snapshot, errorDetail(error), deps.reach());
         }
         deps.onSnapshot(snapshot);
         if (!shouldPollAgain(snapshot)) break;

@@ -72,8 +72,14 @@ export type SubagentTranscriptResponse = {
     ok: true
     /** Raw transcript records, `isSidechain` cleared, conversation records only. */
     rows: Record<string, unknown>[]
-    /** Byte offset after the last complete line; pass back as `since`. */
+    /** Byte offset after the last row on this page; pass back as `since`. */
     cursor: number
+    /**
+     * More complete lines are already on disk past `cursor`. The page stopped
+     * at the size cap, not at the end of the file, so ask again NOW rather
+     * than on the next two-second tick (DROVE-211).
+     */
+    more?: boolean
     agent: SubagentTranscriptAgent
 } | {
     ok: false
@@ -88,6 +94,34 @@ const agentIdPattern = /^[A-Za-z0-9_-]{1,64}$/
 
 /** Per-record cap on a stored result, so a chatty agent cannot pin memory. */
 const maxResultChars = 20_000
+
+/**
+ * ONE PAGE OF TRANSCRIPT (DROVE-211).
+ *
+ * Socket.IO's default `maxHttpBufferSize` is 1 MB and the server sets no
+ * other value, so an answer above that is not slow, it is fatal: engine.io
+ * drops the frame AND closes the socket that sent it. Measured on Clay's Mac,
+ * every oversized answer was followed within a second by
+ * `[API] Socket disconnected: transport close`, and the phone, which never
+ * got an ack, blamed the Mac it was still talking to.
+ *
+ *   968116 bytes  answered, socket lived
+ *  1105652 bytes  socket closed
+ *  1723652 bytes  socket closed, three polls running, three closes
+ *
+ * A whole subagent transcript is routinely megabytes, so the first poll after
+ * opening the screen was the one that killed the session's socket, forever.
+ * The reader therefore hands back at most this much per call and a cursor
+ * that says where to resume; the screen asks again at once while `more` is
+ * set, so a big transcript arrives in pages instead of not at all.
+ *
+ * The cap is spent against the SERIALIZED rows, not the bytes read off disk,
+ * because that is what the frame is made of. 512 KB of rows is about 700 KB
+ * once it is encrypted and base64'd (base64 alone is 4/3), which clears 1 MB
+ * with room for the envelope. Measured over the six biggest transcripts on
+ * Clay's machine, up to 4.4 MB on disk, the worst page came out at 690 KB.
+ */
+const maxPageBytes = 512 * 1024
 
 const asyncLaunchPrefix = 'Async agent launched'
 
@@ -294,36 +328,75 @@ export function createSubagentTranscriptReader(opts: {
             }
 
             let updatedAt = 0
+            let size = 0
             try {
-                updatedAt = statSync(path).mtimeMs
+                const stat = statSync(path)
+                updatedAt = stat.mtimeMs
+                size = stat.size
             } catch {
                 return { ok: false, reason: 'The transcript disappeared while reading it', cursor: 0 }
             }
-            const since = typeof request.since === 'number' && Number.isFinite(request.since) && request.since > 0
+            const asked = typeof request.since === 'number' && Number.isFinite(request.since) && request.since > 0
                 ? Math.floor(request.since)
                 : 0
+            // readNewLines restarts a file that shrank below the cursor, so
+            // the page has to start where IT will, or the cursor we hand back
+            // is an offset into a file that no longer has those bytes.
+            const since = size < asked ? 0 : asked
             const tail: Tail = { offset: since, carry: '' }
             const lines = readNewLines(path, tail, 0) ?? []
             const rows: Record<string, unknown>[] = []
+            // Two counts, because they measure different things. `consumed`
+            // is file bytes and is what the cursor is made of, so a line that
+            // produces no row still has to be stepped over. `wire` is the
+            // serialized rows, which is what the frame is actually made of,
+            // and is what the page cap is spent against. Budgeting on file
+            // bytes instead was 20% out on real transcripts.
+            let consumed = 0
+            let wire = 0
+            let more = false
             for (const line of lines) {
-                if (line.length === 0) continue
+                const bytes = Buffer.byteLength(line, 'utf8') + 1
+                if (line.length === 0) {
+                    consumed += bytes
+                    continue
+                }
                 let record: Record<string, unknown>
                 try {
                     record = JSON.parse(line) as Record<string, unknown>
                 } catch {
+                    consumed += bytes
                     continue
                 }
                 // Only conversation records travel. Attachments are skill
                 // listings and tool deltas the app has no card for.
-                if (record.type !== 'user' && record.type !== 'assistant') continue
-                rows.push(stripForWire(record))
+                if (record.type !== 'user' && record.type !== 'assistant') {
+                    consumed += bytes
+                    continue
+                }
+                const row = stripForWire(record)
+                const rowBytes = Buffer.byteLength(JSON.stringify(row), 'utf8')
+                // Always take the first row. A single record bigger than the
+                // page would otherwise leave the cursor where it was and the
+                // screen would ask for the same page for the rest of time.
+                // So one record can still overrun the page: the biggest one
+                // on Clay's machine lands at 836 KB, and the server's raised
+                // frame cap is what covers the record that lands past 1 MB.
+                if (rows.length > 0 && wire + rowBytes > maxPageBytes) {
+                    more = true
+                    break
+                }
+                consumed += bytes
+                wire += rowBytes
+                rows.push(row)
             }
             return {
                 ok: true,
                 rows,
-                // The carry is a line still being written. It is re-read next
-                // time, from the offset it starts at.
-                cursor: tail.offset - Buffer.byteLength(tail.carry, 'utf8'),
+                // Whatever the page did not reach is read next time from here.
+                // The carry, a line still being written, is never counted.
+                cursor: since + consumed,
+                ...(more ? { more: true } : {}),
                 agent: {
                     id: agentId,
                     label: meta.label ?? agentId,
