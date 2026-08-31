@@ -197,7 +197,15 @@ async function startRemoteRunClaudeHarness(opts: {
     if (!scannerOptions || !loopOptions) {
         throw new Error('runClaude harness did not start');
     }
-    const runtimeSession = { thinking: false, cleanup: vi.fn() };
+    // Stands in for the Session the loop builds. The two DROVE-78 hooks are
+    // declared here because runClaude writes one (onGoalStatusEvent) and reads
+    // the other (paneSlashCommandCarrier, set by the local launcher).
+    const runtimeSession: {
+        thinking: boolean;
+        cleanup: ReturnType<typeof vi.fn>;
+        paneSlashCommandCarrier?: ((command: string) => Promise<boolean>) | null;
+        onGoalStatusEvent?: ((event: any) => void) | null;
+    } = { thinking: false, cleanup: vi.fn() };
     loopOptions.onSessionReady(runtimeSession);
     const goalActionHandler = registerHandler.mock.calls.find(([method]) => method === 'goal-action')?.[1];
 
@@ -845,24 +853,176 @@ describe('runClaude remote JSONL scanner', () => {
         await harness.finish();
     });
 
-    it('rejects Claude goal-action while local mode owns the transcript', async () => {
-        const harness = await startRemoteRunClaudeHarness();
-        await vi.waitFor(() => {
-            expect(harness.registerHandler).toHaveBeenCalledWith('goal-action', expect.any(Function));
-        });
-        const handler = harness.goalActionHandler;
-        if (!handler) throw new Error('goal-action handler not registered');
+    /**
+     * DROVE-78. `/goal` from the phone used to throw for any session that was
+     * not remote, and under one mode (DROVE-1) every session is a pane session
+     * so the goal card was dead for every session Clay actually runs.
+     */
+    describe('a Claude goal set from the phone on a LOCAL session', () => {
+        it('goes to the pane through its own carrier, with nothing pushed at the SDK queue', async () => {
+            const harness = await startRemoteRunClaudeHarness();
+            await vi.waitFor(() => {
+                expect(harness.registerHandler).toHaveBeenCalledWith('goal-action', expect.any(Function));
+            });
+            const handler = harness.goalActionHandler;
+            if (!handler) throw new Error('goal-action handler not registered');
 
-        emitClaudeGoalStatus(harness.scannerOptions, {
-            uuid: 'goal-att-active-local-mode',
-            met: false,
-            condition: 'local mode goal',
-        });
-        harness.loopOptions.onModeChange('local');
+            harness.loopOptions.onModeChange('local');
+            const carrier = vi.fn(async () => true);
+            harness.runtimeSession.paneSlashCommandCarrier = carrier;
 
-        await expectPromptRejectsFast(handler({ action: 'clear' }), /not ready|remote/i);
-        expect(harness.loopOptions.messageQueue.queue).toEqual([]);
-        await harness.finish();
+            emitClaudeGoalStatus(harness.scannerOptions, {
+                uuid: 'goal-att-active-pane',
+                met: false,
+                condition: 'old pane goal',
+            });
+
+            await expect(handler({ action: 'edit', objective: 'ship the pane goal' }))
+                .resolves.toEqual({ ok: true });
+            expect(carrier).toHaveBeenCalledWith('/goal ship the pane goal');
+            // The SDK queue belongs to remote mode. A pane session has no
+            // query() draining it, so anything left here is a message that
+            // never runs.
+            expect(harness.loopOptions.messageQueue.queue).toEqual([]);
+
+            await expect(handler({ action: 'clear' })).resolves.toEqual({ ok: true });
+            expect(carrier).toHaveBeenLastCalledWith('/goal clear');
+            await harness.finish();
+        });
+
+        it('offers clear and edit even though a pane session has no slashCommands list', async () => {
+            // metadata.slashCommands is written from the SDK's system init,
+            // which only the remote launcher runs. Reading it as the whole
+            // truth is what left a pane session's goal card with no buttons.
+            const harness = await startRemoteRunClaudeHarness({
+                metadata: {
+                    claudeSessionId: 'claude-session-1',
+                    slashCommands: [],
+                },
+            });
+            await vi.waitFor(() => {
+                expect(harness.registerHandler).toHaveBeenCalledWith('goal-action', expect.any(Function));
+            });
+
+            harness.loopOptions.onModeChange('local');
+            harness.runtimeSession.paneSlashCommandCarrier = vi.fn(async () => true);
+
+            emitClaudeGoalStatus(harness.scannerOptions, {
+                uuid: 'goal-att-active-pane-capabilities',
+                met: false,
+                condition: 'pane goal with actions',
+            });
+
+            const goalUpdater = harness.updateAgentState.mock.calls.at(-1)?.[0];
+            expect(goalUpdater({})).toMatchObject({
+                agentGoalStatus: {
+                    status: 'active',
+                    text: 'pane goal with actions',
+                    capabilities: { clear: true, edit: true },
+                },
+            });
+            await harness.finish();
+        });
+
+        it('reports the goal back from the local scanner, which is the one that follows a flip', async () => {
+            const harness = await startRemoteRunClaudeHarness();
+            await vi.waitFor(() => {
+                expect(harness.registerHandler).toHaveBeenCalledWith('goal-action', expect.any(Function));
+            });
+
+            harness.loopOptions.onModeChange('local');
+            harness.runtimeSession.paneSlashCommandCarrier = vi.fn(async () => true);
+
+            // What claudeLocalLauncher's scanner hands over. Same reducer as
+            // the remote scanner, so the app sees one goal card either way.
+            const onGoalStatusEvent = harness.runtimeSession.onGoalStatusEvent;
+            expect(onGoalStatusEvent).toEqual(expect.any(Function));
+            onGoalStatusEvent!({
+                type: 'goal_status',
+                uuid: 'goal-from-pane-scanner',
+                sourceRevision: 'rev-pane-1',
+                sourceSessionId: 'claude-session-1',
+                timestamp: new Date().toISOString(),
+                attachment: {
+                    type: 'goal_status',
+                    met: false,
+                    condition: 'watched from the pane',
+                },
+            });
+
+            const goalUpdater = harness.updateAgentState.mock.calls.at(-1)?.[0];
+            expect(goalUpdater({})).toMatchObject({
+                agentGoalStatus: {
+                    status: 'active',
+                    sourceRevision: 'rev-pane-1',
+                    text: 'watched from the pane',
+                },
+            });
+
+            // The same record arriving down the remote scanner as well is one
+            // goal, not two: both feed the same reducer and the revision is
+            // already spent.
+            const updatesAfterFirst = harness.updateAgentState.mock.calls.length;
+            harness.scannerOptions.onTranscriptEvent({
+                type: 'goal_status',
+                uuid: 'goal-from-pane-scanner',
+                sourceRevision: 'rev-pane-1',
+                sourceSessionId: 'claude-session-1',
+                timestamp: new Date().toISOString(),
+                attachment: {
+                    type: 'goal_status',
+                    met: false,
+                    condition: 'watched from the pane',
+                },
+            });
+            expect(harness.updateAgentState.mock.calls.length).toBe(updatesAfterFirst);
+            await harness.finish();
+        });
+
+        it('says there is no terminal, rather than "not ready", when the session has no pane', async () => {
+            const harness = await startRemoteRunClaudeHarness();
+            await vi.waitFor(() => {
+                expect(harness.registerHandler).toHaveBeenCalledWith('goal-action', expect.any(Function));
+            });
+            const handler = harness.goalActionHandler;
+            if (!handler) throw new Error('goal-action handler not registered');
+
+            emitClaudeGoalStatus(harness.scannerOptions, {
+                uuid: 'goal-att-active-local-mode',
+                met: false,
+                condition: 'local mode goal',
+            });
+            harness.loopOptions.onModeChange('local');
+
+            await expectPromptRejectsFast(handler({ action: 'clear' }), /no pane to run \/goal in/i);
+            expect(harness.loopOptions.messageQueue.queue).toEqual([]);
+            await harness.finish();
+        });
+
+        it('says the command did not reach the terminal when the pane has no live Claude', async () => {
+            const harness = await startRemoteRunClaudeHarness();
+            await vi.waitFor(() => {
+                expect(harness.registerHandler).toHaveBeenCalledWith('goal-action', expect.any(Function));
+            });
+            const handler = harness.goalActionHandler;
+            if (!handler) throw new Error('goal-action handler not registered');
+
+            harness.loopOptions.onModeChange('local');
+            harness.runtimeSession.paneSlashCommandCarrier = vi.fn(async () => false);
+
+            emitClaudeGoalStatus(harness.scannerOptions, {
+                uuid: 'goal-att-active-dead-pane',
+                met: false,
+                condition: 'goal with no child',
+            });
+
+            await expectPromptRejectsFast(
+                handler({ action: 'clear' }),
+                /did not reach the terminal/i,
+            );
+            expect(harness.loopOptions.messageQueue.queue).toEqual([]);
+            await harness.finish();
+        });
     });
 
     it('keeps the picked model and effort after an abort resets the other mode defaults', async () => {

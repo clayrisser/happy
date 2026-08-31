@@ -206,9 +206,16 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
                     }
                 });
             }
-        }
+        },
+        // DROVE-78: `/goal` writes a goal_status record into the transcript,
+        // and that record is the only thing that ever says what the goal IS.
+        // runClaude keeps the goal state for both modes so the app sees one
+        // card whichever launcher is running; this scanner is the one that
+        // follows a flip, so without it the card froze on the account the
+        // wrapper happened to start on.
+        onTranscriptEvent: (event) => session.onGoalStatusEvent?.(event),
     });
-    
+
     // DROVE-93: the agent screen on the phone asks for a subagent's transcript
     // over the session RPC channel and polls with the cursor it got back. This
     // scanner is the one that follows a flip, so it answers rather than the
@@ -862,6 +869,34 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
         }
 
         /**
+         * The same carrier, offered to whoever holds an RPC rather than a
+         * message (DROVE-78).
+         *
+         * The app's goal card acts through the `goal-action` RPC, which
+         * runClaude answers, and runClaude's only way to run a command used to
+         * be the SDK message queue, which a pane session does not have. So it
+         * threw, for every session, since one mode made every session a pane
+         * session. This is the way in: exactly what a `/goal` TYPED on the
+         * phone already takes, so there is one gate and one set of rules.
+         *
+         * Registered only for a pane session, and only while this launcher
+         * owns it. Absent is the honest answer for a paneless local run: the
+         * app is told there is no terminal instead of being handed a button
+         * that fails.
+         */
+        if (tmuxPane) {
+            session.paneSlashCommandCarrier = async (command: string) => {
+                // Between spawns, mid-flip, or parked at a shell there is no
+                // Claude in there to take it. Not held for the next child the
+                // way a message is: a `/goal` folded into the next child's
+                // opening prompt would run against a conversation that has not
+                // started, and the phone asked about THIS one.
+                if (!childAlive) return false;
+                return deliverSlashCommand(command);
+            };
+        }
+
+        /**
          * Hand `message` to the Claude running in our pane, or say it did not
          * arrive. There is no third answer any more (DROVE-48).
          *
@@ -1208,6 +1243,11 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
         session.client.rpcHandlerManager.registerHandler('abort', async () => { });
         session.client.rpcHandlerManager.registerHandler('switch', async () => { });
         session.queue.setOnMessage(null);
+        // DROVE-78: the pane goes with the launcher. Left set, the carrier
+        // would keep telling runClaude a terminal is listening through the
+        // whole of the next remote turn, and the app's goal card would take
+        // the pane branch to a pane this call no longer owns.
+        session.paneSlashCommandCarrier = null;
         // The tracker dies with this launcher call; the controller outlives it.
         session.flip?.setInFlightProbe(null);
         // ...and so does the abort handler, which closes over an

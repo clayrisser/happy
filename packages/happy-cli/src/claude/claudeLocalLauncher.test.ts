@@ -185,6 +185,7 @@ async function startLauncher(overrides: {
 
     return {
         onNewSession,
+        session,
         sessionFound: () => sessionFound!,
         finish: async () => {
             localRun.resolve();
@@ -334,6 +335,15 @@ describe('claudeLocalLauncher', () => {
 
         localRun.resolve();
         await expect(launcher).resolves.toEqual({ type: 'switch' });
+    });
+
+    it('registers no goal carrier for a PANELESS session, because there is no prompt to type at', async () => {
+        // DROVE-78: absent is the honest answer. runClaude turns it into "this
+        // session has no pane to run /goal in" rather than offering the app a
+        // button that throws.
+        const started = await startLauncher({ sessionId: 'claude-session-paneless' });
+        expect((started.session as any).paneSlashCommandCarrier).toBeUndefined();
+        await started.finish();
     });
 
     it('routes scanner messages through local transcript replay so attachments can be uploaded', async () => {
@@ -628,6 +638,11 @@ describe('claudeLocalLauncher in a tmux pane', () => {
             hookSettingsPath: '/tmp/hook-settings.json',
             sandboxConfig: undefined,
             pendingInitialPrompt: undefined as string | undefined,
+            // DROVE-78: written by the launcher (the pane's carrier for a
+            // slash command the app raised over RPC) and read by it (where a
+            // goal_status record off this pane's transcript goes).
+            paneSlashCommandCarrier: undefined as ((command: string) => Promise<boolean>) | null | undefined,
+            onGoalStatusEvent: undefined as ((event: any) => void) | null | undefined,
         };
         const emitMetadata = (patch: Record<string, any>) => {
             metadata = { ...metadata, ...patch };
@@ -1267,6 +1282,121 @@ describe('claudeLocalLauncher in a tmux pane', () => {
 
             runs[0].run.resolve();
             await expect(launcher).resolves.toEqual({ type: 'exit', code: 0 });
+        });
+
+        /**
+         * DROVE-78. The app's goal card acts over the `goal-action` RPC, which
+         * runClaude answers. Its only carrier used to be the SDK message
+         * queue, which a pane session does not have. So the goal was dead for
+         * every session under one mode. The pane carrier below is what the RPC
+         * reaches for, and it is the SAME gate a `/goal` typed on the phone
+         * goes through: no ungated paste, held rather than drafted.
+         */
+        describe('the goal carrier the app\'s goal card uses', () => {
+            it('types /goal at an idle prompt, and never writes it to the inbox socket as prose', async () => {
+                mockFindInbox.mockResolvedValue(inbox);
+                mockSendToInbox.mockResolvedValue('ok');
+                mockPaneIsIdle.mockResolvedValue(true);
+                mockInjectIntoPane.mockResolvedValue(true);
+                const runs = trackRuns();
+                const { session } = paneSession();
+
+                const launcher = claudeLocalLauncher(session as any);
+                await vi.waitFor(() => expect(runs).toHaveLength(1));
+                await vi.waitFor(() => expect(session.paneSlashCommandCarrier).toEqual(expect.any(Function)));
+
+                await expect(session.paneSlashCommandCarrier!('/goal ship the thing')).resolves.toBe(true);
+                expect(mockInjectIntoPane).toHaveBeenCalledWith(pane, '/goal ship the thing', { submit: true });
+                // Claude Code hardcodes skipSlashCommands:true on everything it
+                // reads off the inbox socket, so a /goal written there is four
+                // words of prose. It must never go that way.
+                expect(mockSendToInbox).not.toHaveBeenCalled();
+
+                runs[0].run.resolve();
+                await expect(launcher).resolves.toEqual({ type: 'exit', code: 0 });
+            });
+
+            it('holds the goal for the prompt while a subagent runs, and types NOTHING', async () => {
+                mockFindInbox.mockResolvedValue(inbox);
+                mockSendToInbox.mockResolvedValue('ok');
+                mockPaneIsIdle.mockResolvedValue(true);
+                mockInjectIntoPane.mockResolvedValue(true);
+                const runs = trackRuns();
+                let scannerOnMessage: ((message: any) => void) | undefined;
+                mockCreateSessionScanner.mockImplementation(async (opts: any) => {
+                    scannerOnMessage = opts.onMessage;
+                    return { onNewSession: vi.fn(), cleanup: vi.fn(async () => {}) };
+                });
+                const { session } = paneSession();
+
+                const launcher = claudeLocalLauncher(session as any);
+                await vi.waitFor(() => expect(runs).toHaveLength(1));
+                await vi.waitFor(() => expect(session.paneSlashCommandCarrier).toEqual(expect.any(Function)));
+                scannerOnMessage!(asyncAgentLaunched('agent-9'));
+
+                // Accepted, because the queue owns the retry. But a keystroke
+                // aimed at the prompt right now could land on whichever agent
+                // the terminal is showing.
+                await expect(session.paneSlashCommandCarrier!('/goal ship the thing')).resolves.toBe(true);
+                expect(mockInjectIntoPane).not.toHaveBeenCalled();
+                expect(mockSendToInbox).not.toHaveBeenCalled();
+                expect(session.client.sendSessionEvent).toHaveBeenCalledWith(
+                    expect.objectContaining({ message: expect.stringContaining('/goal ship the thing is waiting') }));
+
+                runs[0].run.resolve();
+                await expect(launcher).resolves.toEqual({ type: 'exit', code: 0 });
+            });
+
+            it('goes with the launcher, so a goal never aims at a pane this call no longer owns', async () => {
+                mockPaneIsIdle.mockResolvedValue(true);
+                mockInjectIntoPane.mockResolvedValue(true);
+                const runs = trackRuns();
+                const { session } = paneSession();
+
+                const launcher = claudeLocalLauncher(session as any);
+                await vi.waitFor(() => expect(runs).toHaveLength(1));
+                await vi.waitFor(() => expect(session.paneSlashCommandCarrier).toEqual(expect.any(Function)));
+                const carrier = session.paneSlashCommandCarrier!;
+
+                runs[0].run.resolve();
+                await expect(launcher).resolves.toEqual({ type: 'exit', code: 0 });
+
+                expect(session.paneSlashCommandCarrier).toBeNull();
+                // And the closure itself refuses: no child is in the pane, so
+                // there is nothing in there to run the command.
+                await expect(carrier('/goal ship the thing')).resolves.toBe(false);
+                expect(mockInjectIntoPane).not.toHaveBeenCalled();
+            });
+
+            it('hands goal_status records from the pane transcript to the session reducer', async () => {
+                mockPaneIsIdle.mockResolvedValue(true);
+                let scannerOnTranscriptEvent: ((event: any) => void) | undefined;
+                mockCreateSessionScanner.mockImplementation(async (opts: any) => {
+                    scannerOnTranscriptEvent = opts.onTranscriptEvent;
+                    return { onNewSession: vi.fn(), cleanup: vi.fn(async () => {}) };
+                });
+                const runs = trackRuns();
+                const { session } = paneSession();
+                const onGoalStatusEvent = vi.fn();
+                session.onGoalStatusEvent = onGoalStatusEvent;
+
+                const launcher = claudeLocalLauncher(session as any);
+                await vi.waitFor(() => expect(runs).toHaveLength(1));
+                expect(scannerOnTranscriptEvent).toEqual(expect.any(Function));
+
+                const event = {
+                    type: 'goal_status',
+                    uuid: 'goal-1',
+                    sourceRevision: 'goal-1',
+                    sourceSessionId: claudeSessionId,
+                    attachment: { type: 'goal_status', met: false, condition: 'ship the thing' },
+                };
+                scannerOnTranscriptEvent!(event);
+                expect(onGoalStatusEvent).toHaveBeenCalledWith(event);
+
+                runs[0].run.resolve();
+                await expect(launcher).resolves.toEqual({ type: 'exit', code: 0 });
+            });
         });
 
         it('leaves an ordinary message on the socket, wrapped so the pane stops printing the peer note', async () => {
