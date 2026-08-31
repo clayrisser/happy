@@ -265,6 +265,20 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         // inside this card. The gutter that used to live here is on the
         // composer line and the control row now, and 30pt of radius over a
         // 44pt field draws the 22pt capsule that makes the bubble a bubble.
+        //
+        // AND IT IS WRITTEN DOWN NOW RATHER THAN ONLY SAID (DROVE-214). The
+        // comment above shipped for two tickets over a style that overrode the
+        // desktop panel's colour and radius and nothing else, so `unifiedPanel`
+        // went on applying paddingHorizontal 8, paddingVertical 2 and
+        // paddingBottom 8 underneath it. Every in-field number DROVE-206
+        // pinned was measured from a rim 8pt out from the real one, and 2 over
+        // 8 is not centred, so the field sat 3pt high in its own capsule.
+        // Four longhands, because a shorthand loses to the base's
+        // `paddingBottom` however it is ordered.
+        paddingTop: MOBILE_COMPOSER_METRICS.bubblePadding,
+        paddingBottom: MOBILE_COMPOSER_METRICS.bubblePadding,
+        paddingLeft: MOBILE_COMPOSER_METRICS.bubblePadding,
+        paddingRight: MOBILE_COMPOSER_METRICS.bubblePadding,
     },
     /**
      * The composer's first line (DROVE-196): the `+` at the leading edge, the
@@ -350,6 +364,9 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
      * grows upward as the message wraps and both controls have to stay on the
      * last line where the thumb left them, rather than one of them riding up
      * the side of a tall capsule.
+     *
+     * The BOX is the mirror and stays one (DROVE-214). What is not mirrored is
+     * what fills it, so the glyph inside takes the ink offset instead.
      */
     mobileAddAnchor: {
         position: 'absolute',
@@ -1841,6 +1858,10 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
      * show. Send earns its fill by being the primary; the `+` is a standing
      * offer and reads as one.
      *
+     * NO RESTING FILL is also why it has to be placed by its INK (DROVE-214).
+     * A control with no disc has an ink edge and a box edge in two different
+     * places, and DROVE-206 placed the box. See `addGlyphInkInset`.
+     *
      * It opens the Add context sheet (DROVE-128) rather than jumping into the
      * photo library. 36 drawn plus 6 a side is a 48pt target, over DROVE-153's
      * 44pt floor, which is the same bargain the send button strikes.
@@ -1857,7 +1878,11 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     style={(p) => ({
                         width: '100%',
                         height: '100%',
-                        alignItems: 'center',
+                        // LEADING, not centre (DROVE-214). In a column flex
+                        // this is the horizontal axis, so the glyph is pinned
+                        // to the box's leading edge and still centred
+                        // vertically by `justifyContent`.
+                        alignItems: 'flex-start',
                         justifyContent: 'center',
                         opacity: p.pressed ? 0.7 : 1,
                     })}
@@ -1871,6 +1896,18 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         name="add"
                         size={MOBILE_COMPOSER_METRICS.addIconSize}
                         color={composerPalette.accent}
+                        // PLACED BY ITS INK (DROVE-214). Centring the glyph in
+                        // this box is what Clay was looking at: the box is 4
+                        // off the rim like the send button's, but the send
+                        // button's box is a filled disc and this one is
+                        // transparent, so centring buried the `+`'s ink 9.875
+                        // further in than the disc's. Pulling the em box out
+                        // by its own side bearing puts INK on the disc's
+                        // column, 4 from the rim at both ends. The half point
+                        // of empty em box that lands outside the capsule
+                        // carries no pixels; the box, its 36pt size and its
+                        // 6pt slop are untouched, so the target is the same 46.
+                        style={{ marginLeft: -MOBILE_COMPOSER_LAYOUT.addGlyphInkInset }}
                     />
                 </BubblePressable>
             </View>
@@ -1888,6 +1925,10 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
      * be: Stop, on an empty composer while the agent works, and the lock when
      * the gate refuses. Both are still send unable to proceed rather than
      * other controls.
+     *
+     * DROVE-206 made this the CONTROL. DROVE-214 makes it the GLYPH: it drew a
+     * bare up-arrow, which is the submit affordance a field uses when it has
+     * no send button, and it draws a paper plane now.
      *
      * On an empty composer it is DRAWN AND DISABLED. It is not hidden, because
      * the field reserves its 46pt at that rim either way, and a control that
@@ -1952,9 +1993,23 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                             color={theme.colors.textSecondary}
                         />
                     ) : (
-                        <Octicons
-                            name="arrow-up"
-                            size={16}
+                        // A PAPER PLANE, not an arrow (DROVE-214). Clay: "the
+                        // send button should actually be a send button." An
+                        // up-arrow is what a chat field submits with when it
+                        // has no send button; a send button carries a send
+                        // glyph, and Ionicons already ships one so this costs
+                        // no asset.
+                        //
+                        // Sized by ink rather than by the number it replaces.
+                        // `paper-plane` fills 0.874486 of its em against
+                        // `add`'s 0.625, so 18.58 here and 26 at the other rim
+                        // draw the same 16.25pt of ink. The arrow it replaces
+                        // was 9.97 x 10.75, so this is the heavier mark Clay
+                        // asked for, and it is heavier by the same measure the
+                        // `+` is placed by.
+                        <Ionicons
+                            name="paper-plane"
+                            size={MOBILE_COMPOSER_LAYOUT.sendIconSize}
                             color={canPressSendButton ? activeSendIconColor : theme.colors.textSecondary}
                             // The color has to travel in `style`, not just the
                             // `color` prop: @expo/vector-icons builds
@@ -1962,11 +2017,16 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                             // so a `style` entry always wins over `color`. With
                             // styles.sendButtonIcon here — it hardcodes the
                             // primary tint (white) — the computed color was
-                            // discarded and the arrow painted white on the
+                            // discarded and the glyph painted white on the
                             // near-white glass composer, i.e. invisible.
+                            //
+                            // No vertical nudge any more. The web `marginTop:
+                            // 2` was propping up Octicons `arrow-up`, whose
+                            // ink centre sits 0.0255em over its line box's;
+                            // `paper-plane`'s sits 0.0005em over, which is a
+                            // hundredth of a point at this size (DROVE-214).
                             style={{
                                 color: canPressSendButton ? activeSendIconColor : theme.colors.textSecondary,
-                                marginTop: Platform.OS === 'web' ? 2 : 0,
                             }}
                         />
                     )}

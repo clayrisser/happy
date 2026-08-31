@@ -93,9 +93,14 @@ export const statusRowMetrics = {
      *
      * It reads `textInset` since DROVE-206 rather than reassembling the shell
      * inset and a button's glyph offset. Both spelled 19 while the `+` was a
-     * 44pt button; the `+` is a 36pt disc inside the field now and only
-     * `textInset` still tracks where its ink actually starts. Same number,
-     * and now it stays the same number when the `+` is next redrawn.
+     * 44pt button, and both still spell 19.
+     *
+     * DROVE-206 called this "where its ink actually starts" and DROVE-214
+     * measured that and found it was not: 19 is where the `+`'s transparent em
+     * box started, and its ink starts on the 14pt column now. The strip keeps
+     * 19 because it is a column the strip and the zen caret share, and moving
+     * it is a change to those two rather than a consequence of redrawing the
+     * `+`. It is a chosen column, not a derived one.
      */
     paddingHorizontal: MOBILE_COMPOSER_LAYOUT.textInset,
     dot: 7,
