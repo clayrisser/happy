@@ -134,6 +134,7 @@ describe('the dictation invariant: a capture ending never costs words', () => {
         expect(dictationEndReasons.sort()).toEqual([
             'call-started',
             'cancel',
+            'headphones-unplugged',
             'idle',
             'left-session',
             'mic',
@@ -198,6 +199,7 @@ describe('read-aloud interrupts arriving mid-hold', () => {
         'switched-session',
         'toggled-off',
         'call-started',
+        'headphones-unplugged',
     ] as const;
 
     // Fails to compile if ReadAloudInterruption grows or shrinks, so a new

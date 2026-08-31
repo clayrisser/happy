@@ -56,6 +56,12 @@ export const dictationRestoresDraft = {
     'toggled-off': false,
     /** A boss-mode call took the audio session. It does not get the words. */
     'call-started': false,
+    /**
+     * The headphones came out, so read-aloud was cut to stop a private reply
+     * playing to the room (DROVE-119). That is about who can HEAR, and says
+     * nothing about what he dictated, so his words stay.
+     */
+    'headphones-unplugged': false,
 } satisfies Record<DictationEndReason, boolean>;
 
 /**
