@@ -472,14 +472,9 @@ export const ru: TranslationStructure = {
     },
 
     agentInput: {
-        readAloud: {
-            label: 'Читать ответы вслух',
-            settingsTitle: 'Читать ответы вслух',
-            settingsSubtitle: 'Произносит каждый ответ по мере поступления. Код, диффы и вывод инструментов пропускаются.',
-        },
         streamTalk: {
-            on: 'Stream-talk включён',
-            off: 'Stream-talk выключен',
+            on: 'Читаю ответы вслух',
+            off: 'Ответы не читаются вслух',
         },
         dictate: {
             label: 'Удерживайте, чтобы говорить, коснитесь, чтобы зафиксировать',
@@ -529,7 +524,11 @@ export const ru: TranslationStructure = {
         channels: {
             title: 'КАНАЛЫ',
             label: 'Каналы',
-            audio: 'Звук',
+            audioTitle: 'ЗВУК',
+            speakPrompts: 'Читать запросы вслух при поступлении',
+            speakPromptsSubtitle: 'Запрос Cattle Drover и его варианты зачитываются вслух, когда он приходит.',
+            readReplies: 'Читать ответы вслух',
+            readRepliesSubtitle: 'Произносит каждый ответ по мере поступления. Код, диффы и вывод инструментов пропускаются.',
         },
         codexPermissionMode: {
             title: 'РЕЖИМ РАЗРЕШЕНИЙ CODEX',

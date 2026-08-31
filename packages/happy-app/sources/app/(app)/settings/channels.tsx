@@ -18,8 +18,10 @@ import { ItemGroup } from '@/components/ItemGroup';
 import { ItemList } from '@/components/ItemList';
 import { MOBILE_GLASS_HEADER_HEIGHT } from '@/components/navigation/headerMetrics';
 import { useDroverChannels } from '@/hooks/useDroverChannels';
-import { MODE_COPY, modeTitle } from '@/sync/droverChannels';
+import { audioRows, MODE_COPY, modeTitle } from '@/sync/droverChannels';
 import type { DroverAnswerAudio } from '@/sync/settings';
+import { useLocalSettingMutable } from '@/sync/storage';
+import { t } from '@/text';
 
 const answerAudioChoices: { value: DroverAnswerAudio; title: string; subtitle: string }[] = [
     { value: 'off', title: 'Only a screen answers', subtitle: 'Tap or type. Audio never resolves a prompt.' },
@@ -30,6 +32,10 @@ const answerAudioChoices: { value: DroverAnswerAudio; title: string; subtitle: s
 
 export default function ChannelsScreen() {
     const channels = useDroverChannels();
+    // Stream-talk is local to this handset; the drover audio channel is
+    // synced. Two settings, one Audio group, one row each (DROVE-100).
+    const [readAloudEnabled, setReadAloudEnabled] = useLocalSettingMutable('readAloudEnabled');
+    const rows = audioRows({ announceAudio: channels.toggles.announceAudio, readAloudEnabled });
 
     return (
         <>
@@ -69,7 +75,7 @@ export default function ChannelsScreen() {
 
                 <ItemGroup
                     title="Announce"
-                    footer="Which channels tell you about a prompt. Any combination, all at once. These are this phone's switches and they are mirrored to every connected Mac, where the bus stamps them on each prompt for the terminal, the push and the wrist. Every channel off still leaves the card in the inbox and the popup in the terminal."
+                    footer="Which channels tell you about a prompt. Any combination, all at once. These are this phone's switches and they are mirrored to every connected Mac, where the bus stamps them on each prompt for the terminal, the push and the wrist. The audio channel has its own group below. Every channel off still leaves the card in the inbox and the popup in the terminal."
                 >
                     <Item
                         title="Visual"
@@ -81,19 +87,6 @@ export default function ChannelsScreen() {
                                 value={channels.toggles.announceVisual}
                                 onValueChange={(value) => { void channels.setToggle('announceVisual', value); }}
                                 accessibilityLabel="Visual"
-                            />
-                        )}
-                    />
-                    <Item
-                        title="Audio"
-                        subtitle="The prompt and its options spoken aloud"
-                        icon={<Ionicons name="volume-high-outline" size={29} color="#34C759" />}
-                        showChevron={false}
-                        rightElement={(
-                            <Switch
-                                value={channels.toggles.announceAudio}
-                                onValueChange={(value) => { void channels.setToggle('announceAudio', value); }}
-                                accessibilityLabel="Audio"
                             />
                         )}
                     />
@@ -110,6 +103,32 @@ export default function ChannelsScreen() {
                             />
                         )}
                     />
+                </ItemGroup>
+
+                <ItemGroup
+                    title={t('agentInput.channels.audioTitle')}
+                    footer="Two settings, and they are not the same one. The first is the drover audio channel: a prompt that arrives is read out, and the switch is mirrored to every connected Mac. The second is stream-talk: the assistant's replies are spoken as they stream, on this device only. Turning one on does nothing to the other."
+                >
+                    {rows.map((row) => (
+                        <Item
+                            key={row.key}
+                            title={t(row.labelKey)}
+                            subtitle={t(row.subtitleKey)}
+                            subtitleLines={0}
+                            icon={<Ionicons name={row.icon} size={29} color="#34C759" />}
+                            showChevron={false}
+                            rightElement={(
+                                <Switch
+                                    value={row.value}
+                                    onValueChange={(value) => {
+                                        if (row.setting === 'readAloudEnabled') setReadAloudEnabled(value);
+                                        else void channels.setToggle('announceAudio', value);
+                                    }}
+                                    accessibilityLabel={t(row.labelKey)}
+                                />
+                            )}
+                        />
+                    ))}
                 </ItemGroup>
 
                 <ItemGroup

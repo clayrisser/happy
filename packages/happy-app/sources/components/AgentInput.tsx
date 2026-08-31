@@ -1690,8 +1690,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                     </View>
                                 ) : openPicker === 'channels' ? (
                                     <DroverChannelsSheet
-                                        readAloudEnabled={props.readAloudEnabled}
-                                        onReadAloudToggle={props.onReadAloudToggle}
                                         sectionStyle={styles.overlaySection}
                                         titleStyle={styles.overlaySectionTitle}
                                     />

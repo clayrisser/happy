@@ -6,6 +6,7 @@ import {
     CHANNEL_TOGGLE_KEYS,
     LEGACY_DELIVERY,
     announceFor,
+    audioRows,
     deliveryOf,
     listModes,
     modeFor,
@@ -20,6 +21,9 @@ import {
     type ChannelToggles,
 } from './droverChannels';
 import type { DroverGateEntry } from './droverGates';
+import { applySettings, settingsDefaults } from './settings';
+import { applyLocalSettings, localSettingsDefaults } from './localSettings';
+import { en } from '@/text/_default';
 
 const allOn: ChannelToggles = { announceVisual: true, announceHaptic: true, announceAudio: true, answerAudio: 'off' };
 const shipped: ChannelToggles = { announceVisual: true, announceHaptic: true, announceAudio: false, answerAudio: 'off' };
@@ -162,5 +166,78 @@ describe('waking the wrist', () => {
     it('keeps waking for a card from a bus older than the field, which is the buzz Clay has today', () => {
         expect(wakeDeserved([entry()], allOn)).toBe(true);
         expect(wakeDeserved([entry()], { announceHaptic: false })).toBe(false);
+    });
+});
+
+/**
+ * DROVE-100. Two settings both read "Audio", Clay turned on the one he could
+ * reach and nothing spoke. They stay two settings; only the labels changed.
+ */
+describe('audioRows', () => {
+    it('renders both rows, prompts first, replies second', () => {
+        const rows = audioRows({ announceAudio: false, readAloudEnabled: false });
+        expect(rows.map((row) => row.key)).toEqual(['speakPrompts', 'readReplies']);
+        expect(rows.map((row) => row.setting)).toEqual(['droverAnnounceAudio', 'readAloudEnabled']);
+        expect(rows.map((row) => row.scope)).toEqual(['synced', 'local']);
+    });
+
+    it('labels each row with what it actually does, and never a bare Audio', () => {
+        const rows = audioRows({ announceAudio: true, readAloudEnabled: true });
+        const labels = rows.map((row) => en.agentInput.channels[row.key === 'speakPrompts' ? 'speakPrompts' : 'readReplies']);
+        expect(labels).toEqual(['Speak prompts when they arrive', 'Read replies aloud']);
+        expect(labels).not.toContain('Audio');
+    });
+
+    it('shows exactly one row per setting', () => {
+        const rows = audioRows({ announceAudio: true, readAloudEnabled: false });
+        expect(rows).toHaveLength(2);
+        expect(new Set(rows.map((row) => row.setting)).size).toBe(2);
+    });
+
+    it('draws each row off its own value, not the other one', () => {
+        const promptsOnly = audioRows({ announceAudio: true, readAloudEnabled: false });
+        expect(promptsOnly[0].value).toBe(true);
+        expect(promptsOnly[0].icon).toBe('volume-high-outline');
+        expect(promptsOnly[1].value).toBe(false);
+        expect(promptsOnly[1].icon).toBe('chatbubble-outline');
+
+        const repliesOnly = audioRows({ announceAudio: false, readAloudEnabled: true });
+        expect(repliesOnly[0].value).toBe(false);
+        expect(repliesOnly[0].icon).toBe('volume-mute-outline');
+        expect(repliesOnly[1].value).toBe(true);
+        expect(repliesOnly[1].icon).toBe('chatbubble-ellipses-outline');
+    });
+});
+
+describe('the two audio settings are independent', () => {
+    it('ships with both off', () => {
+        expect(settingsDefaults.droverAnnounceAudio).toBe(false);
+        expect(localSettingsDefaults.readAloudEnabled).toBe(false);
+    });
+
+    it('speaking prompts never touches read-replies', () => {
+        const before = localSettingsDefaults.readAloudEnabled;
+        const next = applySettings(settingsDefaults, settingsPatchFor({ announceAudio: true }));
+        expect(next.droverAnnounceAudio).toBe(true);
+        expect(localSettingsDefaults.readAloudEnabled).toBe(before);
+        expect(Object.keys(settingsPatchFor({ announceAudio: true }))).toEqual(['droverAnnounceAudio']);
+    });
+
+    it('read-replies never touches the drover audio channel', () => {
+        const settings = applySettings(settingsDefaults, settingsPatchFor({ announceAudio: false }));
+        const local = applyLocalSettings(localSettingsDefaults, { readAloudEnabled: true });
+        expect(local.readAloudEnabled).toBe(true);
+        expect(settings.droverAnnounceAudio).toBe(false);
+        expect(togglesFromSettings(settings).announceAudio).toBe(false);
+    });
+
+    it('both on at once is a real combination, not one switch drawn twice', () => {
+        const settings = applySettings(settingsDefaults, settingsPatchFor({ announceAudio: true }));
+        const local = applyLocalSettings(localSettingsDefaults, { readAloudEnabled: true });
+        const rows = audioRows({
+            announceAudio: togglesFromSettings(settings).announceAudio,
+            readAloudEnabled: local.readAloudEnabled,
+        });
+        expect(rows.map((row) => row.value)).toEqual([true, true]);
     });
 });

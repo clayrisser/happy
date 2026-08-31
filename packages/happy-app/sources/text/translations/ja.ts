@@ -457,14 +457,9 @@ export const ja: TranslationStructure = {
     },
 
     agentInput: {
-        readAloud: {
-            label: '返信を読み上げる',
-            settingsTitle: '返信を読み上げる',
-            settingsSubtitle: '届いた返信をそのつど読み上げます。コード、差分、ツール出力は読みません。',
-        },
         streamTalk: {
-            on: 'Stream-talk オン',
-            off: 'Stream-talk オフ',
+            on: '返信を読み上げます',
+            off: '返信は読み上げません',
         },
         dictate: {
             label: '長押しで話す、タップで固定',
@@ -514,7 +509,11 @@ export const ja: TranslationStructure = {
         channels: {
             title: 'チャンネル',
             label: 'チャンネル',
-            audio: '音声',
+            audioTitle: '音声',
+            speakPrompts: '確認を受け取ったら読み上げる',
+            speakPromptsSubtitle: 'Cattle Drover の確認とその選択肢を、届いたときに読み上げます。',
+            readReplies: '返信を読み上げる',
+            readRepliesSubtitle: '届いた返信をそのつど読み上げます。コード、差分、ツール出力は読みません。',
         },
         codexPermissionMode: {
             title: 'CODEX権限モード',

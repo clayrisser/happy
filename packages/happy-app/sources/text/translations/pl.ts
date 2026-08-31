@@ -472,14 +472,9 @@ export const pl: TranslationStructure = {
     },
 
     agentInput: {
-        readAloud: {
-            label: 'Czytaj odpowiedzi na głos',
-            settingsTitle: 'Czytaj odpowiedzi na głos',
-            settingsSubtitle: 'Wypowiada każdą odpowiedź, gdy nadejdzie. Kod, diffy i wyniki narzędzi są pomijane.',
-        },
         streamTalk: {
-            on: 'Stream-talk włączony',
-            off: 'Stream-talk wyłączony',
+            on: 'Czytam odpowiedzi na głos',
+            off: 'Nie czytam odpowiedzi',
         },
         dictate: {
             label: 'Przytrzymaj, aby mówić, dotknij, aby zablokować',
@@ -529,7 +524,11 @@ export const pl: TranslationStructure = {
         channels: {
             title: 'KANAŁY',
             label: 'Kanały',
-            audio: 'Dźwięk',
+            audioTitle: 'DŹWIĘK',
+            speakPrompts: 'Czytaj pytania, gdy nadejdą',
+            speakPromptsSubtitle: 'Pytanie Cattle Drover i jego opcje są czytane na głos, gdy nadejdzie.',
+            readReplies: 'Czytaj odpowiedzi na głos',
+            readRepliesSubtitle: 'Wypowiada każdą odpowiedź, gdy nadejdzie. Kod, diffy i wyniki narzędzi są pomijane.',
         },
         codexPermissionMode: {
             title: 'TRYB UPRAWNIEŃ CODEX',

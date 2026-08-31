@@ -456,14 +456,9 @@ export const ca: TranslationStructure = {
     },
 
     agentInput: {
-        readAloud: {
-            label: 'Llegeix les respostes en veu alta',
-            settingsTitle: 'Llegeix les respostes en veu alta',
-            settingsSubtitle: 'Pronuncia cada resposta a mesura que arriba. El codi, els diffs i la sortida de les eines s\'ometen.',
-        },
         streamTalk: {
-            on: 'Stream-talk activat',
-            off: 'Stream-talk desactivat',
+            on: 'Llegint les respostes en veu alta',
+            off: 'No es llegeixen les respostes',
         },
         dictate: {
             label: 'Mantén premut per parlar, toca per fixar',
@@ -513,7 +508,11 @@ export const ca: TranslationStructure = {
         channels: {
             title: 'CANALS',
             label: 'Canals',
-            audio: 'Àudio',
+            audioTitle: 'ÀUDIO',
+            speakPrompts: 'Llegeix les peticions quan arriben',
+            speakPromptsSubtitle: 'Una petició del Cattle Drover i les seves opcions es llegeixen en veu alta quan arriba.',
+            readReplies: 'Llegeix les respostes en veu alta',
+            readRepliesSubtitle: 'Pronuncia cada resposta a mesura que arriba. El codi, els diffs i la sortida de les eines s\'ometen.',
         },
         codexPermissionMode: {
             title: 'MODE DE PERMISOS CODEX',

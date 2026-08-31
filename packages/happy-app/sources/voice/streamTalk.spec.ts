@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { flipStreamTalk, streamTalkButton, streamTalkIcon } from './streamTalk';
 import { applyLocalSettings, localSettingsDefaults, localSettingsParse } from '@/sync/localSettings';
+import { settingsDefaults } from '@/sync/settings';
+import { en } from '@/text/_default';
 
 describe('streamTalkButton', () => {
     it('is hidden when the surface has no reader', () => {
@@ -54,5 +56,29 @@ describe('flipStreamTalk', () => {
         expect(localSettingsParse(on).readAloudEnabled).toBe(true);
         const off = applyLocalSettings(on, { readAloudEnabled: flipStreamTalk(on.readAloudEnabled).readAloudEnabled });
         expect(off.readAloudEnabled).toBe(false);
+    });
+});
+
+/**
+ * DROVE-100: the toast has to say which of the two audio settings moved, or
+ * the button reads as the one on the channel sheet that speaks prompts.
+ */
+describe('the toast names what it flipped', () => {
+    it('says it is reading replies, not a bare on', () => {
+        expect(en.agentInput.streamTalk.on).toBe('Reading replies aloud');
+        expect(en.agentInput.streamTalk.off).toBe('Not reading replies aloud');
+    });
+
+    it('uses the same words as the read-replies row on the channel sheet', () => {
+        expect(en.agentInput.channels.readReplies).toBe('Read replies aloud');
+        expect(en.agentInput.streamTalk.on).toContain('replies aloud');
+    });
+
+    it('never flips the drover audio channel', () => {
+        // The button writes readAloudEnabled and nothing else; droverAnnounceAudio
+        // is synced and only the "Speak prompts when they arrive" row moves it.
+        const flipped = flipStreamTalk(false);
+        expect(Object.keys(flipped)).toEqual(['readAloudEnabled', 'toastKey']);
+        expect(settingsDefaults.droverAnnounceAudio).toBe(false);
     });
 });

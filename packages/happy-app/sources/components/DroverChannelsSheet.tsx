@@ -7,6 +7,11 @@
  * out of the synced settings, the bus's read on open and adopted when they
  * differ, and every write mirrored to each connected Mac.
  *
+ * The AUDIO section is two rows, not one (DROVE-100). Speaking a prompt when
+ * it arrives and reading replies aloud are separate settings that both read
+ * "Audio" until now, which is why turning one on looked broken. droverChannels
+ * audioRows() names them and pins the order; each row writes its own key.
+ *
  * Modes are ROWS, not code paths. Picking one sets the four switches; moving
  * any switch by hand is a combination with no name, and the picker shows
  * none selected rather than a label that lies.
@@ -22,13 +27,11 @@ import { BubblePressable } from './BubblePressable';
 import { ComposerSheetRow } from './ComposerSheetRow';
 import { hapticsLight } from './haptics';
 import { useDroverChannels } from '@/hooks/useDroverChannels';
-import { MODE_COPY, modeTitle } from '@/sync/droverChannels';
+import { audioRows, MODE_COPY, modeTitle } from '@/sync/droverChannels';
+import { useLocalSettingMutable } from '@/sync/storage';
 import { t } from '@/text';
 
 export interface DroverChannelsSheetProps {
-    /** DROVE-30's read-aloud switch, kept inside the audio channel. */
-    readAloudEnabled?: boolean;
-    onReadAloudToggle?: () => void;
     /** The section title style the composer uses, so the sheet matches its neighbours. */
     titleStyle: object;
     sectionStyle: object;
@@ -37,6 +40,11 @@ export interface DroverChannelsSheetProps {
 export const DroverChannelsSheet = React.memo(function DroverChannelsSheet(props: DroverChannelsSheetProps) {
     const { theme } = useUnistyles();
     const channels = useDroverChannels();
+    // Stream-talk lives on this device, not on the bus, so it is read here
+    // rather than through the channels hook (DROVE-100). The composer's
+    // speaker button and Settings > Voice write the same local key.
+    const [readAloudEnabled, setReadAloudEnabled] = useLocalSettingMutable('readAloudEnabled');
+    const rows = audioRows({ announceAudio: channels.toggles.announceAudio, readAloudEnabled });
 
     return (
         <>
@@ -114,16 +122,6 @@ export const DroverChannelsSheet = React.memo(function DroverChannelsSheet(props
                 />
                 <ComposerSheetRow
                     kind="toggle"
-                    icon={channels.toggles.announceAudio ? 'volume-high-outline' : 'volume-mute-outline'}
-                    title={t('agentInput.channels.audio')}
-                    value={channels.toggles.announceAudio}
-                    onValueChange={(value) => {
-                        hapticsLight();
-                        void channels.setToggle('announceAudio', value);
-                    }}
-                />
-                <ComposerSheetRow
-                    kind="toggle"
                     icon={channels.toggles.announceHaptic ? 'watch-outline' : 'remove-circle-outline'}
                     title="Haptic"
                     value={channels.toggles.announceHaptic}
@@ -132,18 +130,23 @@ export const DroverChannelsSheet = React.memo(function DroverChannelsSheet(props
                         void channels.setToggle('announceHaptic', value);
                     }}
                 />
-                {props.onReadAloudToggle && (
+            </View>
+            <View style={props.sectionStyle}>
+                <Text style={props.titleStyle}>{t('agentInput.channels.audioTitle')}</Text>
+                {rows.map((row) => (
                     <ComposerSheetRow
+                        key={row.key}
                         kind="toggle"
-                        icon="chatbubble-ellipses-outline"
-                        title="Read replies aloud"
-                        value={!!props.readAloudEnabled}
-                        onValueChange={() => {
+                        icon={row.icon}
+                        title={t(row.labelKey)}
+                        value={row.value}
+                        onValueChange={(value) => {
                             hapticsLight();
-                            props.onReadAloudToggle?.();
+                            if (row.setting === 'readAloudEnabled') setReadAloudEnabled(value);
+                            else void channels.setToggle('announceAudio', value);
                         }}
                     />
-                )}
+                ))}
                 {(channels.error || channels.mirroredTo) && (
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 16, paddingTop: 6 }}>
                         <Ionicons

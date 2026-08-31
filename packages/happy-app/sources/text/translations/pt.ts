@@ -455,14 +455,9 @@ export const pt: TranslationStructure = {
     },
 
     agentInput: {
-        readAloud: {
-            label: 'Ler respostas em voz alta',
-            settingsTitle: 'Ler respostas em voz alta',
-            settingsSubtitle: 'Fala cada resposta assim que chega. Código, diffs e saída de ferramentas são ignorados.',
-        },
         streamTalk: {
-            on: 'Stream-talk ligado',
-            off: 'Stream-talk desligado',
+            on: 'A ler as respostas em voz alta',
+            off: 'Respostas não lidas em voz alta',
         },
         dictate: {
             label: 'Segure para falar, toque para fixar',
@@ -512,7 +507,11 @@ export const pt: TranslationStructure = {
         channels: {
             title: 'CANAIS',
             label: 'Canais',
-            audio: 'Áudio',
+            audioTitle: 'ÁUDIO',
+            speakPrompts: 'Ler os pedidos quando chegarem',
+            speakPromptsSubtitle: 'Um pedido do Cattle Drover e as suas opções são lidos em voz alta quando chega.',
+            readReplies: 'Ler respostas em voz alta',
+            readRepliesSubtitle: 'Fala cada resposta assim que chega. Código, diffs e saída de ferramentas são ignorados.',
         },
         codexPermissionMode: {
             title: 'MODO DE PERMISSÃO CODEX',

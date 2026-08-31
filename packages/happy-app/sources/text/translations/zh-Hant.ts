@@ -456,14 +456,9 @@ export const zhHant: TranslationStructure = {
     },
 
     agentInput: {
-        readAloud: {
-            label: '朗讀回覆',
-            settingsTitle: '朗讀回覆',
-            settingsSubtitle: '每則助理回覆抵達時朗讀。程式碼、差異與工具輸出會略過。',
-        },
         streamTalk: {
-            on: 'Stream-talk 已開啟',
-            off: 'Stream-talk 已關閉',
+            on: '正在朗讀回覆',
+            off: '不朗讀回覆',
         },
         dictate: {
             label: '按住說話，輕點鎖定',
@@ -513,7 +508,11 @@ export const zhHant: TranslationStructure = {
         channels: {
             title: '通道',
             label: '通道',
-            audio: '音訊',
+            audioTitle: '音訊',
+            speakPrompts: '提示抵達時朗讀',
+            speakPromptsSubtitle: 'Cattle Drover 的提示及其選項在抵達時朗讀。',
+            readReplies: '朗讀回覆',
+            readRepliesSubtitle: '每則助理回覆抵達時朗讀。程式碼、差異與工具輸出會略過。',
         },
         codexPermissionMode: {
             title: 'CODEX 權限模式',

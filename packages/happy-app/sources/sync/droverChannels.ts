@@ -211,6 +211,60 @@ export function settingsPatchFor(patch: Partial<ChannelToggles>): {
 }
 
 /**
+ * The two audio rows, in the order every audio surface shows them (DROVE-100).
+ *
+ * Two settings both used to read "Audio" and they are not the same thing, so
+ * turning on the one Clay could reach did nothing he could hear. They are
+ * separate on purpose and stay separate: this returns the row per setting,
+ * with the label that says which is which, and nothing here writes anything.
+ *
+ *   droverAnnounceAudio  synced, mirrored to every Mac. A Cattle Drover
+ *                        prompt is spoken when it arrives.
+ *   readAloudEnabled     local to this device. Assistant replies are spoken
+ *                        as they stream (stream-talk, voice/streamTalk.ts).
+ *
+ * One row per setting, never two rows for one, and a row never touches the
+ * other's key. The sheet, Settings > Channels and Settings > Voice all draw
+ * from this, so no screen can invent a third name for either.
+ */
+export type AudioRowKey = 'speakPrompts' | 'readReplies';
+
+export interface AudioRow {
+    key: AudioRowKey;
+    /** The one setting the row flips. Nothing else moves when it does. */
+    setting: 'droverAnnounceAudio' | 'readAloudEnabled';
+    /** Synced to the Macs, or local to this handset. */
+    scope: 'synced' | 'local';
+    labelKey: 'agentInput.channels.speakPrompts' | 'agentInput.channels.readReplies';
+    subtitleKey: 'agentInput.channels.speakPromptsSubtitle' | 'agentInput.channels.readRepliesSubtitle';
+    icon: 'volume-high-outline' | 'volume-mute-outline' | 'chatbubble-ellipses-outline' | 'chatbubble-outline';
+    value: boolean;
+}
+
+export function audioRows(input: { announceAudio: boolean; readAloudEnabled: boolean }): AudioRow[] {
+    return [
+        {
+            key: 'speakPrompts',
+            setting: 'droverAnnounceAudio',
+            scope: 'synced',
+            labelKey: 'agentInput.channels.speakPrompts',
+            subtitleKey: 'agentInput.channels.speakPromptsSubtitle',
+            icon: input.announceAudio ? 'volume-high-outline' : 'volume-mute-outline',
+            value: input.announceAudio,
+        },
+        {
+            key: 'readReplies',
+            setting: 'readAloudEnabled',
+            scope: 'local',
+            labelKey: 'agentInput.channels.readReplies',
+            subtitleKey: 'agentInput.channels.readRepliesSubtitle',
+            icon: input.readAloudEnabled ? 'chatbubble-ellipses-outline' : 'chatbubble-outline',
+            value: input.readAloudEnabled,
+        },
+    ];
+}
+
+/**
  * What the phone does for a gate it has not seen before.
  *
  * Off the event's `delivery` first, which is the bus's stamp from the

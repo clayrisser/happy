@@ -471,14 +471,9 @@ export const en = {
     },
 
     agentInput: {
-        readAloud: {
-            label: 'Read replies aloud',
-            settingsTitle: 'Read replies aloud',
-            settingsSubtitle: 'Speaks each assistant reply as it arrives. Code, diffs and tool output are skipped.',
-        },
         streamTalk: {
-            on: 'Stream-talk on',
-            off: 'Stream-talk off',
+            on: 'Reading replies aloud',
+            off: 'Not reading replies aloud',
         },
         dictate: {
             label: 'Hold to talk, tap to latch',
@@ -534,7 +529,11 @@ export const en = {
         channels: {
             title: 'CHANNELS',
             label: 'Channels',
-            audio: 'Audio',
+            audioTitle: 'AUDIO',
+            speakPrompts: 'Speak prompts when they arrive',
+            speakPromptsSubtitle: 'A Cattle Drover prompt and its options read out the moment it lands.',
+            readReplies: 'Read replies aloud',
+            readRepliesSubtitle: 'Speaks each assistant reply as it arrives. Code, diffs and tool output are skipped.',
         },
         codexPermissionMode: {
             title: 'CODEX PERMISSION MODE',

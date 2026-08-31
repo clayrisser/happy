@@ -457,14 +457,9 @@ export const zhHans: TranslationStructure = {
     },
 
     agentInput: {
-        readAloud: {
-            label: '朗读回复',
-            settingsTitle: '朗读回复',
-            settingsSubtitle: '每条助手回复到达时朗读。代码、差异和工具输出会被跳过。',
-        },
         streamTalk: {
-            on: 'Stream-talk 已开启',
-            off: 'Stream-talk 已关闭',
+            on: '正在朗读回复',
+            off: '不朗读回复',
         },
         dictate: {
             label: '按住说话，轻点锁定',
@@ -514,7 +509,11 @@ export const zhHans: TranslationStructure = {
         channels: {
             title: '通道',
             label: '通道',
-            audio: '音频',
+            audioTitle: '音频',
+            speakPrompts: '提示到达时朗读',
+            speakPromptsSubtitle: 'Cattle Drover 的提示及其选项在到达时朗读。',
+            readReplies: '朗读回复',
+            readRepliesSubtitle: '每条助手回复到达时朗读。代码、差异和工具输出会被跳过。',
         },
         codexPermissionMode: {
             title: 'CODEX 权限模式',

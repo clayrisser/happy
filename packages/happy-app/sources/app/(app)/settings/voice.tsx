@@ -178,8 +178,8 @@ export default React.memo(function VoiceSettingsScreen() {
             {/* Talking to a session directly, on this device (DROVE-30) */}
             <ItemGroup>
                 <Item
-                    title={t('agentInput.readAloud.settingsTitle')}
-                    subtitle={t('agentInput.readAloud.settingsSubtitle')}
+                    title={t('agentInput.channels.readReplies')}
+                    subtitle={t('agentInput.channels.readRepliesSubtitle')}
                     subtitleLines={0}
                     icon={<Ionicons name="volume-high-outline" size={29} color="#34C759" />}
                     rightElement={
