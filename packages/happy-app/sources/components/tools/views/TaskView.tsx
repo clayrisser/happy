@@ -1,14 +1,32 @@
+/**
+ * A subagent as a card (DROVE-32, DROVE-54, DROVE-51).
+ *
+ * The header row (from knownTools) is the task's description. The card body
+ * opens with a status row: the subagent type as a chip, then running /
+ * finished / failed with the run's numbers, live while it runs (the CLI
+ * publishes the agent's clock and tokens on session metadata, joined by the
+ * tool_use id) and from the agent's own report once it has finished. Under
+ * it the tail of the steps the agent took, as before.
+ *
+ * Tapping the status row unfolds the rest: the prompt as text, every step,
+ * the agent's final report as markdown, and the raw JSON. Fold, never drop.
+ */
 import * as React from 'react';
-import { ToolViewProps } from './_all';
-import { Text, View, ActivityIndicator, StyleSheet, Platform, Pressable } from 'react-native';
-import { knownTools } from '../../tools/knownTools';
+import { ActivityIndicator, Platform, Pressable, Text, View } from 'react-native';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Ionicons } from '@expo/vector-icons';
-import { ToolCall } from '@/sync/typesMessage';
-import { useUnistyles } from 'react-native-unistyles';
+
 import { t } from '@/text';
+import { MarkdownView } from '@/components/markdown/MarkdownView';
+import { ToolCall } from '@/sync/typesMessage';
 import { Metadata } from '@/sync/storageTypes';
-import { useTickingNow } from '../../useTickingNow';
+import { agentOutcome, agentOwnKeys, agentPrompt, agentRunState, agentSubagentType } from '@/utils/agentCard';
 import { formatElapsed, formatTokens, isLiveStatusFresh } from '@/utils/liveStatus';
+import { structuredRowsOmitting } from '@/utils/structuredFields';
+import { knownTools } from '../../tools/knownTools';
+import { useTickingNow } from '../../useTickingNow';
+import { RawDisclosure, RowsView } from '../StructuredFieldsView';
+import { ToolViewProps } from './_all';
 
 interface FilteredTool {
     tool: ToolCall;
@@ -16,188 +34,242 @@ interface FilteredTool {
     state: 'running' | 'completed' | 'error';
 }
 
+/** Collapsed shows this many of the newest steps: what the agent is doing NOW. */
+const collapsedSteps = 3;
+
 /**
- * A running agent's own clock and token count, on its card (DROVE-54).
- *
- * DROVE-32 made a finished agent's run visible as a card. This is the half
- * that was still missing: while it is RUNNING the card said only what it was
- * asked to do, and the terminal beside it was showing "3/5 agents done · 28m
- * 15s · 851.9k tokens". The CLI publishes the agent's start time and its
- * cumulative tokens on session metadata, joined to this card by the tool_use
- * id that launched it.
- *
- * Renders nothing for an agent that has finished — the metadata only carries
- * agents that are still writing — so a scrolled-back transcript does not fill
- * up with dead timers.
+ * A running agent's own clock and token count (DROVE-54), read off session
+ * metadata. Null once the agent has finished: the metadata only carries agents
+ * that are still writing, and the finished numbers come from the report.
  */
-function RunningAgentStats(props: { tool: ToolCall, metadata: Metadata | null }) {
-    const { theme } = useUnistyles();
-    const live = props.metadata?.liveStatus ?? null;
-    const callId = props.tool.callId;
-    const now = useTickingNow(!!live && !!callId);
-    if (!callId || !isLiveStatusFresh(live, now)) return null;
+function useLiveAgentNumbers(tool: ToolCall, metadata: Metadata | null): string[] | null {
+    const live = metadata?.liveStatus ?? null;
+    const callId = tool.callId;
+    const now = useTickingNow(!!live && !!callId && tool.state === 'running');
+    if (!callId || tool.state !== 'running' || !isLiveStatusFresh(live, now)) return null;
     const agent = live!.agents?.find((candidate) => candidate.toolId === callId);
     if (!agent) return null;
     const parts = [formatElapsed(now - agent.startedAt)];
     if (typeof agent.tokens === 'number' && agent.tokens > 0) {
         parts.push(`${formatTokens(agent.tokens)} tokens`);
     }
-    return (
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 4, paddingLeft: 4 }}>
-            <ActivityIndicator size={Platform.OS === 'ios' ? 'small' : 14 as any} color={theme.colors.warning} />
-            <Text style={{ fontSize: 12, color: theme.colors.textSecondary, fontFamily: 'monospace' }}>
-                {parts.join(' · ')}
-            </Text>
-        </View>
-    );
+    return parts;
 }
 
-export const TaskView = React.memo<ToolViewProps>(({ tool, metadata, messages }) => {
+function stepTitle(step: ToolCall, metadata: Metadata | null): string {
+    const knownTool = knownTools[step.name as keyof typeof knownTools] as any;
+    if (!knownTool) return step.name;
+    if (typeof knownTool.extractDescription === 'function') {
+        return knownTool.extractDescription({ tool: step, metadata });
+    }
+    if (typeof knownTool.title === 'function') {
+        return knownTool.title({ tool: step, metadata });
+    }
+    return knownTool.title ?? step.name;
+}
+
+export const TaskView = React.memo<ToolViewProps>(({ tool, metadata, messages, sessionId }) => {
     const { theme } = useUnistyles();
-    // Every step the subagent took stays reachable, not just the last three.
-    // Claude Code's own app lets you open a Task and watch the whole run; the
-    // drover bridge already forwards the subagent's sidechain tool calls, so
-    // the data was here — collapsing it to "+N more tools" with no way to
-    // expand is what hid the run. Tap the footer to see all of it, tap again to
-    // fold it back. Collapsed by default so a fan-out of tasks stays scannable.
     const [expanded, setExpanded] = React.useState(false);
-    const filtered: FilteredTool[] = [];
 
-    for (let m of messages) {
-        if (m.kind === 'tool-call') {
-            const knownTool = knownTools[m.tool.name as keyof typeof knownTools] as any;
-            
-            // Extract title using extractDescription if available, otherwise use title
-            let title = m.tool.name;
-            if (knownTool) {
-                if ('extractDescription' in knownTool && typeof knownTool.extractDescription === 'function') {
-                    title = knownTool.extractDescription({ tool: m.tool, metadata });
-                } else if (knownTool.title) {
-                    // Handle optional title and function type
-                    if (typeof knownTool.title === 'function') {
-                        title = knownTool.title({ tool: m.tool, metadata });
-                    } else {
-                        title = knownTool.title;
-                    }
-                }
-            }
+    const subagentType = agentSubagentType(tool.input);
+    const prompt = agentPrompt(tool.input);
+    const outcome = React.useMemo(() => agentOutcome(tool.result), [tool.result]);
+    const runState = agentRunState(tool);
+    const rest = React.useMemo(() => structuredRowsOmitting(tool.input, agentOwnKeys), [tool.input]);
+    const liveNumbers = useLiveAgentNumbers(tool, metadata);
 
-            if (m.tool.state === 'running' || m.tool.state === 'completed' || m.tool.state === 'error') {
-                filtered.push({
-                    tool: m.tool,
-                    title,
-                    state: m.tool.state
-                });
-            }
+    // Every step the subagent took stays reachable, not just the last three
+    // (DROVE-32): the bridge forwards the sidechain tool calls as children.
+    const steps: FilteredTool[] = [];
+    for (const m of messages) {
+        if (m.kind !== 'tool-call') continue;
+        if (m.tool.state === 'running' || m.tool.state === 'completed' || m.tool.state === 'error') {
+            steps.push({ tool: m.tool, title: stepTitle(m.tool, metadata), state: m.tool.state });
         }
     }
+    const hiddenSteps = expanded ? 0 : Math.max(0, steps.length - collapsedSteps);
+    const visibleSteps = hiddenSteps > 0 ? steps.slice(hiddenSteps) : steps;
 
-    const styles = StyleSheet.create({
-        container: {
-            paddingVertical: 4,
-            paddingBottom: 12
-        },
-        toolItem: {
-            flexDirection: 'row',
-            alignItems: 'center',
-            paddingVertical: 4,
-            paddingLeft: 4,
-            paddingRight: 2
-        },
-        toolTitle: {
-            fontSize: 14,
-            fontWeight: '500',
-            color: theme.colors.textSecondary,
-            fontFamily: 'monospace',
-            flex: 1,
-        },
-        statusContainer: {
-            marginLeft: 'auto',
-            paddingLeft: 8,
-        },
-        loadingItem: {
-            flexDirection: 'row',
-            alignItems: 'center',
-            paddingVertical: 8,
-            paddingHorizontal: 4,
-        },
-        loadingText: {
-            marginLeft: 8,
-            fontSize: 14,
-            color: theme.colors.textSecondary,
-        },
-        moreToolsItem: {
-            flexDirection: 'row',
-            alignItems: 'center',
-            paddingVertical: 6,
-            paddingHorizontal: 4,
-        },
-        moreToolsText: {
-            fontSize: 14,
-            color: theme.colors.textLink ?? theme.colors.textSecondary,
-            fontWeight: '500',
-        },
-        chevron: {
-            marginLeft: 4,
-        },
-    });
-
-    // An agent that has just launched has forwarded no steps yet, and used to
-    // render nothing at all. Its clock is still worth showing — that is the
-    // whole of the "it just says online" complaint, one card down.
-    const runningStats = <RunningAgentStats tool={tool} metadata={metadata} />;
-
-    if (filtered.length === 0) {
-        return <View style={styles.container}>{runningStats}</View>;
+    const stateLabel = runState === 'running'
+        ? t('tools.agent.running')
+        : runState === 'finished' ? t('tools.agent.finished') : t('tools.agent.failed');
+    const numbers: string[] = liveNumbers ?? [];
+    if (!liveNumbers && outcome) {
+        if (typeof outcome.durationMs === 'number') numbers.push(formatElapsed(outcome.durationMs));
+        if (typeof outcome.tokens === 'number' && outcome.tokens > 0) numbers.push(`${formatTokens(outcome.tokens)} tokens`);
+        if (typeof outcome.toolUses === 'number' && outcome.toolUses > 0) numbers.push(t('tools.agent.toolUses', { count: outcome.toolUses }));
     }
 
-    // Collapsed shows the tail (what it is doing NOW); expanded shows the whole
-    // run from the top so the order reads the way it happened.
-    const COLLAPSED = 3;
-    const canExpand = filtered.length > COLLAPSED;
-    const visibleTools = expanded || !canExpand
-        ? filtered
-        : filtered.slice(filtered.length - COLLAPSED);
+    const stateIcon = runState === 'running'
+        ? <ActivityIndicator size={Platform.OS === 'ios' ? 'small' : 14 as any} color={theme.colors.warning} />
+        : runState === 'finished'
+            ? <Ionicons name="checkmark-circle" size={16} color={theme.colors.success} />
+            : <Ionicons name="close-circle" size={16} color={theme.colors.textDestructive} />;
 
     return (
         <View style={styles.container}>
-            {runningStats}
-            {visibleTools.map((item, index) => (
-                <View key={`${item.tool.name}-${index}`} style={styles.toolItem}>
-                    <Text style={styles.toolTitle} numberOfLines={expanded ? 2 : 1}>{item.title}</Text>
-                    <View style={styles.statusContainer}>
-                        {item.state === 'running' && (
-                            <ActivityIndicator size={Platform.OS === 'ios' ? "small" : 14 as any} color={theme.colors.warning} />
-                        )}
-                        {item.state === 'completed' && (
-                            <Ionicons name="checkmark-circle" size={16} color={theme.colors.success} />
-                        )}
-                        {item.state === 'error' && (
-                            <Ionicons name="close-circle" size={16} color={theme.colors.textDestructive} />
-                        )}
+            <Pressable
+                onPress={() => setExpanded((value) => !value)}
+                hitSlop={6}
+                accessibilityRole="button"
+                accessibilityLabel={t('tools.agent.details')}
+                style={({ pressed }) => [styles.statusRow, pressed && styles.pressed]}
+            >
+                {subagentType ? <Text style={styles.chip} numberOfLines={1}>{subagentType}</Text> : null}
+                {stateIcon}
+                <Text style={styles.stateText} numberOfLines={1}>
+                    {[stateLabel, ...numbers].join(' · ')}
+                </Text>
+                <Ionicons
+                    name={expanded ? 'chevron-up' : 'chevron-down'}
+                    size={14}
+                    color={theme.colors.textSecondary}
+                />
+            </Pressable>
+
+            {expanded && prompt ? (
+                <View style={styles.section}>
+                    <Text style={styles.sectionLabel}>{t('tools.agent.prompt')}</Text>
+                    <View style={styles.block}>
+                        <Text style={styles.blockText} selectable>{prompt}</Text>
                     </View>
                 </View>
-            ))}
-            {canExpand && (
-                <Pressable
-                    style={styles.moreToolsItem}
-                    onPress={() => setExpanded((v) => !v)}
-                    hitSlop={8}
-                    accessibilityRole="button"
-                >
-                    <Text style={styles.moreToolsText}>
-                        {expanded
-                            ? t('tools.taskView.showLess')
-                            : t('tools.taskView.showAll', { count: filtered.length })}
-                    </Text>
-                    <Ionicons
-                        name={expanded ? 'chevron-up' : 'chevron-down'}
-                        size={14}
-                        color={theme.colors.textLink ?? theme.colors.textSecondary}
-                        style={styles.chevron}
-                    />
-                </Pressable>
-            )}
+            ) : null}
+
+            {visibleSteps.length > 0 ? (
+                <View style={styles.steps}>
+                    {visibleSteps.map((item, index) => (
+                        <View key={`${item.tool.name}-${index}`} style={styles.step}>
+                            <Text style={styles.stepTitle} numberOfLines={expanded ? 2 : 1}>{item.title}</Text>
+                            <View style={styles.stepStatus}>
+                                {item.state === 'running' && (
+                                    <ActivityIndicator size={Platform.OS === 'ios' ? 'small' : 14 as any} color={theme.colors.warning} />
+                                )}
+                                {item.state === 'completed' && (
+                                    <Ionicons name="checkmark-circle" size={16} color={theme.colors.success} />
+                                )}
+                                {item.state === 'error' && (
+                                    <Ionicons name="close-circle" size={16} color={theme.colors.textDestructive} />
+                                )}
+                            </View>
+                        </View>
+                    ))}
+                    {hiddenSteps > 0 ? (
+                        <Pressable
+                            style={styles.moreSteps}
+                            onPress={() => setExpanded(true)}
+                            hitSlop={8}
+                            accessibilityRole="button"
+                        >
+                            <Text style={styles.moreStepsText}>
+                                {t('tools.taskView.showAll', { count: steps.length })}
+                            </Text>
+                            <Ionicons name="chevron-down" size={14} color={theme.colors.textLink ?? theme.colors.textSecondary} />
+                        </Pressable>
+                    ) : null}
+                </View>
+            ) : null}
+
+            {expanded && outcome?.text ? (
+                <View style={styles.section}>
+                    <Text style={styles.sectionLabel}>{t('tools.agent.result')}</Text>
+                    <View style={styles.block}>
+                        <MarkdownView markdown={outcome.text} sessionId={sessionId} />
+                    </View>
+                </View>
+            ) : null}
+
+            {expanded && rest.length > 0 ? <RowsView rows={rest} /> : null}
+            {expanded ? <RawDisclosure value={tool.input} /> : null}
         </View>
     );
 });
+
+const styles = StyleSheet.create((theme) => ({
+    container: {
+        paddingVertical: 4,
+        paddingBottom: 12,
+        gap: 8,
+    },
+    statusRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        minHeight: 24,
+    },
+    pressed: {
+        opacity: 0.6,
+    },
+    chip: {
+        fontSize: 11,
+        lineHeight: 16,
+        color: theme.colors.textSecondary,
+        backgroundColor: theme.colors.surfaceHigh,
+        borderRadius: 4,
+        paddingHorizontal: 6,
+        overflow: 'hidden',
+        maxWidth: 140,
+    },
+    stateText: {
+        flex: 1,
+        minWidth: 0,
+        fontSize: 12,
+        lineHeight: 18,
+        color: theme.colors.textSecondary,
+        fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
+    },
+    section: {
+        gap: 4,
+    },
+    sectionLabel: {
+        fontSize: 12,
+        lineHeight: 18,
+        fontWeight: '600',
+        color: theme.colors.textSecondary,
+    },
+    block: {
+        backgroundColor: theme.colors.surfaceHigh,
+        borderRadius: 6,
+        paddingHorizontal: 10,
+        paddingVertical: 8,
+    },
+    blockText: {
+        fontSize: 13,
+        lineHeight: 19,
+        color: theme.colors.text,
+    },
+    steps: {
+        gap: 0,
+    },
+    step: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingVertical: 4,
+        paddingLeft: 4,
+        paddingRight: 2,
+    },
+    stepTitle: {
+        flex: 1,
+        fontSize: 14,
+        fontWeight: '500',
+        color: theme.colors.textSecondary,
+        fontFamily: 'monospace',
+    },
+    stepStatus: {
+        marginLeft: 'auto',
+        paddingLeft: 8,
+    },
+    moreSteps: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingVertical: 6,
+        paddingHorizontal: 4,
+        gap: 4,
+    },
+    moreStepsText: {
+        fontSize: 14,
+        color: theme.colors.textLink ?? theme.colors.textSecondary,
+        fontWeight: '500',
+    },
+}));

@@ -72,6 +72,16 @@ describe('structuredRows', () => {
         expect(author.rows[0].value).toEqual({ kind: 'text', text: 'clayrisser', long: false });
     });
 
+    it('keeps a long string a text block, at the top level and one level down, never JSON', () => {
+        const long = 'x'.repeat(300) + '\nsecond line';
+        const rows = structuredRows({ prompt: long, nested: { message: long } });
+        expect(rows[0].value).toEqual({ kind: 'text', text: long, long: true });
+        const nested = rows[1].value;
+        expect(nested.kind).toBe('object');
+        if (nested.kind !== 'object') return;
+        expect(nested.rows[0].value).toEqual({ kind: 'text', text: long, long: true });
+    });
+
     it('recognises file paths', () => {
         const rows = structuredRows({ file_path: '/Users/clayrisser/.claude-accounts/jamrizzi/uploads/x/IMG_0273.jpg' });
         expect(rows[0].label).toBe('file path');

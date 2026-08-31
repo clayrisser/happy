@@ -619,6 +619,21 @@ export const ca: TranslationStructure = {
             running: 'L\'eina s\'està executant...',
             rawJsonDevMode: 'JSON en brut (mode desenvolupador)',
         },
+        sendMessage: {
+            to: ({ to }: { to: string }) => `Missatge a ${to}`,
+            untitled: 'Missatge',
+            message: 'Missatge',
+            summary: 'Resum',
+        },
+        agent: {
+            running: 'En execució',
+            finished: 'Acabat',
+            failed: 'Ha fallat',
+            prompt: 'Instrucció',
+            result: 'Resultat',
+            toolUses: ({ count }: { count: number }) => count === 1 ? "1 ús d'eina" : `${count} usos d'eines`,
+            details: 'Detalls',
+        },
         taskView: {
             initializing: 'Inicialitzant l\'agent...',
             moreTools: ({ count }: { count: number }) => `+${count} més ${plural({ count, singular: 'eina', plural: 'eines' })}`,

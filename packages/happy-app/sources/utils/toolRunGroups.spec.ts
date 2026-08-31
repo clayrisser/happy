@@ -254,3 +254,49 @@ describe('groupSameToolRuns', () => {
         expect(ids(items)).toEqual(['m2', 'm1']);
     });
 });
+
+describe('SendMessage and Agent stand alone (DROVE-51)', () => {
+    it('never folds a run of Agent calls: a fan-out of subagents is seen one by one', () => {
+        const items = groupSameToolRuns(newestFirst([
+            tool('a1', 'Agent', 1),
+            tool('a2', 'Agent', 2, { state: 'running' }),
+            tool('a3', 'Agent', 3, { state: 'running' }),
+        ]));
+        expect(ids(items)).toEqual(['a3', 'a2', 'a1']);
+        expect(items.every((item) => item.type === 'message')).toBe(true);
+    });
+
+    it('treats the older Task name the same way', () => {
+        const items = groupSameToolRuns(newestFirst([tool('t1', 'Task', 1), tool('t2', 'Task', 2)]));
+        expect(ids(items)).toEqual(['t2', 't1']);
+    });
+
+    it('never folds a run of SendMessage calls', () => {
+        const items = groupSameToolRuns(newestFirst([
+            tool('m1', 'SendMessage', 1),
+            tool('m2', 'SendMessage', 2),
+            tool('m3', 'SendMessage', 3),
+        ]));
+        expect(ids(items)).toEqual(['m3', 'm2', 'm1']);
+        expect(items.every((item) => item.type === 'message')).toBe(true);
+    });
+
+    it('breaks a shell run in two rather than swallowing the message or the agent between', () => {
+        const items = groupSameToolRuns(newestFirst([
+            tool('b1', 'Bash', 1),
+            tool('b2', 'Bash', 2),
+            tool('m1', 'SendMessage', 3),
+            tool('b3', 'Bash', 4),
+            tool('b4', 'Bash', 5),
+            tool('a1', 'Agent', 6),
+            tool('b5', 'Bash', 7),
+        ]));
+        expect(ids(items)).toEqual(['b5', 'a1', 'group-b3', 'm1', 'group-b1']);
+    });
+
+    it('reports no run category for either', () => {
+        expect(getToolRunCategory(tool('m', 'SendMessage', 1))).toBeNull();
+        expect(getToolRunCategory(tool('a', 'Agent', 1))).toBeNull();
+        expect(getToolRunCategory(tool('t', 'Task', 1))).toBeNull();
+    });
+});

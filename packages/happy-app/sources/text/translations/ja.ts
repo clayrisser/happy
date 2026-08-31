@@ -620,6 +620,21 @@ export const ja: TranslationStructure = {
             running: 'ツールを実行中...',
             rawJsonDevMode: 'Raw JSON (開発モード)',
         },
+        sendMessage: {
+            to: ({ to }: { to: string }) => `${to} へのメッセージ`,
+            untitled: 'メッセージ',
+            message: 'メッセージ',
+            summary: '要約',
+        },
+        agent: {
+            running: '実行中',
+            finished: '完了',
+            failed: '失敗',
+            prompt: 'プロンプト',
+            result: '結果',
+            toolUses: ({ count }: { count: number }) => `ツール使用 ${count} 回`,
+            details: '詳細',
+        },
         taskView: {
             initializing: 'エージェントを初期化中...',
             moreTools: ({ count }: { count: number }) => `+${count} 個のツール`,
