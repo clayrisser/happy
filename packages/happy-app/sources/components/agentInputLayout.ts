@@ -1,3 +1,27 @@
+/**
+ * How much of its own em box an Ionicons glyph's OUTLINE actually fills,
+ * measured off `Ionicons.ttf` (unitsPerEm 512) rather than guessed.
+ *
+ * This is the metric DROVE-214 turned on. An icon font's glyph is drawn inside
+ * an em box that is mostly empty, and both in-field controls are placed by
+ * their box. That is right for the send button, whose box IS its ink because
+ * the disc is filled, and wrong for the `+`, whose box is transparent: 26pt of
+ * `add` is 16.25pt of ink with 4.875 of nothing on each side, so a box placed
+ * 4 off the rim puts INK 13.875 off it.
+ *
+ *   add          outline spans x 96..416 of 512, so 0.625 of the em
+ *   paper-plane  outline spans x 32.26..480 of 512, so 0.874486
+ *
+ * Both glyphs are vertically centred by the font's own metrics and need no
+ * correction: `add`'s ink centre sits 0.3749em over the baseline and
+ * `paper-plane`'s 0.3745, against a line box centred at (454-71)/2/512 =
+ * 0.374em. Under a hundredth of a point either way at these sizes.
+ */
+export const IONICON_INK_RATIO = {
+    add: 0.625,
+    paperPlane: 0.874486,
+} as const;
+
 export interface AgentInputLayoutGeometry {
     shellInset: number;
     actionSize: number;
@@ -17,31 +41,64 @@ export interface AgentInputLayout {
     addGlyphOffset: number;
     /**
      * Half the difference between the 36pt in-field disc and the same 26pt
-     * glyph, so 5 (DROVE-206). What the chat's `+` needs to be centred in the
-     * disc it is drawn in now.
+     * glyph, so 5 (DROVE-206). What the chat's `+` needed to be CENTRED in the
+     * disc it is drawn in.
+     *
+     * It no longer places the `+` (DROVE-214) and is kept because it is what
+     * `textInset` is still built from. Centring is the wrong rule for a
+     * control that draws no disc: see `addGlyphInkInset`.
      */
     inFieldAddGlyphOffset: number;
     /**
-     * THE COMPOSER'S GLYPH COLUMN: 19pt from the screen edge, where the `+`'s
-     * ink starts and where the status row under it lines its text up.
+     * How far the `+`'s ink sits inside its own 26pt em box: 4.875 a side,
+     * because Ionicons `add` fills 0.625 of the em (DROVE-214).
      *
-     * The number has survived three arrangements and it is the same 19 each
-     * time, but the derivation is different now and worth reading (DROVE-206).
-     * DROVE-153 had the `+` on the row below the card, so 19 was the shell
-     * inset plus a 44pt button's glyph offset, 10 + 9. DROVE-196 moved the `+`
-     * up onto the field's line, kept the same 44pt button, and so kept the
-     * same arithmetic. DROVE-206 moves it INSIDE the field, where it is a 36pt
-     * disc inset 4 from the bubble's rim:
+     * THIS IS THE NUMBER THE COMPOSER WAS MISSING. The two in-field controls
+     * are placed by their boxes, 4 off their rim each, which is symmetric by
+     * BOX and asymmetric by INK: the send button's box is filled, so its ink
+     * starts where its box does, while the `+`'s box is transparent and its
+     * ink starts `inFieldAddGlyphOffset + addGlyphInkInset` further in. That
+     * is 5 + 4.875 = 9.875pt, which is exactly the gap Clay photographed.
      *
-     *     10 shell inset + 4 disc inset + 5 glyph offset = 19
+     * So the `+`'s glyph is aligned to the LEADING EDGE of its box and pulled
+     * out by this, rather than centred in it. Its box, its size and its 6pt
+     * slop are untouched, so the touch target is the same 46pt it always was.
+     */
+    addGlyphInkInset: number;
+    /**
+     * The `+`'s ink, 16.25pt of it: 26pt of `add` at 0.625 of the em.
      *
-     * So the status row's alignment is not a number that happens to match any
-     * more, it is the `+`'s ink column read off the `+`'s own geometry, and
-     * `statusRowLayout` reads THIS rather than reassembling it.
+     * The send glyph is sized to match it, which is what makes the two ends of
+     * the field carry the same weight of ink rather than the same font size.
+     */
+    addInkSize: number;
+    /**
+     * What the send glyph is drawn at, so that its ink is the `+`'s ink.
      *
-     * It is also where the text starts when there is no `+` to draw (zen mode,
-     * or a session that takes no context): the caret falls back to the column
-     * the glyph would have occupied rather than to the rim.
+     * Clay: "the send button should actually be a send button", and a paper
+     * plane reads lighter than an arrow at the same point size. It does not
+     * get 16 because the arrow had 16; it gets whatever puts 16.25pt of ink in
+     * the disc, which for `paper-plane` at 0.874486 of the em is 18.58
+     * (DROVE-214). The arrow it replaces carried 9.97 x 10.75 of ink, so this
+     * is a bigger mark as well as a different one.
+     */
+    sendIconSize: number;
+    /**
+     * THE COMPOSER'S GLYPH COLUMN: 19pt from the screen edge, where the status
+     * row under the composer lines its text up and where the caret starts when
+     * there is no `+` to draw (zen mode, or a session that takes no context).
+     *
+     * It is 10 shell inset + 4 rim inset + 5 glyph offset, and DROVE-206 wrote
+     * that this is "the `+`'s ink column". IT NEVER WAS (DROVE-214). 19 is
+     * where the `+`'s transparent EM BOX started; its ink started 4.875
+     * further in, at 23.875, and since DROVE-214 aligns the glyph by its ink
+     * the ink column is 10 + 4 = 14.
+     *
+     * 19 stays anyway, and deliberately. It is a column that two things share,
+     * the status strip and the zen caret, and rebasing it on the ink would
+     * move both for a reason nobody asked for. What it is not is a number
+     * derived from where the `+` is drawn, so it is written down here as the
+     * chosen column it has always actually been.
      */
     textInset: number;
     inputContainerPaddingLeft: number;
@@ -101,6 +158,27 @@ export const MOBILE_COMPOSER_METRICS = {
     // the in-field button's own 4pt inset is the only air inside it.
     shellPaddingTop: 8,
     shellPaddingBottom: 8,
+    /**
+     * THE CHAT BUBBLE'S OWN PADDING, WHICH IS ZERO, AND IS NOW ACTUALLY ZERO
+     * (DROVE-196, enforced in DROVE-214).
+     *
+     * DROVE-196 said "NO PADDING, and that is the ticket" and DROVE-206 built
+     * every in-field number on it. The style that said it only overrode the
+     * panel's colour and radius, so the desktop panel's `paddingHorizontal: 8`
+     * / `paddingVertical: 2` / `paddingBottom: 8` went on shipping under it.
+     *
+     * That one leak is what Clay photographed. It cost the field 8pt at each
+     * rim, so the `+` and the send button were both 8 further in than the spec
+     * said and the pinned text widths were 16 wider than the text really got;
+     * and 2 over 8 vertically is not centred, so the field sat 3pt above the
+     * capsule's middle and took both glyphs up with it. The bubble drew 54
+     * tall against a `MOBILE_COMPOSER_BUBBLE_BASE_HEIGHT` of 44.
+     *
+     * It is a metric rather than a literal 0 in the stylesheet so the spec can
+     * hold it: a padding that reappears here fails a test instead of quietly
+     * moving every number DROVE-206 pinned.
+     */
+    bubblePadding: 0,
     inputMinHeight: 44,
     inputMaxHeight: 120,
     inputFontSize: 16,
@@ -152,7 +230,17 @@ export const MOBILE_COMPOSER_METRICS = {
      * (DROVE-206).
      */
     primaryActionMarginLeft: 6,
-    /** Keeps an in-field control off the capsule's rounded ends. */
+    /**
+     * Keeps an in-field control off the capsule's rounded ends, and since
+     * DROVE-214 it is a rule about INK rather than about boxes.
+     *
+     * 4 IS THE RIM-TO-INK NUMBER AT BOTH ENDS. It is forced by the trailing
+     * end, where a 36pt disc in a 44pt capsule can be inset by exactly this
+     * and no more, and the leading end matches it by putting the `+`'s ink on
+     * the same column rather than its box. Clay: "the gap the eye actually
+     * reads, rim to nearest ink". Read it off the drawn pixels and the answer
+     * is 4 at each rim, 14 from the screen edge once the shell's 10 is added.
+     */
     primaryActionInset: 4,
     attachmentExtraHeight: 72,
     /**
@@ -192,7 +280,8 @@ export const MOBILE_COMPOSER_METRICS = {
  * derivation is finally literal, and the button is inset 4 from the bubble's
  * rim on every side.
  */
-export const MOBILE_COMPOSER_BUBBLE_BASE_HEIGHT = MOBILE_COMPOSER_METRICS.inputMinHeight;
+export const MOBILE_COMPOSER_BUBBLE_BASE_HEIGHT = MOBILE_COMPOSER_METRICS.bubblePadding * 2
+    + MOBILE_COMPOSER_METRICS.inputMinHeight;
 
 /**
  * The whole chat composer block, empty: bubble, gap, control row, and the gap
@@ -516,9 +605,16 @@ export function resolveMobileComposerControlRowGeometry(): MobileComposerGeometr
  * A composer control's disc.
  *
  * `icon` is a control on the row, drawn at the full 44. `primary` and `add`
- * are the two IN-FIELD discs (DROVE-206), the same 36 at opposite rims, and
+ * are the two IN-FIELD boxes (DROVE-206), the same 36 at opposite rims, and
  * they differ only in which side their air is on: the primary keeps the text
  * off its left, the `+` keeps it off its right.
+ *
+ * The BOXES stay identical and mirrored, which is what keeps the text's width
+ * a constant and both touch targets at 46 (DROVE-214). What is not identical
+ * is what fills them: the primary's box is a filled disc, the `+`'s is
+ * transparent, and only the `+` therefore has to place its glyph by ink. That
+ * is `addGlyphInkInset`, applied to the glyph inside this box and not to the
+ * box, so nothing here moves.
  */
 export function resolveMobileComposerActionGeometry(
     variant: 'icon' | 'primary' | 'add',
@@ -551,8 +647,11 @@ export function resolveAgentInputLayout({
 }: AgentInputLayoutGeometry): AgentInputLayout {
     // Home's `+`, still a 44pt button on a row.
     const addGlyphOffset = (actionSize - addIconSize) / 2;
-    // Chat's `+`, a 36pt disc inside the field (DROVE-206).
+    // Chat's `+`, a 36pt box inside the field (DROVE-206).
     const inFieldAddGlyphOffset = (MOBILE_COMPOSER_METRICS.primaryActionSize - addIconSize) / 2;
+    // And the part of that box the glyph does not fill (DROVE-214).
+    const addInkSize = addIconSize * IONICON_INK_RATIO.add;
+    const addGlyphInkInset = (addIconSize - addInkSize) / 2;
     // One expression, read twice: an in-field control is inset off its rim,
     // takes its disc, and leaves air before the text. The `+` at the leading
     // rim and send at the trailing one are mirror images (DROVE-206).
@@ -563,9 +662,15 @@ export function resolveAgentInputLayout({
         shellInset,
         addGlyphOffset,
         inFieldAddGlyphOffset,
-        // The `+`'s ink column, off the `+`'s own geometry: the bubble starts
-        // at the shell inset, the disc 4 inside that, the glyph 5 inside the
-        // disc. 19, the same column it has always been.
+        addGlyphInkInset,
+        addInkSize,
+        // The send glyph carries the `+`'s ink, not the `+`'s point size
+        // (DROVE-214). A paper plane fills more of its em than a plus does, so
+        // matching the number would have drawn a heavier mark than the one at
+        // the other rim.
+        sendIconSize: addInkSize / IONICON_INK_RATIO.paperPlane,
+        // The status strip's column and the zen caret's, 19. NOT the `+`'s ink
+        // column, which is `shellInset + primaryActionInset` = 14 (DROVE-214).
         textInset: shellInset
             + MOBILE_COMPOSER_METRICS.primaryActionInset
             + inFieldAddGlyphOffset,

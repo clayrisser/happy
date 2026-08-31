@@ -11,16 +11,15 @@ describe('agent input compact mobile layout', () => {
      * DROVE-153 had the `+` on the row under the card: 10 shell inset + 9,
      * half the difference between a 44pt button and its 26pt glyph. DROVE-196
      * moved it onto the field's line, same button, same arithmetic. DROVE-206
-     * moves it INSIDE the field, where it is a 36pt disc inset 4 from the
+     * moves it INSIDE the field, where it is a 36pt box inset 4 from the
      * bubble's rim, so the offset that centres the glyph is 5 rather than 9
      * and the column is 10 + 4 + 5.
      *
-     * That it lands on 19 again is worth pinning precisely BECAUSE it looks
-     * like nothing changed. The status row under the composer indents to this
-     * column, and the alignment is now the `+`'s own ink rather than two
-     * expressions that happen to agree.
+     * It is the column the STATUS STRIP and the ZEN CARET share, and that is
+     * all it is (DROVE-214). DROVE-206 called it the `+`'s ink column; the
+     * `+`'s ink is on 14.
      */
-    it('keeps the glyph column at 19, by the in-field geometry that now decides it', () => {
+    it('keeps the glyph column at 19, and says it is not the ink column', () => {
         const layout = resolveAgentInputLayout({
             shellInset: 10,
             actionSize: 44,
@@ -30,6 +29,11 @@ describe('agent input compact mobile layout', () => {
         expect(layout.textInset).toBe(19);
         expect(layout.textInset).toBe(10 + 4 + (36 - 26) / 2);
         expect(layout.inFieldAddGlyphOffset).toBe(5);
+
+        // The `+`'s ink is 5pt further out than this, because the glyph is
+        // placed by its ink now and the ink is not the em box.
+        expect(10 + agentInputLayout.MOBILE_COMPOSER_METRICS.primaryActionInset).toBe(14);
+        expect(layout.textInset - 14).toBe(layout.inFieldAddGlyphOffset);
         // Home's `+` is still a 44pt button on a row, and still 9.
         expect(layout.addGlyphOffset).toBe(9);
         expect(layout.inputContainerPaddingLeft).toBe(9);
@@ -50,6 +54,7 @@ describe('agent input compact mobile layout', () => {
             shellInset: 10,
             shellPaddingTop: 8,
             shellPaddingBottom: 8,
+            bubblePadding: 0,
             inputMinHeight: 44,
             inputMaxHeight: 120,
             inputFontSize: 16,
@@ -284,8 +289,9 @@ describe('agent input compact mobile layout', () => {
                 .toBe(layout.inputLeadingActionPadding - layout.inputContainerPaddingLeft);
         }
 
-        // The caret is at the glyph column either way: 19 from the screen edge
-        // with no `+`, and the `+`'s own ink at 19 when there is one.
+        // With no `+` the caret falls to the glyph column, 19 from the screen
+        // edge, which is also the strip's. It is a chosen column shared by
+        // those two and not a reading off the `+` (DROVE-214).
         expect(agentInputLayout.MOBILE_COMPOSER_METRICS.shellInset
             + agentInputLayout.resolveComposerLeadingPadding(false)).toBe(layout.textInset);
     });
@@ -380,7 +386,7 @@ describe('agent input compact mobile layout', () => {
         const bubbleRight = screenWidth - metrics.shellInset;
         const addLeft = bubbleLeft + metrics.primaryActionInset;
         const addRight = addLeft + metrics.primaryActionSize;
-        const addGlyphLeft = addLeft + layout.inFieldAddGlyphOffset;
+        const addInkLeft = addLeft;
         const textLeft = bubbleLeft + layout.inputLeadingActionPadding;
         const textRight = bubbleRight - layout.inputTrailingActionPadding;
         const primaryRight = bubbleRight - metrics.primaryActionInset;
@@ -391,9 +397,12 @@ describe('agent input compact mobile layout', () => {
         expect(bubbleLeft).toBe(10);
         expect(addLeft - bubbleLeft).toBe(metrics.primaryActionInset);
         expect(addRight).toBeLessThan(textLeft);
-        // And its ink lands on the 19pt column the status row indents to.
-        expect(addGlyphLeft).toBe(layout.textInset);
-        expect(addGlyphLeft).toBe(19);
+        // And its INK starts on the box's leading edge rather than 9.875
+        // inside it, so 14 from the screen edge (DROVE-214).
+        expect(addInkLeft).toBe(14);
+        expect(addInkLeft).toBe(bubbleLeft + metrics.primaryActionInset);
+        expect(layout.textInset - addInkLeft)
+            .toBe(layout.inFieldAddGlyphOffset);
 
         // Send is inside at the trailing rim, 4pt off on every side, which is
         // the same 4 the field's 44pt floor is built from.
@@ -510,5 +519,128 @@ describe('agent input compact mobile layout', () => {
             flexShrink: 0,
             marginRight: 6,
         });
+    });
+
+    /**
+     * DROVE-214, THE MEASUREMENT. Clay, on a close crop of the empty composer:
+     * "Why is the alignment off here?"
+     *
+     * Rim to nearest ink, which is the gap the eye actually reads, was 4 at
+     * the trailing rim and 13.875 at the leading one. Both boxes were inset by
+     * the same 4; the difference is entirely that one box is a filled disc and
+     * the other is transparent, so the trailing box IS ink and the leading one
+     * holds 16.25pt of glyph in 36pt of nothing.
+     *
+     * 9.875 of asymmetry, and it is `inFieldAddGlyphOffset + addGlyphInkInset`
+     * exactly. Which names the wrong rule rather than a wrong number: centring
+     * is what you do to a glyph in a disc it draws, and the `+` draws none.
+     */
+    it('lands rim to ink on 4 at both ends of the bubble', () => {
+        const metrics = agentInputLayout.MOBILE_COMPOSER_METRICS;
+        const layout = agentInputLayout.MOBILE_COMPOSER_LAYOUT;
+
+        // Trailing: the box is the disc, so its rim-to-ink is its inset.
+        const sendBoxRight = metrics.primaryActionInset;
+        const sendRimToInk = sendBoxRight;
+
+        // Leading, walked the way the style walks it: the box is at the same
+        // inset, the glyph sits flush to the box's leading edge, and the
+        // negative margin pulls its em box out by the side bearing so the INK
+        // lands on that edge.
+        const addBoxLeft = metrics.primaryActionInset;
+        const addGlyphEmLeft = addBoxLeft - layout.addGlyphInkInset;
+        const addRimToInk = addGlyphEmLeft + layout.addGlyphInkInset;
+
+        expect(sendRimToInk).toBe(4);
+        expect(addRimToInk).toBe(4);
+        expect(addRimToInk).toBe(sendRimToInk);
+
+        // The em box hangs a hair past the rim and carries no pixels there,
+        // which is the whole cost of placing a glyph by its ink.
+        expect(addGlyphEmLeft).toBe(-0.875);
+        expect(Math.abs(addGlyphEmLeft)).toBeLessThan(1);
+
+        // WAS 13.875, which is the number in Clay's crop, and the 9.875 of it
+        // that was wrong is the box's slack around the glyph.
+        expect(addBoxLeft + layout.inFieldAddGlyphOffset + layout.addGlyphInkInset)
+            .toBe(13.875);
+        expect(layout.inFieldAddGlyphOffset + layout.addGlyphInkInset).toBe(9.875);
+        expect((metrics.primaryActionSize - layout.addInkSize) / 2).toBe(9.875);
+
+        // 14 from the screen edge at either rim, once the shell's gutter is
+        // added. One ink column, both ends.
+        expect(metrics.shellInset + sendRimToInk).toBe(14);
+
+        // AND NEITHER BOX MOVED, which is what keeps the targets. Both are 36
+        // at 4 off their rim with 6pt of slop, so each reaches from the rim to
+        // 46 once the capsule clips the slop that falls outside it, and each
+        // is 44 tall for the same reason.
+        const targetWidth = metrics.primaryActionInset + metrics.primaryActionSize
+            + metrics.primaryActionSlop;
+        expect(targetWidth).toBe(46);
+        expect(targetWidth).toBeGreaterThanOrEqual(44);
+        expect(metrics.inputMinHeight).toBeGreaterThanOrEqual(44);
+    });
+
+    /**
+     * The glyph metrics DROVE-214 turned on, read off Ionicons.ttf rather than
+     * eyeballed, so a font bump moves a number here.
+     */
+    it('measures the `+` by its ink and sizes the send glyph to match', () => {
+        const metrics = agentInputLayout.MOBILE_COMPOSER_METRICS;
+        const layout = agentInputLayout.MOBILE_COMPOSER_LAYOUT;
+
+        // `add` fills 320 of Ionicons' 512 em, so 16.25 of ink at 26pt with
+        // 4.875 of empty box a side.
+        expect(agentInputLayout.IONICON_INK_RATIO.add).toBe(0.625);
+        expect(layout.addInkSize).toBe(16.25);
+        expect(layout.addGlyphInkInset).toBe(4.875);
+        expect(layout.addInkSize + layout.addGlyphInkInset * 2).toBe(metrics.addIconSize);
+
+        // The send glyph is sized so its ink IS that ink. A paper plane fills
+        // more of its em than a plus does, so equal ink means a smaller number
+        // than 26 and a bigger one than the 16 the arrow had.
+        expect(layout.sendIconSize).toBeCloseTo(18.582, 3);
+        expect(layout.sendIconSize * agentInputLayout.IONICON_INK_RATIO.paperPlane)
+            .toBeCloseTo(layout.addInkSize, 6);
+        expect(layout.sendIconSize).toBeGreaterThan(16);
+        expect(layout.sendIconSize).toBeLessThan(metrics.addIconSize);
+
+        // And the ink still clears the disc it sits in by a wide margin.
+        expect(layout.addInkSize).toBeLessThan(metrics.primaryActionSize);
+    });
+
+    /**
+     * DROVE-196 wrote "NO PADDING, and that is the ticket" in a comment and
+     * DROVE-206 built on it; the style never wrote the number, so the desktop
+     * panel's 8/2/8 shipped underneath for two tickets (DROVE-214).
+     *
+     * It is a metric now so this spec can hold it. Everything below is what
+     * that leak was costing, stated as the arithmetic rather than as a story.
+     */
+    it('gives the bubble no padding, so the pinned numbers are the drawn ones', () => {
+        const metrics = agentInputLayout.MOBILE_COMPOSER_METRICS;
+
+        expect(metrics.bubblePadding).toBe(0);
+
+        // Vertical: the field is the bubble, so a control pinned 4 off the
+        // field's bottom is 4 off the capsule's, and its centre is the
+        // capsule's centre. Under the leaked 2-over-8 it was 3pt high.
+        expect(agentInputLayout.MOBILE_COMPOSER_BUBBLE_BASE_HEIGHT).toBe(44);
+        expect(agentInputLayout.MOBILE_COMPOSER_BUBBLE_BASE_HEIGHT)
+            .toBe(metrics.bubblePadding * 2 + metrics.inputMinHeight);
+        expect(metrics.bubblePadding * 2 + metrics.inputMinHeight)
+            .toBe(metrics.primaryActionSize + metrics.primaryActionInset * 2);
+
+        // Horizontal: the pinned widths are what the text really gets. The
+        // leak took 8 a side off them without moving the constant.
+        for (const [screenWidth, width] of [[320, 208], [375, 263], [393, 281]] as const) {
+            expect(agentInputLayout.resolveComposerTextWidth(screenWidth)).toBe(width);
+            expect(screenWidth
+                - metrics.shellInset * 2
+                - metrics.bubblePadding * 2
+                - agentInputLayout.MOBILE_COMPOSER_LAYOUT.inputLeadingActionPadding
+                - agentInputLayout.MOBILE_COMPOSER_LAYOUT.inputTrailingActionPadding).toBe(width);
+        }
     });
 });
