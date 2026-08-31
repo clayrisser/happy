@@ -54,3 +54,31 @@ describe('hand-written press feedback stands down for the platform (DROVE-169)',
         })).toEqual({ animateScale: false });
     });
 });
+
+describe('a glass control has room to swell on press (DROVE-202)', () => {
+    // Clay: "it's not that it's scaling up inside, it's that the size doesn't
+    // grow". The effect was already interactive; the frame around it was not
+    // letting the swell out.
+    it('never clips the material, so the press swell can leave the resting frame', () => {
+        expect(glassPolicy.getGlassSurfaceOverflow(true)).toBe('visible');
+    });
+
+    it('keeps the flat fallback clipped, because there it is what rounds the content', () => {
+        expect(glassPolicy.getGlassSurfaceOverflow(false)).toBe('hidden');
+    });
+});
+
+describe('pressed state stands down for the material (DROVE-202)', () => {
+    it('draws nothing where UIGlassEffect is drawing the press', () => {
+        expect(glassPolicy.shouldDrawPressedFallback(true, true)).toBe(false);
+    });
+
+    it('draws the fade off the material, so a phone without it still answers', () => {
+        expect(glassPolicy.shouldDrawPressedFallback(false, true)).toBe(true);
+    });
+
+    it('draws nothing when the control is not pressed or is disabled', () => {
+        expect(glassPolicy.shouldDrawPressedFallback(false, false)).toBe(false);
+        expect(glassPolicy.shouldDrawPressedFallback(false, true, true)).toBe(false);
+    });
+});

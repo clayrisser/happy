@@ -209,6 +209,14 @@ export const Header = React.memo((props: HeaderProps) => {
                     centerMobileTitle && styles.mobileCenteredContent,
                     { height: contentHeight },
                 ]}>
+                    {/* Neither slot is `interactive` (DROVE-202). They take
+                        whatever a screen puts in them and `headerRightGlass`
+                        defaults to on, so one of them is a ToolStatusIndicator
+                        rather than a button; a capsule that answers a press it
+                        cannot act on is worse than one that sits still. Which
+                        slots earn it is a per-screen decision, not a default.
+                        The clip is gone either way, so the day one does it can
+                        grow. */}
                     <View style={styles.leftContainer}>
                         {headerLeft && headerLeftUsesGlass && (
                             <GlassChromeSurface
@@ -514,7 +522,6 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         justifyContent: 'center',
         paddingHorizontal: 14,
         borderRadius: MOBILE_GLASS_CONTROL_RADIUS,
-        overflow: 'hidden',
         shadowColor: '#000000',
         shadowOffset: { width: 0, height: 4 },
         shadowOpacity: theme.dark ? 0.24 : 0.06,
@@ -531,7 +538,9 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         borderRadius: MOBILE_GLASS_CONTROL_RADIUS,
         alignItems: 'center',
         justifyContent: 'center',
-        overflow: 'hidden',
+        // The clip belongs to GlassChromeSurface (DROVE-202): on the material
+        // it has to be `visible` so the press swell can leave the frame, and
+        // `masksToBounds` was eating this shadow as well.
         shadowColor: '#000000',
         shadowOffset: { width: 0, height: 4 },
         shadowOpacity: Platform.select({ ios: theme.dark ? 0.24 : 0.06, default: 0 }),
@@ -544,7 +553,9 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         borderRadius: MOBILE_GLASS_CONTROL_RADIUS,
         alignItems: 'center',
         justifyContent: 'center',
-        overflow: 'hidden',
+        // The clip belongs to GlassChromeSurface (DROVE-202): on the material
+        // it has to be `visible` so the press swell can leave the frame, and
+        // `masksToBounds` was eating this shadow as well.
         shadowColor: '#000000',
         shadowOffset: { width: 0, height: 4 },
         shadowOpacity: Platform.select({ ios: theme.dark ? 0.24 : 0.06, default: 0 }),

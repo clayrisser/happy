@@ -500,6 +500,11 @@ export const SessionView = React.memo((props: { id: string }) => {
                         backdropVisible={headerBackdropVisible}
                         extraPathSegment={fileViewPath ?? undefined}
                         rightSlot={(diffViewOpen || !!fileViewPath) ? headerRightSlot : headerRight}
+                        // The avatar is one 44pt control, so its capsule is a
+                        // circle; the overlay's slot is a payload and keeps its
+                        // air (DROVE-202).
+                        rightSlotKind={(diffViewOpen || !!fileViewPath) ? 'content' : 'control'}
+                        // The pill opens the worktrees, not settings (DROVE-205).
                         onTitlePress={session ? openWorktreeSheet : undefined}
                         onBackPress={() => router.back()}
                     />

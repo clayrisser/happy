@@ -34,3 +34,50 @@ export function getNativeGlassInteractivity(
 export function shouldUseExpoNativeSettingsMenu(platform: string, runningOnMac: boolean): boolean {
     return platform === 'ios' && !runningOnMac;
 }
+
+/**
+ * Whether a glass surface may draw outside its resting frame (DROVE-202).
+ *
+ * Clay, on the header: "why does the title in the center not grow when you
+ * push on it", then "it's not that it's scaling up inside, it's that the size
+ * doesn't grow". DROVE-169 turned `isInteractive` on and the effect did start
+ * responding, so what was left was a layout fault rather than an effect one.
+ *
+ * WHAT WAS CLIPPING IT. `GlassView` is an `ExpoView`, and `ExpoView` is a
+ * Fabric `RCTViewComponentView`, which sets `clipsToBounds` straight from the
+ * `overflow` style (`RCTViewComponentView.mm`, `getClipsContentToBounds`). The
+ * `UIVisualEffectView` carrying the `UIGlassEffect` is a subview pinned to that
+ * host view's bounds, so `overflow: 'hidden'` on the glass makes UIKit clip the
+ * press swell at the resting frame. The glass still grows; you just cannot see
+ * it leave. What is left on screen is the content getting bigger inside a
+ * rectangle that does not move, which is exactly what Clay described.
+ *
+ * Eight chrome styles carried that `overflow: 'hidden'`, so this is decided
+ * here and applied LAST in the primitive rather than left to each caller: a
+ * consumer style cannot put the clip back. The same flag also cost those
+ * controls their drop shadow, because `masksToBounds` clips a layer's own
+ * shadow as well as its subviews.
+ *
+ * Off the material the flat fallback still clips, because there it is the only
+ * thing rounding the corners of what it holds.
+ */
+export function getGlassSurfaceOverflow(drawsNativeGlass: boolean): 'visible' | 'hidden' {
+    return drawsNativeGlass ? 'visible' : 'hidden';
+}
+
+/**
+ * Whether a control inside a glass surface draws its own pressed state.
+ *
+ * The companion to `getNativeGlassInteractivity`: where the material is
+ * drawing the press, a dimmed glyph on top of it is another imitation of a
+ * response the platform already gives, and it is the one that reads as the
+ * CONTENT reacting instead of the control. Where there is no material it is
+ * the only pressed state there is, so it stays.
+ */
+export function shouldDrawPressedFallback(
+    nativeGlassPress: boolean,
+    pressed: boolean,
+    disabled?: boolean | null,
+): boolean {
+    return !nativeGlassPress && pressed && !disabled;
+}

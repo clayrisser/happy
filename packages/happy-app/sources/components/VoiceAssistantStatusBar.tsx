@@ -8,7 +8,7 @@ import { stopRealtimeSession, getCurrentVoiceSessionDurationSeconds } from '@/re
 import { useUnistyles } from 'react-native-unistyles';
 import { VoiceBars } from './VoiceBars';
 import { ShimmerView } from './ShimmerView';
-import { GlassChromeSurface } from './GlassChromeControl';
+import { GlassChromeSurface, useGlassChromeMaterial } from './GlassChromeControl';
 import { MOBILE_GLASS_CONTROL_SIZE, MOBILE_GLASS_CONTROL_RADIUS } from './navigation/headerMetrics';
 import { t } from '@/text';
 
@@ -54,6 +54,8 @@ export const VoiceAssistantStatusBar = React.memo(({ variant = 'full', style }: 
     const realtimeStatus = useRealtimeStatus();
     const realtimeMode = useRealtimeMode();
     const duration = useCallDuration(realtimeStatus === 'connected');
+    // Read before the early return so the hook order never changes.
+    const nativePress = useGlassChromeMaterial() === 'liquid';
 
     // Don't render if disconnected
     if (realtimeStatus === 'disconnected') {
@@ -87,7 +89,14 @@ export const VoiceAssistantStatusBar = React.memo(({ variant = 'full', style }: 
         return (
             <View style={styles.pillWrapper}>
                 {/* The whole pill ends the call; "tap to end" is just the hint. */}
-                <Pressable onPress={handleEnd} style={({ pressed }) => pressed ? { opacity: 0.7 } : undefined}>
+                {/* The fade is the fallback's pressed state, not the
+                    material's (DROVE-202): where UIGlassEffect draws the press
+                    itself, dimming the pill on top of it is the imitation
+                    DROVE-169 removed everywhere else. */}
+                <Pressable
+                    onPress={handleEnd}
+                    style={({ pressed }) => pressed && !nativePress ? { opacity: 0.7 } : undefined}
+                >
                     {/* The live-call pill floats over the list, so it is the
                         same material as the header controls it sits under
                         (DROVE-161). It was on the `static` blur, which over a
@@ -96,6 +105,7 @@ export const VoiceAssistantStatusBar = React.memo(({ variant = 'full', style }: 
                         keeps it visible on a phone without the material. */}
                     <GlassChromeSurface
                         radius={MOBILE_GLASS_CONTROL_RADIUS}
+                        interactive
                         style={styles.pillGlass}
                     >
                         <View style={styles.pillContent}>
@@ -211,7 +221,7 @@ const styles = StyleSheet.create({
     pillGlass: {
         height: MOBILE_GLASS_CONTROL_SIZE,
         borderRadius: MOBILE_GLASS_CONTROL_RADIUS,
-        overflow: 'hidden',
+        // The clip belongs to GlassChromeSurface (DROVE-202).
         shadowColor: '#000000',
         shadowOffset: { width: 0, height: 4 },
         shadowOpacity: Platform.select({ ios: 0.06, default: 0 }),

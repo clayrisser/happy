@@ -150,7 +150,17 @@ export const RoundButton = React.memo((props: { size?: RoundButtonSize, display?
                     ]}
                 >
                     {props.display !== 'inverted' && (
-                    <View pointerEvents="none" style={[styles.accentTint, { backgroundColor: display.backgroundColor }]} />
+                    // The radius is the tint's own now (DROVE-202): an
+                    // interactive glass surface no longer clips its children,
+                    // so a full-bleed fill has to round itself or it paints
+                    // square corners over the capsule.
+                    <View
+                        pointerEvents="none"
+                        style={[
+                            styles.accentTint,
+                            { backgroundColor: display.backgroundColor, borderRadius: size.height / 2 },
+                        ]}
+                    />
                     )}
                     {content}
                 </MobileGlassSurface>

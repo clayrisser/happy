@@ -16,7 +16,9 @@ import {
     MOBILE_GLASS_HEADER_HEIGHT,
     MOBILE_HEADER_EDGE_INSET,
     MOBILE_TITLE_PILL_GAP,
+    resolveHeaderSlotPadding,
     resolveTitlePillInset,
+    type HeaderSlotKind,
 } from './navigation/headerMetrics';
 import {
     MobileHeaderScrim,
@@ -42,6 +44,12 @@ interface ChatHeaderViewProps {
     /** Optional content rendered at the right edge of the header (used by file-view / diff overlays). */
     rightSlot?: React.ReactNode;
     /**
+     * Whether that slot is one chrome-sized control or a payload sized by what
+     * it says (DROVE-202). A control gets no padding, so its capsule comes out
+     * square and matches the back chevron; a payload keeps its air.
+     */
+    rightSlotKind?: HeaderSlotKind;
+    /**
      * Tapping the pill. It opens the worktrees now, not the session settings
      * (DROVE-205): the pill draws the session name over its worktree, so it
      * should be about the worktree. Settings moved to the avatar.
@@ -63,6 +71,7 @@ export const ChatHeaderView: React.FC<ChatHeaderViewProps> = ({
     branch,
     extraPathSegment,
     rightSlot,
+    rightSlotKind = 'control',
     onTitlePress,
     onBackPress,
     isConnected = true,
@@ -411,7 +420,10 @@ export const ChatHeaderView: React.FC<ChatHeaderViewProps> = ({
                                 style={styles.rightControlGlass}
                                 onLayout={(event) => setRightSlotWidth(event.nativeEvent.layout.width)}
                             >
-                                <View style={styles.rightSlot}>
+                                <View style={[
+                                    styles.rightSlot,
+                                    { paddingHorizontal: resolveHeaderSlotPadding(rightSlotKind) },
+                                ]}>
                                     {rightSlot}
                                 </View>
                             </GlassChromeSurface>
@@ -424,7 +436,10 @@ export const ChatHeaderView: React.FC<ChatHeaderViewProps> = ({
                                 style={styles.rightControlGlass}
                                 onLayout={(event) => setRightSlotWidth(event.nativeEvent.layout.width)}
                             >
-                                <View style={styles.rightSlot}>
+                                <View style={[
+                                    styles.rightSlot,
+                                    { paddingHorizontal: resolveHeaderSlotPadding(rightSlotKind) },
+                                ]}>
                                     {rightSlot}
                                 </View>
                             </MobileGlassSurface>
@@ -506,7 +521,9 @@ const styles = StyleSheet.create((theme) => ({
         paddingHorizontal: 14,
         alignItems: 'center',
         justifyContent: 'center',
-        overflow: 'hidden',
+        // No overflow here (DROVE-202). GlassChromeSurface decides it, and it
+        // has to be `visible` on the material or the press swell is clipped at
+        // the resting frame and reads as the text zooming in place.
         backgroundColor: Platform.select({
             web: 'transparent',
             ios: 'transparent',
@@ -638,7 +655,7 @@ const styles = StyleSheet.create((theme) => ({
         marginRight: MOBILE_HEADER_EDGE_INSET,
         alignItems: 'center',
         justifyContent: 'center',
-        overflow: 'hidden',
+        // See mobileTitlePillGlass: the clip belongs to the primitive now.
         backgroundColor: Platform.select({
             web: 'transparent',
             ios: 'transparent',
@@ -663,7 +680,9 @@ const styles = StyleSheet.create((theme) => ({
         alignItems: 'center',
         justifyContent: 'center',
         gap: 6,
-        paddingHorizontal: Platform.select({ web: 0, default: 8 }),
+        // Set at render time from resolveHeaderSlotPadding (DROVE-202): a lone
+        // 44pt control gets none, so the capsule is a circle beside the back
+        // chevron rather than a 60pt stadium.
         flexShrink: 0,
     },
     backButton: {
