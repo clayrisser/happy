@@ -1,38 +1,59 @@
 /**
- * The session pill on the compact composer (DROVE-83): what it reads, how
- * it truncates, and the rows of the sheet it opens.
+ * What the composer says about the session's mode, model and effort, and how
+ * much room the model's name actually has (DROVE-83, DROVE-111).
  *
- * Pure so the label and the row model can be tested without a renderer. The
- * pill itself is ComposerSessionPill.tsx; the sheet rows are drawn by
- * AgentInput from the row model returned here.
+ * DROVE-83 read the three as one pill, `Yolo · Opus 5 1M · High`, on a row of
+ * its own. DROVE-111 folded them into the button row: the mode is a glyph,
+ * the effort is a meter, and the model is the only one still spelled out. So
+ * the label is still built here (the glyph controls read `mode` and `effort`
+ * to know they have something to draw, and `text` is what a screen reader
+ * gets), but the width arithmetic is now about one name in one gap, not a
+ * three-part string across a whole row.
+ *
+ * Pure, so the names and the budget can be tested without a renderer.
+ * ComposerSessionControls.tsx draws them.
  */
 import { MOBILE_COMPOSER_METRICS } from './agentInputLayout';
 
 export const SESSION_PILL_SEPARATOR = ' · ';
 
-/** Matches the composer chips the pill replaces. */
-export const SESSION_PILL_FONT_SIZE = 14;
+/** The model name on the button row; small, because it shares the row. */
+export const COMPOSER_MODEL_FONT_SIZE = 12;
+
+/** Half a step under the 42pt action buttons, so the row still fits. */
+export const COMPOSER_SESSION_CONTROL_SIZE = 38;
 
 /**
- * Horizontal room the pill's text does NOT get on a phone: AgentInput's
- * container padding, the glass shell inset, and the pill's own padding, each
- * on both sides. The container padding is a literal in AgentInput (8 below
+ * Everything on the action row that is NOT the model's name, on a phone.
+ *
+ * AgentInput's container padding and the glass shell inset on both sides,
+ * then the row itself: the add button, the mode glyph, the effort meter, the
+ * speaker, the mic and the primary, with a gap between each and the primary's
+ * own left margin. The container padding is a literal in AgentInput (8 below
  * 700pt), mirrored here.
  */
-export const SESSION_PILL_GEOMETRY = {
+export const COMPOSER_SESSION_ROW_GEOMETRY = {
     containerPaddingHorizontal: 8,
     shellInset: MOBILE_COMPOSER_METRICS.shellInset,
-    paddingHorizontal: 12,
-    height: MOBILE_COMPOSER_METRICS.secondaryActionHeight,
+    /** add, mode, effort, model, spacer, speaker, mic, primary: seven gaps. */
+    gaps: 7,
+    gap: 6,
+    addSize: MOBILE_COMPOSER_METRICS.actionSize,
+    controlSize: COMPOSER_SESSION_CONTROL_SIZE,
+    voiceButtons: 3,
+    voiceButtonSize: MOBILE_COMPOSER_METRICS.actionSize,
+    primaryMarginLeft: MOBILE_COMPOSER_METRICS.primaryActionMarginLeft,
 } as const;
 
 /**
- * Only the model may truncate, and it truncates in the middle. The mode and
- * the effort are one word each and are never cut.
+ * Only the model can truncate, and it truncates at the TAIL now. DROVE-83 cut
+ * it in the middle because it sat between a mode word and an effort word and
+ * both ends carried meaning. It sits at the end of the row's left group now,
+ * so the front of the name is the half worth keeping.
  */
-export const SESSION_PILL_TRUNCATION = {
+export const COMPOSER_MODEL_TRUNCATION = {
     segment: 'model',
-    ellipsizeMode: 'middle',
+    ellipsizeMode: 'tail',
 } as const;
 
 export interface SessionPillModelLike {
@@ -105,64 +126,35 @@ export function buildSessionPillLabel(input: SessionPillInput): SessionPillLabel
 }
 
 /**
- * A generous average advance for the system font at 14pt: SF Pro Text
- * averages under 7pt across mixed-case words, Roboto about the same. A label
+ * A generous average advance for the system font at 12pt: SF Pro Text
+ * averages under 6.5pt across mixed-case words, Roboto about the same. A name
  * that fits by this estimate fits on the phone; the estimate only ever errs
  * toward "does not fit".
  */
-const AVERAGE_GLYPH_WIDTH = 7.5;
+const AVERAGE_GLYPH_WIDTH = 6.5;
 
-export function estimateSessionPillTextWidth(text: string): number {
+export function estimateComposerModelTextWidth(text: string): number {
     return text.length * AVERAGE_GLYPH_WIDTH;
 }
 
-/** The width the pill's text can use on a screen this wide. */
-export function resolveSessionPillTextBudget(screenWidth: number): number {
-    return screenWidth
-        - 2 * SESSION_PILL_GEOMETRY.containerPaddingHorizontal
-        - 2 * SESSION_PILL_GEOMETRY.shellInset
-        - 2 * SESSION_PILL_GEOMETRY.paddingHorizontal;
-}
-
-/** True when the whole label fits without the model segment truncating. */
-export function sessionPillFits(label: SessionPillLabel, screenWidth: number): boolean {
-    return estimateSessionPillTextWidth(label.text) <= resolveSessionPillTextBudget(screenWidth);
-}
-
-export type SessionSheetRowKey = 'permission' | 'model' | 'effort';
-
-export interface SessionSheetRowInput {
-    title: string;
-    /** The current value as the pill shows it, or a placeholder when unset. */
-    value: string;
-    /** False when the session offers no choice here: no options, or no handler. */
-    available: boolean;
-}
-
-export interface SessionSheetRow {
-    key: SessionSheetRowKey;
-    title: string;
-    value: string;
-}
-
-export interface SessionSheetInput {
-    permission?: SessionSheetRowInput | null;
-    model?: SessionSheetRowInput | null;
-    effort?: SessionSheetRowInput | null;
-}
-
 /**
- * The rows of the session sheet, in the order the pill reads them. A setting
- * the session cannot change has no row: a row that opens nothing is worse than
- * no row.
+ * What is left for the model's name on a screen this wide, once every button
+ * on the row and every gap between them has been paid for.
  */
-export function buildSessionSheetRows(input: SessionSheetInput): SessionSheetRow[] {
-    const rows: SessionSheetRow[] = [];
-    const keys: SessionSheetRowKey[] = ['permission', 'model', 'effort'];
-    for (const key of keys) {
-        const row = input[key];
-        if (!row || !row.available) continue;
-        rows.push({ key, title: row.title, value: row.value });
-    }
-    return rows;
+export function resolveComposerModelTextBudget(screenWidth: number): number {
+    const g = COMPOSER_SESSION_ROW_GEOMETRY;
+    return screenWidth
+        - 2 * g.containerPaddingHorizontal
+        - 2 * g.shellInset
+        - g.addSize
+        - 2 * g.controlSize
+        - g.voiceButtons * g.voiceButtonSize
+        - g.primaryMarginLeft
+        - g.gaps * g.gap;
+}
+
+/** True when the model's name is drawn whole rather than tail-truncated. */
+export function composerModelNameFits(name: string | null, screenWidth: number): boolean {
+    if (!name) return true;
+    return estimateComposerModelTextWidth(name) <= resolveComposerModelTextBudget(screenWidth);
 }

@@ -113,7 +113,7 @@ describe('agent input compact mobile layout', () => {
             flexDirection: 'row',
             alignItems: 'center',
             justifyContent: 'flex-start',
-            gap: 2,
+            gap: 6,
             paddingHorizontal: 0,
         });
         expect(resolveAction?.('icon')).toEqual({

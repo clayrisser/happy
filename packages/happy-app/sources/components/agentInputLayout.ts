@@ -211,7 +211,10 @@ export function resolveMobileComposerActionRowGeometry(): MobileComposerGeometry
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'flex-start',
-        gap: 2,
+        // Three filled circles need air between them (DROVE-118). At 2 the
+        // speaker, the mic and the primary read as one blob once they all
+        // carry a surface.
+        gap: 6,
         paddingHorizontal: 0,
     };
 }

@@ -4,10 +4,14 @@
  * utils/liveStatus.spec.ts proves the live summary, utils/droverUsage.spec.ts
  * the usage mapping and agentInputUsage.spec.ts the derivation; this is the
  * render. The segments come out in the order Clay asked for, the branch is
- * no longer among them (DROVE-90 moved it under the session title), the
- * working segment unfolds the agent tree, and a session with nothing to say
- * renders nothing, which is the shape the composer relies on to collapse
- * the row.
+ * no longer among them (DROVE-90 moved it under the session title), and a
+ * session with nothing to say renders nothing, which is the shape the
+ * composer relies on to collapse the row.
+ *
+ * Both expanders open a sheet rather than unfolding under the row (DROVE-117
+ * for the quota, DROVE-111 for the tree), and one piece of state holds which
+ * is open, so the assertions here are about what the row asks for and about
+ * the two never being open at once.
  */
 import * as React from 'react';
 // @ts-expect-error react-test-renderer has no declarations in this workspace.
@@ -61,10 +65,12 @@ vi.mock('./StatusDot', () => ({ StatusDot: host('StatusDot') }));
 
 vi.mock('./AnimatedOverlay', () => ({ AnimatedFade: host('AnimatedFade') }));
 
-// The quota sheet (DROVE-117) pulls in gesture-handler and reanimated, neither
-// of which vitest can transform. What the row owes it is the open flag and the
-// groups; UsageAccountBars.test.ts renders the real thing.
+// Both sheets (DROVE-117's quota, DROVE-111's agent tree) pull in
+// gesture-handler and reanimated through ComposerAnchoredSheet, neither of
+// which vitest can transform. What the row owes them is the open flag and the
+// content; UsageAccountBars.test.ts renders the real bars.
 vi.mock('./UsageAccountBarsSheet', () => ({ UsageAccountBarsSheet: host('UsageAccountBarsSheet') }));
+vi.mock('./SessionAgentsSheet', () => ({ SessionAgentsSheet: host('SessionAgentsSheet') }));
 
 // The session store, reduced to the one session the row reads. `storage` is
 // what the tree rows use to find a tool's transcript card; there are none.
@@ -275,20 +281,57 @@ describe('AgentInputStatusRow while the session is working', () => {
         }
     });
 
-    it('unfolds the agent tree under the row on tap and stays visible while the chat is scrolled up', () => {
+    it('opens the agent tree in the same sheet the quota uses and stays visible while the chat is scrolled up (DROVE-111)', () => {
         vi.useFakeTimers();
         vi.setSystemTime(now + 1_000);
         try {
             const renderer = row({ sessionId: 'busy', showDetails: false });
+            const agents = () => renderer.root.findByType('SessionAgentsSheet' as any);
             expect(renderer.root.findByType('AnimatedFade' as any).props.visible).toBe(true);
+            // Closed by default, and nothing unfolded under the row.
+            expect(agents().props.open).toBe(false);
             expect(renderer.root.findAllByType('ScrollView' as any)).toHaveLength(0);
             const working = renderer.root.findAllByType('Pressable' as any)[0];
             expect(working.props.accessibilityLabel).toBe('Working: 1 agent running');
             act(() => {
                 working.props.onPress();
             });
-            expect(renderer.root.findAllByType('ScrollView' as any)).toHaveLength(1);
-            expect(line(renderer)).toContain('Sweep the backlog');
+            expect(agents().props.open).toBe(true);
+            // The tree's rows go to the sheet, and the row itself draws none.
+            expect(agents().props.summary.rows.some((r: any) => r.title === 'Sweep the backlog'))
+                .toBe(true);
+            expect(renderer.root.findAllByType('ScrollView' as any)).toHaveLength(0);
+            expect(line(renderer)).not.toContain('Sweep the backlog');
+            act(() => {
+                agents().props.onClose();
+            });
+            expect(agents().props.open).toBe(false);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('never has both sheets open, because one value says which is (DROVE-111)', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(now + 1_000);
+        try {
+            const strip = paneStrip(true);
+            const renderer = row({
+                sessionId: 'busy',
+                weekPercent: strip.weekPercent,
+                usageBarGroups: strip.usageBarGroups,
+            });
+            const agents = () => renderer.root.findByType('SessionAgentsSheet' as any);
+            const usage = () => renderer.root.findByType('UsageAccountBarsSheet' as any);
+            const pressables = renderer.root.findAllByType('Pressable' as any);
+            act(() => {
+                pressables[0].props.onPress();
+            });
+            expect([agents().props.open, usage().props.open]).toEqual([true, false]);
+            act(() => {
+                renderer.root.findAllByType('Pressable' as any)[2].props.onPress();
+            });
+            expect([agents().props.open, usage().props.open]).toEqual([false, true]);
         } finally {
             vi.useRealTimers();
         }
