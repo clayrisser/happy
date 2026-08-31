@@ -30,10 +30,12 @@ describe('agent input compact mobile layout', () => {
         expect(layout.textInset).toBe(10 + 4 + (36 - 26) / 2);
         expect(layout.inFieldAddGlyphOffset).toBe(5);
 
-        // The `+`'s ink is 5pt further out than this, because the glyph is
-        // placed by its ink now and the ink is not the em box.
-        expect(10 + agentInputLayout.MOBILE_COMPOSER_METRICS.primaryActionInset).toBe(14);
-        expect(layout.textInset - 14).toBe(layout.inFieldAddGlyphOffset);
+        // The `+`'s ink starts 4.875 further in than this, not on it. 19 is
+        // where its transparent em box starts, which is why it is a chosen
+        // column for the strip and the zen caret and not a reading off the
+        // `+` (DROVE-214).
+        expect(10 + layout.addInkInset).toBe(23.875);
+        expect(10 + layout.addInkInset - layout.textInset).toBe(layout.addGlyphInkInset);
         // Home's `+` is still a 44pt button on a row, and still 9.
         expect(layout.addGlyphOffset).toBe(9);
         expect(layout.inputContainerPaddingLeft).toBe(9);
@@ -74,6 +76,7 @@ describe('agent input compact mobile layout', () => {
             primaryActionSize: 36,
             primaryActionSlop: 6,
             primaryActionMarginLeft: 6,
+            capsuleEndRadius: 22,
             primaryActionInset: 4,
             attachmentExtraHeight: 72,
             controlGap: 6,
@@ -391,7 +394,7 @@ describe('agent input compact mobile layout', () => {
         const bubbleRight = screenWidth - metrics.shellInset;
         const addLeft = bubbleLeft + metrics.primaryActionInset;
         const addRight = addLeft + metrics.primaryActionSize;
-        const addInkLeft = addLeft;
+        const addInkLeft = bubbleLeft + layout.addInkInset;
         const textLeft = bubbleLeft + layout.inputLeadingActionPadding;
         const textRight = bubbleRight - layout.inputTrailingActionPadding;
         const primaryRight = bubbleRight - metrics.primaryActionInset;
@@ -402,12 +405,14 @@ describe('agent input compact mobile layout', () => {
         expect(bubbleLeft).toBe(10);
         expect(addLeft - bubbleLeft).toBe(metrics.primaryActionInset);
         expect(addRight).toBeLessThan(textLeft);
-        // And its INK starts on the box's leading edge rather than 9.875
-        // inside it, so 14 from the screen edge (DROVE-214).
-        expect(addInkLeft).toBe(14);
-        expect(addInkLeft).toBe(bubbleLeft + metrics.primaryActionInset);
-        expect(layout.textInset - addInkLeft)
-            .toBe(layout.inFieldAddGlyphOffset);
+        // Its DISC is the send button's, at the same 4, and its ink is the
+        // same 16.25 centred in it, so it starts 13.875 in and its centre
+        // lands on the end's centre exactly as the other rim's does
+        // (DROVE-214).
+        expect(addLeft - bubbleLeft).toBe(bubbleRight - primaryRight);
+        expect(addInkLeft - bubbleLeft).toBe(13.875);
+        expect(addInkLeft - bubbleLeft + layout.addInkSize / 2)
+            .toBe(metrics.capsuleEndRadius);
 
         // Send is inside at the trailing rim, 4pt off on every side, which is
         // the same 4 the field's 44pt floor is built from.
@@ -527,59 +532,68 @@ describe('agent input compact mobile layout', () => {
     });
 
     /**
-     * DROVE-214, THE MEASUREMENT. Clay, on a close crop of the empty composer:
-     * "Why is the alignment off here?"
+     * DROVE-214, SETTLED. Clay: "the plus to add images and stuff should be a
+     * circle just like on the right hand side send button."
      *
-     * Rim to nearest ink, which is the gap the eye actually reads, was 4 at
-     * the trailing rim and 13.875 at the leading one. Both boxes were inset by
-     * the same 4; the difference is entirely that one box is a filled disc and
-     * the other is transparent, so the trailing box IS ink and the leading one
-     * holds 16.25pt of glyph in 36pt of nothing.
+     * Two rules were tried first and both looked right in numbers. Making
+     * rim-to-ink equal put the `+` flush at 4, where its tightest clearance
+     * measured 3.999 against the disc's 4.000 and Clay said "is still wrong it
+     * looks like shit". Centring the ink on the end's centre put it at 13.875,
+     * which was better because centring is the closest a bare glyph gets to
+     * the property the disc has for free: a 36pt disc inset 4 in a 44pt
+     * capsule is CONCENTRIC with the semicircular end, so its clearance is
+     * even round the whole arc rather than at a handful of points.
      *
-     * 9.875 of asymmetry, and it is `inFieldAddGlyphOffset + addGlyphInkInset`
-     * exactly. Which names the wrong rule rather than a wrong number: centring
-     * is what you do to a glyph in a disc it draws, and the `+` draws none.
+     * Giving the `+` the disc is not a third rule. It is the two ends becoming
+     * one object, after which every number matches without anything being
+     * nudged toward it.
      */
-    it('lands rim to ink on 4 at both ends of the bubble', () => {
+    it('draws one disc at each rim, so every number matches without being tuned', () => {
         const metrics = agentInputLayout.MOBILE_COMPOSER_METRICS;
         const layout = agentInputLayout.MOBILE_COMPOSER_LAYOUT;
 
-        // Trailing: the box is the disc, so its rim-to-ink is its inset.
-        const sendBoxRight = metrics.primaryActionInset;
-        const sendRimToInk = sendBoxRight;
+        // The end is the field's own semicircle, and the inset falls out of
+        // sitting concentric in it rather than being chosen.
+        expect(metrics.capsuleEndRadius).toBe(22);
+        expect(metrics.capsuleEndRadius).toBe(metrics.inputMinHeight / 2);
+        expect(metrics.primaryActionInset)
+            .toBe(metrics.capsuleEndRadius - metrics.primaryActionSize / 2);
+        expect(metrics.primaryActionInset).toBe(4);
 
-        // Leading, walked the way the style walks it: the box is at the same
-        // inset, the glyph sits flush to the box's leading edge, and the
-        // negative margin pulls its em box out by the side bearing so the INK
-        // lands on that edge.
-        const addBoxLeft = metrics.primaryActionInset;
-        const addGlyphEmLeft = addBoxLeft - layout.addGlyphInkInset;
-        const addRimToInk = addGlyphEmLeft + layout.addGlyphInkInset;
+        // ONE OBJECT, TWO RIMS. Same disc, so the same expression is the
+        // leading and the trailing geometry, which is what `resolveMobile-
+        // ComposerActionGeometry` already returned for both.
+        const add = agentInputLayout.resolveMobileComposerActionGeometry('add');
+        const primary = agentInputLayout.resolveMobileComposerActionGeometry('primary');
+        expect(add.width).toBe(primary.width);
+        expect(add.height).toBe(primary.height);
+        expect(add.borderRadius).toBe(primary.borderRadius);
+        expect(add.width).toBe(metrics.primaryActionSize);
+        expect(add.borderRadius).toBe(metrics.primaryActionSize / 2);
 
-        expect(sendRimToInk).toBe(4);
-        expect(addRimToInk).toBe(4);
-        expect(addRimToInk).toBe(sendRimToInk);
+        // RIM TO DISC: 4 at each end. Concentric, so this is the clearance the
+        // whole way round the arc and not a figure on the centreline.
+        const sendDiscInset = metrics.primaryActionInset;
+        const addDiscInset = metrics.primaryActionInset;
+        expect(addDiscInset).toBe(sendDiscInset);
+        expect(addDiscInset).toBe(4);
 
-        // The em box hangs a hair past the rim and carries no pixels there,
-        // which is the whole cost of placing a glyph by its ink.
-        expect(addGlyphEmLeft).toBe(-0.875);
-        expect(Math.abs(addGlyphEmLeft)).toBeLessThan(1);
+        // RIM TO INK: 13.875 at each end, and it is the same number at both
+        // only because the paper plane is sized to the `+`'s ink. Neither was
+        // tuned to the other; both are a 16.25pt glyph centred in the disc.
+        expect(layout.addInkInset).toBe(13.875);
+        expect(layout.addInkInset)
+            .toBe(metrics.capsuleEndRadius - layout.addInkSize / 2);
+        const sendInkInset = metrics.primaryActionInset
+            + (metrics.primaryActionSize - layout.addInkSize) / 2;
+        expect(sendInkInset).toBe(layout.addInkInset);
 
-        // WAS 13.875, which is the number in Clay's crop, and the 9.875 of it
-        // that was wrong is the box's slack around the glyph.
-        expect(addBoxLeft + layout.inFieldAddGlyphOffset + layout.addGlyphInkInset)
-            .toBe(13.875);
-        expect(layout.inFieldAddGlyphOffset + layout.addGlyphInkInset).toBe(9.875);
-        expect((metrics.primaryActionSize - layout.addInkSize) / 2).toBe(9.875);
+        // ONE CENTRE, BOTH ENDS: disc and ink alike land on 22 from their rim.
+        expect(addDiscInset + metrics.primaryActionSize / 2).toBe(metrics.capsuleEndRadius);
+        expect(layout.addInkInset + layout.addInkSize / 2).toBe(metrics.capsuleEndRadius);
 
-        // 14 from the screen edge at either rim, once the shell's gutter is
-        // added. One ink column, both ends.
-        expect(metrics.shellInset + sendRimToInk).toBe(14);
-
-        // AND NEITHER BOX MOVED, which is what keeps the targets. Both are 36
-        // at 4 off their rim with 6pt of slop, so each reaches from the rim to
-        // 46 once the capsule clips the slop that falls outside it, and each
-        // is 44 tall for the same reason.
+        // And nothing about the box moved to get here, so both targets are the
+        // same 46 x 44 they have been since DROVE-206.
         const targetWidth = metrics.primaryActionInset + metrics.primaryActionSize
             + metrics.primaryActionSlop;
         expect(targetWidth).toBe(46);

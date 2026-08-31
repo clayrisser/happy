@@ -65,7 +65,10 @@ import { ComposerSessionControls, type ComposerSessionPicker } from './ComposerS
 import { useEffortSlider } from './EffortSliderPopover';
 import { effortSliderScaleFromLevels } from './effortSlider';
 import {
+    COMPOSER_IN_FIELD_DISC,
+    COMPOSER_IN_FIELD_DISC_OPEN,
     composerControlPalette,
+    composerGlyphColour,
     micColour,
     primaryActionColour,
 } from './composerControlColour';
@@ -573,11 +576,38 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         marginLeft: 8,
     },
     mobilePrimaryButton: MOBILE_PRIMARY_ACTION_GEOMETRY,
-    mobilePrimaryButtonActive: {
-        backgroundColor: theme.colors.surfaceHighest,
+    /**
+     * THE IN-FIELD DISC, worn by BOTH ends of the capsule (DROVE-214).
+     *
+     * Clay: "the plus to add images and stuff should be a circle just like on
+     * the right hand side send button." So this stopped being the send
+     * button's inactive state and became the surface the pair shares: what
+     * send wears with nothing to send, and what the `+` wears always.
+     *
+     * The `+` has no second state to wear, because it is an offer rather than
+     * a thing that becomes live. That is the whole difference between the two
+     * ends now, and it is a difference with something to say: on an empty
+     * composer they are identical discs, and the moment there is something to
+     * send only the trailing one changes.
+     */
+    mobileInFieldDisc: {
+        backgroundColor: theme.dark
+            ? COMPOSER_IN_FIELD_DISC.dark
+            : COMPOSER_IN_FIELD_DISC.light,
     },
-    mobilePrimaryButtonInactive: {
-        backgroundColor: theme.dark ? '#3A3A3C' : '#D1D1D6',
+    /**
+     * The `+` with its sheet open, a step off the resting disc.
+     *
+     * DROVE-206 spent `mobileIconButtonOpen` on this, arguing the `+` had no
+     * resting fill so the fill itself could be the open state. It has one now,
+     * so open needs a surface of its own; this is the value the send button's
+     * live state vacated on each theme. The control row's own controls keep
+     * `mobileIconButtonOpen` and are untouched.
+     */
+    mobileInFieldDiscOpen: {
+        backgroundColor: theme.dark
+            ? COMPOSER_IN_FIELD_DISC_OPEN.dark
+            : COMPOSER_IN_FIELD_DISC_OPEN.light,
     },
     mobileStopButton: {
         backgroundColor: theme.dark ? '#F5F5F5' : theme.colors.button.primary.background,
@@ -1850,54 +1880,75 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     const showMobileAddButton = compactMobileComposer && !props.zenMode && canAddContext;
 
     /**
-     * THE `+`, inside the input capsule at its LEADING edge (DROVE-206).
+     * THE `+`, inside the input capsule at its LEADING edge, and a DISC
+     * (DROVE-206, DROVE-214).
      *
-     * Clay: "the plus should be [in the message box]". DROVE-196 put it
-     * outside on the field's line, which was the instruction at the time; this
-     * supersedes that, and there is exactly one of it. Same disc as the send
-     * button at the other rim, same 4pt inset, same bottom pin, so the field
-     * reads as one capsule with a control at each end.
+     * Clay, settling three passes of argument in one sentence: "the plus to
+     * add images and stuff should be a circle just like on the right hand side
+     * send button." So it is the same 36pt circle, the same 4pt inset, the
+     * same bottom pin and the same surface. The two ends are one object drawn
+     * at two rims, and every question about how to place a bare glyph against
+     * a rounded end stops existing.
      *
-     * NO RESTING FILL, which is the one place it does not mirror send. Two
-     * reasons. DROVE-176 measured the accent as a GLYPH over the composer's
-     * glass stack, and a filled disc would put it on a backdrop nothing has
-     * measured; and the filled disc is already this control's OPEN state
-     * (`mobileIconButtonOpen`, the same held-down step every other control
-     * uses), so spending it at rest would leave the open sheet with nothing to
-     * show. Send earns its fill by being the primary; the `+` is a standing
-     * offer and reads as one.
+     * WHY THAT IS THE RIGHT ANSWER AND NOT JUST THE ONE HE PICKED. A 44pt
+     * capsule ends in a semicircle of radius 22, and a 36pt disc inset 4 is
+     * CONCENTRIC with it: its clearance is 4 the whole way round the arc
+     * rather than 4 at one point, which is why the send button has always
+     * looked deliberate there. A 16pt cross has no such relationship at any
+     * inset. DROVE-214 tried it flush at 4 ("is still wrong it looks like
+     * shit") and centred at 13.875, and the centred one was better only
+     * because centring is the closest a bare glyph gets to the property the
+     * disc has for free. Give it the disc and it HAS the property. Both ends
+     * are now concentric with the end they sit in. See `capsuleEndRadius`.
      *
-     * NO RESTING FILL is also why it has to be placed by its INK (DROVE-214).
-     * A control with no disc has an ink edge and a box edge in two different
-     * places, and DROVE-206 placed the box. See `addGlyphInkInset`.
+     * DROVE-206 ARGUED AGAINST THIS FILL and the argument does not survive.
+     * It said the fill was already the OPEN state so spending it at rest would
+     * leave the sheet nothing to show. But send has carried a resting fill and
+     * a distinct live one all along, so a control can plainly have both: open
+     * steps to `mobileIconButtonOpen`, a different surface from the resting
+     * disc, and reads as held down exactly as it did. It also said a filled
+     * disc would put the accent on a backdrop nothing had measured. There is
+     * no accent on it any more, which is the other half of this.
+     *
+     * THE GLYPH IS THE FOREGROUND, which settles the exception DROVE-215 left
+     * open for this lane. That file took the colour off the control row and
+     * wrote that the `+` "keeps its accent... DROVE-214 owns that pair". Under
+     * its own rule the `+` never qualifies: it holds no value and is never one
+     * press from the app doing something, it is simply always available, and a
+     * colour that is always on carries nothing. Clay has asked twice for no
+     * coloured icons. The blue goes, and the accent at the other rim gets its
+     * meaning back: an empty composer is two white glyphs on two identical
+     * discs, and blue appears only when there is something to send.
      *
      * It opens the Add context sheet (DROVE-128) rather than jumping into the
      * photo library. 36 drawn plus 6 a side is a 48pt target, over DROVE-153's
      * 44pt floor, which is the same bargain the send button strikes.
-     *
-     * IT KEEPS THE ACCENT through DROVE-215, which took the colour off the
-     * control row. This is not on that row: it is inside the field capsule,
-     * paired with the send button at the other rim, and DROVE-214 owns that
-     * pair. If it should go white too, that is a ruling on the field, not on
-     * the row, and it belongs in the same lane as the send glyph.
      */
     const mobileAddAction = (
         <View style={styles.mobileAddAnchor}>
             <View
                 style={[
                     styles.mobileAddButton,
-                    openPicker === 'attach' ? styles.mobileIconButtonOpen : undefined,
+                    // The same disc the send button wears at rest, so the two
+                    // ends are one object at two rims (DROVE-214). Open still
+                    // steps off it: `mobileIconButtonOpen` is a different
+                    // surface from this one, so the held-down read survives
+                    // the control gaining a resting fill.
+                    styles.mobileInFieldDisc,
+                    openPicker === 'attach' ? styles.mobileInFieldDiscOpen : undefined,
                 ]}
             >
                 <BubblePressable
                     style={(p) => ({
                         width: '100%',
                         height: '100%',
-                        // LEADING, not centre (DROVE-214). In a column flex
-                        // this is the horizontal axis, so the glyph is pinned
-                        // to the box's leading edge and still centred
-                        // vertically by `justifyContent`.
-                        alignItems: 'flex-start',
+                        // CENTRE, on both axes, and the horizontal one is
+                        // load-bearing (DROVE-214). The box is 36 inset 4 in a
+                        // 44pt field, so its centre is 22 from the rim on both
+                        // axes, which is the centre of the capsule's rounded
+                        // end. Centring the glyph in it therefore centres the
+                        // glyph in that end.
+                        alignItems: 'center',
                         justifyContent: 'center',
                         opacity: p.pressed ? 0.7 : 1,
                     })}
@@ -1910,19 +1961,19 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     <Ionicons
                         name="add"
                         size={MOBILE_COMPOSER_METRICS.addIconSize}
-                        color={composerPalette.accent}
-                        // PLACED BY ITS INK (DROVE-214). Centring the glyph in
-                        // this box is what Clay was looking at: the box is 4
-                        // off the rim like the send button's, but the send
-                        // button's box is a filled disc and this one is
-                        // transparent, so centring buried the `+`'s ink 9.875
-                        // further in than the disc's. Pulling the em box out
-                        // by its own side bearing puts INK on the disc's
-                        // column, 4 from the rim at both ends. The half point
-                        // of empty em box that lands outside the capsule
-                        // carries no pixels; the box, its 36pt size and its
-                        // 6pt slop are untouched, so the target is the same 46.
-                        style={{ marginLeft: -MOBILE_COMPOSER_LAYOUT.addGlyphInkInset }}
+                        // THE FOREGROUND, and this is DROVE-215's exception
+                        // being settled rather than a new ruling (DROVE-214).
+                        // That file left the `+` its accent and said the pair
+                        // was this lane's to decide. The `+` holds no state
+                        // and is never one press from anything: it is always
+                        // available, which under DROVE-215 is exactly the case
+                        // that does NOT earn a colour. Clay has asked twice for
+                        // no coloured icons. So the blue goes, and what it buys
+                        // is that the accent still means something at the other
+                        // rim: on an empty composer both ends are a white glyph
+                        // on the same disc, and the blue appears only when
+                        // there is something to send.
+                        color={composerGlyphColour(composerPalette)}
                     />
                 </BubblePressable>
             </View>
@@ -1963,10 +2014,17 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     // Stop is checked first: a blank composer on a
                     // non-steerable agent is both blocked and abortable, and it
                     // must not look locked.
+                    // ONE DISC, whether or not there is something to send
+                    // (DROVE-214). It used to change fill with state, and the
+                    // resting value measured 1.05:1 on the composer's glass,
+                    // so what actually changed was invisible. The glyph
+                    // carries the state now, which is DROVE-215's rule, and
+                    // the fill is the same circle the `+` wears at the other
+                    // rim. Stop and the gate's lock keep their own surfaces:
+                    // those are other things, not other states of send.
                     shouldShowStopButton ? styles.mobileStopButton
                         : isSendBlocked ? styles.sendButtonLocked
-                            : canSendMessage ? styles.mobilePrimaryButtonActive
-                                : styles.mobilePrimaryButtonInactive,
+                            : styles.mobileInFieldDisc,
                 ]}
             >
                 <BubblePressable

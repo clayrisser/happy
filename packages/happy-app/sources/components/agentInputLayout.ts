@@ -44,25 +44,23 @@ export interface AgentInputLayout {
      * glyph, so 5 (DROVE-206). What the chat's `+` needed to be CENTRED in the
      * disc it is drawn in.
      *
-     * It no longer places the `+` (DROVE-214) and is kept because it is what
-     * `textInset` is still built from. Centring is the wrong rule for a
-     * control that draws no disc: see `addGlyphInkInset`.
+     * And centring is right, for a reason DROVE-206 never wrote down and
+     * DROVE-214 briefly talked itself out of: the disc is 36 inset 4 in a 44pt
+     * field, so its centre sits on the centre of the capsule's rounded end.
+     * Centring the glyph in the disc centres it in that END, and the disc is
+     * drawn now, so this is the same offset the send glyph takes at the other
+     * rim. See `capsuleEndRadius`.
      */
     inFieldAddGlyphOffset: number;
     /**
      * How far the `+`'s ink sits inside its own 26pt em box: 4.875 a side,
      * because Ionicons `add` fills 0.625 of the em (DROVE-214).
      *
-     * THIS IS THE NUMBER THE COMPOSER WAS MISSING. The two in-field controls
-     * are placed by their boxes, 4 off their rim each, which is symmetric by
-     * BOX and asymmetric by INK: the send button's box is filled, so its ink
-     * starts where its box does, while the `+`'s box is transparent and its
-     * ink starts `inFieldAddGlyphOffset + addGlyphInkInset` further in. That
-     * is 5 + 4.875 = 9.875pt, which is exactly the gap Clay photographed.
-     *
-     * So the `+`'s glyph is aligned to the LEADING EDGE of its box and pulled
-     * out by this, rather than centred in it. Its box, its size and its 6pt
-     * slop are untouched, so the touch target is the same 46pt it always was.
+     * It does NOT place the glyph. DROVE-214's first pass used it to pull the
+     * em box out until the ink started 4 from the rim, matching the disc's,
+     * and that is the version Clay called "still wrong". It survives because
+     * it is what `addInkSize` and `addInkInset` are measured with, and it is
+     * what sizes the paper plane to the same ink at the other rim.
      */
     addGlyphInkInset: number;
     /**
@@ -72,6 +70,19 @@ export interface AgentInputLayout {
      * the field carry the same weight of ink rather than the same font size.
      */
     addInkSize: number;
+    /**
+     * Rim to a GLYPH's ink inside its disc: 13.875, which is
+     * `capsuleEndRadius` minus half the ink (DROVE-214).
+     *
+     * THE SAME NUMBER AT BOTH RIMS, which is what the ticket asked for and
+     * only became true once both ends were discs. The `+` is 16.25pt of ink
+     * centred in a 36pt disc inset 4; the paper plane is sized to the same
+     * 16.25pt of ink in the identical disc at the other rim. So rim to disc is
+     * 4 at each end and rim to ink is 13.875 at each end, and neither is a
+     * number anything was nudged toward: they fall out of the two ends being
+     * the same object.
+     */
+    addInkInset: number;
     /**
      * What the send glyph is drawn at, so that its ink is the `+`'s ink.
      *
@@ -247,15 +258,47 @@ export const MOBILE_COMPOSER_METRICS = {
      */
     primaryActionMarginLeft: 6,
     /**
-     * Keeps an in-field control off the capsule's rounded ends, and since
-     * DROVE-214 it is a rule about INK rather than about boxes.
+     * THE PILL'S ROUNDED END: half the field's height, so 22, and the number
+     * both in-field controls are placed by (DROVE-214).
      *
-     * 4 IS THE RIM-TO-INK NUMBER AT BOTH ENDS. It is forced by the trailing
-     * end, where a 36pt disc in a 44pt capsule can be inset by exactly this
-     * and no more, and the leading end matches it by putting the `+`'s ink on
-     * the same column rather than its box. Clay: "the gap the eye actually
-     * reads, rim to nearest ink". Read it off the drawn pixels and the answer
-     * is 4 at each rim, 14 from the screen edge once the shell's 10 is added.
+     * A 44pt capsule ends in a semicircle of radius 22 centred 22 in from the
+     * rim. `primaryActionInset` is a CONSEQUENCE of that and not a chosen 4:
+     * a 36pt disc whose centre is on the end's centre is inset
+     * `capsuleEndRadius - primaryActionSize / 2` from the rim. CONCENTRIC, so
+     * its clearance is 4 the whole way round the arc rather than 4 at one
+     * point, and that is the whole reason a disc looks deliberate at a rounded
+     * end while a bare glyph never quite does.
+     *
+     * Clay settled the composer on that property without naming it: "the plus
+     * to add images and stuff should be a circle just like on the right hand
+     * side send button." Both ends are the same disc now, so both have it.
+     */
+    capsuleEndRadius: 22,
+    /**
+     * Keeps an in-field disc off the capsule's rounded end. Derived, not
+     * chosen: `capsuleEndRadius - primaryActionSize / 2` (DROVE-214).
+     *
+     * IT APPLIES TO BOTH ENDS BECAUSE BOTH ENDS ARE DISCS. Getting there took
+     * two wrong rules and they are worth keeping, because each one looked
+     * right in numbers.
+     *
+     * First: make rim-to-ink equal, and pull the `+` out until its ink also
+     * started 4 from the rim. Clay: "is still wrong it looks like shit".
+     * Measured off that build, rim to ink was 3.9 and the tightest clearance
+     * anywhere on the glyph 3.999, against the disc's 4.000. Ionicons `add`
+     * tapers its arm tips to half a point, so the cross's tightest point IS
+     * its centreline and nothing sat closer. THE NUMBERS MATCHED EXACTLY AND
+     * IT LOOKED WORSE, which is what says the quantity was wrong.
+     *
+     * Second: centre the ink on the end's centre, 13.875 in, and let the
+     * clearances differ. Better, and for the right reason, but still an
+     * approximation of a property the disc simply has: a cross centred in a
+     * circle is only radially even at four arm tips, and it is transparent
+     * everywhere else, so the end still reads as mostly empty.
+     *
+     * The disc ends the argument. Same circle, same inset, same centre, and
+     * the clearance is even round the entire arc at both rims rather than at
+     * a handful of points.
      */
     primaryActionInset: 4,
     attachmentExtraHeight: 72,
@@ -680,6 +723,11 @@ export function resolveAgentInputLayout({
         inFieldAddGlyphOffset,
         addGlyphInkInset,
         addInkSize,
+        // Rim to the `+`'s ink, which is what centring it in a box that is
+        // itself concentric with the capsule's end comes out as (DROVE-214).
+        addInkInset: MOBILE_COMPOSER_METRICS.primaryActionInset
+            + inFieldAddGlyphOffset
+            + addGlyphInkInset,
         // The send glyph carries the `+`'s ink, not the `+`'s point size
         // (DROVE-214). A paper plane fills more of its em than a plus does, so
         // matching the number would have drawn a heavier mark than the one at
