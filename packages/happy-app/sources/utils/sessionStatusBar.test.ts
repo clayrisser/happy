@@ -119,20 +119,37 @@ describe('usage limit helpers', () => {
     });
 });
 
+const weekday = /Mon|Tue|Wed|Thu|Fri|Sat|Sun/;
+
 describe('the weekday on a reset date', () => {
     // Clay: "I would actually like to know the day of the week for these."
     // "Sep 3" is a date he has to convert before it means anything; the
     // question he is actually asking is how long he has to wait.
-    it('names the day once the reset is more than a day out', () => {
+    it('names the day, and only the day, once the reset is more than a day out', () => {
         const now = Date.UTC(2026, 7, 31, 12, 0);
         const out = formatUsageLimitResetTime(Date.UTC(2026, 8, 3, 9, 59), now);
-        expect(out).toMatch(/Sep/);
-        expect(out).toMatch(/Mon|Tue|Wed|Thu|Fri|Sat|Sun/);
+        expect(out).toMatch(weekday);
+        // The MONTH is what DROVE-248 took back out. `Resets Wed, Sep 3` did
+        // not fit the 88pt trailing column and drew as `Resets Wed, Se…`, so
+        // the part he asked for survived by luck. Nothing on this sheet resets
+        // more than seven days out, so inside that span the weekday alone is
+        // unambiguous and it is the whole answer.
+        expect(out).not.toMatch(/Sep/);
     });
 
     it('stays a clock time inside the day, where a weekday says nothing new', () => {
         const now = Date.UTC(2026, 7, 31, 12, 0);
         const out = formatUsageLimitResetTime(Date.UTC(2026, 7, 31, 20, 50), now);
-        expect(out).not.toMatch(/Mon|Tue|Wed|Thu|Fri|Sat|Sun/);
+        expect(out).not.toMatch(weekday);
+    });
+
+    it('gives the weekday up past a week, where a bare day name wraps', () => {
+        // Unreachable from a quota window, whose longest is the seven-day
+        // week. Here so a cooling stamp from a future CLI cannot print `Wed`
+        // for a Wednesday a fortnight out and read as this one.
+        const now = Date.UTC(2026, 7, 31, 12, 0);
+        const out = formatUsageLimitResetTime(Date.UTC(2026, 8, 16, 9, 0), now);
+        expect(out).not.toMatch(weekday);
+        expect(out).toMatch(/Sep/);
     });
 });

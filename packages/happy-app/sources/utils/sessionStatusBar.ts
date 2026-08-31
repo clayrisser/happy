@@ -167,7 +167,6 @@ export function getUsageLimitDisplayPercentage(utilization: number, showRemainin
     return showRemaining ? 100 - utilization : utilization;
 }
 
-/** Short reset moment: a clock time within a day, a date beyond that. */
 /**
  * A reset time, in the phone's OWN zone, saying which zone that is (DROVE-173).
  *
@@ -194,18 +193,55 @@ export function usageLimitZoneLabel(): string {
     }
 }
 
+/**
+ * Calendar days from one instant to the next, in the phone's own zone.
+ *
+ * Midnight to midnight rather than a division of the gap, so 11pm tonight to
+ * 1am tomorrow is one day and not zero. Rounded, so an hour of DST inside the
+ * span does not shift the count.
+ */
+function calendarDaysAhead(now: number, ms: number): number {
+    const from = new Date(now);
+    from.setHours(0, 0, 0, 0);
+    const to = new Date(ms);
+    to.setHours(0, 0, 0, 0);
+    return Math.round((to.getTime() - from.getTime()) / 86400_000);
+}
+
+/**
+ * A clock time today, a bare WEEKDAY inside the week, a date beyond it.
+ *
+ * The weekday is Clay's: "I would actually like to know the day of the week
+ * for these." A window resetting on "Sep 3" is a date he has to convert before
+ * it means anything, and the question he is actually asking is how long he has
+ * to wait. Inside 22 hours it is still a clock time, because a weekday on
+ * something happening this evening tells him nothing he does not already know.
+ *
+ * The MONTH is what DROVE-248 took back out. `Resets Wed, Sep 3` is 17
+ * characters in an 88pt column at 10pt and the sheet drew `Resets Wed, Se…`,
+ * so the weekday survived by luck rather than by design. Nothing on this sheet
+ * resets more than seven days out, since the windows are a five-hour session
+ * and a seven-day week, so inside that span the weekday alone is both
+ * unambiguous and shorter than the thing it replaces. `Resets Wed` is the whole answer at
+ * 10 characters, and the family and cooling labels that share the column
+ * (`Fable back Wed`) fit with it.
+ *
+ * Past the week the weekday WRAPS, and a bare `Wed` a fortnight out reads as
+ * this Wednesday. So that case gives up the weekday and keeps the date, which
+ * is the fact that still means something at that distance. It is unreachable
+ * from a quota window and is here so a cooling stamp from a future CLI cannot
+ * truncate.
+ */
 export function formatUsageLimitResetTime(ms: number, now = Date.now()): string {
     const d = new Date(ms);
     if (ms - now < 22 * 3600_000) {
         return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     }
-    // The WEEKDAY, not just the date. Clay: "I would actually like to know the
-    // day of the week for these." A window resetting on "Sep 3" is a date he
-    // has to convert before it means anything; "Thu Sep 3" answers the actual
-    // question, which is how long he has to wait. Inside 22 hours it is still
-    // a clock time, because a weekday on something happening this evening
-    // tells him nothing he does not already know.
-    return d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+    const days = calendarDaysAhead(now, ms);
+    if (days >= 1 && days <= 6) {
+        return d.toLocaleDateString([], { weekday: 'short' });
+    }
+    return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
 
 /** Compact age like "3m" / "2h" for the "as of" footer. */
