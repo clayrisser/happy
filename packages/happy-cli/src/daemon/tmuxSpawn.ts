@@ -36,7 +36,7 @@ import { basename, join } from 'node:path';
 import { droverDir } from '@/drover/hooks';
 
 /** Agents the daemon knows how to launch. `rig` is handled by another RPC. */
-export const daemonAgents = ['claude', 'codex', 'gemini', 'openclaw', 'agy'] as const;
+export const daemonAgents = ['claude', 'codex', 'cursor', 'gemini', 'openclaw', 'agy'] as const;
 
 export type DaemonAgent = (typeof daemonAgents)[number];
 

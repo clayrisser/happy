@@ -274,7 +274,30 @@ export function filterPermissionModesForCli<T extends ModeOption>(
     return modes.filter((mode) => modeSupportedByCli(mode, cliVersion));
 }
 
+/**
+ * Cursor has no permission mode to pick (DROVE-57).
+ *
+ * A drover Cursor turn is one `cursor-agent --print` process, and `--print`
+ * raises no approval prompt at all: there is nothing to answer, so the turn
+ * runs with `--force` or it stalls on the first shell command. One option, so
+ * the picker does not appear — Claude's four modes rendered on a session that
+ * honours none of them is the present-and-inert failure this ticket was
+ * reopened for.
+ */
+export function getCursorPermissionModes(): PermissionMode[] {
+    return [
+        {
+            key: 'bypassPermissions',
+            name: 'full access',
+            description: 'Cursor runs each turn with --force; it has no approval prompt to raise',
+        },
+    ];
+}
+
 export function getHardcodedPermissionModes(flavor: AgentFlavor, translate: Translate): PermissionMode[] {
+    if (flavor === 'cursor') {
+        return getCursorPermissionModes();
+    }
     if (flavor === 'codex') {
         return getCodexPermissionModes(translate);
     }
@@ -314,6 +337,14 @@ export function getAgyModelModes(): ModelMode[] {
 }
 
 export function getHardcodedModelModes(flavor: AgentFlavor, _translate: Translate): ModelMode[] {
+    // Cursor's model list is published by the SESSION (metadata.models, filled
+    // from `cursor-agent --list-models`), never hardcoded here: Cursor ships
+    // models faster than this file can be edited, and a stale key is a turn
+    // that fails at exec. No published list means no picker, which is the
+    // honest reading of "this login's models are unknown".
+    if (flavor === 'cursor') {
+        return [];
+    }
     if (flavor === 'codex') {
         return getCodexModelModes();
     }

@@ -63,6 +63,17 @@ export function appendDaemonSpawnModeArgs(
   agent: string,
   skipPermissions: boolean = droverSkipPermissions(),
 ): void {
+  // Cursor takes a model and nothing else (DROVE-57): a `--print` turn has no
+  // permission mode to set, and Cursor spells effort inside the model id
+  // (`cursor-grok-4.6-xhigh-fast`), so there is no `--effort` to forward.
+  // `auto` is a real Cursor model id, so unlike Claude's `default` it is
+  // passed through rather than treated as "no override".
+  if (agent === 'cursor') {
+    if (options.modelMode) {
+      args.push('--model', options.modelMode);
+    }
+    return;
+  }
   if (agent !== 'claude' && agent !== 'codex') return;
 
   appendDaemonPermissionArgs(args, agent, options.permissionMode, skipPermissions);

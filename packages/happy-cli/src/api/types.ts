@@ -152,6 +152,9 @@ export const MachineMetadataSchema = z.object({
     // Optional so metadata written by a CLI predating agy detection still
     // matches this shape. detectCLIAvailability always reports it.
     agy: z.boolean().optional(),
+    // Optional for the same reason as agy: a daemon predating DROVE-57 does
+    // not report it, and the app must read that as "unknown", not "absent".
+    cursor: z.boolean().optional(),
     detectedAt: z.number(),
   }).optional(),
   resumeSupport: z.object({

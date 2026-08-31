@@ -1,7 +1,7 @@
 import * as z from 'zod';
 import { compareVersionsWithPrerelease, isWellFormedVersion } from '@/utils/versionUtils';
 
-export const agentKeys = ['claude', 'codex', 'gemini', 'openclaw', 'agy'] as const;
+export const agentKeys = ['claude', 'codex', 'cursor', 'gemini', 'openclaw', 'agy'] as const;
 export type AgentKey = typeof agentKeys[number];
 
 export const AgentDefaultOverrideSchema = z.object({
@@ -13,6 +13,7 @@ export const AgentDefaultOverrideSchema = z.object({
 export const AgentDefaultOverridesSchema = z.object({
     claude: AgentDefaultOverrideSchema.optional(),
     codex: AgentDefaultOverrideSchema.optional(),
+    cursor: AgentDefaultOverrideSchema.optional(),
     gemini: AgentDefaultOverrideSchema.optional(),
     openclaw: AgentDefaultOverrideSchema.optional(),
     agy: AgentDefaultOverrideSchema.optional(),
@@ -34,6 +35,10 @@ const codeAgentDefaults: Record<AgentKey, AgentDefaultConfig> = {
     // a user override is kept separate and is never rewritten here.
     claude: { permissionMode: 'auto', modelMode: 'claude-opus-5', effortLevel: 'medium' },
     codex: { permissionMode: 'auto', modelMode: 'gpt-5.6-sol', effortLevel: 'medium' },
+    // Cursor has one permission mode and no effort axis of its own — effort is
+    // spelled inside the model id. `auto` is Cursor's own default model, and
+    // the session republishes the real list once it starts (DROVE-57).
+    cursor: { permissionMode: 'bypassPermissions', modelMode: 'auto', effortLevel: null },
     gemini: { permissionMode: 'default', modelMode: 'gemini-2.5-pro', effortLevel: null },
     openclaw: { permissionMode: 'default', modelMode: 'default', effortLevel: null },
     agy: { permissionMode: 'default', modelMode: 'Gemini 3.1 Pro (High)', effortLevel: null },
@@ -60,7 +65,7 @@ function resolveCodeDefaultPermissionMode(
 }
 
 export function normalizeAgentKey(flavor: string | null | undefined): AgentKey {
-    if (flavor === 'codex' || flavor === 'gemini' || flavor === 'openclaw' || flavor === 'agy') {
+    if (flavor === 'codex' || flavor === 'cursor' || flavor === 'gemini' || flavor === 'openclaw' || flavor === 'agy') {
         return flavor;
     }
     return 'claude';

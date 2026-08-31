@@ -3,6 +3,7 @@ import os from 'os';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { findAgyBin } from '@/agy/constants';
+import { findCursorBin } from '@/cursor/cursorBin';
 
 export interface CLIAvailability {
   claude: boolean;
@@ -10,6 +11,8 @@ export interface CLIAvailability {
   gemini: boolean;
   openclaw: boolean;
   agy: boolean;
+  /** cursor-agent, which also installs itself as `agent` and `cursor`. */
+  cursor: boolean;
   detectedAt: number;
 }
 
@@ -40,6 +43,10 @@ function detectPosix(): CLIAvailability {
   const codex = commandExists('codex');
   const gemini = commandExists('gemini');
   const agy = findAgyBin() !== undefined;
+  // NOT commandExists: the installer puts cursor-agent in ~/.local/bin, which
+  // is not on the daemon's PATH, so a bare probe reports "not installed" on a
+  // machine that runs Cursor every day.
+  const cursor = findCursorBin() !== undefined;
 
   // OpenClaw: check command, config file, or env var
   const openclawCommand = commandExists('openclaw');
@@ -47,7 +54,7 @@ function detectPosix(): CLIAvailability {
   const openclawEnv = !!process.env.OPENCLAW_GATEWAY_URL;
   const openclaw = openclawCommand || openclawConfig || openclawEnv;
 
-  return { claude, codex, gemini, openclaw, agy, detectedAt: Date.now() };
+  return { claude, codex, gemini, openclaw, agy, cursor, detectedAt: Date.now() };
 }
 
 function detectWindows(): CLIAvailability {
@@ -64,6 +71,7 @@ function detectWindows(): CLIAvailability {
   const codex = checkCommand('codex');
   const gemini = checkCommand('gemini');
   const agy = findAgyBin() !== undefined;
+  const cursor = findCursorBin() !== undefined;
 
   // OpenClaw: check command, config file, or env var
   const openclawCommand = checkCommand('openclaw');
@@ -71,5 +79,5 @@ function detectWindows(): CLIAvailability {
   const openclawEnv = !!process.env.OPENCLAW_GATEWAY_URL;
   const openclaw = openclawCommand || openclawConfig || openclawEnv;
 
-  return { claude, codex, gemini, openclaw, agy, detectedAt: Date.now() };
+  return { claude, codex, gemini, openclaw, agy, cursor, detectedAt: Date.now() };
 }
