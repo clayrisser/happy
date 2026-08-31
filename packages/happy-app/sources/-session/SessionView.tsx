@@ -74,7 +74,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import type { ModelMode, PermissionMode } from '@/components/PermissionModeSelector';
 import { resolveAgentDefaultConfig } from '@/sync/agentDefaults';
 import { performAgentGoalAction } from './agentGoalActionHandler';
-import { MOBILE_GLASS_HEADER_HEIGHT } from '@/components/navigation/headerMetrics';
+import { MOBILE_GLASS_CONTROL_SIZE, MOBILE_GLASS_HEADER_HEIGHT } from '@/components/navigation/headerMetrics';
 import {
     getRigReasoningSelection,
     isRigMetadata,
@@ -386,6 +386,16 @@ export const SessionView = React.memo((props: { id: string }) => {
             <Pressable
                 onPress={() => router.push(`/session/${sessionId}/info`)}
                 hitSlop={10}
+                accessibilityRole="button"
+                accessibilityLabel="Session details"
+                // The whole glass capsule is the target, not just the 28pt
+                // avatar sitting in the middle of it (DROVE-133).
+                style={{
+                    width: MOBILE_GLASS_CONTROL_SIZE,
+                    height: MOBILE_GLASS_CONTROL_SIZE,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                }}
             >
                 <Avatar
                     id={getSessionAvatarId(session)}

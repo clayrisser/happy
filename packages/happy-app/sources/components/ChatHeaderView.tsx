@@ -9,10 +9,13 @@ import { layout } from '@/components/layout';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { MobileGlassSurface } from './MobileGlass';
 import { BubblePressable } from './BubblePressable';
+import { NativeGlassIconButton, supportsNativeGlassIconButton } from './NativeGlassIconButton';
 import {
     MOBILE_GLASS_CONTROL_RADIUS,
     MOBILE_GLASS_CONTROL_SIZE,
     MOBILE_GLASS_HEADER_HEIGHT,
+    MOBILE_HEADER_EDGE_INSET,
+    MOBILE_TITLE_PILL_GAP,
     resolveTitlePillInset,
 } from './navigation/headerMetrics';
 import {
@@ -66,6 +69,11 @@ export const ChatHeaderView: React.FC<ChatHeaderViewProps> = ({
     const showBackButton = !isTablet && !!onBackPress;
     const hasExtra = !!extraPathSegment;
     const glassEnabled = !isTablet && Platform.OS === 'ios' && !isRunningOnMac();
+    // The back button is one SF Symbol and nothing else, so it can be a real
+    // SwiftUI button (DROVE-133). Its two neighbours cannot: the avatar is a
+    // generated React Native image with a badge and the pill is two lines of
+    // measured text, and @expo/ui's Button only takes SwiftUI children.
+    const nativeBackButton = glassEnabled && supportsNativeGlassIconButton();
     const contentHeight = glassEnabled ? Math.max(headerHeight, MOBILE_GLASS_HEADER_HEIGHT) : headerHeight;
     const showFolderSubtitle = !!folderName && folderName !== title;
     // The file-view overlay owns the subtitle while it is open.
@@ -324,10 +332,22 @@ export const ChatHeaderView: React.FC<ChatHeaderViewProps> = ({
             )}
             <View style={styles.contentWrapper}>
                 <View style={[styles.content, { height: contentHeight }]}>
-                    {showBackButton && (
+                    {showBackButton && (nativeBackButton ? (
+                        <NativeGlassIconButton
+                            systemImage="chevron.backward"
+                            accessibilityLabel="Back"
+                            onPress={onBackPress}
+                            size={MOBILE_GLASS_CONTROL_SIZE}
+                            iconSize={19}
+                            tintColor={theme.colors.header.tint}
+                            style={styles.backButton}
+                        />
+                    ) : (
                         <Pressable
                             onPress={onBackPress}
                             hitSlop={10}
+                            accessibilityRole="button"
+                            accessibilityLabel="Back"
                             style={({ pressed }) => [styles.backButton, pressed && styles.controlPressed]}
                         >
                             <MobileGlassSurface
@@ -344,7 +364,7 @@ export const ChatHeaderView: React.FC<ChatHeaderViewProps> = ({
                                 />
                             </MobileGlassSurface>
                         </Pressable>
-                    )}
+                    ))}
                     {glassEnabled ? (
                         <>
                             <View pointerEvents="none" style={styles.mobileTitleSpacer} />
@@ -359,7 +379,20 @@ export const ChatHeaderView: React.FC<ChatHeaderViewProps> = ({
                             </View>
                         </>
                     ) : (
-                        <View style={styles.titlePillContainer}>
+                        <View
+                            style={[
+                                styles.titlePillContainer,
+                                {
+                                    // The row has no padding of its own, so the
+                                    // title carries its own clearance: a gap
+                                    // beside a control, the edge inset beside
+                                    // the screen. The right control brings its
+                                    // own left margin.
+                                    marginLeft: showBackButton ? MOBILE_TITLE_PILL_GAP : MOBILE_HEADER_EDGE_INSET,
+                                    marginRight: rightSlot ? 0 : MOBILE_HEADER_EDGE_INSET,
+                                },
+                            ]}
+                        >
                             {nativeTitle}
                         </View>
                     )}
@@ -399,11 +432,12 @@ const styles = StyleSheet.create((theme) => ({
         width: '100%',
         alignItems: 'center',
     },
+    // No horizontal padding on purpose: the title pill is an absolute child of
+    // this row, and the edge inset lives on the controls instead so both are
+    // measured from the same origin. See MOBILE_HEADER_EDGE_INSET.
     content: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
-        paddingHorizontal: 16,
         width: '100%',
         maxWidth: layout.headerMaxWidth,
     },
@@ -574,6 +608,8 @@ const styles = StyleSheet.create((theme) => ({
         minWidth: Platform.select({ web: 0, android: 48, default: MOBILE_GLASS_CONTROL_SIZE }),
         minHeight: Platform.select({ web: 0, android: 48, default: MOBILE_GLASS_CONTROL_SIZE }),
         borderRadius: MOBILE_GLASS_CONTROL_RADIUS,
+        marginLeft: MOBILE_TITLE_PILL_GAP,
+        marginRight: MOBILE_HEADER_EDGE_INSET,
         alignItems: 'center',
         justifyContent: 'center',
         overflow: 'hidden',
@@ -605,6 +641,7 @@ const styles = StyleSheet.create((theme) => ({
         width: Platform.select({ web: 36, android: 48, default: MOBILE_GLASS_CONTROL_SIZE }),
         height: Platform.select({ web: 36, android: 48, default: MOBILE_GLASS_CONTROL_SIZE }),
         borderRadius: MOBILE_GLASS_CONTROL_RADIUS,
+        marginLeft: MOBILE_HEADER_EDGE_INSET,
         zIndex: 1,
     },
     backButtonGlass: {

@@ -211,7 +211,6 @@ describe('settings', () => {
                 avatarStyle: 'brutalist',
                 avatarMonochrome: false,
                 sessionListGrouping: 'flat',
-                droverAccountFilter: '',
                 showFlavorIcons: false,
                 showHarnessIconInSessionHeader: true,
                 userMessageBubbleColor: 'gray',

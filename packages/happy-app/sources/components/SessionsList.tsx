@@ -28,7 +28,6 @@ import { t } from '@/text';
 import { SessionShortcutHintBadge } from './ShortcutHints';
 import { ProviderIcon } from './ProviderIcon';
 import { buildSessionProjectDisplayGroups } from '@/utils/sessionDisplayOrder';
-import { collectDroverAccounts, filterByDroverAccount } from '@/utils/droverAccounts';
 
 type SessionListDisplayItem = SessionListViewItem | {
     type: 'machine-header';
@@ -129,33 +128,6 @@ const stylesheet = StyleSheet.create((theme) => ({
         color: theme.colors.textSecondary,
         marginRight: 4,
         ...Typography.default('regular'),
-    },
-    droverChipRow: {
-        flexDirection: 'row',
-        flexWrap: 'wrap',
-        gap: 6,
-        paddingHorizontal: 16,
-        paddingTop: 8,
-        paddingBottom: 4,
-    },
-    droverChip: {
-        paddingHorizontal: 10,
-        paddingVertical: 4,
-        borderRadius: 12,
-        borderWidth: 1,
-        borderColor: theme.colors.divider,
-    },
-    droverChipActive: {
-        backgroundColor: theme.colors.text,
-        borderColor: theme.colors.text,
-    },
-    droverChipText: {
-        fontSize: 11,
-        color: theme.colors.textSecondary,
-        ...Typography.default('regular'),
-    },
-    droverChipTextActive: {
-        color: theme.colors.groupped.background,
     },
     projectGroup: {
         paddingHorizontal: 16,
@@ -338,42 +310,6 @@ const MachineHeader = React.memo(({ machineId, machineName }: {
     );
 });
 
-/**
- * Cattle Drover account chips (BASED-98). One chip per account seen in the
- * list plus "All"; hidden entirely until a second account shows up, so the
- * single-account case is untouched.
- */
-const DroverAccountChips = React.memo((props: {
-    accounts: string[];
-    selected: string;
-    onSelect: (account: string) => void;
-}) => {
-    const styles = stylesheet;
-    if (props.accounts.length < 2) return null;
-    const chip = (label: string, value: string) => {
-        const active = props.selected === value;
-        return (
-            <Pressable
-                key={value || '__all__'}
-                onPress={() => props.onSelect(value)}
-                style={[styles.droverChip, active && styles.droverChipActive]}
-                hitSlop={6}
-            >
-                <Text style={[styles.droverChipText, active && styles.droverChipTextActive]} numberOfLines={1}>
-                    {label}
-                </Text>
-            </Pressable>
-        );
-    };
-    return (
-        <View style={styles.droverChipRow}>
-            {chip('All', '')}
-            {props.accounts.map((a) => chip(a, a))}
-        </View>
-    );
-});
-DroverAccountChips.displayName = 'DroverAccountChips';
-
 export function SessionsList({
     topContentInset = 0,
     scrollIndicatorTopInset = 0,
@@ -396,14 +332,6 @@ export function SessionsList({
     // is offered back through the home filter menu for people who organized
     // around it.
     const flatSessionList = useSetting('sessionListGrouping') !== 'project';
-    // Cattle Drover account filter (BASED-98). The chip row only appears once
-    // more than one account is actually present, so single-account users never
-    // see it.
-    const [droverAccount, setDroverAccount] = useSettingMutable('droverAccountFilter');
-    const droverAccounts = React.useMemo(
-        () => collectDroverAccounts(sourceData),
-        [sourceData],
-    );
     const machines = useAllMachines();
     const pathname = usePathname();
     const isTablet = useIsTablet();
@@ -427,20 +355,13 @@ export function SessionsList({
     const data = React.useMemo<SessionListDisplayItem[] | null>(() => {
         if (!sourceData) return sourceData;
 
-        // Account filter first: everything below (archive split, flattening,
-        // project grouping) then operates on the visible set only, so counts
-        // and headers stay consistent with what is on screen.
-        const visibleByAccount = droverAccount
-            ? filterByDroverAccount(sourceData, droverAccount)
-            : sourceData;
-
         // The archive is a flat, date-grouped tail rather than extra rows
         // inside the project cards, so the toggle is the divider that opens
         // it and always sits directly above those rows.
-        const archivedRows = visibleByAccount.filter((item) => (
+        const archivedRows = sourceData.filter((item) => (
             item.type === 'header' || item.type === 'session'
         ));
-        const groupedRows = visibleByAccount.filter((item) => (
+        const groupedRows = sourceData.filter((item) => (
             item.type !== 'header' && item.type !== 'session'
         ));
         const archiveToggle: SessionListDisplayItem[] = hasArchivedSessions
@@ -498,7 +419,7 @@ export function SessionsList({
             item.type !== 'project' && item.type !== 'projects-header'
         ));
         return [...hierarchy, ...legacyItems, ...archiveToggle, ...archivedRows];
-    }, [droverAccount, flatSessionList, hasArchivedSessions, hideArchivedSessions, machines, sourceData]);
+    }, [flatSessionList, hasArchivedSessions, hideArchivedSessions, machines, sourceData]);
 
     // Early return if no data yet
     if (!data) {
@@ -649,17 +570,9 @@ export function SessionsList({
                     style={isPhoneLayout ? styles.phoneUpdateBanner : undefined}
                     headerStyle={isPhoneLayout ? styles.phoneUpdateBannerHeader : undefined}
                 />
-                <DroverAccountChips
-                    accounts={droverAccounts}
-                    selected={droverAccount}
-                    onSelect={setDroverAccount}
-                />
             </>
         );
     }, [
-        droverAccount,
-        droverAccounts,
-        setDroverAccount,
         styles.phoneUpdateBanner,
         styles.phoneUpdateBannerHeader,
         topContentInset,
