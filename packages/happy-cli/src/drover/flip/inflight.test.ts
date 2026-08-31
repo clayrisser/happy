@@ -9,7 +9,7 @@
  * the whole failure mode, so they are pinned here.
  */
 
-import { mkdtempSync, rmSync, writeFileSync, appendFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, appendFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -426,6 +426,12 @@ describe('describeInFlight', () => {
 /**
  * The gate itself: what a flip does when the answer is "eight of them".
  *
+ * The answer used to be "not yet, ask again". It is now "going, and here is
+ * what you are dropping" (DROVE-240) -- Clay replaced the design before a
+ * drain was built, because a flip he has to ask for twice is a flip he forgets
+ * to come back to. What the gate was spending on a refusal it now spends on
+ * the handover the arrival prompt carries.
+ *
  * These drive FlipController.request() directly. It decides before it touches
  * the account registry, so no fixture on disk is needed — the whole point is
  * that the decision happens BEFORE anything is stopped.
@@ -469,51 +475,36 @@ describe('FlipController, gated on running subagents', () => {
         expect(c.flip.take()).toMatchObject({ account: 'alt' })
     })
 
-    it('holds a manual flip, names the agents, and stops nothing', async () => {
+    it('flips at once with eight running, and says what it is dropping', async () => {
         const c = await controller({ running: 8 })
         c.flip.request({ account: 'alt', reason: 'manual', by: 'app' })
 
-        expect(c.aborts()).toBe(0)
-        // Nothing pending either: a request left in the queue would fire at
-        // the next natural exit, which is Clay quitting claude.
-        expect(c.flip.take()).toBeNull()
-        expect(c.said.join('\n')).toContain('8 subagents still running')
-        expect(c.said.join('\n')).toContain('Ask again within 30s')
+        // The whole change: one ask, one flip. No hold, no second press.
+        expect(c.aborts()).toBe(1)
+        expect(c.flip.take()).toMatchObject({ account: 'alt' })
+        const note = c.said.join('\n')
+        expect(note).toContain('8 subagents still running')
+        expect(note).not.toContain('Ask again within')
     })
 
-    it('flips on the second ask, and the second request wins', async () => {
+    it('never calls the handover a resume, because a subagent has none', async () => {
         const c = await controller({ running: 3 })
         c.flip.request({ account: 'alt', reason: 'manual', by: 'app' })
-        expect(c.aborts()).toBe(0)
-
-        c.flip.request({ account: 'other', reason: 'manual again', by: 'app' })
-        expect(c.aborts()).toBe(1)
-        expect(c.flip.take()).toMatchObject({ account: 'other', reason: 'manual again' })
-        expect(c.said.join('\n')).toContain('confirmed')
+        const note = c.said.join('\n')
+        expect(note).toContain('RE-DISPATCH')
+        expect(note).toContain('cannot be resumed')
+        expect(note).not.toMatch(/resuming/i)
     })
 
-    it('lets the confirmation lapse, so an old ask cannot arm a new one', async () => {
-        const { FlipController } = await import('./controller')
-        const said: string[] = []
-        let aborts = 0
-        const tracker = new InFlightTracker()
-        tracker.note(launchRecord('a1', { description: 'job 1' }))
-        const flip = new FlipController('/tmp/project', (m: string) => said.push(m), {
-            toTerminal: () => {},
-            toPane: () => {},
-            flipConfirmMs: 0,
-        })
-        flip.setAbortHandler(() => {
-            aborts++
-        })
-        flip.setInFlightProbe(() => tracker.snapshot())
-
-        flip.request({ account: 'alt', reason: 'manual', by: 'app' })
-        flip.request({ account: 'alt', reason: 'manual', by: 'app' })
-        expect(aborts).toBe(0)
+    it('says where the work is, so the drop is a handover rather than a loss', async () => {
+        const c = await controller({ running: 2 })
+        c.flip.request({ account: 'alt', reason: 'manual', by: 'app' })
+        const note = c.said.join('\n')
+        expect(note).toContain('where its transcript')
+        expect(note).toContain('pushed a lane')
     })
 
-    it('flips ANYWAY on a real usage limit, but says what it is costing first', async () => {
+    it('flips on a usage limit too, and says why waiting would not have helped', async () => {
         // The account is dead. Waiting does not save them, it only fails them
         // one API call later. So the loss goes on the record instead.
         const c = await controller({ running: 5 })
@@ -523,7 +514,17 @@ describe('FlipController, gated on running subagents', () => {
         expect(c.flip.take()).toMatchObject({ by: 'auto' })
         const note = c.said.join('\n')
         expect(note).toContain('5 subagents still running')
-        expect(note).toContain('tasks/<agentId>.output')
+        expect(note).toContain('no headroom left')
+        expect(note).toContain('RE-DISPATCH')
+    })
+
+    it('does not need a second press even with twelve out', async () => {
+        // The old gate turned a twelve-agent fan-out into two keypresses and
+        // a thirty-second window. Clay forgot the second press; the flip he
+        // asked for simply never happened.
+        const c = await controller({ running: 12 })
+        c.flip.request({ account: 'alt', reason: 'manual', by: 'app' })
+        expect(c.aborts()).toBe(1)
     })
 
     it('behaves exactly as before when no probe is wired up', async () => {
@@ -552,8 +553,17 @@ describe('FlipController, gated on running subagents', () => {
     })
 })
 
-describe('the arrival prompt names what was stranded', () => {
-    it('appends the output paths, keeping the configured prompt intact', async () => {
+describe('the arrival prompt hands the stranded agents over', () => {
+    // The handover writes a file as it goes, on purpose (see handover.ts), so
+    // the state dir is pointed somewhere disposable rather than at Clay's.
+    let state: string
+
+    beforeEach(() => {
+        state = mkdtempSync(join(tmpdir(), 'drover-handover-'))
+        process.env.XDG_STATE_HOME = state
+    })
+
+    it('names each agent and points at its transcript, keeping the prompt intact', async () => {
         const { resolveFlipPrompt, defaultFlipPrompt } = await import('./prompt')
         const tracker = new InFlightTracker()
         tracker.note(launchRecord('a752a2a9e89efbca8', { description: 'raft animation' }))
@@ -567,13 +577,32 @@ describe('the arrival prompt names what was stranded', () => {
             stranded: tracker.snapshot().agents,
         })
 
-        // The default still asks for the subagents; it just no longer asks for
-        // them blind.
+        // The configured prompt still leads; the handover is appended under it.
         expect(prompt).toContain('Pick up where we left off, including all subagents')
-        expect(prompt).toContain('2 subagents were still running')
-        expect(prompt).toContain('raft animation: /private/tmp/claude-501/-Users-clay-project/sess-1/tasks/a752a2a9e89efbca8.output')
-        expect(prompt).toContain('platforms scroll-pop: /private/tmp/claude-501/-Users-clay-project/sess-1/tasks/a0222667a1b1a8886.output')
-        expect(prompt).toContain('Only relaunch an agent whose file is')
+        expect(prompt).toContain('raft animation')
+        expect(prompt).toContain('/private/tmp/claude-501/-Users-clay-project/sess-1/tasks/a752a2a9e89efbca8.output')
+        expect(prompt).toContain('platforms scroll-pop')
+        expect(prompt).toContain('/private/tmp/claude-501/-Users-clay-project/sess-1/tasks/a0222667a1b1a8886.output')
+        expect(prompt).toContain('RE-DISPATCH')
+        expect(prompt).toContain('READ THAT FILE FIRST')
+    })
+
+    it('calls it a re-dispatch and never a resume', async () => {
+        const { resolveFlipPrompt, defaultFlipPrompt } = await import('./prompt')
+        const tracker = new InFlightTracker()
+        tracker.note(launchRecord('a752a2a9e89efbca8', { description: 'raft animation' }))
+
+        const prompt = resolveFlipPrompt({
+            to: 'alt',
+            reason: 'manual',
+            cwd: '/tmp/project',
+            override: defaultFlipPrompt,
+            stranded: tracker.snapshot().agents,
+        })
+        expect(prompt).toContain('RE-DISPATCH')
+        expect(prompt).toContain('no way to resume a subagent')
+        // "resume" appears only in the sentence denying it.
+        expect(prompt).not.toMatch(/resuming/i)
     })
 
     it('says nothing at all when nothing was stranded', async () => {
@@ -588,7 +617,7 @@ describe('the arrival prompt names what was stranded', () => {
         expect(prompt).toBe(defaultFlipPrompt)
     })
 
-    it('drops the block when no output path was ever captured', async () => {
+    it('drops the block for bare ids, which name neither the work nor where it is', async () => {
         const { resolveFlipPrompt, defaultFlipPrompt } = await import('./prompt')
         const prompt = resolveFlipPrompt({
             to: 'alt',
@@ -598,5 +627,63 @@ describe('the arrival prompt names what was stranded', () => {
             stranded: [{ id: 'a1' }, { id: 'a2' }],
         })
         expect(prompt).toBe(defaultFlipPrompt)
+    })
+
+    it('points at a file instead of inlining once five agents are out', async () => {
+        const { resolveFlipPrompt, defaultFlipPrompt } = await import('./prompt')
+        const tracker = new InFlightTracker()
+        for (let i = 0; i < 5; i++) {
+            tracker.note(launchRecord(`a752a2a9e89efbc${i}`, { description: `job number ${i}` }))
+        }
+
+        const prompt = resolveFlipPrompt({
+            to: 'alt',
+            reason: 'manual',
+            cwd: '/tmp/project',
+            session: 'sess-1',
+            override: defaultFlipPrompt,
+            stranded: tracker.snapshot().agents,
+        })
+
+        const path = join(state, 'cattle-drover', 'handover', 'sess-1.md')
+        expect(prompt).toContain(path)
+        expect(prompt).toContain('Read that file before you start anything')
+        // The point of the pointer: the prompt stops growing with the fan-out.
+        expect(prompt).not.toContain('job number 3')
+
+        const written = readFileSync(path, 'utf8')
+        expect(written).toContain('job number 3')
+        expect(written).toContain('5 subagents were running')
+    })
+
+    it('writes the file even for a flip nobody asked for, and even when it inlines', async () => {
+        // The unwatched flips are exactly the ones where the file has to
+        // outlive the prompt: nobody is at the terminal to read the announce.
+        const { resolveFlipPrompt, defaultFlipPrompt } = await import('./prompt')
+        const tracker = new InFlightTracker()
+        tracker.note(launchRecord('a752a2a9e89efbca8', { description: 'raft animation' }))
+
+        resolveFlipPrompt({
+            to: 'alt',
+            reason: 'usage limit',
+            cwd: '/tmp/project',
+            session: 'sess-auto',
+            override: defaultFlipPrompt,
+            stranded: tracker.snapshot().agents,
+        })
+
+        const written = readFileSync(join(state, 'cattle-drover', 'handover', 'sess-auto.md'), 'utf8')
+        expect(written).toContain('raft animation')
+        expect(written).toContain('RE-DISPATCH')
+    })
+
+    it('reads the ticket out of the label, so the new agent can go and read it', async () => {
+        const { buildHandover, renderHandover } = await import('./handover')
+        const entries = buildHandover(
+            [{ id: 'a1', name: 'DROVE-240 flip drains', output: '/tmp/a1.jsonl' }],
+            { cwd: '/tmp/project' },
+        )
+        expect(entries[0].ticket).toBe('DROVE-240')
+        expect(renderHandover(entries)).toContain('DROVE-240 flip drains')
     })
 })
