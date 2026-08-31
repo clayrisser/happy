@@ -850,12 +850,13 @@ export function SessionViewLoaded({
     const pickerEffortLevels = React.useMemo<EffortLevel[]>(() => (
         getEffortLevelsForPicker(flavor, modelKey, session.metadata)
     ), [flavor, modelKey, session.metadata]);
-    // Same rule for effort, from the same transcript field. `ultracode` is the
-    // one pick the pane can never confirm: Claude Code records it as the xhigh
-    // it runs at, so a session set to Ultracode reports `xhigh` and the chip
-    // settles there. That is honest about the effort and loses the workflow
-    // orchestration half of the name; better than claiming a level the pane is
-    // not on.
+    // Same rule for effort, and `ultracode` used to be the one pick the pane
+    // could never confirm: Claude Code records it as the `xhigh` it runs at,
+    // with no field to tell the two apart, so a session set to Ultracode
+    // reported xHigh and the chip snapped there — which read as the app undoing
+    // the pick. The CLI now reads ultracode off the composer's own rule and
+    // sends `paneEffort: 'ultracode'` (DROVE-164, claudeLocalLauncher), so this
+    // field is the truth for that level too.
     const paneEffortKey = session.metadata?.hasPane ? session.metadata?.paneEffort ?? null : null;
     const effortLevel = React.useMemo<EffortLevel | null>(() => (
         resolveCurrentOption(availableEffortLevels, [

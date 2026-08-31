@@ -497,31 +497,49 @@ function effortLevels(keys: readonly string[]): EffortLevel[] {
 const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max', 'ultracode'] as const;
 
 // The scale above is per SDK. The CEILING is per model, and this is the one
-// place that fact lives (DROVE-101).
+// place that fact lives.
 //
-// Source: Claude Code's model-config documentation, which gates `ultracode` on
-// an xhigh-capable model with workflows and names Fable 5, Sonnet 5, Opus 4.8,
-// Opus 4.7 and Opus 4.6. Opus 5 is not one of them, in any variant. Offering it
-// there is worse than it sounds: Claude Code downgrades instead of erroring, so
-// the pane runs xhigh, DROVE-77's pane-wins echo snaps the pill back, and it
-// reads as the app refusing the pick.
+// DROVE-101 wrote this table from documentation and got it BACKWARDS for the
+// only model Clay runs: it said Opus 5 could not reach ultracode, so the picker
+// greyed the row out and he could not select the level he had been asking for
+// since June. DROVE-164 measured Claude Code 2.1.251 instead, both in the
+// binary and at a real prompt on `claude-opus-5[1m]`:
 //
-// One entry per model whose ceiling is known. A model that is NOT listed keeps
-// the whole scale: a table that has gone stale should not cripple a model that
-// shipped after it.
-const CLAUDE_ULTRACODE_BY_MODEL: Record<string, boolean> = {
-    'claude-fable-5': true,
-    'claude-sonnet-5': true,
-    'claude-opus-4-8': true,
-    'claude-opus-4-7': true,
-    'claude-opus-4-6': true,
-    'claude-opus-5': false,
-};
+//     > /effort ultracode
+//     Set effort level to ultracode (this session only): xhigh + dynamic
+//     workflow orchestration
+//
+// The rule ultracode is really gated on is `Zu() && X2(model) && zue('xhigh')`
+// — workflows enabled, the model reaches xhigh, the org allows it. `X2` is a
+// DENY list, not an allow list, and its whole content is below. Everything not
+// on it reaches xhigh, which is why Opus 5, Opus 4.7, Opus 4.8, Fable 5 and
+// Sonnet 5 all take ultracode and Opus 4.6 — which DROVE-101 listed as
+// supported — does not.
+//
+// A deny list is also the right shape for the thing this table kept getting
+// wrong. An allow list cripples every model that ships after it; a deny list
+// only ever goes stale in the direction of offering a level the pane will then
+// refuse in words the app now relays (DROVE-164, claudeLocalLauncher).
+const CLAUDE_NO_XHIGH_MODELS: ReadonlySet<string> = new Set([
+    'claude-opus-4-0',
+    'claude-opus-4-1',
+    'claude-opus-4-5',
+    'claude-opus-4-6',
+    'claude-sonnet-4-0',
+    'claude-sonnet-4-5',
+    'claude-sonnet-4-6',
+    'claude-haiku-4-5',
+]);
+
+/** Every `claude-3-*` is below the xhigh line too, and there are many. */
+const CLAUDE_LEGACY_PREFIX = 'claude-3-';
 
 // Why a level is out of reach, for the disabled row that says so. Keyed by
-// effort so a second gated level gets its own line rather than this one.
+// effort so a second gated level gets its own line rather than this one. The
+// model list is Claude Code's own wording for the same set (`Ojt` in 2.1.251).
 const CLAUDE_EFFORT_REQUIREMENT: Record<string, string> = {
-    ultracode: 'needs Fable 5, Sonnet 5 or Opus 4.8',
+    xhigh: 'needs Fable 5, Opus 4.7+ or Sonnet 5',
+    ultracode: 'needs Fable 5, Opus 4.7+ or Sonnet 5',
 };
 
 // `claude-opus-5[1m]` is the 1M-context variant of `claude-opus-5`, not a
@@ -532,11 +550,21 @@ function claudeModelBaseKey(modelKey: string | null | undefined): string {
     return bracket > 0 ? modelKey.slice(0, bracket) : modelKey;
 }
 
+function claudeReachesXhigh(modelKey?: string | null): boolean {
+    const base = claudeModelBaseKey(modelKey);
+    // No model named is not a model that cannot: an unresolved pick keeps the
+    // whole scale rather than being trimmed on a guess.
+    if (base.length === 0) return true;
+    if (base.startsWith(CLAUDE_LEGACY_PREFIX)) return false;
+    return !CLAUDE_NO_XHIGH_MODELS.has(base);
+}
+
 function claudeEffortKeysForModel(modelKey?: string | null): readonly string[] {
-    if (CLAUDE_ULTRACODE_BY_MODEL[claudeModelBaseKey(modelKey)] === false) {
-        return CLAUDE_EFFORTS.filter((key) => key !== 'ultracode');
-    }
-    return CLAUDE_EFFORTS;
+    if (claudeReachesXhigh(modelKey)) return CLAUDE_EFFORTS;
+    // A model below the xhigh line loses `ultracode` (which IS xhigh plus
+    // workflows) and `xhigh` itself. `max` is gated separately by Claude Code
+    // and left alone here.
+    return CLAUDE_EFFORTS.filter((key) => key !== 'ultracode' && key !== 'xhigh');
 }
 
 // Exactly what each model publishes in Codex's own registry, in its order

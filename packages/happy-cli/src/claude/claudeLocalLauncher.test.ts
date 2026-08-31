@@ -6,6 +6,9 @@ const {
     mockCreateSessionScanner,
     mockInjectIntoPane,
     mockPaneIsIdle,
+    mockPaneAcceptsCommand,
+    mockCapturePane,
+    mockPressPaneKey,
     mockFindInbox,
     mockSendToInbox,
     mockInterruptPane,
@@ -18,6 +21,15 @@ const {
     mockCreateSessionScanner: vi.fn(),
     mockInjectIntoPane: vi.fn(),
     mockPaneIsIdle: vi.fn(async () => true),
+    // DROVE-164: the picker's commands take this gate instead. It does NOT
+    // wait for the turn to end, so it is open by default here the way the
+    // pane really behaves.
+    mockPaneAcceptsCommand: vi.fn(async () => true),
+    // What the pane shows when the launcher reads its command back. An empty
+    // screen parses as "nothing came back", which is the pending path, so a
+    // test that does not care about the outcome is unaffected by the readback.
+    mockCapturePane: vi.fn(async (): Promise<string | null> => null),
+    mockPressPaneKey: vi.fn(async () => true),
     mockFindInbox: vi.fn(),
     mockSendToInbox: vi.fn(),
     mockInterruptPane: vi.fn(),
@@ -63,6 +75,11 @@ vi.mock('./utils/paneInject', () => ({
     // check. Idle by default here so a queued /model is not held forever; the
     // model-routing tests below override it.
     paneIsIdle: mockPaneIsIdle,
+    // DROVE-164: model and effort no longer wait for idle, and the launcher
+    // reads the pane back instead of assuming the keystrokes worked.
+    paneAcceptsCommand: mockPaneAcceptsCommand,
+    capturePane: mockCapturePane,
+    pressPaneKey: mockPressPaneKey,
     interruptPane: mockInterruptPane,
 }));
 
@@ -787,14 +804,16 @@ describe('claudeLocalLauncher in a tmux pane', () => {
             await launcher;
         });
 
-        it('waits for the prompt instead of pasting a half-typed command into it', async () => {
+        it('holds the command while something is typed in the input box', async () => {
             // The one thing that must never happen: `/model x` landing in the
-            // middle of Clay's own line. A message is drafted when the pane is
-            // busy; a command is HELD.
+            // middle of Clay's own line. That is what `paneAcceptsCommand`
+            // checks, and DROVE-164 is the discovery that it is the WHOLE
+            // check — waiting for the turn to end as well was not caution, it
+            // was a gate that never opened in a session anyone was working.
             const runs = trackRuns();
             const { session, emitMetadata } = paneSession({});
             mockInjectIntoPane.mockResolvedValue(true);
-            mockPaneIsIdle.mockResolvedValue(false);
+            mockPaneAcceptsCommand.mockResolvedValue(false);
 
             const launcher = claudeLocalLauncher(session as any);
             await vi.waitFor(() => expect(runs).toHaveLength(1));
@@ -803,12 +822,99 @@ describe('claudeLocalLauncher in a tmux pane', () => {
             await new Promise((r) => setTimeout(r, 50));
             expect(mockInjectIntoPane).not.toHaveBeenCalled();
 
-            // ...and it goes in the moment the prompt opens up.
-            mockPaneIsIdle.mockResolvedValue(true);
+            // ...and it goes in the moment the box is clear.
+            mockPaneAcceptsCommand.mockResolvedValue(true);
             await vi.waitFor(() => expect(mockInjectIntoPane).toHaveBeenCalledWith(
                 pane, '/model claude-sonnet-5', { submit: true },
             ), { timeout: 5000 });
 
+            runs[0].run.resolve();
+            await launcher;
+        });
+
+        it('types the pick MID-TURN rather than waiting for a prompt that never opens', async () => {
+            // DROVE-164, and the whole of it. Clay's own log for 2026-08-31 has
+            // `/effort max` queued at 05:40:59 and still held at 08:06, 4454
+            // "pane is busy" lines later, because a session being worked is
+            // never idle. Measured on 2.1.251: a `/effort` pasted while a turn
+            // is streaming runs immediately and the turn carries on.
+            const runs = trackRuns();
+            const { session, emitMetadata } = paneSession({});
+            mockInjectIntoPane.mockResolvedValue(true);
+            mockPaneIsIdle.mockResolvedValue(false);
+            mockPaneAcceptsCommand.mockResolvedValue(true);
+
+            const launcher = claudeLocalLauncher(session as any);
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+
+            emitMetadata({ effortLevel: 'ultracode' });
+            await vi.waitFor(() => expect(mockInjectIntoPane).toHaveBeenCalledWith(
+                pane, '/effort ultracode', { submit: true },
+            ), { timeout: 5000 });
+            expect(mockPaneIsIdle).not.toHaveBeenCalled();
+
+            mockPaneIsIdle.mockResolvedValue(true);
+            runs[0].run.resolve();
+            await launcher;
+        });
+
+        it('answers the confirmation Claude Code puts up, instead of leaving it on screen', async () => {
+            // Measured on 2.1.251: every `/effort` at an idle prompt on a
+            // conversation with history draws "Change effort level?" and waits.
+            // Nobody was pressing that Enter, so the pick stopped there while
+            // the app was told it had landed.
+            const runs = trackRuns();
+            const { session, emitMetadata, readMetadata } = paneSession({});
+            mockInjectIntoPane.mockResolvedValue(true);
+            const rule = '\u2500'.repeat(40);
+            const idleScreen = [rule, '\u276f ', rule].join('\n');
+            const dialog = ['   Change effort level?', '   \u276f 1. Yes, switch to max'].join('\n');
+            const applied = ['  \u23bf  Set effort level to max (this session only)', rule, '\u276f ', rule].join('\n');
+            let answered = false;
+            mockCapturePane.mockImplementation(async () => (answered ? applied : idleScreen + '\n' + dialog));
+            mockPressPaneKey.mockImplementation(async () => { answered = true; return true; });
+
+            const launcher = claudeLocalLauncher(session as any);
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+
+            emitMetadata({ effortLevel: 'max' });
+            await vi.waitFor(() => expect(mockPressPaneKey).toHaveBeenCalledWith(pane, 'Enter'), { timeout: 5000 });
+            await vi.waitFor(() => expect(readMetadata().paneEffort).toBe('max'), { timeout: 5000 });
+
+            mockCapturePane.mockResolvedValue(null);
+            mockPressPaneKey.mockResolvedValue(true);
+            runs[0].run.resolve();
+            await launcher;
+        });
+
+        it('tells the phone in the pane\'s own words when the level is refused', async () => {
+            // A level the harness will not take must never look accepted. The
+            // pill stays where it was and the reason is said out loud.
+            const runs = trackRuns();
+            const { session, emitMetadata } = paneSession({});
+            mockInjectIntoPane.mockResolvedValue(true);
+            const rule = '\u2500'.repeat(40);
+            const refusal = [
+                "  \u23bf  Ultracode runs at xhigh effort, which claude-opus-4-6 doesn't support \u2014 switch to an xhigh-capable model (Fable 5, Opus 4.7+, Sonnet 5).",
+                rule, '\u276f ', rule,
+            ].join('\n');
+            let typed = false;
+            mockCapturePane.mockImplementation(async () => (typed ? refusal : [rule, '\u276f ', rule].join('\n')));
+            mockInjectIntoPane.mockImplementation(async () => { typed = true; return true; });
+
+            const launcher = claudeLocalLauncher(session as any);
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+
+            emitMetadata({ effortLevel: 'ultracode' });
+            await vi.waitFor(() => expect(session.client.sendSessionEvent).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    type: 'message',
+                    message: expect.stringContaining("doesn't support"),
+                }),
+            ), { timeout: 5000 });
+
+            mockCapturePane.mockResolvedValue(null);
+            mockInjectIntoPane.mockResolvedValue(true);
             runs[0].run.resolve();
             await launcher;
         });
@@ -861,7 +967,7 @@ describe('claudeLocalLauncher in a tmux pane', () => {
             });
             const { session, emitMetadata } = paneSession({});
             mockInjectIntoPane.mockResolvedValue(true);
-            mockPaneIsIdle.mockResolvedValue(false);
+            mockPaneAcceptsCommand.mockResolvedValue(false);
 
             const launcher = claudeLocalLauncher(session as any);
             await vi.waitFor(() => expect(runs).toHaveLength(1));
@@ -873,7 +979,7 @@ describe('claudeLocalLauncher in a tmux pane', () => {
 
             scannerOptions!.onRunObserved!({ model: 'claude-sonnet-5', effort: null });
             emitMetadata({ modelMode: 'claude-sonnet-5' });
-            mockPaneIsIdle.mockResolvedValue(true);
+            mockPaneAcceptsCommand.mockResolvedValue(true);
             await new Promise((r) => setTimeout(r, 300));
             expect(mockInjectIntoPane).not.toHaveBeenCalled();
 
@@ -900,17 +1006,54 @@ describe('claudeLocalLauncher in a tmux pane', () => {
             await launcher;
         });
 
-        it('says the pane is on the new model straight away, so the chip stops lying', async () => {
+        it('says the pane is on the new model as soon as the pane says so', async () => {
+            // It used to say so as soon as the keystrokes went in, which is
+            // how a refused command still moved the chip (DROVE-164). Now the
+            // pane's own answer is what moves it.
             const runs = trackRuns();
             const { session, emitMetadata, readMetadata } = paneSession({ modelMode: 'claude-opus-5' });
-            mockInjectIntoPane.mockResolvedValue(true);
+            const rule = '\u2500'.repeat(40);
+            const applied = ['  \u23bf  Set model to claude-sonnet-5', rule, '\u276f ', rule].join('\n');
+            let typed = false;
+            mockCapturePane.mockImplementation(async () => (typed ? applied : [rule, '\u276f ', rule].join('\n')));
+            mockInjectIntoPane.mockImplementation(async () => { typed = true; return true; });
 
             const launcher = claudeLocalLauncher(session as any);
             await vi.waitFor(() => expect(runs).toHaveLength(1));
 
             emitMetadata({ modelMode: 'claude-sonnet-5' });
-            await vi.waitFor(() => expect(readMetadata().paneModel).toBe('claude-sonnet-5'));
+            await vi.waitFor(() => expect(readMetadata().paneModel).toBe('claude-sonnet-5'), { timeout: 5000 });
 
+            mockCapturePane.mockResolvedValue(null);
+            mockInjectIntoPane.mockResolvedValue(true);
+            runs[0].run.resolve();
+            await launcher;
+        });
+
+        it('reports ultracode as ultracode, not as the xhigh the transcript records', async () => {
+            // Claude Code runs ultracode as xhigh with dynamic workflows beside
+            // it, and the transcript carries no field that tells them apart —
+            // so a session set to Ultracode reported xHigh and the chip snapped
+            // back, which read as the app refusing the pick (DROVE-101). The
+            // composer's top rule is the only place the word is written down.
+            const runs = trackRuns();
+            let scannerOptions: ScannerOptions | undefined;
+            mockCreateSessionScanner.mockImplementation(async (opts: ScannerOptions) => {
+                scannerOptions = opts;
+                return { onNewSession: vi.fn(), cleanup: vi.fn(async () => {}) };
+            });
+            const { session, readMetadata } = paneSession({});
+            const rule = '\u2500'.repeat(40);
+            mockCapturePane.mockResolvedValue([rule + ' ultracode \u2500', '\u276f ', rule].join('\n'));
+
+            const launcher = claudeLocalLauncher(session as any);
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+            await vi.waitFor(() => expect(scannerOptions?.onRunObserved).toBeTypeOf('function'));
+
+            scannerOptions!.onRunObserved!({ model: 'claude-opus-5', effort: 'xhigh' });
+            await vi.waitFor(() => expect(readMetadata().paneEffort).toBe('ultracode'), { timeout: 5000 });
+
+            mockCapturePane.mockResolvedValue(null);
             runs[0].run.resolve();
             await launcher;
         });

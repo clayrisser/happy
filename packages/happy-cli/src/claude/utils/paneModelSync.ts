@@ -21,12 +21,22 @@
  * accepted. The effort keys are the same words `/effort` prints. So the mapping
  * is the identity, and this file is mostly about WHEN, not WHAT.
  *
- * When matters because a pane is a keyboard. `/model x` typed mid-turn is not
- * queued, it is merged into whatever is in the input box and submitted with it.
- * So commands wait for the same idle gate a phone message waits for
- * (paneInject.paneIsIdle) and are retried until it opens, rather than pasted as
- * a draft the way a message is — a half-typed slash command sitting in Clay's
- * input box is worse than a late one.
+ * When matters because a pane is a keyboard, and this file got WHEN wrong for
+ * three months (DROVE-164). It used to wait for `paneInject.paneIsIdle`, on the
+ * reasoning that a command typed mid-turn merges into the input box. Measured
+ * on 2.1.251, that is not what happens: a `/effort` pasted while a turn is
+ * streaming executes immediately, the turn carries on, and it does not even
+ * raise the confirmation the same command raises at an idle prompt. What a
+ * paste can actually ruin is a HALF-TYPED LINE and an OPEN DIALOG, neither of
+ * which is the turn.
+ *
+ * Waiting for idle was not a cautious version of the right gate, it was a gate
+ * that never opened. Clay's own log for 2026-08-31 has `/effort max` queued at
+ * 05:40:59 and still held at 08:06, 4454 "pane is busy" lines later, because a
+ * session that is being worked is never idle. So the picker's commands take
+ * `paneInject.paneAcceptsCommand` instead — pane alive, no dialog, empty input
+ * box — and a slash command Clay typed on the phone keeps the strict gate,
+ * where `/clear` landing mid-turn is not something to be clever about.
  *
  * The carrier is deliberately generic over the command string, and DROVE-36
  * now hangs the permission-mode pick off the same queue. That one is NOT a
@@ -186,6 +196,13 @@ export function remoteControlCommand(
 export interface PaneCommandQueueOptions {
     /** Is the pane sitting at an idle prompt right now? */
     isIdle: () => Promise<boolean>
+    /**
+     * The weaker gate a picker's command may use instead (DROVE-164): the pane
+     * is alive, no dialog is up and the input box is empty, but a turn may well
+     * be running. Absent, `allowWhileBusy` falls back to `isIdle` and nothing
+     * changes.
+     */
+    accepts?: () => Promise<boolean>
     /** Type one command and press Enter. True when it actually went in. */
     send: (command: string) => Promise<boolean>
     /**
@@ -217,6 +234,15 @@ export interface PaneCommandRequestOptions {
     collapse?: boolean
     /** Also wait for `agentsQuiet()`. See PaneCommandQueueOptions. */
     requireQuietAgents?: boolean
+    /**
+     * Take the weaker `accepts` gate rather than waiting for idle (DROVE-164).
+     *
+     * Right for the model and effort pickers, whose commands Claude Code runs
+     * mid-turn without so much as a confirmation. Wrong for a slash command
+     * Clay typed on the phone, where `/clear` landing in the middle of a turn
+     * is not something to be clever about.
+     */
+    allowWhileBusy?: boolean
 }
 
 export interface PaneCommandQueue {
@@ -280,12 +306,20 @@ interface QueuedCommand {
     collapse: boolean
     /** Also wait for `agentsQuiet()` before typing it. */
     requireQuietAgents: boolean
+    /** Take `accepts` rather than `isIdle`. */
+    allowWhileBusy: boolean
 }
 
 export function createPaneCommandQueue(opts: PaneCommandQueueOptions): PaneCommandQueue {
     let queued: QueuedCommand[] = []
     let draining: Promise<void> | null = null
     const agentsQuiet = opts.agentsQuiet ?? (() => true)
+    const accepts = opts.accepts ?? opts.isIdle
+
+    /** The gate THIS command asked for. Re-read per command, not per drain. */
+    function gateFor(q: QueuedCommand): Promise<boolean> {
+        return q.allowWhileBusy ? accepts() : opts.isIdle()
+    }
 
     async function drain(): Promise<void> {
         if (queued.length === 0) return
@@ -293,8 +327,8 @@ export function createPaneCommandQueue(opts: PaneCommandQueueOptions): PaneComma
             logger.debug(`[paneModelSync] agents are still running — holding ${queued.length} command(s)`)
             return
         }
-        if (!(await opts.isIdle())) {
-            logger.debug(`[paneModelSync] pane is busy — holding ${queued.length} command(s)`)
+        if (!(await gateFor(queued[0]))) {
+            logger.debug(`[paneModelSync] pane will not take a command — holding ${queued.length}`)
             return
         }
         while (queued.length > 0) {
@@ -304,6 +338,12 @@ export function createPaneCommandQueue(opts: PaneCommandQueueOptions): PaneComma
             // the flag is that THIS command never goes in while one is running.
             if (requireQuietAgents && !agentsQuiet()) {
                 logger.debug(`[paneModelSync] agents started — holding ${command}`)
+                return
+            }
+            // Two commands in one batch can want different gates — the picker's
+            // pair is `allowWhileBusy`, a phone-typed `/clear` behind it is not.
+            if (!(await gateFor(queued[0]))) {
+                logger.debug(`[paneModelSync] pane will not take ${command} — holding it`)
                 return
             }
             let ok = false
@@ -328,12 +368,13 @@ export function createPaneCommandQueue(opts: PaneCommandQueueOptions): PaneComma
         request: (commands: string[], reqOpts: PaneCommandRequestOptions = {}) => {
             const collapse = reqOpts.collapse ?? true
             const requireQuietAgents = reqOpts.requireQuietAgents ?? false
+            const allowWhileBusy = reqOpts.allowWhileBusy ?? false
             for (const command of commands) {
                 const kind = commandKind(command)
                 // Only ever drops a COLLAPSIBLE entry. A picker tap must not
                 // swallow a `/model` Clay typed on the phone a second earlier.
                 queued = queued.filter((q) => !(q.collapse && commandKind(q.command) === kind))
-                queued.push({ command, collapse, requireQuietAgents })
+                queued.push({ command, collapse, requireQuietAgents, allowWhileBusy })
             }
         },
         cancel: (kind: string) => {

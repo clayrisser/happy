@@ -6,7 +6,8 @@ import { createSessionScanner } from "./utils/sessionScanner";
 import { launchFailureMessage } from "./utils/launchFailureMessage";
 import { ambientDataDir } from "@/drover/flip/accounts";
 import { parseFlipCommand } from "@/drover/flip/controller";
-import { injectIntoPane, interruptPane, paneIsIdle } from "./utils/paneInject";
+import { capturePane, injectIntoPane, interruptPane, paneAcceptsCommand, paneIsIdle, pressPaneKey } from "./utils/paneInject";
+import { paneCommandKind, paneCommandOutcome, paneUltracodeActive } from "./utils/paneCommandOutcome";
 import { createPaneCommandQueue, paneCommandsForSelection, paneSlashCommand, parseRemoteControlRequest, remoteControlCommand, type PaneModelSelection } from "./utils/paneModelSync";
 import { cyclePaneMode, pressCycleKey, readPaneMode, type PaneMode } from "./utils/panePermissionSync";
 import { isPermissionMode, mapToClaudeMode } from "./utils/permissionMode";
@@ -144,12 +145,27 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
         // terminal for anyone to type `/model` into.
         onRunObserved: process.env.TMUX_PANE
             ? (run) => {
-                observedRun = { model: run.model, effort: run.effort };
-                session.client.updateMetadata((metadata) => ({
-                    ...metadata,
-                    paneModel: run.model,
-                    paneEffort: run.effort,
-                }));
+                // DROVE-164: the transcript cannot say `ultracode`. Claude Code
+                // runs it as xhigh with dynamic workflows beside it and records
+                // `"effort":"xhigh"` with no field to tell the two apart, so the
+                // one and only place ultracode is written down is the composer's
+                // top rule. Read it whenever the transcript claims xhigh, and a
+                // `/effort ultracode` Clay typed at his own keyboard reaches the
+                // phone as Ultracode instead of snapping it to xHigh.
+                void (async () => {
+                    let effort = run.effort;
+                    if (effort === 'xhigh') {
+                        const capture = await capturePane(process.env.TMUX_PANE!);
+                        if (capture !== null && paneUltracodeActive(capture)) effort = 'ultracode';
+                    }
+                    observedRun = { model: run.model, effort };
+                    session.client.updateMetadata((metadata) => ({
+                        ...metadata,
+                        paneModel: run.model,
+                        paneEffort: effort,
+                    }));
+                    reconcilePaneEffort();
+                })();
             }
             : undefined,
         // DROVE-36: the same half, for the permission mode. Clay had Yolo
@@ -334,17 +350,24 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
      *
      * The pane's own way in is `/model <name>` and `/effort <level>`, both
      * real commands in 2.1.251, and the app's keys are already exactly what
-     * they take. So this types them — through the SAME idle gate a phone
-     * message goes through, because a slash command landing mid-turn merges
-     * into whatever is in the input box and gets submitted with it.
+     * they take. So this types them.
      *
-     * Not `injectIntoPaneGated`: that pastes a DRAFT when the pane is busy,
-     * which is right for a message a human can read and send, and wrong for
-     * a half-typed `/model` sitting in Clay's input box waiting to corrupt
-     * his next line. A command waits for the prompt instead.
+     * NOT through the idle gate any more (DROVE-164). That gate never opened:
+     * a session Clay is actually working is never idle, and his log for
+     * 2026-08-31 has `/effort max` queued at 05:40:59 and still waiting at
+     * 08:06. The picker's commands take the weaker `paneAcceptsCommand` — pane
+     * alive, no dialog on screen, input box empty — which is the property that
+     * was ever at stake, and Claude Code runs the command mid-turn without
+     * complaint. A slash command Clay TYPED on the phone (DROVE-49) keeps the
+     * strict gate.
      */
     const paneCommands = createPaneCommandQueue({
         isIdle: () => paneIsIdle({
+            pane: tmuxPane!,
+            configDir: session.claudeEnvVars?.CLAUDE_CONFIG_DIR,
+            claudeSessionId: session.sessionId,
+        }),
+        accepts: () => paneAcceptsCommand({
             pane: tmuxPane!,
             configDir: session.claudeEnvVars?.CLAUDE_CONFIG_DIR,
             claudeSessionId: session.sessionId,
@@ -368,9 +391,15 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
                 logger.debug(`[local]: no carrier for pane command ${command} — dropping it`);
                 return true;
             }
-            const ok = await injectIntoPane(tmuxPane!, command, { submit: true });
-            if (ok) notePaneCommandApplied(command);
-            return ok;
+            const kind = paneCommandKind(command);
+            if (kind === null) {
+                // A slash command Clay typed on the phone. Nothing to read
+                // back — the TUI's answer to `/clear` is the whole screen.
+                const ok = await injectIntoPane(tmuxPane!, command, { submit: true });
+                if (ok) notePaneCommandApplied(command);
+                return ok;
+            }
+            return applyPaneSelectionCommand(command, kind);
         },
     });
 
@@ -427,46 +456,134 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
     }
 
     /**
-     * Say the switch happened as soon as it is typed, rather than waiting
-     * for the next turn to prove it.
+     * The toggle half of what used to be one optimistic write.
      *
-     * The transcript is the real answer and corrects this within one turn,
-     * including when Claude Code refuses the command (Fable's one-time
-     * consent, an org effort cap). But without the optimistic write the
-     * chip keeps showing the OLD model from the moment Clay taps until the
-     * next assistant turn, which can be minutes, and reads as the pick
-     * having done nothing — the exact complaint this ticket is about.
+     * `/remote-control` carries no value and prints no result line worth
+     * parsing. It is a toggle and we only ever type it when we know the current
+     * state differs from the request, so the state after it lands is the
+     * opposite of what we observed (DROVE-63).
      */
     function notePaneCommandApplied(command: string): void {
-        // `/remote-control` carries no value, so it returns before the split
-        // below. It is a toggle and we only ever type it when we know the
-        // current state differs from the request, so the state after it lands
-        // is the opposite of what we observed (DROVE-63).
-        if (command === '/remote-control') {
-            const next = !(observedRemoteControl ?? false);
-            observedRemoteControl = next;
-            session.client.updateMetadata((metadata) => ({
-                ...metadata,
-                paneRemoteControl: next,
-            }));
+        if (command !== '/remote-control') return;
+        const next = !(observedRemoteControl ?? false);
+        observedRemoteControl = next;
+        session.client.updateMetadata((metadata) => ({
+            ...metadata,
+            paneRemoteControl: next,
+        }));
+    }
+
+    /** How long the TUI gets to answer a `/model` or `/effort`, and how often we look. */
+    const paneOutcomeTimeoutMs = 8000;
+    const paneOutcomePollMs = 300;
+
+    /**
+     * Type `/model` or `/effort` and then READ THE PANE BACK (DROVE-164).
+     *
+     * "tmux accepted the keystrokes" was the old proof, and it was worth
+     * nothing. Measured against 2.1.251, three things happen to a command that
+     * was typed perfectly, and the app was told all three had worked:
+     *
+     *   - a "Change effort level? / Switch model?" confirmation goes up and
+     *     waits for an Enter nobody was pressing. This is EVERY effort change
+     *     made at an idle prompt on a conversation with history, which is to
+     *     say every one Clay ever made from his phone;
+     *   - Claude Code refuses in words: an org cap, a model that cannot reach
+     *     xhigh, a launch-effort pin, a model name it does not know;
+     *   - `/effort ultracode` succeeds but is recorded as `xhigh`, because
+     *     ultracode is xhigh plus workflows rather than a sixth level.
+     *
+     * So this presses the Enter, reports the refusal to the phone in Claude
+     * Code's own words, and writes back what the pane actually settled on.
+     */
+    async function applyPaneSelectionCommand(command: string, kind: 'effort' | 'model'): Promise<boolean> {
+        const before = (await capturePane(tmuxPane!)) ?? '';
+        if (!(await injectIntoPane(tmuxPane!, command, { submit: true }))) return false;
+
+        let confirmed = false;
+        const deadline = Date.now() + paneOutcomeTimeoutMs;
+        while (Date.now() < deadline) {
+            await new Promise((r) => setTimeout(r, paneOutcomePollMs));
+            const after = await capturePane(tmuxPane!);
+            if (after === null) {
+                // No screen to read is not a slow answer, it is no answer.
+                // Polling another twenty-six times will not conjure a tmux.
+                logger.debug(`[local]: cannot read ${tmuxPane} back after ${command}`);
+                return true;
+            }
+            const outcome = paneCommandOutcome(before, after, kind);
+            if (outcome.state === 'confirm') {
+                // Answered only because we READ our own dialog first and know
+                // "Yes" is the highlighted row. A blind Enter at a pane is the
+                // DROVE-80 mistake; this is the panePermissionSync pattern.
+                if (confirmed) continue;
+                confirmed = true;
+                logger.debug(`[local]: ${command} raised the confirmation — answering it`);
+                await pressPaneKey(tmuxPane!, 'Enter');
+                continue;
+            }
+            if (outcome.state === 'refused') {
+                logger.debug(`[local]: the pane refused ${command}: ${outcome.message}`);
+                rollBackPaneSelection(kind);
+                // Said out loud rather than logged. A pick that silently does
+                // nothing is the whole of DROVE-164.
+                session.client.sendSessionEvent({
+                    type: 'message',
+                    message: `Cattle Drover: the terminal would not take ${command} — ${outcome.message}`,
+                });
+                await reportPaneRun();
+                return true;
+            }
+            if (outcome.state === 'applied') {
+                logger.debug(`[local]: the pane took ${command} (${outcome.value})`);
+                await reportPaneRun(kind, outcome.value);
+                return true;
+            }
+        }
+        // Nothing recognisable came back. Do NOT claim it landed: the scanner
+        // reports the real run within a turn, and a stale chip for one turn is
+        // cheaper than a chip that is confidently wrong.
+        logger.debug(`[local]: no answer from the pane for ${command} — leaving the chip to the transcript`);
+        return true;
+    }
+
+    /** A pick the pane refused was never applied, so stop believing it was. */
+    function rollBackPaneSelection(kind: 'effort' | 'model'): void {
+        if (kind === 'effort') paneSelection = { ...paneSelection, effortLevel: observedRun.effort ?? undefined };
+        else paneSelection = { ...paneSelection, modelMode: observedRun.model ?? undefined };
+    }
+
+    /**
+     * Write what the pane is on NOW into metadata, reading the screen for the
+     * one fact the transcript cannot carry.
+     *
+     * `/effort ultracode` leaves `"effort":"xhigh"` in the JSONL and no field
+     * that says ultracode, so a session set to Ultracode reported xHigh and the
+     * chip snapped back — read as the app refusing the pick (DROVE-101). The
+     * composer's top rule says `── ultracode ─` while it is on, and that is the
+     * only place the truth is written down.
+     */
+    async function reportPaneRun(kind?: 'effort' | 'model', value?: string | null): Promise<void> {
+        if (kind === 'model') {
+            const model = value === 'default' || value === undefined ? null : value;
+            observedRun = { ...observedRun, model };
+            session.client.updateMetadata((metadata) => ({ ...metadata, paneModel: model }));
             return;
         }
-        const gap = command.indexOf(' ');
-        if (gap === -1) return;
-        const value = command.slice(gap + 1);
-        if (command.startsWith('/model ')) {
-            observedRun = { ...observedRun, model: value === 'default' ? null : value };
-            session.client.updateMetadata((metadata) => ({
-                ...metadata,
-                paneModel: value === 'default' ? null : value,
-            }));
-        } else if (command.startsWith('/effort ')) {
-            observedRun = { ...observedRun, effort: value === 'auto' ? null : value };
-            session.client.updateMetadata((metadata) => ({
-                ...metadata,
-                paneEffort: value === 'auto' ? null : value,
-            }));
+        // The command's own word is authoritative when there is one: Claude
+        // Code printed `Set effort level to ultracode` and there is nothing the
+        // screen can add to that. The rule is only consulted when we are
+        // reporting the run WITHOUT having just set it — after a refusal —
+        // where `xhigh` on screen may really be ultracode.
+        let effort = kind === 'effort'
+            ? (value === 'auto' || value === undefined ? null : value)
+            : (observedRun.effort ?? null);
+        if (kind === undefined && effort === 'xhigh') {
+            const capture = await capturePane(tmuxPane!);
+            if (capture !== null && paneUltracodeActive(capture)) effort = 'ultracode';
         }
+        observedRun = { ...observedRun, effort };
+        session.client.updateMetadata((metadata) => ({ ...metadata, paneEffort: effort }));
     }
 
     /** How often a held command re-checks whether the prompt opened up. */
@@ -559,6 +676,35 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
         pumpPaneCommands();
     };
 
+    /**
+     * Once per launcher, when the pane's real effort is first known: does it
+     * match what the app asked for (DROVE-164)?
+     *
+     * `paneSelection` is seeded from the app's OWN request, on the reasoning
+     * that a reconnect should not retype a pick that never changed. The cost is
+     * that a pick made while the CLI was down, or one that a crash or a flip
+     * interrupted, is assumed to have landed and is never typed at all — the
+     * only thing that ever applies effort is a metadata DELTA. Remote Control
+     * has had a start-up reconcile since DROVE-63; this is the same one.
+     *
+     * Effort only. The transcript reports a model as `claude-opus-5` whether or
+     * not the pane is on the `[1m]` variant, so reconciling the model against
+     * it would retype `/model` on every launch forever.
+     */
+    let effortReconciled = false;
+    function reconcilePaneEffort(): void {
+        if (!tmuxPane || effortReconciled) return;
+        effortReconciled = true;
+        const wanted = session.client.getMetadata()?.effortLevel;
+        if (wanted === undefined || wanted === null) return;
+        const running = observedRun.effort ?? undefined;
+        if (running === undefined || running === wanted) return;
+        logger.debug(`[local]: the app asked for effort ${wanted} and the pane is on ${running} — queueing the difference`);
+        paneSelection = { ...paneSelection, effortLevel: wanted };
+        paneCommands.request([`/effort ${wanted}`], { allowWhileBusy: true });
+        pumpPaneCommands();
+    }
+
     const onMetadataChanged = (metadata: { modelMode?: string | null, effortLevel?: string | null, permissionMode?: string | null, remoteControl?: unknown } | null) => {
         if (!tmuxPane || !metadata) return;
         const next: PaneModelSelection = {
@@ -596,7 +742,15 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
         // would just queue duplicates of what is already waiting.
         paneSelection = { ...paneSelection, ...next };
         logger.debug(`[local]: app changed the model/effort — queueing ${commands.join(', ')}`);
-        paneCommands.request(commands);
+        // Queued one at a time because they do not share a gate any more
+        // (DROVE-164). `/model` and `/effort` are typed at the prompt and
+        // Claude Code runs them mid-turn, so they take the weaker gate. The
+        // permission mode is a shift+tab loop that READS THE PANE BACK between
+        // presses (panePermissionSync), which wants the screen holding still,
+        // so it keeps waiting for idle. Order is preserved either way.
+        for (const command of commands) {
+            paneCommands.request([command], { allowWhileBusy: command.startsWith('/') });
+        }
         pumpPaneCommands();
     };
     if (tmuxPane) {
