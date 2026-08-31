@@ -45,6 +45,11 @@ export type SubagentTranscriptResponse = {
     rows: SubagentTranscriptRow[];
     /** Byte offset to hand back as `since`. */
     cursor: number;
+    /**
+     * The CLI stopped at its page cap, not at the end of the file, so there
+     * is more waiting past `cursor` (DROVE-211). Ask again at once.
+     */
+    more?: boolean;
     agent: SubagentTranscriptAgent;
 } | {
     ok: false;

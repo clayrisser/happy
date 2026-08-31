@@ -1094,7 +1094,7 @@ export const en: TranslationStructure = {
         stateUnknown: 'State unknown',
         waitingForComputer: 'The computer is restarting or out of reach. This screen will fill in on its own.',
         waitingForNetwork: 'No connection. This screen will fill in as soon as the phone is back online.',
-        waitingUnknown: 'The transcript cannot be read right now. Still trying.',
+        waitingUnknown: 'The transcript is not coming through, and the app cannot tell why.',
         retrying: 'Still trying…',
     },
 

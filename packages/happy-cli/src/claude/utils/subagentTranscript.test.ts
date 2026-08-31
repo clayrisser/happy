@@ -225,3 +225,92 @@ describe('createSubagentTranscriptReader', () => {
         expect(r.read({ agentId }).ok).toBe(false)
     })
 })
+
+/**
+ * DROVE-211. The whole transcript in one answer is what killed the CLI's
+ * socket: Socket.IO drops a frame over 1 MB and closes the connection that
+ * sent it, so the phone never got an ack and told Clay his live machine was
+ * out of reach. The reader pages instead.
+ */
+describe('a transcript bigger than one frame', () => {
+    /** One record per 64 KB, so a handful of them clears the 512 KB page. */
+    const fat = (n: number) => agentRecord({
+        type: 'assistant',
+        uuid: `fat${n}`,
+        parentUuid: 'u1',
+        timestamp: iso(5000 + n),
+        message: { role: 'assistant', model: 'claude-fable-5', content: [{ type: 'text', text: 'x'.repeat(64 * 1024) }], usage },
+    })
+
+    const writeFat = (count: number) => {
+        const lines = [fixtureLines[0], ...Array.from({ length: count }, (_, i) => fat(i))]
+        writeFileSync(join(projectDir, sessionId, 'subagents', `agent-${agentId}.jsonl`), lines.join('\n') + '\n')
+    }
+
+    it('caps a page well under the frame limit and says there is more', () => {
+        writeFat(40)
+        const page = reader().read({ agentId })
+        expect(page.ok).toBe(true)
+        if (!page.ok) return
+        expect(page.more).toBe(true)
+        expect(JSON.stringify(page).length).toBeLessThan(700_000)
+    })
+
+    it('walks the whole file across pages, each row once', () => {
+        writeFat(40)
+        const r = reader()
+        let since = 0
+        let rows = 0
+        let pages = 0
+        for (;;) {
+            const page = r.read({ agentId, since })
+            expect(page.ok).toBe(true)
+            if (!page.ok) break
+            rows += page.rows.length
+            since = page.cursor
+            pages += 1
+            if (!page.more) break
+            expect(pages).toBeLessThan(20)
+        }
+        expect(pages).toBeGreaterThan(1)
+        expect(rows).toBe(41)
+        // The cursor landed on the end of the file, so the next poll is a
+        // plain tail read rather than a re-read of everything.
+        const tail = r.read({ agentId, since })
+        expect(tail.ok).toBe(true)
+        if (!tail.ok) return
+        expect(tail.rows).toEqual([])
+    })
+
+    it('still answers a small transcript in one page', () => {
+        const page = reader().read({ agentId })
+        expect(page.ok).toBe(true)
+        if (!page.ok) return
+        expect(page.more).toBeUndefined()
+        expect(page.rows).toHaveLength(6)
+    })
+
+    it('always moves the cursor, even past a record bigger than a page', () => {
+        const huge = agentRecord({
+            type: 'assistant',
+            uuid: 'huge',
+            parentUuid: 'u1',
+            timestamp: iso(6000),
+            message: { role: 'assistant', model: 'claude-fable-5', content: [{ type: 'text', text: 'y'.repeat(700 * 1024) }], usage },
+        })
+        writeFileSync(join(projectDir, sessionId, 'subagents', `agent-${agentId}.jsonl`), [huge, fixtureLines[6]].join('\n') + '\n')
+        const first = reader().read({ agentId })
+        expect(first.ok).toBe(true)
+        if (!first.ok) return
+        expect(first.cursor).toBeGreaterThan(0)
+        expect(first.more).toBe(true)
+    })
+
+    it('restarts from the top when the file shrank below the cursor', () => {
+        const page = reader().read({ agentId, since: 10_000_000 })
+        expect(page.ok).toBe(true)
+        if (!page.ok) return
+        expect(page.rows).toHaveLength(6)
+        expect(page.cursor).toBeGreaterThan(0)
+    })
+})

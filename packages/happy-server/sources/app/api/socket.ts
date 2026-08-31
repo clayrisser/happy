@@ -24,6 +24,15 @@ export function startSocket(app: Fastify) {
             allowedHeaders: ["*"]
         },
         transports: ['websocket', 'polling'],
+        // Socket.IO defaults this to 1 MB, and an oversized frame is not
+        // rejected, it CLOSES the socket that sent it (DROVE-211). A CLI
+        // answering a subagentTranscript RPC with a 1.7 MB transcript had its
+        // session socket killed on every poll, and the phone, which never got
+        // an ack, told Clay his computer was out of reach while it sat there
+        // answering him. Producers page their answers now; this is so the next
+        // handler that forgets costs a slow message rather than a dead
+        // session. Still bounded, because it is a per-frame allocation.
+        maxHttpBufferSize: 16 * 1024 * 1024,
         pingTimeout: 45000,
         pingInterval: 15000,
         path: '/v1/updates',

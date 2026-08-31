@@ -20,6 +20,7 @@ import {
     createSubagentPollSnapshot,
     runSubagentTranscriptPoll,
     type SubagentPollSnapshot,
+    type SubagentReach,
     type SubagentTrouble,
 } from '@/sync/subagentTranscriptPoll';
 import { fetchSubagentTranscript } from '@/sync/subagentTranscriptRpc';
@@ -156,9 +157,14 @@ export default React.memo(() => {
     const [snapshot, setSnapshot] = React.useState<SubagentPollSnapshot>(() => createSubagentPollSnapshot());
 
     // Read by the poll loop between renders, so it never closes over a stale
-    // connection state when it has to say WHY a fetch failed.
-    const onlineRef = React.useRef(true);
-    onlineRef.current = socket.status === 'connected';
+    // connection state when it has to say WHY a fetch failed. Both ends, not
+    // just this one: the phone's socket goes to the SERVER, so it is no
+    // evidence at all about the Mac (DROVE-211). The session's presence is.
+    const reachRef = React.useRef<SubagentReach>({ phoneOnline: undefined, sessionOnline: undefined });
+    reachRef.current = {
+        phoneOnline: socket.status === 'connected',
+        sessionOnline: session ? session.presence === 'online' : undefined,
+    };
     // Set while the loop is sleeping between attempts; calling it retries now.
     const wakeRef = React.useRef<(() => void) | null>(null);
 
@@ -186,7 +192,7 @@ export default React.memo(() => {
         void runSubagentTranscriptPoll({
             fetch: (since) => fetchSubagentTranscript(sessionId, agentId, since),
             wait,
-            isOnline: () => onlineRef.current,
+            reach: () => reachRef.current,
             isCancelled: () => cancelled,
             onSnapshot: (next) => {
                 if (!cancelled) setSnapshot(next);

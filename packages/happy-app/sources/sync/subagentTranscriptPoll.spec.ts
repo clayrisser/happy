@@ -16,10 +16,12 @@ import {
     pollDelayMs,
     runSubagentTranscriptPoll,
     shouldPollAgain,
+    SUBAGENT_PAGE_MS,
     SUBAGENT_POLL_MS,
     SUBAGENT_RETRY_MAX_MS,
     SUBAGENT_RETRY_MIN_MS,
     type SubagentPollSnapshot,
+    type SubagentReach,
 } from './subagentTranscriptPoll';
 
 const iso = (ms: number) => new Date(ms).toISOString();
@@ -55,6 +57,11 @@ const done = { id: 'a1', label: 'agent', state: 'done' as const, updatedAt: 2_00
 /** What the server hands back when the daemon's socket left mid-call. */
 const targetDisconnected = () => new Error('RPC target disconnected');
 
+/** Phone on the network, session answering: nothing here names a cause. */
+const live: SubagentReach = { phoneOnline: true, sessionOnline: true };
+/** Phone on the network, the machine really is away. */
+const gone: SubagentReach = { phoneOnline: true, sessionOnline: false };
+
 interface Run {
     snapshots: SubagentPollSnapshot[];
     waits: number[];
@@ -69,7 +76,7 @@ interface Run {
  */
 async function drive(
     answers: (SubagentTranscriptResponse | Error)[],
-    options: { online?: boolean | undefined; stopAfter?: number } = {},
+    options: { online?: boolean | undefined; sessionOnline?: boolean | undefined; stopAfter?: number } = {},
 ): Promise<Run> {
     const snapshots: SubagentPollSnapshot[] = [];
     const waits: number[] = [];
@@ -91,7 +98,7 @@ async function drive(
             waits.push(ms);
             if (calls >= limit) stopped = true;
         },
-        isOnline: () => options.online,
+        reach: () => ({ phoneOnline: options.online, sessionOnline: options.sessionOnline }),
         isCancelled: () => stopped,
         onSnapshot: (snapshot) => snapshots.push(snapshot),
     });
@@ -112,7 +119,7 @@ describe('the retry ladder', () => {
     });
 
     it('never treats being unreachable as an ending', () => {
-        const snapshot = applyPollFailure(createSubagentPollSnapshot(), 'RPC target disconnected', true);
+        const snapshot = applyPollFailure(createSubagentPollSnapshot(), 'RPC target disconnected', gone);
         expect(shouldPollAgain(snapshot)).toBe(true);
     });
 
@@ -129,19 +136,30 @@ describe('the retry ladder', () => {
 
 describe('naming what went wrong', () => {
     it('blames the phone when the socket is down', () => {
-        expect(classifySubagentFailure(false)).toBe('offline');
+        expect(classifySubagentFailure({ phoneOnline: false, sessionOnline: true })).toBe('offline');
     });
 
-    it('blames the computer when the socket is up and the call still failed', () => {
-        expect(classifySubagentFailure(true)).toBe('computer');
+    it('blames the computer only when the session itself is offline', () => {
+        expect(classifySubagentFailure(gone)).toBe('computer');
+    });
+
+    // DROVE-211. The phone's socket goes to the SERVER, so "I have a socket"
+    // is not evidence that the Mac is gone. The whole bug was one word of
+    // copy asserting a cause nothing had established.
+    it('names no cause at all while the session is answering', () => {
+        expect(classifySubagentFailure(live)).toBe('unknown');
     });
 
     it('blames neither end when the socket state is not known', () => {
-        expect(classifySubagentFailure(undefined)).toBe('unknown');
+        expect(classifySubagentFailure({ phoneOnline: undefined, sessionOnline: undefined })).toBe('unknown');
+    });
+
+    it('says nothing about the far end before the session has loaded', () => {
+        expect(classifySubagentFailure({ phoneOnline: true, sessionOnline: undefined })).toBe('unknown');
     });
 
     it('keeps the transport sentence out of the way, as detail', () => {
-        const snapshot = applyPollFailure(createSubagentPollSnapshot(), 'RPC target disconnected', true);
+        const snapshot = applyPollFailure(createSubagentPollSnapshot(), 'RPC target disconnected', gone);
         expect(snapshot.trouble).toEqual({ cause: 'computer', detail: 'RPC target disconnected' });
     });
 
@@ -183,6 +201,19 @@ describe('a CLI restart under an open screen', () => {
         const run = await drive([first, targetDisconnected()], { stopAfter: 2, online: true });
         expect(run.final.agent?.state).toBe('running');
     });
+
+    // DROVE-211: this is the screenshot on the ticket. The machine was fine,
+    // the parent session was answering, and the body still said the computer
+    // was out of reach.
+    it('does not blame the computer while the session is online', async () => {
+        const run = await drive([targetDisconnected()], { stopAfter: 1, online: true, sessionOnline: true });
+        expect(run.final.trouble?.cause).toBe('unknown');
+    });
+
+    it('still blames the computer when the daemon really is down', async () => {
+        const run = await drive([targetDisconnected()], { stopAfter: 1, online: true, sessionOnline: false });
+        expect(run.final.trouble?.cause).toBe('computer');
+    });
 });
 
 describe('a phone that loses the network', () => {
@@ -220,6 +251,45 @@ describe('an answer that is a refusal', () => {
         const run = await drive([gone], { stopAfter: 5 });
         expect(run.fetches).toHaveLength(1);
         expect(run.final.agent?.state).toBe('done');
+    });
+});
+
+/**
+ * DROVE-211. Socket.IO drops a frame over 1 MB and closes the socket that
+ * sent it, so the CLI hands a big transcript back a page at a time. The
+ * screen has to chase those pages rather than wait out the two-second tick
+ * between each one, and it must not stop paging because the agent finished.
+ */
+describe('a transcript that arrives in pages', () => {
+    const page1: SubagentTranscriptResponse = { ok: true, rows: [promptRow], cursor: 120, more: true, agent: running };
+    const page2: SubagentTranscriptResponse = { ok: true, rows: [replyRow], cursor: 260, agent: done };
+
+    it('asks for the next page at once, not on the next tick', async () => {
+        const run = await drive([page1, page2]);
+        expect(run.waits[0]).toBe(SUBAGENT_PAGE_MS);
+        expect(run.waits[0]).not.toBe(SUBAGENT_POLL_MS);
+    });
+
+    it('resumes each page from the cursor the last one gave back', async () => {
+        const run = await drive([page1, page2]);
+        expect(run.fetches).toEqual([0, 120]);
+        expect(run.final.transcript.messages).toHaveLength(2);
+    });
+
+    it('keeps paging past a settled agent rather than stopping half-drawn', () => {
+        const capped: SubagentTranscriptResponse = { ok: true, rows: [promptRow], cursor: 120, more: true, agent: done };
+        expect(shouldPollAgain(applyPollResponse(createSubagentPollSnapshot(), capped))).toBe(true);
+    });
+
+    it('goes back to the plain cadence once the last page is in', async () => {
+        const run = await drive([page1, page2]);
+        expect(run.final.more).toBe(false);
+        expect(pollDelayMs(run.final)).toBe(SUBAGENT_POLL_MS);
+    });
+
+    it('backs off on a failure even mid-paging', () => {
+        const stalled = applyPollFailure({ ...createSubagentPollSnapshot(), more: true }, 'boom', gone);
+        expect(pollDelayMs(stalled)).toBe(SUBAGENT_RETRY_MIN_MS);
     });
 });
 
