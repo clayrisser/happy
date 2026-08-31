@@ -55,9 +55,21 @@ vi.mock('./sync', () => ({
 // The row builder folds tool runs through the phone's own labels, which read
 // the locale off React Native; neither exists under vitest (DROVE-91).
 vi.mock('@/components/tools/knownTools', () => ({ knownTools: {} }));
-vi.mock('@/text', () => ({
-    t: (key: string, params?: { count?: number }) => `${key}:${params?.count ?? ''}`,
-}));
+// The real English strings, not a stub of the key. The wrist's limit label is
+// the phone's own word for the window ("Session", "Fable week"), and a test
+// that accepts `agentInput.usagePopup.session:` would pass while the two
+// surfaces printed different things (DROVE-131).
+vi.mock('@/text', async () => {
+    const { en } = await import('@/text/_default');
+    return {
+        t: (key: string, params?: Record<string, unknown>) => {
+            const value = key.split('.').reduce<any>((node, part) => node?.[part], en);
+            if (typeof value === 'function') return value(params);
+            if (typeof value === 'string') return value;
+            return `${key}:${(params as { count?: number } | undefined)?.count ?? ''}`;
+        },
+    };
+});
 
 // The voice side owns the reader and the wrist speaker; the feed only hands
 // them facts off the wire (DROVE-92).
@@ -766,6 +778,61 @@ describe('collectAccountRows', () => {
         }).reverse();
         expect(cooling.backAt).toBe(new Date(1_700).toISOString());
         expect('backAt' in fine).toBe(false);
+    });
+
+    /**
+     * The wrist shows one number per account, so it has to be told WHICH limit
+     * that number is about, when it resets and how alarmed to look (DROVE-131).
+     * All four decided by the phone and sent, because the watch is Swift and
+     * cannot import the ranking (DROVE-129).
+     */
+    it('sends which limit binds, when it resets, and which account is current', () => {
+        const rows = collectAccountRows({
+            s1: session({
+                droverUsage: usage(10, [
+                    {
+                        name: 'promanagerdevteam', headroom: 2, loggedIn: true, current: true,
+                        limits: [
+                            { kind: 'session', percent: 98, resetsAt: 1_700, scope: null, family: null },
+                            { kind: 'weekly_all', percent: 62, resetsAt: 9_000, scope: null, family: null },
+                        ],
+                    },
+                    {
+                        name: 'jamrizzi', headroom: 61, loggedIn: true,
+                        limits: [
+                            { kind: 'weekly_scoped', percent: 39, resetsAt: 9_000, scope: 'Fable', family: 'fable' },
+                        ],
+                    },
+                ]),
+            }),
+        });
+        // Ordered by headroom, so the current account is not the first row —
+        // which is exactly why the wrist needs the flag rather than an index.
+        const current = rows.find((r) => r.name === 'promanagerdevteam')!;
+        const other = rows.find((r) => r.name === 'jamrizzi')!;
+        expect(current).toMatchObject({
+            name: 'promanagerdevteam',
+            headroom: 2,
+            current: true,
+            limit: 'Session',
+            tone: 'critical',
+            resetsAt: new Date(1_700).toISOString(),
+        });
+        // The bar and the label are two readings of one number: the CLI's
+        // headroom is 100 minus the fullest row, which is the row named here.
+        expect(current.headroom).toBe(100 - 98);
+        expect(other).toMatchObject({ name: 'jamrizzi', limit: 'Fable week', tone: 'ample' });
+        expect('current' in other).toBe(false);
+    });
+
+    // The watch is a TestFlight binary and cannot be updated OTA, so a row it
+    // has nothing to say about must stay exactly as small as it was — and one
+    // NSNull anywhere fails the whole WatchConnectivity publish.
+    it('omits every limit key rather than sending a null for an account with no rows', () => {
+        const [row] = collectAccountRows({
+            s1: session({ droverUsage: usage(10, [{ name: 'spare', headroom: 40, loggedIn: true }]) }),
+        });
+        expect(row).toEqual({ name: 'spare', headroom: 40, loggedIn: true });
     });
 
     it('is empty when no session has ever carried the registry', () => {

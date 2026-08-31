@@ -69,6 +69,11 @@ struct TranscriptView: View {
                         } else {
                             WaitingForRows(connected: store.snapshot.connected, freshness: freshness)
                         }
+                        // What the wrist has said and not yet sent, under the
+                        // conversation and above the anchor, so it is the last
+                        // thing on screen and the auto-scroll lands on it
+                        // (DROVE-130).
+                        WristDraftBar(session: session)
                         // A zero-height anchor under everything, so scrolling
                         // "to the bottom" is one id whatever the last row is.
                         Color.clear
@@ -108,8 +113,11 @@ struct TranscriptView: View {
             // `TextFieldLink` opens watchOS's own input sheet, where
             // dictation is one tap away beside the keyboard and Scribble, the
             // same path GateDetailView answers a question by (DROVE-55).
-            // watchOS gives no hold gesture on that control, so there is no
-            // push-to-talk here; the sheet closes on Done and the text goes.
+            // watchOS gives no hold gesture on that control and no in-app
+            // recogniser to hold open, so there is no push-to-talk here. What
+            // there IS, since DROVE-130, is a LATCH: the sheet closes on Done
+            // and the phrase joins a draft that stays open, so the next thing
+            // said is added rather than replacing what came before.
             ToolbarItem(placement: .bottomBar) {
                 SayLink(session: session)
             }
@@ -130,24 +138,107 @@ struct TranscriptView: View {
     }
 }
 
-/// The mic: dictate a message to this session (DROVE-92).
+/// The mic, latched (DROVE-130).
+///
+/// A tap opens watchOS's input sheet and what comes back is KEPT rather than
+/// sent: the draft stays on the wrist with the mic still armed, another tap
+/// appends the next phrase, Send sends the lot, Clear throws it away. That is
+/// the phone's gesture table (DROVE-105, DROVE-140) as far as watchOS allows
+/// it — see WristDraft for why the recorder itself cannot be held open, which
+/// comes down to Speech.framework not existing in the watchOS SDK at all.
+///
+/// The important half is the append. DROVE-140's second fault was that
+/// speaking again after a silence OVERWROTE what came before, and that is
+/// exactly what the wrist did: every sheet started from empty and the last
+/// phrase was the whole message. Every sheet return is its own recognition, so
+/// every return appends — the same rule, keyed on the task rather than on
+/// comparing strings, with the sheet standing in for the task.
 ///
 /// One control, used from the transcript's bottom bar and from the session's
-/// facts screen, so both places send by the one `GateStore.say`. The sheet
-/// hands back whatever was said (or typed); a blank is refused by the store
-/// and the transcript's banner says so, which is why nothing here dismisses.
+/// facts screen, so both places accumulate into the one draft on the store
+/// rather than each holding their own.
 struct SayLink: View {
     let session: DroverSession
     @EnvironmentObject private var store: GateStore
 
+    private var draft: WristDraft { store.draft(for: session.id) }
+
     var body: some View {
         TextFieldLink(prompt: Text("Say to \(session.title)")) {
-            Label("Dictate", systemImage: "mic.fill")
+            // The label says what the tap DOES, and after the first phrase
+            // that is "add", not "dictate": the draft is already open and the
+            // sheet is how you keep talking into it.
+            Label(draft.isEmpty ? "Dictate" : "Add", systemImage: "mic.fill")
                 .font(.caption)
         } onSubmit: { said in
-            store.say(session, text: said)
+            store.addToDraft(session, heard: said)
         }
-        .tint(.green)
+        .tint(draft.isEmpty ? .green : .orange)
+    }
+}
+
+/// What has been said so far and has not gone anywhere (DROVE-130).
+///
+/// The visible half of the latch. Without it the wrist would be holding a
+/// message with nothing on screen saying so, which is the failure the phone's
+/// live banner exists to prevent. It shows the words, how many times the sheet
+/// has been opened for them, and the two ways out: Send, and Clear.
+///
+/// Clear is the wrist's cancel. The phone cancels by sliding the finger off
+/// the button, which a watch cannot express, so the discard is a visible
+/// button — the one thing DROVE-130 asked for explicitly on top of the latch.
+struct WristDraftBar: View {
+    let session: DroverSession
+    @EnvironmentObject private var store: GateStore
+
+    private var draft: WristDraft { store.draft(for: session.id) }
+
+    var body: some View {
+        if !draft.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 4) {
+                    Image(systemName: "mic.fill")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.orange)
+                    Text(draft.count == 1 ? "1 phrase" : "\(draft.count) phrases")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.secondary)
+                }
+                Text(draft.text)
+                    .font(.caption2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .lineLimit(4)
+                HStack(spacing: 6) {
+                    Button {
+                        store.sendDraft(session)
+                    } label: {
+                        Label("Send", systemImage: "paperplane.fill")
+                            .font(.system(size: 11))
+                    }
+                    .tint(.green)
+                    Button {
+                        store.clearDraft()
+                    } label: {
+                        Label("Clear", systemImage: "trash")
+                            .font(.system(size: 11))
+                    }
+                    .tint(.red)
+                }
+                // The undo, one level deep and no more: dictation mishears the
+                // last thing said far more often than the first, and re-saying
+                // one phrase should not mean re-saying the paragraph.
+                Button {
+                    store.undoLastPhrase()
+                } label: {
+                    Label("Undo last", systemImage: "arrow.uturn.backward")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(6)
+            .background(Color.orange.opacity(0.15), in: RoundedRectangle(cornerRadius: 8))
+        }
     }
 }
 

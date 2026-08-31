@@ -26,6 +26,7 @@ vi.mock('@/text', async () => {
 });
 
 import {
+    droverBindingLimit,
     resolveUsageStrip,
     truncateUsageName,
     usageBarFraction,
@@ -238,6 +239,93 @@ describe('resolveUsageStrip with nothing to show', () => {
         expect(strip.weekPercent).toBeNull();
         expect(strip.usageBarGroups.map((g) => g.key)).toEqual(['accounts']);
         expect(strip.usageBarGroups[0].rows).toHaveLength(4);
+    });
+});
+
+/**
+ * The one figure a wrist has room for (DROVE-131).
+ *
+ * The phone shows Session, Week and every family week side by side and lets
+ * Clay rank them. A watch cannot, so the ranking is decided here and SENT, and
+ * these pin that it agrees with `headroom` — which the CLI writes as `100 -
+ * max(percent)` over the same rows — because two numbers for one fact drifting
+ * apart is the whole of DROVE-129.
+ */
+describe('droverBindingLimit', () => {
+    const account = (name: string) => paneUsage!.accounts.find((a) => a.name === name)!;
+
+    it('picks the window with the least left, and agrees with the account headroom', () => {
+        // jamrizzi: session 49% used, week 23%, Fable week 39%. The session is
+        // the one that bites, and 100 - 49 is the 51 the picker prints.
+        const binding = droverBindingLimit(account('jamrizzi'));
+        expect(binding).toEqual({
+            id: 'five_hour',
+            label: 'Session',
+            percentLeft: 51,
+            resetsAt: sessionReset,
+            tone: 'ample',
+        });
+        expect(binding!.percentLeft).toBe(account('jamrizzi').headroom);
+    });
+
+    it('names a family window with the family, the same word the sheet prints', () => {
+        // bitspur.com is out for Fable only: the scoped row at 100% binds,
+        // not the account-wide week at 60%.
+        expect(droverBindingLimit(account('bitspur.com'))).toEqual({
+            id: 'seven_day_fable',
+            label: 'Fable week',
+            percentLeft: 0,
+            resetsAt: sep4,
+            tone: 'critical',
+        });
+    });
+
+    it('names the week when the week is what is dead', () => {
+        expect(droverBindingLimit(account('main'))).toMatchObject({
+            id: 'seven_day',
+            label: 'Week',
+            percentLeft: 0,
+            resetsAt: sep3,
+        });
+    });
+
+    // An account never measured shows no figure rather than a 0 that reads as
+    // "out" and would hide the one account with room.
+    it('says nothing about an account with no limit rows', () => {
+        expect(droverBindingLimit(account('spare'))).toBeNull();
+        expect(droverBindingLimit(null)).toBeNull();
+        expect(droverBindingLimit(undefined)).toBeNull();
+        expect(droverBindingLimit({ name: 'x', limits: null })).toBeNull();
+    });
+
+    it('keeps the shorter window on a tie, because it bites first', () => {
+        expect(droverBindingLimit({
+            name: 'tied',
+            limits: [
+                { kind: 'session', percent: 80, resetsAt: 1_000, scope: null, family: null },
+                { kind: 'weekly_all', percent: 80, resetsAt: 2_000, scope: null, family: null },
+            ],
+        })).toMatchObject({ label: 'Session', percentLeft: 20 });
+    });
+
+    it('prints a window it cannot name as itself rather than calling it Week', () => {
+        // `headroom` is computed over EVERY row including the
+        // provider-internal ones, so one of those really can be the binding
+        // limit, and naming the wrong window is worse than an ugly word.
+        expect(droverBindingLimit({
+            name: 'odd',
+            limits: [{ kind: 'nimbus_quill', percent: 95, resetsAt: null, scope: null, family: null }],
+        })).toMatchObject({ id: 'nimbus_quill', label: 'nimbus_quill', percentLeft: 5, tone: 'critical' });
+    });
+
+    it('clamps a cache that overshoots and ignores a row with no number', () => {
+        expect(droverBindingLimit({
+            name: 'over',
+            limits: [
+                { kind: 'session', percent: 120, resetsAt: null, scope: null, family: null },
+                { kind: 'weekly_all', percent: Number.NaN, resetsAt: null, scope: null, family: null },
+            ],
+        })).toMatchObject({ percentLeft: 0, resetsAt: null, tone: 'critical' });
     });
 });
 

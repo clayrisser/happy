@@ -34,6 +34,14 @@ struct SessionListView: View {
                     if let message = store.lastError {
                         BannerRow(text: message, symbol: "exclamationmark.triangle", tint: .red)
                     }
+                    // What is left, above the list of what is running
+                    // (DROVE-131). This screen is where a flip is decided, and
+                    // "which account has room" is the question the flip is an
+                    // answer to, so the glance belongs at the top of it rather
+                    // than behind a menu somewhere else.
+                    if let headroom = store.snapshot.currentAccount {
+                        HeadroomLink(account: headroom)
+                    }
                     ForEach(store.sessions) { session in
                         NavigationLink(value: session) {
                             SessionRow(session: session, flipping: store.flipping.contains(session.id))
@@ -151,8 +159,12 @@ struct SessionDetailView: View {
 
                 // Dictate a message to this session from its facts screen
                 // too (DROVE-92): the same control the transcript's bottom
-                // bar carries, so the mic is wherever the session is.
+                // bar carries, so the mic is wherever the session is. And
+                // since DROVE-130 the draft comes with it — the phrases
+                // accumulate on the store, not in either screen, so walking
+                // from the transcript to here mid-sentence does not lose it.
                 SayLink(session: session)
+                WristDraftBar(session: session)
 
                 Button {
                     store.flip(session)
@@ -256,12 +268,17 @@ private struct AccountLabel: View {
         }
     }
 
+    /// "65% left · Week". WHICH limit the figure is about, now that the phone
+    /// sends it (DROVE-131): a flip decided on a bare percentage cannot tell
+    /// an account that is out for the next five hours from one that is out for
+    /// the rest of the week, and those are different answers.
     private var detail: String? {
         if account.loggedIn == false { return "not logged in" }
         if let backAt = account.backAt, backAt > Date() {
             return "back \(backAt.formatted(date: .omitted, time: .shortened))"
         }
-        if let headroom = account.headroom { return "\(headroom)% left" }
-        return nil
+        guard let headroom = account.headroom else { return nil }
+        if let limit = account.limit { return "\(headroom)% left · \(limit)" }
+        return "\(headroom)% left"
     }
 }

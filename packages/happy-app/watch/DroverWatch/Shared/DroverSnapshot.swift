@@ -194,6 +194,55 @@ struct DroverAccount: Codable, Identifiable, Equatable, Hashable {
     let loggedIn: Bool?
     /// When a cooling account is back. Absent when it is not out.
     let backAt: Date?
+    /// The account the work is on right now (DROVE-131). Absent on the others,
+    /// and absent from every phone that predates the key — which is why the
+    /// wrist falls back to the first row rather than showing nothing.
+    let current: Bool?
+    /// WHICH window `headroom` is about: "Session", "Week", "Fable week".
+    ///
+    /// The figure was always the most binding limit's — the CLI writes `100 -
+    /// max(percent)` over every row — but the wrist could not say which limit
+    /// that was, and "4% left" with no window named cannot be acted on. The
+    /// phone decides and sends the answer rather than the watch re-ranking raw
+    /// rows it does not have (DROVE-129).
+    let limit: String?
+    /// When THAT limit resets. Absent when the usage cache never said.
+    let resetsAt: Date?
+    /// The fill band for `headroom`, as the phone's own bars compute it.
+    /// A String, not a Codable enum, for the reason `DroverGate.kind` is one:
+    /// a band from a newer phone must cost this one label, not the snapshot.
+    let tone: String?
+
+    /// The four bands the phone's `usageBarTone` produces, plus the one it
+    /// cannot: a band this build has never heard of.
+    enum Tone: String {
+        case ample
+        case low
+        case critical
+        case unknown
+    }
+
+    /// The band the phone sent. `unknown` covers both "the phone said nothing"
+    /// and "the phone said something this build does not know", which draw the
+    /// same: a neutral track, never a healthy-looking one.
+    var band: Tone { Tone(rawValue: tone ?? "") ?? .unknown }
+
+    /// How much of the track the fill covers, 0...1 — the headroom LEFT, the
+    /// same direction every bar on the phone's sheet fills. An account with no
+    /// figure reads as an EMPTY track rather than a full one: no measurement
+    /// is not a claim of a full tank.
+    var fraction: Double {
+        guard let headroom else { return 0 }
+        return Double(min(100, max(0, headroom))) / 100
+    }
+
+    /// Is this limit still in force at `now`? A reset time in the past is the
+    /// cache being behind, and printing "resets 6 PM" at 9 PM is worse than
+    /// printing nothing.
+    func resets(after now: Date) -> Date? {
+        guard let resetsAt, resetsAt > now else { return nil }
+        return resetsAt
+    }
 }
 
 /// One row of the open session's transcript, as the phone folded it
@@ -427,6 +476,28 @@ extension DroverSnapshot {
         accounts = try container.decodeIfPresent([String].self, forKey: .accounts) ?? []
         accountRows = try container.decodeIfPresent([DroverAccount].self, forKey: .accountRows) ?? []
         transcript = try container.decodeIfPresent(DroverTranscript.self, forKey: .transcript)
+    }
+}
+
+extension DroverSnapshot {
+    /// The account the work is on, for the one glance that answers "can I
+    /// still work" (DROVE-131).
+    ///
+    /// The phone's `current` flag first, because the registry is what decides
+    /// it. A phone that predates the key falls back to the FIRST row, which is
+    /// the most headroom the picker found — not a lie about which account is
+    /// live, but the account the wrist would offer next, and a bar for it beats
+    /// no bar at all. Nil only when there are no rows.
+    var currentAccount: DroverAccount? {
+        accountRows.first { $0.current == true } ?? accountRows.first
+    }
+
+    /// Every other account, in the order the phone sent them (most headroom
+    /// first). The second glance, never the first: five accounts do not fit on
+    /// a wrist above the number that matters.
+    var otherAccounts: [DroverAccount] {
+        guard let current = currentAccount else { return [] }
+        return accountRows.filter { $0.name != current.name }
     }
 }
 

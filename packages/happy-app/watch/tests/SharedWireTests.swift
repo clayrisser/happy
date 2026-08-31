@@ -171,6 +171,12 @@ struct SharedWireTests {
         sessionCarriesWhatItIsDoing()
         sessionWithoutAStatusStillDecodes()
         accountHeadroomSurvivesTheWire()
+        theBindingLimitSurvivesTheWire()
+        anAccountRowWithoutTheLimitKeysStillDecodes()
+        theCurrentAccountIsTheOnePhoneMarked()
+        aWristDraftAccumulatesAcrossSheets()
+        aWristDraftIgnoresAnEmptySheet()
+        aWristDraftCanDropItsLastPhrase()
         aNewGateEarnsACue()
         aGateTheWristAlreadyKnowsDoesNot()
         anOldGateDoesNotBuzzOnAColdLaunch()
@@ -581,6 +587,152 @@ struct SharedWireTests {
         // "out" and would hide the one account with room.
         check(snapshot.accountRows[2].headroom == nil, "an unmeasured account carries no figure")
         check(snapshot.accountRows[2].loggedIn == false, "a logged-out account says so")
+    }
+
+    // ---- what is left, on the wrist (DROVE-131) ---------------------------
+
+    /// The wrist shows the account's MOST BINDING limit, and the phone decides
+    /// which that is. So the wire has to carry the window's name, when it
+    /// resets and the band the bar fills in, and none of it may be re-derived
+    /// here from raw rows the watch does not have (DROVE-129).
+    static func theBindingLimitSurvivesTheWire() {
+        let payload = """
+        {"gates":[],"updatedAt":"2026-08-31T12:00:00Z","connected":true,
+        "accountRows":[
+        {"name":"promanagerdevteam","headroom":2,"loggedIn":true,"current":true,
+         "limit":"Session","resetsAt":"2026-08-31T18:00:00Z","tone":"critical"},
+        {"name":"jamrizzi","headroom":51,"loggedIn":true,"limit":"Fable week","tone":"ample"},
+        {"name":"main","headroom":20,"loggedIn":true,"limit":"Week","tone":"nebulous"}]}
+        """
+        guard let snapshot = try? DroverSnapshot.decoder.decode(
+            DroverSnapshot.self, from: Data(payload.utf8)
+        ) else {
+            check(false, "a snapshot carrying binding limits decodes")
+            return
+        }
+        let rows = snapshot.accountRows
+        check(rows.count == 3, "every account row decodes")
+        check(rows[0].limit == "Session", "the wrist is told WHICH limit the figure is about")
+        check(rows[0].resetsAt != nil, "the binding limit carries when it resets")
+        check(rows[0].band == .critical, "the phone's band comes through as the bar's colour")
+        check(rows[1].band == .ample, "an account with room reads as ample")
+        // A band from a newer phone must cost this one label and nothing else.
+        // A Codable enum would have thrown and taken the whole snapshot with
+        // it, which is the failure DroverGate.kind is written the same way for.
+        check(rows[2].band == .unknown, "a band this build has never heard of is unknown, not a throw")
+        // The bar fills with what is LEFT, in both directions of the extreme.
+        check(rows[0].fraction < 0.05, "an account nearly out draws a nearly empty track")
+        check(abs(rows[1].fraction - 0.51) < 0.001, "the track is the headroom left, not the amount used")
+        // Nothing measured must not look healthy.
+        let unmeasured = DroverAccount(
+            name: "spare", headroom: nil, loggedIn: true, backAt: nil,
+            current: nil, limit: nil, resetsAt: nil, tone: nil
+        )
+        check(unmeasured.fraction == 0, "an unmeasured account draws an empty track, never a full one")
+        check(unmeasured.band == .unknown, "an unmeasured account has no band to claim")
+        // A reset time already past is the cache being behind; printing
+        // "resets 6 PM" at 9 PM is worse than printing nothing.
+        let then = Date(timeIntervalSince1970: 1_000)
+        check(rows[0].resets(after: then) != nil, "a live reset time is shown")
+        check(
+            rows[0].resets(after: Date(timeIntervalSince1970: 4_000_000_000)) == nil,
+            "a reset time in the past is not printed as a promise"
+        )
+    }
+
+    /// The watch is a TestFlight binary and cannot be updated OTA, so a phone
+    /// that predates these keys has to keep working — and so does an app-group
+    /// blob written before them, which outlives an app update.
+    static func anAccountRowWithoutTheLimitKeysStillDecodes() {
+        let payload = """
+        {"gates":[],"updatedAt":"2026-08-31T12:00:00Z","connected":true,
+        "accountRows":[{"name":"main","headroom":40,"loggedIn":true}]}
+        """
+        guard let snapshot = try? DroverSnapshot.decoder.decode(
+            DroverSnapshot.self, from: Data(payload.utf8)
+        ) else {
+            check(false, "an account row with none of the DROVE-131 keys decodes")
+            return
+        }
+        let row = snapshot.accountRows.first
+        check(row?.headroom == 40, "the figure it does carry still arrives")
+        check(row?.limit == nil, "a missing limit is absent, not a decode failure")
+        check(row?.current == nil, "a missing current flag is absent, not a decode failure")
+        check(row?.band == .unknown, "no band sent reads as unknown")
+    }
+
+    /// Which account the glance is about. The phone's `current` flag decides
+    /// it; an older phone sends none, and falling back to the first row is
+    /// better than a blank screen — the rows are ordered most headroom first,
+    /// so the first is the one the wrist would offer next anyway.
+    static func theCurrentAccountIsTheOnePhoneMarked() {
+        let rows = [
+            DroverAccount(name: "jamrizzi", headroom: 90, loggedIn: true, backAt: nil,
+                          current: nil, limit: "Week", resetsAt: nil, tone: "ample"),
+            DroverAccount(name: "promanagerdevteam", headroom: 2, loggedIn: true, backAt: nil,
+                          current: true, limit: "Session", resetsAt: nil, tone: "critical"),
+        ]
+        var snapshot = DroverSnapshot.empty
+        snapshot.accountRows = rows
+        check(
+            snapshot.currentAccount?.name == "promanagerdevteam",
+            "the glance is about the account the work is ON, not the emptiest one"
+        )
+        check(
+            snapshot.otherAccounts.map { $0.name } == ["jamrizzi"],
+            "every other account is reachable, and the current one is not listed twice"
+        )
+        var older = DroverSnapshot.empty
+        older.accountRows = [rows[0]]
+        check(
+            older.currentAccount?.name == "jamrizzi",
+            "a phone that never marks current still gives the wrist a bar to draw"
+        )
+        check(DroverSnapshot.empty.currentAccount == nil, "no rows means no glance, not a crash")
+    }
+
+    // ---- the latched wrist mic (DROVE-130) --------------------------------
+
+    /// The complaint, on both devices: "when I'm silent and then talk again
+    /// it's overwriting what I said" (DROVE-140). On the wrist every input
+    /// sheet hands back one phrase and closes, so without accumulation the
+    /// last thing said IS the whole message. Every return appends.
+    static func aWristDraftAccumulatesAcrossSheets() {
+        let draft = WristDraft.empty
+            .appending("fix the build")
+            .appending("and push it")
+        check(draft.text == "fix the build and push it", "a second phrase is added, never substituted")
+        check(draft.count == 2, "the wrist can say how many times it has been opened")
+        check(!draft.isEmpty, "a draft with words in it is not empty")
+        // Whatever the sheet hands back is trimmed on the way in, so the join
+        // cannot produce a run of spaces in the middle of a sentence.
+        check(
+            WristDraft.empty.appending("  one  ").appending(" two ").text == "one two",
+            "phrases are trimmed, so the join is one space and no more"
+        )
+        check(WristDraft.empty.text.isEmpty, "an untouched draft sends nothing")
+    }
+
+    /// The sheet is dismissed with nothing in it far more often than it hands
+    /// back a real empty phrase. A draft that grows a space every time Clay
+    /// changes his mind is a draft that cannot be read.
+    static func aWristDraftIgnoresAnEmptySheet() {
+        let draft = WristDraft.empty.appending("hello")
+        check(draft.appending("") == draft, "a blank return changes nothing")
+        check(draft.appending("   \n ") == draft, "a whitespace-only return changes nothing")
+        check(WristDraft.empty.appending("") == WristDraft.empty, "a blank on an empty draft leaves it empty")
+    }
+
+    /// Dictation mishears the last thing said far more often than the first,
+    /// and re-saying one phrase must not mean re-saying the paragraph.
+    static func aWristDraftCanDropItsLastPhrase() {
+        let draft = WristDraft.empty.appending("one").appending("two").appending("three")
+        check(draft.droppingLast().text == "one two", "the undo drops exactly one phrase")
+        check(
+            draft.droppingLast().droppingLast().droppingLast().isEmpty,
+            "undoing every phrase empties the draft"
+        )
+        check(WristDraft.empty.droppingLast().isEmpty, "an undo with nothing to undo is a no-op")
     }
 
     // ---- the wrist buzz, DROVE-62 -----------------------------------------

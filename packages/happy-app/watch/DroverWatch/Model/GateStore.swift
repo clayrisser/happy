@@ -236,7 +236,18 @@ final class GateStore: NSObject, ObservableObject {
     /// empty just because the figures are missing.
     var accountRows: [DroverAccount] {
         if !snapshot.accountRows.isEmpty { return snapshot.accountRows }
-        return snapshot.accounts.map { DroverAccount(name: $0, headroom: nil, loggedIn: nil, backAt: nil) }
+        return snapshot.accounts.map {
+            DroverAccount(
+                name: $0,
+                headroom: nil,
+                loggedIn: nil,
+                backAt: nil,
+                current: nil,
+                limit: nil,
+                resetsAt: nil,
+                tone: nil
+            )
+        }
     }
 
     /// The rows the phone last sent for `sessionId`, or nil when what it last
@@ -291,6 +302,81 @@ final class GateStore: NSObject, ObservableObject {
             return false
         }
         return send(DroverSay(sessionId: session.id, text: typed), describing: "message")
+    }
+
+    // MARK: The latched composer (DROVE-130)
+
+    /// What the wrist has said to `draftSessionId` so far and not yet sent.
+    ///
+    /// The LATCH, at the only level watchOS allows one: the input sheet cannot
+    /// be held open and there is no in-app recogniser to hold (see
+    /// WristDraft), so a tap opens the sheet, what comes back stays here, and
+    /// the mic stays armed for the next phrase. Nothing leaves the wrist until
+    /// Send. Held on the store rather than in a view's `@State` so a push to a
+    /// gate and back, or the transcript screen going away under a
+    /// notification, does not throw away a half-dictated message.
+    @Published private(set) var draft: WristDraft = .empty
+    /// Which session the draft belongs to. A draft is never carried across
+    /// sessions: the words were meant for the one that was on screen.
+    @Published private(set) var draftSessionId: String?
+
+    /// The draft for this session, or an empty one. A draft left over from
+    /// another session reads as empty here and is cleared on the next append.
+    func draft(for sessionId: String) -> WristDraft {
+        draftSessionId == sessionId ? draft : .empty
+    }
+
+    /// A phrase came back from the input sheet: keep it, do not send it
+    /// (DROVE-130).
+    ///
+    /// Every sheet return is its own recognition, so every return APPENDS —
+    /// DROVE-140's rule, keyed on the task rather than on comparing strings,
+    /// and on the wrist the sheet IS the task. This is what stops the second
+    /// thing Clay says from replacing the first, which is the same complaint
+    /// on both devices.
+    func addToDraft(_ session: DroverSession, heard: String) {
+        if draftSessionId != session.id {
+            draftSessionId = session.id
+            draft = .empty
+        }
+        let next = draft.appending(heard)
+        if next == draft {
+            // The sheet was dismissed with nothing in it. Not an error worth a
+            // banner, but the wrist must not look as though it took something.
+            lastError = "Nothing was heard"
+            return
+        }
+        lastError = nil
+        draft = next
+    }
+
+    /// Send the whole draft and clear it. The wrist's answer to the phone's
+    /// second tap: everything said across every sheet goes as ONE message, in
+    /// the order it was said.
+    @discardableResult
+    func sendDraft(_ session: DroverSession) -> Bool {
+        let pending = draft(for: session.id)
+        guard !pending.isEmpty else {
+            lastError = "Nothing to send"
+            return false
+        }
+        guard say(session, text: pending.text) else { return false }
+        clearDraft()
+        return true
+    }
+
+    /// Throw the draft away. The wrist's slide-off: the words were wrong and
+    /// nothing should reach the session.
+    func clearDraft() {
+        draft = .empty
+        draftSessionId = nil
+    }
+
+    /// Drop the last phrase. Dictation misheard one thing; re-saying it should
+    /// not mean re-saying the paragraph.
+    func undoLastPhrase() {
+        draft = draft.droppingLast()
+        if draft.isEmpty { draftSessionId = nil }
     }
 
     /// Tell the phone whether this wrist has headphones on its route
