@@ -80,7 +80,8 @@ describe('every chrome control against Apple’s 44pt floor', () => {
         { name: 'header title pill', drawnWidth: MOBILE_GLASS_CONTROL_SIZE, drawnHeight: MOBILE_GLASS_CONTROL_SIZE, slop: 0 },
         { name: 'header avatar capsule', drawnWidth: MOBILE_GLASS_CONTROL_SIZE, drawnHeight: MOBILE_GLASS_CONTROL_SIZE, slop: 0 },
         { name: 'jump to bottom', drawnWidth: CHROME_TARGET_MIN, drawnHeight: CHROME_TARGET_MIN, slop: 0 },
-        { name: 'composer add', drawnWidth: MOBILE_COMPOSER_METRICS.actionSize, drawnHeight: MOBILE_COMPOSER_METRICS.actionSize, slop: 0 },
+        // Home's `+`, still a 44pt button on a row of them.
+        { name: 'home composer add', drawnWidth: MOBILE_COMPOSER_METRICS.actionSize, drawnHeight: MOBILE_COMPOSER_METRICS.actionSize, slop: 0 },
         { name: 'permission mode segment', drawnWidth: COMPOSER_SESSION_CONTROL_SIZE, drawnHeight: COMPOSER_SESSION_CONTROL_SIZE, slop: 0 },
         { name: 'effort segment', drawnWidth: COMPOSER_SESSION_CONTROL_SIZE, drawnHeight: COMPOSER_SESSION_CONTROL_SIZE, slop: 0 },
         {
@@ -93,10 +94,22 @@ describe('every chrome control against Apple’s 44pt floor', () => {
             drawnHeight: COMPOSER_SESSION_CONTROL_SIZE,
             slop: 0,
         },
+        // The audio group, three across since DROVE-206 put the waveform on
+        // the row beside the other two.
+        { name: 'waveform segment', drawnWidth: MOBILE_COMPOSER_METRICS.actionSize, drawnHeight: MOBILE_COMPOSER_METRICS.actionSize, slop: 0 },
         { name: 'speaker segment', drawnWidth: MOBILE_COMPOSER_METRICS.actionSize, drawnHeight: MOBILE_COMPOSER_METRICS.actionSize, slop: 0 },
         { name: 'mic segment', drawnWidth: MOBILE_COMPOSER_METRICS.actionSize, drawnHeight: MOBILE_COMPOSER_METRICS.actionSize, slop: 0 },
+        // The two controls nested INSIDE the input capsule, one at each rim
+        // (DROVE-206). Both 36 drawn with 6pt of slop, so both meet the floor
+        // as a target rather than as a drawn size.
         {
-            name: 'in-field send / voice / stop',
+            name: 'in-field add',
+            drawnWidth: MOBILE_COMPOSER_METRICS.primaryActionSize,
+            drawnHeight: MOBILE_COMPOSER_METRICS.primaryActionSize,
+            slop: MOBILE_COMPOSER_METRICS.primaryActionSlop,
+        },
+        {
+            name: 'in-field send / stop',
             drawnWidth: MOBILE_COMPOSER_METRICS.primaryActionSize,
             drawnHeight: MOBILE_COMPOSER_METRICS.primaryActionSize,
             slop: MOBILE_COMPOSER_METRICS.primaryActionSlop,
@@ -111,13 +124,19 @@ describe('every chrome control against Apple’s 44pt floor', () => {
         },
     );
 
-    it('draws every one of them at 36pt or more, and all but the nested one at 44', () => {
+    it('draws every one of them at 36pt or more, and all but the nested pair at 44', () => {
         const nested = controls.filter((control) => control.drawnHeight < CHROME_TARGET_MIN);
-        // Exactly one exception, and it is the button INSIDE the 44pt input
-        // capsule: drawing it at 44 would touch both of the field's edges.
-        // Messages nests its own mic at the same proportion.
-        expect(nested.map((control) => control.name)).toEqual(['in-field send / voice / stop']);
-        expect(nested[0].drawnHeight).toBe(36);
+        // Exactly two exceptions, and they are the pair INSIDE the 44pt input
+        // capsule, one at each rim (DROVE-206): drawing either at 44 would
+        // touch both of the field's edges. Messages nests its own mic at the
+        // same proportion. Both carry the slop, so neither is a special case
+        // of the other.
+        expect(nested.map((control) => control.name))
+            .toEqual(['in-field add', 'in-field send / stop']);
+        for (const control of nested) {
+            expect(control.drawnHeight, control.name).toBe(36);
+            expect(control.slop, control.name).toBe(MOBILE_COMPOSER_METRICS.primaryActionSlop);
+        }
     });
 
     // The status row is the one place the floor is NOT met, and the arithmetic

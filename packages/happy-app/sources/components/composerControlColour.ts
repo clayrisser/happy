@@ -39,14 +39,24 @@
  *              intermediate stops are positions, not vocabulary, and the spec
  *              holds every one of them off the reserved colours.
  *   recording  the mic latched or held. DROVE-142's banner red, so the glyph
- *              and the bar under it are one signal. Also the live mic inside
- *              the field, because a live mic is a live mic.
+ *              and the bar under it are one signal. Also a live voice turn on
+ *              the waveform beside it (DROVE-206), because a live mic is a
+ *              live mic wherever it is drawn.
  *   neutral    the theme's text colour: the shut padlock (asks first, nothing
- *              to flag), the mic at rest, the speaker off, the in-field
- *              button with nothing to send, and the model's name. The name
- *              is deliberately neutral: it is read, not glanced, it has no
- *              state axis to map to, and a coloured word beside coloured
- *              glyphs would compete with the state they carry.
+ *              to flag), the mic at rest, the waveform at rest, the speaker
+ *              off, the in-field send button with nothing to send, and the
+ *              model's name. The name is deliberately neutral: it is read,
+ *              not glanced, it has no state axis to map to, and a coloured
+ *              word beside coloured glyphs would compete with the state they
+ *              carry.
+ *
+ * DROVE-206 REARRANGED THE COMPOSER AND SPENT NO NEW COLOUR ON IT, which is
+ * the test of a vocabulary this small. The `+` moved inside the field and is
+ * still the accent, on the same measured glass stack rather than on a fill
+ * nothing has measured. The waveform came out of the field onto the row and
+ * took `recording` and `neutral`, the entries the mic beside it already uses,
+ * through the same `micColour` helper. The send button stopped changing
+ * identity, which RETIRED a case rather than adding one.
  *
  * MEASURED, NOT EYEBALLED, ON BOTH THEMES. The colour is the glyph, not the
  * fill (the material stays glass, DROVE-153), so every entry is checked as a
@@ -172,8 +182,13 @@ export function micColour(palette: ComposerControlPalette, state: MicColourState
 }
 
 /**
- * The in-field primary's glyph: the accent when there is something to send,
- * neutral when there is not.
+ * The in-field send button's glyph: the accent when there is something to
+ * send, neutral when there is not.
+ *
+ * The rule is unchanged by DROVE-206 and says more than it used to. It was
+ * competing with the waveform, which was what the same button became on an
+ * empty composer, so the accent had to distinguish two controls as well as
+ * two states. Now it distinguishes one control's two states and nothing else.
  */
 export function primaryActionColour(palette: ComposerControlPalette, hasSomethingToSend: boolean): string {
     return hasSomethingToSend ? palette.accent : palette.neutral;

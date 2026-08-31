@@ -621,13 +621,12 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
             <View style={{
                 flexDirection: 'row',
                 alignItems: 'center',
-                // 19 = 10pt shell inset + 9pt action inset: lines the row up
-                // with the composer card's controls. The action inset moved
-                // from 8 to 9 when the row's buttons went 42 -> 44 (DROVE-153),
-                // because it is half the difference between the button and its
-                // 26pt glyph.
-                paddingHorizontal: MOBILE_COMPOSER_METRICS.shellInset
-                    + MOBILE_COMPOSER_LAYOUT.addGlyphOffset,
+                // The composer's glyph column, 19 from the screen edge: where
+                // the `+`'s ink starts, so the row lines up with it. It is
+                // read off the composer rather than rebuilt here (DROVE-206),
+                // because the `+` has been three different sizes in three
+                // arrangements and this alignment has to follow it.
+                paddingHorizontal: MOBILE_COMPOSER_LAYOUT.textInset,
                 // The strip's box, shared with the recording banner that sits
                 // over it (DROVE-157), so the two cannot drift and a mic
                 // cannot resize the dock.

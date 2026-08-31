@@ -4,26 +4,44 @@ import * as agentInputLayout from './agentInputLayout';
 const { resolveAgentInputLayout, resolveMobileCollapsedComposerGeometry } = agentInputLayout;
 
 describe('agent input compact mobile layout', () => {
-    it('starts the text 19pt inside the bubble and leaves room for the button', () => {
+    /**
+     * The glyph column, which is 19 for the third arrangement running and
+     * arrives there a different way each time (DROVE-206).
+     *
+     * DROVE-153 had the `+` on the row under the card: 10 shell inset + 9,
+     * half the difference between a 44pt button and its 26pt glyph. DROVE-196
+     * moved it onto the field's line, same button, same arithmetic. DROVE-206
+     * moves it INSIDE the field, where it is a 36pt disc inset 4 from the
+     * bubble's rim, so the offset that centres the glyph is 5 rather than 9
+     * and the column is 10 + 4 + 5.
+     *
+     * That it lands on 19 again is worth pinning precisely BECAUSE it looks
+     * like nothing changed. The status row under the composer indents to this
+     * column, and the alignment is now the `+`'s own ink rather than two
+     * expressions that happen to agree.
+     */
+    it('keeps the glyph column at 19, by the in-field geometry that now decides it', () => {
         const layout = resolveAgentInputLayout({
             shellInset: 10,
             actionSize: 44,
             addIconSize: 26,
         });
 
-        // 19 used to be measured from the DOCK's edge and aligned the caret
-        // with the add glyph on the row below. DROVE-196 moved the `+` up onto
-        // the field's line, so there is no glyph below to align with and the
-        // number is measured from the BUBBLE's leading rim instead: the card's
-        // old gutter plus its old input padding, which is why the caret sits
-        // exactly where it did.
         expect(layout.textInset).toBe(19);
+        expect(layout.textInset).toBe(10 + 4 + (36 - 26) / 2);
+        expect(layout.inFieldAddGlyphOffset).toBe(5);
+        // Home's `+` is still a 44pt button on a row, and still 9.
+        expect(layout.addGlyphOffset).toBe(9);
         expect(layout.inputContainerPaddingLeft).toBe(9);
         expect(layout.inputContainerPaddingRight).toBe(9);
-        expect(layout.textInset).toBe(layout.shellInset + (44 - 26) / 2);
-        // The trailing side is not symmetric: the send/voice button lives
-        // inside the field at that edge now (DROVE-153).
+
+        // SYMMETRIC AGAIN, and for the opposite reason to DROVE-196's. The
+        // field holds a control at each rim now, both the same disc, so both
+        // paddings are the same expression: 4 off the rim, 36 of disc, 6 of
+        // air. The text is what runs between them.
+        expect(layout.inputLeadingActionPadding).toBe(4 + 36 + 6);
         expect(layout.inputTrailingActionPadding).toBe(4 + 36 + 6);
+        expect(layout.inputLeadingActionPadding).toBe(layout.inputTrailingActionPadding);
     });
 
     it('publishes one visual metric contract for Home and Chat composers', () => {
@@ -195,35 +213,81 @@ describe('agent input compact mobile layout', () => {
             .toBeGreaterThan(resolveHeight(emptyInputHeight));
     });
 
-    /**
-     * Height does not read the screen width anywhere, so the narrowest phone
-     * the status row is tested at (320) and a 393pt one open identically. The
-     * only width-sensitive thing left is the placeholder wrapping, and it has
-     * 185pt of room on the narrow one for `Type a message ...`. That is 60pt
-     * less than before DROVE-196, because the `+` moved onto this line and
-     * takes 50 of it; still comfortably more than the placeholder needs, and
-     * the check below is what would catch it if a control were added beside
-     * the `+` and pushed it under.
-     */
     it('opens the same height on a 320pt phone as on a 393pt one', () => {
         const metrics = agentInputLayout.MOBILE_COMPOSER_METRICS;
+        const resolveHeight = agentInputLayout.resolveMobileComposerHeight;
+        // Height reads no screen width anywhere, which is why the widths get
+        // a spec of their own below rather than a clause in this one.
+        expect(resolveHeight(30)).toBe(agentInputLayout.MOBILE_COMPOSER_BASE_HEIGHT);
+        expect(metrics.inputMinHeight).toBe(44);
+    });
+
+    /**
+     * THE TEXT'S USABLE WIDTH, RE-PINNED AT ALL THREE WIDTHS (DROVE-206).
+     *
+     * The field holds a control at each rim now, so the width changed at BOTH
+     * ends and there is no width at which "does the placeholder still fit" is
+     * the same question as "did the arrangement stay put". Pinned, therefore,
+     * rather than left to the placeholder.
+     *
+     * The text came out WIDER even though it now shares its box, which is the
+     * result worth stating. Outside on the line the `+` cost 69 (a 44pt
+     * button, a 6pt gap, and the 19pt inset the bubble still kept); inside it
+     * costs 46. 23pt back at every width.
+     */
+    it('re-pins the text at 320, 375 and 393, wider at each than it was outside', () => {
+        const metrics = agentInputLayout.MOBILE_COMPOSER_METRICS;
+        const layout = agentInputLayout.MOBILE_COMPOSER_LAYOUT;
+        const textWidth = agentInputLayout.resolveComposerTextWidth;
+
+        // The composer's gutter, then a control's 46 at each rim.
+        expect(textWidth(320)).toBe(208);
+        expect(textWidth(375)).toBe(263);
+        expect(textWidth(393)).toBe(281);
+        for (const width of [320, 375, 393]) {
+            expect(textWidth(width), `text at ${width}`).toBe(width - 112);
+            // The expression, not the number: gutter, leading control,
+            // trailing control, text.
+            expect(
+                metrics.shellInset * 2
+                + layout.inputLeadingActionPadding
+                + layout.inputTrailingActionPadding
+                + textWidth(width),
+                `the field at ${width}`,
+            ).toBe(width);
+        }
+
+        // 23 wider than DROVE-196's 185 / 240 / 258.
+        expect([textWidth(320) - 185, textWidth(375) - 240, textWidth(393) - 258])
+            .toEqual([23, 23, 23]);
+
+        // Still comfortably wider than the placeholder at 16pt on the
+        // narrowest phone, which is what would have to wrap to open a second
+        // line and break DROVE-106's one-line composer.
+        expect(textWidth(320)).toBeGreaterThan(metrics.inputFontSize * 10);
+    });
+
+    /**
+     * The one state that moves it: no `+` to draw, in zen mode or on a session
+     * that takes no context. The caret falls back to the glyph column rather
+     * than to the rim, so it does not jump; only the gap in front of it goes.
+     */
+    it('re-pins the same three widths with no `+` in the field', () => {
+        const textWidth = agentInputLayout.resolveComposerTextWidth;
         const layout = agentInputLayout.MOBILE_COMPOSER_LAYOUT;
 
-        // The `+` and its gap come off the line before the bubble starts
-        // (DROVE-196), and the bubble carries the whole leading inset itself.
-        const textWidth = (screenWidth: number) => screenWidth
-            - metrics.shellInset * 2
-            - metrics.actionSize
-            - metrics.controlGap
-            - layout.textInset
-            - layout.inputTrailingActionPadding;
+        expect(textWidth(320, false)).toBe(245);
+        expect(textWidth(375, false)).toBe(300);
+        expect(textWidth(393, false)).toBe(318);
+        for (const width of [320, 375, 393]) {
+            expect(textWidth(width, false) - textWidth(width), `zen at ${width}`)
+                .toBe(layout.inputLeadingActionPadding - layout.inputContainerPaddingLeft);
+        }
 
-        expect(textWidth(320)).toBe(185);
-        expect(textWidth(375)).toBe(240);
-        expect(textWidth(393)).toBe(258);
-        // Comfortably wider than the placeholder at 16pt, which is what would
-        // have to wrap for either width to open a second line.
-        expect(textWidth(320)).toBeGreaterThan(metrics.inputFontSize * 10);
+        // The caret is at the glyph column either way: 19 from the screen edge
+        // with no `+`, and the `+`'s own ink at 19 when there is one.
+        expect(agentInputLayout.MOBILE_COMPOSER_METRICS.shellInset
+            + agentInputLayout.resolveComposerLeadingPadding(false)).toBe(layout.textInset);
     });
 
     it.each([
@@ -266,16 +330,17 @@ describe('agent input compact mobile layout', () => {
      * The two rows DROVE-196 introduced, and the thing that makes them the
      * arrangement Clay asked for rather than a reshuffle.
      */
-    it('puts the plus on the field\u2019s line and the controls outside the bubble', () => {
+    it('puts the plus inside the field and the controls outside the bubble', () => {
         const metrics = agentInputLayout.MOBILE_COMPOSER_METRICS;
         const line = agentInputLayout.resolveMobileComposerLineGeometry();
         const controls = agentInputLayout.resolveMobileComposerControlRowGeometry();
 
-        // The `+` and the bubble share a line, bottom-aligned so the `+` stays
-        // beside send as the field wraps rather than riding up the capsule.
+        // The line is the bubble and nothing else now (DROVE-206), so there is
+        // nothing left on it to be spaced from: no gap. It stays a
+        // bottom-aligned row because it carries the composer's gutter.
         expect(line.flexDirection).toBe('row');
         expect(line.alignItems).toBe('flex-end');
-        expect(line.gap).toBe(metrics.controlGap);
+        expect(line.gap).toBeUndefined();
 
         // Both rows carry the shell gutter themselves, which is the whole
         // difference from a row inside a card: the card used to supply it, and
@@ -299,48 +364,103 @@ describe('agent input compact mobile layout', () => {
     });
 
     /**
-     * What a screenshot at 375 and 393 would show, as numbers.
+     * What a screenshot at 375 and 393 would show, as numbers (DROVE-206).
      *
-     * The arrangement is the claim, not the pixel: `+` outside the bubble at
-     * the leading edge, send inside it at the trailing edge, both on the same
-     * line (DROVE-196). Walked left to right so a metric that drifts moves a
-     * landmark here rather than only in the picture.
+     * The arrangement is the claim, not the pixel: BOTH controls inside the
+     * bubble, `+` at the leading rim, send at the trailing one, with the text
+     * running between them. Walked left to right so a metric that drifts moves
+     * a landmark here rather than only in the picture.
      */
-    it.each([375, 393])('lays the line out leading-plus, trailing-send at %ipt', (screenWidth) => {
+    it.each([375, 393])('lays the field out plus-inside, send-inside at %ipt', (screenWidth) => {
         const metrics = agentInputLayout.MOBILE_COMPOSER_METRICS;
         const layout = agentInputLayout.MOBILE_COMPOSER_LAYOUT;
 
-        const addLeft = metrics.shellInset;
-        const addRight = addLeft + metrics.actionSize;
-        const bubbleLeft = addRight + metrics.controlGap;
+        // The bubble is the whole line now: gutter to gutter.
+        const bubbleLeft = metrics.shellInset;
         const bubbleRight = screenWidth - metrics.shellInset;
-        const textLeft = bubbleLeft + layout.textInset;
+        const addLeft = bubbleLeft + metrics.primaryActionInset;
+        const addRight = addLeft + metrics.primaryActionSize;
+        const addGlyphLeft = addLeft + layout.inFieldAddGlyphOffset;
+        const textLeft = bubbleLeft + layout.inputLeadingActionPadding;
         const textRight = bubbleRight - layout.inputTrailingActionPadding;
         const primaryRight = bubbleRight - metrics.primaryActionInset;
         const primaryLeft = primaryRight - metrics.primaryActionSize;
 
-        // The `+` is OUTSIDE the bubble, at the leading edge, with one gap.
-        expect(addLeft).toBe(10);
-        expect(addRight).toBeLessThan(bubbleLeft);
-        expect(bubbleLeft - addRight).toBe(metrics.controlGap);
+        // The `+` is INSIDE the bubble at the leading rim, 4pt off it, which
+        // is the same 4 the send button keeps at the other end.
+        expect(bubbleLeft).toBe(10);
+        expect(addLeft - bubbleLeft).toBe(metrics.primaryActionInset);
+        expect(addRight).toBeLessThan(textLeft);
+        // And its ink lands on the 19pt column the status row indents to.
+        expect(addGlyphLeft).toBe(layout.textInset);
+        expect(addGlyphLeft).toBe(19);
 
-        // Send is INSIDE it, at the trailing edge, 4pt off the rim on every
-        // side, which is the same 4 the field's 44pt floor is built from.
+        // Send is inside at the trailing rim, 4pt off on every side, which is
+        // the same 4 the field's 44pt floor is built from.
         expect(bubbleRight - primaryRight).toBe(metrics.primaryActionInset);
         expect(metrics.inputMinHeight - metrics.primaryActionSize)
             .toBe(metrics.primaryActionInset * 2);
 
-        // And the text runs between them, stopping one gap short of the button
-        // rather than under it.
-        expect(textLeft).toBeLessThan(textRight);
-        expect(primaryLeft - textRight).toBe(metrics.primaryActionMarginLeft);
-        expect(textRight - textLeft).toBe(screenWidth === 375 ? 240 : 258);
+        // The two are mirror images across the field.
+        expect(addLeft - bubbleLeft).toBe(bubbleRight - primaryRight);
+        expect(addRight - addLeft).toBe(primaryRight - primaryLeft);
 
-        // The bubble's trailing rim and the control row's trailing edge are
-        // the same column, because both now take the gutter from outside.
-        expect(bubbleRight).toBe(screenWidth - metrics.shellInset);
+        // And the text runs between them, stopping one gap short of each
+        // rather than under either.
+        expect(textLeft).toBeLessThan(textRight);
+        expect(textLeft - addRight).toBe(metrics.primaryActionMarginLeft);
+        expect(primaryLeft - textRight).toBe(metrics.primaryActionMarginLeft);
+        expect(textRight - textLeft).toBe(screenWidth === 375 ? 263 : 281);
+        expect(textRight - textLeft)
+            .toBe(agentInputLayout.resolveComposerTextWidth(screenWidth));
+
+        // The bubble's rims and the control row's ends are the same two
+        // columns, because both take the gutter from outside. That is what
+        // makes the recording banner exactly as wide as the composer
+        // (DROVE-157).
+        expect(agentInputLayout.resolveMobileComposerLineGeometry().paddingHorizontal)
+            .toBe(metrics.shellInset);
         expect(agentInputLayout.resolveMobileComposerControlRowGeometry().paddingHorizontal)
             .toBe(metrics.shellInset);
+    });
+
+    /**
+     * The whole of DROVE-206 in one place: where the three things Clay moved
+     * ended up, and what did not move for them.
+     */
+    it('moves the plus in, the waveform down, and the block not at all', () => {
+        const metrics = agentInputLayout.MOBILE_COMPOSER_METRICS;
+        const layout = agentInputLayout.MOBILE_COMPOSER_LAYOUT;
+
+        // 1. The `+` is in the field. There is nothing left on the line for it
+        //    to sit beside, which is what says there is exactly one of it.
+        expect(agentInputLayout.resolveMobileComposerLineGeometry().gap).toBeUndefined();
+        expect(layout.inputLeadingActionPadding)
+            .toBe(metrics.primaryActionInset + metrics.primaryActionSize
+                + metrics.primaryActionMarginLeft);
+
+        // 2. The waveform is on the control row, which is still 44 tall and
+        //    still spaces its controls by the one composer gap. A fourth
+        //    control costs the row no height.
+        const controls = agentInputLayout.resolveMobileComposerControlRowGeometry();
+        expect(controls.height).toBe(metrics.actionRowHeight);
+        expect(controls.height).toBe(44);
+        expect(controls.gap).toBe(metrics.controlGap);
+
+        // 3. Both in-field discs clear DROVE-153's 44pt floor the same way:
+        //    36 drawn plus 6pt of slop a side is a 48pt target.
+        const target = metrics.primaryActionSize + metrics.primaryActionSlop * 2;
+        expect(target).toBe(48);
+        expect(target).toBeGreaterThanOrEqual(44);
+
+        // And the empty composer is the same 102 it was, deliberately: the
+        // bubble's floor did not move when the `+` came in, and the row's
+        // height did not move when the waveform arrived (DROVE-106,
+        // DROVE-196).
+        expect(agentInputLayout.MOBILE_COMPOSER_BASE_HEIGHT).toBe(102);
+        expect(agentInputLayout.MOBILE_COMPOSER_BUBBLE_BASE_HEIGHT)
+            .toBe(metrics.inputMinHeight);
+        expect(agentInputLayout.resolveMobileComposerHeight(30)).toBe(102);
     });
 
     it('uses identical row and circular-button geometry in both composers', () => {
@@ -366,9 +486,12 @@ describe('agent input compact mobile layout', () => {
             justifyContent: 'center',
             flexShrink: 0,
         });
-        // The primary is smaller than the row's buttons because it is nested
-        // inside the 44pt input capsule now (DROVE-153), the way Messages nests
-        // its mic. 36 drawn plus 6pt of slop is a 48pt target.
+        // The two IN-FIELD discs are smaller than the row's buttons because
+        // they are nested inside the 44pt input capsule (DROVE-153), the way
+        // Messages nests its mic. 36 drawn plus 6pt of slop is a 48pt target.
+        // They differ in one property, which is the side their air is on: the
+        // primary keeps the text off its left, the `+` off its right
+        // (DROVE-206).
         expect(resolveAction?.('primary')).toEqual({
             width: 36,
             height: 36,
@@ -377,6 +500,15 @@ describe('agent input compact mobile layout', () => {
             justifyContent: 'center',
             flexShrink: 0,
             marginLeft: 6,
+        });
+        expect(resolveAction?.('add')).toEqual({
+            width: 36,
+            height: 36,
+            borderRadius: 18,
+            alignItems: 'center',
+            justifyContent: 'center',
+            flexShrink: 0,
+            marginRight: 6,
         });
     });
 });

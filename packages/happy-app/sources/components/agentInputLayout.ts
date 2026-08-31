@@ -6,30 +6,74 @@ export interface AgentInputLayoutGeometry {
 
 export interface AgentInputLayout {
     shellInset: number;
+    /**
+     * Half the difference between a 44pt row button and its 26pt glyph, so 9.
+     *
+     * This is HOME's number now (DROVE-206). Home still draws the `+` as a
+     * 44pt button on its own row, and HomeDock reads it as the collapsed
+     * composer's inner padding. The chat's `+` is inside the field and takes
+     * `inFieldAddGlyphOffset` instead.
+     */
     addGlyphOffset: number;
     /**
-     * Where the text starts, measured from the bubble's leading rim
-     * (DROVE-196).
+     * Half the difference between the 36pt in-field disc and the same 26pt
+     * glyph, so 5 (DROVE-206). What the chat's `+` needs to be centred in the
+     * disc it is drawn in now.
+     */
+    inFieldAddGlyphOffset: number;
+    /**
+     * THE COMPOSER'S GLYPH COLUMN: 19pt from the screen edge, where the `+`'s
+     * ink starts and where the status row under it lines its text up.
      *
-     * It used to be measured from the DOCK's edge, because the card spanned
-     * the dock and the `+` sat below the caret; 19 was the column they shared.
-     * The `+` is on the field's line now, so that alignment is gone and the
-     * number is kept for what is left of it: 19 clears a 22pt capsule rim, and
-     * it is where the caret already was inside the card, so nothing about
-     * typing moved.
+     * The number has survived three arrangements and it is the same 19 each
+     * time, but the derivation is different now and worth reading (DROVE-206).
+     * DROVE-153 had the `+` on the row below the card, so 19 was the shell
+     * inset plus a 44pt button's glyph offset, 10 + 9. DROVE-196 moved the `+`
+     * up onto the field's line, kept the same 44pt button, and so kept the
+     * same arithmetic. DROVE-206 moves it INSIDE the field, where it is a 36pt
+     * disc inset 4 from the bubble's rim:
+     *
+     *     10 shell inset + 4 disc inset + 5 glyph offset = 19
+     *
+     * So the status row's alignment is not a number that happens to match any
+     * more, it is the `+`'s ink column read off the `+`'s own geometry, and
+     * `statusRowLayout` reads THIS rather than reassembling it.
+     *
+     * It is also where the text starts when there is no `+` to draw (zen mode,
+     * or a session that takes no context): the caret falls back to the column
+     * the glyph would have occupied rather than to the rim.
      */
     textInset: number;
     inputContainerPaddingLeft: number;
     inputContainerPaddingRight: number;
     /**
-     * What the text has to leave clear on the trailing side for the in-field
-     * send/voice button (DROVE-153): the button's inset from the capsule edge,
-     * the button, and air between it and the last character.
+     * What the text leaves clear on the LEADING side for the in-field `+`
+     * (DROVE-206): the disc's inset from the capsule edge, the disc, and air
+     * between it and the first character.
+     *
+     * Clay: "the plus should be [in the message box]". It was outside on the
+     * field's line (DROVE-196); inside, it costs the field 46 instead of the
+     * 69 it cost the LINE out there (44 button + 6 gap + 19 inset), so the
+     * text gains 23pt at every width even though it now shares its box.
+     *
+     * Deliberately the same expression as the trailing padding, off the same
+     * three metrics, so the field is symmetric by construction: a control at
+     * each rim, 4 off the rim, 6 off the text.
+     */
+    inputLeadingActionPadding: number;
+    /**
+     * What the text leaves clear on the trailing side for the in-field send
+     * button (DROVE-153): the button's inset from the capsule edge, the
+     * button, and air between it and the last character.
      *
      * Measured from the bubble's trailing rim since DROVE-196. The card used
      * to add its own 10pt gutter under this, so the text stopped 56 short of
      * the rim for a button that ended at 46; the gutter moved outside the card
      * and the number is now literally what it says.
+     *
+     * It is reserved unconditionally, because the send button is always drawn
+     * (DROVE-206). That is what makes the text's width a constant per screen
+     * width rather than something that changes as you type.
      */
     inputTrailingActionPadding: number;
 }
@@ -70,25 +114,45 @@ export const MOBILE_COMPOSER_METRICS = {
     // now the same number, so there is nothing left to argue about.
     actionRowHeight: 44,
     actionSize: 44,
+    /**
+     * The `+`'s ink, unchanged through every arrangement it has been drawn in.
+     *
+     * It is centred in a 44pt button on Home's row and in the 36pt in-field
+     * disc on chat (DROVE-206). 26 in 36 leaves 5 clear on every side, which
+     * is enough that the glyph never touches the rim, so the `+` moved inside
+     * without being redrawn: only the offset that centres it changed, 9 to 5.
+     * It reads heavier in the smaller disc on purpose. It is the one control
+     * inside the field that is an offer rather than a state, and it has to
+     * hold its own against a send button at the other rim.
+     */
     addIconSize: 26,
     secondaryActionHeight: 40,
     effortWidth: 64,
     /**
-     * The send/voice/stop button, which now sits INSIDE the input capsule at
-     * its trailing edge rather than at the end of the button row (DROVE-153).
+     * The disc every IN-FIELD control is drawn at: the send button at the
+     * trailing rim, and since DROVE-206 the `+` at the leading one.
      *
      * Clay's Messages reference is one capsule field with the primary
-     * affordance inside it at the trailing edge, and this is that. Smaller
-     * than the row's buttons on purpose: it is nested in a 44pt-tall field, so
-     * drawing it at 44 would touch both edges. 36 drawn with 6pt of slop is a
-     * 48pt target, above the floor, and it is the same proportion Messages
-     * uses for the mic inside its own field.
+     * affordance inside it at the trailing edge, and DROVE-153 did that half.
+     * DROVE-206 does the other: "the plus should be [in the message box]", so
+     * the field holds a control at each rim and they are the same disc.
+     *
+     * Smaller than the row's buttons on purpose: nested in a 44pt-tall field,
+     * a 44pt disc would touch both edges. 36 drawn with 6pt of slop is a 48pt
+     * target, which clears DROVE-153's 44pt FLOOR. The floor is a
+     * floor on what the thumb can hit, and the row's buttons meet it by being drawn at
+     * 44 while these two meet it with slop. Both in-field controls take the
+     * slop, so neither is the exception.
      */
     primaryActionSize: 36,
     primaryActionSlop: 6,
-    /** Air between the text and the in-field primary. */
+    /**
+     * Air between the text and an in-field control, at either rim: the send
+     * button's `marginLeft` and the `+`'s `marginRight` are this one number
+     * (DROVE-206).
+     */
     primaryActionMarginLeft: 6,
-    /** Keeps the primary off the capsule's rounded trailing end. */
+    /** Keeps an in-field control off the capsule's rounded ends. */
     primaryActionInset: 4,
     attachmentExtraHeight: 72,
     /**
@@ -150,6 +214,16 @@ export const MOBILE_COMPOSER_BUBBLE_BASE_HEIGHT = MOBILE_COMPOSER_METRICS.inputM
  *
  * DROVE-106's claim survives intact and gets tighter: the empty composer is
  * one line, and the bubble around that line is now exactly the line.
+ *
+ * DROVE-206 rearranged everything inside those four numbers and did not move
+ * one of them, which was checked rather than assumed. The `+` came off the
+ * line and into the field, where it is a 36pt disc inset 4 in a 44pt box, so
+ * the bubble's floor is what it was; the line it left was 44 tall because the
+ * `+` and the bubble were both 44, and it is 44 now because the bubble is.
+ * The waveform went the other way, onto the control row, which was already
+ * 44 and holds a fourth 44pt control at the same height. So 102 STANDS, and
+ * it stands deliberately: an arrangement that changed at both ends of the
+ * field and on the row under it costs the transcript nothing.
  */
 export const MOBILE_COMPOSER_BASE_HEIGHT = MOBILE_COMPOSER_BUBBLE_BASE_HEIGHT
     + MOBILE_COMPOSER_METRICS.controlGap
@@ -230,6 +304,7 @@ export interface MobileComposerGeometryStyle {
     paddingHorizontal?: number;
     gap?: number;
     marginLeft?: number;
+    marginRight?: number;
     marginTop?: number;
     marginBottom?: number;
 }
@@ -379,28 +454,30 @@ export function resolveMobileComposerActionRowGeometry(): MobileComposerGeometry
 }
 
 /**
- * The composer's first line: the `+`, then the bubble (DROVE-196).
+ * The composer's first line, which is now the bubble and nothing else
+ * (DROVE-206).
  *
- * Clay: "Put plus to add image on same level as send button." The `+` is the
- * one affordance that adds content to the message being written, so it belongs
- * with the field rather than on the row of session settings underneath. This
- * is the Messages arrangement DROVE-153 took its cue from and stopped halfway
- * through: `+` OUTSIDE the field at the leading edge, primary action INSIDE it
- * at the trailing edge.
+ * DROVE-196 put the `+` out here beside the field, because that is where
+ * Messages draws it. Clay looked at it and said the opposite: "the boss should
+ * not be in the message box but the plus should be." So the `+` went inside,
+ * to the leading rim, opposite the send button, and this line has one child.
  *
- * `alignItems: 'flex-end'` is the part worth stating. The bubble grows upward
- * as the text wraps, and the `+` stays on the last line beside the send button
- * rather than floating up the side of a tall capsule.
+ * It stays a row rather than collapsing into the bubble's own style for two
+ * reasons that are both load-bearing. It carries the composer's GUTTER, which
+ * is what makes the bubble's rims line up with the control row's ends and lets
+ * the recording banner be exactly as wide as the composer above it
+ * (DROVE-157). And `alignItems: 'flex-end'` still pins the bubble to the
+ * bottom of whatever the line grows to, which matters the moment anything is
+ * ever put back beside it.
  *
- * The gutter lives here now rather than inside the card, which is what lets
- * the bubble's trailing rim line up with the audio capsule below it and lets
- * the recording banner be exactly as wide as the composer above it.
+ * No `gap`: there is nothing left on this line to be spaced from. The gap
+ * between the `+` and the text is inside the field now
+ * (`inputLeadingActionPadding`).
  */
 export function resolveMobileComposerLineGeometry(): MobileComposerGeometryStyle {
     return {
         flexDirection: 'row',
         alignItems: 'flex-end',
-        gap: MOBILE_COMPOSER_METRICS.controlGap,
         paddingHorizontal: MOBILE_COMPOSER_METRICS.shellInset,
     };
 }
@@ -415,6 +492,13 @@ export function resolveMobileComposerLineGeometry(): MobileComposerGeometryStyle
  * capsule inside a 44pt row) and DROVE-176's colours: this row moved, it did
  * not change.
  *
+ * DROVE-206 adds a fourth control, the waveform, at the head of the audio
+ * capsule. Clay: "the boss should not be in the message box." It was the face
+ * the in-field button wore on an empty composer, which made that button two
+ * things depending on what you had typed; out here it is one thing next to
+ * the two other audio controls, and the row's height does not move for it
+ * because it is a 44pt control on a 44pt row.
+ *
  * It carries the shell gutter itself, which is the whole difference from the
  * Home row, and the two gaps that used to be the card's padding: `controlGap`
  * above it, `controlsBottomGap` below it over the status strip.
@@ -428,24 +512,33 @@ export function resolveMobileComposerControlRowGeometry(): MobileComposerGeometr
     };
 }
 
+/**
+ * A composer control's disc.
+ *
+ * `icon` is a control on the row, drawn at the full 44. `primary` and `add`
+ * are the two IN-FIELD discs (DROVE-206), the same 36 at opposite rims, and
+ * they differ only in which side their air is on: the primary keeps the text
+ * off its left, the `+` keeps it off its right.
+ */
 export function resolveMobileComposerActionGeometry(
-    variant: 'icon' | 'primary',
+    variant: 'icon' | 'primary' | 'add',
 ): MobileComposerGeometryStyle {
+    const inField = variant === 'primary' || variant === 'add';
+    const size = inField
+        ? MOBILE_COMPOSER_METRICS.primaryActionSize
+        : MOBILE_COMPOSER_METRICS.actionSize;
     return {
-        width: variant === 'primary'
-            ? MOBILE_COMPOSER_METRICS.primaryActionSize
-            : MOBILE_COMPOSER_METRICS.actionSize,
-        height: variant === 'primary'
-            ? MOBILE_COMPOSER_METRICS.primaryActionSize
-            : MOBILE_COMPOSER_METRICS.actionSize,
-        borderRadius: variant === 'primary'
-            ? MOBILE_COMPOSER_METRICS.primaryActionSize / 2
-            : MOBILE_COMPOSER_METRICS.actionSize / 2,
+        width: size,
+        height: size,
+        borderRadius: size / 2,
         alignItems: 'center',
         justifyContent: 'center',
         flexShrink: 0,
         ...(variant === 'primary'
             ? { marginLeft: MOBILE_COMPOSER_METRICS.primaryActionMarginLeft }
+            : {}),
+        ...(variant === 'add'
+            ? { marginRight: MOBILE_COMPOSER_METRICS.primaryActionMarginLeft }
             : {}),
     };
 }
@@ -456,16 +549,30 @@ export function resolveAgentInputLayout({
     actionSize,
     addIconSize,
 }: AgentInputLayoutGeometry): AgentInputLayout {
+    // Home's `+`, still a 44pt button on a row.
     const addGlyphOffset = (actionSize - addIconSize) / 2;
+    // Chat's `+`, a 36pt disc inside the field (DROVE-206).
+    const inFieldAddGlyphOffset = (MOBILE_COMPOSER_METRICS.primaryActionSize - addIconSize) / 2;
+    // One expression, read twice: an in-field control is inset off its rim,
+    // takes its disc, and leaves air before the text. The `+` at the leading
+    // rim and send at the trailing one are mirror images (DROVE-206).
+    const inFieldActionPadding = MOBILE_COMPOSER_METRICS.primaryActionInset
+        + MOBILE_COMPOSER_METRICS.primaryActionSize
+        + MOBILE_COMPOSER_METRICS.primaryActionMarginLeft;
     return {
         shellInset,
         addGlyphOffset,
-        textInset: shellInset + addGlyphOffset,
+        inFieldAddGlyphOffset,
+        // The `+`'s ink column, off the `+`'s own geometry: the bubble starts
+        // at the shell inset, the disc 4 inside that, the glyph 5 inside the
+        // disc. 19, the same column it has always been.
+        textInset: shellInset
+            + MOBILE_COMPOSER_METRICS.primaryActionInset
+            + inFieldAddGlyphOffset,
         inputContainerPaddingLeft: addGlyphOffset,
         inputContainerPaddingRight: addGlyphOffset,
-        inputTrailingActionPadding: MOBILE_COMPOSER_METRICS.primaryActionInset
-            + MOBILE_COMPOSER_METRICS.primaryActionSize
-            + MOBILE_COMPOSER_METRICS.primaryActionMarginLeft,
+        inputLeadingActionPadding: inFieldActionPadding,
+        inputTrailingActionPadding: inFieldActionPadding,
     };
 }
 
@@ -474,3 +581,37 @@ export const MOBILE_COMPOSER_LAYOUT = resolveAgentInputLayout({
     actionSize: MOBILE_COMPOSER_METRICS.actionSize,
     addIconSize: MOBILE_COMPOSER_METRICS.addIconSize,
 });
+
+/**
+ * What the field's leading padding is, which is the only thing about the
+ * composer that still depends on state (DROVE-206).
+ *
+ * With the `+` there the text starts past it; without one it starts at the
+ * column the glyph would have occupied, so the caret lands in the same place
+ * either way and only the gap in front of it changes. Zen mode and a session
+ * that takes no context are the two ways to get the second case.
+ */
+export function resolveComposerLeadingPadding(hasAddButton: boolean): number {
+    return hasAddButton
+        ? MOBILE_COMPOSER_LAYOUT.inputLeadingActionPadding
+        : MOBILE_COMPOSER_LAYOUT.inputContainerPaddingLeft;
+}
+
+/**
+ * How wide the text actually is, at a screen width (DROVE-206).
+ *
+ * Pinned rather than left to the placeholder. The field holds a control at
+ * each rim now, so the usable width changed at BOTH ends and there is no
+ * longer any width where "does the placeholder fit" is the same question as
+ * "did the arrangement stay put". This is the expression the composer draws
+ * with, so a metric that drifts moves a number in the spec.
+ *
+ * The send button is always drawn, so the trailing 46 is never conditional
+ * and this does not change as the user types.
+ */
+export function resolveComposerTextWidth(screenWidth: number, hasAddButton = true): number {
+    return screenWidth
+        - MOBILE_COMPOSER_METRICS.shellInset * 2
+        - resolveComposerLeadingPadding(hasAddButton)
+        - MOBILE_COMPOSER_LAYOUT.inputTrailingActionPadding;
+}

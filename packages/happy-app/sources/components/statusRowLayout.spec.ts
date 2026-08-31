@@ -306,9 +306,16 @@ describe('the estimate itself', () => {
     });
 
     it('takes the row\'s inset off the composer\'s metrics, the same expression the row draws with', () => {
-        expect(statusRowMetrics.paddingHorizontal)
-            .toBe(MOBILE_COMPOSER_METRICS.shellInset + MOBILE_COMPOSER_LAYOUT.addGlyphOffset);
+        // The composer's glyph column, which is where the `+`'s ink starts.
+        // DROVE-206 moved the `+` inside the field and this still indents to
+        // it, because it reads `textInset` rather than rebuilding the number
+        // from a button size the `+` no longer has.
+        expect(statusRowMetrics.paddingHorizontal).toBe(MOBILE_COMPOSER_LAYOUT.textInset);
         expect(statusRowMetrics.paddingHorizontal).toBe(19);
+        expect(MOBILE_COMPOSER_LAYOUT.textInset)
+            .toBe(MOBILE_COMPOSER_METRICS.shellInset
+                + MOBILE_COMPOSER_METRICS.primaryActionInset
+                + MOBILE_COMPOSER_LAYOUT.inFieldAddGlyphOffset);
         expect(statusRowUsableWidth(393)).toBe(355);
     });
 });

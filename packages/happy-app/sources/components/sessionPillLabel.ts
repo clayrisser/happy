@@ -68,26 +68,43 @@ export const COMPOSER_MODEL_SEGMENT = {
 } as const;
 
 /**
- * Everything on the phone's action row that is NOT the model's name, in
+ * Everything on the phone's control row that is NOT the model's name, in
  * points, at the DROVE-153 sizes.
  *
- * The card is inset from the screen by `shellInset` and pads its content by
- * `shellInset` again. Then, left to right: the `+`, a gap, the mode and
- * effort segments, the model segment, the spacer, a gap, and the speaker and
- * mic capsule. The two hairline dividers inside the capsule are counted at a
- * point each, which over-counts them.
+ * Left to right: the mode and effort segments and the model segment in one
+ * capsule, a spacer, a gap, then the audio capsule. Every hairline divider is
+ * counted at a whole point, which over-counts it.
+ *
+ * TWO TERMS CHANGED IN DROVE-206 and one stale one went with them.
+ *
+ *   - The `+` and its gap are GONE from this row. It is inside the field now,
+ *     so it takes nothing from the model's name. That is 50pt back.
+ *   - The audio capsule holds THREE buttons, not two: the waveform came down
+ *     off the send button to join the speaker and the mic. That is 45 spent.
+ *   - `cardPadding` is deleted. It was the card's own horizontal padding,
+ *     counted on top of the screen inset, and DROVE-196 moved that padding
+ *     out onto this row as the row's whole gutter. It has been double-counted
+ *     for two tickets, making the budget 20pt pessimistic.
+ *
+ * The three together hand the name 24pt more than it had. The check that
+ * matters is not any one of them but `composerModelBudget`'s: the terms plus
+ * the budget add up to the screen width exactly, so a term that goes missing
+ * shows up as a row that does not fit its phone.
  */
 export const COMPOSER_ROW_GEOMETRY = {
     screenInset: MOBILE_COMPOSER_METRICS.shellInset,
-    cardPadding: MOBILE_COMPOSER_METRICS.shellInset,
-    add: MOBILE_COMPOSER_METRICS.actionSize,
     gap: 6,
     glyphSegments: 2,
     segment: COMPOSER_SESSION_CONTROL_SIZE,
+    /** Between the mode, effort and model segments: three segments, two rules. */
     dividers: 2,
-    audioButtons: 2,
+    /** Waveform, speaker, mic (DROVE-206). */
+    audioButtons: 3,
     audioButton: MOBILE_COMPOSER_METRICS.actionSize,
 } as const;
+
+/** The hairlines inside the audio capsule: one between each adjacent pair. */
+export const composerAudioDividers = Math.max(0, COMPOSER_ROW_GEOMETRY.audioButtons - 1);
 
 /** The width the model segment needs for a name, at a given type scale. */
 export function composerModelSegmentWidth(name: string, fontScale = 1): number {
@@ -101,12 +118,15 @@ export function composerModelSegmentWidth(name: string, fontScale = 1): number {
  * ticket points at, measured rather than quoted.
  */
 export function composerModelBudget(screenWidth: number): number {
+    return screenWidth - 2 * COMPOSER_ROW_GEOMETRY.screenInset - composerRowFixedWidth();
+}
+
+/** Everything on the row but the name, which is what the name gets the rest of. */
+export function composerRowFixedWidth(): number {
     const g = COMPOSER_ROW_GEOMETRY;
-    const usable = screenWidth - 2 * g.screenInset - 2 * g.cardPadding;
-    const fixed = g.add + g.gap
-        + g.glyphSegments * g.segment + g.dividers
-        + g.gap + g.audioButtons * g.audioButton;
-    return usable - fixed;
+    return g.glyphSegments * g.segment + g.dividers
+        + g.gap
+        + g.audioButtons * g.audioButton + composerAudioDividers;
 }
 
 /** True when the name draws whole at 13pt on this phone, with no scaling. */
