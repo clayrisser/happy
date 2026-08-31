@@ -235,6 +235,15 @@ export const SettingsView = React.memo(function SettingsView({
                     icon={<Ionicons name="swap-horizontal-outline" size={29} color="#FF9500" />}
                     onPress={() => router.push('/settings/flip-policy' as any)}
                 />
+                {/* Every channel on demand (DROVE-75): each wrist buzz, the
+                    voices, every card shape, and a real push, without waiting
+                    for a gate. Shown once on first run; this is the way back. */}
+                <Item
+                    title="Demo every channel"
+                    subtitle="Feel each buzz, hear each voice, see each card"
+                    icon={<Ionicons name="pulse-outline" size={29} color="#AF52DE" />}
+                    onPress={() => router.push('/settings/demo' as any)}
+                />
                 {experiments && (
                     <Item
                         title={t('settings.usage')}

@@ -804,6 +804,28 @@ export const en: TranslationStructure = {
         usageUsed: ({ used, limit }: { used: string; limit: string }) => `${used} used of ${limit}`,
         supportTitle: 'Upgrade Voice',
         supportSubtitle: 'Get more voice time and support development',
+        // Speaking voice for read-aloud (DROVE-97)
+        speaking: {
+            title: 'Speaking Voice',
+            footer: 'Which installed voice reads replies aloud. Premium and enhanced voices sound like a person; the compact one is the robotic default. More voices download in Settings > Accessibility > Spoken Content > Voices.',
+            automatic: 'Automatic',
+            automaticSubtitle: ({ name }: { name: string }) => `Best installed voice: ${name}`,
+            automaticNone: 'No voice installed for this language',
+            preview: 'Preview',
+            previewSentence: 'The tests pass, two files changed, and nothing else moved.',
+            qualityPremium: 'Premium',
+            qualityEnhanced: 'Enhanced',
+            qualityDefault: 'Compact',
+            personal: 'Personal Voice',
+            deliveryTitle: 'Delivery',
+            deliveryFooter: 'Speed and pitch apply to every voice. When the voice falls further behind the text than the skip-ahead threshold, it drops the backlog, says "skipping ahead", and continues from the newest sentence.',
+            rate: 'Speed',
+            pitch: 'Pitch',
+            lag: 'Skip ahead after',
+            seconds: ({ seconds }: { seconds: number }) => `${seconds} s`,
+            noNaturalVoice: ({ language }: { language: string }) => `No enhanced or premium voice is installed for ${language}, so replies use the compact one. In Settings, go to Accessibility > Spoken Content > Voices and download one.`,
+            openSettings: 'Open Settings',
+        },
     },
 
     settingsAccount: {

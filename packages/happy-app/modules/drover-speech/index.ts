@@ -19,9 +19,46 @@ export interface DictationSupport {
     reason?: string;
 }
 
+/** How good a voice sounds, in the order iOS ranks them (DROVE-97). */
+export type SpeechVoiceQuality = 'default' | 'enhanced' | 'premium';
+
+/** One installed synthesiser voice, as `listVoices()` reports it. */
+export interface SpeechVoice {
+    /** Stable across launches; what the setting stores. */
+    identifier: string;
+    name: string;
+    /** BCP 47 tag as iOS reports it, e.g. `en-US`. */
+    language: string;
+    quality: SpeechVoiceQuality;
+    /** A Personal Voice the user recorded (iOS 17+). */
+    personal?: boolean;
+}
+
+export interface SpeakOptions {
+    /** 0 to 1, AVSpeechUtterance.rate; 0.5 is the platform default. */
+    rate?: number;
+    /** 0.5 to 2.0, AVSpeechUtterance.pitchMultiplier. */
+    pitch?: number;
+    /**
+     * A voice identifier from `listVoices()`. Native falls back to the best
+     * installed voice for `language` when this is unset or not installed.
+     */
+    voiceId?: string | null;
+    /** BCP 47 tag the text is in; drives the native fallback pick. */
+    language?: string | null;
+}
+
+type NativeSpeakOptions = {
+    rate: number;
+    pitch: number;
+    voiceId: string | null;
+    language: string | null;
+};
+
 type DroverSpeechModuleType = {
     /** Resolves true when the utterance was spoken to the end, false when cut. */
-    speak: (text: string, rate: number) => Promise<boolean>;
+    speak: (text: string, options: NativeSpeakOptions) => Promise<boolean>;
+    listVoices: () => Promise<SpeechVoice[]>;
     stop: () => Promise<void>;
     isSpeaking: () => boolean;
     dictationSupport: (localeTag: string | null) => Promise<DictationSupport>;
@@ -48,9 +85,30 @@ export const isDroverSpeechAvailable = () => native !== null;
  */
 export const defaultSpeechRate = 0.52;
 
-export async function speakUtterance(text: string, rate = defaultSpeechRate): Promise<boolean> {
+export const defaultSpeechPitch = 1.0;
+
+export async function speakUtterance(text: string, options: SpeakOptions = {}): Promise<boolean> {
     if (!native) return false;
-    return native.speak(text, rate);
+    return native.speak(text, {
+        rate: options.rate ?? defaultSpeechRate,
+        pitch: options.pitch ?? defaultSpeechPitch,
+        voiceId: options.voiceId ?? null,
+        language: options.language ?? null,
+    });
+}
+
+/**
+ * Every voice installed on the device, in no particular order. Empty on a
+ * build with no speech module, so a caller that finds nothing offers the
+ * platform default rather than an error.
+ */
+export async function listVoices(): Promise<SpeechVoice[]> {
+    if (!native) return [];
+    try {
+        return await native.listVoices();
+    } catch {
+        return [];
+    }
 }
 
 export async function stopSpeaking(): Promise<void> {

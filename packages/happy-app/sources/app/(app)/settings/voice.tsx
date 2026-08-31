@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, ActivityIndicator } from 'react-native';
+import { View, ActivityIndicator, Platform } from 'react-native';
 import { Text } from '@/components/StyledText';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -18,6 +18,8 @@ import { sync } from '@/sync/sync';
 import { trackPaywallButtonClicked } from '@/track';
 import { getVoiceExperimentStatus, getVoiceUpsellVariantLabel } from '@/realtime/voiceExperiment';
 import { getVoiceLocalCounters, resetVoiceLocalCounters } from '@/sync/persistence';
+import { SpeakingVoiceSettings } from '@/components/SpeakingVoiceSettings';
+import { canReadAloud } from '@/voice/speechEngine';
 
 function formatVoiceTime(totalSeconds: number): string {
     const mins = Math.floor(totalSeconds / 60);
@@ -175,6 +177,10 @@ export default React.memo(function VoiceSettingsScreen() {
                     }
                 />
             </ItemGroup>
+
+            {/* Which voice reads, and how (DROVE-97). Native speech only: the
+                web engine has no voice list to pick from. */}
+            {canReadAloud() && Platform.OS !== 'web' ? <SpeakingVoiceSettings /> : null}
 
             {/* Voice Usage */}
             {usageLoading ? (

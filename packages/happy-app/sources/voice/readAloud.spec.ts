@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Message } from '@/sync/typesMessage';
 import { ReadAloudReader, type SpeechEngine } from './readAloud';
 
@@ -211,6 +211,148 @@ describe('ReadAloudReader', () => {
         other.onMessages('s1', [agentText('m1', 'One. Two.')]);
         await settle();
         expect((flaky as any).spoken).toEqual(['One.', 'Two.']);
+    });
+
+    describe('whole sentences only (DROVE-97)', () => {
+        afterEach(() => { vi.useRealTimers(); });
+
+        it('holds an unfinished tail until the message grows into a sentence', async () => {
+            reader.onMessages('s1', [agentText('m1', 'The tests pass now. Two files')]);
+            await settle();
+            expect(engine.spoken).toEqual(['The tests pass now.']);
+            engine.finishOne();
+            await settle();
+            // "Two files" is not a sentence yet, so nothing more is said.
+            expect(engine.spoken).toEqual(['The tests pass now.']);
+
+            reader.onMessages('s1', [agentText('m1', 'The tests pass now. Two files changed, e.g. the reducer. Nothing')]);
+            await settle();
+            expect(engine.spoken).toEqual(['The tests pass now.', 'Two files changed, e.g. the reducer.']);
+        });
+
+        it('speaks a held tail once a later message shows the reply moved on', async () => {
+            reader.onMessages('s1', [agentText('m1', 'Done with the first part')]);
+            await settle();
+            expect(engine.spoken).toEqual([]);
+            reader.onMessages('s1', [agentText('m2', 'Second part.', 2)]);
+            await settle();
+            expect(engine.spoken).toEqual(['Done with the first part']);
+            engine.finishOne();
+            await settle();
+            expect(engine.spoken).toEqual(['Done with the first part', 'Second part.']);
+        });
+
+        it('speaks a held tail as it stands once the hold expires', async () => {
+            vi.useFakeTimers();
+            const held = new ReadAloudReader(engine, { holdMs: 500 });
+            held.setEnabled(true);
+            held.focus('s1');
+            held.onMessages('s1', [agentText('m1', 'Almost there')]);
+            await settle();
+            expect(engine.spoken).toEqual([]);
+            vi.advanceTimersByTime(499);
+            await settle();
+            expect(engine.spoken).toEqual([]);
+            vi.advanceTimersByTime(1);
+            await settle();
+            expect(engine.spoken).toEqual(['Almost there']);
+        });
+
+        it('drops a held tail when interrupted', async () => {
+            vi.useFakeTimers();
+            const held = new ReadAloudReader(engine, { holdMs: 500 });
+            held.setEnabled(true);
+            held.focus('s1');
+            held.onMessages('s1', [agentText('m1', 'Almost there')]);
+            held.interrupt('typed');
+            vi.advanceTimersByTime(1000);
+            await settle();
+            expect(engine.spoken).toEqual([]);
+        });
+    });
+
+    describe('skipping ahead (DROVE-97)', () => {
+        let clock: number;
+        let lagged: ReadAloudReader;
+
+        beforeEach(() => {
+            clock = 1_000_000;
+            lagged = new ReadAloudReader(engine, {
+                now: () => clock,
+                maxLagSeconds: () => 15,
+            });
+            lagged.setEnabled(true);
+            lagged.focus('s1');
+        });
+
+        it('drops the backlog, says so, and resumes from the newest sentence', async () => {
+            lagged.onMessages('s1', [agentText('m1', 'One. Two. Three. Four.')]);
+            await settle();
+            expect(engine.spoken).toEqual(['One.']);
+
+            // The first sentence took so long that the rest is now stale.
+            clock += 16_000;
+            engine.finishOne();
+            await settle();
+            expect(engine.spoken).toEqual(['One.', 'Skipping ahead.']);
+            expect(lagged.skipCount).toBe(1);
+
+            engine.finishOne();
+            await settle();
+            expect(engine.spoken).toEqual(['One.', 'Skipping ahead.', 'Four.']);
+            expect(lagged.pending).toBe(0);
+        });
+
+        it('keeps reading in order while the voice is within the threshold', async () => {
+            lagged.onMessages('s1', [agentText('m1', 'One. Two. Three.')]);
+            await settle();
+            clock += 14_000;
+            engine.finishOne();
+            await settle();
+            clock += 14_000;
+            engine.finishOne();
+            await settle();
+            expect(engine.spoken).toEqual(['One.', 'Two.', 'Three.']);
+            expect(lagged.skipCount).toBe(0);
+        });
+
+        it('speaks a lone stale sentence rather than skipping to nothing', async () => {
+            lagged.onMessages('s1', [agentText('m1', 'One. Two.')]);
+            await settle();
+            clock += 30_000;
+            engine.finishOne();
+            await settle();
+            expect(engine.spoken).toEqual(['One.', 'Two.']);
+            expect(lagged.skipCount).toBe(0);
+        });
+
+        it('measures lag per sentence, so text that keeps arriving keeps its place', async () => {
+            lagged.onMessages('s1', [agentText('m1', 'One. Two.')]);
+            await settle();
+            clock += 20_000;
+            lagged.onMessages('s1', [agentText('m2', 'Three. Four.', 2)]);
+            engine.finishOne();
+            await settle();
+            // "Two." is 20 s old with newer sentences behind it: cut to "Four.".
+            expect(engine.spoken).toEqual(['One.', 'Skipping ahead.']);
+            engine.finishOne();
+            await settle();
+            expect(engine.spoken).toEqual(['One.', 'Skipping ahead.', 'Four.']);
+        });
+
+        it('reads the threshold live so a settings change applies to the next sentence', async () => {
+            let threshold = 30;
+            const live = new ReadAloudReader(engine, { now: () => clock, maxLagSeconds: () => threshold });
+            live.setEnabled(true);
+            live.focus('s1');
+            live.onMessages('s1', [agentText('m1', 'One. Two. Three.')]);
+            await settle();
+            clock += 20_000;
+            threshold = 10;
+            engine.finishOne();
+            await settle();
+            expect(engine.spoken).toEqual(['One.', 'Skipping ahead.']);
+        });
     });
 });
 

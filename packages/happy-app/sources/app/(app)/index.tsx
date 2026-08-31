@@ -14,6 +14,7 @@ import { trackAccountCreated, trackAccountRestored } from '@/track';
 import { HomeHeaderNotAuth } from "@/components/HomeHeader";
 import { Wordmark } from "@/components/Wordmark";
 import { MainView } from "@/components/MainView";
+import { useLocalSettingMutable } from '@/sync/storage';
 import { t } from '@/text';
 
 export default function Home() {
@@ -27,6 +28,25 @@ export default function Home() {
 }
 
 function Authenticated() {
+    const router = useRouter();
+    // The channel demo doubles as onboarding (DROVE-75): the first
+    // authenticated launch on a device opens it once, so the first thing this
+    // phone teaches is which buzz means what. Stamped BEFORE the push so a
+    // crash between the two can never turn "once" into "every launch". The
+    // web has no haptics, no speech and no push, so it is stamped and skipped.
+    const [demoSeenAt, setDemoSeenAt] = useLocalSettingMutable('droverDemoSeenAt');
+    React.useEffect(() => {
+        if (demoSeenAt !== null) return;
+        setDemoSeenAt(Date.now());
+        if (Platform.OS === 'web') return;
+        // After the home screen has mounted, not during: a push made while the
+        // stack is still settling is dropped by expo-router without a word.
+        const handle = setTimeout(() => router.push('/settings/demo?onboarding=1' as any), 800);
+        return () => clearTimeout(handle);
+        // Once, on mount. `demoSeenAt` changing to a number above must not
+        // re-run this.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
     return <MainView variant="phone" />;
 }
 
