@@ -102,6 +102,7 @@ type ScannerOptions = {
     sessionId: string | null;
     workingDirectory: string;
     onMessage: (message: any) => void;
+    onRunObserved?: (run: { model: string; effort: string | null }) => void;
 };
 
 function createDeferred<T>() {
