@@ -8,6 +8,7 @@ import { Item } from '@/components/Item';
 import { ItemGroup } from '@/components/ItemGroup';
 import { useSettingMutable } from '@/sync/storage';
 import {
+    audioCueRateRange,
     audioCueTitlesPerRunRange,
     audioCueVolumeRange,
     audioCueWaitingIntervalRange,
@@ -15,7 +16,7 @@ import {
     resolveAudioCues,
     type AudioCues,
 } from '@/sync/settings';
-import { audioCues as cueTable } from '@/voice/audioCues';
+import { isWorkingCue, audioCues as cueTable } from '@/voice/audioCues';
 import { audioCues as cueService } from '@/voice/audioCueService';
 import { t } from '@/text';
 
@@ -87,13 +88,24 @@ export const AudioCueSettings = React.memo(function AudioCueSettings() {
     const [workingEvery, setWorkingEvery] = React.useState(cues.workingIntervalSeconds);
     const [waitingEvery, setWaitingEvery] = React.useState(cues.waitingIntervalSeconds);
     const [perRun, setPerRun] = React.useState(cues.titlesPerRun);
+    const [toolCap, setToolCap] = React.useState(cues.toolCuesPerMinute);
+    const [agentCap, setAgentCap] = React.useState(cues.agentCuesPerMinute);
 
     React.useEffect(() => {
         setVolume(cues.volume);
         setWorkingEvery(cues.workingIntervalSeconds);
         setWaitingEvery(cues.waitingIntervalSeconds);
         setPerRun(cues.titlesPerRun);
-    }, [cues.volume, cues.workingIntervalSeconds, cues.waitingIntervalSeconds, cues.titlesPerRun]);
+        setToolCap(cues.toolCuesPerMinute);
+        setAgentCap(cues.agentCuesPerMinute);
+    }, [
+        cues.volume,
+        cues.workingIntervalSeconds,
+        cues.waitingIntervalSeconds,
+        cues.titlesPerRun,
+        cues.toolCuesPerMinute,
+        cues.agentCuesPerMinute,
+    ]);
 
     const commit = React.useCallback((patch: Partial<AudioCues>) => {
         setStored({ ...cues, ...patch });
@@ -197,6 +209,30 @@ export const AudioCueSettings = React.memo(function AudioCueSettings() {
                         />
                     }
                 />
+                <Item
+                    title="Read thinking"
+                    subtitle="The model's reasoning, read in its place before the reply it precedes, lower and a shade slower so it never sounds like the answer."
+                    subtitleLines={0}
+                    icon={<Ionicons name="bulb-outline" size={29} color="#FFCC00" />}
+                    rightElement={
+                        <Switch
+                            value={cues.speakThinking}
+                            onValueChange={(speakThinking) => commit({ speakThinking })}
+                        />
+                    }
+                />
+                <Item
+                    title="Read questions and permissions"
+                    subtitle="A gate waiting on you is spoken ahead of the transcript, once, with one reminder after a minute."
+                    subtitleLines={0}
+                    icon={<Ionicons name="help-circle-outline" size={29} color="#FF3B30" />}
+                    rightElement={
+                        <Switch
+                            value={cues.speakGates}
+                            onValueChange={(speakGates) => commit({ speakGates })}
+                        />
+                    }
+                />
                 <SliderRow
                     label={t('settingsVoice.cues.titlesPerRun')}
                     value={perRun}
@@ -209,8 +245,47 @@ export const AudioCueSettings = React.memo(function AudioCueSettings() {
                 />
             </ItemGroup>
 
+            {/*
+              * The caps, visible rather than silent (DROVE-174). They used to
+              * be hardcoded at 6 and 12 a minute with the excess dropped in
+              * silence, which is what swallowed most of a tool burst. Zero is
+              * off and zero is the default; a cue is still dropped when it
+              * cannot be heard within four seconds of the thing it is about.
+              */}
+            <ItemGroup
+                title="Sound rate"
+                footer="Off means every tool call and every agent event sounds. A sound is still dropped rather than played late if it cannot be heard within four seconds, and it never plays over the voice."
+            >
+                <SliderRow
+                    label="Tool ticks a minute"
+                    value={toolCap}
+                    display={toolCap <= 0 ? 'Off' : String(Math.round(toolCap))}
+                    min={audioCueRateRange.min}
+                    max={audioCueRateRange.max}
+                    step={5}
+                    onChange={setToolCap}
+                    onCommit={(value) => commit({ toolCuesPerMinute: Math.round(value) })}
+                />
+                <SliderRow
+                    label="Agent and reply sounds a minute"
+                    value={agentCap}
+                    display={agentCap <= 0 ? 'Off' : String(Math.round(agentCap))}
+                    min={audioCueRateRange.min}
+                    max={audioCueRateRange.max}
+                    step={5}
+                    onChange={setAgentCap}
+                    onCommit={(value) => commit({ agentCuesPerMinute: Math.round(value) })}
+                />
+            </ItemGroup>
+
             <ItemGroup title={t('settingsVoice.cues.tableTitle')} footer={t('settingsVoice.cues.tableFooter')}>
-                {cueTable.map((cue) => {
+                {/*
+                  * The working heartbeat has six variants now, one per agent
+                  * count (DROVE-182), and they are ONE row: the sound is the
+                  * same sound with a different rhythm, and six rows saying
+                  * "Working" would be six ways to half-mute a heartbeat.
+                  */}
+                {cueTable.filter((cue) => cue.id === 'working' || !isWorkingCue(cue.id)).map((cue) => {
                     const silenced = cues.muted.includes(cue.id);
                     return (
                         <Item

@@ -6,6 +6,8 @@ import {
     resolveSpokenRate,
     resolveStreamTalk,
     streamTalkPitchRange,
+    thinkingPitchScale,
+    thinkingRateScale,
 } from '@/sync/settings';
 import type { SpeakOptions, SpeechEngine } from './readAloud';
 import { pickVoice } from './voicePick';
@@ -57,16 +59,26 @@ export const speechEngine: SpeechEngine = {
         const voices = await installedVoices();
         const voice = pickVoice(voices, language, talk.voiceId);
         const aside = options?.aside === true;
+        // Thinking, read LOWER and a shade slower than the reply (DROVE-181).
+        // An aside and a thought are never both set; if they somehow were, the
+        // aside wins, because a title is the shorter claim.
+        const thinking = !aside && options?.thinking === true;
         // The rate is resolveSpokenRate's business (settings.ts): an aside is
         // the title of a tool call and has to sound like one (DROVE-112), and
         // the catch-up is clamped against the engine's ceiling rather than the
         // speed slider's (DROVE-116). Pitch carries the rest of the aside's
         // difference, because the native module takes no per-utterance volume.
         return speakUtterance(text, {
-            rate: resolveSpokenRate(talk.rate, options?.rateScale ?? 1, aside),
+            rate: resolveSpokenRate(
+                talk.rate,
+                (options?.rateScale ?? 1) * (thinking ? thinkingRateScale : 1),
+                aside,
+            ),
             pitch: aside
                 ? Math.min(streamTalkPitchRange.max, talk.pitch * asidePitchScale)
-                : talk.pitch,
+                : thinking
+                    ? Math.max(streamTalkPitchRange.min, talk.pitch * thinkingPitchScale)
+                    : talk.pitch,
             voiceId: voice?.identifier ?? talk.voiceId,
             language,
         });

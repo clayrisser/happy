@@ -32,13 +32,28 @@
 export interface CueBeat {
     hz: number;
     ms: number;
+    /**
+     * Loudness of THIS beat relative to the cue's own gain, 0 to 1, 1 unasked.
+     *
+     * Added by DROVE-182, which needs one figure to hold two loudnesses: the
+     * heartbeat's thump is the main thread and the ticks after it are the
+     * agents, and the ticket's words are "the ticks are quieter and shorter
+     * than the thump". A second cue would not do, because the two have to be
+     * one sound with one rhythm.
+     */
+    gain?: number;
 }
 
 export type AudioCueKind = 'ambient' | 'event';
 
 export type AudioCueId =
-    /** Working, nothing pending. The ordinary pulse. */
+    /**
+     * Working, nothing pending. The settings row for the whole family; the
+     * heartbeat actually plays `working:<n>` (DROVE-182).
+     */
     | 'working'
+    /** Working, with the thread count said in Morse after the thump. */
+    | `working:${number}`
     /** A yes/no gate is waiting on Clay. */
     | 'waitingPermission'
     /** A session is blocked on an answer. */
@@ -53,8 +68,13 @@ export type AudioCueId =
     | 'agentDone'
     /** A subagent came back an error. */
     | 'agentFailed'
-    /** A RUN of tool calls started. Never one per call; see the mixer. */
-    | 'toolRun'
+    /**
+     * ONE tool call started. One per CALL since DROVE-174; DROVE-112 folded a
+     * run to a single tick and Clay asked for the opposite.
+     */
+    | 'toolCall'
+    /** A reply arrived. Played before its first sentence, never over it. */
+    | 'reply'
     /** The reader dropped its backlog and jumped to the newest sentence. */
     | 'skipAhead';
 
@@ -83,6 +103,147 @@ export interface AudioCueSpec {
  * takes a second to play is a cue that gets in the way.
  */
 export const cueBeatGap = 160;
+
+/**
+ * The heartbeat COUNTS what is running, in Morse (DROVE-182).
+ *
+ * Clay: "The heartbeat is supposed to be number of subagents including main in
+ * Morse code."
+ *
+ * The first version of this ticket said one tick per agent, and that was the
+ * weaker idea for the reason it already admitted: counting ticks past four by
+ * ear does not work, which is why it had to invent a vague "roll meaning many"
+ * for anything above four. Clay routinely runs eight to fifteen at once, so
+ * "many" would have been the answer almost every time.
+ *
+ * Morse digits solve it exactly. Every digit is FIVE symbols, so the rhythm
+ * stays regular whatever the number, and two digits cover everything he
+ * actually runs. Rhythm is still the axis: tempo is the state (6s working
+ * against 3s waiting on him) and pitch is the polish a pocket flattens.
+ *
+ *     1 .----   2 ..---   3 ...--   4 ....-   5 .....
+ *     6 -....   7 --...   8 ---..   9 ----.   0 -----
+ *
+ * The 196 Hz thump stays, and its job changes slightly: it is now the MARKER
+ * that a count is starting, not the main thread's own tick. Then the digits,
+ * most significant first.
+ *
+ * THE COUNT INCLUDES MAIN. One session working alone with no subagents is 1,
+ * not 0, because the main thread is a thing that is running and a heartbeat
+ * that said zero while the phone was clearly busy would say nothing. That is
+ * one more than the number the status row shows, which counts agents only, and
+ * the difference is stated rather than left to be discovered: see
+ * `heartbeatCount`, which is the one place the +1 happens.
+ *
+ * TIMING, tuned so a digit is comfortably inside the cadence:
+ *   dit 50ms, dah 150ms, one dit between symbols, three dits between digits,
+ *   the thump 190ms with a 200ms gap after it.
+ * So "1" (.----) is 850ms and the whole figure 1240ms; "0" (-----) is 950ms;
+ * "10" is 1950ms of digits and 2340ms of figure, the longest he will hear in
+ * practice. At the default 6s cadence that leaves between 3.6 and 4.8 seconds
+ * of silence after the figure, so it stays ambient rather than becoming a
+ * drum machine.
+ */
+const morseDit = 50;
+const morseDah = 150;
+/** Between two symbols of one digit. One dit, as Morse has it. */
+const morseSymbolGap = 50;
+/** Between two digits. Three dits. */
+const morseDigitGap = 150;
+/** The marker that a count is starting, and the gap before the first digit. */
+const countMarker: CueBeat = { hz: 196, ms: 190 };
+const afterMarker: CueBeat = { hz: 0, ms: 200 };
+/** The digits are quieter and shorter than the marker, as the ticket requires. */
+const morseHz = 880;
+const morseGain = 0.45;
+
+/** Morse for one digit, `.` and `-`. Five symbols each, which is the point. */
+export const morseDigits: Readonly<Record<string, string>> = {
+    '0': '-----',
+    '1': '.----',
+    '2': '..---',
+    '3': '...--',
+    '4': '....-',
+    '5': '.....',
+    '6': '-....',
+    '7': '--...',
+    '8': '---..',
+    '9': '----.',
+};
+
+/**
+ * The number the heartbeat says: subagents PLUS the main thread.
+ *
+ * The one derivation, and the only place the +1 lives. `agents` is
+ * `summarizeLiveStatus`'s agent-row count, which is exactly the number the
+ * status row draws (DROVE-155), so the two can never drift; what the heartbeat
+ * adds to it is stated here and in the settings row rather than being a silent
+ * off-by-one.
+ */
+export function heartbeatCount(agents: number): number {
+    return Math.max(1, Math.round(agents) + 1);
+}
+
+/** The beats for a count, as Morse digits after the marker. */
+export function morseBeats(count: number): CueBeat[] {
+    const beats: CueBeat[] = [countMarker, afterMarker];
+    // Two digits is 99, which is far past anything real; a bigger number is
+    // clamped rather than turned into a figure longer than the cadence.
+    const digits = String(Math.min(99, Math.max(1, Math.round(count))));
+    for (let d = 0; d < digits.length; d++) {
+        if (d > 0) beats.push({ hz: 0, ms: morseDigitGap });
+        const symbols = morseDigits[digits[d]] ?? '';
+        for (let i = 0; i < symbols.length; i++) {
+            if (i > 0) beats.push({ hz: 0, ms: morseSymbolGap });
+            beats.push({
+                hz: morseHz,
+                ms: symbols[i] === '-' ? morseDah : morseDit,
+                gain: morseGain,
+            });
+        }
+    }
+    return beats;
+}
+
+/**
+ * The cue id for a count.
+ *
+ * A count is unbounded, so the working cues cannot all be rows in a table the
+ * way every other cue is. `working:<n>` is built on demand and cached, and
+ * plain `working` is the row settings shows and mutes: they are one sound with
+ * one meaning and a different number in it.
+ */
+export function workingCueFor(count: number): AudioCueId {
+    return `working:${Math.min(99, Math.max(1, Math.round(count)))}` as AudioCueId;
+}
+
+/** Every working variant is the SAME settings row; muting one mutes all. */
+export function isWorkingCue(id: AudioCueId): boolean {
+    return id === 'working' || id.startsWith('working:');
+}
+
+/** The count inside a working cue id, or 1 for the plain row. */
+export function workingCueCount(id: AudioCueId): number {
+    if (!id.startsWith('working:')) return 1;
+    const parsed = Number.parseInt(id.slice('working:'.length), 10);
+    return Number.isFinite(parsed) ? Math.max(1, parsed) : 1;
+}
+
+function workingRow(id: AudioCueId): AudioCueSpec {
+    const count = workingCueCount(id);
+    return {
+        id,
+        kind: 'ambient',
+        beats: morseBeats(count),
+        // The rests inside the figure carry the spacing, so there is no
+        // uniform gap on top of them.
+        gapMs: 0,
+        gain: 0.45,
+        rank: 0,
+        title: 'Working',
+        meaning: 'Something is running and nothing needs you. One low thump, then how many threads are running in Morse — the main thread plus its subagents, so one more than the agent count on the status row.',
+    };
+}
 
 /**
  * The table.
@@ -141,16 +302,7 @@ export const audioCues: readonly AudioCueSpec[] = [
         title: 'Waiting: account limit',
         meaning: 'An account is running out of usage or auth. Two beeps, falling.',
     },
-    {
-        id: 'working',
-        kind: 'ambient',
-        beats: [{ hz: 196, ms: 190 }],
-        gapMs: cueBeatGap,
-        gain: 0.45,
-        rank: 0,
-        title: 'Working',
-        meaning: 'Something is running and nothing needs you. One low thump on the slow clock.',
-    },
+    workingRow('working'),
     {
         id: 'agentStart',
         kind: 'event',
@@ -182,14 +334,29 @@ export const audioCues: readonly AudioCueSpec[] = [
         meaning: 'A subagent came back an error. Two low notes, falling further.',
     },
     {
-        id: 'toolRun',
+        id: 'toolCall',
         kind: 'event',
-        beats: [{ hz: 1046, ms: 40 }],
+        // 28ms, which is about as short as a pitched tick can be and still
+        // read as a pitch rather than a click. Twenty of them in a burst take
+        // well under a second of air between them and rattle (DROVE-174).
+        beats: [{ hz: 1046, ms: 28 }],
         gapMs: 40,
-        gain: 0.35,
+        gain: 0.3,
         rank: 0,
-        title: 'Tool calls started',
-        meaning: 'A run of tool calls began. One quiet tick for the run, never one per call.',
+        title: 'Tool call',
+        meaning: 'A tool call started. One short quiet tick, one per call.',
+    },
+    {
+        id: 'reply',
+        kind: 'event',
+        // Low and warm against agentStart's bright rise and toolCall's high
+        // tick, so the three are told apart by register as well as by shape.
+        beats: [{ hz: 349, ms: 55 }, { hz: 440, ms: 70 }],
+        gapMs: 45,
+        gain: 0.5,
+        rank: 0,
+        title: 'Reply arrived',
+        meaning: 'A reply landed. Two soft low notes, played before its first sentence.',
     },
     {
         id: 'skipAhead',
@@ -204,13 +371,22 @@ export const audioCues: readonly AudioCueSpec[] = [
 ];
 
 const byId = new Map<AudioCueId, AudioCueSpec>(audioCues.map((cue) => [cue.id, cue]));
+/** Working variants, built on demand and kept. See workingCueFor. */
+const workingById = new Map<AudioCueId, AudioCueSpec>();
 
 export function cueSpec(id: AudioCueId): AudioCueSpec {
     const spec = byId.get(id);
-    // Exhaustive by construction: AudioCueId and the table are edited together
-    // and audioCues.spec.ts fails the moment one grows without the other.
-    if (!spec) throw new Error(`unknown audio cue ${id}`);
-    return spec;
+    if (spec) return spec;
+    // A count is unbounded, so this one family is built rather than tabled.
+    if (id.startsWith('working:')) {
+        const built = workingById.get(id) ?? workingRow(id);
+        workingById.set(id, built);
+        return built;
+    }
+    // Exhaustive by construction otherwise: AudioCueId and the table are
+    // edited together and audioCues.spec.ts fails the moment one grows
+    // without the other.
+    throw new Error(`unknown audio cue ${id}`);
 }
 
 /** How long a cue takes to play, beats plus the gaps between them. */

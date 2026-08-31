@@ -1,5 +1,6 @@
 import AVFoundation
 import ExpoModulesCore
+import MediaPlayer
 import Speech
 
 /// On-device speech for Cattle Drover (DROVE-30).
@@ -132,6 +133,31 @@ public final class DroverSpeechModule: Module {
     /// that lands between two replies still has to be remembered.
     private var routeObserver: NSObjectProtocol?
 
+    /// The AVAudioSession interruption observer (DROVE-189).
+    ///
+    /// Until this ticket there was NONE, which is why read-aloud died on a
+    /// phone call and never came back: iOS deactivates the session under the
+    /// synthesiser, the utterance cancels, and nothing ever reactivates. From
+    /// the outside that is indistinguishable from "it stopped when I locked
+    /// the screen", which is how the two halves of this bug hid each other.
+    /// It is also the same family as DROVE-146's wedge: a session change under
+    /// a running utterance, arriving from the OS instead of from us.
+    private var interruptionObserver: NSObjectProtocol?
+    /// Set when an interruption paused a live utterance, so `.ended` resumes it.
+    private var speechPausedByInterruption = false
+
+    /// JS is holding the session open (DROVE-189).
+    ///
+    /// `stop()` normally deactivates so ducked music comes back up. That is
+    /// right in the foreground and fatal in the BACKGROUND: an app with the
+    /// audio background mode stays alive only while its session is active, so
+    /// releasing it on a drained queue let iOS suspend the process, and the
+    /// next reply arrived at an app that was not running. While this is set,
+    /// `stop` cuts the voice and keeps the session.
+    private var sessionHeld = false
+    /// Remote commands are registered once, lazily, on the first utterance.
+    private var remoteCommandsWired = false
+
     /// The session as it was before dictation took it over, put back when
     /// dictation lets go. Nil while nobody is dictating.
     private var sessionBeforeDictation: (
@@ -177,17 +203,20 @@ public final class DroverSpeechModule: Module {
     public func definition() -> ModuleDefinition {
         Name("DroverSpeech")
 
-        Events("onDictationPartial", "onDictationEnded", "onDictationLevel", "onAudioRouteChange")
+        Events("onDictationPartial", "onDictationEnded", "onDictationLevel", "onAudioRouteChange", "onSpeechInterruption", "onRemoteCommand")
 
         OnCreate {
             self.synthesizer.delegate = self.speechDelegate
             self.startWatchingAudioRoute()
+            self.startWatchingInterruptions()
         }
 
         OnDestroy {
             self.synthesizer.stopSpeaking(at: .immediate)
             self.teardownDictation()
             self.stopWatchingAudioRoute()
+            self.stopWatchingInterruptions()
+            self.teardownRemoteCommands()
         }
 
         /// Speak one utterance and resolve when it is over — finished or cut.
@@ -231,6 +260,14 @@ public final class DroverSpeechModule: Module {
             // 10 ended up in the compact voice whatever was picked.
             utterance.prefersAssistiveTechnologySettings = false
             self.synthesizer.speak(utterance)
+            // Only while the session is HELD, which is the background case.
+            // In the foreground there is nothing to show a now-playing entry
+            // on and registering one would put Drover in the Control Centre
+            // for every reply (DROVE-189).
+            if self.sessionHeld {
+                self.wireRemoteCommands()
+                self.updateNowPlaying(title: String(text.prefix(60)))
+            }
         }
 
         /// Every voice installed on the device, with the fields JS picks on.
@@ -257,11 +294,43 @@ public final class DroverSpeechModule: Module {
         /// both on interruption and when the queue drains.
         AsyncFunction("stop") { () -> Void in
             self.synthesizer.stopSpeaking(at: .immediate)
+            self.speechPausedByInterruption = false
             // The session belongs to the microphone while dictation runs;
-            // dropping it here would stop the engine under a live tap.
-            if !self.isDictating {
+            // dropping it here would stop the engine under a live tap. And it
+            // belongs to BACKGROUND READING while JS is holding it: releasing
+            // a drained queue's session in the background lets iOS suspend the
+            // app, and a suspended app never speaks the next reply (DROVE-189).
+            if !self.isDictating && !self.sessionHeld {
                 self.deactivateSession()
+                self.clearNowPlaying()
             }
+        }
+
+        /// Keep the audio session even when nothing is speaking (DROVE-189).
+        ///
+        /// JS sets this while read-aloud is on and the app is in the
+        /// background, and clears it on the way back to the foreground or when
+        /// read-aloud goes off, so ducked music comes up again exactly when it
+        /// used to. Releasing it here rather than letting JS guess means the
+        /// session is dropped the moment the hold ends, not on the next stop.
+        AsyncFunction("holdSession") { (hold: Bool) -> Void in
+            self.sessionHeld = hold
+            if hold {
+                try? self.activatePlayback()
+                self.wireRemoteCommands()
+                self.updateNowPlaying(title: nil)
+            } else if !self.synthesizer.isSpeaking && !self.isDictating {
+                self.deactivateSession()
+                self.clearNowPlaying()
+            }
+        }
+
+        /// Whether this binary handles interruptions and takes `holdSession`.
+        /// The same build-stamp trick `watchesAudioRoute` uses (DROVE-119): a
+        /// bundle running on build 12 or earlier gets false and keeps the old
+        /// behaviour rather than assuming a protection it does not have.
+        Function("handlesInterruptions") { () -> Bool in
+            true
         }
 
         Function("isSpeaking") { () -> Bool in
@@ -413,6 +482,133 @@ public final class DroverSpeechModule: Module {
                 "reason": Self.routeChangeReasonName(raw)
             ])
         }
+    }
+
+    /// Pause on an interruption and resume after it (DROVE-189).
+    ///
+    /// `.began` means something else took the route — a call, a timer, Siri.
+    /// The synthesiser is PAUSED rather than stopped, so the sentence resumes
+    /// where it left off instead of the reader losing it; the utterance's
+    /// promise never settles meanwhile, which is exactly right, because the
+    /// reader must not pump the next sentence into a session it does not have.
+    ///
+    /// `.ended` with `.shouldResume` reactivates `.playback` and continues. On
+    /// an `.ended` WITHOUT `.shouldResume` (the other app is still playing)
+    /// the utterance is cut, which settles its promise and lets the reader
+    /// move on rather than waiting forever on a voice that will never speak.
+    /// Silence there was the old behaviour and it was permanent.
+    private func startWatchingInterruptions() {
+        guard interruptionObserver == nil else { return }
+        interruptionObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification,
+            object: AVAudioSession.sharedInstance(),
+            queue: .main
+        ) { [weak self] notification in
+            guard let self else { return }
+            let raw = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt ?? 0
+            guard let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
+            switch type {
+            case .began:
+                if self.synthesizer.isSpeaking && !self.synthesizer.isPaused {
+                    self.synthesizer.pauseSpeaking(at: .word)
+                    self.speechPausedByInterruption = true
+                }
+                self.sendEvent("onSpeechInterruption", ["state": "began"])
+            case .ended:
+                let optionsRaw = notification.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
+                let resume = AVAudioSession.InterruptionOptions(rawValue: optionsRaw).contains(.shouldResume)
+                let wasPaused = self.speechPausedByInterruption
+                self.speechPausedByInterruption = false
+                if wasPaused {
+                    if resume, (try? self.activatePlayback()) != nil {
+                        self.synthesizer.continueSpeaking()
+                    } else {
+                        // Settles the promise (didCancel), so the reader takes
+                        // the next sentence instead of hanging on a dead one.
+                        self.synthesizer.stopSpeaking(at: .immediate)
+                    }
+                } else if resume && self.sessionHeld {
+                    try? self.activatePlayback()
+                }
+                self.sendEvent("onSpeechInterruption", [
+                    "state": "ended",
+                    "resumed": wasPaused && resume
+                ])
+            @unknown default:
+                break
+            }
+        }
+    }
+
+    private func stopWatchingInterruptions() {
+        guard let interruptionObserver else { return }
+        NotificationCenter.default.removeObserver(interruptionObserver)
+        self.interruptionObserver = nil
+    }
+
+    //
+    // Lock screen
+    //
+
+    /// Play/pause on the lock screen and on an AirPod squeeze (DROVE-189).
+    ///
+    /// Scope, deliberately small: PLAY, PAUSE and TOGGLE only. Next and
+    /// previous track are left disabled rather than wired to the sentence
+    /// seek, because a skip on the lock screen that jumped a sentence would
+    /// be a second way to move the playhead and DROVE-146 settled that there
+    /// is exactly one (a deliberate tap). Nothing here decides anything: the
+    /// command goes up as an event and JS pauses or resumes the READER, so
+    /// the queue and the buttons cannot disagree.
+    private func wireRemoteCommands() {
+        guard !remoteCommandsWired else { return }
+        remoteCommandsWired = true
+        let centre = MPRemoteCommandCenter.shared()
+        centre.nextTrackCommand.isEnabled = false
+        centre.previousTrackCommand.isEnabled = false
+        centre.playCommand.isEnabled = true
+        centre.pauseCommand.isEnabled = true
+        centre.togglePlayPauseCommand.isEnabled = true
+        centre.playCommand.addTarget { [weak self] _ in
+            self?.sendEvent("onRemoteCommand", ["command": "play"])
+            return .success
+        }
+        centre.pauseCommand.addTarget { [weak self] _ in
+            self?.sendEvent("onRemoteCommand", ["command": "pause"])
+            return .success
+        }
+        centre.togglePlayPauseCommand.addTarget { [weak self] _ in
+            self?.sendEvent("onRemoteCommand", ["command": "toggle"])
+            return .success
+        }
+    }
+
+    private func teardownRemoteCommands() {
+        guard remoteCommandsWired else { return }
+        remoteCommandsWired = false
+        let centre = MPRemoteCommandCenter.shared()
+        centre.playCommand.removeTarget(nil)
+        centre.pauseCommand.removeTarget(nil)
+        centre.togglePlayPauseCommand.removeTarget(nil)
+        clearNowPlaying()
+    }
+
+    /// The lock screen needs SOMETHING to name, or the controls are dead even
+    /// when the commands are wired. No duration and no elapsed time: speech is
+    /// a stream of sentences, not a track, and a fake scrubber would be worse
+    /// than none.
+    private func updateNowPlaying(title: String?) {
+        var info: [String: Any] = [
+            MPMediaItemPropertyTitle: title ?? "Reading",
+            MPMediaItemPropertyArtist: "Cattle Drover",
+            MPNowPlayingInfoPropertyIsLiveStream: true,
+            MPNowPlayingInfoPropertyPlaybackRate: synthesizer.isSpeaking && !synthesizer.isPaused ? 1.0 : 0.0
+        ]
+        info[MPNowPlayingInfoPropertyMediaType] = MPNowPlayingInfoMediaType.audio.rawValue
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+    }
+
+    private func clearNowPlaying() {
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
     }
 
     private func stopWatchingAudioRoute() {

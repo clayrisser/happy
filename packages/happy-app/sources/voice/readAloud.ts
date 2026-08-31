@@ -131,6 +131,37 @@ import { stripToSpeakableProse } from './speakable';
  *   - `onSkip` fires on every cut, and `skipMarker` may now be empty. Clay:
  *     "don't say skipping ahead, it should be like a ding or a beep or
  *     something". So the app passes no words and plays an earcon instead.
+ *
+ * DROVE-181 added the THIRD kind of thing to say. Clay: "Read thought
+ * processes too". Thinking blocks were skipped outright; `thinkingFor` offers
+ * every message the same way `asideFor` does and takes back the thought to
+ * say. It becomes a sentence in the timeline at that message's createdAt, so
+ * it is spoken BEFORE the reply it precedes by construction rather than by a
+ * scheduler, and it inherits spoken-once, the mic gate, the catch-up and the
+ * jump for nothing — which is what makes a minute of thinking skippable to
+ * reach the answer, with the skip earcon saying so. `SpeakOptions.thinking`
+ * tells the engine to read it LOWER, not faster: a thought is long, and the
+ * treatment an aside gets (faster and higher) would make a paragraph of it
+ * exhausting. A thought is not an ARRIVAL either, for the same reason a title
+ * is not (DROVE-177): the model thinking is not the model writing, and letting
+ * it hold the arrival window open would bring the catch-up rate back on a
+ * reply that has already landed whole.
+ *
+ * DROVE-188 added the one thing allowed to JUMP THE QUEUE. Clay: "When a
+ * question comes in you need to read it to me." A gate waiting on him blocks a
+ * session, which costs him time directly, so `sayUrgent` puts a line in front
+ * of everything else queued. It cannot cut a sentence mid-word, and it does
+ * not have to try: `pump` only ever runs when nothing is at the synthesiser,
+ * so "finish this sentence, then say the gate" falls out of where the check
+ * sits. `cancelUrgent` un-says a gate answered before its line was reached.
+ *
+ * DROVE-189 stopped the reader silencing itself in the background. `rest`
+ * releases the audio session when the queue drains, which is right in the
+ * foreground (ducked music comes back up) and fatal behind the lock screen: an
+ * app with the audio background mode stays alive only while its session is
+ * ACTIVE, so a drained queue let iOS suspend the process and the next reply
+ * arrived at an app that was not running. `setBackgrounded` is the whole fix
+ * on the JS side, and it needs no new build.
  */
 
 /**
@@ -165,6 +196,14 @@ export interface SpeakOptions {
      * `asideFor`'s business.
      */
     aside?: boolean;
+    /**
+     * This is the model THINKING, not answering (DROVE-181). The engine reads
+     * it lower and a shade slower, which is the opposite direction from an
+     * aside on purpose: an aside is one line and can afford to be quick, a
+     * thought is a paragraph and quick would be exhausting. Volume would have
+     * been the obvious axis and the native module takes none per utterance.
+     */
+    thinking?: boolean;
 }
 
 export interface SpeechEngine {
@@ -271,6 +310,18 @@ export interface ReadAloudOptions {
      * spoken marker (DROVE-112).
      */
     onSkip?: () => void;
+    /**
+     * The model's reasoning for a thinking message, as prose to say, or null
+     * (DROVE-181).
+     *
+     * Injected for the same reason `asideFor` is: whether thinking is read at
+     * all is a SETTING, and how the reasoning is pulled out of the message is
+     * the CLI's transport detail. Neither belongs in a queue. What the queue
+     * gives it is the thing it could not get anywhere else — a place in the
+     * timeline at the message's own createdAt, so the thought is said before
+     * the reply it precedes and never after it.
+     */
+    thinkingFor?: (message: Message, sessionId: string) => string | null;
 }
 
 /**
@@ -358,6 +409,11 @@ interface QueuedSentence {
      * other sentence, and differs only in how the engine reads it.
      */
     aside: boolean;
+    /**
+     * The model thinking rather than answering (DROVE-181). Same deal: it
+     * rides the timeline, and only the engine treats it differently.
+     */
+    thinking: boolean;
 }
 
 interface HeldTail {
@@ -395,6 +451,7 @@ export class ReadAloudReader {
     private readonly turnStillRunning: ((sessionId: string) => boolean) | null;
     private readonly asideFor: ((message: Message, sessionId: string) => string | null) | null;
     private readonly onSkip: (() => void) | null;
+    private readonly thinkingFor: ((message: Message, sessionId: string) => string | null) | null;
     private readonly interruptListeners = new Set<ReadAloudInterruptListener>();
     private readonly playheadListeners = new Set<ReadAloudPlayheadListener>();
     private enabled = false;
@@ -455,6 +512,26 @@ export class ReadAloudReader {
      */
     private previousArrivalAt = Number.NEGATIVE_INFINITY;
     private lastArrivalAt = 0;
+    /**
+     * The same pair, counting THINKING as well as prose (DROVE-181).
+     *
+     * DROVE-177 made the ramp and the cut share one question, and reading the
+     * thinking splits them again, on purpose and in one direction only:
+     *
+     *   THE RAMP asks "is there newer PROSE I am falling behind?" and a thought
+     *   is not prose. Letting it count would put the catch-up rate back on a
+     *   reply that had already landed whole, which is the exact leak DROVE-177
+     *   closed an hour after DROVE-116 opened it.
+     *
+     *   THE CUT asks "is there something newer to skip TO?" and a thought
+     *   absolutely is. Without this a minute of reasoning followed by the
+     *   answer is a minute of waiting, because a turn whose only prose batch is
+     *   the answer itself never looks like a stream. "A minute of thinking is
+     *   skippable to reach the answer" is the acceptance criterion, and this is
+     *   what makes it true.
+     */
+    private previousSayableArrivalAt = Number.NEGATIVE_INFINITY;
+    private lastSayableArrivalAt = 0;
     /** The sentence at the engine, published to whoever marks it. */
     private playheadValue: ReadAloudPlayhead | null = null;
     /**
@@ -465,6 +542,19 @@ export class ReadAloudReader {
      * screen every time the list twitched.
      */
     private lastPosition: number | null = null;
+    /**
+     * Lines that jump the queue (DROVE-188). A gate waiting on Clay is the one
+     * thing that outranks the transcript, because a blocked session costs him
+     * time and a paragraph of reply does not.
+     */
+    private urgent: { key: string; text: string }[] = [];
+    /**
+     * The app is not in the foreground (DROVE-189). Reading carries on; what
+     * changes is that a drained queue no longer hands the audio session back,
+     * because letting go of it in the background is what lets iOS suspend the
+     * app and end reading for good.
+     */
+    private backgrounded = false;
 
     constructor(engine: SpeechEngine, options: ReadAloudOptions = {}) {
         this.engine = engine;
@@ -479,6 +569,7 @@ export class ReadAloudReader {
         this.turnStillRunning = options.turnStillRunning ?? null;
         this.asideFor = options.asideFor ?? null;
         this.onSkip = options.onSkip ?? null;
+        this.thinkingFor = options.thinkingFor ?? null;
     }
 
     get isSpeaking(): boolean {
@@ -532,6 +623,64 @@ export class ReadAloudReader {
     }
 
     /**
+     * Is there anything still to SAY? (DROVE-174.)
+     *
+     * Not the same question as `isSpeaking`. This is the sentence that has not
+     * started yet, and it is what the cue mixer needs: a cue that starts in
+     * the few milliseconds between two sentences is a cue over speech, and on
+     * iOS it was a cue that tore the audio session down under the next one.
+     * Nothing here is a promise to speak — the mic gate or a toggle can still
+     * take it away — only that the reader has material it intends to say.
+     */
+    get speechPending(): boolean {
+        if (this.urgent.length > 0) return true;
+        return this.skipSpoken(this.cursor) < this.timeline.length;
+    }
+
+    /**
+     * The app went to the background, or came back (DROVE-189).
+     *
+     * Reading does NOT stop either way. All this decides is whether a drained
+     * queue releases the audio session: in the foreground it should, so ducked
+     * music comes up; in the background it must not, because an app that has
+     * released its session is an app iOS suspends, and a suspended app never
+     * hears the next reply let alone reads it.
+     */
+    setBackgrounded(backgrounded: boolean): void {
+        if (this.backgrounded === backgrounded) return;
+        this.backgrounded = backgrounded;
+        // Coming back to the foreground with nothing to say hands the session
+        // over at the first opportunity rather than holding it all day.
+        if (!backgrounded && !this.speaking) this.pump();
+    }
+
+    /**
+     * Say this NOW, ahead of the transcript (DROVE-188).
+     *
+     * For a gate waiting on Clay, and for nothing else. It never cuts the
+     * sentence in flight: `pump` runs only when the synthesiser is idle, so
+     * the current sentence finishes and this is next. `key` is the gate's own
+     * id, so `cancelUrgent` can take it back if he answers first.
+     */
+    sayUrgent(key: string, text: string): void {
+        if (!this.enabled) return;
+        if (text.length === 0) return;
+        if (this.urgent.some((line) => line.key === key && line.text === text)) return;
+        this.urgent.push({ key, text });
+        this.pump();
+    }
+
+    /** Un-say a gate that was answered, dismissed or expired before its turn. */
+    cancelUrgent(key: string): void {
+        this.urgent = this.urgent.filter((line) => line.key !== key);
+    }
+
+    /** Lines still waiting to jump the queue. For the tests. */
+    get urgentPending(): number {
+        return this.urgent.length;
+    }
+
+    /**
      * The microphone has the audio session, or has given it back (DROVE-143).
      *
      * `interrupt('mic')` cuts the sentence in flight, but cutting once is not
@@ -574,9 +723,11 @@ export class ReadAloudReader {
         // Another session's arrival stamps say nothing about this one's, and
         // neither does its transcript: the playhead starts from nothing.
         this.arrivalTurn = -1;
+        this.previousSayableArrivalAt = Number.NEGATIVE_INFINITY;
         this.timeline = [];
         this.cursor = 0;
         this.lastPosition = null;
+        this.urgent = [];
         this.interrupt(reason);
     }
 
@@ -716,6 +867,31 @@ export class ReadAloudReader {
                 }
             }
 
+            // The model's reasoning, read in its place (DROVE-181). Same
+            // shape as the aside above and for the same reasons: offered every
+            // time, enqueued once, and NOT counted as an arrival — a thought
+            // is the model thinking, not writing, and letting it hold the
+            // arrival window open would bring the catch-up rate back on a
+            // reply that has already landed whole (DROVE-177).
+            if (this.thinkingFor !== null && message.kind === 'agent-text' && message.isThinking) {
+                const thought = this.thinkingFor(message, sessionId);
+                const thinkingKey = `thinking:${message.id}`;
+                const already = this.queuedChunks.get(thinkingKey) ?? 0;
+                if (thought !== null && thought.length > 0) {
+                    const { complete, pending } = chunkStreamed(stripToSpeakableProse(thought), false);
+                    // A thought STREAMS, so it is chunked and counted exactly
+                    // the way prose is; the tail is held under its own key so
+                    // a half-finished sentence is not read twice.
+                    const sentences = pending !== null ? [...complete, pending] : complete;
+                    if (sentences.length > already) {
+                        if (this.flushTails((id) => id !== message.id)) added = true;
+                        this.enqueue(sentences.slice(already), this.turn, message.id, message.createdAt, false, true);
+                        this.queuedChunks.set(thinkingKey, sentences.length);
+                        added = true;
+                    }
+                }
+            }
+
             if (message.kind !== 'agent-text' || message.isThinking) continue;
             if (typeof message.text !== 'string' || message.text.length === 0) continue;
 
@@ -740,7 +916,9 @@ export class ReadAloudReader {
                 this.pendingTails.delete(message.id);
             }
         }
-        if (proseAdded) this.noteArrival();
+        // Prose moves both clocks; a thought or a title moves only the one
+        // the CUT reads (DROVE-181, DROVE-177).
+        if (added) this.noteArrival(proseAdded);
         this.armHold();
         if (added) this.pump();
     }
@@ -759,6 +937,8 @@ export class ReadAloudReader {
         this.generation += 1;
         this.cursor = this.timeline.length;
         this.pendingTails.clear();
+        // A gate line belongs to a session and a queue the user threw away.
+        this.urgent = [];
         this.clearHold();
         this.speaking = false;
         this.speakingTurn = null;
@@ -828,11 +1008,27 @@ export class ReadAloudReader {
         return () => { this.interruptListeners.delete(listener); };
     }
 
-    private enqueue(sentences: string[], turn: number, messageId: string, createdAt: number, aside = false): void {
+    private enqueue(
+        sentences: string[],
+        turn: number,
+        messageId: string,
+        createdAt: number,
+        aside = false,
+        thinking = false,
+    ): void {
         if (sentences.length === 0) return;
         this.abandonTurnsBefore(turn);
         for (const text of sentences) {
-            this.timeline.push({ text, words: countWords(text), turn, messageId, createdAt, spoken: false, aside });
+            this.timeline.push({
+                text,
+                words: countWords(text),
+                turn,
+                messageId,
+                createdAt,
+                spoken: false,
+                aside,
+                thinking,
+            });
         }
     }
 
@@ -915,16 +1111,27 @@ export class ReadAloudReader {
         return flushed;
     }
 
-    /** New text landed; remember when, and when the batch before it did. */
-    private noteArrival(): void {
+    /**
+     * New material landed; remember when, and when the batch before it did.
+     *
+     * `prose` says whether it is the model WRITING. Only prose moves the pair
+     * the ramp reads; anything sayable moves the pair the cut reads. See the
+     * fields for why the two are no longer one question.
+     */
+    private noteArrival(prose: boolean): void {
         const at = this.now();
-        if (this.arrivalTurn !== this.turn) {
+        const newTurn = this.arrivalTurn !== this.turn;
+        if (newTurn) {
             this.arrivalTurn = this.turn;
             this.previousArrivalAt = Number.NEGATIVE_INFINITY;
-        } else {
-            this.previousArrivalAt = this.lastArrivalAt;
+            this.previousSayableArrivalAt = Number.NEGATIVE_INFINITY;
         }
-        this.lastArrivalAt = at;
+        if (prose) {
+            if (!newTurn) this.previousArrivalAt = this.lastArrivalAt;
+            this.lastArrivalAt = at;
+        }
+        if (!newTurn) this.previousSayableArrivalAt = this.lastSayableArrivalAt;
+        this.lastSayableArrivalAt = at;
     }
 
     /**
@@ -940,10 +1147,21 @@ export class ReadAloudReader {
      * the whole thing: nothing is newer once the agent has finished.
      */
     private stillArriving(): boolean {
-        if (this.turnStillRunning !== null && this.focused !== null && !this.turnStillRunning(this.focused)) {
-            return false;
-        }
+        if (this.turnFinished()) return false;
         return this.now() - this.previousArrivalAt <= this.arrivalWindowMs;
+    }
+
+    /** The cut's question: is there anything newer to skip TO? (DROVE-181.) */
+    private somethingNewerToSay(): boolean {
+        if (this.turnFinished()) return false;
+        return this.now() - this.previousSayableArrivalAt <= this.arrivalWindowMs;
+    }
+
+    /** The agent has stopped. Nothing is newer once that is true. */
+    private turnFinished(): boolean {
+        return this.turnStillRunning !== null
+            && this.focused !== null
+            && !this.turnStillRunning(this.focused);
     }
 
     /**
@@ -1007,6 +1225,12 @@ export class ReadAloudReader {
     /** Drained: let the audio session go and mark nothing. */
     private rest(): void {
         this.setPlayhead(null);
+        // In the BACKGROUND the session is kept (DROVE-189). Stopping here is
+        // about releasing it so ducked music comes back up, and behind the
+        // lock screen releasing it is how the app gets suspended and reading
+        // ends for the rest of the session. Music stays ducked meanwhile,
+        // which is the correct trade: he is listening to the session.
+        if (this.backgrounded && this.enabled) return;
         if (this.started) {
             this.started = false;
             void this.engine.stop();
@@ -1019,6 +1243,17 @@ export class ReadAloudReader {
         // queued; setMicHeld(false) pumps again (DROVE-143).
         if (this.micHeld) return;
 
+        // A gate waiting on him outranks the transcript (DROVE-188). Checked
+        // HERE, at the top of a pump that only ever runs with the synthesiser
+        // idle, which is what makes "finish the sentence, then say the gate"
+        // true without a single line about cutting anything.
+        const urgent = this.urgent.shift();
+        if (urgent !== undefined) {
+            this.setPlayhead(null);
+            this.speakNow(urgent.text, this.turn, 1, null);
+            return;
+        }
+
         // Nothing already said is ever a candidate, so every measure below
         // this line is about unread material only (DROVE-126).
         this.cursor = this.skipSpoken(this.cursor);
@@ -1029,21 +1264,26 @@ export class ReadAloudReader {
         // it, firing before the ramp had any room to run.
         const jump = Math.max(speedUp, this.jumpBacklogSeconds());
         const backlog = this.backlogSeconds();
-        // One answer to "is the voice behind?" for both the cut and the ramp
-        // (DROVE-177). Behind means newer prose is still landing; a reply
-        // that has finished is read at the normal rate however long it is.
+        // "Is the voice behind?", for the RAMP. Behind means newer PROSE is
+        // still landing (DROVE-177); a reply that has finished is read at the
+        // normal rate however long it is, and a thought landing beside it is
+        // not prose (DROVE-181). The cut asks its own, wider question below.
         const arriving = this.stillArriving();
 
         // The cut (DROVE-108, moved out to its own threshold by DROVE-116).
         // Three things have to hold at once: there is something newer to skip
         // TO, more than the JUMP threshold of unspoken audio is waiting, and
-        // the turn is still being written so that newer material actually
-        // exists. A finished turn fails the third test however long it is,
-        // which is the whole point. Between the two thresholds nothing is
-        // thrown away and the voice simply reads faster.
+        // the turn is still producing so that newer material actually exists.
+        // A finished turn fails the third test however long it is, which is
+        // the whole point. Between the two thresholds nothing is thrown away
+        // and the voice simply reads faster.
+        //
+        // `somethingNewerToSay` rather than `arriving` since DROVE-181: a
+        // minute of THINKING followed by the answer has to be skippable, and
+        // thinking is not prose so it never moves the ramp.
         if (this.timeline.length - this.cursor > 1
             && backlog > jump
-            && arriving) {
+            && this.somethingNewerToSay()) {
             this.cursor = this.timeline.length - 1;
             this.markerDue = true;
         }
@@ -1090,7 +1330,11 @@ export class ReadAloudReader {
         }
         const generation = this.generation;
         void Promise.resolve()
-            .then(() => this.engine.speak(text, { rateScale, aside: at?.aside === true }))
+            .then(() => this.engine.speak(text, {
+                rateScale,
+                aside: at?.aside === true,
+                thinking: at?.thinking === true,
+            }))
             .catch(() => {
                 // One utterance failing must not wedge every later one. The
                 // reply keeps being read from the next sentence on.

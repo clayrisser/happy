@@ -6,8 +6,10 @@ import { audioCues } from './audioCueService';
 import { resolveSpeaker } from './speaker';
 import { cueWatchReplyStart, watchSpeechEngine } from './watchSpeaker';
 import { storage } from '@/sync/storage';
-import { resolveStreamTalk } from '@/sync/settings';
+import { resolveAudioCues, resolveStreamTalk } from '@/sync/settings';
+import { extractThinkingText, isEmptyThinking } from '@/utils/thinkingText';
 import { readFromHere, readSentenceFromHere } from './readAloudTap';
+import { startBackgroundAudio } from './backgroundAudio';
 
 /**
  * The one reader the app owns (DROVE-30).
@@ -66,6 +68,15 @@ export const readAloud = new ReadAloudReader(
         skipMarker: '',
         onSkip: () => audioCues.skipped(),
         asideFor: (message, sessionId) => audioCues.titleFor(message, sessionId),
+        // The model's reasoning, said in its place (DROVE-181). The setting
+        // and the unwrapping both live out here so the queue stays a queue.
+        thinkingFor: (message) => {
+            if (!resolveAudioCues(storage.getState().settings).speakThinking) return null;
+            if (message.kind !== 'agent-text') return null;
+            if (typeof message.text !== 'string') return null;
+            if (isEmptyThinking(message.text)) return null;
+            return extractThinkingText(message.text);
+        },
     },
 );
 
@@ -91,3 +102,4 @@ export function readAloudSentenceFromHere(
 }
 
 audioCues.attach(readAloud);
+startBackgroundAudio(readAloud);
