@@ -46,7 +46,12 @@ export const lightTheme = {
         // because every other accent in here already means something else:
         // #007AFF is working / subagent, #2BACCC is a link, green is success,
         // red is destructive. A reading position is none of those.
-        spokenSentence: '#6D28D9',
+        //
+        // Clay asked for yellow. Yellow reads beautifully on the dark theme and
+        // fails on the light one, so this is the same hue at the darkness white
+        // demands: 5.24:1 here, against 12.82:1 for the dark theme's #FFD54F.
+        // Both measured, not judged by eye.
+        spokenSentence: '#946200',
         deleteAction: '#FF6B6B', // Delete/remove button color
         warningCritical: '#FF3B30',
         warning: '#8E8E93',
@@ -273,8 +278,8 @@ export const darkTheme = {
         textDestructive: Platform.select({ ios: '#FF453A', default: '#F48FB1' }),
         textSecondary: Platform.select({ ios: '#8E8E93', default: '#CAC4D0' }),
         textLink: '#2BACCC',
-        /** See the light theme: a violet nothing else in the palette claims. */
-        spokenSentence: '#B388FF',
+        /** See the light theme: yellow, which only this reading position uses. */
+        spokenSentence: '#FFD54F',
         deleteAction: '#FF6B6B', // Delete/remove button color (same in both themes)
         warningCritical: '#FF453A',
         warning: '#8E8E93',
