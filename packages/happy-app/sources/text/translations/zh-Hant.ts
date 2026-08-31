@@ -80,6 +80,22 @@ export const zhHant: TranslationStructure = {
         status: '狀態',
     },
 
+    // The home page's all-time token counter (DROVE-241).
+    allTimeTokens: {
+        strip: ({ tokens }: { tokens: string }) => `累計 ${tokens}`,
+        title: '累計 Token',
+        total: ({ tokens }: { tokens: string }) => `所有工作階段共 ${tokens}`,
+        unattributed: '未歸類',
+        empty: '還沒有統計。',
+        footer: '在本裝置連線期間統計。',
+        since: ({ when }: { when: string }) => `自 ${when} 起統計`,
+        accessibility: ({ tokens }: { tokens: string }) => `累計使用 ${tokens} 個 token`,
+        accessibilityHint: '輕按查看依模型分類，長按重設',
+        resetTitle: '重設 Token 計數？',
+        resetMessage: '累計數量和依模型的分類都會歸零，且無法復原。',
+        resetConfirm: '重設',
+        resetCancel: '保留',
+    },
     status: {
         connected: '已連線',
         connecting: '連線中',

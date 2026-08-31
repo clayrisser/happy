@@ -20,6 +20,8 @@ import { resolveSessionState, type SessionState } from './sessionState';
 import { getSessionActivityAt } from '@/utils/sessionActivity';
 import { applySettings, Settings } from "./settings";
 import { LocalSettings, applyLocalSettings } from "./localSettings";
+import { creditTokenLedger, resetTokenLedger, type TokenLedger, type TokenLedgerSighting } from "./tokenLedger";
+import { loadTokenLedger, saveTokenLedger } from "./tokenLedgerStore";
 import type { PushPermissionInfo } from "./pushRegistration";
 import { Purchases, customerInfoToPurchases } from "./purchases";
 import { Profile } from "./profile";
@@ -264,6 +266,12 @@ interface StorageState {
     settings: Settings;
     settingsVersion: number | null;
     localSettings: LocalSettings;
+    /**
+     * Every token this DEVICE has seen spent, all time, split by model
+     * (DROVE-241). Not part of `localSettings`: a logout clears that store and
+     * the long press is meant to be the only thing that resets this.
+     */
+    tokenLedger: TokenLedger;
     purchases: Purchases;
     profile: Profile;
     sessions: Record<string, Session>;
@@ -311,6 +319,8 @@ interface StorageState {
     applySettings: (settings: Settings, version: number) => void;
     applySettingsLocal: (settings: Partial<Settings>) => void;
     applyLocalSettings: (settings: Partial<LocalSettings>) => void;
+    /** The long press on the home page's counter, after its confirm. */
+    resetAllTimeTokens: () => void;
     applyPurchases: (customerInfo: CustomerInfo) => void;
     applyProfile: (profile: Profile) => void;
     applyGitStatus: (pathKey: string, status: GitStatus | null) => void;
@@ -454,6 +464,7 @@ function buildSessionListViewData(
 export const storage = create<StorageState>()((set, get) => {
     let { settings, version } = loadSettings();
     let localSettings = loadLocalSettings();
+    const tokenLedger = loadTokenLedger();
     let purchases = loadPurchases();
     let profile = loadProfile();
     let sessionDrafts = loadSessionDrafts();
@@ -462,6 +473,7 @@ export const storage = create<StorageState>()((set, get) => {
         settings,
         settingsVersion: version,
         localSettings,
+        tokenLedger,
         purchases,
         profile,
         sessions: {},
@@ -735,6 +747,30 @@ export const storage = create<StorageState>()((set, get) => {
                 state.projects,
             );
 
+            // BANK WHAT EVERY SESSION HAS SPENT (DROVE-241).
+            //
+            // Here rather than in a hook on the home screen, because
+            // `liveStatus` is nulled the instant a session goes idle: a
+            // counter that only credited while its own screen was mounted
+            // would miss whole sessions. This runs wherever the socket does.
+            //
+            // Only the sessions in THIS frame, not every session in the store,
+            // so a quiet phone costs nothing. `creditTokenLedger` returns the
+            // same object when nothing moved, so most frames are a no-op and
+            // no write reaches MMKV.
+            const sightings: TokenLedgerSighting[] = [];
+            sessions.forEach((session) => {
+                const tokens = mergedSessions[session.id]?.metadata?.liveStatus?.tokens;
+                if (!tokens || typeof tokens.session !== 'number') return;
+                sightings.push({
+                    sessionId: session.id,
+                    session: tokens.session,
+                    byModel: tokens.sessionByModel,
+                });
+            });
+            const nextLedger = creditTokenLedger(state.tokenLedger, sightings, Date.now());
+            if (nextLedger !== state.tokenLedger) saveTokenLedger(nextLedger);
+
             return {
                 ...state,
                 sessions: mergedSessions,
@@ -742,6 +778,7 @@ export const storage = create<StorageState>()((set, get) => {
                 sessionListViewData,
                 sessionMessages: updatedSessionMessages,
                 unreadSessionIds,
+                tokenLedger: nextLedger,
             };
         }),
         applyLoaded: () => set((state) => {
@@ -987,6 +1024,14 @@ export const storage = create<StorageState>()((set, get) => {
             } else {
                 return state;
             }
+        }),
+        resetAllTimeTokens: () => set((state) => {
+            // The marks survive on purpose; see `resetTokenLedger`. Without
+            // them every live session's running total would be re-credited on
+            // the next socket frame and the number would bounce off zero.
+            const nextLedger = resetTokenLedger(state.tokenLedger, Date.now());
+            saveTokenLedger(nextLedger);
+            return { ...state, tokenLedger: nextLedger };
         }),
         applyLocalSettings: (delta: Partial<LocalSettings>) => set((state) => {
             const updatedLocalSettings = applyLocalSettings(state.localSettings, delta);
@@ -1645,6 +1690,16 @@ export function useSetting<K extends keyof Settings>(name: K): Settings[K] {
 
 export function useLocalSettings(): LocalSettings {
     return storage(useShallow((state) => state.localSettings));
+}
+
+/** The home page's all-time counter (DROVE-241). */
+export function useTokenLedger(): TokenLedger {
+    return storage(useShallow((state) => state.tokenLedger));
+}
+
+/** The long press, once its confirm has come back true. */
+export function resetAllTimeTokens(): void {
+    storage.getState().resetAllTimeTokens();
 }
 
 export function useAllMachines(options?: { includeOffline?: boolean }): Machine[] {

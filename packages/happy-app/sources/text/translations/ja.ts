@@ -81,6 +81,22 @@ export const ja: TranslationStructure = {
         status: 'ステータス',
     },
 
+    // The home page's all-time token counter (DROVE-241).
+    allTimeTokens: {
+        strip: ({ tokens }: { tokens: string }) => `累計 ${tokens}`,
+        title: '累計トークン',
+        total: ({ tokens }: { tokens: string }) => `全セッションで ${tokens}`,
+        unattributed: '未分類',
+        empty: 'まだ集計はありません。',
+        footer: 'この端末が接続していた間に集計したものです。',
+        since: ({ when }: { when: string }) => `${when} から集計`,
+        accessibility: ({ tokens }: { tokens: string }) => `累計 ${tokens} トークン使用`,
+        accessibilityHint: '押すとモデル別の内訳、長押しでリセット',
+        resetTitle: 'トークンカウンターをリセットしますか？',
+        resetMessage: '累計とモデル別の内訳がゼロに戻ります。元に戻せません。',
+        resetConfirm: 'リセット',
+        resetCancel: '残す',
+    },
     status: {
         connected: '接続済み',
         connecting: '接続中',

@@ -28,6 +28,7 @@ import {
     type StatusStripContent,
 } from './statusStripLayout';
 import { resolveFlexFrames } from './flexFrames';
+import { formatTokens } from '@/utils/liveStatus';
 
 /** Clay's own row: `● Bash 4m 20s 👥6 ˄ · 1/3 tasks ˄ · 51.6k ◔ · jamrizzi 8% ˄`. */
 const busy: StatusStripContent = {
@@ -260,5 +261,100 @@ describe('the tree itself', () => {
         expect('workingWord' in busy).toBe(false);
         const frame = resolveFlexFrames(statusStripNode(busy, 393), statusRowUsableWidth(393));
         expect(findFrame(frame, 'workingWord')).toBeUndefined();
+    });
+});
+
+/**
+ * THE CENTRE ZONE UNDER A SESSION TOTAL (DROVE-241).
+ *
+ * The strip's number stopped being the turn and became the session, and a
+ * session total only ever grows: Clay's reached 1.3M in an evening. So the
+ * question DROVE-223 would ask is whether the centre zone can outgrow its
+ * budget, and the answer is no, for a reason that is a property of
+ * `formatTokens` rather than a happy accident of tonight's numbers.
+ *
+ * `formatTokens` returns AT MOST SIX CHARACTERS. One decimal, one suffix, and
+ * a promotion at 0.99995 of each tier so `999_999` renders `1.0M` instead of
+ * the seven-character `1000.0k`. Six characters is 36pt at the row's 6pt
+ * advance, so the centre is bounded whatever the session spends, and the
+ * widest string is a number in the high hundreds of its tier rather than a
+ * big one.
+ */
+describe('the centre holds a session total, at every width (DROVE-241)', () => {
+    /** The centre is the number, the 3pt gap and the 14pt ring. Nothing else. */
+    const centreOf = (tokens: string, width: number) =>
+        statusStripZoneWidths({ ...busy, tokens }, width).centre;
+
+    it('is never wider than six characters can draw', () => {
+        // Every tier's widest string, and they are all the same width.
+        for (const widest of ['999.9k', '999.9M', '999.9B']) {
+            expect(formatTokens(999_900).length, widest).toBe(6);
+            expect(centreOf(widest, 393), widest).toBe(6 * 6 + 3 + 14);
+            expect(centreOf(widest, 393), widest).toBe(53);
+        }
+    });
+
+    it('is NARROWER at 10M than at 999.9k, which is the whole point', () => {
+        // Ten million is `10.0M`, five characters. A session that grows past a
+        // million gets a SHORTER string, not a longer one, because the tier
+        // promotes before the digits do. There is no width event at 10M and
+        // none at a billion either.
+        expect(formatTokens(10_000_000)).toBe('10.0M');
+        expect(formatTokens(1_300_000)).toBe('1.3M');
+        expect(formatTokens(9_999_999_999)).toBe('10.0B');
+        for (const width of [320, 375, 393]) {
+            expect(centreOf('10.0M', width), String(width)).toBeLessThan(centreOf('999.9k', width));
+        }
+    });
+
+    it('costs the sides 3pt against the turn figure it replaced, at 320 / 375 / 393', () => {
+        // `51.6k` is the turn on the row Clay photographed; `1.3M` is what his
+        // session had actually spent by then. The session total is the SHORTER
+        // string of the two, so each side zone gains 3pt rather than losing
+        // any. Pinned per width because the share is what the folds spend.
+        const shares = (tokens: string) => [320, 375, 393]
+            .map((width) => statusStripZoneWidths({ ...busy, tokens }, width).share);
+        expect(shares('51.6k')).toEqual([109.5, 137, 146]);
+        expect(shares('1.3M')).toEqual([112.5, 140, 149]);
+        // And the worst case the format can produce, which is the one the
+        // budget has to survive rather than tonight's number.
+        expect(shares('999.9k')).toEqual([106.5, 134, 143]);
+    });
+
+    it('folds exactly what DROVE-231 folded, with the widest total on the line', () => {
+        // THE ACCEPTANCE CRITERION. A total in the millions must not cost the
+        // row a fact it kept before. The give-way order is unchanged at all
+        // three widths: the tool name and the clock at 393 and 375, the tasks
+        // badge as well at 320.
+        const widest = { ...busy, tokens: '999.9k' };
+        for (const width of [375, 393]) {
+            expect(drawnAt(widest, width).folds, String(width)).toEqual({
+                ...noStatusStripFolds,
+                toolName: true,
+                elapsed: true,
+            });
+        }
+        expect(drawnAt(widest, 320).folds).toEqual({
+            ...noStatusStripFolds,
+            toolName: true,
+            elapsed: true,
+            tasks: true,
+        });
+        // And the number itself is never the thing that gives way: it is last
+        // on STATUS_ROW_GIVE_WAY and the centre fits at every width.
+        for (const width of [320, 375, 393]) {
+            expect(drawnAt(widest, width).drawn.tokens, String(width)).toBe('999.9k');
+        }
+    });
+
+    it('would have overflowed on the old format, which is why the tier promotes', () => {
+        // `1000.0k` is what DROVE-184's formatter returned for 999_999: seven
+        // characters, 42pt, and it arrived in the narrow band right below the
+        // million Clay was watching for. 6pt of extra centre is 3pt off each
+        // side's share, and at 320 the shares are already inside 110.
+        expect(centreOf('1000.0k', 320)).toBe(59);
+        expect(centreOf('999.9k', 320)).toBe(53);
+        expect(formatTokens(999_999)).toBe('1.0M');
+        expect(formatTokens(999_999)).not.toBe('1000.0k');
     });
 });

@@ -22,10 +22,13 @@ import type { LiveStatusSummary, LiveStatusTally } from '@/utils/liveStatus';
 /**
  * `Session 1.4M · main 210k · agents 1.2M · this turn 312k`.
  *
- * The session total first, because that is the question the row cannot answer:
- * the strip resets its number at every prompt and Clay's is "what has this
- * cost me". Then the split, so main is legible against the fan-out, and the
- * turn last since it is the one already on the row.
+ * The session total leads because it is the headline, and it is now also what
+ * the strip draws (DROVE-241) — so this line's job changed from answering the
+ * row to expanding it. The split comes next, so main is legible against the
+ * fan-out, and THE TURN IS LAST AND LIVES ONLY HERE: it is the number that was
+ * on the row until Clay asked why his counter kept resetting, and it is still
+ * worth having, one tap away, where a number going back to zero at each prompt
+ * is the answer to a question rather than a bug.
  */
 function sessionTallyLine(tally: LiveStatusTally): string {
     return [
@@ -63,12 +66,11 @@ export function SessionAgentsSheet(props: {
                         {props.summary.headline}
                     </Text>
                     {/* The tally spelled out, one tap from the strip
-                        (DROVE-184). The row has room for one number and it
-                        spends it on the turn's total; the two things it cannot
-                        say are what the SESSION has cost and how much of that
-                        was the main thread rather than the fan-out. Both are
-                        here, and the session line is the one that keeps
-                        finished agents. */}
+                        (DROVE-184, DROVE-241). The row has room for one number
+                        and it spends it on the session total; the three things
+                        it cannot say are how much of that was the main thread
+                        rather than the fan-out, and what THIS turn has cost on
+                        its own. All three are here. */}
                     {props.summary.tally ? (
                         <Text
                             numberOfLines={2}

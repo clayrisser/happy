@@ -90,6 +90,22 @@ export const pl: TranslationStructure = {
     },
 
 
+    // The home page's all-time token counter (DROVE-241).
+    allTimeTokens: {
+        strip: ({ tokens }: { tokens: string }) => `${tokens} łącznie`,
+        title: 'Tokeny łącznie',
+        total: ({ tokens }: { tokens: string }) => `${tokens} we wszystkich sesjach`,
+        unattributed: 'Bez modelu',
+        empty: 'Nic jeszcze nie policzono.',
+        footer: 'Liczone na tym urządzeniu, gdy było połączone.',
+        since: ({ when }: { when: string }) => `Liczymy od ${when}`,
+        accessibility: ({ tokens }: { tokens: string }) => `użyto ${tokens} tokenów łącznie`,
+        accessibilityHint: 'Naciśnij, aby zobaczyć podział na modele, przytrzymaj, aby wyzerować',
+        resetTitle: 'Wyzerować licznik tokenów?',
+        resetMessage: 'Suma i podział na modele wrócą do zera. Tego nie da się cofnąć.',
+        resetConfirm: 'Wyzeruj',
+        resetCancel: 'Zostaw',
+    },
     status: {
         connected: 'połączono',
         connecting: 'łączenie',

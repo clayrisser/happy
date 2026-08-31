@@ -33,6 +33,7 @@ import { MOBILE_GLASS_HEADER_HEIGHT } from './navigation/headerMetrics';
 import { useNewSessionDraft } from '@/hooks/useNewSessionDraft';
 import { useStartSessionFromDraft } from '@/hooks/useStartSessionFromDraft';
 import { shouldShowHomeConnectionStatus } from './homeConnectionStatus';
+import { AllTimeTokens } from './AllTimeTokens';
 
 interface MainViewProps {
     variant: 'phone' | 'sidebar';
@@ -227,6 +228,13 @@ const HeaderTitle = React.memo(({ activeTab }: { activeTab: ActiveTabType }) => 
                     </Text>
                 </View>
             )}
+            {/* Every token this phone has ever seen spent (DROVE-241). It
+                lives in the centred column, which is absolutely positioned at
+                left:64 / right:64, so a number that only grows takes no width
+                from the logo or the action pill. Sessions tab only: it is a
+                fact about the whole device and the other tabs are about
+                something else. */}
+            {activeTab === 'sessions' && <AllTimeTokens />}
         </View>
     );
 });

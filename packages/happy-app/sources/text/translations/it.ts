@@ -78,6 +78,22 @@ export const it: TranslationStructure = {
         status: 'Stato',
     },
 
+    // The home page's all-time token counter (DROVE-241).
+    allTimeTokens: {
+        strip: ({ tokens }: { tokens: string }) => `${tokens} in totale`,
+        title: 'Token in totale',
+        total: ({ tokens }: { tokens: string }) => `${tokens} su tutte le sessioni`,
+        unattributed: 'Non attribuiti',
+        empty: 'Ancora niente da contare.',
+        footer: 'Contato su questo dispositivo, mentre era connesso.',
+        since: ({ when }: { when: string }) => `Si conta da ${when}`,
+        accessibility: ({ tokens }: { tokens: string }) => `${tokens} token usati in totale`,
+        accessibilityHint: 'Tocca per la ripartizione per modello, tieni premuto per azzerare',
+        resetTitle: 'Azzerare il contatore dei token?',
+        resetMessage: 'Il totale e la ripartizione per modello tornano a zero. Non si può annullare.',
+        resetConfirm: 'Azzera',
+        resetCancel: 'Mantieni',
+    },
     status: {
         connected: 'connesso',
         connecting: 'connessione in corso',
