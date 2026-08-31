@@ -129,8 +129,17 @@ export function sessionEnvironmentKeysToUnset(explicitEnv: NodeJS.ProcessEnv = {
 export function wrapTmuxCommandWithSessionEnvironmentSanitizer(
     command: string,
     explicitEnv: NodeJS.ProcessEnv = {},
+    /**
+     * Keys this one launch must shed on top of the session-scoped set. A
+     * resume onto the ambient account unsets CLAUDE_CONFIG_DIR (DROVE-76),
+     * because the tmux server may carry another account's dir.
+     */
+    extraKeysToUnset: string[] = [],
 ): string {
-    const keysToUnset = sessionEnvironmentKeysToUnset(explicitEnv);
+    const keysToUnset = [
+        ...sessionEnvironmentKeysToUnset(explicitEnv),
+        ...extraKeysToUnset.filter((key) => explicitEnv[key] === undefined),
+    ];
     if (keysToUnset.length === 0) {
         return command;
     }
