@@ -36,8 +36,31 @@ vi.mock('@/constants/Typography', () => ({ Typography: { default: () => ({}) } }
 vi.mock('./BubblePressable', () => ({ BubblePressable: host('Pressable') }));
 
 // The shell pulls in gesture-handler and reanimated, neither of which vitest
-// can transform. What this sheet owes it is the open flag and the children.
-vi.mock('./ComposerSheet', () => ({ ComposerSheet: host('ComposerSheet') }));
+// can transform. This double is the part the tiles actually depend on: the
+// REAL exit (DROVE-183), published on the real context, with its onClosed on
+// the host element so a test can say "and now the Modal has gone".
+vi.mock('./ComposerSheet', async () => {
+    const react = await import('react');
+    const { ComposerSheetContext, useComposerSheetExit } = await import('./composerSheetNavigation');
+    return {
+        ComposerSheet: (props: any) => {
+            const exit = useComposerSheetExit({
+                open: props.open,
+                onClose: props.onClose,
+                onClosed: props.onClosed,
+            });
+            return react.createElement(
+                'ComposerSheet',
+                { ...props, onClosed: exit.onClosed },
+                react.createElement(
+                    ComposerSheetContext.Provider,
+                    { value: exit.shell },
+                    props.children,
+                ),
+            );
+        },
+    };
+});
 
 vi.mock('@/text', async () => {
     const { en } = await import('@/text/_default');

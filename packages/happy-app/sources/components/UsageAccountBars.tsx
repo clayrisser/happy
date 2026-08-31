@@ -40,6 +40,7 @@ import * as React from 'react';
 import { LayoutChangeEvent, Pressable, Text, View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 import { Typography } from '@/constants/Typography';
+import { useComposerSheetNavigate } from './composerSheetNavigation';
 import {
     usageBarColumns,
     usageBarPercentLabel,
@@ -171,6 +172,11 @@ function UsageAccountBlock(props: {
     onSwitch?: (account: string) => void;
 }) {
     const { theme } = useUnistyles();
+    // The confirm is a system alert, so it cannot come up while the sheet's
+    // Modal is still sliding down (DROVE-183, the DROVE-158 mechanism). In the
+    // sheet this closes first and asks after; on the session info screen,
+    // where the same block is drawn outside any sheet, it asks straight away.
+    const leave = useComposerSheetNavigate();
     const group = props.group;
     const account = group.account ?? null;
     const canSwitch = !!(props.onSwitch && group.switchable && account);
@@ -241,7 +247,7 @@ function UsageAccountBlock(props: {
             accessible
             accessibilityRole="button"
             accessibilityLabel={label}
-            onPress={() => props.onSwitch?.(account!)}
+            onPress={() => leave(() => props.onSwitch?.(account!))}
             style={({ pressed }: { pressed: boolean }) => ({ opacity: pressed ? 0.5 : 1 })}
         >
             {body}

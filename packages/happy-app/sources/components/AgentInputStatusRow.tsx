@@ -312,10 +312,11 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
     const closeSheet = React.useCallback(() => setOpenSheet(null), []);
 
     // Tapping an account block in the quota sheet moves the session onto it
-    // (DROVE-160). The sheet is closed first and the confirm is raised on the
-    // next tick, so the alert is not presented into a sheet still tearing down.
-    // Nothing new is sent: confirmDroverSwitch is the `/flip` message every
-    // other surface already sends.
+    // (DROVE-160). The block routes this through the sheet's own exit
+    // (DROVE-183), so by the time it arrives the Modal is off the screen and
+    // the system alert has somewhere to present; the close here is the
+    // belt-and-braces for any path that did not. Nothing new is sent:
+    // confirmDroverSwitch is the `/flip` message every other surface sends.
     const sessionId = p.sessionId;
     const currentAccount = p.usageBarGroups.find((group) => group.active)?.account ?? null;
     // What the strip prints. In zen mode that is nothing, while the switch

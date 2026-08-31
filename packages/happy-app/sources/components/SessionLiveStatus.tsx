@@ -8,6 +8,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { Typography } from '@/constants/Typography';
 import { storage } from '@/sync/storage';
 import type { LiveStatusRow } from '@/utils/liveStatus';
+import { useComposerSheetNavigate } from './composerSheetNavigation';
 
 /**
  * The unfolded task tree: what the session is DOING, one row per running
@@ -23,7 +24,7 @@ import type { LiveStatusRow } from '@/utils/liveStatus';
  * folded over the tree. The headline now lives in the composer's status row
  * (AgentInputStatusRow, DROVE-82) so the chat gets the height back; the row
  * unfolds this tree under itself. Tapping a row opens that tool's card in the
- * transcript. Fold, never drop.
+ * transcript, and closes the sheet on the way (DROVE-183). Fold, never drop.
  */
 
 /**
@@ -50,6 +51,11 @@ const rowIcon: Record<LiveStatusRow['kind'], React.ComponentProps<typeof Octicon
 function LiveStatusTreeRow(props: { sessionId: string, row: LiveStatusRow }) {
     const { theme } = useUnistyles();
     const router = useRouter();
+    // Both rows below go through the sheet, not straight to the router
+    // (DROVE-183). This tree IS the agents sheet's content, so a tap used to
+    // push the agent screen with the sheet still open under it. Outside a
+    // sheet this is the identity and the push is immediate.
+    const leave = useComposerSheetNavigate();
     const messageId = useMessageIdForTool(props.sessionId, props.row.toolId);
     const { row } = props;
 
@@ -100,10 +106,10 @@ function LiveStatusTreeRow(props: { sessionId: string, row: LiveStatusRow }) {
         const agentId = row.agentId;
         return (
             <Pressable
-                onPress={() => router.push({
+                onPress={() => leave(() => router.push({
                     pathname: '/session/[id]/agent/[agentId]',
                     params: { id: props.sessionId, agentId, label: row.title },
-                })}
+                }))}
                 style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
             >
                 {body}
@@ -116,7 +122,7 @@ function LiveStatusTreeRow(props: { sessionId: string, row: LiveStatusRow }) {
     if (!messageId) return body;
     return (
         <Pressable
-            onPress={() => router.push(`/session/${props.sessionId}/message/${messageId}`)}
+            onPress={() => leave(() => router.push(`/session/${props.sessionId}/message/${messageId}`))}
             style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
         >
             {body}
