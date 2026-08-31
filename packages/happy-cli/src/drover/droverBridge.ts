@@ -23,6 +23,7 @@ import { configuration } from '@/configuration'
 import { projectPath } from '@/projectPath'
 import { logger } from '@/ui/logger'
 import { getOrCreateBridgeSession } from './bridgeSession'
+import { gateActionsFor, legendFor, overflowNoteFor, type GateActionPlan } from './gateActions'
 import { createOriginRegistry } from './originSession'
 import { isDroverDemoId } from './demo'
 import packageJson from '../../package.json'
@@ -381,13 +382,17 @@ function answerCandidates(answer: PermissionAnswer): string[] {
 /**
  * Which surface answered and over which channel, read off the answer's own
  * stamps (DROVE-72). `via: 'watch'` is what droverWatchFeed puts on a wrist
- * answer; `channel: 'audio'` is what the phone's audio answerer puts on a
- * headphone click or a dictated pick. Anything else is a thumb on the phone.
+ * answer; `via: 'push'` is a button on the notification banner itself
+ * (DROVE-207), which is neither the app nor the wrist and has to read as its
+ * own surface or "who won the race" is unanswerable on the ledger;
+ * `channel: 'audio'` is what the phone's audio answerer puts on a headphone
+ * click or a dictated pick. Anything else is a thumb on the phone.
  */
 function answererOf(answer: PermissionAnswer): { by: string; channel: 'visual' | 'audio' } {
     const input = answer.updatedInput as { via?: unknown; channel?: unknown } | undefined
+    const by = input?.via === 'watch' ? 'watch' : input?.via === 'push' ? 'push' : 'phone'
     return {
-        by: input?.via === 'watch' ? 'watch' : 'phone',
+        by,
         channel: input?.channel === 'audio' ? 'audio' : 'visual',
     }
 }
@@ -518,7 +523,7 @@ export function completedReasonFor(ev: DroverEvent): string | undefined {
  * that buzzes without naming the prompt or the project is barely better than
  * one that stays quiet: nothing tells you which of five running agents stopped.
  */
-export function pushMetadata(metadata: Metadata | null, ev: DroverEvent): Metadata {
+export function pushMetadata(metadata: Metadata | null, ev: DroverEvent, plan?: GateActionPlan): Metadata {
     const project = ev.origin?.cwd?.split('/').filter(Boolean).pop()
     // The REASON, which never left the Mac (DROVE-53). A gate's reason is the
     // only part that says WHY it fired — "this command deletes files outside
@@ -528,7 +533,14 @@ export function pushMetadata(metadata: Metadata | null, ev: DroverEvent): Metada
     // wrist, and a truncated reason reads worse than a short one.
     const reason = ev.reason?.trim()
     const short = reason && reason.length > 90 ? `${reason.slice(0, 89)}…` : reason
-    const text = [ev.title, short, project].filter(Boolean).join(' · ')
+    // The legend and the overflow note come LAST, after the reason, because
+    // they are only readable on an expanded banner and that is exactly where
+    // the buttons they explain are (DROVE-207). A numbered banner without its
+    // legend is a row of digits meaning nothing; an overflowing one without
+    // its note is a banner claiming to show every choice.
+    const legend = plan ? legendFor(ev, plan) : ''
+    const overflow = plan ? overflowNoteFor(plan) : ''
+    const text = [ev.title, short, project, legend, overflow].filter(Boolean).join(' · ')
     return { ...(metadata ?? ({} as Metadata)), summary: { text, updatedAt: Date.now() } }
 }
 
@@ -551,20 +563,42 @@ export function pushKindFor(ev: DroverEvent): 'question' | 'todo' | 'permission'
  * `gateId` is the bus event id, which is also the request id the card is
  * filed under on the phone. `kind` is the bus kind, so the phone can tell a
  * to-do from a prompt before the store has caught up.
+ *
+ * `answerSessionId` is the session HOLDING the card, which is the bridge
+ * session and never the raising one (DROVE-207). A button on the banner
+ * answers through the app's own sessionAllow, and that is addressed to the
+ * holder; `sessionId` above is where a TAP navigates. The two were the same
+ * key until a tap needed the raising session, and a button needs the other
+ * one, so both travel and neither is inferred.
+ *
+ * `actions` is the bus option id each button slot answers with, in order, as
+ * JSON. The button itself carries only its slot, so nothing on either side
+ * ever matches a label back to an option.
  */
 export function gatePushData(
     ev: DroverEvent,
     tool: string,
     raisingSessionId: string | null,
+    answerSessionId?: string | null,
+    plan?: GateActionPlan,
 ): Record<string, string> {
     return {
         ...(raisingSessionId ? { sessionId: raisingSessionId } : {}),
+        ...(answerSessionId ? { answerSessionId } : {}),
         gateId: ev.id,
         kind: pushKindFor(ev),
         requestId: ev.id,
         tool,
         type: 'permission_request',
         provider: 'claude',
+        ...(plan?.categoryId
+            ? {
+                  categoryId: plan.categoryId,
+                  actions: JSON.stringify(plan.optionIds),
+                  optionCount: String(plan.total),
+                  ...(plan.overflow ? { overflow: '1' } : {}),
+              }
+            : {}),
     }
 }
 
@@ -673,8 +707,8 @@ export async function runDroverBridge(): Promise<void> {
         // and the answer surface. What `delivery.announce` gates is the alert
         // push below, visual's half of the announcement, and the sound on it,
         // which is audio's (DROVE-72). Nothing here reads a setting.
-        const plan = announcePlanFor(ev)
-        if (!plan.alert) {
+        const announce = announcePlanFor(ev)
+        if (!announce.alert) {
             logger.debug(`[drover] no alert push for ${ev.id}: visual announce is off`)
         } else {
             // The push waits on one registry read so it can name the session that
@@ -682,6 +716,16 @@ export async function runDroverBridge(): Promise<void> {
             // list is current whether or not the registry answers. The wake below
             // does not wait either: the wrist reads the gate off the snapshot, not
             // off the push.
+            // The buttons the banner will carry, decided here so the payload
+            // and the body agree (DROVE-207). Pure and logged, because a gate
+            // that silently fell back to no buttons is indistinguishable on a
+            // phone from one that never got the feature.
+            const plan = gateActionsFor(ev)
+            logger.debug(
+                plan.categoryId
+                    ? `[drover] ${ev.id} banner ${plan.categoryId} answers ${JSON.stringify(plan.optionIds)}${plan.overflow ? ` (${plan.total - plan.shown} more in the app)` : ''}`
+                    : `[drover] ${ev.id} banner has no buttons (${plan.total} option(s)); tap opens the app`
+            )
             void originRegistry.happySessionIdFor(ev.origin?.sessionId).then((raising) => {
                 if (ev.origin?.sessionId && !raising) {
                     logger.debug(`[drover] no happy session for origin ${ev.origin.sessionId}; push routes to the inbox`)
@@ -695,9 +739,13 @@ export async function runDroverBridge(): Promise<void> {
                     // The body is the session summary, and the bridge holds ONE session
                     // for the whole machine, so every push read the same fixed line and
                     // said nothing about what was being asked or by which agent.
-                    metadata: pushMetadata(client.getMetadata(), ev),
-                    data: gatePushData(ev, card.tool, raising),
-                    sound: plan.sound,
+                    metadata: pushMetadata(client.getMetadata(), ev, plan),
+                    data: gatePushData(ev, card.tool, raising, session.id, plan),
+                    sound: announce.sound,
+                    // The category is what makes iOS draw buttons at all, and
+                    // it is also what forces this push off the server's
+                    // push-event route, which has no field for it (DROVE-207).
+                    ...(plan.categoryId ? { categoryId: plan.categoryId } : {}),
                 })
             })
         }

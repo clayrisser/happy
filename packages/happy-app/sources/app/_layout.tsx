@@ -30,6 +30,7 @@ import { useLocalSetting } from '@/sync/storage';
 import { useUnistyles } from 'react-native-unistyles';
 import { AsyncLock } from '@/utils/lock';
 import { getRouteFromNotificationResponse, isGatePushData, parsePushRoute } from '@/utils/notificationRouting';
+import { moreActionIdentifier } from '@/sync/droverNotificationCategories';
 import { navigateToSession } from '@/hooks/useNavigateToSession';
 import { applyVoiceUpsellOverride } from '@/realtime/voiceExperiment';
 import { useTauriZoom } from '@/hooks/useTauriZoom';
@@ -298,7 +299,22 @@ export default function RootLayout() {
         handledNotificationIds.current.add(responseId);
 
         try {
-            if (response.actionIdentifier !== Notifications.DEFAULT_ACTION_IDENTIFIER) {
+            // This listener owns the TAP, and the one button that is a tap by
+            // another name. An ANSWERING button on the banner is handled by
+            // sources/sync/droverNotificationActions.ts, registered at module
+            // scope so it also exists on the headless launch a button press
+            // causes (DROVE-207); routing one from here would defeat the whole
+            // point, which is answering without the app coming forward.
+            //
+            // "More in the app" is the exception and the reason the check is
+            // not a bare inequality: it is the overflow escape on a gate with
+            // more options than iOS will draw, it opens the app on purpose,
+            // and landing on the home screen instead of the gate would make it
+            // useless.
+            const isTap =
+                response.actionIdentifier === Notifications.DEFAULT_ACTION_IDENTIFIER ||
+                response.actionIdentifier === moreActionIdentifier;
+            if (!isTap) {
                 console.log(`[PUSH ROUTING] Ignoring non-default action: ${response.actionIdentifier}`);
                 return;
             }

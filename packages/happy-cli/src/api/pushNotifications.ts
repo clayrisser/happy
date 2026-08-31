@@ -523,7 +523,19 @@ export class PushNotificationClient {
      * @param body - Notification body
      * @param data - Additional data to send with the notification
      */
-    sendToAllDevices(title: string, body?: string, data?: Record<string, any>, sound: boolean = true): void {
+    sendToAllDevices(
+        title: string,
+        body?: string,
+        data?: Record<string, any>,
+        sound: boolean = true,
+        /**
+         * The `UNNotificationCategory` iOS draws this push's buttons from
+         * (DROVE-207). Expo maps it to `aps.category`; the app registers the
+         * category and its actions at launch. Absent means the old behaviour:
+         * a banner you can tap or dismiss and nothing else.
+         */
+        categoryId?: string,
+    ): void {
         logger.debug(`[PUSH] sendToAllDevices called with title: "${title}", body: "${body ?? ''}"`);
         
         // Execute async operations without awaiting
@@ -561,6 +573,7 @@ export class PushNotificationClient {
                         // delivery; a visual-only announcement lights the
                         // screen and says nothing. No decision is made here.
                         ...(sound ? { sound: 'default' as const } : {}),
+                        ...(categoryId ? { categoryId } : {}),
                         priority: 'high'
                     }
                 })
@@ -600,6 +613,24 @@ export class PushNotificationClient {
          * of its own, so there the server's default stands.
          */
         sound?: boolean
+        /**
+         * The notification category, when this push carries buttons
+         * (DROVE-207). Setting it FORCES the direct-to-Expo path, and that is
+         * a measurement rather than a preference: `/v1/sessions/:id/push-event`
+         * takes `{kind, title, body, data}` and nothing else, and the server's
+         * own `PushMessage` has no category field either
+         * (packages/happy-server/sources/app/push/pushSend.ts), so a push sent
+         * that way arrives with no `aps.category` and iOS draws no buttons at
+         * all. There is no way to add the category on the phone: iOS renders
+         * the banner from the payload before any JS runs.
+         *
+         * What is given up is the server's presence suppression and its
+         * duplicate throttle. That is the smaller loss for this kind of push:
+         * DROVE-85 already established that a gate must be shown even with the
+         * app in the foreground, and a permission waiting on a human is
+         * precisely the thing an open desktop tab is no substitute for.
+         */
+        categoryId?: string
     }): void {
         const { title, body } = getSessionNotificationCopy(params.kind, params.metadata)
         const sessionTitle = getSessionNotificationBody(params.metadata)
@@ -615,7 +646,15 @@ export class PushNotificationClient {
         const sound = params.sound !== false
         if (!sessionId) {
             logger.debug('[PUSH] sendSessionNotification: missing sessionId, falling back to direct send')
-            this.sendToAllDevices(title, body, payloadData, sound)
+            this.sendToAllDevices(title, body, payloadData, sound, params.categoryId)
+            return
+        }
+        // A push with buttons cannot go through the route (DROVE-207); see
+        // `categoryId` above for the measurement. Checked before the kind
+        // filter so the reason in the log is the real one.
+        if (params.categoryId) {
+            logger.debug(`[PUSH] category=${params.categoryId} is not on the push-event route; sending direct to Expo`)
+            this.sendToAllDevices(title, body, payloadData, sound, params.categoryId)
             return
         }
         // A kind the route will refuse never gets handed to it (DROVE-70). It
@@ -626,7 +665,7 @@ export class PushNotificationClient {
         // something" was the one card that could never buzz his phone.
         if (!serverPushEventKinds.has(params.kind)) {
             logger.debug(`[PUSH] kind=${params.kind} is not on the push-event route; sending direct to Expo`)
-            this.sendToAllDevices(title, body, payloadData, sound)
+            this.sendToAllDevices(title, body, payloadData, sound, params.categoryId)
             return
         }
 
