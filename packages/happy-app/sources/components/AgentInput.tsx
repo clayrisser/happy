@@ -30,7 +30,7 @@ import { t } from '@/text';
 import { Metadata } from '@/sync/storageTypes';
 import { isRunningOnMac } from '@/utils/platform';
 import { MobileGlassSurface } from './MobileGlass';
-import { GlassChromeButton, GlassChromeSurface } from './GlassChromeControl';
+import { GlassChromeSurface } from './GlassChromeControl';
 import { AnimatedFade } from './AnimatedOverlay';
 import { BubblePressable } from './BubblePressable';
 import { resolveAgentInputPrimaryAction } from './agentInputPrimaryAction';
@@ -214,6 +214,7 @@ const MOBILE_COMPOSER_LINE_GEOMETRY = resolveMobileComposerLineGeometry();
 const MOBILE_CONTROL_ROW_GEOMETRY = resolveMobileComposerControlRowGeometry();
 const MOBILE_ICON_ACTION_GEOMETRY = resolveMobileComposerActionGeometry('icon');
 const MOBILE_PRIMARY_ACTION_GEOMETRY = resolveMobileComposerActionGeometry('primary');
+const MOBILE_ADD_ACTION_GEOMETRY = resolveMobileComposerActionGeometry('add');
 
 // Shared with the action-area offset reported to onActionAreaOffsetChange —
 // the Shaker's layout.y is relative to innerContainer, which sits this far
@@ -311,17 +312,26 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         // floor, and it is already derived from what it holds — the 36pt send
         // button inset 4 at each end.
         minHeight: MOBILE_COMPOSER_METRICS.inputMinHeight,
-        // 19pt from the bubble's leading rim. The card used to supply 10 of it
-        // and this style the other 9; the card's gutter went outside in
-        // DROVE-196, so the field carries the whole inset and the caret has
-        // not moved.
-        paddingLeft: MOBILE_COMPOSER_LAYOUT.textInset,
-        // The trailing side is not symmetric any more: the send/voice button
-        // sits inside the field at that edge (DROVE-153), so the text has to
-        // stop short of it rather than run underneath.
+        // Symmetric again, and for the opposite reason to before (DROVE-206).
+        // The field holds a control at EACH rim now, so the text stops short
+        // of both: 4 off the rim, a 36pt disc, 6 of air. 46 a side.
+        paddingLeft: MOBILE_COMPOSER_LAYOUT.inputLeadingActionPadding,
+        // The send button sits inside the field at this edge (DROVE-153), so
+        // the text stops short of it rather than running underneath. Reserved
+        // whether or not the button can fire, because the button is always
+        // drawn: that is what keeps the text's width off the composer's state.
         paddingRight: MOBILE_COMPOSER_LAYOUT.inputTrailingActionPadding,
         paddingTop: MOBILE_COMPOSER_METRICS.inputPaddingTop,
         paddingBottom: MOBILE_COMPOSER_METRICS.inputPaddingBottom,
+    },
+    /**
+     * The field with no `+` in it: zen mode, or a session that takes no
+     * context (DROVE-206). The text falls back to the glyph column the `+`
+     * would have stood in rather than to the bubble's rim, so the caret is in
+     * the same place either way and only the gap in front of it changes.
+     */
+    mobileInputContainerNoAdd: {
+        paddingLeft: MOBILE_COMPOSER_LAYOUT.inputContainerPaddingLeft,
     },
     /**
      * Where the in-field primary sits: hard against the capsule's trailing
@@ -332,6 +342,21 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         right: MOBILE_COMPOSER_METRICS.primaryActionInset,
         bottom: MOBILE_COMPOSER_METRICS.primaryActionInset,
     },
+    /**
+     * And where the `+` sits: the mirror of it, at the leading rim
+     * (DROVE-206).
+     *
+     * Same 4pt inset and the same bottom pin, for the same reason. The field
+     * grows upward as the message wraps and both controls have to stay on the
+     * last line where the thumb left them, rather than one of them riding up
+     * the side of a tall capsule.
+     */
+    mobileAddAnchor: {
+        position: 'absolute',
+        left: MOBILE_COMPOSER_METRICS.primaryActionInset,
+        bottom: MOBILE_COMPOSER_METRICS.primaryActionInset,
+    },
+    mobileAddButton: MOBILE_ADD_ACTION_GEOMETRY,
 
     // Overlay styles
     autocompleteOverlay: {
@@ -810,26 +835,26 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         isSendDisabled: props.isSendDisabled ?? false,
         showAbortButton: props.showAbortButton ?? false,
         canAbort: !!props.onAbort && !stopRequested,
-        // Only the mobile composer folds the mic into the primary button; the
-        // desktop layout keeps its own send/mic resolution below.
-        canDictate: compactMobileComposer && !!props.onTalkTap,
-        // An open mic keeps the button, so the next tap stops it rather than
-        // sending the half-spoken sentence the partials just wrote.
-        micLive,
-        // A live voice session stays in this state so the same button can end it.
-        canVoice: compactMobileComposer && !!props.onMicPress,
     });
     const shouldShowStopButton = primaryAction === 'stop';
-    const shouldShowMicButton = primaryAction === 'mic';
-    const shouldShowVoiceButton = primaryAction === 'voice';
     const canSendMessage = primaryAction === 'send';
     /**
-     * The in-field send/voice glyph: the accent once there is something to
-     * send, the theme's neutral when there is not (DROVE-176). The voice
-     * glyph is the "not" case: it is what the button offers with an empty
-     * field, so it stays neutral and the arrow that appears once you have
-     * typed is the one thing on the row that turns. Stop keeps its own colour
-     * and a blocked send keeps the lock's grey; neither reads this.
+     * The waveform, on the control row (DROVE-206).
+     *
+     * The condition is what `canVoice` used to be on the primary action, moved
+     * unchanged: only the phone's glass composer folds a voice turn into this
+     * row, and the desktop keeps its own send/mic resolution below. What
+     * changed is that it now decides whether a CONTROL is drawn rather than
+     * which face another control wears.
+     */
+    const showBossButton = compactMobileComposer && !!props.onMicPress;
+    /**
+     * The in-field send glyph: the accent once there is something to send, the
+     * theme's neutral when there is not (DROVE-176). It no longer wears a
+     * second identity on an empty field, because the waveform moved out to the
+     * control row (DROVE-206), so the arrow that turns accent is the one thing
+     * this colour has to say. Stop keeps its own colour and a blocked send
+     * keeps the lock's grey; neither reads this.
      *
      * Only on the phone's glass composer. The desktop keeps its filled primary
      * disc, where the glyph is the button's tint and the FILL says active.
@@ -1191,22 +1216,12 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         props.onMicPress();
     }, [props.isSendDisabled, props.onMicPress]);
 
-    /**
-     * A tap on the primary button's MIC face (DROVE-210). It latches the same
-     * capture the capsule's TalkButton drives, and a second tap stops it with
-     * the words left in the composer. No haptic here: the gesture reducer
-     * ticks on every transition it makes, and a second one would double up.
-     */
-    const handleTalkTapPress = React.useCallback(() => {
-        if (!props.onTalkTap || props.isSendDisabled) return;
-        props.onTalkTap();
-    }, [props.isSendDisabled, props.onTalkTap]);
-
-    // Stop, boss mode and send share one button, so which one fires is resolved
-    // from the live text rather than from `hasText`, which is set in a
-    // transition and lags a fast type-then-tap. Without the live read that tap
-    // would abort the agent or start a call instead of sending what was just
-    // typed. The tap / long-press split is resolveComposerPrimaryPress
+    // Stop and send share one button, so which one fires is resolved from the
+    // live text rather than from `hasText`, which is set in a transition and
+    // lags a fast type-then-tap. Without the live read that tap would abort
+    // the agent instead of sending what was just typed. Boss mode used to be
+    // a third answer here and is a control of its own on the row now
+    // (DROVE-206). The tap / long-press split is resolveComposerPrimaryPress
     // (DROVE-98), one table for both handlers.
     const dispatchPrimaryGesture = React.useCallback((gesture: ComposerPrimaryGesture) => {
         const liveHasContent = (inputRef.current?.getText() ?? '').trim().length > 0 || hasImages;
@@ -1219,12 +1234,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         switch (dispatch) {
             case 'abort':
                 handleAbortPress();
-                return;
-            case 'mic':
-                handleTalkTapPress();
-                return;
-            case 'boss':
-                handleMicrophonePress();
                 return;
             case 'channels':
                 handleChannelsLongPress();
@@ -1241,7 +1250,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         handleChannelsLongPress,
         handleMicrophonePress,
         handleSendPress,
-        handleTalkTapPress,
         hasImages,
         primaryAction,
     ]);
@@ -1812,16 +1820,80 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         && openPicker !== 'channels' && openPicker !== 'attach';
 
 
+    /** Whether the `+` is there to be drawn, which is what the field's leading padding turns on. */
+    const showMobileAddButton = compactMobileComposer && !props.zenMode && canAddContext;
+
     /**
-     * Send, voice or stop, INSIDE the input capsule at its trailing edge
-     * (DROVE-153).
+     * THE `+`, inside the input capsule at its LEADING edge (DROVE-206).
      *
-     * Clay's second reference is Messages' New Message screen: one capsule
-     * field with the primary affordance inside it at the trailing edge, and a
-     * single + outside. It was the end of a row of separate discs under the
-     * field. Moving it is what makes the row below read as furniture rather
-     * than as a sixth equal button, and it is what pays for the mode, effort
-     * and model getting bigger without the name losing room.
+     * Clay: "the plus should be [in the message box]". DROVE-196 put it
+     * outside on the field's line, which was the instruction at the time; this
+     * supersedes that, and there is exactly one of it. Same disc as the send
+     * button at the other rim, same 4pt inset, same bottom pin, so the field
+     * reads as one capsule with a control at each end.
+     *
+     * NO RESTING FILL, which is the one place it does not mirror send. Two
+     * reasons. DROVE-176 measured the accent as a GLYPH over the composer's
+     * glass stack, and a filled disc would put it on a backdrop nothing has
+     * measured; and the filled disc is already this control's OPEN state
+     * (`mobileIconButtonOpen`, the same held-down step every other control
+     * uses), so spending it at rest would leave the open sheet with nothing to
+     * show. Send earns its fill by being the primary; the `+` is a standing
+     * offer and reads as one.
+     *
+     * It opens the Add context sheet (DROVE-128) rather than jumping into the
+     * photo library. 36 drawn plus 6 a side is a 48pt target, over DROVE-153's
+     * 44pt floor, which is the same bargain the send button strikes.
+     */
+    const mobileAddAction = (
+        <View style={styles.mobileAddAnchor}>
+            <View
+                style={[
+                    styles.mobileAddButton,
+                    openPicker === 'attach' ? styles.mobileIconButtonOpen : undefined,
+                ]}
+            >
+                <BubblePressable
+                    style={(p) => ({
+                        width: '100%',
+                        height: '100%',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        opacity: p.pressed ? 0.7 : 1,
+                    })}
+                    hitSlop={MOBILE_COMPOSER_METRICS.primaryActionSlop}
+                    onPress={handleAddContextPress}
+                    accessibilityRole="button"
+                    accessibilityLabel={t('imageUpload.addContextTitle')}
+                    accessibilityState={{ expanded: openPicker === 'attach' }}
+                >
+                    <Ionicons
+                        name="add"
+                        size={MOBILE_COMPOSER_METRICS.addIconSize}
+                        color={composerPalette.accent}
+                    />
+                </BubblePressable>
+            </View>
+        </View>
+    );
+
+    /**
+     * THE SEND BUTTON, inside the input capsule at its trailing edge
+     * (DROVE-153, DROVE-206).
+     *
+     * Clay: "we should have a send button, proper button." It used to turn
+     * into the waveform on an empty composer, so the same spot did two
+     * unrelated things depending on what you had typed. The waveform is on the
+     * control row now and this is a send button with two things it can also
+     * be: Stop, on an empty composer while the agent works, and the lock when
+     * the gate refuses. Both are still send unable to proceed rather than
+     * other controls.
+     *
+     * On an empty composer it is DRAWN AND DISABLED. It is not hidden, because
+     * the field reserves its 46pt at that rim either way, and a control that
+     * came and went would reflow the caret on the first keystroke and flicker
+     * every time Stop borrowed the slot. The reasoning is in full on
+     * `AgentInputPrimaryAction`.
      *
      * Pinned to the bottom, not centred: the field grows upward as the message
      * gets longer and the button has to stay where the thumb left it.
@@ -1837,8 +1909,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     // must not look locked.
                     shouldShowStopButton ? styles.mobileStopButton
                         : isSendBlocked ? styles.sendButtonLocked
-                            : canSendMessage || shouldShowVoiceButton || shouldShowMicButton
-                                ? styles.mobilePrimaryButtonActive
+                            : canSendMessage ? styles.mobilePrimaryButtonActive
                                 : styles.mobilePrimaryButtonInactive,
                 ]}
             >
@@ -1857,14 +1928,11 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     onLongPress={handleMobilePrimaryLongPress}
                     disabled={!canPressSendButton}
                     accessibilityRole="button"
-                    accessibilityLabel={shouldShowStopButton ? 'Stop'
-                        : shouldShowMicButton
-                            ? (micLive
-                                ? t('agentInput.dictate.tapToStop')
-                                : t('agentInput.dictate.label'))
-                            : shouldShowVoiceButton ? 'Voice'
-                                : 'Send'}
-                    accessibilityState={{ selected: shouldShowMicButton && micLive }}
+                    // It is a send button (DROVE-206). Stop is the one face
+                    // that is genuinely another action, and it only appears on
+                    // an empty composer while the agent is working.
+                    accessibilityLabel={shouldShowStopButton ? 'Stop' : 'Send'}
+                    accessibilityState={{ disabled: !canPressSendButton }}
                 >
                     {isAborting ? (
                         <ActivityIndicator
@@ -1882,32 +1950,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                             name="lock-closed"
                             size={14}
                             color={theme.colors.textSecondary}
-                        />
-                    ) : shouldShowMicButton ? (
-                        // The MICROPHONE, not the waveform (DROVE-210). The
-                        // waveform below is boss mode, a call; this is
-                        // dictation, and it is the same glyph and the same
-                        // recording red as the capsule's mic so the two read
-                        // as one control in two places.
-                        <Ionicons
-                            name={micLive ? 'mic' : 'mic-outline'}
-                            size={20}
-                            color={micLive
-                                ? micColour(composerPalette, 'latched')
-                                : activeSendIconColor}
-                        />
-                    ) : shouldShowVoiceButton ? (
-                        // Boss mode: a WAVEFORM, because it is a call and not
-                        // a microphone. This branch used to draw a mic glyph
-                        // when `isMicActive`, which the mobile composer never
-                        // sets, so the button advertised a microphone it
-                        // could not open. That is half of why DROVE-210 had to
-                        // be guessed at from the outside; the mic face above
-                        // is the real one.
-                        <Image
-                            source={require('@/assets/images/icon-voice-white.png')}
-                            style={{ width: 22, height: 22 }}
-                            tintColor={activeSendIconColor}
                         />
                     ) : (
                         <Octicons
@@ -2260,39 +2302,15 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
 
                 {/* Box 2: Action Area (Input + Send) */}
                 <Shaker ref={sendBlockShakerRef} onLayout={handleActionAreaLayout}>
-                    {/* The composer's FIRST LINE (DROVE-196). Clay: "Put plus
-                        to add image on same level as send button." The `+` is
-                        the one affordance that adds content to the message
-                        being written, so it belongs with the field rather than
-                        on the row of session settings underneath. Messages
-                        puts it outside the field at the leading edge and the
-                        primary action inside at the trailing edge; DROVE-153
-                        did the second half, this is the first. The line is
-                        bottom-aligned, so as the text wraps the `+` stays down
-                        beside send instead of riding up a tall capsule. */}
+                    {/* The composer's FIRST LINE, which is the bubble and
+                        nothing else now (DROVE-206). DROVE-196 put the `+` out
+                        here beside the field; Clay looked at it and asked for
+                        the opposite, so it went inside to the leading rim and
+                        this line has one child. It stays a row because it
+                        carries the composer's gutter, which is what lines the
+                        bubble's rims up with the control row and the recording
+                        banner (DROVE-157). */}
                     <View style={compactMobileComposer ? styles.mobileComposerLine : undefined}>
-                    {/* The plus opens the Add context sheet (DROVE-128) rather
-                        than jumping straight into the photo library, and it
-                        keeps the surface every control got in DROVE-118 and
-                        the accent it got in DROVE-176: the `+` is a standing
-                        offer rather than a state. It is the same 44pt button
-                        it was on the row below, moved, not redrawn. */}
-                    {compactMobileComposer && !props.zenMode && canAddContext && (
-                        <GlassChromeButton
-                            onPress={handleAddContextPress}
-                            size={MOBILE_COMPOSER_METRICS.actionSize}
-                            style={openPicker === 'attach' ? styles.mobileIconButtonOpen : undefined}
-                            accessibilityRole="button"
-                            accessibilityLabel={t('imageUpload.addContextTitle')}
-                            accessibilityState={{ expanded: openPicker === 'attach' }}
-                        >
-                            <Ionicons
-                                name="add"
-                                size={MOBILE_COMPOSER_METRICS.addIconSize}
-                                color={composerPalette.accent}
-                            />
-                        </GlassChromeButton>
-                    )}
                     <View style={[
                         compactMobileComposer && styles.unifiedPanelShadow,
                         compactMobileComposer && styles.mobileUnifiedPanelShadow,
@@ -2337,6 +2355,8 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     <View style={[
                         styles.inputContainer,
                         compactMobileComposer && styles.mobileInputContainer,
+                        compactMobileComposer && !showMobileAddButton
+                            && styles.mobileInputContainerNoAdd,
                         props.minHeight ? { minHeight: props.minHeight } : undefined,
                     ]}>
                         <MultiTextInput
@@ -2355,6 +2375,10 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                             maxHeight={Platform.OS === 'web' ? 480 : MOBILE_COMPOSER_METRICS.inputMaxHeight}
                             lineHeight={compactMobileComposer ? MOBILE_COMPOSER_METRICS.inputLineHeight : undefined}
                         />
+                        {/* One control at each rim of the field, both
+                            absolutely positioned against it and both pinned to
+                            its bottom (DROVE-206). */}
+                        {showMobileAddButton ? mobileAddAction : null}
                         {compactMobileComposer ? mobilePrimaryAction : null}
                     </View>
 
@@ -2409,18 +2433,60 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
 
                         <View style={{ flex: 1 }} />
 
-                        {/* Speaker and mic share ONE capsule (DROVE-153).
-                            Clay's Screenshot-toolbar reference groups two
-                            related actions into a single capsule rather than
-                            two circles, and these two are the audio pair:
-                            what the session says out loud, and what it hears.
-                            Each half is still its own 44pt target. */}
-                        {(streamTalk.shown || props.onTalkPressIn) ? (
+                        {/* The audio group, in ONE capsule (DROVE-153).
+                            Clay's Screenshot-toolbar reference groups related
+                            actions into a single capsule rather than separate
+                            circles, and these are the audio ones: what the
+                            session hears from a live voice turn, what it says
+                            out loud, and what it hears from the mic.
+
+                            The WAVEFORM is the third of them, at the head of
+                            the capsule, and it is new here (DROVE-206). Clay:
+                            "the boss should not be in the message box." It was
+                            the face the send button wore on an empty composer,
+                            which made one spot on the screen two controls
+                            depending on what you had typed. It is an audio
+                            control, so it belongs with the other two, and the
+                            row does not grow for it: a 44pt control on a 44pt
+                            row. Each third is still its own 44pt target. */}
+                        {(showBossButton || streamTalk.shown || props.onTalkPressIn) ? (
                         <GlassChromeSurface
                             radius={MOBILE_COMPOSER_METRICS.actionSize / 2}
                             interactive
                             style={styles.mobileAudioCapsule}
                         >
+                        {showBossButton && (
+                            <BubblePressable
+                                onPress={handleMicrophonePress}
+                                style={styles.mobileIconButton}
+                                accessibilityRole="button"
+                                accessibilityLabel="Voice"
+                                accessibilityState={{ selected: !!props.isMicActive }}
+                            >
+                                {/* Neutral at rest, DROVE-142's recording red
+                                    once the turn is live (DROVE-176). A live
+                                    voice turn is a live mic, which is the
+                                    entry the vocabulary already has, so this
+                                    needed no new colour and reads the same
+                                    helper the mic beside it does. */}
+                                {props.isMicActive ? (
+                                    <Ionicons
+                                        name="mic"
+                                        size={20}
+                                        color={micColour(composerPalette, 'latched')}
+                                    />
+                                ) : (
+                                    <Image
+                                        source={require('@/assets/images/icon-voice-white.png')}
+                                        style={{ width: 22, height: 22 }}
+                                        tintColor={micColour(composerPalette, 'idle')}
+                                    />
+                                )}
+                            </BubblePressable>
+                        )}
+                        {showBossButton && (streamTalk.shown || props.onTalkPressIn) ? (
+                            <View style={styles.mobileAudioDivider} />
+                        ) : null}
                         {streamTalk.shown && (
                             <BubblePressable
                                 onPress={handleStreamTalkPress}

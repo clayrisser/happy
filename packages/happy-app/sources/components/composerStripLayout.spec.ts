@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+    MOBILE_COMPOSER_BASE_HEIGHT,
     MOBILE_COMPOSER_METRICS,
     resolveMobileComposerControlRowGeometry,
     resolveMobileComposerHeight,
@@ -87,18 +88,37 @@ describe('where the recording banner lives', () => {
     });
 
     it('makes the bar exactly as wide as the composer above it', () => {
-        // The shell inset is the composer's outer gutter since DROVE-196: it
-        // is the padding on the line carrying the `+` and the bubble, and on
-        // the control row under them. The banner runs rim to rim with both.
-        // Before that the card spanned the whole dock and carried the gutter
-        // inside itself, so this assertion was true of the number and false of
-        // the picture.
+        // The shell inset is the composer's outer gutter since DROVE-196: the
+        // padding on the composer's line, and on the control row under it. The
+        // banner runs rim to rim with both. Before that the card spanned the
+        // whole dock and carried the gutter inside itself, so this assertion
+        // was true of the number and false of the picture.
         expect(RECORDING_BANNER_FRAME.left).toBe(MOBILE_COMPOSER_METRICS.shellInset);
         expect(RECORDING_BANNER_FRAME.right).toBe(MOBILE_COMPOSER_METRICS.shellInset);
         expect(RECORDING_BANNER_FRAME.left)
             .toBe(resolveMobileComposerLineGeometry().paddingHorizontal);
         expect(RECORDING_BANNER_FRAME.left)
             .toBe(resolveMobileComposerControlRowGeometry().paddingHorizontal);
+    });
+
+    /**
+     * DROVE-206 rebuilt what is above this bar at both ends of the field and
+     * on the row under it, and the bar's box did not move. That is the same
+     * guarantee DROVE-196 tested, asked again of a bigger change: the strip is
+     * 6 over 18 whatever the composer is arranged like, so a recording still
+     * cannot resize the dock or shove the transcript.
+     */
+    it('survives the plus moving into the field and the waveform onto the row', () => {
+        expect(COMPOSER_STRIP_PADDING_TOP).toBe(6);
+        expect(COMPOSER_STRIP_MIN_HEIGHT).toBe(18);
+        expect(COMPOSER_STRIP_HEIGHT).toBe(24);
+        expect(resolveComposerStripHeight(true, true)).toBe(resolveComposerStripHeight(false, true));
+
+        // And the bar is now the bubble's own two rims rather than the `+`'s
+        // leading edge at one end and the bubble's rim at the other, because
+        // the `+` is inside the field. Same two columns, one fewer thing they
+        // depend on.
+        expect(MOBILE_COMPOSER_BASE_HEIGHT).toBe(102);
     });
 
     it('leaves the bar tall enough to hold the dot, clock, level and glyph', () => {

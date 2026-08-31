@@ -67,7 +67,7 @@
  * Pure, so the budget can be pinned at 393, 375 and 320 without a renderer.
  * AgentInputStatusRow.tsx draws it.
  */
-import { MOBILE_COMPOSER_LAYOUT, MOBILE_COMPOSER_METRICS } from './agentInputLayout';
+import { MOBILE_COMPOSER_LAYOUT } from './agentInputLayout';
 
 /**
  * Everything on the row that is not text, in points.
@@ -87,11 +87,17 @@ export const statusRowMetrics = {
      */
     glyphWidth: 6,
     /**
-     * The row's own inset: the shell inset plus the action inset, read off the
-     * composer's metrics rather than written down again, so the row and this
-     * estimate cannot disagree about where the row's edges are (DROVE-153).
+     * The row's own inset: the composer's GLYPH COLUMN, read off the composer
+     * rather than written down again, so the row and this estimate cannot
+     * disagree about where the row's edges are (DROVE-153).
+     *
+     * It reads `textInset` since DROVE-206 rather than reassembling the shell
+     * inset and a button's glyph offset. Both spelled 19 while the `+` was a
+     * 44pt button; the `+` is a 36pt disc inside the field now and only
+     * `textInset` still tracks where its ink actually starts. Same number,
+     * and now it stays the same number when the `+` is next redrawn.
      */
-    paddingHorizontal: MOBILE_COMPOSER_METRICS.shellInset + MOBILE_COMPOSER_LAYOUT.addGlyphOffset,
+    paddingHorizontal: MOBILE_COMPOSER_LAYOUT.textInset,
     dot: 7,
     dotMarginRight: 5,
     separator: 16,

@@ -2,25 +2,24 @@ import { describe, expect, it } from 'vitest';
 import { resolveComposerPrimaryPress } from './composerPrimaryPress';
 
 describe('resolveComposerPrimaryPress', () => {
-    const voiceFace = { action: 'voice' as const, liveHasContent: false, canPress: true };
+    const sendFace = { action: 'send' as const, liveHasContent: true, canPress: true };
 
-    it('a tap on the boss-mode face starts boss mode', () => {
-        expect(resolveComposerPrimaryPress({ ...voiceFace, gesture: 'press' })).toBe('boss');
+    it('a tap with text in the composer sends', () => {
+        expect(resolveComposerPrimaryPress({ ...sendFace, gesture: 'press' })).toBe('send');
     });
 
-    it('a long-press on the boss-mode face opens the channel sheet, not boss mode', () => {
-        expect(resolveComposerPrimaryPress({ ...voiceFace, gesture: 'longPress' })).toBe('channels');
+    it('a long-press opens the channel sheet, not send', () => {
+        expect(resolveComposerPrimaryPress({ ...sendFace, gesture: 'longPress' })).toBe('channels');
     });
 
     it('a long-press opens the sheet whatever face the button wears', () => {
-        for (const action of ['send', 'stop', 'blocked', 'mic', 'voice'] as const) {
+        for (const action of ['send', 'stop', 'blocked', 'idle'] as const) {
             expect(resolveComposerPrimaryPress({ gesture: 'longPress', action, liveHasContent: true, canPress: true })).toBe('channels');
         }
     });
 
-    it('a tap with text in the composer sends, even on the stop or boss face', () => {
+    it('a tap with text in the composer sends, even on the stop face', () => {
         expect(resolveComposerPrimaryPress({ gesture: 'press', action: 'stop', liveHasContent: true, canPress: true })).toBe('send');
-        expect(resolveComposerPrimaryPress({ gesture: 'press', action: 'voice', liveHasContent: true, canPress: true })).toBe('send');
     });
 
     it('a tap on a blank composer while the agent works aborts', () => {
@@ -31,39 +30,41 @@ describe('resolveComposerPrimaryPress', () => {
         expect(resolveComposerPrimaryPress({ gesture: 'press', action: 'blocked', liveHasContent: false, canPress: true })).toBe('send');
     });
 
-    /**
-     * DROVE-210. The mic face is the microphone, and a tap on it latches the
-     * same capture the control-row capsule drives. It only ever latches: a
-     * plain `onPress` fires once, on the lift, with no duration and no
-     * coordinates, so there is no hold to recognise and nothing to slide off.
-     * Push-to-talk and slide-to-cancel stay on the capsule.
-     */
-    describe('the mic face', () => {
-        const micFace = { action: 'mic' as const, liveHasContent: false, canPress: true };
-
-        it('latches the mic on a tap', () => {
-            expect(resolveComposerPrimaryPress({ ...micFace, gesture: 'press' })).toBe('mic');
-        });
-
-        it('opens the channel sheet on a long-press, like every other face', () => {
-            expect(resolveComposerPrimaryPress({ ...micFace, gesture: 'longPress' })).toBe('channels');
-        });
-
-        it('never starts a call: the two are different controls', () => {
-            expect(resolveComposerPrimaryPress({ ...micFace, gesture: 'press' })).not.toBe('boss');
-        });
-
-        it('gives way to send the moment there is something to send', () => {
-            expect(resolveComposerPrimaryPress({
-                ...micFace,
-                gesture: 'press',
-                liveHasContent: true,
-            })).toBe('send');
-        });
+    it('a disabled button does nothing for either gesture', () => {
+        expect(resolveComposerPrimaryPress({ ...sendFace, gesture: 'press', canPress: false })).toBe('none');
+        expect(resolveComposerPrimaryPress({ ...sendFace, gesture: 'longPress', canPress: false })).toBe('none');
     });
 
-    it('a disabled button does nothing for either gesture', () => {
-        expect(resolveComposerPrimaryPress({ ...voiceFace, gesture: 'press', canPress: false })).toBe('none');
-        expect(resolveComposerPrimaryPress({ ...voiceFace, gesture: 'longPress', canPress: false })).toBe('none');
+    /**
+     * DROVE-206. Boss mode was one of this table's answers, reached only when
+     * the button wore the waveform on an empty composer, which is exactly the
+     * thing Clay asked to be taken out of the message box. It is a control of
+     * its own on the row now and calls the mic handler directly, so no gesture
+     * on the send button can start a voice turn.
+     */
+    it('never starts boss mode: the waveform is not this button any more', () => {
+        const dispatches = new Set<string>();
+        for (const action of ['send', 'stop', 'blocked', 'idle'] as const) {
+            for (const gesture of ['press', 'longPress'] as const) {
+                for (const liveHasContent of [true, false]) {
+                    for (const canPress of [true, false]) {
+                        dispatches.add(resolveComposerPrimaryPress({ gesture, action, liveHasContent, canPress }));
+                    }
+                }
+            }
+        }
+        expect(dispatches).not.toContain('boss');
+        expect([...dispatches].sort()).toEqual(['abort', 'channels', 'none', 'send']);
+    });
+
+    /**
+     * An idle button is disabled, so `canPress` refuses it before the face is
+     * read. It stays in the table anyway: a later state that enables the
+     * button on an empty composer lands on send, which shakes and explains
+     * itself, rather than on a hole.
+     */
+    it('sends rather than falling through when an idle button is somehow pressable', () => {
+        expect(resolveComposerPrimaryPress({ gesture: 'press', action: 'idle', liveHasContent: false, canPress: true })).toBe('send');
+        expect(resolveComposerPrimaryPress({ gesture: 'press', action: 'idle', liveHasContent: false, canPress: false })).toBe('none');
     });
 });

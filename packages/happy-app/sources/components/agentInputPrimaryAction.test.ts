@@ -37,123 +37,41 @@ describe('resolveAgentInputPrimaryAction', () => {
         expect(resolveAgentInputPrimaryAction(base)).toBe('idle');
     });
 
-    it('falls back to boss mode on an empty composer when a call is available', () => {
-        expect(resolveAgentInputPrimaryAction({
-            ...base,
-            canVoice: true,
-        })).toBe('voice');
-    });
-
     /**
-     * DROVE-210. This used to be one action for two different things: the
-     * button drew a waveform and a tap started an ElevenLabs call, while this
-     * file's comment and this test both said dictation. On a phone that can
-     * dictate, the biggest button on an empty composer is the microphone.
+     * DROVE-206. The button used to become the waveform on an empty composer,
+     * so the same spot on the screen was send or boss mode depending on what
+     * you had typed. Clay: "the boss should not be in the message box… we
+     * should have a send button, proper button." The waveform is a control of
+     * its own on the row now, and an empty composer leaves this one DISABLED
+     * rather than repurposed.
+     *
+     * There is no `canVoice` left to pass. These are the cases that used to
+     * resolve to `voice`, asserted to reach `idle` instead, so the removal is
+     * pinned rather than merely deleted.
      */
-    it('shows the microphone on an empty composer when dictation is available', () => {
-        expect(resolveAgentInputPrimaryAction({
-            ...base,
-            canDictate: true,
-        })).toBe('mic');
+    it('leaves a send button disabled on an empty composer, never a waveform', () => {
+        expect(resolveAgentInputPrimaryAction(base)).toBe('idle');
+        // With an abort in flight the slot is Stop, which is the ONE face that
+        // is genuinely another action, and it only appears while the agent is
+        // working on a composer with nothing in it.
+        expect(resolveAgentInputPrimaryAction({ ...base, showAbortButton: true })).toBe('stop');
+        // Type one character and it is a live send button again.
+        expect(resolveAgentInputPrimaryAction({ ...base, hasComposerContent: true })).toBe('send');
     });
 
-    it('puts the microphone ahead of a boss-mode call', () => {
-        expect(resolveAgentInputPrimaryAction({
-            ...base,
-            canDictate: true,
-            canVoice: true,
-        })).toBe('mic');
-    });
-
-    /**
-     * `canVoice` is false for every second the session reads disconnected,
-     * and DROVE-179 measured that flipping on any reconnect blip. That left
-     * the primary `idle`, which draws a DISABLED button: the tap fires
-     * nothing at all, no shake and no haptic. Dictation does not care about
-     * the transport, so the mic face holds through the blip.
-     */
-    it('keeps the microphone through a blip that takes the call away', () => {
-        expect(resolveAgentInputPrimaryAction({
-            ...base,
-            canDictate: true,
-            canVoice: false,
-        })).toBe('mic');
-    });
-
-    it('keeps Stop ahead of both voice faces while the agent is thinking', () => {
-        expect(resolveAgentInputPrimaryAction({
-            ...base,
-            showAbortButton: true,
-            canVoice: true,
-        })).toBe('stop');
-        expect(resolveAgentInputPrimaryAction({
-            ...base,
-            showAbortButton: true,
-            canDictate: true,
-        })).toBe('stop');
-    });
-
-    it('keeps Send ahead of both voice faces once there is content', () => {
-        expect(resolveAgentInputPrimaryAction({
-            ...base,
-            hasComposerContent: true,
-            canVoice: true,
-        })).toBe('send');
-        expect(resolveAgentInputPrimaryAction({
-            ...base,
-            hasComposerContent: true,
-            canDictate: true,
-        })).toBe('send');
-    });
-
-    /**
-     * Dictation writes its partials into the composer, so a live capture makes
-     * `hasComposerContent` true within a word or two. Without this the button
-     * turned into Send under the thumb and the next tap fired a half-spoken
-     * sentence with the mic still running (DROVE-210).
-     */
-    it('keeps the microphone while the mic is open, even with words in the composer', () => {
-        expect(resolveAgentInputPrimaryAction({
-            ...base,
-            hasComposerContent: true,
-            canDictate: true,
-            micLive: true,
-        })).toBe('mic');
-    });
-
-    it('keeps the microphone while the mic is open, even while the agent is thinking', () => {
-        expect(resolveAgentInputPrimaryAction({
-            ...base,
-            showAbortButton: true,
-            canDictate: true,
-            micLive: true,
-        })).toBe('mic');
-    });
-
-    it('goes back to Send the moment the mic closes', () => {
-        expect(resolveAgentInputPrimaryAction({
-            ...base,
-            hasComposerContent: true,
-            canDictate: true,
-            micLive: false,
-        })).toBe('send');
-    });
-
-    it('a live mic on a surface with no mic control changes nothing', () => {
-        expect(resolveAgentInputPrimaryAction({
-            ...base,
-            hasComposerContent: true,
-            micLive: true,
-        })).toBe('send');
-    });
-
-    it('offers nothing at all when sending is disabled, mic included', () => {
-        expect(resolveAgentInputPrimaryAction({
-            ...base,
-            isSendDisabled: true,
-            canDictate: true,
-            canVoice: true,
-        })).toBe('idle');
+    it('never resolves to a face the send button no longer has', () => {
+        const cases = [
+            base,
+            { ...base, hasComposerContent: true },
+            { ...base, showAbortButton: true },
+            { ...base, isSendBlocked: true, hasComposerContent: true },
+            { ...base, isSendDisabled: true },
+            { ...base, showAbortButton: true, canAbort: false },
+        ];
+        for (const input of cases) {
+            expect(['send', 'stop', 'blocked', 'idle'])
+                .toContain(resolveAgentInputPrimaryAction(input));
+        }
     });
 
     it('still offers Stop for a blank composer when steering is blocked', () => {
@@ -161,7 +79,6 @@ describe('resolveAgentInputPrimaryAction', () => {
             ...base,
             isSendBlocked: true,
             showAbortButton: true,
-            canVoice: true,
         })).toBe('stop');
     });
 

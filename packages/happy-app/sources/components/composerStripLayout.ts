@@ -80,12 +80,16 @@ export interface RecordingBannerFrame {
  * Where the banner is pinned. `position: 'absolute'` is the load-bearing
  * part: change it and the composer starts moving the transcript again.
  *
- * Left and right are the shell inset, which is the composer's outer gutter:
- * the bar runs from the `+`'s leading edge to the bubble's trailing rim, so it
- * is exactly as wide as the composer above it. That claim used to be aspiration
- * rather than fact, because the card spanned the whole dock and carried the
- * gutter inside itself; DROVE-196 moved the gutter out onto the composer line
- * and the control row, and the two now really are the same width.
+ * Left and right are the shell inset, which is the composer's outer gutter, so
+ * the bar is exactly as wide as the composer above it. That claim used to be
+ * aspiration rather than fact, because the card spanned the whole dock and
+ * carried the gutter inside itself; DROVE-196 moved the gutter out onto the
+ * composer line and the control row, and the two really became the same width.
+ *
+ * DROVE-206 made it simpler still without moving a number. The bar used to run
+ * from the `+`'s leading edge to the bubble's trailing rim, which was two
+ * different things at the two ends; the `+` is inside the field now, so both
+ * ends are the bubble's own rims and the bar is the card's width literally.
  */
 export const RECORDING_BANNER_FRAME: RecordingBannerFrame = {
     position: 'absolute',

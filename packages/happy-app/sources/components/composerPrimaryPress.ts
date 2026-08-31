@@ -1,29 +1,25 @@
 import type { AgentInputPrimaryAction } from './agentInputPrimaryAction';
 
 /**
- * What a gesture on the composer's primary button does (DROVE-98, DROVE-210).
+ * What a gesture on the composer's send button does (DROVE-98).
  *
- * The button is one control with five faces (send, stop, mic, boss mode,
- * locked) and two gestures: a tap runs the face, a long-press opens the
+ * It is a send button with two gestures: a tap sends, a long-press opens the
  * channel sheet (DROVE-72). React Native fires exactly one of onPress and
  * onLongPress per touch, so the split is here as data rather than in two
  * handlers that could drift apart. The face is decided from the live text,
  * not the transitioned `hasText`, so a fast type-then-tap sends what was
- * typed instead of aborting the agent or starting a call.
+ * typed instead of aborting the agent.
  *
- * WHY THE MIC FACE ONLY LATCHES (DROVE-210). A tap here opens the mic and
- * leaves it open; the next tap stops it with the words in the composer,
- * unsent. It cannot also do push-to-talk, and that is a fact about the
- * gesture rather than a decision: `onPress` fires once, on the lift, with no
- * press-in, no duration and no coordinates, so there is nothing to hold and
- * nothing to slide off. Push-to-talk and slide-to-cancel stay on the
- * control-row capsule's TalkButton, which owns the whole touch stream. Both
- * controls drive the SAME capture, so a latch opened on either is stopped by
- * either.
+ * BOSS MODE IS NO LONGER ONE OF THE ANSWERS (DROVE-206). The waveform was the
+ * face this button wore on an empty composer, so a tap in that one spot did
+ * two unrelated things depending on what was in the field. Clay: "the boss
+ * should not be in the message box." It is a control of its own on the row
+ * now and it calls the mic handler directly, so this table is down to the
+ * three things a send button can do: send, halt, or nothing.
  */
 export type ComposerPrimaryGesture = 'press' | 'longPress';
 
-export type ComposerPrimaryDispatch = 'send' | 'abort' | 'mic' | 'boss' | 'channels' | 'none';
+export type ComposerPrimaryDispatch = 'send' | 'abort' | 'channels' | 'none';
 
 export interface ComposerPrimaryPressInput {
     gesture: ComposerPrimaryGesture;
@@ -39,9 +35,10 @@ export function resolveComposerPrimaryPress(input: ComposerPrimaryPressInput): C
     if (input.gesture === 'longPress') return 'channels';
     if (input.liveHasContent) return 'send';
     if (input.action === 'stop') return 'abort';
-    if (input.action === 'mic') return 'mic';
-    if (input.action === 'voice') return 'boss';
     // Locked and idle both go through the send path, which shakes the
-    // button and explains why nothing went.
+    // button and explains why nothing went. `idle` never actually arrives
+    // here, because an idle button is disabled and `canPress` has already
+    // returned 'none'; it stays reachable in the type so a future state that
+    // enables the button lands on send rather than on a hole.
     return 'send';
 }
