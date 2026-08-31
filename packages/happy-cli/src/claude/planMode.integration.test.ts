@@ -10,8 +10,9 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
+import { fixtureProjectNames, mungedProjectName, sharedStoreProjectsDir } from '@/testing/droverTestHome';
 import { PushableAsyncIterable } from '@/utils/PushableAsyncIterable';
 import { query, type QueryOptions, type SDKAssistantMessage, type SDKMessage, type SDKResultMessage, type SDKSystemMessage } from './sdk';
 import { createPlanModeFixture } from '@/testing/planModeTestFixture';
@@ -55,7 +56,7 @@ async function isClaudeAvailable(cwd: string): Promise<boolean> {
         const result = resultMessage(messages);
         return (result && 'result' in result) ? result.result?.trim() === 'ready' : false;
     } catch {
-        console.log('[plan-mode-test] Skipping: Claude query unavailable');
+        console.log(`[plan-mode-test] Skipping: Claude query unavailable (CLAUDE_CONFIG_DIR=${process.env.CLAUDE_CONFIG_DIR ?? 'unset'})`);
         return false;
     }
 }
@@ -74,6 +75,23 @@ describe.skipIf(!(await claudeAvailable))('Plan Mode Integration', { timeout: 18
 
     afterEach(() => {
         fixture?.cleanup();
+    });
+
+    it('writes its transcript under the harness config dir, never the shared session store (DROVE-81)', async () => {
+        const storeBefore = fixtureProjectNames(sharedStoreProjectsDir());
+        const configDir = process.env.CLAUDE_CONFIG_DIR;
+        expect(configDir, 'droverTestHome.setup.ts sets CLAUDE_CONFIG_DIR').toBeTruthy();
+
+        await collectMessages(query({
+            prompt: 'Say exactly ready',
+            options: { abort: AbortSignal.timeout(60_000), cwd: fixture.dir, model: MODEL },
+        }));
+
+        // Claude Code names the project dir from the RESOLVED cwd: /tmp is
+        // /private/tmp on a Mac.
+        const project = mungedProjectName(realpathSync(fixture.dir));
+        expect(existsSync(join(configDir!, 'projects', project))).toBe(true);
+        expect(fixtureProjectNames(sharedStoreProjectsDir())).toEqual(storeBefore);
     });
 
     it('should call canCallTool for ExitPlanMode and allow plan execution', async () => {
