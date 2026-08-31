@@ -155,12 +155,11 @@ export const WorktreeSheet = React.memo(function WorktreeSheet(props: WorktreeSh
         }
     }, [starting, machineId, session?.metadata?.flavor, closeThen, router]);
 
-    // The pickers' cap, not the agent tree's: a repo has more worktrees than
-    // either, and 400 is what DROVE-90's own list was capped at. DROVE-201 is
-    // replacing the cap with "grow to content, scroll only at full screen",
-    // and when it lands this number goes with it.
+    // No cap. DROVE-201 landed: a sheet grows to its content and scrolls only
+    // once it has filled the screen, which suits a worktree list better than
+    // any number would, because a repo has as many as it has.
     return (
-        <ComposerSheet open={open} onClose={onClose} onClosed={handleClosed} maxHeight={400}>
+        <ComposerSheet open={open} onClose={onClose} onClosed={handleClosed}>
             <View style={styles.body}>
                 <View style={styles.header}>
                     <Text style={styles.title}>Worktrees</Text>
