@@ -103,10 +103,12 @@ describe('loop keeps Session.mode and the session-alive heartbeat in step with t
     });
 
     it('a session that starts remote says so from its first heartbeat', async () => {
-        // The daemon's resume path (daemon/run.ts, claudeStartingMode:
-        // 'remote') starts in remote mode and, under DROVE-1, stays there. It
-        // never passes through a switch, so the initial value is the only
-        // value it will ever report.
+        // No daemon path starts a session remote any more: spawn (DROVE-2)
+        // and resume (DROVE-76) both open a tmux window in local mode. A
+        // remote start is still reachable by hand, `--happy-starting-mode
+        // remote` typed into a terminal, and such a session never passes
+        // through a switch, so the initial value is the only value it will
+        // ever report.
         mockRemoteLauncher.mockResolvedValueOnce('exit');
 
         const h = harness('remote');

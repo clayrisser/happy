@@ -40,7 +40,8 @@ export function parseResumeCommandArgs(args: string[]): { showHelp: boolean; ses
     };
 }
 
-function resolveFlavor(metadata: Metadata): 'codex' | 'claude' | null {
+/** Which agent a Happy session belongs to, from its metadata. Shared with the daemon's resume (DROVE-76). */
+export function resolveResumeFlavor(metadata: Metadata): 'codex' | 'claude' | null {
     if (metadata.flavor === 'codex' || metadata.codexThreadId) {
         return 'codex';
     }
@@ -52,7 +53,7 @@ function resolveFlavor(metadata: Metadata): 'codex' | 'claude' | null {
 
 export function buildResumeLaunch(session: ResumableHappySession, options: ResumeLaunchOptions = {}): ResumeLaunch {
     const { metadata } = session;
-    const flavor = resolveFlavor(metadata);
+    const flavor = resolveResumeFlavor(metadata);
 
     if (flavor === 'codex') {
         if (!metadata.codexThreadId) {
