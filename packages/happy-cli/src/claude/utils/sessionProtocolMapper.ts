@@ -1,4 +1,10 @@
 import { createHash } from 'node:crypto';
+import {
+    applyClaudeTaskTool,
+    createClaudeTaskList,
+    isClaudeTaskTool,
+    type ClaudeTaskList,
+} from './claudeTaskTools';
 import { createId } from '@paralleldrive/cuid2';
 import type { RawJSONLines } from '@/claude/types';
 import {
@@ -34,7 +40,9 @@ export type ClaudeSessionProtocolState = {
      */
     queuedPromptEnvelopeIds?: Map<string, string[]>;
     /**
-     * The main thread's task list, counted at the last TodoWrite (DROVE-167).
+     * The main thread's task list, counted at the last write (DROVE-167), in
+     * either dialect: TodoWrite, or the TaskCreate/TaskUpdate/TaskList family
+     * that is the only one Clay's Claude Code actually has (DROVE-192).
      *
      * `metadata.activity.tasks` has been on the wire and rendered by the
      * phone's info screen since BASED-134 and hardcoded to zeros here, so the
@@ -45,6 +53,18 @@ export type ClaudeSessionProtocolState = {
      * are what a session the phone has not opened can still say about itself.
      */
     claudeTasks?: { pending: number; inProgress: number; completed: number; total: number };
+    /**
+     * The list itself, when the session keeps it with the TaskCreate /
+     * TaskUpdate / TaskList family rather than TodoWrite (DROVE-192). Those
+     * calls are DELTAS, so the counts can only be taken off a list we hold.
+     */
+    claudeTaskList?: ClaudeTaskList;
+    /**
+     * Task-tool calls whose result has not arrived. TaskCreate states the id it
+     * assigned in its RESULT (`Task #3 created successfully: …`) and nowhere
+     * else, so the input has to wait for it.
+     */
+    pendingTaskToolCalls?: Map<string, { name: string; input: unknown }>;
 };
 
 /**
@@ -470,7 +490,9 @@ export function readClaudeActivity(state: ClaudeSessionProtocolState): ClaudeAct
 }
 
 /**
- * Count a TodoWrite the main thread just issued (DROVE-167).
+ * Count a TodoWrite the main thread just issued (DROVE-167). The task-tool
+ * family is counted separately, in settleClaudeTaskCall, because those calls
+ * are deltas and only make sense against a list we hold.
  *
  * The INPUT, not a result: the input is the list the agent is committing, it
  * arrives one message earlier, and it is the only shape guaranteed to be there
@@ -487,7 +509,10 @@ function recordClaudeTasks(
     input: unknown,
     subagent: string | undefined,
 ): void {
-    if (name !== 'TodoWrite' || subagent) {
+    if (subagent) {
+        return;
+    }
+    if (name !== 'TodoWrite') {
         return;
     }
     const todos = (input as { todos?: unknown } | null | undefined)?.todos;
@@ -501,6 +526,52 @@ function recordClaudeTasks(
         else if (status === 'in_progress') counts.inProgress += 1;
         else if (status === 'pending') counts.pending += 1;
         else continue;
+        counts.total += 1;
+    }
+    state.claudeTasks = counts;
+}
+
+/**
+ * Remember a task-family call until its result lands (DROVE-192).
+ *
+ * A subagent's list is not the session's, same rule as TodoWrite above.
+ */
+function noteClaudeTaskCall(
+    state: ClaudeSessionProtocolState,
+    call: string,
+    name: string,
+    input: unknown,
+    subagent: string | undefined,
+): void {
+    if (subagent || !isClaudeTaskTool(name)) {
+        return;
+    }
+    const pending = state.pendingTaskToolCalls ?? new Map();
+    pending.set(call, { name, input });
+    state.pendingTaskToolCalls = pending;
+}
+
+/** Fold the finished call into the list and recount. */
+function settleClaudeTaskCall(
+    state: ClaudeSessionProtocolState,
+    call: string,
+    result: unknown,
+): void {
+    const pendingCall = state.pendingTaskToolCalls?.get(call);
+    if (!pendingCall) {
+        return;
+    }
+    state.pendingTaskToolCalls!.delete(call);
+    const list = state.claudeTaskList ?? createClaudeTaskList();
+    if (!applyClaudeTaskTool(list, pendingCall.name, pendingCall.input, result)) {
+        return;
+    }
+    state.claudeTaskList = list;
+    const counts = { pending: 0, inProgress: 0, completed: 0, total: 0 };
+    for (const task of list.values()) {
+        if (task.status === 'completed') counts.completed += 1;
+        else if (task.status === 'in_progress') counts.inProgress += 1;
+        else counts.pending += 1;
         counts.total += 1;
     }
     state.claudeTasks = counts;
@@ -850,6 +921,7 @@ function mapClaudeLogMessageToSessionEnvelopesInternal(
                 const baseArgs = toToolArgs(block.input);
                 const title = toolTitle(name, block.input);
                 recordClaudeTasks(state, name, block.input, subagent);
+                noteClaudeTaskCall(state, call, name, block.input, subagent);
                 const sessionSubagentForCall = ensureSessionSubagentIdForProviderSubagent(state, call);
                 if (isSubagentTool(name)) {
                     const prompt = pickTaskPrompt(block.input);
@@ -979,6 +1051,9 @@ function mapClaudeLogMessageToSessionEnvelopesInternal(
                     if (sessionSubagentForToolResult) {
                         maybeEmitSubagentStop(state, turnId, sessionSubagentForToolResult, envelopes);
                     }
+                }
+                if (!message.isSidechain) {
+                    settleClaudeTaskCall(state, block.tool_use_id, block.content);
                 }
                 envelopes.push(createEnvelope('agent', {
                     t: 'tool-call-end',

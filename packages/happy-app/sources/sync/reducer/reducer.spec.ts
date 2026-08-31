@@ -3244,6 +3244,95 @@ describe('reducer', () => {
         });
     });
 
+    describe('TaskCreate / TaskUpdate task list (DROVE-192)', () => {
+        const call = (id: string, name: string, input: unknown, at: number) => ({
+            id: `use-${id}`,
+            localId: null,
+            createdAt: at,
+            role: 'agent' as const,
+            isSidechain: false,
+            content: [{
+                type: 'tool-call' as const,
+                id,
+                name,
+                input: input as any,
+                description: null,
+                uuid: `uuid-${id}`,
+                parentUUID: null,
+            }],
+        });
+        const answer = (id: string, content: unknown, at: number, isSidechain = false) => ({
+            id: `res-${id}`,
+            localId: null,
+            createdAt: at,
+            role: 'agent' as const,
+            isSidechain,
+            content: [{
+                type: 'tool-result' as const,
+                tool_use_id: id,
+                content: content as any,
+                is_error: false,
+                uuid: `uuid-${id}`,
+                parentUUID: null,
+            }],
+        });
+
+        it('builds the list from a create/update stream whose results are prose', () => {
+            const state = createReducer();
+            const result = reducer(state, [
+                call('t1', 'TaskCreate', { subject: 'Boot local fork server' }, 1000),
+                answer('t1', 'Task #1 created successfully: Boot local fork server', 1010),
+                call('t2', 'TaskCreate', { subject: 'Smoke sign-in' }, 1020),
+                answer('t2', 'Task #2 created successfully: Smoke sign-in', 1030),
+                call('t3', 'TaskUpdate', { taskId: '1', status: 'completed' }, 1040),
+                answer('t3', 'Updated task #1 status', 1050),
+                call('t4', 'TaskUpdate', { taskId: '2', status: 'in_progress' }, 1060),
+                answer('t4', 'Updated task #2 status', 1070),
+            ]);
+
+            expect(result.todos).toEqual([
+                { id: '1', content: 'Boot local fork server', status: 'completed' },
+                { id: '2', content: 'Smoke sign-in', status: 'in_progress' },
+            ]);
+        });
+
+        it('keeps the list across reducer calls, because every call is a delta', () => {
+            const state = createReducer();
+            reducer(state, [
+                call('t1', 'TaskCreate', { subject: 'First' }, 1000),
+                answer('t1', 'Task #1 created successfully: First', 1010),
+            ]);
+            const later = reducer(state, [
+                call('t2', 'TaskUpdate', { taskId: '1', status: 'in_progress' }, 1020),
+                answer('t2', 'Updated task #1 status', 1030),
+            ]);
+            expect(later.todos).toEqual([{ id: '1', content: 'First', status: 'in_progress' }]);
+        });
+
+        it('takes a TaskList result as the authoritative list', () => {
+            const state = createReducer();
+            const result = reducer(state, [
+                call('t1', 'TaskCreate', { subject: 'Stale row' }, 1000),
+                answer('t1', 'Task #1 created successfully: Stale row', 1010),
+                call('t2', 'TaskList', {}, 1020),
+                answer('t2', '#41 [pending] Item 7\n#42 [completed] Item 16', 1030),
+            ]);
+            expect(result.todos).toEqual([
+                { id: '41', content: 'Item 7', status: 'pending' },
+                { id: '42', content: 'Item 16', status: 'completed' },
+            ]);
+        });
+
+        it('is empty for a session that only ever mentioned the tools', () => {
+            const state = createReducer();
+            const result = reducer(state, [
+                call('t1', 'Bash', { command: 'grep -r TaskCreate .' }, 1000),
+                answer('t1', 'no matches', 1010),
+            ]);
+            expect(result.todos).toBeUndefined();
+        });
+    });
+
     describe('TodoWrite latestTodos handling', () => {
         it('does not update todos from a running TodoWrite input', () => {
             const state = createReducer();

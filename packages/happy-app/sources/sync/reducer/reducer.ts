@@ -114,6 +114,13 @@ import { Message, ToolCall } from "../typesMessage";
 import { AgentEvent, NormalizedMessage, UsageData } from "../typesRaw";
 import { createTracer, traceMessages, TracerState } from "./reducerTracer";
 import { AgentState, TodoItem, TodoItemsSchema } from "../storageTypes";
+import {
+    applyClaudeTaskTool,
+    claudeTaskListToTodos,
+    createClaudeTaskList,
+    isClaudeTaskTool,
+    type ClaudeTaskList,
+} from '@/utils/claudeTaskTools';
 import { MessageMeta } from "../typesMessageMeta";
 import { parseMessageAsEvent } from "./messageToEvent";
 import { isAsyncAgentLaunch } from "@/utils/agentCard";
@@ -161,6 +168,18 @@ export type ReducerState = {
     tracerState: TracerState; // Tracer state for sidechain processing
     latestTodos?: {
         todos: TodoItem[];
+        timestamp: number;
+    };
+    /**
+     * The same list, kept by the OTHER task tools (DROVE-192).
+     *
+     * TodoWrite writes the whole array at once; TaskCreate / TaskUpdate /
+     * TaskList mutate a list one row at a time and answer with prose. Clay's
+     * Claude Code only has the second family, so without this his task list is
+     * empty on every surface no matter how much planning a session does.
+     */
+    claudeTasks?: {
+        list: ClaudeTaskList;
         timestamp: number;
     };
     latestUsage?: {
@@ -273,6 +292,44 @@ function updateLatestTodos(state: ReducerState, value: unknown, timestamp: numbe
             timestamp,
         };
     }
+}
+
+/**
+ * Fold one TaskCreate / TaskUpdate / TaskList into the session's list.
+ *
+ * Unlike TodoWrite this is cumulative, so it cannot be guarded on "newer than
+ * what we have" — every call is a delta and dropping one loses a row for good.
+ * The timestamp is only recorded so the two families can be compared at the
+ * end, and it moves forward only.
+ */
+function updateClaudeTasks(
+    state: ReducerState,
+    name: string,
+    input: unknown,
+    result: unknown,
+    timestamp: number,
+) {
+    const list = state.claudeTasks?.list ?? createClaudeTaskList();
+    if (!applyClaudeTaskTool(list, name, input, result)) {
+        return;
+    }
+    state.claudeTasks = {
+        list,
+        timestamp: Math.max(timestamp, state.claudeTasks?.timestamp ?? 0),
+    };
+}
+
+/**
+ * One list out of two sources. A session speaks one dialect or the other, so
+ * in practice only one is ever populated; when both are, the fresher write
+ * wins rather than one silently shadowing the other.
+ */
+function resolveTodos(state: ReducerState): TodoItem[] | undefined {
+    const fromTasks = state.claudeTasks ? claudeTaskListToTodos(state.claudeTasks.list) : null;
+    const fromTodoWrite = state.latestTodos?.todos;
+    if (!fromTasks || fromTasks.length === 0) return fromTodoWrite;
+    if (!fromTodoWrite || fromTodoWrite.length === 0) return fromTasks;
+    return (state.claudeTasks!.timestamp >= (state.latestTodos?.timestamp ?? 0)) ? fromTasks : fromTodoWrite;
 }
 
 export function reducer(state: ReducerState, messages: NormalizedMessage[], agentState?: AgentState | null): ReducerResult {
@@ -401,6 +458,10 @@ export function reducer(state: ReducerState, messages: NormalizedMessage[], agen
             state.latestTodos = {
                 todos: [],
                 timestamp: msg.createdAt  // Use message timestamp, not current time
+            };
+            state.claudeTasks = {
+                list: createClaudeTaskList(),
+                timestamp: msg.createdAt
             };
             state.latestUsage = {
                 inputTokens: 0,
@@ -1000,6 +1061,16 @@ export function reducer(state: ReducerState, messages: NormalizedMessage[], agen
                         );
                     }
 
+                    if (isClaudeTaskTool(message.tool.name) && !c.is_error) {
+                        updateClaudeTasks(
+                            state,
+                            message.tool.name,
+                            message.tool.input,
+                            message.tool.result,
+                            msg.createdAt,
+                        );
+                    }
+
                     changed.add(messageId);
                 }
             }
@@ -1256,7 +1327,7 @@ export function reducer(state: ReducerState, messages: NormalizedMessage[], agen
 
     return {
         messages: newMessages,
-        todos: state.latestTodos?.todos,
+        todos: resolveTodos(state),
         usage: state.latestUsage ? {
             inputTokens: state.latestUsage.inputTokens,
             outputTokens: state.latestUsage.outputTokens,

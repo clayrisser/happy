@@ -4,7 +4,7 @@
  * Clay, three times: "Why when I click on the drover icon it doesn't show the
  * todo", "When I press the Longhorn button nothing happens", "why does this
  * not let me see my fucking tasks". The data was already here the whole time.
- * Claude Code's TodoWrite result lands on `session.todos` in the reducer, and
+ * Claude Code's task list lands on `session.todos` in the reducer, and
  * it has been kept up to date on every message since long before this ticket.
  * It simply had nowhere to land but the inline card in the transcript, which
  * scrolls away the moment the next tool runs.
@@ -43,11 +43,13 @@ export interface SessionTasks {
 /**
  * What an empty list says.
  *
- * A session that has never called TodoWrite is the common case, not an error:
- * a one-question session never keeps a list. The screenshot on this ticket is
- * a black watch face, so the empty case gets a sentence, always.
+ * A session that has never written a list is the common case, not an error:
+ * a one-question session never keeps one. The screenshot on this ticket is
+ * a black watch face, so the empty case gets a sentence, always — and the
+ * sentence has to name what WOULD fill it (DROVE-192), because "No tasks yet"
+ * on its own is indistinguishable from a surface that is broken.
  */
-export const noTasksHeadline = 'No tasks yet';
+export const noTasksHeadline = 'No task list yet';
 
 /**
  * A blank line is not a task. Claude Code will happily write `""` into the
