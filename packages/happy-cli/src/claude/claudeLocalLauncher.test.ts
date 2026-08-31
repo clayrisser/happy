@@ -1185,7 +1185,7 @@ describe('claudeLocalLauncher in a tmux pane', () => {
         // spelling Claude Code writes back into the transcript. It is our own
         // delivery either way and must not be re-sent to the app.
         scannerOpts.onQueuedPrompt({
-            text: `<cross-session-message from-name="${appSenderName}">\nfrom the phone\n</cross-session-message>`,
+            text: `<cross-session-message from-name="${appSenderName}" from-mode="bypass">\nfrom the phone\n</cross-session-message>`,
             at: 1788113421999,
             carrier: 'enqueue',
         });

@@ -137,9 +137,47 @@ describe('findInbox', () => {
  * literally rather than rebuilding it from the same code under test.
  */
 describe('wrapForPane', () => {
-    it('emits from-name and nothing else, body on its own lines', () => {
+    it('emits from-name and from-mode, in that order, body on its own lines', () => {
         expect(wrapForPane('ship it', 'phone')).toBe(
-            '<cross-session-message from-name="phone">\nship it\n</cross-session-message>',
+            '<cross-session-message from-name="phone" from-mode="bypass">\nship it\n</cross-session-message>',
+        )
+    })
+
+    /**
+     * DROVE-102. Claude Code parses the wrapper, rebuilds it from what it
+     * parsed, and throws the whole thing away as body text unless the two are
+     * byte identical (`SM` calling `VMe` in 2.1.251). So this is the receiver's
+     * own accepting regex, transcribed, with our attributes in the only order
+     * it takes: from, from-session, hop-chain, from-name, from-mode. If a
+     * future CLI renames the attribute or reorders it, this fails here instead
+     * of silently holding every one of Clay's phone messages again.
+     */
+    it('matches the receiver\'s parser, attributes in the order it demands', () => {
+        const parser = new RegExp(
+            '^<cross-session-message'
+            + '(?: from="([A-Za-z0-9%:_/.\\\\-]+)")?'
+            + '(?: from-session="([0-9a-f]{24})")?'
+            + '(?: hop-chain="([0-9a-f]{24}(?:,[0-9a-f]{24}){0,31})")?'
+            + '(?: from-name="([^"<>\\n\\r]+)")?'
+            + '(?: from-mode="(bypass|prompting)")?'
+            + '>\\n([\\s\\S]*)\\n</cross-session-message>$',
+        )
+        const match = parser.exec(wrapForPane('ship it', 'phone'))
+
+        expect(match).not.toBeNull()
+        expect(match![4]).toBe('phone')
+        expect(match![5]).toBe('bypass')
+        expect(match![6]).toBe('ship it')
+    })
+
+    /**
+     * The one class the receiver must not see from us by accident. A relayed
+     * peer note keeps its own attestation because it arrives already wrapped,
+     * so `prompting` is only ever emitted when a caller asks for it.
+     */
+    it('attests prompting when the caller says so, so a weaker sender is not laundered', () => {
+        expect(wrapForPane('ship it', 'phone', 'prompting')).toBe(
+            '<cross-session-message from-name="phone" from-mode="prompting">\nship it\n</cross-session-message>',
         )
     })
 
@@ -180,7 +218,7 @@ describe('sendToInbox', () => {
                 type: 'user',
                 message: {
                     role: 'user',
-                    content: `<cross-session-message from-name="${appSenderName}">\nfrom the phone\n</cross-session-message>`,
+                    content: `<cross-session-message from-name="${appSenderName}" from-mode="bypass">\nfrom the phone\n</cross-session-message>`,
                 },
                 session_id: sessionId,
             },

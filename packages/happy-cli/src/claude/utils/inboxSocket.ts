@@ -166,6 +166,13 @@ async function readPeerToken(dir: string, names: string[], pid: number): Promise
  */
 export const appSenderName = 'phone'
 
+/**
+ * The two permission-mode classes Claude Code's wrapper accepts, spelled its
+ * way (`_M` in 2.1.251). Anything else fails the parser's own round trip and
+ * the whole wrapper is treated as body text.
+ */
+export type PaneSenderMode = 'bypass' | 'prompting'
+
 /** Claude Code's `de` test: does this text already carry the wrapper? */
 const wrappedRe = /^<cross-session-message(?:[ \t][^>\r\n]*)?>/
 
@@ -174,16 +181,41 @@ const wrappedRe = /^<cross-session-message(?:[ \t][^>\r\n]*)?>/
  *
  * Attribute ORDER matters and so does every space: the receiver re-serialises
  * what it parsed and compares it to what arrived (`SM`), so a wrapper that is
- * a byte off is treated as ordinary body text and the name is lost. We emit
- * `from-name` and nothing else, because the other attributes — `from`,
- * `from-session`, `hop-chain` — are addresses of a real Claude peer, and
- * claiming one would point Claude Code's delivery receipts at a socket that
- * does not exist.
+ * a byte off is treated as ordinary body text and the name is lost. The order
+ * the parser accepts is `from`, `from-session`, `hop-chain`, `from-name`,
+ * `from-mode`. We emit the last two. `from`, `from-session` and `hop-chain`
+ * are addresses of a real Claude peer, and claiming one would point Claude
+ * Code's delivery receipts at a socket that does not exist.
  *
- * Already-wrapped text is left alone. A relayed peer note arrives that way and
- * wrapping it twice would show the inner wrapper as literal text.
+ * WHY `from-mode` (DROVE-102). Without it every phone message was HELD:
+ *
+ *   Held peer message ... The sender did not attest its permission mode and
+ *   this session bypasses prompts.
+ *
+ * and Clay had to tap Deliver on each one. The receiver classes both ends and
+ * holds when the sender is weaker than itself, so an agent that prompts for
+ * permissions cannot silently drive one that does not. Measured in 2.1.251:
+ * `var _M = ["bypass", "prompting"]` are the only two values the parser takes,
+ * and the reasons it logs are `no-mode-asserted`, `mode-mismatch` and
+ * `bypass-default`. Unattested plus a bypassing receiver is `no-mode-asserted`,
+ * which is exactly what we were hitting.
+ *
+ * We attest `bypass` for the app's own messages. The sender there is Clay
+ * typing on his phone, not an agent: a human is not gated by permission
+ * prompts, and the session he is typing into is his own. Nothing is laundered
+ * by saying so, and it is narrower than the blunt alternative he was reaching
+ * for, `crossSessionInbound: accept`, which would accept every peer on the
+ * machine rather than identifying ours.
+ *
+ * Already-wrapped text is left alone, and that is load bearing here: a relayed
+ * peer note arrives wrapped and keeps whatever mode its real sender attested,
+ * so a prompting agent's note cannot pick up our `bypass` on the way through.
  */
-export function wrapForPane(text: string, fromName: string = appSenderName): string {
+export function wrapForPane(
+    text: string,
+    fromName: string = appSenderName,
+    mode: PaneSenderMode = 'bypass',
+): string {
     if (wrappedRe.test(text)) return text
     // Same scrub Claude Code applies before it will accept the attribute:
     // no quotes or angle brackets, no control characters, trimmed, <= 64.
@@ -191,7 +223,7 @@ export function wrapForPane(text: string, fromName: string = appSenderName): str
         .slice(0, 64)
         .join('')
     if (name.length === 0) return text
-    return `<cross-session-message from-name="${name}">\n${text}\n</cross-session-message>`
+    return `<cross-session-message from-name="${name}" from-mode="${mode}">\n${text}\n</cross-session-message>`
 }
 
 /**
@@ -204,8 +236,9 @@ export function sendToInbox(
     text: string,
     sessionId?: string,
     fromName: string = appSenderName,
+    mode: PaneSenderMode = 'bypass',
 ): Promise<InboxSendResult> {
-    const body = wrapForPane(text, fromName)
+    const body = wrapForPane(text, fromName, mode)
     return new Promise((resolve) => {
         let settled = false
         const done = (result: InboxSendResult) => {
