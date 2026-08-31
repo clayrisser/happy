@@ -30,6 +30,56 @@ const sharedSpacing = {
     },
 } as const;
 
+/**
+ * Syntax colours for a dark surface (DROVE-159).
+ *
+ * Shared, because the terminal card is `#1E1E1E` in BOTH themes: a light-theme
+ * phone still shows a black terminal, so the light syntax palette would be
+ * invisible on it. This set therefore serves code blocks in the dark theme and
+ * terminal cards in either.
+ *
+ * Every value is measured in `syntaxPalette.spec.ts` rather than eyeballed:
+ * at least 4.5:1 against `#292929`, `#282828` and `#1E1E1E`, at least 0.20
+ * normalised-sRGB from the reading mark, and at least 0.15 from the diff view's
+ * added and removed signals. The four that carry a skim (plain, keyword,
+ * string, comment) are additionally held 0.15 apart from each other.
+ *
+ * The palette is cool-heavy because the warm end is spoken for: amber is the
+ * reading mark and red is a removed line.
+ */
+const darkSyntax = {
+    plain: '#D4D4D4',
+    keyword: '#569CD6',
+    string: '#CE9178',
+    comment: '#9AA5B1',
+    number: '#B5CEA8',
+    function: '#D2A8FF',
+    variable: '#9CDCFE',
+    operator: '#D4D4D4',
+    punctuation: '#A0A0A0',
+    builtin: '#4EC9B0',
+    property: '#9CDCFE',
+    class: '#4EC9B0',
+};
+
+/** The same roles on `#f0f0f0`, the light theme's code block. */
+const lightSyntax = {
+    plain: '#1F2937',
+    keyword: '#1D4ED8',
+    string: '#047857',
+    comment: '#5F6773',
+    // Fuchsia rather than the dark theme's pale green: on a light ground the
+    // green is already the string, and the warm end is the reading mark.
+    number: '#A21CAF',
+    function: '#7E22CE',
+    variable: '#0369A1',
+    operator: '#1F2937',
+    punctuation: '#5F6773',
+    builtin: '#0F766E',
+    property: '#0369A1',
+    class: '#0F766E',
+};
+
 export const lightTheme = {
     dark: false,
     colors: {
@@ -232,17 +282,7 @@ export const lightTheme = {
         agentEventText: '#666666',
 
         // Code/Syntax colors
-        syntaxKeyword: '#1d4ed8',
-        syntaxString: '#059669',
-        syntaxComment: '#6b7280',
-        syntaxNumber: '#0891b2',
-        syntaxFunction: '#9333ea',
-        syntaxBracket1: '#ff6b6b',
-        syntaxBracket2: '#4ecdc4',
-        syntaxBracket3: '#45b7d1',
-        syntaxBracket4: '#f7b731',
-        syntaxBracket5: '#5f27cd',
-        syntaxDefault: '#374151',
+        syntax: lightSyntax,
 
         // Git status colors
         gitBranchText: '#6b7280',
@@ -259,6 +299,8 @@ export const lightTheme = {
             stderr: '#FFB86C',
             error: '#FF5555',
             emptyOutput: '#6272A4',
+            // The card is black in this theme too, so it takes the dark set.
+            syntax: darkSyntax,
         },
 
     },
@@ -460,17 +502,7 @@ export const darkTheme = {
         agentEventText: '#8E8E93',
 
         // Code/Syntax colors (brighter for dark mode)
-        syntaxKeyword: '#569CD6',
-        syntaxString: '#CE9178',
-        syntaxComment: '#6A9955',
-        syntaxNumber: '#B5CEA8',
-        syntaxFunction: '#DCDCAA',
-        syntaxBracket1: '#FFD700',
-        syntaxBracket2: '#DA70D6',
-        syntaxBracket3: '#179FFF',
-        syntaxBracket4: '#FF8C00',
-        syntaxBracket5: '#00FF00',
-        syntaxDefault: '#D4D4D4',
+        syntax: darkSyntax,
 
         // Git status colors
         gitBranchText: '#8E8E93',
@@ -487,6 +519,7 @@ export const darkTheme = {
             stderr: '#FFB86C',
             error: '#FF6B6B',
             emptyOutput: '#7B7B93',
+            syntax: darkSyntax,
         },
 
     },

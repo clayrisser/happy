@@ -3,6 +3,9 @@ import { Text, View, StyleSheet, Platform } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 import { DoubleTap, WrapGlyph } from './CodeWrapToggle';
 import { useCodeWrap } from './useCodeWrap';
+import { highlight, highlightShell } from './syntax/highlight';
+import { detectOutputLanguage } from './syntax/detect';
+import { SyntaxSpans } from './syntax/SyntaxText';
 
 interface CommandViewProps {
     command: string;
@@ -36,6 +39,21 @@ export const CommandView = React.memo<CommandViewProps>(({
     const [wrap, toggleWrap] = useCodeWrap('terminal');
     // Use legacy output if new props aren't provided
     const hasNewProps = stdout !== undefined || stderr !== undefined || error !== undefined;
+
+    // The command is bash by construction, so this is not a guess. What is a
+    // guess, and the reason this ticket exists, is what a heredoc body holds:
+    // `python3 - <<'PY'` is a shell call carrying Python, and colouring the
+    // Python as shell is worse than leaving it grey (DROVE-159).
+    const commandSpans = React.useMemo(() => highlightShell(command), [command]);
+    // Output is not code. A stack trace, a test report and a paragraph of
+    // English all match a shell rule or two, so nothing here is sniffed: only
+    // a payload that actually parses as JSON gets colour, everything else
+    // renders exactly as it did before.
+    const stdoutSpans = React.useMemo(() => {
+        if (!stdout) return [];
+        const language = detectOutputLanguage(stdout);
+        return language ? highlight(stdout, language) : [];
+    }, [stdout]);
 
     const styles = StyleSheet.create({
         container: {
@@ -114,14 +132,20 @@ export const CommandView = React.memo<CommandViewProps>(({
                 {/* Command Line */}
                 <View style={[styles.line, wrapped]}>
                     <Text style={styles.promptText}>{prompt} </Text>
-                    <Text style={[styles.commandText, wrapped]}>{command}</Text>
+                    <Text style={[styles.commandText, wrapped]}>
+                        <SyntaxSpans spans={commandSpans} palette={theme.colors.terminal.syntax} />
+                    </Text>
                 </View>
 
                 {hasNewProps ? (
                     <>
                         {/* Standard Output */}
                         {stdout && stdout.trim() && (
-                            <Text style={[styles.stdout, wrapped]}>{stdout}</Text>
+                            <Text style={[styles.stdout, wrapped]}>
+                                {stdoutSpans.length > 0
+                                    ? <SyntaxSpans spans={stdoutSpans} palette={theme.colors.terminal.syntax} />
+                                    : stdout}
+                            </Text>
                         )}
 
                         {/* Standard Error */}
