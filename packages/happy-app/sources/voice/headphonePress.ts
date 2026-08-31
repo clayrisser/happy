@@ -39,11 +39,18 @@
  * whatever the user pointed that tap at and nothing more.
  *
  * AND ONLY WHILE THIS APP OWNS NOW PLAYING. `wireRemoteCommands` in
- * DroverSpeechModule.swift runs only while the session is HELD, which JS sets
- * while read-aloud is on and the app is backgrounded. That is not a
- * limitation to work around, it is exactly the case Clay described: phone in
- * the pocket, headphones in, the reader talking. In the foreground the button
- * belongs to Music, and an app in the foreground does not need it.
+ * DroverSpeechModule.swift used to run only while the session was HELD, which
+ * JS sets while read-aloud is on and the app is backgrounded. DROVE-233 widened
+ * that to "while read-aloud is ON", because the narrower rule left a locked
+ * phone with an idle session showing no card and therefore no buttons — Clay
+ * photographed exactly that on build 14. The cost is that the press now
+ * reaches Drover in the FOREGROUND too, where it used to belong to Music. That
+ * is the right way round for an app that is reading to him, and it is the same
+ * trade any audio player makes by holding the card.
+ *
+ * The single press means pause and resume rather than off (DROVE-233); what it
+ * does is `transportEffect`'s to say, in readAloudTransport.ts. Which PRESS is
+ * whose is still this file's, and that has not moved.
  *
  * ## The rule
  *

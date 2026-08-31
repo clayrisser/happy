@@ -476,6 +476,8 @@ export const pl: TranslationStructure = {
             on: 'Czytam odpowiedzi na głos',
             off: 'Nie czytam odpowiedzi',
             onHint: 'Czytam odpowiedzi na głos. Dotknij zdania, aby czytać od niego',
+            paused: 'Wstrzymano. Przytrzymaj, aby kontynuować od miejsca zatrzymania',
+            resumed: 'Czytam dalej od miejsca zatrzymania',
             headphonesOff: 'Słuchawki odłączone, teraz przez głośnik',
         },
         dictate: {

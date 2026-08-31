@@ -209,6 +209,13 @@ import { stopsSpeech, type ReadAloudInterruption } from './readAloudGate';
  * the session rejected, `putBack` moves the cursor no further back than that
  * sentence's own index, and the retry resumes there rather than at the top of
  * the reply. `readAloudOnlyNew.spec.ts` holds the numbers.
+ *
+ * PAUSE IS A THIRD STATE, not a third way to be off (DROVE-233). `setPaused`
+ * stops the voice and moves nothing — not the cursor, not a spoken mark — so a
+ * resume is a plain `pump` from where it stood. That makes it neither a START
+ * (which the paragraph above places at new content) nor a TAP (which clears
+ * spoken marks and reads from a chosen point), and it is spelled as its own
+ * case for exactly that reason. readAloudTransport.ts holds the model.
  */
 
 /**
@@ -530,6 +537,7 @@ export class ReadAloudReader {
     private readonly thinkingFor: ((message: Message, sessionId: string) => string | null) | null;
     private readonly interruptListeners = new Set<ReadAloudInterruptListener>();
     private readonly playheadListeners = new Set<ReadAloudPlayheadListener>();
+    private readonly transportListeners = new Set<() => void>();
     private enabled = false;
     /**
      * The microphone holds the audio session, so the reader says nothing
@@ -537,6 +545,20 @@ export class ReadAloudReader {
      * reading picks up from where it stood as soon as the mic lets go.
      */
     private micHeld = false;
+    /**
+     * HE paused it (DROVE-233). Same shape as `micHeld` and for the same
+     * reason: the timeline keeps filling, nothing is spoken, and the cursor
+     * does not move, so resuming carries on at the sentence it stopped on.
+     *
+     * Distinct from `enabled` because off throws the position away and pause
+     * is the state that keeps it. Only reachable while enabled: `setEnabled`
+     * clears it in both directions, and `interrupt` clears it too, because a
+     * queue the user threw away is not a queue anyone is holding a place in.
+     *
+     * The whole model, the three gestures that drive it and why a resume is
+     * neither a start nor a tap are in readAloudTransport.ts.
+     */
+    private paused = false;
     private focused: string | null = null;
     /**
      * Every sentence this session has produced, in order, spoken or not. It is
@@ -726,17 +748,100 @@ export class ReadAloudReader {
     setEnabled(enabled: boolean): void {
         if (this.enabled === enabled) return;
         this.enabled = enabled;
+        // OFF SUBSUMES PAUSE, in both directions (DROVE-233). Going off throws
+        // the position away, so there is nothing left to be holding. Coming on
+        // is a START, which DROVE-226 places at new content — the one thing a
+        // resume must never be. Either way the button comes back to two states
+        // and a pause cannot survive as a state nothing can see.
+        this.setPausedSilently(false);
         if (!enabled) {
             this.interrupt('toggled-off');
+            this.notifyTransport();
             return;
         }
         // Switched back on with a sentence still owed to a session that
         // refused it (DROVE-189). Ask again now rather than on the timer.
         this.audioSessionRecovered();
+        this.notifyTransport();
     }
 
     get isMicHeld(): boolean {
         return this.micHeld;
+    }
+
+    /** Is he holding it? (DROVE-233.) False whenever read-aloud is off. */
+    get isPaused(): boolean {
+        return this.paused;
+    }
+
+    /**
+     * Pause or resume, from any of the three surfaces (DROVE-233).
+     *
+     * The long press on the speaker, a single headphone press and the lock
+     * screen all land here, which is what makes "pause in my ears, resume with
+     * my thumb" continue at the same sentence: there is one state and one
+     * position, and neither surface owns either.
+     *
+     * PAUSING touches nothing but the utterance in flight. Not the cursor, not
+     * a spoken mark, not the timeline, not the tails. `cutCurrentUtterance`
+     * bumps the generation so the cut utterance's promise cannot pump the next
+     * sentence behind our back, and stops there. The sentence that was
+     * speaking keeps its `spoken` mark, because DROVE-126 says a sentence that
+     * made a sound stays spoken however little of it was heard — so a resume
+     * carries on at the NEXT sentence and can never re-read.
+     *
+     * RESUMING is `pump`, and that is all it is. The position was never lost,
+     * so there is nothing to restore.
+     *
+     * A pause is not an interrupt and does not notify the interrupt listeners:
+     * it stops the voice, it does not throw the reading away, and a capture
+     * that would stop for a real interrupt has no reason to stop for this.
+     */
+    setPaused(paused: boolean): void {
+        // Nothing to hold a place in. A pause that could outlive the toggle
+        // would be a silent reader claiming to be on.
+        if (paused && !this.enabled) return;
+        if (this.paused === paused) return;
+        this.paused = paused;
+        if (paused) {
+            this.cutCurrentUtterance();
+        } else {
+            // The commonest reason the last utterance was refused is that
+            // something else had the session, and the pause outlived it
+            // (DROVE-189).
+            this.audioSessionRecovered();
+            this.pump();
+        }
+        this.notifyTransport();
+    }
+
+    /** Drop the pause without a pump, for the paths that are about to do their own. */
+    private setPausedSilently(paused: boolean): void {
+        if (this.paused === paused) return;
+        this.paused = paused;
+    }
+
+    /**
+     * On, paused or off has changed (DROVE-233).
+     *
+     * No payload: the listener reads `isEnabled` and `isPaused`, which is what
+     * `useSyncExternalStore` wants and what keeps the button and the lock
+     * screen reading the same two fields rather than a copy that can drift.
+     */
+    private notifyTransport(): void {
+        for (const listener of this.transportListeners) {
+            try {
+                listener();
+            } catch {
+                // A button that failed to redraw must not wedge the reader.
+            }
+        }
+    }
+
+    /** Told when on/paused/off changes. Returns the unsubscribe. */
+    addTransportListener(listener: () => void): () => void {
+        this.transportListeners.add(listener);
+        return () => { this.transportListeners.delete(listener); };
     }
 
     /**
@@ -750,6 +855,14 @@ export class ReadAloudReader {
      * take it away — only that the reader has material it intends to say.
      */
     get speechPending(): boolean {
+        // A PAUSE IS NOT PENDING SPEECH (DROVE-233). The mic gate and a toggle
+        // can take a pending sentence away and this getter deliberately does
+        // not care, because both are over in a second or two. A pause is not:
+        // it lasts until he presses something, and a cue mixer that treated it
+        // as "speech is coming" would hold every earcon until it went stale
+        // and silence the heartbeat for as long as he was paused. Nothing is
+        // about to be said, so nothing is pending.
+        if (this.paused) return false;
         if (this.urgent.length > 0) return true;
         if (this.detour.length > 0) return true;
         return this.skipSpoken(this.cursor) < this.timeline.length;
@@ -1251,6 +1364,19 @@ export class ReadAloudReader {
         }
         this.generation += 1;
         this.cursor = this.timeline.length;
+        // A pause holds a place in a queue, and this is the queue being thrown
+        // away (DROVE-233). Keeping it would leave a reader that is on, silent,
+        // and holding a position that no longer exists — and the next reply
+        // would arrive to nothing. Released here so a new turn reads.
+        //
+        // ONLY the reasons that stop the voice reach this line, which is the
+        // gate table's doing and is the behaviour that is wanted: `sent`,
+        // `typed`, `backgrounded` and `left-session` do not throw the queue
+        // away, so there is still a place to be holding and the pause is his
+        // to release. He asked for silence; sending a message is not him
+        // taking it back.
+        const wasPaused = this.paused;
+        this.setPausedSilently(false);
         this.pendingTails.clear();
         // A gate line belongs to a session and a queue the user threw away.
         this.urgent = [];
@@ -1271,6 +1397,7 @@ export class ReadAloudReader {
             this.started = false;
             void this.engine.stop();
         }
+        if (wasPaused) this.notifyTransport();
         this.notifyInterrupted(reason);
     }
 
@@ -1564,6 +1691,10 @@ export class ReadAloudReader {
         // The microphone has the audio session. Everything queued stays
         // queued; setMicHeld(false) pumps again (DROVE-143).
         if (this.micHeld) return;
+        // He paused it (DROVE-233). Same rule, one line below the one it is
+        // modelled on: everything queued stays queued, the cursor does not
+        // move, and setPaused(false) pumps again from exactly here.
+        if (this.paused) return;
         // The session refused the last utterance and the retry has not come
         // round yet (DROVE-189). Everything queued stays queued, including the
         // sentence that was refused; pumping here is what burned the reply.

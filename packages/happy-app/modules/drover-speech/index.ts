@@ -97,6 +97,13 @@ type DroverSpeechModuleType = {
     handlesMicCommand?: () => boolean;
     /** Keep the audio session while nothing is speaking. See DROVE-189. */
     holdSession?: (hold: boolean) => Promise<void>;
+    /**
+     * Whether the card's lifetime is this binary's (DROVE-233). Build 15 and
+     * later; its own stamp for the reason `handlesMicCommand` has one.
+     */
+    handlesReadingState?: () => boolean;
+    /** Read-aloud is on, paused or off, for the lock screen. See DROVE-233. */
+    setReadingState?: (state: string) => Promise<void>;
     dictationSupport: (localeTag: string | null) => Promise<DictationSupport>;
     startDictation: (localeTag: string | null) => Promise<boolean>;
     /** Resolves with the final transcript. */
@@ -275,6 +282,41 @@ export async function holdAudioSession(hold: boolean): Promise<void> {
     } catch {
         // A session the OS would not give up is not worth taking the reader
         // down for; the foreground behaviour is unchanged either way.
+    }
+}
+
+/**
+ * What read-aloud is doing, for the lock screen (DROVE-233).
+ *
+ * The same three values `readAloudTransport` deals in, sent across so the
+ * now-playing card exists for as long as read-aloud is ON rather than only
+ * while a sentence is in flight or the session is held. Clay on build 14
+ * photographed a lock screen with no card at all, which is that gap.
+ */
+export type ReadingState = 'off' | 'reading' | 'paused';
+
+/**
+ * Whether this binary owns the card's lifetime, or the old build does
+ * (DROVE-233).
+ *
+ * Its own stamp rather than a reuse of `speechInterruptionsHandled`, for the
+ * reason DROVE-225 gave for `remoteMicCommandAvailable`: they ship in
+ * different builds. False is build 14 and earlier, where the card appears only
+ * while the app is backgrounded with read-aloud on. `setReadingState` is a
+ * no-op there and `holdAudioSession` carries on doing what it did.
+ */
+export function readingStateReported(): boolean {
+    if (!native) return false;
+    return typeof native.handlesReadingState === 'function';
+}
+
+/** Tell the lock screen what the reader is doing. A no-op on an older build. */
+export async function setReadingState(state: ReadingState): Promise<void> {
+    if (!native || typeof native.setReadingState !== 'function') return;
+    try {
+        await native.setReadingState(state);
+    } catch {
+        // A card that would not update is not worth taking the reader down for.
     }
 }
 
