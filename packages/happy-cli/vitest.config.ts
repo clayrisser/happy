@@ -32,7 +32,7 @@ export default defineConfig({
                         'src/codex/codex.integration.test.ts',
                         'src/sandbox/network.integration.test.ts',
                     ],
-                    setupFiles: ['./src/testing/integration.setup.empty.ts'],
+                    setupFiles: ['./src/testing/droverTestHome.setup.ts', './src/testing/integration.setup.empty.ts'],
                     sequence: {
                         groupOrder: 1,
                     },
@@ -50,6 +50,7 @@ export default defineConfig({
                     include: [
                         'src/claude/planMode.integration.test.ts',
                     ],
+                    setupFiles: ['./src/testing/droverTestHome.setup.ts'],
                     sequence: {
                         groupOrder: 1,
                     },
@@ -68,7 +69,7 @@ export default defineConfig({
                         'src/daemon/daemon.integration.test.ts',
                         'src/openclaw/openclaw.integration.test.ts',
                     ],
-                    setupFiles: ['./src/testing/integration.setup.authenticated.ts'],
+                    setupFiles: ['./src/testing/droverTestHome.setup.ts', './src/testing/integration.setup.authenticated.ts'],
                     sequence: {
                         groupOrder: 2,
                     },
