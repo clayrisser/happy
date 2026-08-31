@@ -187,6 +187,7 @@ export const AudioCueSettings = React.memo(function AudioCueSettings() {
                 />
                 <Item
                     title={t('settingsVoice.cues.toolTitles')}
+                    subtitle="Tool calls and terminal calls"
                     icon={<Ionicons name="terminal-outline" size={29} color="#007AFF" />}
                     rightElement={
                         <Switch

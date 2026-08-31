@@ -20,6 +20,10 @@ export interface ItemProps {
     title: string;
     subtitle?: string;
     subtitleLines?: number; // defaults to 2; set 0 for unlimited
+    // Defaults to 1 beside a subtitle, 2 without one. A row whose right
+    // element is wide (a dropdown value with a preview) gives its title a
+    // second line rather than an ellipsis on a narrow phone (DROVE-175).
+    titleLines?: number;
     detail?: string;
     icon?: React.ReactNode;
     leftElement?: React.ReactNode;
@@ -124,6 +128,7 @@ export const Item = React.memo<ItemProps>((props) => {
         title,
         subtitle,
         subtitleLines,
+        titleLines,
         detail,
         icon,
         leftElement,
@@ -218,7 +223,7 @@ export const Item = React.memo<ItemProps>((props) => {
                 <View style={styles.centerContent}>
                     <Text 
                         style={[styles.title, titleColor, titleStyle]}
-                        numberOfLines={subtitle ? 1 : 2}
+                        numberOfLines={titleLines ?? (subtitle ? 1 : 2)}
                     >
                         {title}
                     </Text>
