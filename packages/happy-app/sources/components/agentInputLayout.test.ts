@@ -400,9 +400,11 @@ describe('agent input compact mobile layout', () => {
         expect(bubbleLeft).toBe(10);
         expect(addLeft - bubbleLeft).toBe(metrics.primaryActionInset);
         expect(addRight).toBeLessThan(textLeft);
-        // And its INK is centred on the capsule end's centre, so it starts
-        // 13.875 in from the rim and its centre lands on the same 22 the send
-        // disc's does at the other end (DROVE-214).
+        // Its DISC is the send button's, at the same 4, and its ink is the
+        // same 16.25 centred in it, so it starts 13.875 in and its centre
+        // lands on the end's centre exactly as the other rim's does
+        // (DROVE-214).
+        expect(addLeft - bubbleLeft).toBe(bubbleRight - primaryRight);
         expect(addInkLeft - bubbleLeft).toBe(13.875);
         expect(addInkLeft - bubbleLeft + layout.addInkSize / 2)
             .toBe(metrics.capsuleEndRadius);
@@ -525,68 +527,68 @@ describe('agent input compact mobile layout', () => {
     });
 
     /**
-     * DROVE-214, THE MEASUREMENT, AND THE RULE IT PICKED SECOND.
+     * DROVE-214, SETTLED. Clay: "the plus to add images and stuff should be a
+     * circle just like on the right hand side send button."
      *
-     * Clay, on a close crop of the empty composer: "Why is the alignment off
-     * here?" The first pass read "rim to nearest ink" as an instruction to
-     * make that number equal at both ends, and pulled the `+` out until its
-     * ink also started 4 from the rim. Clay on the result: "is still wrong it
-     * looks like shit".
+     * Two rules were tried first and both looked right in numbers. Making
+     * rim-to-ink equal put the `+` flush at 4, where its tightest clearance
+     * measured 3.999 against the disc's 4.000 and Clay said "is still wrong it
+     * looks like shit". Centring the ink on the end's centre put it at 13.875,
+     * which was better because centring is the closest a bare glyph gets to
+     * the property the disc has for free: a 36pt disc inset 4 in a 44pt
+     * capsule is CONCENTRIC with the semicircular end, so its clearance is
+     * even round the whole arc rather than at a handful of points.
      *
-     * IT WAS NOT A MISSED NUMBER. Measured off that build, rim to ink was 3.9
-     * and the tightest clearance anywhere on the glyph was 3.999, against the
-     * disc's 4.000. Ionicons `add` tapers its arm tips to half a point, so the
-     * cross's tightest point IS its centreline and there is no hidden corner
-     * sitting closer. The two ends matched on every measure of gap and looked
-     * worse, which is what says the QUANTITY was wrong.
-     *
-     * The quantity is the CENTRE. A 44pt capsule ends in a semicircle of
-     * radius 22, and both controls put their ink's centre on that end's
-     * centre. The disc fills the end to within 4 all the way round; the `+`
-     * fills it to within 13.87. iMessage and Slack give a bare leading glyph
-     * more room than a filled trailing button for the same reason.
+     * Giving the `+` the disc is not a third rule. It is the two ends becoming
+     * one object, after which every number matches without anything being
+     * nudged toward it.
      */
-    it('centres both ends ink on the capsule end, and lets the clearances differ', () => {
+    it('draws one disc at each rim, so every number matches without being tuned', () => {
         const metrics = agentInputLayout.MOBILE_COMPOSER_METRICS;
         const layout = agentInputLayout.MOBILE_COMPOSER_LAYOUT;
 
-        // The end is the field's own semicircle, and the disc's inset falls
-        // out of sitting concentric in it rather than being chosen.
+        // The end is the field's own semicircle, and the inset falls out of
+        // sitting concentric in it rather than being chosen.
         expect(metrics.capsuleEndRadius).toBe(22);
         expect(metrics.capsuleEndRadius).toBe(metrics.inputMinHeight / 2);
         expect(metrics.primaryActionInset)
             .toBe(metrics.capsuleEndRadius - metrics.primaryActionSize / 2);
-
-        // ONE CENTRE, BOTH ENDS: 22 from each control's own rim.
-        const sendInkCentre = metrics.primaryActionInset + metrics.primaryActionSize / 2;
-        const addInkCentre = layout.addInkInset + layout.addInkSize / 2;
-        expect(sendInkCentre).toBe(metrics.capsuleEndRadius);
-        expect(addInkCentre).toBe(metrics.capsuleEndRadius);
-        expect(addInkCentre).toBe(sendInkCentre);
-
-        // TWO CLEARANCES, and they are meant to differ. The disc's is uniform
-        // round the arc; the `+`'s is the same at all four arm tips, because a
-        // centred cross is radially even too.
-        // Both are the end's radius minus the ink's own reach from that
-        // centre: the disc's is its radius, the cross's is its arm tip, which
-        // tapers to half a point and so lies on the axis.
-        const sendClearance = metrics.capsuleEndRadius - metrics.primaryActionSize / 2;
-        const addClearance = metrics.capsuleEndRadius - layout.addInkSize / 2;
-        expect(sendClearance).toBe(4);
-        expect(addClearance).toBe(13.875);
-        expect(addClearance).toBeGreaterThan(sendClearance);
-
-        // Rim to ink, the number the ticket asks to be told: 4 and 13.875.
         expect(metrics.primaryActionInset).toBe(4);
+
+        // ONE OBJECT, TWO RIMS. Same disc, so the same expression is the
+        // leading and the trailing geometry, which is what `resolveMobile-
+        // ComposerActionGeometry` already returned for both.
+        const add = agentInputLayout.resolveMobileComposerActionGeometry('add');
+        const primary = agentInputLayout.resolveMobileComposerActionGeometry('primary');
+        expect(add.width).toBe(primary.width);
+        expect(add.height).toBe(primary.height);
+        expect(add.borderRadius).toBe(primary.borderRadius);
+        expect(add.width).toBe(metrics.primaryActionSize);
+        expect(add.borderRadius).toBe(metrics.primaryActionSize / 2);
+
+        // RIM TO DISC: 4 at each end. Concentric, so this is the clearance the
+        // whole way round the arc and not a figure on the centreline.
+        const sendDiscInset = metrics.primaryActionInset;
+        const addDiscInset = metrics.primaryActionInset;
+        expect(addDiscInset).toBe(sendDiscInset);
+        expect(addDiscInset).toBe(4);
+
+        // RIM TO INK: 13.875 at each end, and it is the same number at both
+        // only because the paper plane is sized to the `+`'s ink. Neither was
+        // tuned to the other; both are a 16.25pt glyph centred in the disc.
         expect(layout.addInkInset).toBe(13.875);
         expect(layout.addInkInset)
             .toBe(metrics.capsuleEndRadius - layout.addInkSize / 2);
+        const sendInkInset = metrics.primaryActionInset
+            + (metrics.primaryActionSize - layout.addInkSize) / 2;
+        expect(sendInkInset).toBe(layout.addInkInset);
 
-        // 13.875 is where centring the glyph in its box already put it, so
-        // nothing about the box, its 36pt size or its 6pt slop moved. Both
-        // targets are the same 46 x 44 they were.
-        expect(layout.addInkInset).toBe(metrics.primaryActionInset
-            + layout.inFieldAddGlyphOffset + layout.addGlyphInkInset);
+        // ONE CENTRE, BOTH ENDS: disc and ink alike land on 22 from their rim.
+        expect(addDiscInset + metrics.primaryActionSize / 2).toBe(metrics.capsuleEndRadius);
+        expect(layout.addInkInset + layout.addInkSize / 2).toBe(metrics.capsuleEndRadius);
+
+        // And nothing about the box moved to get here, so both targets are the
+        // same 46 x 44 they have been since DROVE-206.
         const targetWidth = metrics.primaryActionInset + metrics.primaryActionSize
             + metrics.primaryActionSlop;
         expect(targetWidth).toBe(46);

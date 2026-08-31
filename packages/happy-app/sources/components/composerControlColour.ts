@@ -87,13 +87,21 @@
  *     (DROVE-118): a solid accent disc with the tint that reads against it,
  *     never a glyph colour of its own. Off, its glyph is the foreground.
  *
- * WHAT IS NOT ON THE ROW, so this file does not rule on it. The `+` at the
- * field's leading edge keeps its accent: it sits inside the input capsule,
- * paired with the send button at the other rim (DROVE-206), and DROVE-214 owns
- * that pair. An open picker still marks its current choice the way a picker
- * does, the effort popover's `Auto` or a checkmark in a native menu, because
- * that is selection chrome on a surface that only exists while a finger is
- * down, not a glyph sitting on the row at rest.
+ * WHAT IS NOT ON THE ROW. The two controls inside the input capsule, and
+ * DROVE-214 settled them the same way this file settles the row. The `+` at
+ * the leading rim was the one accent this file left standing, on the grounds
+ * that the pair was that lane's to rule on; it is the FOREGROUND now. Under
+ * the rule above it never qualified: it holds no value and is never one press
+ * from the app doing something, it is simply always available, and a colour
+ * that is always on carries nothing. The send button at the other rim keeps
+ * the accent, because "there is something to send" is a live state, and that
+ * contrast is what the accent buys. An empty composer is two foreground
+ * glyphs on two identical discs.
+ *
+ * An open picker still marks its current choice the way a picker does, the
+ * effort popover's `Auto` or a checkmark in a native menu, because that is
+ * selection chrome on a surface that only exists while a finger is down, not a
+ * glyph sitting on the row at rest.
  *
  * MEASURED, NOT EYEBALLED, ON BOTH THEMES. The colour is the glyph, not the
  * fill (the material stays glass, DROVE-153), so every entry is checked as a
@@ -244,8 +252,74 @@ export function composerGlyphLayers(dark: boolean): readonly string[] {
 export const COMPOSER_FALLBACK_SURFACE = { dark: '#1E1E1E', light: '#F8F8F8' } as const;
 
 /**
- * The in-field primary's active disc (AgentInput's mobilePrimaryButtonActive,
- * the theme's surfaceHighest). The send arrow is the one accent glyph that
- * sits on a solid fill rather than on the glass.
+ * THE IN-FIELD DISC: the one circle both ends of the input capsule wear
+ * (AgentInput's `mobileInFieldDisc`), and the only surface either of them has
+ * apart from Stop and the gate's lock (DROVE-214).
+ *
+ * Clay: "the plus to add images and stuff should be a circle just like on the
+ * right hand side send button." One circle, so one value.
+ *
+ * IT IS THE DARKER OF THE TWO VALUES EACH THEME ALREADY HAD, and that is a
+ * measurement rather than a preference. The send button used to change fill
+ * with state: dark #282828 live and #3A3A3C at rest, light #f0f0f0 live and
+ * #D1D1D6 at rest. Read off the glass in Clay's screenshot, where the
+ * composer's material sits at 61/255, the resting dark value came out at
+ * 1.05:1. That is not a faint circle, it is no circle, and copying it to the
+ * leading rim would have answered him with nothing to see. Light was worse:
+ * #f0f0f0 measures 1.018:1 on the light glass.
+ *
+ * Both themes land on the same 1.36:1 with the darker value, so the disc is a
+ * step DOWN from the glass on each and neither theme is the exception.
+ *
+ * The fill no longer carries send's state; the GLYPH does, which is the rule
+ * this file already runs on. An empty composer is two identical circles, and
+ * the accent appears at one rim when there is something to send.
  */
-export const COMPOSER_PRIMARY_SURFACE = { dark: '#282828', light: '#f0f0f0' } as const;
+export const COMPOSER_IN_FIELD_DISC = { dark: '#282828', light: '#D1D1D6' } as const;
+
+/**
+ * And the held-down step off it, for the `+` while its sheet is open: the
+ * value the other state just vacated on each theme, so the pair of surfaces is
+ * the pair that was already there, swapped (DROVE-214).
+ *
+ * The row's controls keep `mobileIconButtonOpen` and are not touched by this.
+ */
+export const COMPOSER_IN_FIELD_DISC_OPEN = { dark: '#3A3A3C', light: '#f0f0f0' } as const;
+
+/**
+ * WHAT THE IN-FIELD DISC IS SEEN AGAINST: the BUBBLE's material, which is not
+ * the same backdrop as `composerGlyphLayers` (DROVE-214).
+ *
+ * That stack models the control ROW's glass, ground plus tint. These two discs
+ * are inside the input capsule, whose material is a native UIGlassEffect over
+ * the chat, and it does not composite to the same value. Dark is read off
+ * Clay's own screenshot, where the capsule's interior sits at 61/255; light is
+ * the ground the glass sits on, since a light glass over a light ground barely
+ * moves.
+ *
+ * It exists so the disc's separation can be a test. A circle Clay cannot see
+ * is what sent this ticket round a third time, and a value that goes back to
+ * blending into the capsule should fail rather than ship.
+ */
+export const COMPOSER_BUBBLE_MATERIAL = { dark: '#3D3D3D', light: '#F2F2F7' } as const;
+
+/**
+ * How far the disc has to sit off that material to read as a circle at all.
+ *
+ * Not a legibility floor: a disc is a shape, not text, and the glyph on it is
+ * held to the real 3:1 elsewhere. This is the separation both themes achieve
+ * at 1.36:1 with the values chosen, against the 1.05 and 1.02 of the values
+ * that were there before.
+ */
+export const COMPOSER_DISC_SEPARATION_FLOOR = 1.3;
+
+/**
+ * And the weaker bar the OPEN step is held to, because it is a different job.
+ *
+ * The disc has to read as a shape against a material you are not touching. The
+ * open step has to read as a change on a shape your thumb is on, while the
+ * press also drops the control to 0.7 opacity and a sheet slides up. It
+ * measures 1.30:1 on dark and more on light, so the margin is thin and stated
+ * rather than hidden inside a shared number.
+ */
+export const COMPOSER_DISC_STEP_FLOOR = 1.25;

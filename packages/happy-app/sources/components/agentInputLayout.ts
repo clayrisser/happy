@@ -45,10 +45,11 @@ export interface AgentInputLayout {
      * disc it is drawn in.
      *
      * And centring is right, for a reason DROVE-206 never wrote down and
-     * DROVE-214 briefly talked itself out of: the box is 36 inset 4 in a 44pt
+     * DROVE-214 briefly talked itself out of: the disc is 36 inset 4 in a 44pt
      * field, so its centre sits on the centre of the capsule's rounded end.
-     * Centring the glyph in the box centres it in that END. See
-     * `capsuleEndRadius`.
+     * Centring the glyph in the disc centres it in that END, and the disc is
+     * drawn now, so this is the same offset the send glyph takes at the other
+     * rim. See `capsuleEndRadius`.
      */
     inFieldAddGlyphOffset: number;
     /**
@@ -58,8 +59,8 @@ export interface AgentInputLayout {
      * It does NOT place the glyph. DROVE-214's first pass used it to pull the
      * em box out until the ink started 4 from the rim, matching the disc's,
      * and that is the version Clay called "still wrong". It survives because
-     * it is what `addInkSize` and `addInkInset` are measured with, and those
-     * are the two numbers the ticket has to state.
+     * it is what `addInkSize` and `addInkInset` are measured with, and it is
+     * what sizes the paper plane to the same ink at the other rim.
      */
     addGlyphInkInset: number;
     /**
@@ -70,15 +71,16 @@ export interface AgentInputLayout {
      */
     addInkSize: number;
     /**
-     * Rim to the `+`'s ink: 13.875, which is `capsuleEndRadius` minus half the
-     * ink (DROVE-214). The number Clay asked to be told, and the one that is
-     * deliberately NOT 4.
+     * Rim to a GLYPH's ink inside its disc: 13.875, which is
+     * `capsuleEndRadius` minus half the ink (DROVE-214).
      *
-     * It falls out of centring: the ink's centre lands on 22, the capsule
-     * end's centre, so the ink starts 22 - 8.125 in. The trailing disc's ink
-     * starts 4 in from its own rim and its centre lands on the same 22. Same
-     * centre, different fill, and the clearances that produces are 13.87 for
-     * the `+` against 4 for the disc.
+     * THE SAME NUMBER AT BOTH RIMS, which is what the ticket asked for and
+     * only became true once both ends were discs. The `+` is 16.25pt of ink
+     * centred in a 36pt disc inset 4; the paper plane is sized to the same
+     * 16.25pt of ink in the identical disc at the other rim. So rim to disc is
+     * 4 at each end and rim to ink is 13.875 at each end, and neither is a
+     * number anything was nudged toward: they fall out of the two ends being
+     * the same object.
      */
     addInkInset: number;
     /**
@@ -241,41 +243,46 @@ export const MOBILE_COMPOSER_METRICS = {
     primaryActionMarginLeft: 6,
     /**
      * THE PILL'S ROUNDED END: half the field's height, so 22, and the number
-     * every in-field control is actually placed by (DROVE-214).
+     * both in-field controls are placed by (DROVE-214).
      *
      * A 44pt capsule ends in a semicircle of radius 22 centred 22 in from the
      * rim. `primaryActionInset` is a CONSEQUENCE of that and not a chosen 4:
      * a 36pt disc whose centre is on the end's centre is inset
-     * `capsuleEndRadius - primaryActionSize / 2` from the rim. Which is why
-     * the send button looks deliberate. It is concentric with the end it sits
-     * in, so its clearance is the same 4 the whole way round the arc rather
-     * than 4 at one point.
+     * `capsuleEndRadius - primaryActionSize / 2` from the rim. CONCENTRIC, so
+     * its clearance is 4 the whole way round the arc rather than 4 at one
+     * point, and that is the whole reason a disc looks deliberate at a rounded
+     * end while a bare glyph never quite does.
      *
-     * That is the rule both ends follow: INK CENTRED ON THE END'S CENTRE, 22
-     * from the rim. What differs is how much of the end each one fills, and
-     * they are allowed to differ, because the eye is reading a mark inside a
-     * curve rather than a gap on a centreline.
+     * Clay settled the composer on that property without naming it: "the plus
+     * to add images and stuff should be a circle just like on the right hand
+     * side send button." Both ends are the same disc now, so both have it.
      */
     capsuleEndRadius: 22,
     /**
-     * Keeps the in-field disc off the capsule's rounded end. Derived, not
+     * Keeps an in-field disc off the capsule's rounded end. Derived, not
      * chosen: `capsuleEndRadius - primaryActionSize / 2` (DROVE-214).
      *
-     * DROVE-214 first read Clay's "rim to nearest ink" as an instruction to
-     * make that ONE number equal at both ends, and pulled the `+` out until
-     * its ink also started 4 from the rim. Clay on the result: "is still wrong
-     * it looks like shit", and he was right. Measured off the shipped build,
-     * rim to ink was 3.9 and the minimum clearance anywhere on the glyph was
-     * 3.999 against the disc's 4.000. THE NUMBERS MATCHED EXACTLY AND IT
-     * LOOKED WORSE, which is what says the quantity was wrong rather than the
-     * value.
+     * IT APPLIES TO BOTH ENDS BECAUSE BOTH ENDS ARE DISCS. Getting there took
+     * two wrong rules and they are worth keeping, because each one looked
+     * right in numbers.
      *
-     * A filled disc concentric with the end reads as a ring. A 16pt cross
-     * shoved into the same 4pt gap reads as a collision, because the arc
-     * sweeps away from it and the air around it goes lopsided. iMessage and
-     * Slack both give a bare leading glyph noticeably more room than a filled
-     * trailing button for exactly this reason. So the shared rule is the
-     * CENTRE, not the gap: see `capsuleEndRadius`.
+     * First: make rim-to-ink equal, and pull the `+` out until its ink also
+     * started 4 from the rim. Clay: "is still wrong it looks like shit".
+     * Measured off that build, rim to ink was 3.9 and the tightest clearance
+     * anywhere on the glyph 3.999, against the disc's 4.000. Ionicons `add`
+     * tapers its arm tips to half a point, so the cross's tightest point IS
+     * its centreline and nothing sat closer. THE NUMBERS MATCHED EXACTLY AND
+     * IT LOOKED WORSE, which is what says the quantity was wrong.
+     *
+     * Second: centre the ink on the end's centre, 13.875 in, and let the
+     * clearances differ. Better, and for the right reason, but still an
+     * approximation of a property the disc simply has: a cross centred in a
+     * circle is only radially even at four arm tips, and it is transparent
+     * everywhere else, so the end still reads as mostly empty.
+     *
+     * The disc ends the argument. Same circle, same inset, same centre, and
+     * the clearance is even round the entire arc at both rims rather than at
+     * a handful of points.
      */
     primaryActionInset: 4,
     attachmentExtraHeight: 72,

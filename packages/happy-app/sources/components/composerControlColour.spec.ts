@@ -15,7 +15,11 @@ import { describe, expect, it } from 'vitest';
 import {
     COMPOSER_CONTROL_PALETTE,
     COMPOSER_FALLBACK_SURFACE,
-    COMPOSER_PRIMARY_SURFACE,
+    COMPOSER_BUBBLE_MATERIAL,
+    COMPOSER_DISC_SEPARATION_FLOOR,
+    COMPOSER_DISC_STEP_FLOOR,
+    COMPOSER_IN_FIELD_DISC,
+    COMPOSER_IN_FIELD_DISC_OPEN,
     composerControlPalette,
     composerGlyphColour,
     pendingOrSettled,
@@ -110,6 +114,29 @@ describe.each(themes)('the rule on the $name theme: the foreground unless it is 
         expect(primaryActionColour(palette, true)).toBe(palette.accent);
     });
 
+    /**
+     * The `+` inside the field, which DROVE-215 left as this vocabulary's one
+     * standing exception and DROVE-214 settled (Clay: "the plus to add images
+     * and stuff should be a circle just like on the right hand side send
+     * button", and twice before that, no coloured icons).
+     *
+     * It takes no signal, so it comes out the foreground by writing less. The
+     * point of pinning it is the CONTRAST: the two in-field controls are the
+     * same glyph colour on the same disc until there is something to send, so
+     * the accent at the trailing rim marks a state rather than marking which
+     * end of the capsule you are looking at.
+     */
+    it('draws the in-field `+` in the foreground, so the accent still means something', () => {
+        for (const dark of [true, false]) {
+            const p = composerControlPalette(dark);
+            // The `+` is always available: no signal, so the foreground.
+            expect(composerGlyphColour(p)).toBe(p.foreground);
+            // Which is what send wears too, until there is something to send.
+            expect(primaryActionColour(p, false)).toBe(composerGlyphColour(p));
+            expect(primaryActionColour(p, true)).not.toBe(composerGlyphColour(p));
+        }
+    });
+
     it('leaves the mic, the waveform and the send button on the foreground at rest', () => {
         expect(micColour(palette, 'idle')).toBe(palette.foreground);
         expect(primaryActionColour(palette, false)).toBe(palette.foreground);
@@ -153,6 +180,60 @@ describe.each(themes)('legibility on the $name theme, measured', ({ dark }) => {
         expect(worstContrast(colour, composerGlyphLayers(dark))).toBeGreaterThanOrEqual(CHROME_CONTRAST_FLOOR);
     });
 
+    /**
+     * THE CIRCLE HAS TO BE VISIBLE, which is the whole of Clay's third pass on
+     * this ticket: "the plus to add images and stuff should be a circle just
+     * like on the right hand side send button."
+     *
+     * The send button's resting fill measured 1.05:1 against the capsule's
+     * material on the dark theme and #f0f0f0 measured 1.018:1 on the light
+     * one. Copying either to the leading rim would have satisfied "the same as
+     * send" and drawn nothing. So both themes take the darker of the two
+     * values they already had, and the separation is a test.
+     */
+    it('draws a disc that can actually be seen against the capsule', () => {
+        const material = dark ? COMPOSER_BUBBLE_MATERIAL.dark : COMPOSER_BUBBLE_MATERIAL.light;
+        const disc = dark ? COMPOSER_IN_FIELD_DISC.dark : COMPOSER_IN_FIELD_DISC.light;
+        expect(worstContrast(disc, [material]))
+            .toBeGreaterThanOrEqual(COMPOSER_DISC_SEPARATION_FLOOR);
+
+        // And the value it replaced does NOT clear it, on either theme, which
+        // is why this test is here rather than a comment.
+        const wasResting = dark ? '#3A3A3C' : '#f0f0f0';
+        expect(worstContrast(wasResting, [material]))
+            .toBeLessThan(COMPOSER_DISC_SEPARATION_FLOOR);
+    });
+
+    /**
+     * Open is a step off the resting disc, not the same surface. DROVE-206
+     * spent the fill itself on the open state, which only worked while the
+     * `+` had no resting fill.
+     */
+    it('keeps the open step distinct from the disc it steps off', () => {
+        const disc = dark ? COMPOSER_IN_FIELD_DISC.dark : COMPOSER_IN_FIELD_DISC.light;
+        const open = dark ? COMPOSER_IN_FIELD_DISC_OPEN.dark : COMPOSER_IN_FIELD_DISC_OPEN.light;
+        expect(open).not.toBe(disc);
+        expect(worstContrast(open, [disc]))
+            .toBeGreaterThanOrEqual(COMPOSER_DISC_STEP_FLOOR);
+        // Held to the weaker bar on purpose, and it is thin: 1.30 on dark.
+        // The press opacity and the sheet carry the rest of the feedback.
+        expect(COMPOSER_DISC_STEP_FLOOR).toBeLessThan(COMPOSER_DISC_SEPARATION_FLOOR);
+    });
+
+    /**
+     * Both in-field glyphs sit on a solid disc rather than on the glass since
+     * DROVE-214, so the disc is a backdrop the floor has to be met over.
+     */
+    it('keeps both in-field glyphs legible on the disc they now share', () => {
+        const palette = composerControlPalette(dark);
+        const disc = dark ? COMPOSER_IN_FIELD_DISC.dark : COMPOSER_IN_FIELD_DISC.light;
+        // The `+` at rest, and send with nothing to send: both the foreground.
+        expect(worstContrast(palette.foreground, [disc])).toBeGreaterThanOrEqual(CHROME_CONTRAST_FLOOR);
+        // And send once there is something to send, which is the one that
+        // changes and so the one worth checking on both discs.
+        expect(worstContrast(palette.accent, [disc])).toBeGreaterThanOrEqual(CHROME_CONTRAST_FLOOR);
+    });
+
     it.each(everyGlyphColour(dark))('%s clears 3:1 on the opaque fallback material too', (_name, colour) => {
         expect(worstContrast(colour, [dark ? COMPOSER_FALLBACK_SURFACE.dark : COMPOSER_FALLBACK_SURFACE.light]))
             .toBeGreaterThanOrEqual(CHROME_CONTRAST_FLOOR);
@@ -160,7 +241,7 @@ describe.each(themes)('legibility on the $name theme, measured', ({ dark }) => {
 
     it('carries the send arrow on the primary disc, which is a fill rather than glass', () => {
         const palette = composerControlPalette(dark);
-        const disc = dark ? COMPOSER_PRIMARY_SURFACE.dark : COMPOSER_PRIMARY_SURFACE.light;
+        const disc = dark ? COMPOSER_IN_FIELD_DISC.dark : COMPOSER_IN_FIELD_DISC.light;
         expect(worstContrast(palette.accent, [disc])).toBeGreaterThanOrEqual(CHROME_CONTRAST_FLOOR);
         expect(worstContrast(palette.foreground, [disc])).toBeGreaterThanOrEqual(CHROME_CONTRAST_FLOOR);
         expect(worstContrast(palette.recording, [disc])).toBeGreaterThanOrEqual(CHROME_CONTRAST_FLOOR);
