@@ -7,4 +7,10 @@ import './sources/unistyles';
 // arrives, finds no handler, and the wrist is never refreshed. That silent
 // no-op is indistinguishable from the push never being sent.
 import './sources/sync/droverBackgroundNotification';
+// Same reasoning, one step further (DROVE-207). A tap on a notification BUTTON
+// launches the bundle without mounting the React tree, and expo-notifications
+// hands the response to whichever listener is attached by then. Registered
+// from a component effect it would exist only when the app was already
+// running, which is the one case this feature is not for.
+import './sources/sync/droverNotificationActions';
 import 'expo-router/entry';
