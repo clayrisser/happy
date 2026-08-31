@@ -92,6 +92,11 @@ export interface VoiceComposerState {
     onTalkPressOut?: (touchAt?: number) => void;
     /** The finger crossed the button's edge while still down. */
     onTalkSlide?: (inside: boolean) => void;
+    /**
+     * One tap on a control with no touch stream: the composer's primary
+     * button (DROVE-210). Latches the mic open, and stops a latched one.
+     */
+    onTalkTap?: () => void;
     /** Drop the recording without transcribing. */
     onTalkCancel?: () => void;
     /** What the button draws: idle, held, latched. */
@@ -359,13 +364,15 @@ export function useVoiceComposer(options: VoiceComposerOptions): VoiceComposerSt
         setReadAloudEnabled(!readAloudEnabled);
     }, [readAloudEnabled, setReadAloudEnabled]);
 
-    const onTalkPressIn = React.useCallback((touchAt?: number) => {
+    /**
+     * May this press move the gesture at all? Checked before any state moves,
+     * so the button never goes red over a recording nothing will ever read
+     * back (DROVE-105).
+     */
+    const canPress = React.useCallback(() => {
         // The recogniser is still settling the last stop: a press now would
         // open nothing and leave the button claiming otherwise.
-        if (capture.current.settling) return;
-        // A module that cannot report is refused HERE, before any state
-        // moves, so the button never goes red over a recording nothing will
-        // ever read back (DROVE-105).
+        if (capture.current.settling) return false;
         const block = dictationBlock({
             moduleAvailable: isDroverSpeechAvailable(),
             reportsProgress: dictationReportsProgress(),
@@ -375,16 +382,45 @@ export function useVoiceComposer(options: VoiceComposerOptions): VoiceComposerSt
             callbacks.current.onError(block.kind === 'unsupported'
                 ? t('agentInput.dictate.noSpeechModule')
                 : t('agentInput.dictate.needsNewerBuild', { build: block.build ?? unknownBuild }));
-            return;
+            return false;
         }
+        return true;
+    }, [capture]);
+
+    const onTalkPressIn = React.useCallback((touchAt?: number) => {
+        if (!canPress()) return;
         dispatch({ type: 'pressIn', at: Date.now(), touchAt });
-    }, [capture, dispatch]);
+    }, [canPress, dispatch]);
     const onTalkPressOut = React.useCallback((touchAt?: number) => {
         dispatch({ type: 'pressOut', at: Date.now(), touchAt });
     }, [dispatch]);
     const onTalkSlide = React.useCallback((inside: boolean) => {
         dispatch({ type: 'slide', inside });
     }, [dispatch]);
+    /**
+     * One tap on a control that has no touch stream (DROVE-210).
+     *
+     * The composer's primary button is a plain `onPress`: it fires once, on
+     * the lift, with no press-in, no duration and no coordinates. So the tap
+     * is fed to the same reducer as a press and a lift at the SAME instant.
+     * Zero elapsed is under HOLD_MIN_MS on any clock, which is exactly the
+     * definition of a tap, so it can only ever latch, and on a mic that is
+     * already latched it can only ever stop. Push-to-talk and slide-to-cancel
+     * need the touch stream and stay on the capsule's TalkButton.
+     *
+     * Same reducer, same capture, same banner, so a latch opened on either
+     * control is stopped by either.
+     */
+    const onTalkTap = React.useCallback(() => {
+        // A finger is already down on the capsule's button. Two controls
+        // driving one gesture at once is the only way that happens, and the
+        // lift belongs to the finger, not to this tap.
+        if (gestureRef.current.pressedAt !== null) return;
+        if (!canPress()) return;
+        const at = Date.now();
+        dispatch({ type: 'pressIn', at });
+        dispatch({ type: 'pressOut', at });
+    }, [canPress, dispatch]);
     const onTalkCancel = React.useCallback(() => capture.discard('left-session'), [capture]);
 
     const offersReadAloud = active && canReadAloud();
@@ -398,6 +434,7 @@ export function useVoiceComposer(options: VoiceComposerOptions): VoiceComposerSt
         onTalkPressIn: offersDictation ? onTalkPressIn : undefined,
         onTalkPressOut: offersDictation ? onTalkPressOut : undefined,
         onTalkSlide: offersDictation ? onTalkSlide : undefined,
+        onTalkTap: offersDictation ? onTalkTap : undefined,
         onTalkCancel: offersDictation ? onTalkCancel : undefined,
         talkState: offersDictation ? talkState : undefined,
         talkCancelArmed: offersDictation ? talkCancelArmed : undefined,

@@ -54,6 +54,7 @@ import { COMPOSER_STRIP_HEIGHT } from './composerStripLayout';
 import { shouldUseExpoNativeSettingsMenu } from './glassInteractionPolicy';
 import { LiveMicBanner } from './LiveMicBanner';
 import { TalkButton } from './TalkButton';
+import { talkButtonWiring } from './talkButtonWiring';
 import type { MicButtonState } from '@/voice/micButton';
 import type { DictationCaptureState } from '@/voice/dictationCapture';
 import { DroverChannelsSheet } from './DroverChannelsSheet';
@@ -100,6 +101,12 @@ interface AgentInputProps {
     onTalkPressOut?: (touchAt?: number) => void;
     /** The finger crossed the button's edge while still down (DROVE-105). */
     onTalkSlide?: (inside: boolean) => void;
+    /**
+     * One tap, on a control with no touch stream (DROVE-210). The primary
+     * button is a plain `onPress`, so this is all it can do: latch the mic
+     * open, and stop a latched one. Same capture as the capsule above.
+     */
+    onTalkTap?: () => void;
     onTalkCancel?: () => void;
     /** What the button draws. Absent when there is no button. */
     talkState?: MicButtonState;
@@ -784,6 +791,19 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     const shakerRef = React.useRef<ShakeInstance>(null);
     const sendBlockShakerRef = React.useRef<ShakeInstance>(null);
     const inputRef = React.useRef<MultiTextInputHandle>(null);
+    // The handlers TalkButton needs, built once and passed BY REFERENCE
+    // (DROVE-210). Never wrap these in a lambda: an arrow that forgets to
+    // forward `touchAt` type-checks and silently undoes DROVE-140.
+    const talkWiring = React.useMemo(
+        () => talkButtonWiring({
+            onTalkPressIn: props.onTalkPressIn,
+            onTalkPressOut: props.onTalkPressOut,
+            onTalkSlide: props.onTalkSlide,
+        }),
+        [props.onTalkPressIn, props.onTalkPressOut, props.onTalkSlide],
+    );
+    /** The mic is open right now, latched by a tap or held under a finger. */
+    const micLive = props.talkState === 'latched' || props.talkState === 'held';
     const primaryAction = resolveAgentInputPrimaryAction({
         hasComposerContent,
         isSendBlocked,
@@ -791,11 +811,16 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         showAbortButton: props.showAbortButton ?? false,
         canAbort: !!props.onAbort && !stopRequested,
         // Only the mobile composer folds the mic into the primary button; the
-        // desktop layout keeps its own send/mic resolution below. A live voice
-        // session stays in this state so the same button can end it.
+        // desktop layout keeps its own send/mic resolution below.
+        canDictate: compactMobileComposer && !!props.onTalkTap,
+        // An open mic keeps the button, so the next tap stops it rather than
+        // sending the half-spoken sentence the partials just wrote.
+        micLive,
+        // A live voice session stays in this state so the same button can end it.
         canVoice: compactMobileComposer && !!props.onMicPress,
     });
     const shouldShowStopButton = primaryAction === 'stop';
+    const shouldShowMicButton = primaryAction === 'mic';
     const shouldShowVoiceButton = primaryAction === 'voice';
     const canSendMessage = primaryAction === 'send';
     /**
@@ -1166,6 +1191,17 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         props.onMicPress();
     }, [props.isSendDisabled, props.onMicPress]);
 
+    /**
+     * A tap on the primary button's MIC face (DROVE-210). It latches the same
+     * capture the capsule's TalkButton drives, and a second tap stops it with
+     * the words left in the composer. No haptic here: the gesture reducer
+     * ticks on every transition it makes, and a second one would double up.
+     */
+    const handleTalkTapPress = React.useCallback(() => {
+        if (!props.onTalkTap || props.isSendDisabled) return;
+        props.onTalkTap();
+    }, [props.isSendDisabled, props.onTalkTap]);
+
     // Stop, boss mode and send share one button, so which one fires is resolved
     // from the live text rather than from `hasText`, which is set in a
     // transition and lags a fast type-then-tap. Without the live read that tap
@@ -1183,6 +1219,9 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         switch (dispatch) {
             case 'abort':
                 handleAbortPress();
+                return;
+            case 'mic':
+                handleTalkTapPress();
                 return;
             case 'boss':
                 handleMicrophonePress();
@@ -1202,6 +1241,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         handleChannelsLongPress,
         handleMicrophonePress,
         handleSendPress,
+        handleTalkTapPress,
         hasImages,
         primaryAction,
     ]);
@@ -1797,7 +1837,8 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     // must not look locked.
                     shouldShowStopButton ? styles.mobileStopButton
                         : isSendBlocked ? styles.sendButtonLocked
-                            : canSendMessage || shouldShowVoiceButton ? styles.mobilePrimaryButtonActive
+                            : canSendMessage || shouldShowVoiceButton || shouldShowMicButton
+                                ? styles.mobilePrimaryButtonActive
                                 : styles.mobilePrimaryButtonInactive,
                 ]}
             >
@@ -1817,8 +1858,13 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     disabled={!canPressSendButton}
                     accessibilityRole="button"
                     accessibilityLabel={shouldShowStopButton ? 'Stop'
-                        : shouldShowVoiceButton ? 'Voice'
-                            : 'Send'}
+                        : shouldShowMicButton
+                            ? (micLive
+                                ? t('agentInput.dictate.tapToStop')
+                                : t('agentInput.dictate.label'))
+                            : shouldShowVoiceButton ? 'Voice'
+                                : 'Send'}
+                    accessibilityState={{ selected: shouldShowMicButton && micLive }}
                 >
                     {isAborting ? (
                         <ActivityIndicator
@@ -1837,16 +1883,32 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                             size={14}
                             color={theme.colors.textSecondary}
                         />
+                    ) : shouldShowMicButton ? (
+                        // The MICROPHONE, not the waveform (DROVE-210). The
+                        // waveform below is boss mode, a call; this is
+                        // dictation, and it is the same glyph and the same
+                        // recording red as the capsule's mic so the two read
+                        // as one control in two places.
+                        <Ionicons
+                            name={micLive ? 'mic' : 'mic-outline'}
+                            size={20}
+                            color={micLive
+                                ? micColour(composerPalette, 'latched')
+                                : activeSendIconColor}
+                        />
                     ) : shouldShowVoiceButton ? (
-                        props.isMicActive ? (
-                            <Ionicons name="mic" size={20} color={activeSendIconColor} />
-                        ) : (
-                            <Image
-                                source={require('@/assets/images/icon-voice-white.png')}
-                                style={{ width: 22, height: 22 }}
-                                tintColor={activeSendIconColor}
-                            />
-                        )
+                        // Boss mode: a WAVEFORM, because it is a call and not
+                        // a microphone. This branch used to draw a mic glyph
+                        // when `isMicActive`, which the mobile composer never
+                        // sets, so the button advertised a microphone it
+                        // could not open. That is half of why DROVE-210 had to
+                        // be guessed at from the outside; the mic face above
+                        // is the real one.
+                        <Image
+                            source={require('@/assets/images/icon-voice-white.png')}
+                            style={{ width: 22, height: 22 }}
+                            tintColor={activeSendIconColor}
+                        />
                     ) : (
                         <Octicons
                             name="arrow-up"
@@ -2389,15 +2451,19 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                             <View style={styles.mobileAudioDivider} />
                         ) : null}
 
-                        {props.onTalkPressIn && (
+                        {talkWiring && (
                             // The gesture and the slide-off live in
                             // TalkButton (DROVE-105); this row only says
                             // where it sits and what it is drawn in.
+                            //
+                            // The handlers go in BY REFERENCE, never wrapped
+                            // in a lambda (DROVE-210). See talkButtonWiring.ts
+                            // for what a wrapper costs.
                             <TalkButton
                                 state={props.talkState ?? 'idle'}
-                                onPressIn={() => props.onTalkPressIn?.()}
-                                onPressOut={() => props.onTalkPressOut?.()}
-                                onSlide={(inside) => props.onTalkSlide?.(inside)}
+                                onPressIn={talkWiring.onPressIn}
+                                onPressOut={talkWiring.onPressOut}
+                                onSlide={talkWiring.onSlide}
                                 style={styles.mobileIconButton}
                                 heldStyle={styles.talkButtonHeld}
                                 latchedStyle={styles.talkButtonLatched}
