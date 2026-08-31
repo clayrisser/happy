@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { idleSessionDotFacts } from '@/components/sessionDot';
 import type { SessionListViewItem, SessionRowData } from '@/sync/storage';
 import {
     buildActiveSessionDisplayGroups,
@@ -28,6 +29,7 @@ function session(
         gitDeletions: null,
         gitInsertions: null,
         state: 'waiting',
+        dot: idleSessionDotFacts,
         createdAt,
         lastActivityAt: createdAt,
         hasDraft: false,

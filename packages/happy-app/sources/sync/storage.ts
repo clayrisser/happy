@@ -32,6 +32,7 @@ import React from "react";
 import { sync } from "./sync";
 import { getCurrentRealtimeSessionId, getVoiceSession } from '@/realtime/RealtimeSession';
 import { isMutableTool } from "@/components/tools/knownTools";
+import { sessionDotFacts, type SessionDotFacts } from '@/components/sessionDot';
 import { DecryptedArtifact } from "./artifactTypes";
 import { FeedItem } from "./feedTypes";
 import { getRigActivityIndicators, getRigGitSummary, getRigIdentity, isRigMetadata } from './rig';
@@ -129,6 +130,16 @@ export interface SessionRowData {
     gitDeletions: number | null;
     gitInsertions: number | null;
     state: SessionState;
+    /**
+     * Everything the row's DOT needs, derived once here (DROVE-243).
+     *
+     * The row cannot work this out for itself: presence, the live snapshot and
+     * the context reading are all on the Session and none of them is projected
+     * onto a row. Carrying five booleans and a timestamp instead is what lets a
+     * row draw the same dot the session's own strip draws without subscribing
+     * to the session and re-rendering on every heartbeat.
+     */
+    dot: SessionDotFacts;
     // Only present on inactive sessions — active sessions never show "last seen"
     // and activeAt updates on every heartbeat, causing needless deep-equal diffs
     activeAt?: number;
@@ -206,6 +217,10 @@ function buildSessionRowData(
         gitDeletions: rigGit?.deletions ?? null,
         gitInsertions: rigGit?.insertions ?? null,
         state,
+        // `Date.now()` only decides whether the live snapshot is still fresh
+        // (DROVE-243). It is not the clock that turns yellow into red: the row
+        // owns that one, because a row sits on screen long after this ran.
+        dot: sessionDotFacts(session, Date.now()),
         createdAt: session.createdAt,
         lastActivityAt: getSessionActivityAt(session),
         ...(!session.active && { activeAt: session.activeAt }),

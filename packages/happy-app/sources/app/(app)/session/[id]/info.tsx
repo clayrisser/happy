@@ -1,5 +1,5 @@
 import React, { useCallback } from 'react';
-import { View, Text, Animated, AppState, Platform } from 'react-native';
+import { View, Text, AppState, Platform } from 'react-native';
 import { Stack, useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Typography } from '@/constants/Typography';
@@ -37,45 +37,13 @@ import { flipRiskFooter, flipRiskSubtitle, resolveSessionAccount, sessionsLosing
 import { describeDroverWakeBudget, getDroverWatchStatus, type DroverWatchStatus } from 'drover-watch';
 import { wristRelayLine } from '@/sync/droverWristRelay';
 import { SessionTasksList, useSessionTasks } from '@/components/SessionTasksList';
+import { StatusDot } from '@/components/StatusDot';
 
-// Animated status dot component
-function StatusDot({ color, isPulsing, size = 8 }: { color: string; isPulsing?: boolean; size?: number }) {
-    const pulseAnim = React.useRef(new Animated.Value(1)).current;
-
-    React.useEffect(() => {
-        if (isPulsing) {
-            Animated.loop(
-                Animated.sequence([
-                    Animated.timing(pulseAnim, {
-                        toValue: 0.3,
-                        duration: 1000,
-                        useNativeDriver: true,
-                    }),
-                    Animated.timing(pulseAnim, {
-                        toValue: 1,
-                        duration: 1000,
-                        useNativeDriver: true,
-                    }),
-                ])
-            ).start();
-        } else {
-            pulseAnim.setValue(1);
-        }
-    }, [isPulsing, pulseAnim]);
-
-    return (
-        <Animated.View
-            style={{
-                width: size,
-                height: size,
-                borderRadius: size / 2,
-                backgroundColor: color,
-                opacity: pulseAnim,
-                marginRight: 4,
-            }}
-        />
-    );
-}
+// The session card's dot is the shared one (DROVE-243). A private copy lived
+// here: the same 1000ms half-cycle, but its own `Animated.Value`, no
+// `useReducedMotion`, and a colour handed to it by a table that has since gone.
+// Deleting it is how the card starts honouring reduced motion and stops being a
+// fourth place the dot could drift.
 
 /**
  * What the paired watch can do right now, re-read whenever the app comes back
@@ -436,7 +404,13 @@ function SessionInfoContent({ session }: { session: Session }) {
                             {sessionName}
                         </Text>
                         <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8 }}>
-                            <StatusDot color={sessionStatus.statusDotColor} isPulsing={sessionStatus.isPulsing} size={10} />
+                            <StatusDot
+                                color={sessionStatus.statusDotColor}
+                                isPulsing={sessionStatus.isPulsing}
+                                size={10}
+                                accessibilityLabel={sessionStatus.dotLabel}
+                                style={{ marginRight: 4 }}
+                            />
                             <Text style={{
                                 fontSize: 15,
                                 color: sessionStatus.statusColor,

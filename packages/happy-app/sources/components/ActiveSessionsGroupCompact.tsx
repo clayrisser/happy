@@ -8,6 +8,7 @@ import { type SessionState, formatPathRelativeToHome, vibingMessages, formatLast
 import { Avatar } from './Avatar';
 import { Typography } from '@/constants/Typography';
 import { StatusDot } from './StatusDot';
+import { useSessionRowDot } from './sessionDot';
 import { useAllMachines, useSessionGitStatus } from '@/sync/storage';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { t } from '@/text';
@@ -23,12 +24,21 @@ import { useRouter } from 'expo-router';
 import { SessionShortcutHintBadge } from './ShortcutHints';
 import { buildActiveSessionDisplayGroups } from '@/utils/sessionDisplayOrder';
 
-const STATUS_CONFIG: Record<SessionState, { color: string; dotColor: string; isPulsing: boolean; isConnected: boolean }> = {
-    disconnected: { color: '#999', dotColor: '#999', isPulsing: false, isConnected: false },
-    thinking: { color: '#007AFF', dotColor: '#007AFF', isPulsing: true, isConnected: true },
-    waiting: { color: '#34C759', dotColor: '#34C759', isPulsing: false, isConnected: true },
-    permission_required: { color: '#FF9500', dotColor: '#FF9500', isPulsing: true, isConnected: true },
-    input_required: { color: '#FF9500', dotColor: '#FF9500', isPulsing: true, isConnected: true },
+/**
+ * Whether the row reads as connected, which is all this table is for now.
+ *
+ * Its dot columns are gone (DROVE-243). This was the second verbatim copy of
+ * SessionsList's colour table, and the trailing slot then ignored it anyway and
+ * painted `textSecondary` on a `waiting` session — grey on a session that was
+ * connected and idle, while that same session's strip drew green or blue. The
+ * dot comes from `statusDotColors` now, through the one resolver.
+ */
+const STATUS_CONFIG: Record<SessionState, { isConnected: boolean }> = {
+    disconnected: { isConnected: false },
+    thinking: { isConnected: true },
+    waiting: { isConnected: true },
+    permission_required: { isConnected: true },
+    input_required: { isConnected: true },
 };
 
 interface ActiveSessionsGroupProps {
@@ -225,12 +235,8 @@ export function ActiveSessionsGroupCompact({ sessions, selectedSessionId }: Acti
 export const CompactSessionRow = React.memo(({ session, selected, showBorder }: { session: SessionRowData; selected?: boolean; showBorder?: boolean }) => {
     const styles = stylesheet;
     const { theme } = useUnistyles();
-    const baseStatus = STATUS_CONFIG[session.state];
-    const needsUserAction = session.state === 'permission_required' || session.state === 'input_required';
-    // User action stays orange and pulsing even when the request also marked the session unread.
-    const status = session.hasUnread && !needsUserAction
-        ? { ...baseStatus, color: '#007AFF', dotColor: '#007AFF', isPulsing: false, isConnected: baseStatus.isConnected }
-        : baseStatus;
+    const status = STATUS_CONFIG[session.state];
+    const dot = useSessionRowDot(session.dot);
     const navigateToSession = useNavigateToSession();
     const swipeableRef = React.useRef<Swipeable | null>(null);
     const swipeEnabled = Platform.OS !== 'web';
@@ -269,26 +275,37 @@ export const CompactSessionRow = React.memo(({ session, selected, showBorder }: 
         onLongPress: showActionAlert,
     };
 
+    /**
+     * The 18pt slot at the end of the row (DROVE-243).
+     *
+     * It used to be a mux over five conditions that mixed two languages: the
+     * session's state and Clay's reading of it. Unread borrowed the working
+     * blue, which is exactly the collision this ticket is about — and with the
+     * row's pulse gone there is nothing left to tell an unread row from a
+     * working one anyway. So the slot says one thing: what the session is
+     * doing. Unread keeps its own mark where it always had one, the flat list's
+     * timestamp slot, which is a badge and not a status dot.
+     *
+     * The draft pencil survives, and only on a session that is idle and
+     * connected. A half-typed message is a thing to finish and the dot there
+     * would only say `connected`, so the pencil is strictly more information.
+     * Anything else and the dot wins: it is the one that says the session
+     * dropped, which this row previously drew as nothing at all.
+     */
     const renderTrailingIndicator = () => {
-        let indicator: React.ReactNode = null;
-
-        if (needsUserAction) {
-            indicator = <StatusDot color={status.dotColor} isPulsing={status.isPulsing} />;
-        } else if (session.hasUnread) {
-            indicator = <StatusDot color={status.dotColor} isPulsing={false} />;
-        } else if (session.state === 'waiting' && session.hasDraft) {
-            indicator = (
-                <Ionicons
-                    name="create-outline"
-                    size={14}
-                    color={theme.colors.textSecondary}
-                />
-            );
-        } else if (session.state === 'thinking') {
-            indicator = <StatusDot color={status.dotColor} isPulsing={status.isPulsing} />;
-        } else if (session.state === 'waiting') {
-            indicator = <StatusDot color={theme.colors.textSecondary} isPulsing={false} />;
-        }
+        const indicator = dot.state === 'connected' && session.hasDraft ? (
+            <Ionicons
+                name="create-outline"
+                size={14}
+                color={theme.colors.textSecondary}
+            />
+        ) : (
+            <StatusDot
+                color={dot.color}
+                isPulsing={dot.isPulsing}
+                accessibilityLabel={dot.label}
+            />
+        );
 
         return (
             <View style={styles.trailingIndicatorSlot}>

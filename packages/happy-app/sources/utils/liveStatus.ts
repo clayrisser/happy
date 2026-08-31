@@ -139,7 +139,7 @@ export interface LiveStatusMain {
      * The two look the same on the row and give way in opposite orders: a tool
      * name folds first of the text on the strip, the working word folds last
      * of anything on it. The strip reads this rather than comparing the label
-     * to a string, so the rule cannot drift from what `mainReadout` decided.
+     * to a string, so the rule cannot drift from what `liveStatusMain` decided.
      */
     working: boolean;
     /** The turn's clock, ticking on this device. */
@@ -496,7 +496,7 @@ export function summarizeLiveStatus(status: LiveStatus, now: number): LiveStatus
     ].filter((part): part is string => part !== null);
 
     const tally = liveStatusTally(status);
-    const main = mainReadout(status, now, tally);
+    const main = liveStatusMain(status, now, tally);
     const sideCount = agents.length + workflows.length;
 
     return {
@@ -517,6 +517,12 @@ export function summarizeLiveStatus(status: LiveStatus, now: number): LiveStatus
  * The main thread's own line, or null when the main thread is not what is
  * running (DROVE-155).
  *
+ * Exported since DROVE-243, because the SESSION DOT is this question and
+ * nothing else: `main !== null` is the main thread working, and `!main.working`
+ * is it blocked on a tool. Every surface that draws a dot for a session asks it
+ * here, so a list row and the strip inside that session cannot answer it
+ * differently.
+ *
  * The label is the tool it is blocked on, because a tool call IS the main
  * thread waiting, and `working` otherwise — the "Sketching… 17m 13s" state,
  * where the model is composing and writes nothing to disk until it is done.
@@ -529,7 +535,7 @@ export function summarizeLiveStatus(status: LiveStatus, now: number): LiveStatus
  * A snapshot that is only background agents stays null rather than guessing,
  * which is the one case where the old CLI shows less than the new one.
  */
-function mainReadout(status: LiveStatus, now: number, tally: LiveStatusTally | null): LiveStatusMain | null {
+export function liveStatusMain(status: LiveStatus, now: number, tally: LiveStatusTally | null): LiveStatusMain | null {
     const label = status.tool ? status.tool.name : LIVE_STATUS_WORKING_WORD;
     const working = !status.tool;
     // THE ROW'S NUMBER IS THE TALLY (DROVE-184). It sits in the slot the
