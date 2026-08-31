@@ -4,8 +4,12 @@ import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
     builtinCommandFloor,
+    collapseHome,
     discoverSessionInventory,
+    formatSkillsAnswer,
     frontmatterDescription,
+    type SessionInventory,
+    type SessionInventoryEntry,
 } from './sessionInventory';
 
 const tempRoots: string[] = [];
@@ -233,5 +237,92 @@ describe('discoverSessionInventory (codex)', () => {
 
         expect(inventory.skills.map((s) => s.name)).toEqual(['agent-browser', 'plan-to-beads']);
         expect(inventory.commands).toEqual([]);
+    });
+});
+
+describe('formatSkillsAnswer', () => {
+    const home = '/home/clay';
+
+    function inventory(
+        skills: SessionInventoryEntry[],
+        commands: SessionInventoryEntry[] = [],
+    ): SessionInventory {
+        return { skills, commands, source: 'scan', updatedAt: 0 };
+    }
+
+    it('lists the skills it found, with their descriptions', () => {
+        const answer = formatSkillsAnswer(
+            inventory(
+                [
+                    { name: 'huly-ticket', description: 'File and update tickets' },
+                    { name: 'grug', origin: 'user' },
+                ],
+                [{ name: 'clear' }],
+            ),
+            { account: 'main', configDir: `${home}/.claude`, homeDir: home },
+        );
+        expect(answer).toContain('**2 skills** on account `main`, from `~/.claude/skills`.');
+        expect(answer).toContain('- **/huly-ticket** — File and update tickets');
+        expect(answer).toContain('- **/grug**');
+        expect(answer).toContain('1 command is available too.');
+    });
+
+    it('never says a session may still be initializing', () => {
+        const answer = formatSkillsAnswer(
+            inventory([], [{ name: 'clear' }, { name: 'compact' }]),
+            { account: 'jamrizzi', configDir: `${home}/.claude-accounts/jamrizzi`, homeDir: home },
+        );
+        // The old answer was "No skills available. Session may still be
+        // initializing — try again after sending a message." It was the answer
+        // for the LIFE of every pane session, and nothing was initializing.
+        expect(answer).not.toMatch(/initializ/i);
+        expect(answer).toContain('**No skills** on account `jamrizzi`');
+        expect(answer).toContain('`~/.claude-accounts/jamrizzi/skills`');
+        expect(answer).toContain('2 commands are available too.');
+    });
+
+    it('names the default account when a flip is what emptied the list', () => {
+        const answer = formatSkillsAnswer(
+            inventory([]),
+            {
+                account: 'jamrizzi',
+                configDir: `${home}/.claude-accounts/jamrizzi`,
+                elsewhere: { configDir: `${home}/.claude`, skills: 71 },
+                homeDir: home,
+            },
+        );
+        expect(answer).toContain('The default account has 71 of them, in `~/.claude/skills`.');
+    });
+
+    it('says nothing about the default account when it has no skills either', () => {
+        const answer = formatSkillsAnswer(
+            inventory([]),
+            {
+                account: 'alt',
+                configDir: `${home}/.claude-accounts/alt`,
+                elsewhere: { configDir: `${home}/.claude`, skills: 0 },
+                homeDir: home,
+            },
+        );
+        expect(answer).not.toContain('default account');
+    });
+
+    it('drops the account clause when the session is not on a drover account', () => {
+        const answer = formatSkillsAnswer(
+            inventory([{ name: 'flip' }]),
+            { configDir: `${home}/.claude`, homeDir: home },
+        );
+        expect(answer).toContain('**1 skill**, from `~/.claude/skills`.');
+        expect(answer).not.toContain('account');
+    });
+});
+
+describe('collapseHome', () => {
+    it('collapses the home prefix and leaves anything else alone', () => {
+        expect(collapseHome('/home/clay/.claude', '/home/clay')).toBe('~/.claude');
+        expect(collapseHome('/home/clay', '/home/clay')).toBe('~');
+        expect(collapseHome('/opt/claude', '/home/clay')).toBe('/opt/claude');
+        // A sibling directory that merely starts with the same characters.
+        expect(collapseHome('/home/clayton/.claude', '/home/clay')).toBe('/home/clayton/.claude');
     });
 });

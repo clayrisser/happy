@@ -37,7 +37,7 @@ import { applySandboxPermissionPolicy, normalizeRemotePermissionMode, resolveIni
 import { decodeBase64, encodeBase64 } from '@/api/encryption';
 import type { Session as ApiSession } from '@/api/types';
 import { getProjectPath, resolveClaudeConfigDir } from './utils/path';
-import { discoverSessionInventory, type SessionInventoryResponse } from '@/utils/sessionInventory';
+import { discoverSessionInventory, formatSkillsAnswer, type SessionInventoryResponse } from '@/utils/sessionInventory';
 import { writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -1090,30 +1090,81 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
             return;
         }
 
-        if (specialCommand.type === 'mcp' || specialCommand.type === 'skills') {
-            // In local mode, let Claude Code handle these commands natively
-            if (currentRunMode === 'local') {
-                logger.debug(`[start] /${specialCommand.type} in local mode — passing through to Claude Code`);
-            } else {
-                logger.debug(`[start] Detected /${specialCommand.type} command in remote mode`);
-                const metadata = session.getMetadata();
-                let responseText: string;
-
-                if (specialCommand.type === 'mcp') {
-                    const servers = metadata?.mcpServers;
-                    if (servers && servers.length > 0) {
-                        responseText = '**MCP Servers**\n\n' + servers.map(s => `- **${s.name}** — ${s.status}`).join('\n');
-                    } else {
-                        responseText = 'No MCP servers configured. Session may still be initializing — try again after sending a message.';
-                    }
-                } else {
-                    const skills = metadata?.skills ?? metadata?.slashCommands;
-                    if (skills && skills.length > 0) {
-                        responseText = '**Available Skills**\n\n' + skills.map(s => `- /${s}`).join('\n');
-                    } else {
-                        responseText = 'No skills available. Session may still be initializing — try again after sending a message.';
-                    }
+        // DROVE-237: `/skills` is answered HERE, in BOTH modes, off the same
+        // disk scan the app's `/` dropdown reads.
+        //
+        // Both of the paths it replaces were dead ends. Local mode forwarded
+        // it to the tmux pane, where Claude Code's answer is terminal UI that
+        // never reaches the transcript — so the phone got nothing at all, and
+        // on a busy pane the command sat queued behind the running agents on
+        // top of that (measured 2026-08-31: "holding /skills for the pane's
+        // prompt (2 agent(s) running)"). Remote mode read `metadata.skills`,
+        // which only the remote launcher's `system.init` ever writes, so a
+        // pane session answered "may still be initializing" for the life of
+        // the session. Nothing was initializing; the list was never coming.
+        if (specialCommand.type === 'skills') {
+            logger.debug(`[start] Detected /skills command in ${currentRunMode} mode — answering from the disk scan`);
+            const configDir = resolveClaudeConfigDir(
+                (currentSession as Session | null)?.claudeEnvVars?.CLAUDE_CONFIG_DIR,
+            );
+            let responseText: string;
+            try {
+                const inventory = await discoverSessionInventory({
+                    flavor: 'claude',
+                    cwd: workingDirectory,
+                    configDir,
+                });
+                // Only when this account has none: a flip (BASED-98) carries
+                // the destination account's own commands/ and skills/, so an
+                // empty answer is usually "you are on another account", not
+                // "you have no skills". Say which.
+                let elsewhere: { configDir: string; skills: number } | null = null;
+                const defaultConfigDir = join(os.homedir(), '.claude');
+                if (inventory.skills.length === 0 && configDir !== defaultConfigDir) {
+                    const fallback = await discoverSessionInventory({
+                        flavor: 'claude',
+                        cwd: workingDirectory,
+                        configDir: defaultConfigDir,
+                    });
+                    elsewhere = { configDir: defaultConfigDir, skills: fallback.skills.length };
                 }
+                responseText = formatSkillsAnswer(inventory, {
+                    account: session.getMetadata()?.droverAccount,
+                    configDir,
+                    elsewhere,
+                });
+            } catch (error) {
+                logger.debug('[start] /skills scan failed:', error);
+                responseText = `Could not read the skills tree under \`${configDir}\`.`;
+            }
+
+            session.sendClaudeSessionMessage({
+                type: 'assistant',
+                uuid: randomUUID(),
+                parentUuid: null,
+                isSidechain: false,
+                sessionId: session.sessionId || 'unknown',
+                timestamp: new Date().toISOString(),
+                message: {
+                    role: 'assistant',
+                    model: 'system',
+                    content: [{ type: 'text', text: responseText }],
+                },
+            } as any);
+            return;
+        }
+
+        if (specialCommand.type === 'mcp') {
+            // In local mode, let Claude Code handle this natively.
+            if (currentRunMode === 'local') {
+                logger.debug('[start] /mcp in local mode — passing through to Claude Code');
+            } else {
+                logger.debug('[start] Detected /mcp command in remote mode');
+                const metadata = session.getMetadata();
+                const servers = metadata?.mcpServers;
+                const responseText = servers && servers.length > 0
+                    ? '**MCP Servers**\n\n' + servers.map(s => `- **${s.name}** — ${s.status}`).join('\n')
+                    : 'No MCP servers configured. Session may still be initializing — try again after sending a message.';
 
                 session.sendClaudeSessionMessage({
                     type: 'assistant',

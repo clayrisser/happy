@@ -348,3 +348,72 @@ export async function discoverSessionInventory(
         updatedAt: Date.now(),
     };
 }
+
+/**
+ * How `/skills` from the app is answered (DROVE-237).
+ *
+ * The interesting case is the EMPTY one. Before this, `/skills` read
+ * `metadata.skills`, which only the remote launcher's `system.init` ever
+ * writes — so under one mode (DROVE-1), where every session is a tmux pane,
+ * it was empty for all of them and the answer was "session may still be
+ * initializing" for the life of the session. Nothing was initializing. The
+ * list was never coming.
+ *
+ * So the answer comes off the same disk scan the `/` dropdown reads, and when
+ * that scan finds nothing it says WHERE it looked. A session that flipped onto
+ * another account (BASED-98) carries that account's `commands/` and `skills/`
+ * and nothing else, and measured on 2026-08-31 a flip from `main` to
+ * `jamrizzi` took 71 skills to 0. That is worth a sentence, not a silence.
+ */
+export interface SkillsAnswerContext {
+    /** The drover account this session is on right now, when it is on one. */
+    account?: string | null;
+    /** The CLAUDE_CONFIG_DIR the scan actually read. */
+    configDir: string;
+    /**
+     * What the DEFAULT account holds, looked up only when THIS one holds no
+     * skills. A flip is meant to change which subscription pays, not which
+     * skills exist, so when the two disagree the answer names the gap.
+     */
+    elsewhere?: { configDir: string; skills: number } | null;
+    homeDir?: string;
+}
+
+/** `~/.claude-accounts/jamrizzi`, not `/Users/clayrisser/.claude-accounts/jamrizzi`. */
+export function collapseHome(path: string, homeDir: string): string {
+    if (path === homeDir) return '~';
+    return path.startsWith(homeDir + sep) ? `~${path.slice(homeDir.length)}` : path;
+}
+
+function bullet(entry: SessionInventoryEntry): string {
+    return entry.description ? `- **/${entry.name}** — ${entry.description}` : `- **/${entry.name}**`;
+}
+
+export function formatSkillsAnswer(inventory: SessionInventory, ctx: SkillsAnswerContext): string {
+    const homeDir = ctx.homeDir ?? homedir();
+    const where = collapseHome(ctx.configDir, homeDir);
+    const onAccount = ctx.account ? ` on account \`${ctx.account}\`` : '';
+    const commandCount = inventory.commands.length;
+    const browse = commandCount > 0
+        ? `\n\n${commandCount} command${commandCount === 1 ? '' : 's'} ${commandCount === 1 ? 'is' : 'are'} available too. Type \`/\` in the composer to browse both.`
+        : '';
+
+    if (inventory.skills.length > 0) {
+        return [
+            `**${inventory.skills.length} skill${inventory.skills.length === 1 ? '' : 's'}**${onAccount}, from \`${where}/skills\`.`,
+            '',
+            inventory.skills.map(bullet).join('\n'),
+        ].join('\n') + browse;
+    }
+
+    const lines = [`**No skills**${onAccount}. Nothing under \`${where}/skills\`.`];
+    if (ctx.elsewhere && ctx.elsewhere.skills > 0) {
+        lines.push(
+            '',
+            `The default account has ${ctx.elsewhere.skills} of them, in \`${collapseHome(ctx.elsewhere.configDir, homeDir)}/skills\`.`
+            + ' A flip changes which subscription pays and takes the account\'s skills tree with it, so this session cannot run those until'
+            + ' this account has a `skills/` tree of its own.',
+        );
+    }
+    return lines.join('\n') + browse;
+}

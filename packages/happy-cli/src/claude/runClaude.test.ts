@@ -1514,4 +1514,44 @@ describe('runClaude remote JSONL scanner', () => {
 
         await finishRun(runPromise, loopDeferred);
     });
+    /**
+     * DROVE-237. `/skills` from the phone answered nothing at all on a local
+     * session: it was forwarded to the pane, where Claude Code's own answer is
+     * terminal UI the transcript never sees, and it queued behind whatever the
+     * pane was already running. The remote branch was no better, reading
+     * `metadata.skills`, which only the remote launcher ever writes.
+     */
+    describe('/skills from the phone', () => {
+        it('answers off the disk scan in local mode, with nothing pushed at the pane', async () => {
+            const configDir = process.env.CLAUDE_CONFIG_DIR!;
+            mkdirSync(join(configDir, 'skills', 'huly-ticket'), { recursive: true });
+            writeFileSync(
+                join(configDir, 'skills', 'huly-ticket', 'SKILL.md'),
+                '---\ndescription: File and update Huly tickets\n---\nbody\n',
+            );
+
+            const harness = await startRemoteRunClaudeHarness({
+                metadata: { claudeSessionId: 'claude-session-1', droverAccount: 'jamrizzi' },
+            });
+            harness.loopOptions.onModeChange('local');
+            harness.runtimeSession.paneSlashCommandCarrier = vi.fn(async () => true);
+
+            const userMessageHandler = harness.sessionClient.onUserMessage.mock.calls[0][0] as
+                (message: unknown) => Promise<void>;
+            await userMessageHandler({ content: { text: '/skills ' }, meta: {} });
+
+            const sent = harness.sessionClient.sendClaudeSessionMessage.mock.calls.at(-1)?.[0] as any;
+            const text = sent?.message?.content?.[0]?.text as string;
+            expect(text).toContain('/huly-ticket');
+            expect(text).toContain('File and update Huly tickets');
+            expect(text).toContain('account `jamrizzi`');
+            expect(text).not.toMatch(/initializ/i);
+            // Forwarding it was the bug: the pane owns the prompt and holds
+            // the command behind any running agent, and its answer is never
+            // written to the transcript the app reads.
+            expect(harness.loopOptions.messageQueue.queue).toEqual([]);
+            expect(harness.runtimeSession.paneSlashCommandCarrier).not.toHaveBeenCalled();
+            await harness.finish();
+        });
+    });
 });
