@@ -27,7 +27,6 @@ import {
     COMPOSER_SESSION_CONTROL_SIZE,
     type SessionPillLabel,
 } from './sessionPillLabel';
-import type { EffortSliderHandle } from './EffortSliderPopover';
 
 /**
  * Permission mode, effort and model, folded into the composer's button row
@@ -57,14 +56,6 @@ import type { EffortSliderHandle } from './EffortSliderPopover';
  * effort, model, in that order, each its own picker on the first tap. The name
  * is drawn smaller before it is ever cut.
  *
- * AND EFFORT IS A SLIDER (DROVE-200). Its segment is the only one that does
- * not open a list on a DRAG: pressing it raises a horizontal line above the
- * row and the same touch drags along it, one stop per level, committing on
- * release. The dial in the segment is untouched — it is still DROVE-141's
- * resting glyph with DROVE-176's ramp on its needle — but while a drag is
- * running the needle follows the thumb, so the two never disagree. The whole
- * rule set is in effortSlider.ts; this file only hands it the touch.
- *
  * AND ALL THREE ARE SHEETS (DROVE-242). Mode and model were iOS native menus
  * here until Clay, with one of them open: "Shouldn't these show in sheets like
  * the effort does". They were left as menus deliberately, on the grounds that
@@ -75,16 +66,19 @@ import type { EffortSliderHandle } from './EffortSliderPopover';
  * file no longer knows what platform it is on. Every segment is a press that
  * reports its picker, and the sheet is what draws it.
  *
- * A TAP ON IT IS STILL THE PICKER, LIKE THE OTHER TWO (DROVE-229). A press
- * that never moved reports a tap and the hook calls `onTap`, which the control
- * row turns into `handlePickerPress('effort')` — the same full-width sheet the
- * mode and the model open, with the same second tap, tap outside and back
- * gesture. It used to LATCH the readout open instead, which is the one surface
- * on the composer a second tap could not put away.
+ * AND EFFORT IS ONE OF THE THREE AGAIN (DROVE-242). DROVE-200 made this
+ * segment a raw JS responder driving a drag: a press raised a horizontal
+ * readout above the row and the same touch slid along it. DROVE-229 then made
+ * a TAP open the sheet and left the readout for the drag. Clay, with a
+ * screenshot of it over his field: "Why does it show the old shitty slider
+ * when I hold down effort?" The responder entered its drag on touch-DOWN, so
+ * resting a finger raised the surface the sheet had just replaced.
  *
- * THE READOUT IS NOT DRAWN HERE. It spans the composer's whole width, which is
- * wider than this capsule, so the control row places it (DROVE-229). This file
- * hands the hook the touch and reads its live index for the needle.
+ * The drag is deleted, not narrowed to a real move. Nothing announced it, and
+ * a press, the only thing anyone tries, opens a sheet, so the fast path was
+ * reachable only by a gesture nobody was told about. What is left here is a
+ * 44pt press like its two neighbours. effortSlider.ts holds the reasoning and
+ * what is left of that file.
  *
  * COLOUR CARRIES THE STATE TOO (DROVE-176). The padlock is the warning amber
  * when open, the shield and the eye have their own hues, and the dial's needle
@@ -129,12 +123,6 @@ export interface ComposerSessionControlsProps {
     canOpen?: { permission?: boolean; effort?: boolean; model?: boolean };
     /** Which picker is open, so the pressed control reads as open. */
     openPicker?: ComposerSessionPicker | null;
-    /**
-     * The effort slider (DROVE-200). Present on the phone, where effort is
-     * dragged as well as picked; absent on a surface that only lists it, and
-     * then the effort segment is an ordinary picker segment.
-     */
-    effortSlider?: EffortSliderHandle | null;
     /**
      * Which segments hold a pick the terminal has not confirmed yet
      * (DROVE-217). Absent means everything shown is what the session is
@@ -261,12 +249,6 @@ const styles = StyleSheet.create((theme) => ({
     },
 }));
 
-/** VoiceOver's two actions on an adjustable, since there is no drag there. */
-const ADJUSTABLE_ACTIONS = [
-    { name: 'increment' as const },
-    { name: 'decrement' as const },
-];
-
 function Control(props: {
     picker: ComposerSessionPicker;
     accessibilityLabel: string;
@@ -315,16 +297,12 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
         onPress,
         canOpen,
         openPicker,
-        effortSlider,
         pending,
     } = props;
     const palette = composerControlPalette(theme.dark);
     const permissionPending = !!pending?.permission;
     const modelPending = !!pending?.model;
-    // A drag in progress outranks a wait: while the finger is on the slider the
-    // needle is following the thumb, and that is a value nobody has asked for
-    // yet, so there is nothing outstanding to draw.
-    const effortPending = !!pending?.effort && !effortSlider?.active;
+    const effortPending = !!pending?.effort;
     const showMode = !!label.mode;
     const showEffort = !!label.effort && effortCount > 0 && effortIndex != null && effortIndex >= 0;
     const showModel = !!label.model;
@@ -375,67 +353,28 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
             ) : null}
             {effortNeedsDivider ? <View style={styles.segmentDivider} /> : null}
             {showEffort ? (
-                effortSlider ? (
-                    /* The drag (DROVE-200). The responder is a plain View
-                       rather than a Pressable because it has to keep the touch
-                       for the whole gesture: `onResponderTerminationRequest`
-                       returning false is what stops the chat's scroll view
-                       taking it back the moment the finger moves. Page
-                       coordinates, because the drag is a DELTA between two of
-                       them and never an absolute position (effortSlider.ts). */
-                    <View
-                        style={[styles.control, effortSlider.active && styles.controlOpen]}
-                        accessible
-                        accessibilityRole="adjustable"
-                        accessibilityLabel={effort.label}
-                        accessibilityValue={(() => {
-                            const text = unconfirmedAccessibilityValue(effort.value, effortPending);
-                            return text ? { text } : undefined;
-                        })()}
-                        accessibilityActions={ADJUSTABLE_ACTIONS}
-                        onAccessibilityAction={(event) => {
-                            if (event.nativeEvent.actionName === 'increment') effortSlider.step(1);
-                            if (event.nativeEvent.actionName === 'decrement') effortSlider.step(-1);
-                        }}
-                        onStartShouldSetResponder={() => true}
-                        onMoveShouldSetResponder={() => true}
-                        onResponderTerminationRequest={() => false}
-                        onResponderGrant={(event) => effortSlider.onPressIn(event.nativeEvent.pageX)}
-                        onResponderMove={(event) => effortSlider.onMove(event.nativeEvent.pageX)}
-                        onResponderRelease={() => effortSlider.onRelease()}
-                        onResponderTerminate={() => effortSlider.dismiss()}
-                    >
-                        {/* The needle follows the thumb while a drag runs, so
-                            the glyph and the line never say different things.
-                            The ANGLE follows it; the colour is the foreground
-                            at every level (DROVE-215), because a level is a
-                            value and the angle was always the reading the dial
-                            was chosen for (DROVE-101). The track under it is
-                            that same foreground at a reduced opacity, held off
-                            the capsule and under the needle (DROVE-227). */}
-                        <EffortGauge
-                            index={effortSlider.active ? effortSlider.index : effortIndex!}
-                            count={effortCount}
-                            color={pendingOrSettled(palette, effortPending, composerGlyphColour(palette))}
-                            track={composerGaugeTrack(theme.dark)}
-                        />
-                    </View>
-                ) : (
-                    <Control
-                        picker="effort"
-                        accessibilityLabel={effort.label}
-                        accessibilityValue={unconfirmedAccessibilityValue(effort.value, effortPending)}
-                        open={openPicker === 'effort'}
-                        onPress={canOpenEffort ? onPress : undefined}
-                    >
-                        <EffortGauge
-                            index={effortIndex!}
-                            count={effortCount}
-                            color={pendingOrSettled(palette, effortPending, composerGlyphColour(palette))}
-                            track={composerGaugeTrack(theme.dark)}
-                        />
-                    </Control>
-                )
+                <Control
+                    picker="effort"
+                    accessibilityLabel={effort.label}
+                    accessibilityValue={unconfirmedAccessibilityValue(effort.value, effortPending)}
+                    open={openPicker === 'effort'}
+                    onPress={canOpenEffort ? onPress : undefined}
+                >
+                    {/* The dial is DROVE-141's resting glyph, unchanged by the
+                        drag's removal: it was never the slider, and the level
+                        is still read as an ANGLE rather than counted
+                        (DROVE-101). The colour is the foreground at every
+                        level (DROVE-215), because a level is a value the
+                        session holds and not something it is doing. The track
+                        under it is that same foreground at a reduced opacity,
+                        held off the capsule and under the needle (DROVE-227). */}
+                    <EffortGauge
+                        index={effortIndex!}
+                        count={effortCount}
+                        color={pendingOrSettled(palette, effortPending, composerGlyphColour(palette))}
+                        track={composerGaugeTrack(theme.dark)}
+                    />
+                </Control>
             ) : null}
             {modelNeedsDivider ? <View style={styles.segmentDivider} /> : null}
             {showModel ? (
