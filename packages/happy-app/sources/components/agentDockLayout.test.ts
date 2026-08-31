@@ -10,8 +10,11 @@ import {
 
 // Measured on the iPhone the DROVE-113 screenshot came from: composer card,
 // the DROVE-82 status row under it, AgentInput's 8pt container padding, and a
-// 34pt home indicator inset.
-const composerOnly = 116;
+// 34pt home indicator inset. DROVE-111 took the session pill's own 40pt row
+// out of the card, which is why the card is shorter here than it was; the
+// arithmetic below never knew about that row, because the dock is measured
+// rather than computed.
+const composerOnly = 76;
 const withStatusRow = composerOnly + 24;
 const safeAreaBottom = 34;
 
@@ -95,6 +98,22 @@ describe('resolveDockInset', () => {
             safeAreaBottom,
             floatingDock: true,
         }) + keyboardInset);
+    });
+
+    /*
+     * The one number Clay can see: how much empty space sits under the status
+     * line. It is the home indicator inset and nothing else. DROVE-113 is what
+     * made that true, by spending AgentInput's 8pt of bottom padding inside
+     * the inset instead of on top of it; DROVE-111 re-checked it after taking
+     * the pill row out and found no second gap to remove.
+     */
+    it('leaves exactly the safe-area inset under the status row and no more', () => {
+        const reserved = resolveDockInset({
+            dockHeight: withStatusRow,
+            safeAreaBottom,
+            floatingDock: true,
+        });
+        expect(reserved - withStatusRow + DOCK_CONTENT_BOTTOM_PADDING).toBe(safeAreaBottom);
     });
 
     it('is unchanged by an open keyboard on the translating platform', () => {

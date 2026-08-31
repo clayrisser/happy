@@ -4,10 +4,14 @@
  * utils/liveStatus.spec.ts proves the live summary, utils/droverUsage.spec.ts
  * the usage mapping and agentInputUsage.spec.ts the derivation; this is the
  * render. The segments come out in the order Clay asked for, the branch is
- * no longer among them (DROVE-90 moved it under the session title), the
- * working segment unfolds the agent tree, and a session with nothing to say
- * renders nothing, which is the shape the composer relies on to collapse
- * the row.
+ * no longer among them (DROVE-90 moved it under the session title), and a
+ * session with nothing to say renders nothing, which is the shape the
+ * composer relies on to collapse the row.
+ *
+ * What DROVE-111 changed: the working segment and the quota figure ASK for a
+ * sheet instead of unfolding under the row. Nothing expands here any more, so
+ * the assertions are about what the row requests, and about there being no
+ * tree and no bars left inside it.
  */
 import * as React from 'react';
 // @ts-expect-error react-test-renderer has no declarations in this workspace.
@@ -83,7 +87,6 @@ vi.mock('@/text', async () => {
 
 import { AgentInputStatusRow, type StatusRowProps } from './AgentInputStatusRow';
 import { resolveUsageStrip } from './agentInputUsage';
-import { UsageAccountBarRow } from './UsageAccountBars';
 
 const originalConsoleError = console.error;
 
@@ -147,7 +150,9 @@ function row(overrides: Partial<StatusRowProps> = {}) {
         connectionStatus: online,
         contextStatus: null,
         weekPercent: strip.weekPercent,
-        usageBarGroups: strip.usageBarGroups,
+        canOpenUsage: strip.usageBarGroups.length > 0,
+        openSheet: null,
+        onOpenSheet: () => {},
         showDetails: true,
         ...overrides,
     }));
@@ -202,28 +207,32 @@ describe('AgentInputStatusRow on an idle pane session', () => {
         expect(onSessionInfoPress).toHaveBeenCalledTimes(1);
     });
 
-    it('unfolds a bar per window and per account under the week figure (DROVE-107)', () => {
+    it('asks for the quota sheet from the week figure and draws no bars itself (DROVE-111)', () => {
+        const onOpenSheet = vi.fn();
         const strip = paneStrip(true);
-        const renderer = row({ weekPercent: strip.weekPercent, usageBarGroups: strip.usageBarGroups });
-        // Folded by default: the row is still one line until it is asked for.
-        expect(renderer.root.findAllByType(UsageAccountBarRow as any)).toHaveLength(0);
+        const renderer = row({
+            onOpenSheet,
+            weekPercent: strip.weekPercent,
+            canOpenUsage: strip.usageBarGroups.length > 0,
+        });
+        expect(line(renderer)).toEqual(['online', '·', '77% week']);
         const week = renderer.root.findAllByType('Pressable' as any)[1];
         act(() => {
             week.props.onPress();
         });
-        const bars = renderer.root.findAllByType(UsageAccountBarRow as any);
-        expect(bars.map((node: any) => [node.props.row.name, node.props.row.percentText])).toEqual([
-            ['Session', '51%'],
-            ['Week', '77%'],
-            ['Fable week', '61%'],
-            ['main', '0%'],
-        ]);
-        // Every row is the same height, current account included, and the
-        // track is drawn even for the account at zero.
-        const main = bars[3].props.row;
-        expect(main.fraction).toBe(0);
-        expect(main.tone).toBe('critical');
-        expect(line(renderer)).toContain('77% week');
+        expect(onOpenSheet).toHaveBeenCalledWith('usage');
+        // Nothing unfolded: the row is still exactly one line.
+        expect(line(renderer)).toEqual(['online', '·', '77% week']);
+    });
+
+    it('leaves the week figure unpressable when there is nothing to open', () => {
+        const renderer = row({ canOpenUsage: false });
+        expect(renderer.root.findAllByType('Pressable' as any)).toHaveLength(1);
+    });
+
+    it('turns a chevron over while its sheet is showing', () => {
+        const renderer = row({ openSheet: 'usage' });
+        expect(renderer.root.findByType('Ionicons' as any).props.name).toBe('chevron-down');
     });
 
     it('keeps the context gauge after the week figure when the session has one', () => {
@@ -265,20 +274,22 @@ describe('AgentInputStatusRow while the session is working', () => {
         }
     });
 
-    it('unfolds the agent tree under the row on tap and stays visible while the chat is scrolled up', () => {
+    it('asks for the agent sheet on tap and stays visible while the chat is scrolled up (DROVE-111)', () => {
         vi.useFakeTimers();
         vi.setSystemTime(now + 1_000);
         try {
-            const renderer = row({ sessionId: 'busy', showDetails: false });
+            const onOpenSheet = vi.fn();
+            const renderer = row({ sessionId: 'busy', showDetails: false, onOpenSheet });
             expect(renderer.root.findByType('AnimatedFade' as any).props.visible).toBe(true);
-            expect(renderer.root.findAllByType('ScrollView' as any)).toHaveLength(0);
             const working = renderer.root.findAllByType('Pressable' as any)[0];
             expect(working.props.accessibilityLabel).toBe('Working: 1 agent running');
             act(() => {
                 working.props.onPress();
             });
-            expect(renderer.root.findAllByType('ScrollView' as any)).toHaveLength(1);
-            expect(line(renderer)).toContain('Sweep the backlog');
+            expect(onOpenSheet).toHaveBeenCalledWith('agents');
+            // The tree has nowhere to unfold now: it lives in the sheet.
+            expect(renderer.root.findAllByType('ScrollView' as any)).toHaveLength(0);
+            expect(line(renderer)).not.toContain('Sweep the backlog');
         } finally {
             vi.useRealTimers();
         }
@@ -291,7 +302,7 @@ describe('AgentInputStatusRow with nothing to show', () => {
         const renderer = row({
             connectionStatus: undefined,
             weekPercent: strip.weekPercent,
-            usageBarGroups: strip.usageBarGroups,
+            canOpenUsage: strip.usageBarGroups.length > 0,
         });
         expect(renderer.toJSON()).toBeNull();
     });
@@ -303,7 +314,10 @@ describe('AgentInputStatusRow with nothing to show', () => {
             showRemaining: false,
             contextShown: false,
         });
-        const renderer = row({ weekPercent: strip.weekPercent, usageBarGroups: strip.usageBarGroups });
+        const renderer = row({
+            weekPercent: strip.weekPercent,
+            canOpenUsage: strip.usageBarGroups.length > 0,
+        });
         expect(line(renderer)).toEqual(['online']);
     });
 });

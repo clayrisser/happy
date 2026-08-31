@@ -1,20 +1,20 @@
 /**
- * The session pill's label and the session sheet's row model (DROVE-83).
+ * The composer's session label and the model name's width (DROVE-83,
+ * DROVE-111).
  *
- * The pill reads `<mode> · <short model> · <effort>`, the short names come
- * from the model id, only the model segment may truncate and only in the
- * middle, and every model the pickers offer fits at default font on a 393pt
- * screen. The sheet lists a row per setting the session can change, in the
- * pill's order.
+ * The short names come from the model id, the mode and the effort are drawn
+ * as glyphs now so only the model is spelled out, and it truncates at the
+ * tail when the button row cannot hold it. The budget test is what keeps the
+ * row honest: it is the screen minus every button and every gap, and
+ * `Opus 5 1M` has to survive it.
  */
 import { describe, expect, it } from 'vitest';
 import {
     buildSessionPillLabel,
-    buildSessionSheetRows,
-    resolveSessionPillTextBudget,
+    composerModelNameFits,
+    COMPOSER_MODEL_TRUNCATION,
+    resolveComposerModelTextBudget,
     SESSION_PILL_SEPARATOR,
-    SESSION_PILL_TRUNCATION,
-    sessionPillFits,
     shortModelName,
 } from './sessionPillLabel';
 import {
@@ -81,66 +81,41 @@ describe('buildSessionPillLabel', () => {
         expect(buildSessionPillLabel({ modeLabel: '  ' }).text).toBe('');
     });
 
-    it('only ever truncates the model, in the middle', () => {
-        expect(SESSION_PILL_TRUNCATION).toEqual({ segment: 'model', ellipsizeMode: 'middle' });
+    it('only ever truncates the model, and at the tail now the row runs left to right', () => {
+        expect(COMPOSER_MODEL_TRUNCATION).toEqual({ segment: 'model', ellipsizeMode: 'tail' });
     });
 });
 
-describe('sessionPillFits at 393pt', () => {
-    const widest = (names: string[]) => names
-        .reduce((widest, name) => (name.length > widest.length ? name : widest), '');
-    // The widest one-word mode any harness ships, and each harness's widest
-    // effort name, paired with that harness's own models.
-    const widestMode = 'Workspace';
-    const harnesses = [
-        { models: getClaudeModelModes(), effort: widest(getClaudeEffortLevels().map((level) => level.name)) },
-        { models: getCodexModelModes(), effort: widest(getCodexEffortLevels('gpt-5.6-sol').map((level) => level.name)) },
-        { models: getGeminiModelModes(), effort: null },
-    ];
-
-    it('leaves the text a budget of the screen minus the paddings', () => {
-        expect(resolveSessionPillTextBudget(393)).toBe(393 - 16 - 20 - 24);
+describe('the model name on the button row at 393pt', () => {
+    // add(42) + mode(38) + effort(38) + speaker(42) + mic(42) + primary(42)
+    // + the primary's 8pt margin + seven 6pt gaps, inside 8pt of container
+    // padding and 10pt of shell inset a side.
+    it('leaves the name the screen minus every button and every gap', () => {
+        expect(resolveComposerModelTextBudget(393))
+            .toBe(393 - 16 - 20 - 42 - 76 - 126 - 8 - 42);
+        expect(resolveComposerModelTextBudget(393)).toBe(63);
     });
 
-    it('fits every model in the pickers with the widest mode and effort', () => {
-        for (const { models, effort } of harnesses) {
-            expect(models.length).toBeGreaterThan(0);
-            for (const model of models) {
-                const label = buildSessionPillLabel({ modeLabel: widestMode, model, effortLabel: effort });
-                expect(sessionPillFits(label, 393), label.text).toBe(true);
-            }
+    it('holds the names Clay actually runs', () => {
+        for (const model of [
+            { key: 'claude-opus-5[1m]' },
+            { key: 'claude-fable-5' },
+            { key: 'claude-opus-5' },
+            { key: 'claude-sonnet-5' },
+        ]) {
+            const name = shortModelName(model);
+            expect(composerModelNameFits(name, 393), name ?? '').toBe(true);
         }
     });
 
-    it('reports a model name that would overflow so the pill knows to cut it', () => {
-        const label = buildSessionPillLabel({
-            modeLabel: widestMode,
-            model: { key: 'x'.repeat(60) },
-            effortLabel: 'Ultracode',
-        });
-        expect(sessionPillFits(label, 393)).toBe(false);
-    });
-});
-
-describe('buildSessionSheetRows', () => {
-    it('lists permission, model, effort in the pill order with the current values', () => {
-        expect(buildSessionSheetRows({
-            effort: { title: 'EFFORT', value: 'High', available: true },
-            model: { title: 'MODEL', value: 'Fable 5', available: true },
-            permission: { title: 'PERMISSION MODE', value: 'Yolo', available: true },
-        })).toEqual([
-            { key: 'permission', title: 'PERMISSION MODE', value: 'Yolo' },
-            { key: 'model', title: 'MODEL', value: 'Fable 5' },
-            { key: 'effort', title: 'EFFORT', value: 'High' },
-        ]);
+    // Not every model fits, and that is the deal DROVE-111 made: the mode and
+    // the effort became glyphs so the model got the slack, and a name past
+    // nine or ten characters still tail-truncates. The picker spells it out.
+    it('reports a long provider name as one that will be cut', () => {
+        expect(composerModelNameFits('Gemini 3.1 Flash Lite', 393)).toBe(false);
     });
 
-    it('has no row for a setting the session cannot change', () => {
-        expect(buildSessionSheetRows({
-            permission: { title: 'PERMISSION MODE', value: 'Yolo', available: true },
-            model: { title: 'MODEL', value: 'Opus 5', available: false },
-            effort: null,
-        })).toEqual([{ key: 'permission', title: 'PERMISSION MODE', value: 'Yolo' }]);
-        expect(buildSessionSheetRows({})).toEqual([]);
+    it('never claims a missing name does not fit', () => {
+        expect(composerModelNameFits(null, 393)).toBe(true);
     });
 });

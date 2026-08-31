@@ -37,7 +37,9 @@ import { resolveComposerPrimaryPress, type ComposerPrimaryGesture } from './comp
 import { ComposerToast } from './ComposerToast';
 import { flipStreamTalk, streamTalkButton } from '@/voice/streamTalk';
 import { NativeSettingsMenu, type NativeSettingsMenuGroup } from './NativeSettingsMenu';
-import { AgentInputStatusRow } from './AgentInputStatusRow';
+import { AgentInputStatusRow, type StatusRowSheet } from './AgentInputStatusRow';
+import { SessionAgentsSheet } from './SessionAgentsSheet';
+import { UsageAccountBars } from './UsageAccountBars';
 import { resolveUsageStrip } from './agentInputUsage';
 import { ProviderIcon } from './ProviderIcon';
 import { isRigMetadata } from '@/sync/rig';
@@ -48,14 +50,13 @@ import {
     resolveMobileComposerActionRowGeometry,
 } from './agentInputLayout';
 import { shouldUseExpoNativeSettingsMenu } from './glassInteractionPolicy';
-import { ComposerSessionPill } from './ComposerSessionPill';
 import { LiveMicBanner } from './LiveMicBanner';
 import { TalkButton } from './TalkButton';
 import type { MicButtonState } from '@/voice/micButton';
 import type { DictationCaptureState } from '@/voice/dictationCapture';
-import { ComposerSheetRow } from './ComposerSheetRow';
 import { DroverChannelsSheet } from './DroverChannelsSheet';
-import { buildSessionPillLabel, buildSessionSheetRows, type SessionSheetRowKey } from './sessionPillLabel';
+import { buildSessionPillLabel } from './sessionPillLabel';
+import { ComposerSessionControls, type ComposerSessionPicker } from './ComposerSessionControls';
 
 interface AgentInputProps {
     // `initialValue` seeds the uncontrolled textarea once; keystrokes never
@@ -132,6 +133,8 @@ interface AgentInputProps {
     alwaysShowContextSize?: boolean;
     /** Hide the auxiliary connection/mode row while reading older messages. */
     showStatusDetails?: boolean;
+    /** Opens session info; the status row's connection segment taps into it (DROVE-82). */
+    onSessionInfoPress?: () => void;
     /**
      * Reports the composer card's top offset from AgentInput's own top edge.
      * The status/chips rows above the card keep their layout space when faded
@@ -147,8 +150,6 @@ interface AgentInputProps {
      */
     sessionStatusDroverUsage?: DroverUsageLike;
     sessionStatusDroverAccount?: string | null;
-    /** Opens session info; the status row's connection and branch segments tap into it (DROVE-82). */
-    onSessionInfoPress?: () => void;
     onFileViewerPress?: () => void;
     agentType?: 'claude' | 'codex' | 'gemini' | 'openclaw' | 'agy';
     onAgentClick?: () => void;
@@ -382,10 +383,29 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     },
     mobileActionButtonsContainer: MOBILE_ACTION_ROW_GEOMETRY,
     mobileIconButton: MOBILE_ICON_ACTION_GEOMETRY,
+    /*
+     * The speaker and the mic are buttons, not labels (DROVE-118).
+     *
+     * Clay: "these should be shown as buttons." They were bare glyphs sitting
+     * beside the filled primary, so the row read as one control and two
+     * decorations, and the two decorations are the ones he presses most. Same
+     * diameter and radius as the primary already (42pt from
+     * MOBILE_ICON_ACTION_GEOMETRY), so what was missing was the surface. It is
+     * one step below the primary's surfaceHighest rather than equal to it, so
+     * the row reads as three buttons with the primary still leading.
+     */
+    mobileIconButtonSurface: {
+        backgroundColor: theme.colors.surfaceHigh,
+    },
+    // Stream-talk on: the surface carries it, not just the glyph, which is
+    // what a blue icon on nothing could never say at a glance.
+    mobileIconButtonOn: {
+        backgroundColor: theme.colors.radio.active,
+    },
     // The talk button's two live states (DROVE-74). Held is a solid red disc
-    // with a white glyph; latched is a red ring with a red glyph, so a mic
-    // that will stay open after the lift looks different from one that will
-    // not, and both look different from idle.
+    // with a white glyph; latched is the resting surface inside a red ring
+    // with a red glyph, so a mic that will stay open after the lift looks
+    // different from one that will not, and both look different from idle.
     talkButtonHeld: {
         backgroundColor: TALK_RED,
         borderRadius: 999,
@@ -881,7 +901,15 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     // sheet's rows open. Keep a single popup state so only one selection
     // surface is ever visible, including while we dismiss the keyboard on
     // mobile.
-    type ComposerPicker = 'session' | 'channels' | 'permission' | 'model' | 'effort';
+    /*
+     * 'session' is gone (DROVE-111). It was DROVE-83's intermediate sheet,
+     * three rows that opened the three pickers; Clay: "I don't like this
+     * extra menu, then I have to click twice." The mode, the effort and the
+     * model are three controls in the button row now and each opens its own
+     * picker on the first tap. 'agents' and 'usage' joined instead, because
+     * what used to unfold under the status row opens as a sheet.
+     */
+    type ComposerPicker = 'channels' | 'permission' | 'model' | 'effort' | 'agents' | 'usage';
     const [openPicker, setOpenPicker] = React.useState<ComposerPicker | null>(null);
     const pickerOpeningRef = React.useRef<ComposerPicker | null>(null);
     const pickerKeyboardSubscriptionRef = React.useRef<ReturnType<typeof Keyboard.addListener> | null>(null);
@@ -935,18 +963,11 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         handlePickerPress('permission');
     }, [handlePickerPress]);
 
-    // The session pill opens one sheet (DROVE-83); its rows open the
-    // permission, model and effort pickers that used to be chips on the row.
-    const handleSessionPillPress = React.useCallback(() => {
-        handlePickerPress('session');
+    // Mode, effort and model each open their own picker, straight from the
+    // button row (DROVE-111).
+    const handleSessionControlPress = React.useCallback((picker: ComposerSessionPicker) => {
+        handlePickerPress(picker);
     }, [handlePickerPress]);
-
-    // The keyboard was already put away when the sheet opened, so a row
-    // swaps the popup content directly rather than going through the dance.
-    const handleSessionRowPress = React.useCallback((row: SessionSheetRowKey) => {
-        hapticsLight();
-        setOpenPicker(row);
-    }, []);
 
     // Long-press on the primary button opens the channel sheet (DROVE-72):
     // the mode picker and the three channel switches, with DROVE-30's
@@ -1171,37 +1192,21 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         model: props.modelMode,
         effortLabel,
     }), [effortLabel, permissionShortLabel, props.modelMode]);
-    const sessionSheetRows = React.useMemo(() => buildSessionSheetRows({
-        permission: {
-            title: t('agentInput.session.permission'),
-            value: permissionShortLabel ?? '',
-            available: permissionSettingsGroups.length > 0,
-        },
-        model: {
-            title: t('agentInput.session.model'),
-            value: sessionPillLabel.model ?? modelLabel,
-            available: !!modelSettingsGroup,
-        },
-        effort: {
-            title: t('agentInput.session.effort'),
-            value: effortLabel ?? t('agentInput.effort.title'),
-            available: !!effortSettingsGroup,
-        },
-    }), [effortLabel, effortSettingsGroup, modelLabel, modelSettingsGroup, permissionSettingsGroups.length, permissionShortLabel, sessionPillLabel.model]);
-    const sessionSheetGroups: Partial<Record<SessionSheetRowKey, NativeSettingsMenuGroup>> = {
-        permission: permissionSettingsGroups[0],
-        model: modelSettingsGroup,
-        effort: effortSettingsGroup,
-    };
-    // On iOS the sheet rows are native menu triggers, so the sheet has to
-    // close itself once a choice lands; the chips never had to.
-    const closeAfterSelect = (group: NativeSettingsMenuGroup): NativeSettingsMenuGroup => ({
-        ...group,
-        onSelect: (key) => {
-            group.onSelect(key);
-            closePicker();
-        },
-    });
+    // The status row's two expanders (DROVE-111). They share the composer's
+    // one picker slot, which is what makes opening either of them close
+    // whatever else was showing.
+    const statusSheet: StatusRowSheet | null = openPicker === 'agents' || openPicker === 'usage'
+        ? openPicker
+        : null;
+    const handleOpenStatusSheet = React.useCallback((sheet: StatusRowSheet) => {
+        handlePickerPress(sheet);
+    }, [handlePickerPress]);
+    // Where this effort sits on the scale the current model offers, for the
+    // meter on the session control.
+    const effortIndex = props.effortLevel
+        ? availableEffortLevels.findIndex((level) => level.key === props.effortLevel?.key)
+        : -1;
+
 
     // Handle keyboard navigation
     const handleKeyPress = React.useCallback((event: KeyPressEvent): boolean => {
@@ -1661,49 +1666,32 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                             { paddingHorizontal: screenWidth > 700 ? 0 : 16 }
                         ]}>
                             <FloatingOverlay maxHeight={400} keyboardShouldPersistTaps="always">
-                                {openPicker === 'session' ? (
-                                    <View style={styles.overlaySection}>
-                                        <Text style={styles.overlaySectionTitle}>
-                                            {t('agentInput.session.title')}
-                                        </Text>
-                                        {sessionSheetRows.map((row) => {
-                                            const group = sessionSheetGroups[row.key];
-                                            const icon = row.key === 'permission' ? 'shield-outline'
-                                                : row.key === 'model' ? 'cube-outline'
-                                                    : 'flash-outline';
-                                            if (useNativeSettingsMenus && group) {
-                                                return (
-                                                    <NativeSettingsMenu
-                                                        key={row.key}
-                                                        accessibilityLabel={row.title}
-                                                        groups={[closeAfterSelect(group)]}
-                                                    >
-                                                        <ComposerSheetRow
-                                                            kind="picker"
-                                                            icon={icon}
-                                                            title={row.title}
-                                                            value={row.value}
-                                                        />
-                                                    </NativeSettingsMenu>
-                                                );
-                                            }
-                                            return (
-                                                <ComposerSheetRow
-                                                    key={row.key}
-                                                    kind="picker"
-                                                    icon={icon}
-                                                    title={row.title}
-                                                    value={row.value}
-                                                    onPress={() => handleSessionRowPress(row.key)}
-                                                />
-                                            );
-                                        })}
-                                    </View>
-                                ) : openPicker === 'channels' ? (
+                                {openPicker === 'channels' ? (
                                     <DroverChannelsSheet
                                         sectionStyle={styles.overlaySection}
                                         titleStyle={styles.overlaySectionTitle}
                                     />
+                                ) : openPicker === 'agents' ? (
+                                    // The agent tree, in a sheet rather than
+                                    // unfolded under the status line
+                                    // (DROVE-111).
+                                    props.sessionId ? (
+                                        <SessionAgentsSheet
+                                            sessionId={props.sessionId}
+                                            sectionStyle={styles.overlaySection}
+                                            titleStyle={styles.overlaySectionTitle}
+                                        />
+                                    ) : null
+                                ) : openPicker === 'usage' ? (
+                                    // The shared host for the quota sheet.
+                                    // DROVE-117 owns what goes in it; this is
+                                    // today's bars, unchanged, moved out of
+                                    // the inline unfold.
+                                    // The groups carry their own headings, so
+                                    // the sheet adds none.
+                                    <View style={styles.overlaySection}>
+                                        <UsageAccountBars groups={usageBarGroups} />
+                                    </View>
                                 ) : openPicker === 'permission' ? (
                                     <View style={styles.overlaySection}>
                                         <Text style={styles.overlaySectionTitle}>
@@ -2026,19 +2014,15 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     </View>
 
                     {compactMobileComposer ? (
-                    /* Two rows under the input (DROVE-83): the session pill
-                        alone on the first, then add on the left and the voice
+                    /* One row under the input (DROVE-111): add, then the
+                        session's mode, effort and model, then the voice
                         cluster (stream-talk, talk, then send/boss/stop) on the
-                        right (DROVE-98 put the speaker back). */
+                        right (DROVE-98 put the speaker back). DROVE-83's
+                        dedicated pill row is gone, which is the row of
+                        composer furniture MOBILE_COMPOSER_BASE_HEIGHT never
+                        counted (DROVE-105) and therefore the end of
+                        DROVE-106's over-tall composer. */
                     <>
-                        {!props.zenMode && (
-                            <ComposerSessionPill
-                                label={sessionPillLabel}
-                                onPress={sessionSheetRows.length > 0 ? handleSessionPillPress : undefined}
-                                open={openPicker === 'session'}
-                                accessibilityLabel={t('agentInput.session.label')}
-                            />
-                        )}
                     <View style={[
                         styles.actionButtonsContainer,
                         styles.mobileActionButtonsContainer,
@@ -2061,13 +2045,40 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                             </BubblePressable>
                         )}
 
+                        {/* Mode, effort, model: three controls, three pickers,
+                            one tap each (DROVE-111). */}
+                        {!props.zenMode && (
+                            <ComposerSessionControls
+                                label={sessionPillLabel}
+                                modeKind={isSandboxedYoloMode ? 'safe-yolo' : displayPermissionMode?.semanticKind}
+                                modeKey={permissionModeKey}
+                                effortIndex={effortIndex}
+                                effortCount={availableEffortLevels.length}
+                                onPress={handleSessionControlPress}
+                                nativeMenus={useNativeSettingsMenus}
+                                modeGroups={permissionSettingsGroups}
+                                modelGroup={modelSettingsGroup}
+                                effortGroup={effortSettingsGroup}
+                                openPicker={openPicker === 'permission' || openPicker === 'model' || openPicker === 'effort'
+                                    ? openPicker
+                                    : null}
+                            />
+                        )}
+
                         <View style={{ flex: 1 }} />
 
                         {streamTalk.shown && (
                             <BubblePressable
                                 onPress={handleStreamTalkPress}
+                                // 42pt of surface plus 6 of slop: past the
+                                // 44pt floor a bare glyph never had.
                                 hitSlop={6}
-                                style={styles.mobileIconButton}
+                                style={[
+                                    styles.mobileIconButton,
+                                    streamTalk.on
+                                        ? styles.mobileIconButtonOn
+                                        : styles.mobileIconButtonSurface,
+                                ]}
                                 accessibilityRole="button"
                                 accessibilityState={{ selected: streamTalk.on }}
                                 accessibilityLabel={t(streamTalk.labelKey)}
@@ -2076,7 +2087,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                     name={streamTalk.icon}
                                     size={16}
                                     color={streamTalk.on
-                                        ? theme.colors.radio.active
+                                        ? theme.colors.button.primary.tint
                                         : theme.colors.text}
                                 />
                             </BubblePressable>
@@ -2091,7 +2102,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                 onPressIn={() => props.onTalkPressIn?.()}
                                 onPressOut={() => props.onTalkPressOut?.()}
                                 onSlide={(inside) => props.onTalkSlide?.(inside)}
-                                style={styles.mobileIconButton}
+                                style={[styles.mobileIconButton, styles.mobileIconButtonSurface]}
                                 heldStyle={styles.talkButtonHeld}
                                 latchedStyle={styles.talkButtonLatched}
                                 idleColor={theme.colors.text}
@@ -2188,15 +2199,18 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 </Shaker>
 
                 {/* Every status fact on one line under the card (DROVE-82):
-                    working state and timer, connection, branch, quota. The
-                    strip above the composer and the row between it and the
-                    input are gone, which is the chat's height back. */}
+                    working state and timer, connection, quota. Clay, seeing it
+                    in place: "this is great, keep that shit down there." Both
+                    of its expanders open the composer's sheet rather than
+                    unfolding under it (DROVE-111). */}
                 <AgentInputStatusRow
                     sessionId={props.sessionId}
                     connectionStatus={props.connectionStatus}
                     contextStatus={contextStatus}
                     weekPercent={weekPercent}
-                    usageBarGroups={usageBarGroups}
+                    canOpenUsage={usageBarGroups.length > 0}
+                    openSheet={statusSheet}
+                    onOpenSheet={handleOpenStatusSheet}
                     onSessionInfoPress={props.onSessionInfoPress}
                     showDetails={props.showStatusDetails !== false}
                 />
