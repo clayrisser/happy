@@ -165,24 +165,27 @@ describe('the row and the session draw the same dot', () => {
             expect(row.label).toBe(statusDotLabels[row.state]);
         });
 
-        it(`differs only in the blink: ${entry.name}`, () => {
+        it(`blinks exactly as the strip does: ${entry.name}`, () => {
+            // Clay overruled the row-takes-the-hue-only rule: he asked twice
+            // for this dot to match the one in the session, so the motion
+            // matches too. Same state, same colour, same blink.
             const row = sessionRowDot(facts, at);
             const inside = sessionDotPresentation(facts, at);
-            expect(row.isPulsing).toBe(false);
+            expect(row.isPulsing).toBe(inside.isPulsing);
             expect(inside.isPulsing).toBe(statusDotBlinks(inside.state));
         });
     }
 });
 
-describe('the row takes the hue and not the animation', () => {
-    it('never pulses, including for the two states that do inside the session', () => {
-        expect(SESSION_ROW_DOT_BLINKS).toBe(false);
+describe('the row takes the strip\'s motion too, by Clay\'s call', () => {
+    it('pulses for exactly the two states that pulse inside the session', () => {
+        expect(SESSION_ROW_DOT_BLINKS).toBe(true);
         const blinking: StatusDotState[] = ['working', 'compacting'];
         for (const state of blinking) expect(statusDotBlinks(state)).toBe(true);
         for (const entry of [working(), working({}, { latestUsage: usage(compactionAt) })]) {
             const facts = sessionDotFacts(entry, now);
             expect(blinking).toContain(sessionDotState(facts, now));
-            expect(sessionRowDot(facts, now).isPulsing).toBe(false);
+            expect(sessionRowDot(facts, now).isPulsing).toBe(statusDotBlinks(sessionDotState(facts, now)));
         }
     });
 

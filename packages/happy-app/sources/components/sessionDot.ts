@@ -158,7 +158,21 @@ export interface SessionDotPresentation {
  * under `useReducedMotion` (DROVE-231), and a row passes `isPulsing: false`, so
  * there is nothing left to reduce. That is belt and braces, not the reason.
  */
-export const SESSION_ROW_DOT_BLINKS = false;
+/**
+ * OVERRULED BY CLAY, and the reasoning above is kept because it is still the
+ * argument against, not because it won.
+ *
+ * He asked twice for this dot to match the one in the session, and then asked
+ * why it does not pulse. Matching is the whole point of the ticket: a dot that
+ * means one thing in a list and another inside the session is worse than no
+ * dot, and "same colours, different motion" is a second dialect of the same
+ * vocabulary. The cost the paragraphs above describe is real and he owns it.
+ *
+ * Note it is quieter than it sounds: only `working` and `compacting` blink, so
+ * a list is as busy as the number of sessions actually running, not as busy as
+ * the list is long.
+ */
+export const SESSION_ROW_DOT_BLINKS = true;
 
 /**
  * The dot for a row in a list: the shared hue, steady.
@@ -168,7 +182,10 @@ export function sessionRowDot(facts: SessionDotFacts, now: number): SessionDotPr
     return {
         state,
         color: statusDotColors[state],
-        isPulsing: SESSION_ROW_DOT_BLINKS,
+        // Per state, not a flat true: only `working` and `compacting` blink
+        // inside the session, so a row that blinked on green would be a third
+        // dialect rather than the match Clay asked for.
+        isPulsing: SESSION_ROW_DOT_BLINKS && statusDotBlinks(state),
         label: statusDotLabels[state],
     };
 }
