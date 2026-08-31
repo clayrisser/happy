@@ -8,18 +8,15 @@
  */
 import * as React from 'react';
 import { Text, View } from 'react-native';
-import { Image } from 'expo-image';
 import { StyleSheet } from 'react-native-unistyles';
 
 import { t } from '@/text';
 import { CodeView } from '@/components/CodeView';
+import { InlineImage } from '@/components/InlineImage';
 import { structuredRows } from '@/utils/structuredFields';
 import { presentToolResult, type ToolResultPresentation } from '@/utils/toolResult';
 import { RowsView } from './StructuredFieldsView';
 import { ToolCollapsibleSection } from './ToolCollapsibleSection';
-
-const maxImageHeight = 360;
-const defaultAspect = 4 / 3;
 
 const PresentationView = React.memo<{ presentation: ToolResultPresentation; mono: boolean }>((
     { presentation, mono },
@@ -27,18 +24,18 @@ const PresentationView = React.memo<{ presentation: ToolResultPresentation; mono
     switch (presentation.kind) {
         case 'empty':
             return null;
-        case 'image': {
-            const aspect = presentation.width && presentation.height
-                ? presentation.width / presentation.height
-                : defaultAspect;
+        case 'image':
+            // Full width, aspect kept, no black bars. The sizing is in
+            // utils/imageResult so both this screen and the transcript row
+            // get the same picture (DROVE-151).
             return (
-                <Image
-                    source={{ uri: presentation.uri }}
-                    style={[styles.image, { aspectRatio: aspect }]}
-                    contentFit="contain"
+                <InlineImage
+                    uri={presentation.uri}
+                    width={presentation.width}
+                    height={presentation.height}
+                    fallback={<Text style={styles.text}>{`[${presentation.mediaType}]`}</Text>}
                 />
             );
-        }
         case 'text':
             return mono
                 ? <CodeView code={presentation.text} />
@@ -92,12 +89,6 @@ export const ToolResultView = React.memo<ToolResultViewProps>(({ result, mono = 
 });
 
 const styles = StyleSheet.create((theme) => ({
-    image: {
-        width: '100%',
-        maxHeight: maxImageHeight,
-        borderRadius: 8,
-        backgroundColor: theme.colors.surfaceHigh,
-    },
     text: {
         fontSize: 13,
         lineHeight: 19,
