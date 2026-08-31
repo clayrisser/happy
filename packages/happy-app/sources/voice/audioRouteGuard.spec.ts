@@ -26,7 +26,6 @@ const airplay = ['AirPlay'];
 interface Harness {
     guard: AudioRouteGuard;
     interrupt: ReturnType<typeof vi.fn>;
-    disable: ReturnType<typeof vi.fn>;
     announce: ReturnType<typeof vi.fn>;
     /** Mutable so a test can turn read-aloud off between two readings. */
     state: { speaking: boolean; enabled: boolean; speaker: Speaker };
@@ -35,7 +34,6 @@ interface Harness {
 function harness(over: Partial<Harness['state']> = {}): Harness {
     const state = { speaking: true, enabled: true, speaker: 'phone' as Speaker, ...over };
     const interrupt = vi.fn();
-    const disable = vi.fn(() => { state.enabled = false; });
     const announce = vi.fn();
     const deps: AudioRouteGuardDeps = {
         route: () => [],
@@ -43,16 +41,19 @@ function harness(over: Partial<Harness['state']> = {}): Harness {
         isEnabled: () => state.enabled,
         speaker: () => state.speaker,
         interrupt,
-        disable,
         announce,
     };
-    return { guard: new AudioRouteGuard(deps), interrupt, disable, announce, state };
+    return { guard: new AudioRouteGuard(deps), interrupt, announce, state };
 }
 
 /**
- * Clay: "if headphones disconnect, make sure by default you mute, or you
- * disable the reading things back." The route names come from
- * AVAudioSession; what counts as the room is decided here (DROVE-119).
+ * The route names come from AVAudioSession; what counts as the room is
+ * decided here (DROVE-119).
+ *
+ * DROVE-189 kept every line of this classification and changed only what
+ * happens next: the move to the speaker is announced, and read-aloud is left
+ * ON. Clay asked for that directly, having asked for the opposite in
+ * DROVE-119 and lived with it.
  */
 describe('classifyRoute', () => {
     it('wired headphones are headphones', () => {
@@ -128,69 +129,79 @@ describe('leaksToTheRoom', () => {
 });
 
 describe('AudioRouteGuard', () => {
-    it('headphones to the speaker: cuts the utterance, turns it off, says why', () => {
+    it('headphones to the speaker: names the change and says where the sound went', () => {
         const h = harness();
         h.guard.observe(headphones);
         expect(h.interrupt).not.toHaveBeenCalled();
         h.guard.observe(speaker);
         expect(h.interrupt).toHaveBeenCalledTimes(1);
-        expect(h.disable).toHaveBeenCalledTimes(1);
         expect(h.announce).toHaveBeenCalledTimes(1);
         expect(h.guard.stopCount).toBe(1);
     });
 
-    it('cuts BEFORE it flips the setting, so nothing is spoken in between', () => {
+    /**
+     * THE ONE CLAY ASKED FOR (DROVE-189). DROVE-119 flipped
+     * `readAloudEnabled` off here and this test asserted it did. He has since
+     * said, plainly, that removing headphones must not disable read-aloud: an
+     * AirPod that drops for a second should not need a deliberate press to get
+     * the voice back. The guard has no way to disable anything any more, which
+     * is stronger than a test.
+     */
+    it('leaves read-aloud ON when the headphones come out', () => {
+        const h = harness();
+        h.guard.observe(headphones);
+        h.guard.observe(speaker);
+        expect(h.state.enabled).toBe(true);
+    });
+
+    it('names the change BEFORE the toast, so the captures stop first', () => {
         const h = harness();
         const order: string[] = [];
         h.interrupt.mockImplementation(() => order.push('interrupt'));
-        h.disable.mockImplementation(() => { order.push('disable'); h.state.enabled = false; });
         h.announce.mockImplementation(() => order.push('announce'));
         h.guard.observe(headphones);
         h.guard.observe(speaker);
-        expect(order).toEqual(['interrupt', 'disable', 'announce']);
+        expect(order).toEqual(['interrupt', 'announce']);
     });
 
-    it('headphones to CarPlay stops nothing', () => {
+    it('headphones to CarPlay says nothing', () => {
         const h = harness();
         h.guard.observe(airpods);
         h.guard.observe(carplay);
         expect(h.interrupt).not.toHaveBeenCalled();
-        expect(h.disable).not.toHaveBeenCalled();
         expect(h.announce).not.toHaveBeenCalled();
     });
 
-    it('the speaker to headphones stops nothing and re-enables nothing', () => {
+    it('the speaker to headphones says nothing and re-enables nothing', () => {
         const h = harness({ enabled: false });
         h.guard.observe(speaker);
         h.guard.observe(headphones);
         expect(h.interrupt).not.toHaveBeenCalled();
-        expect(h.disable).not.toHaveBeenCalled();
         expect(h.state.enabled).toBe(false);
     });
 
-    it('reconnecting after a stop leaves it off: turning it back on is a press', () => {
+    it('reconnecting after an announcement changes nothing either way', () => {
         const h = harness();
         h.guard.observe(headphones);
         h.guard.observe(speaker);
-        expect(h.state.enabled).toBe(false);
         h.guard.observe(headphones);
-        expect(h.state.enabled).toBe(false);
+        expect(h.state.enabled).toBe(true);
         expect(h.guard.stopCount).toBe(1);
     });
 
-    it('the watch is the speaker: a phone route change stops nothing (DROVE-92)', () => {
+    it('the watch is the speaker: a phone route change says nothing (DROVE-92)', () => {
         const h = harness({ speaker: 'watch' });
         h.guard.observe(headphones);
         h.guard.observe(speaker);
         expect(h.interrupt).not.toHaveBeenCalled();
-        expect(h.disable).not.toHaveBeenCalled();
+        expect(h.announce).not.toHaveBeenCalled();
     });
 
-    it('a change while nothing is being spoken disables nothing', () => {
+    it('a change while nothing is being spoken says nothing', () => {
         const h = harness({ speaking: false });
         h.guard.observe(headphones);
         h.guard.observe(speaker);
-        expect(h.disable).not.toHaveBeenCalled();
+        expect(h.announce).not.toHaveBeenCalled();
         expect(h.state.enabled).toBe(true);
     });
 
@@ -228,8 +239,7 @@ describe('AudioRouteGuard', () => {
             isEnabled: () => state.enabled,
             speaker: () => state.speaker,
             interrupt,
-            disable: () => { state.enabled = false; },
-            announce: () => {},
+            announce: () => { },
         });
         guard.observe();
         ports = speaker;

@@ -458,7 +458,7 @@ export const it: TranslationStructure = {
             on: 'Sto leggendo le risposte ad alta voce',
             off: 'Risposte non lette ad alta voce',
             onHint: 'Lettura delle risposte ad alta voce. Tocca una frase per leggere da lì',
-            headphonesOff: 'Lettura ad alta voce disattivata, cuffie scollegate',
+            headphonesOff: 'Cuffie scollegate, ora dall\'altoparlante',
         },
         dictate: {
             label: 'Tieni premuto per parlare, tocca per bloccare',

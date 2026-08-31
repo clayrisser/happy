@@ -42,8 +42,20 @@ import {
  *
  * INTERRUPTIONS are handled in DroverSpeechModule — they were not handled at
  * all before this ticket, which is why a phone call left the reader dead. What
- * arrives here is the news of it, so the reader can be told rather than left
- * guessing.
+ * arrives here is the news of it, and the reader is TOLD: an interruption
+ * ending is the exact moment a refused utterance will be taken, so it does not
+ * have to wait out its own retry timer.
+ *
+ * THE SECOND PASS (DROVE-189 again, because Clay reported it a third time).
+ * Everything above keeps the app ALIVE, and a live app was still going quiet,
+ * because staying alive was necessary and not sufficient. The half that was
+ * missing is in readAloud.ts: `speak` REJECTS when the audio session refuses
+ * it, which is what an unfinished interruption looks like from JS, and the
+ * reader used to swallow that and pump the next sentence, so a refusing
+ * session consumed the whole reply in a tight loop and marked every sentence
+ * spoken. He came back to an app that was running, connected and silent, with
+ * nothing left to read. `isStalled` and `audioSessionRecovered` are that fix's
+ * two ends, and this file is one of the things that calls the second one.
  */
 
 /** What this needs of the reader, and nothing more. */
@@ -51,6 +63,10 @@ export interface BackgroundReader {
     readonly isEnabled: boolean;
     setBackgrounded(backgrounded: boolean): void;
     interrupt(reason: 'toggled-off'): void;
+    /** An interruption ended, so an utterance the session refused may go now. */
+    audioSessionRecovered(): void;
+    /** Told when the reader stops, which is how the hold learns it is over. */
+    addInterruptListener(listener: (reason: string) => void): () => void;
 }
 
 /**
@@ -72,12 +88,20 @@ export function startBackgroundAudio(reader: BackgroundReader): () => void {
     started = true;
 
     let backgrounded = !isForeground(AppState.currentState);
+    // What was last asked of the native side. `apply` runs on every interrupt
+    // as well as every app-state change, and an interrupt is as common as a
+    // keystroke, so the call across the bridge is made only when the answer
+    // actually changes.
+    let held: boolean | null = null;
     const apply = () => {
         try {
             reader.setBackgrounded(backgrounded);
             // Only hold while there is something to stay alive FOR. Holding
             // with read-aloud off would keep music ducked for no one.
-            void holdAudioSession(backgrounded && reader.isEnabled);
+            const next = backgrounded && reader.isEnabled;
+            if (next === held) return;
+            held = next;
+            void holdAudioSession(next);
         } catch {
             // Nothing about staying alive is worth taking the reader down for.
         }
@@ -91,9 +115,23 @@ export function startBackgroundAudio(reader: BackgroundReader): () => void {
         apply();
     });
 
-    // News, not control. The native side has already paused and resumed the
-    // utterance; this is so a log and a future banner have something to read.
-    const interruption = addSpeechInterruptionListener(() => { });
+    // Read-aloud going off in the background has to let the session go too,
+    // or music stays ducked for nobody. `apply` re-reads `isEnabled`, so one
+    // line covers the toggle, the route guard and a boss-mode call alike.
+    const enabledChanged = reader.addInterruptListener(() => { apply(); });
+
+    // The native side has already paused and resumed the utterance. What the
+    // reader needs from this is the END: an interruption ending is the moment
+    // a refused utterance will be accepted, so it is offered again at once
+    // rather than after the retry timer.
+    const interruption = addSpeechInterruptionListener((state) => {
+        if (state !== 'ended') return;
+        try {
+            reader.audioSessionRecovered();
+        } catch {
+            // The retry timer is the belt under this.
+        }
+    });
 
     /**
      * Lock-screen and AirPod play/pause (DROVE-189).
@@ -116,7 +154,9 @@ export function startBackgroundAudio(reader: BackgroundReader): () => void {
 
     return () => {
         started = false;
+        held = null;
         appState.remove();
+        enabledChanged();
         interruption.remove();
         remote.remove();
         void holdAudioSession(false);

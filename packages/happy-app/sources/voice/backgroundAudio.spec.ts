@@ -17,6 +17,10 @@ import type { Message } from '@/sync/typesMessage';
  *
  * The native half — interruption handling and the lock-screen controls — needs
  * a build and is listed as unverified until one exists.
+ *
+ * This file is the FIRST pass and every line of it still holds. What it did
+ * not cover is a session that refuses the utterance outright, which is in
+ * backgroundAudioRefused.spec.ts and is the half Clay was actually hitting.
  */
 
 describe('background reading', () => {

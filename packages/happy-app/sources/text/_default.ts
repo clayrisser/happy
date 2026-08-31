@@ -482,7 +482,7 @@ export const en = {
             on: 'Reading replies aloud',
             off: 'Not reading replies aloud',
             onHint: 'Reading replies aloud. Tap a sentence to read from there',
-            headphonesOff: 'Read aloud off, headphones disconnected',
+            headphonesOff: 'Headphones disconnected, now on speaker',
         },
         dictate: {
             label: 'Hold to talk, tap to latch',
