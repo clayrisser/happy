@@ -8,6 +8,7 @@ import { t } from '@/text';
 import { useSession } from '@/sync/storage';
 import { isLiveStatusFresh, summarizeLiveStatus, type LiveStatusSummary } from '@/utils/liveStatus';
 import { STATUS_ROW_TAP_SLOP_BOTTOM, STATUS_ROW_TAP_SLOP_TOP } from './agentDockLayout';
+import { COMPOSER_STRIP_MIN_HEIGHT, COMPOSER_STRIP_PADDING_TOP } from './composerStripLayout';
 import { AnimatedFade } from './AnimatedOverlay';
 import { UsageAccountBarsSheet } from './UsageAccountBarsSheet';
 import type { UsageBarGroup } from './agentInputUsage';
@@ -334,8 +335,11 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
                 // 18 = 10pt shell inset + 8pt action inset: lines the row up
                 // with the composer card's controls.
                 paddingHorizontal: 18,
-                paddingTop: 6,
-                minHeight: 18,
+                // The strip's box, shared with the recording banner that sits
+                // over it (DROVE-157), so the two cannot drift and a mic
+                // cannot resize the dock.
+                paddingTop: COMPOSER_STRIP_PADDING_TOP,
+                minHeight: COMPOSER_STRIP_MIN_HEIGHT,
             }}>
                 {dotColor ? (
                     <StatusDot
