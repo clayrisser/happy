@@ -43,12 +43,20 @@ interface Row {
 
 function writeAccount(name: string, opts: {
     loggedIn?: boolean
+    /**
+     * Claude Code's one-time first run settled for this dir (DROVE-246).
+     * Defaults TRUE, because a fixture that means "a normal working account"
+     * has to look like one; pass false to model the account Clay was stranded
+     * on — a real credential in a directory that has never run interactively.
+     */
+    onboarded?: boolean
     fetchedAtMs?: number | null
     rows?: Row[]
 } = {}): void {
     const configDir = join(root, name)
     mkdirSync(configDir, { recursive: true })
     const raw: Record<string, unknown> = {}
+    if (opts.onboarded !== false) raw.hasCompletedOnboarding = true
     if (opts.loggedIn !== false) raw.oauthAccount = { emailAddress: `${name}@example.com` }
     if (opts.rows) {
         raw.cachedUsageUtilization = {

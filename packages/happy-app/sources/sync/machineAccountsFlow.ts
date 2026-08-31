@@ -252,10 +252,17 @@ export function advanceAddAccount(
 
         case 'accounts': {
             if (phase.kind !== 'waiting') return phase;
-            // The registry row is written by the shell only after Claude Code
-            // reports itself logged in, so a name that was not there before the
-            // start IS the login having succeeded. Nothing here infers it from
-            // the code being typed, from the card closing, or from time passing.
+            // The registry row is written by the shell only after the account
+            // passes a real check — first run settled, and `claude auth status`
+            // reading it as signed in (DROVE-246) — so a name that was not
+            // there before the start IS a usable account having appeared.
+            // Nothing here infers it from the code being typed, from the card
+            // closing, or from time passing.
+            //
+            // The caller also filters the names to the rows that can RUN, so a
+            // row that somehow reached the registry without passing does not
+            // announce itself as added. Two gates for one fact, because
+            // "it says it added but it did not work" is the whole ticket.
             const added = event.names.find((name) => !phase.before.includes(name));
             if (added !== undefined) return { kind: 'added', name: added };
             return elapsed(phase, event.at, watchMs, linkWaitMs);
@@ -420,7 +427,17 @@ export interface MachineAccount {
     configDir: string;
     /** The ambient login (~/.claude) — the one the phone must not replace. */
     ambient: boolean;
+    /** There is a credential. NOT the same as "a session can start here". */
     loggedIn: boolean;
+    /**
+     * Claude Code's one-time first run is settled for that config dir
+     * (DROVE-246). A brand-new dir opens on the theme picker before it does
+     * anything, whatever its login says, and a flip cannot answer that — so a
+     * row with this false is as dead as one with no login, and needs a
+     * different fix. Optional because an older machine does not send it, and
+     * an absent answer must not turn every account red.
+     */
+    onboarded?: boolean;
     /** The address it is logged in as, which is the identity Clay recognises. */
     login: string | null;
     /** Another row on the same claude.ai login, so the two share one quota. */
@@ -432,9 +449,27 @@ export interface MachineAccount {
     fetchedAt: number | null;
 }
 
+/**
+ * Can a session actually start on this account?
+ *
+ * The predicate every "may this be flipped to" question should ask.
+ * `loggedIn` was being read as this and only ever meant "there is a
+ * credential" (DROVE-246). `onboarded === false` is the failure; absent is
+ * treated as fine, so an older machine that does not report it behaves exactly
+ * as it did before.
+ */
+export function accountCanRun(account: MachineAccount): boolean {
+    return account.loggedIn && account.onboarded !== false;
+}
+
 /** "43% left", or the reason there is no figure. Never an invented number. */
 export function accountHeadroomLabel(account: MachineAccount): string {
     if (!account.loggedIn) return 'no login yet';
+    // Said in the words of what is WRONG and what fixes it. "Not set up" would
+    // read as "still finishing", which is the sentence DROVE-237 already had to
+    // remove once; and "no login" would be a lie about an account that is
+    // logged in, which is what cost Clay a day.
+    if (account.onboarded === false) return 'setup unfinished — run drover trust';
     if (account.cooling) return 'out of headroom';
     if (account.headroom == null) return 'not measured yet';
     return `${Math.round(account.headroom)}% left`;

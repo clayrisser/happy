@@ -1000,14 +1000,32 @@ export class FlipController {
             }
         }
 
+        // THE FLIP FAILS LOUDLY AND STAYS PUT (DROVE-246). This account has a
+        // credential — saying "log it in" would be wrong and is what confused
+        // Clay for a day — but its config dir has never been through Claude
+        // Code's first run, so a session there opens on the theme picker. The
+        // session does not move: a refusal leaves it exactly where it was,
+        // which is the whole point of answering instead of trying.
+        if (choice.kind === 'neverrun') {
+            return {
+                kind: 'refused',
+                note:
+                    `Cattle Drover: "${choice.account.name}" is logged in, but its config dir has ` +
+                    'never been through Claude Code\'s one-time first run, so a session there opens ' +
+                    'on the theme picker instead of a prompt — which a wrapped session cannot ' +
+                    'answer. Staying put. Settle it with: drover trust',
+            }
+        }
+
         if (choice.kind === 'none') {
             return {
                 kind: 'refused',
                 note: req.account
                     ? `Cattle Drover: no account named "${req.account}" in the registry.`
-                    : 'Cattle Drover: no other LOGGED-IN account to flip to. Add one with ' +
-                      '`drover account add <name>`, which logs it in as it creates it, or check ' +
-                      '`drover account list` for rows marked "no login".',
+                    : 'Cattle Drover: no other account to flip to that a session can actually ' +
+                      'START on. Add one with `drover account add <name>`, which logs it in as it ' +
+                      'creates it, or check `drover accounts` for rows marked "no login" (log it ' +
+                      'in) or "never run" (run `drover trust`).',
             }
         }
 

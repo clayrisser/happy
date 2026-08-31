@@ -27,6 +27,7 @@ import {
     coolingState,
     cooldownFamily,
     isLoggedIn,
+    isOnboarded,
     ledgerPath,
     modelDemand,
     readAccounts,
@@ -105,7 +106,16 @@ export interface AccountUsageSnapshot {
     name: string
     /** The account this session is on. Exactly one row is, when any is. */
     current: boolean
+    /** There is a credential here. NOT the same as "a session can start here". */
     loggedIn: boolean
+    /**
+     * Claude Code's one-time first run is settled for this config dir, so an
+     * interactive session reaches a prompt instead of the theme picker
+     * (DROVE-246). A credentialed account with this false is a dead end for a
+     * flip exactly as `loggedIn: false` is, and needs a different fix
+     * (`drover trust`, not another login), which is why it is its own field.
+     */
+    onboarded: boolean
     /** When Claude Code last fetched this account's cache; null when it never has. */
     fetchedAt: number | null
     /**
@@ -276,6 +286,7 @@ function accountSnapshot(
         name: a.name,
         current: a.name === current,
         loggedIn: isLoggedIn(a),
+        onboarded: isOnboarded(a),
         fetchedAt: cache?.fetchedAt ?? null,
         // 100 minus the fullest row that APPLIES to the model this session is
         // running (DROVE-173), and null when any of those rows has expired

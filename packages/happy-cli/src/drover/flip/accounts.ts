@@ -216,6 +216,60 @@ export function isLoggedIn(a: DroverAccount): boolean {
     }
 }
 
+/**
+ * Has Claude Code's ONE-TIME FIRST RUN been settled for this config dir?
+ *
+ * A credential is not enough, and reading it as though it were is DROVE-246.
+ * A directory that has never run interactively opens on the onboarding
+ * wizard — the pig, "Let's get started", "Choose the text style that looks
+ * best with your terminal", seven theme options — before it does anything
+ * else, whatever its login says. A wrapped session can no more answer that
+ * than it can answer a permission prompt, so the flip appears to do nothing
+ * and the pane just sits on a theme picker.
+ *
+ * That is not hypothetical: Clay added accounts from the phone, they appeared
+ * in the list, and flipping to one landed him there. `~/.claude-accounts/
+ * account-3` (registry name bitspur.com@gmail.com) carried a perfectly good
+ * credential — `claude auth status` said loggedIn, authMethod claude.ai — and
+ * had no `hasCompletedOnboarding` at all.
+ *
+ * ONE KEY decides it, measured 2026-08-31 on 2.1.251 against a throwaway
+ * config dir: write `hasCompletedOnboarding` into an empty dir and the theme
+ * picker is gone. `theme` itself is null on every one of Clay's working
+ * accounts, so the picker is a symptom of first-run and not the gate.
+ *
+ * ABSENT FILE READS AS SETTLED, and that asymmetry with isLoggedIn is
+ * deliberate. isLoggedIn fails open because an unreadable config should not
+ * strand a session; this fails open for the same reason. What it does NOT do
+ * is fail open on a file it read successfully that simply lacks the key —
+ * that is the account this function exists to catch.
+ */
+export function isOnboarded(a: DroverAccount): boolean {
+    try {
+        const cfg = accountConfigFile(a)
+        if (!existsSync(cfg)) return true
+        const raw = JSON.parse(readFileSync(cfg, 'utf8'))
+        if (!raw || typeof raw !== 'object') return true
+        return raw.hasCompletedOnboarding === true
+    } catch (err) {
+        logger.debug('[flip] could not read onboarding state for ' + a.name, err)
+        return true
+    }
+}
+
+/**
+ * Can a session actually START on this account?
+ *
+ * The single predicate everything deciding "may a flip land here" should use.
+ * `isLoggedIn` was being read as this and never meant it: it answers only
+ * whether a credential exists. Both halves have to hold, and each fails for a
+ * different reason with a different fix — logging in, versus `drover trust` —
+ * so the two are kept apart rather than folded into one boolean.
+ */
+export function canStartSession(a: DroverAccount): boolean {
+    return isLoggedIn(a) && isOnboarded(a)
+}
+
 export function accountByName(name: string): DroverAccount | undefined {
     return readAccounts().find((a) => a.name === name)
 }
@@ -1005,6 +1059,12 @@ export type Pick =
       }
     /** Named explicitly, but it has no credential — flipping there is a dead end. */
     | { kind: 'nologin'; account: DroverAccount }
+    /**
+     * Named explicitly, logged in, and its config dir has never been through
+     * Claude Code's first run — so a session there opens on the theme picker
+     * (DROVE-246). Equally a dead end, different fix.
+     */
+    | { kind: 'neverrun'; account: DroverAccount }
     | { kind: 'none' }
 
 /**
@@ -1041,15 +1101,24 @@ export function pickTarget(
         // because that is not a preference — there is no session to be had
         // there, only a first-run wizard nothing can answer.
         if (!isLoggedIn(target)) return { kind: 'nologin', account: target }
+        // And an account that IS logged in but whose config dir has never been
+        // through Claude Code's first run is the same dead end wearing a
+        // different face (DROVE-246) — the wizard belongs to the DIRECTORY, not
+        // to the login. Its own kind, because the fix is a different command
+        // and telling Clay to log in an account he already logged in is what
+        // made this take a day to understand.
+        if (!isOnboarded(target)) return { kind: 'neverrun', account: target }
         return { kind: 'account', account: target }
     }
 
     const ledger = readLedger()
-    // An account with no credential is not somewhere work can go, so it is not
-    // a candidate at all — not for the automatic choice, and not for the park
-    // deadline either. Leaving it in made auto-flip pick a dead account and
-    // then park the session waiting for a limit that account never had.
-    const usable = accounts.filter(isLoggedIn)
+    // An account a session cannot START on is not somewhere work can go, so it
+    // is not a candidate at all — not for the automatic choice, and not for the
+    // park deadline either. Leaving it in made auto-flip pick a dead account
+    // and then park the session waiting for a limit that account never had.
+    // "Cannot start" is two things (DROVE-246): no credential, and a config dir
+    // that has never been through Claude Code's first run.
+    const usable = accounts.filter(canStartSession)
     // A twin of the current account is the same login (DROVE-21): moving
     // there changes nothing but the name and costs a relaunch, so it is no
     // more a target than the account we are on.

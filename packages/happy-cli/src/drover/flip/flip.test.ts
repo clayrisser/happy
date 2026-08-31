@@ -50,7 +50,7 @@ function writeAccounts(accounts: { name: string; configDir?: string }[]): void {
     for (const a of accounts) {
         if (!a.configDir) continue
         mkdirSync(a.configDir, { recursive: true })
-        writeFileSync(join(a.configDir, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: `${a.name}@example.com` } }))
+        writeFileSync(join(a.configDir, '.claude.json'), JSON.stringify({ hasCompletedOnboarding: true, oauthAccount: { emailAddress: `${a.name}@example.com` } }))
     }
 }
 
@@ -1314,7 +1314,7 @@ describe('one login wearing two names', () => {
             { name: 'twin', configDir: join(root, 'tw-twin') },
         ])
         writeFileSync(join(root, 'tw-twin', '.claude.json'),
-            JSON.stringify({ oauthAccount: { emailAddress: 'Main@example.com' } }))
+            JSON.stringify({ hasCompletedOnboarding: true, oauthAccount: { emailAddress: 'Main@example.com' } }))
     }
 
     it('names the duplicate after the first of its login in registry order', async () => {
@@ -1565,7 +1565,7 @@ describe('naming the account a session with no stamp is on (DROVE-31)', () => {
         two()
         const odd = join(root, 'd31-elsewhere')
         mkdirSync(odd, { recursive: true })
-        writeFileSync(join(odd, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'alt@example.com' } }))
+        writeFileSync(join(odd, '.claude.json'), JSON.stringify({ hasCompletedOnboarding: true, oauthAccount: { emailAddress: 'alt@example.com' } }))
         process.env.CLAUDE_CONFIG_DIR = odd
         const { currentAccount } = await accountsModule()
         expect(currentAccount()?.name).toBe('alt')

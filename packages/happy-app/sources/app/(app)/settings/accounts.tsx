@@ -64,6 +64,7 @@ import {
     type MachineAccountsResult,
 } from '@/sync/machineAccounts';
 import {
+    accountCanRun,
     accountSubtitle,
     addAccountBusy,
     addAccountIdle,
@@ -136,9 +137,16 @@ export default function AccountsScreen() {
         setLoaded((prev) => ({ ...prev, [machineId]: { loading: false, result } }));
         // The list is also the success signal for a login in flight: a name that
         // was not there before the start means the machine wrote the registry
-        // row, which it only does once Claude Code says it is logged in.
+        // row, which it only does once the account has PASSED a real check —
+        // first run settled and `claude auth status` reading it as signed in
+        // (DROVE-246). Rows that cannot run are filtered out here as well, so a
+        // half-made account can never be what makes this screen say "added".
         if (result.ok) {
-            dispatch(machineId, { type: 'accounts', at: Date.now(), names: result.accounts.map((a) => a.name) });
+            dispatch(machineId, {
+                type: 'accounts',
+                at: Date.now(),
+                names: result.accounts.filter(accountCanRun).map((a) => a.name),
+            });
         } else {
             // A read that failed still tells the truth about the time. Only
             // the account list is unknown, not the clock.
@@ -357,10 +365,18 @@ export default function AccountsScreen() {
                                     title={account.name}
                                     subtitle={accountSubtitle(account)}
                                     subtitleLines={0}
+                                    // Amber for BOTH dead ends, not just the
+                                    // one with no credential (DROVE-246): an
+                                    // account whose config dir has never been
+                                    // through Claude Code's first run looked
+                                    // identical to a working one here, and
+                                    // tapping through to it is what stranded
+                                    // Clay on a theme picker. The subtitle says
+                                    // which of the two it is.
                                     icon={<Ionicons
-                                        name={account.loggedIn ? 'person-circle-outline' : 'alert-circle-outline'}
+                                        name={accountCanRun(account) ? 'person-circle-outline' : 'alert-circle-outline'}
                                         size={29}
-                                        color={account.loggedIn ? '#007AFF' : '#FF9500'}
+                                        color={accountCanRun(account) ? '#007AFF' : '#FF9500'}
                                     />}
                                     // The ambient login is the account every plain `claude` on that
                                     // Mac uses. Removing it from a phone is not undoable from a

@@ -42,6 +42,12 @@ export type DroverUsageAccountLike = {
     name: string;
     current?: boolean | null;
     loggedIn?: boolean | null;
+    /**
+     * Claude Code's one-time first run is settled for that config dir
+     * (DROVE-246). False is a dead end for a flip; absent means an older
+     * machine that does not report it, which reads as fine.
+     */
+    onboarded?: boolean | null;
     fetchedAt?: number | null;
     /** Percent LEFT on the fullest limit; null when never measured. */
     headroom?: number | null;
@@ -336,6 +342,13 @@ export function droverFamilyRows(usage: DroverUsageLike, droverAccount?: string 
 export type DroverOtherAccountRow = {
     name: string;
     loggedIn: boolean;
+    /**
+     * Claude Code's one-time first run is settled for that config dir
+     * (DROVE-246). False makes the row unswitchable exactly as `loggedIn:
+     * false` does — a session there opens on the theme picker — and it is
+     * carried separately because the two need different fixes.
+     */
+    onboarded: boolean;
     /** The reading is old enough to say so rather than show as current (DROVE-173). */
     stale?: boolean;
     /**
@@ -381,6 +394,9 @@ function toAccountRow(a: DroverUsageAccountLike, capturedAt = Number.NaN): Drove
     return {
         name: a.name,
         loggedIn: a.loggedIn !== false,
+        // Absent reads as onboarded, which is what an older CLI meant: it did
+        // not report the field because nothing had asked the question yet.
+        onboarded: a.onboarded !== false,
         ...(droverAccountStale(a, capturedAt) ? { stale: true } : {}),
         ...(droverAccountExpired(a, capturedAt) ? { expired: true } : {}),
         headroom: typeof a.headroom === 'number' && Number.isFinite(a.headroom)
@@ -442,5 +458,8 @@ export function currentDroverAccountRow(
     if (account && typeof account.name === 'string') return toAccountRow(account, usage?.capturedAt ?? Number.NaN);
     const name = droverAccount?.trim();
     if (!name) return null;
-    return { name, loggedIn: true, headroom: null, back: null, family: null };
+    // A session already RUNNING on this account is the proof that it can run,
+    // so both gates read true here — there is nothing to warn about on a pane
+    // that is answering (DROVE-246).
+    return { name, loggedIn: true, onboarded: true, headroom: null, back: null, family: null };
 }
