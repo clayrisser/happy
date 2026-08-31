@@ -1034,6 +1034,11 @@ export const ca: TranslationStructure = {
         unavailable: 'Transcripció no disponible',
         result: 'Resultat',
         title: 'Agent',
+        stateUnknown: 'Estat desconegut',
+        waitingForComputer: 'L\'ordinador s\'està reiniciant o no respon. Aquesta pantalla s\'omplirà sola.',
+        waitingForNetwork: 'Sense connexió. Aquesta pantalla s\'omplirà tan aviat com el telèfon torni a estar en línia.',
+        waitingUnknown: 'Ara mateix no es pot llegir la transcripció. S\'hi continua provant.',
+        retrying: 'Reintentant…',
     },
 
     codex: {

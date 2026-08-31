@@ -1033,6 +1033,11 @@ export const pt: TranslationStructure = {
         unavailable: 'Transcrição indisponível',
         result: 'Resultado',
         title: 'Agente',
+        stateUnknown: 'Estado desconhecido',
+        waitingForComputer: 'O computador está reiniciando ou fora de alcance. Esta tela vai se preencher sozinha.',
+        waitingForNetwork: 'Sem conexão. Esta tela vai se preencher assim que o telefone voltar a ficar on-line.',
+        waitingUnknown: 'No momento não dá para ler a transcrição. Continuamos tentando.',
+        retrying: 'Tentando de novo…',
     },
 
     codex: {

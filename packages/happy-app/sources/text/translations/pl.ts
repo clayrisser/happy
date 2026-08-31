@@ -1050,6 +1050,11 @@ export const pl: TranslationStructure = {
         unavailable: 'Transkrypcja niedostępna',
         result: 'Wynik',
         title: 'Agent',
+        stateUnknown: 'Stan nieznany',
+        waitingForComputer: 'Komputer się restartuje albo jest poza zasięgiem. Ten ekran uzupełni się sam.',
+        waitingForNetwork: 'Brak połączenia. Ten ekran uzupełni się, gdy telefon wróci do sieci.',
+        waitingUnknown: 'W tej chwili nie da się odczytać transkrypcji. Próbujemy dalej.',
+        retrying: 'Ponawianie…',
     },
 
     codex: {

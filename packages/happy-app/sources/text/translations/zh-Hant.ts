@@ -1034,6 +1034,11 @@ export const zhHant: TranslationStructure = {
         unavailable: '無法取得記錄',
         result: '結果',
         title: '代理',
+        stateUnknown: '狀態未知',
+        waitingForComputer: '電腦正在重新啟動或連不上。此頁面會自行補齊。',
+        waitingForNetwork: '沒有網路。手機恢復連線後此頁面會自行補齊。',
+        waitingUnknown: '現在讀不到記錄，仍在重試。',
+        retrying: '仍在重試…',
     },
 
     codex: {
