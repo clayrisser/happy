@@ -341,14 +341,34 @@ export default {
                 build: {
                     experimental: {
                         ios: {
+                            // The entitlements matter as much as the ids.
+                            // Without them EAS syncs the capability set for
+                            // each extension and reports "Disabled: App
+                            // Groups", so the profile it mints omits the
+                            // group the target's .entitlements file demands
+                            // and Xcode refuses: "doesn't support the
+                            // group.com.bitspur.drover App Group". The group
+                            // is a literal here because it is a literal in
+                            // watch/DroverWatch{,Widget}/*.entitlements; the
+                            // two must agree or the build fails the same way.
                             appExtensions: [
                                 {
                                     targetName: "DroverWatch",
-                                    bundleIdentifier: `${bundleId}.watchkitapp`
+                                    bundleIdentifier: `${bundleId}.watchkitapp`,
+                                    entitlements: {
+                                        "com.apple.security.application-groups": [
+                                            "group.com.bitspur.drover"
+                                        ]
+                                    }
                                 },
                                 {
                                     targetName: "DroverWatchWidget",
-                                    bundleIdentifier: `${bundleId}.watchkitapp.widget`
+                                    bundleIdentifier: `${bundleId}.watchkitapp.widget`,
+                                    entitlements: {
+                                        "com.apple.security.application-groups": [
+                                            "group.com.bitspur.drover"
+                                        ]
+                                    }
                                 }
                             ]
                         }
