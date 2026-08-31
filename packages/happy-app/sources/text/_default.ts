@@ -591,7 +591,6 @@ export const en = {
             used: ({ percent }: { percent: number }) => `${percent}% used`,
             back: ({ time }: { time: string }) => `Back ${time}`,
             familyBack: ({ family, time }: { family: string; time: string }) => `${family} back ${time}`,
-            otherAccounts: 'Other accounts',
             unmeasured: 'not measured',
             noLogin: 'no login',
         },

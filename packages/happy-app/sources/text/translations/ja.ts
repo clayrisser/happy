@@ -567,7 +567,6 @@ export const ja: TranslationStructure = {
             used: ({ percent }: { percent: number }) => `使用 ${percent}%`,
             back: ({ time }: { time: string }) => `${time} に復帰`,
             familyBack: ({ family, time }: { family: string; time: string }) => `${family} は ${time} に復帰`,
-            otherAccounts: '他のアカウント',
             unmeasured: '未計測',
             noLogin: '未ログイン',
         },

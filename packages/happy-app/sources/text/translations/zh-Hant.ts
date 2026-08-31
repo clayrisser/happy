@@ -566,7 +566,6 @@ export const zhHant: TranslationStructure = {
             used: ({ percent }: { percent: number }) => `已用 ${percent}%`,
             back: ({ time }: { time: string }) => `${time} 恢復`,
             familyBack: ({ family, time }: { family: string; time: string }) => `${family} ${time} 恢復`,
-            otherAccounts: '其他帳戶',
             unmeasured: '未測量',
             noLogin: '未登入',
         },

@@ -8,7 +8,7 @@ import { t } from '@/text';
 import { useSession } from '@/sync/storage';
 import { isLiveStatusFresh, summarizeLiveStatus, type LiveStatusSummary } from '@/utils/liveStatus';
 import { AnimatedFade } from './AnimatedOverlay';
-import { UsageAccountBars } from './UsageAccountBars';
+import { UsageAccountBarsSheet } from './UsageAccountBarsSheet';
 import type { UsageBarGroup } from './agentInputUsage';
 import { SessionLiveStatusTree } from './SessionLiveStatus';
 import { StatusDot } from './StatusDot';
@@ -242,10 +242,10 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
                 {t('agentInput.context.percentWeek', { percent: Math.round(p.weekPercent) })}
             </Text>
         );
-        // The quota unfolds in place rather than opening a native menu
-        // (DROVE-107). A UIMenu row is a string, so it can hold a sentence but
-        // never a bar; unfolding under the row is what the working segment
-        // already does and it lets the rows be drawn.
+        // The quota opens a sheet that slides up (DROVE-117), not a native
+        // menu: a UIMenu row is a string, so it can hold a sentence but never
+        // a bar. DROVE-107 unfolded the rows in place instead; a sheet gives
+        // the account list room to scroll and a known width to align in.
         segments.push(
             canOpenUsage ? (
                 <Pressable
@@ -323,8 +323,12 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
                     </React.Fragment>
                 ))}
             </View>
-            {usageOpen && canOpenUsage ? (
-                <UsageAccountBars groups={p.usageBarGroups} />
+            {canOpenUsage ? (
+                <UsageAccountBarsSheet
+                    groups={p.usageBarGroups}
+                    open={usageOpen}
+                    onClose={() => setUsageOpen(false)}
+                />
             ) : null}
             {expanded && canExpand && p.sessionId ? (
                 <SessionLiveStatusTree sessionId={p.sessionId} rows={summary!.rows} />

@@ -582,7 +582,6 @@ export const ru: TranslationStructure = {
             used: ({ percent }: { percent: number }) => `Использовано ${percent}%`,
             back: ({ time }: { time: string }) => `Вернётся ${time}`,
             familyBack: ({ family, time }: { family: string; time: string }) => `${family} вернётся ${time}`,
-            otherAccounts: 'Другие аккаунты',
             unmeasured: 'не измерено',
             noLogin: 'нет входа',
         },

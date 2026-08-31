@@ -83,7 +83,7 @@ export type UsageBarRow = {
 
 export type UsageBarGroup = {
     key: string;
-    /** "jamrizzi · 51% left" / "Other accounts". */
+    /** "jamrizzi · 51% left"; empty for the account list, which has no heading. */
     title: string;
     rows: UsageBarRow[];
 };
@@ -95,13 +95,64 @@ export type UsageStrip = {
     usageFromDrover: boolean;
     /**
      * The popup: this account's session, week and family rows under its own
-     * headroom, then every other account folded under a second heading.
+     * headroom, then every other account as a plain unheaded list.
      */
     usageBarGroups: UsageBarGroup[];
 };
 
 /** How wide the name column is, in characters, before a name is cut. */
 export const usageBarNameLimit = 14;
+
+/**
+ * The four columns, in points (DROVE-117).
+ *
+ * DROVE-107 sized these to fit a 393pt phone with every field present, but let
+ * the absent ones COLLAPSE: a row with no reset time gave its trailing slot to
+ * the track, so `jamrizzi` drew a visibly longer bar than `bitspur.com` at a
+ * similar headroom, and a row with no figure left a hole in the number column.
+ * A bar whose length encodes how much trailing text the row happens to carry
+ * is not comparable with the bar above it, which was the whole point of using
+ * bars. So every column holds its width whether or not it has content: the
+ * percent renders a dash, the trailing slot renders empty, and the track is a
+ * fixed width computed from the container rather than whatever is left over.
+ */
+export const usageBarColumns = {
+    /** Inset on each side of the row, matching the status line above it. */
+    horizontalPadding: 16,
+    name: 80,
+    /** Between each pair of columns; three of them on a row. */
+    gap: 8,
+    percent: 34,
+    trailing: 88,
+    /** The track never shrinks past this, however narrow the container is. */
+    minTrack: 40,
+} as const;
+
+/** Everything on a row that is not the track: paddings, three columns, three gaps. */
+export const usageBarFixedWidth =
+    usageBarColumns.horizontalPadding * 2
+    + usageBarColumns.name
+    + usageBarColumns.percent
+    + usageBarColumns.trailing
+    + usageBarColumns.gap * 3;
+
+/**
+ * How wide the track is inside a container of this width. One number for the
+ * whole popup, so every track starts and ends at the same x no matter which
+ * fields its row happens to have.
+ */
+export function usageBarTrackWidth(containerWidth: number): number {
+    if (!Number.isFinite(containerWidth)) return usageBarColumns.minTrack;
+    return Math.max(usageBarColumns.minTrack, Math.round(containerWidth - usageBarFixedWidth));
+}
+
+/** What the number column shows when nothing was measured: a dash, never a gap. */
+export const usageBarMissingPercent = '\u2013';
+
+/** The number column's text, so the missing case cannot render as empty. */
+export function usageBarPercentLabel(percentText: string | null | undefined): string {
+    return percentText ? percentText : usageBarMissingPercent;
+}
 
 /**
  * Percent left to a track fraction. Nothing measured reads as an empty track
@@ -255,8 +306,12 @@ export function resolveUsageStrip(input: UsageStripInput): UsageStrip {
                 trailing: back,
             });
         });
+    // No heading over the list (DROVE-117). Clay: "Don't say other accounts.
+    // Have each one listed." The rows above are quota WINDOWS within one
+    // account and earn their heading; below is just the accounts, and a label
+    // over a list of five names told nobody anything.
     if (others.length > 0) {
-        groups.push({ key: 'accounts', title: t('agentInput.usagePopup.otherAccounts'), rows: others });
+        groups.push({ key: 'accounts', title: '', rows: others });
     }
     return { weekPercent, usageFromDrover, usageBarGroups: groups };
 }

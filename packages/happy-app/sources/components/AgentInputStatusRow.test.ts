@@ -61,6 +61,11 @@ vi.mock('./StatusDot', () => ({ StatusDot: host('StatusDot') }));
 
 vi.mock('./AnimatedOverlay', () => ({ AnimatedFade: host('AnimatedFade') }));
 
+// The quota sheet (DROVE-117) pulls in gesture-handler and reanimated, neither
+// of which vitest can transform. What the row owes it is the open flag and the
+// groups; UsageAccountBars.test.ts renders the real thing.
+vi.mock('./UsageAccountBarsSheet', () => ({ UsageAccountBarsSheet: host('UsageAccountBarsSheet') }));
+
 // The session store, reduced to the one session the row reads. `storage` is
 // what the tree rows use to find a tool's transcript card; there are none.
 vi.mock('@/sync/storage', () => ({
@@ -83,7 +88,6 @@ vi.mock('@/text', async () => {
 
 import { AgentInputStatusRow, type StatusRowProps } from './AgentInputStatusRow';
 import { resolveUsageStrip } from './agentInputUsage';
-import { UsageAccountBarRow } from './UsageAccountBars';
 
 const originalConsoleError = console.error;
 
@@ -202,28 +206,34 @@ describe('AgentInputStatusRow on an idle pane session', () => {
         expect(onSessionInfoPress).toHaveBeenCalledTimes(1);
     });
 
-    it('unfolds a bar per window and per account under the week figure (DROVE-107)', () => {
+    it('opens the quota sheet from the week figure with a bar per window and per account (DROVE-117)', () => {
         const strip = paneStrip(true);
         const renderer = row({ weekPercent: strip.weekPercent, usageBarGroups: strip.usageBarGroups });
-        // Folded by default: the row is still one line until it is asked for.
-        expect(renderer.root.findAllByType(UsageAccountBarRow as any)).toHaveLength(0);
+        const sheet = () => renderer.root.findByType('UsageAccountBarsSheet' as any);
+        // Closed by default: the row is still one line until it is asked for.
+        expect(sheet().props.open).toBe(false);
         const week = renderer.root.findAllByType('Pressable' as any)[1];
         act(() => {
             week.props.onPress();
         });
-        const bars = renderer.root.findAllByType(UsageAccountBarRow as any);
-        expect(bars.map((node: any) => [node.props.row.name, node.props.row.percentText])).toEqual([
+        expect(sheet().props.open).toBe(true);
+        const rows = sheet().props.groups.flatMap((group: any) => group.rows);
+        expect(rows.map((r: any) => [r.name, r.percentText])).toEqual([
             ['Session', '51%'],
             ['Week', '77%'],
             ['Fable week', '61%'],
             ['main', '0%'],
         ]);
-        // Every row is the same height, current account included, and the
-        // track is drawn even for the account at zero.
-        const main = bars[3].props.row;
-        expect(main.fraction).toBe(0);
-        expect(main.tone).toBe('critical');
+        // The track is drawn even for the account at zero.
+        expect(rows[3].fraction).toBe(0);
+        expect(rows[3].tone).toBe('critical');
         expect(line(renderer)).toContain('77% week');
+        // And the sheet closes itself, which is what the backdrop and the
+        // grabber both call.
+        act(() => {
+            sheet().props.onClose();
+        });
+        expect(sheet().props.open).toBe(false);
     });
 
     it('keeps the context gauge after the week figure when the session has one', () => {
