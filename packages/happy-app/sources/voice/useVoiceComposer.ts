@@ -31,7 +31,7 @@ import {
 } from './micButton';
 import { dictationBlock, unknownBuild } from './dictationCapability';
 import { headphoneAction } from './headphonePress';
-import { readAloudTransport, transportEffect } from './readAloudTransport';
+import { readAloudTransport, transportEffect, type TransportEffect } from './readAloudTransport';
 import { HeadphoneMic } from './headphoneMic';
 import { audioCues as cueService } from './audioCueService';
 import { cueDurationMs, cueSpec } from './audioCues';
@@ -92,12 +92,15 @@ export interface VoiceComposerState {
     /** On and holding its place (DROVE-233). Only ever true beside `readAloudEnabled`. */
     readAloudPaused?: boolean;
     /**
-     * The long press on the speaker: pause, or carry on from where it stopped
-     * (DROVE-233). Resolves to the state it ended in, which is what the toast
-     * names; null when the press meant nothing, which is only ever with
-     * read-aloud off.
+     * The long press on the one audio-out button (DROVE-233, DROVE-236).
+     *
+     * It reads the transport table, APPLIES the read-aloud half itself, and
+     * hands back the effect the table chose. The composer performs the one
+     * effect this layer cannot: `boss-mode`, which is a call and belongs to
+     * SessionView. So the decision is made once, here, where the headphone and
+     * the lock screen make theirs.
      */
-    onReadAloudPauseToggle?: () => boolean | null;
+    onAudioOutLongPress?: () => TransportEffect;
     /**
      * Finger down on the talk button. `touchAt` is the OS's touch clock, which
      * is what the tap-versus-hold split is measured on (DROVE-140). Absent
@@ -410,20 +413,20 @@ export function useVoiceComposer(options: VoiceComposerOptions): VoiceComposerSt
      * about avoiding. It is runtime state on the one reader, which is also
      * what lets the headphones and the lock screen share it.
      */
-    const onReadAloudPauseToggle = React.useCallback((): boolean | null => {
+    const onAudioOutLongPress = React.useCallback((): TransportEffect => {
         const effect = transportEffect(
             'long-press',
             readAloudTransport(readAloud.isEnabled, readAloud.isPaused),
         );
         if (effect === 'pause') {
             readAloud.setPaused(true);
-            return true;
-        }
-        if (effect === 'resume') {
+        } else if (effect === 'resume') {
             readAloud.setPaused(false);
-            return false;
         }
-        return null;
+        // `boss-mode` is returned untouched (DROVE-236). Read-aloud is off in
+        // that cell, so there is nothing here to do with it, and the composer
+        // starts the call.
+        return effect;
     }, []);
 
     /**
@@ -562,7 +565,7 @@ export function useVoiceComposer(options: VoiceComposerOptions): VoiceComposerSt
         readAloudEnabled: offersReadAloud ? readAloudEnabled : undefined,
         onReadAloudToggle: offersReadAloud ? onReadAloudToggle : undefined,
         readAloudPaused: offersReadAloud ? readAloudPaused : undefined,
-        onReadAloudPauseToggle: offersReadAloud ? onReadAloudPauseToggle : undefined,
+        onAudioOutLongPress: offersReadAloud ? onAudioOutLongPress : undefined,
         onTalkPressIn: offersDictation ? onTalkPressIn : undefined,
         onTalkPressOut: offersDictation ? onTalkPressOut : undefined,
         onTalkSlide: offersDictation ? onTalkSlide : undefined,

@@ -99,9 +99,14 @@ describe('the composer bubble, resolved rather than restated', () => {
         //
         // The shipped build measured 0.69pt of corner clearance at a 66pt
         // bubble, down from 4pt at 44, because a bottom-pinned disc slides
-        // into the corner as the field grows. This is 7.76 and does not move,
-        // because the disc's distance from the bottom corner is the bubble's
-        // padding at every height.
+        // into the corner as the field grows. This does not move, because the
+        // disc's distance from the bottom corner is the bubble's padding at
+        // every height.
+        //
+        // 3.456 since DROVE-236, from 7.757, and that is the move: the floor
+        // went 9 to 4 so the control row under the bubble comes up by 5. It is
+        // above the 2 DROVE-214 measured as visibly broken and below the 4.7
+        // the arrangement before it drew, with the whole margin stated.
         for (const text of textHeights) {
             const frames = layout(text);
             for (const name of ['add', 'send']) {
@@ -110,10 +115,37 @@ describe('the composer bubble, resolved rather than restated', () => {
                     MOBILE_COMPOSER_METRICS.shellRadius,
                     findFrame(frames, name),
                 );
-                expect(clearance).toBeCloseTo(7.757, 3);
-                expect(clearance).toBeGreaterThan(0);
+                expect(clearance).toBeCloseTo(3.456, 3);
+                expect(clearance).toBeGreaterThan(2);
             }
         }
+    });
+
+    /**
+     * THE MOVE, measured rather than described (DROVE-236).
+     *
+     * Clay: "Move the bottom row up." The control row is pinned to the bottom
+     * of the dock, so the only air between it and the bubble is the bubble's
+     * own floor plus `controlGap`. This is what a disc at the trailing rim sees
+     * of it, before and after.
+     */
+    it('brings the control row 5pt nearer the send button', () => {
+        const frames = layout(22);
+        const send = findFrame(frames, 'send');
+        const floor = frames.height - (send.y + send.height);
+        expect(floor).toBe(MOBILE_COMPOSER_METRICS.bubbleInsetBottom);
+        expect(floor).toBe(4);
+        // Send disc to the audio capsule's rim, which is the distance he is
+        // actually looking at: the bubble's floor plus the one gap outside it.
+        const toControlRow = floor + MOBILE_COMPOSER_METRICS.controlGap;
+        expect(toControlRow).toBe(10);
+        // It was 15 while the floor was 9. Nothing else in the stack moved.
+        expect(MOBILE_COMPOSER_METRICS.bubbleInset + MOBILE_COMPOSER_METRICS.controlGap).toBe(15);
+        expect(MOBILE_COMPOSER_METRICS.controlGap).toBe(6);
+        // The floor is the only side that changed. The three that hold text
+        // keep the square corner's number.
+        expect(findFrame(frames, 'textRow').y).toBe(MOBILE_COMPOSER_METRICS.bubbleInset);
+        expect(send.x + send.width).toBe(frames.width - MOBILE_COMPOSER_METRICS.bubbleInset);
     });
 
     it('draws the two discs as mirror images about the bubble\'s centre line', () => {
@@ -167,12 +199,13 @@ describe('the composer bubble, resolved rather than restated', () => {
 
     it('resolves to the height the module models, so the model cannot drift', () => {
         expect(layout(22).height).toBe(MOBILE_COMPOSER_BUBBLE_BASE_HEIGHT);
-        expect(MOBILE_COMPOSER_BUBBLE_BASE_HEIGHT).toBe(90);
+        expect(MOBILE_COMPOSER_BUBBLE_BASE_HEIGHT).toBe(85);
         for (const text of textHeights) {
             expect(layout(text).height).toBe(resolveMobileComposerBubbleHeight(text));
         }
-        // Two rows and their air, and the transcript pays 46pt for it.
-        expect(MOBILE_COMPOSER_BUBBLE_BASE_HEIGHT - 44).toBe(46);
+        // Two rows and their air. The transcript paid 46 for it in DROVE-214
+        // and gets 5 back in DROVE-236, so the standing bill is 41.
+        expect(MOBILE_COMPOSER_BUBBLE_BASE_HEIGHT - 44).toBe(41);
         expect(MOBILE_COMPOSER_TEXT_ROW_BASE_HEIGHT).toBe(30);
         expect(MOBILE_COMPOSER_BUBBLE_ACTION_ROW_HEIGHT)
             .toBe(MOBILE_COMPOSER_METRICS.primaryActionSize);
@@ -187,6 +220,38 @@ describe('the composer bubble, resolved rather than restated', () => {
         expect(needed).toBeCloseTo(8.787, 3);
         expect(MOBILE_COMPOSER_METRICS.bubbleInset).toBe(Math.ceil(needed));
         expect(MOBILE_COMPOSER_METRICS.bubbleInset).toBe(9);
+    });
+
+    it('pads the FLOOR by what a circle needs, which is less (DROVE-236)', () => {
+        // The 9 above is the TEXT's number and the text has square corners.
+        // Nothing square is on the bottom row, so its floor is measured against
+        // the shape that is actually there. This is the derivation, run rather
+        // than restated: the clearance at each candidate padding.
+        const clearanceAt = (paddingBottom: number) => {
+            const height = MOBILE_COMPOSER_METRICS.bubbleInset
+                + MOBILE_COMPOSER_TEXT_ROW_BASE_HEIGHT
+                + MOBILE_COMPOSER_METRICS.controlGap
+                + MOBILE_COMPOSER_BUBBLE_ACTION_ROW_HEIGHT
+                + paddingBottom;
+            const size = MOBILE_COMPOSER_METRICS.primaryActionSize;
+            return roundedRectClearance(
+                { x: 0, y: 0, width: bubbleWidth, height },
+                MOBILE_COMPOSER_METRICS.shellRadius,
+                {
+                    x: MOBILE_COMPOSER_METRICS.bubbleInset,
+                    y: height - paddingBottom - size,
+                    width: size,
+                    height: size,
+                },
+            );
+        };
+        expect(clearanceAt(9)).toBeCloseTo(7.757, 3);
+        expect(clearanceAt(4)).toBeCloseTo(3.456, 3);
+        // Below the chosen number it reaches what DROVE-214 measured as broken,
+        // then leaves the drawn shape entirely.
+        expect(clearanceAt(2)).toBeLessThan(2);
+        expect(clearanceAt(0)).toBeLessThan(0);
+        expect(MOBILE_COMPOSER_METRICS.bubbleInsetBottom).toBe(4);
     });
 
     it('refuses any hand-placed offset in the bubble\'s geometry', () => {

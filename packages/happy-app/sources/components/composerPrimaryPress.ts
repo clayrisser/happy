@@ -13,13 +13,22 @@ import type { AgentInputPrimaryAction } from './agentInputPrimaryAction';
  * BOSS MODE IS NO LONGER ONE OF THE ANSWERS (DROVE-206). The waveform was the
  * face this button wore on an empty composer, so a tap in that one spot did
  * two unrelated things depending on what was in the field. Clay: "the boss
- * should not be in the message box." It is a control of its own on the row
- * now and it calls the mic handler directly, so this table is down to the
- * three things a send button can do: send, halt, or nothing.
+ * should not be in the message box." It is on the control row now, folded into
+ * the audio-out button (DROVE-236), and it is not reachable from here.
+ *
+ * DICTATION IS (DROVE-236), and it is not the same trade. A call is a session
+ * thing that has nothing to do with the message; dictation puts words in THIS
+ * composer for THIS send. `mic` is the empty composer's answer and, while a
+ * capture is open, every composer's answer. See `agentInputPrimaryAction.ts`
+ * for the full table and for why the capture is checked before the text.
+ *
+ * THE LONG PRESS DOES NOT MOVE WITH THE FACE. It is the channel sheet whatever
+ * the button currently is, so the second gesture stays one thing and only the
+ * tap has a table.
  */
 export type ComposerPrimaryGesture = 'press' | 'longPress';
 
-export type ComposerPrimaryDispatch = 'send' | 'abort' | 'channels' | 'none';
+export type ComposerPrimaryDispatch = 'send' | 'abort' | 'channels' | 'mic' | 'none';
 
 export interface ComposerPrimaryPressInput {
     gesture: ComposerPrimaryGesture;
@@ -33,6 +42,12 @@ export interface ComposerPrimaryPressInput {
 export function resolveComposerPrimaryPress(input: ComposerPrimaryPressInput): ComposerPrimaryDispatch {
     if (!input.canPress) return 'none';
     if (input.gesture === 'longPress') return 'channels';
+    // BEFORE the live text (DROVE-236). `mic` means either the composer is
+    // empty and offering dictation, or a capture is open and filling it with
+    // partials; in the second case there IS live content and it must not send.
+    // The one press this button has always had is "do what you are drawn as",
+    // and it is drawn as a microphone.
+    if (input.action === 'mic') return 'mic';
     if (input.liveHasContent) return 'send';
     if (input.action === 'stop') return 'abort';
     // Locked and idle both go through the send path, which shakes the

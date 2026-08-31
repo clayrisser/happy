@@ -465,6 +465,11 @@ export const ja: TranslationStructure = {
             resumed: '止まったところから読み上げを再開します',
             headphonesOff: 'ヘッドホンが切断されました。スピーカーで再生します',
         },
+        audioOut: {
+            boss: '音声通話中',
+            micStart: '音声入力',
+            micStop: '音声入力を停止',
+        },
         dictate: {
             label: '長押しで話す、タップで固定',
             settingsTitle: 'トークボタン',

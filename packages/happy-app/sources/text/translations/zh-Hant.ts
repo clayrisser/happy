@@ -464,6 +464,11 @@ export const zhHant: TranslationStructure = {
             resumed: '從停下的地方繼續朗讀',
             headphonesOff: '耳機已中斷連線，改用喇叭播放',
         },
+        audioOut: {
+            boss: '語音通話進行中',
+            micStart: '語音輸入',
+            micStop: '停止語音輸入',
+        },
         dictate: {
             label: '按住說話，輕點鎖定',
             settingsTitle: '說話按鈕',

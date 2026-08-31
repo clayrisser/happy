@@ -108,6 +108,11 @@ export type TransportEffect =
     | 'pause'
     /** Carry on from exactly where it stood. */
     | 'resume'
+    /**
+     * Open a live ElevenLabs call (DROVE-236). The one cell that is not
+     * read-aloud at all, and it is reachable from the in-app long press only.
+     */
+    | 'boss-mode'
     /** This press means nothing in this state, and doing nothing is the answer. */
     | 'nothing';
 
@@ -123,10 +128,35 @@ export type TransportEffect =
  * give one control two axes on the same gesture, and it would leave him with
  * no way to get out of paused except by finding the gesture that made it.
  *
- * THE LONG PRESS IS PAUSE AND RESUME, and only that. On `off` it does nothing
- * rather than turning reading on: starting is the tap's job, and a long press
- * that started reading would be a second way to start, with no position to
- * hold, which is the exact confusion this ticket exists to end.
+ * THE LONG PRESS IS PAUSE AND RESUME WHILE READ-ALOUD IS ON, and boss mode
+ * while it is off (DROVE-236). It still never starts reading: starting is the
+ * tap's job, and a long press that started reading would be a second way to
+ * start, with no position to hold, which is the confusion DROVE-233 existed to
+ * end.
+ *
+ * The `off` cell used to be `nothing`. Clay collapsed the waveform and the
+ * speaker into one control and gave that cell a job:
+ *
+ *     state     single press        long press
+ *     normal    reading mode on     boss mode
+ *     reading   back to normal      pause
+ *
+ * That is his table verbatim, and `paused` is the row it does not write out:
+ * paused IS reading with a place held, so its tap turns read-aloud off like
+ * any other on-state, and its long press is the way back out.
+ *
+ * BOSS MODE IS NOT READ-ALOUD, and putting it here is a claim worth defending.
+ * It earns the cell because the control is now one audio-out button and this
+ * table is what that button means; leaving the decision in the renderer would
+ * put the fourth cell somewhere the headphones and the lock screen cannot see
+ * it, which is how three surfaces come to disagree. What the table does NOT do
+ * is start the call: it names the effect and the composer performs it, so a
+ * caller with no call to start (an embedded chat, or one already in a call)
+ * does nothing with it and says so.
+ *
+ * A REMOTE PRESS NEVER OPENS A CALL EITHER (DROVE-236). Only `long-press`
+ * reaches `boss-mode`; the three remote gestures are untouched by that cell,
+ * so a squeeze in a pocket cannot dial anybody.
  *
  * A REMOTE PRESS NEVER TURNS READING ON. `play` from a pocket resumes a pause
  * and does nothing at all when read-aloud is off. This is DROVE-189's rule
@@ -144,7 +174,7 @@ export function transportEffect(
             return state === 'off' ? 'turn-on' : 'turn-off';
         case 'long-press':
             switch (state) {
-                case 'off': return 'nothing';
+                case 'off': return 'boss-mode';
                 case 'paused': return 'resume';
                 case 'reading': return 'pause';
             }

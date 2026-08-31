@@ -490,6 +490,14 @@ export const en = {
             resumed: 'Reading on from where it stopped',
             headphonesOff: 'Headphones disconnected, now on speaker',
         },
+        audioOut: {
+            // DROVE-236. The one audio-out button's fourth face, and the two
+            // the collapsed send button wears. Not toasts: these are what a
+            // screen reader says, so they name the state, not the gesture.
+            boss: 'Voice call in progress',
+            micStart: 'Dictate',
+            micStop: 'Stop dictating',
+        },
         dictate: {
             label: 'Hold to talk, tap to latch',
             settingsTitle: 'Talk button',

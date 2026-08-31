@@ -144,6 +144,41 @@ export const MOBILE_COMPOSER_METRICS = {
      */
     bubbleInset: 9,
     /**
+     * THE BUBBLE'S BOTTOM PADDING, and it is a different number because it
+     * holds a different shape (DROVE-236).
+     *
+     * Clay, on the composer: "Move the bottom row up." The control row is
+     * pinned to the bottom of the dock, so the only thing that can shorten the
+     * distance between it and the bubble is the air the bubble keeps under its
+     * own button row. There are 15pt of it: 9 of padding inside the rim and
+     * `controlGap`'s 6 outside. This takes 5 of the 9.
+     *
+     * IT IS DERIVED, NOT TASTE. `bubbleInset` is 9 because the TEXT has square
+     * corners and a square corner clears a 30pt radius only when it is inset
+     * `r - r/sqrt(2)` = 8.79. Nothing square is in the bottom row: it holds two
+     * 36pt CIRCLES, and DROVE-214 already wrote down that they "need less than
+     * that". How much less is `roundedRectClearance`'s question, and the answer
+     * at each padding, for a disc 9 in from the side of a 30pt corner:
+     *
+     *   9   7.76pt of clearance
+     *   6   5.29
+     *   4   3.46      <- here
+     *   2   1.56      <- under 2, which is what DROVE-214 measured as broken
+     *   0  -0.37      escapes the drawn shape
+     *
+     * The shipped bug Clay photographed measured 0.69, and the arrangement it
+     * replaced measured 4.7. So 4 sits above the number that was wrong and
+     * below the one that was fine, with the whole margin stated rather than
+     * felt. It does not move with the text, because the disc's distance from
+     * the bottom corner is this padding at every height.
+     *
+     * `controlGap` is NOT the number that moved, deliberately. The recording
+     * band reads it (`COMPOSER_STRIP_PADDING_TOP`), so spending it would move
+     * DROVE-221's band as a side effect, and two glass rims 0pt apart read as
+     * one slab, which is DROVE-118's argument against small gaps.
+     */
+    bubbleInsetBottom: 4,
+    /**
      * HOME's field floor. The chat bubble no longer has one: its text row is
      * as tall as the text, because nothing else stands in that row any more.
      *
@@ -255,7 +290,7 @@ export const MOBILE_COMPOSER_BUBBLE_ACTION_ROW_HEIGHT = MOBILE_COMPOSER_METRICS.
  * The chat bubble, empty: padding, one line of text, the gap, the button row,
  * padding (DROVE-214).
  *
- * 90, up from 44, AND THE COMPOSER GETS 46PT TALLER. That is the cost of the
+ * 85, up from 44, AND THE COMPOSER GETS 41PT TALLER. That is the cost of the
  * arrangement Clay asked for and it is worth stating plainly rather than
  * burying: "probably we should put everything in the speech bubble with the
  * buttons on the bottom and the text input one row above it?" A button row
@@ -274,21 +309,27 @@ export const MOBILE_COMPOSER_BUBBLE_ACTION_ROW_HEIGHT = MOBILE_COMPOSER_METRICS.
  * is the whole reason three green suites shipped a broken composer: the model
  * agreed with itself while the renderer did something else.
  */
-export const MOBILE_COMPOSER_BUBBLE_BASE_HEIGHT = MOBILE_COMPOSER_METRICS.bubbleInset * 2
+export const MOBILE_COMPOSER_BUBBLE_BASE_HEIGHT = MOBILE_COMPOSER_METRICS.bubbleInset
     + MOBILE_COMPOSER_TEXT_ROW_BASE_HEIGHT
     + MOBILE_COMPOSER_METRICS.controlGap
-    + MOBILE_COMPOSER_BUBBLE_ACTION_ROW_HEIGHT;
+    + MOBILE_COMPOSER_BUBBLE_ACTION_ROW_HEIGHT
+    + MOBILE_COMPOSER_METRICS.bubbleInsetBottom;
 
 /**
  * The whole chat composer block, empty: bubble, gap, control row, and the gap
  * the row keeps over the status strip.
  *
- * 102, AND THAT IS A DELIBERATE CHANGE FROM DROVE-106's 104. DROVE-153 pinned
- * 104 and wrote "104, not 102: the row's buttons are drawn at 44 rather than
- * 42". The buttons are still 44. What moved is everything around them:
+ * 143. DROVE-214 made it 148 by giving the buttons a row of their own inside
+ * the bubble, and DROVE-236 takes 5 back off the bubble's bottom padding to
+ * bring the control row nearer the message. The four terms:
  *
- *   was  8 + 44 + 44 + 8    card padding, field, row, card padding
- *   now      44 + 6 + 44 + 8    bubble, gap, row, gap over the strip
+ *   DROVE-153   8 + 44 + 44 + 8      card padding, field, row, card padding
+ *   DROVE-196       44 + 6 + 44 + 8  bubble, gap, row, gap over the strip
+ *   DROVE-214       90 + 6 + 44 + 8  the bubble grew a button row
+ *   DROVE-236       85 + 6 + 44 + 8  and gave 5 of its floor back
+ *
+ * The paragraph below is DROVE-196's arithmetic and is kept because the gaps
+ * it names are the ones still in the sum.
  *
  * The card's 16pt of padding is gone because the card no longer holds the row;
  * 6 of it comes back as the gap between the bubble and the row, and 8 as the
@@ -306,9 +347,26 @@ export const MOBILE_COMPOSER_BUBBLE_BASE_HEIGHT = MOBILE_COMPOSER_METRICS.bubble
  * the bubble's floor is what it was; the line it left was 44 tall because the
  * `+` and the bubble were both 44, and it is 44 now because the bubble is.
  * The waveform went the other way, onto the control row, which was already
- * 44 and holds a fourth 44pt control at the same height. So 102 STANDS, and
- * it stands deliberately: an arrangement that changed at both ends of the
- * field and on the row under it costs the transcript nothing.
+ * 44 and holds a fourth 44pt control at the same height. So 102 STOOD through
+ * DROVE-206, deliberately: an arrangement that changed at both ends of the
+ * field and on the row under it cost the transcript nothing.
+ *
+ * WHAT THE MOVE DOES DOWNSTREAM (DROVE-236), because three other lanes read
+ * this number and none of them needs a line changing:
+ *
+ *   the bottom fade      `resolveTranscriptBottomScrim` hangs off the dock's
+ *                        MEASURED height (DROVE-219), so it is 5pt shorter and
+ *                        its top edge 5pt lower, and it stays exactly equal to
+ *                        `resolveDockInset` because it calls it.
+ *   the transcript mask  same measured height. Its clear band is derived from
+ *                        `safeAreaBottom` alone and does not move at all.
+ *   the recording band   20pt, `STATUS_ROW_ROW_HEIGHT` (DROVE-221), and its
+ *                        padding is `controlGap`. Neither is touched.
+ *   the tap floor        `resolveComposerButtonFloor` is the strip plus
+ *                        `controlsBottomGap`. Both unchanged, so DROVE-153's
+ *                        STATUS_ROW_TAP_SLOP_TOP of 14 still holds.
+ *
+ * The transcript gets the 5pt.
  */
 export const MOBILE_COMPOSER_BASE_HEIGHT = MOBILE_COMPOSER_BUBBLE_BASE_HEIGHT
     + MOBILE_COMPOSER_METRICS.controlGap
@@ -342,7 +400,8 @@ export function resolveMobileComposerBubbleHeight(
     inputHeight: number,
     hasAttachments = false,
 ): number {
-    return MOBILE_COMPOSER_METRICS.bubbleInset * 2
+    return MOBILE_COMPOSER_METRICS.bubbleInset
+        + MOBILE_COMPOSER_METRICS.bubbleInsetBottom
         + resolveMobileComposerTextRowHeight(inputHeight)
         + MOBILE_COMPOSER_METRICS.controlGap
         + MOBILE_COMPOSER_BUBBLE_ACTION_ROW_HEIGHT
