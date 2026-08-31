@@ -79,3 +79,23 @@ export function getSessionRouteFromNotificationResponse(response: unknown): `/se
     const contentData = getObjectValue(getObjectValue(getObjectValue(response, 'notification'), 'request'), 'content');
     return getSessionRouteFromNotificationData(getObjectValue(contentData, 'data'));
 }
+
+/**
+ * A gate push is the one kind of push that must SHOW while the app is in the
+ * foreground (DROVE-85).
+ *
+ * Upstream's handler hid every push while the app was active, on the theory
+ * that you are already looking at it. For a "done" that is right. For a
+ * permission, a question or a to-do it is the bug: Clay tests with the app
+ * open, the bridge logs "accepted by Expo", and the phone shows nothing,
+ * because iOS presents a foreground push only if this handler asks it to.
+ * The kind travels in `data.kind`, set by happy-cli's sendSessionNotification
+ * on both the server path and the direct-to-Expo one.
+ */
+const foregroundPushKinds = new Set(['permission', 'question', 'todo']);
+
+export function isGatePushData(data: unknown): boolean {
+    const normalizedData = normalizeNotificationData(data);
+    const kind = getObjectValue(normalizedData, 'kind');
+    return typeof kind === 'string' && foregroundPushKinds.has(kind);
+}

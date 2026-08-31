@@ -3,6 +3,7 @@ import { MobileGlassBackdrop } from '@/components/MobileGlass';
 import { AgentGoalBar, type AgentGoalAction } from '@/components/AgentGoalBar';
 import { AgentQuestionBanner } from '@/components/AgentQuestionBanner';
 import { SessionGateBanner } from '@/components/SessionGateBanner';
+import { PushPermissionNotice } from '@/components/PushPermissionNotice';
 import { AgentInput } from '@/components/AgentInput';
 import { readAloud } from '@/voice/readAloudService';
 import { useVoiceComposer } from '@/voice/useVoiceComposer';
@@ -1235,6 +1236,7 @@ export function SessionViewLoaded({
             */}
             <CenteredInputWidth horizontalPadding={sessionInputHorizontalPadding}>
                 <SessionGateBanner sessionId={sessionId} />
+                <PushPermissionNotice />
             </CenteredInputWidth>
             <AnimatedFade visible={showBottomDockDetails}>
                 <CenteredInputWidth horizontalPadding={sessionInputHorizontalPadding}>
