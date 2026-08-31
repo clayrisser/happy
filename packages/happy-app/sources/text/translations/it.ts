@@ -511,7 +511,7 @@ export const it: TranslationStructure = {
             title: 'CANALI',
             label: 'Canali',
             audioTitle: 'AUDIO',
-            speakPrompts: 'Leggi le richieste quando arrivano',
+            speakPrompts: 'Leggi le richieste all\'arrivo',
             speakPromptsSubtitle: 'Una richiesta di Cattle Drover e le sue opzioni vengono lette ad alta voce all\'arrivo.',
             readReplies: 'Leggi le risposte ad alta voce',
             readRepliesSubtitle: 'Pronuncia ogni risposta appena arriva. Codice, diff e output degli strumenti vengono saltati.',

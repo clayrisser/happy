@@ -512,7 +512,7 @@ export const pt: TranslationStructure = {
             title: 'CANAIS',
             label: 'Canais',
             audioTitle: 'ÁUDIO',
-            speakPrompts: 'Ler os pedidos quando chegarem',
+            speakPrompts: 'Ler os pedidos à chegada',
             speakPromptsSubtitle: 'Um pedido do Cattle Drover e as suas opções são lidos em voz alta quando chega.',
             readReplies: 'Ler respostas em voz alta',
             readRepliesSubtitle: 'Fala cada resposta assim que chega. Código, diffs e saída de ferramentas são ignorados.',

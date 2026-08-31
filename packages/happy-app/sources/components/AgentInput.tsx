@@ -1646,11 +1646,19 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
 
                 <ComposerToast text={composerToast} />
 
-                {/* The session sheet and the channel sheet (DROVE-83), and on
-                    Android the permission, model and effort pickers a session
-                    row opens. On iOS those three are native menus anchored to
-                    the rows, so only the two sheets ever render here. */}
-                {compactMobileComposer && openPicker && (
+                {/* The channel sheet slides up on its own (DROVE-123), like
+                    the quota sheet, so it is out of the shared panel below. */}
+                <DroverChannelsSheet
+                    open={compactMobileComposer && openPicker === 'channels'}
+                    onClose={closePicker}
+                    horizontalInset={screenWidth > 700 ? 0 : 16}
+                />
+
+                {/* The session sheet (DROVE-83), and on Android the
+                    permission, model and effort pickers a session row opens.
+                    On iOS those three are native menus anchored to the rows,
+                    so only the session sheet ever renders here. */}
+                {compactMobileComposer && openPicker && openPicker !== 'channels' && (
                     <>
                         <AnimatedClickAwayBackdrop
                             onPress={closePicker}
@@ -1699,11 +1707,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                             );
                                         })}
                                     </View>
-                                ) : openPicker === 'channels' ? (
-                                    <DroverChannelsSheet
-                                        sectionStyle={styles.overlaySection}
-                                        titleStyle={styles.overlaySectionTitle}
-                                    />
                                 ) : openPicker === 'permission' ? (
                                     <View style={styles.overlaySection}>
                                         <Text style={styles.overlaySectionTitle}>

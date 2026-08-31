@@ -184,7 +184,7 @@ describe('audioRows', () => {
     it('labels each row with what it actually does, and never a bare Audio', () => {
         const rows = audioRows({ announceAudio: true, readAloudEnabled: true });
         const labels = rows.map((row) => en.agentInput.channels[row.key === 'speakPrompts' ? 'speakPrompts' : 'readReplies']);
-        expect(labels).toEqual(['Speak prompts when they arrive', 'Read replies aloud']);
+        expect(labels).toEqual(['Speak prompts on arrival', 'Read replies aloud']);
         expect(labels).not.toContain('Audio');
     });
 

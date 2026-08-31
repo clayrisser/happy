@@ -527,7 +527,7 @@ export const en: TranslationStructure = {
             title: 'CHANNELS',
             label: 'Channels',
             audioTitle: 'AUDIO',
-            speakPrompts: 'Speak prompts when they arrive',
+            speakPrompts: 'Speak prompts on arrival',
             speakPromptsSubtitle: 'A Cattle Drover prompt and its options read out the moment it lands.',
             readReplies: 'Read replies aloud',
             readRepliesSubtitle: 'Speaks each assistant reply as it arrives. Code, diffs and tool output are skipped.',

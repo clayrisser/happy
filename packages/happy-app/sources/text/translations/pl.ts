@@ -529,7 +529,7 @@ export const pl: TranslationStructure = {
             title: 'KANAŁY',
             label: 'Kanały',
             audioTitle: 'DŹWIĘK',
-            speakPrompts: 'Czytaj pytania, gdy nadejdą',
+            speakPrompts: 'Czytaj pytania po nadejściu',
             speakPromptsSubtitle: 'Pytanie Cattle Drover i jego opcje są czytane na głos, gdy nadejdzie.',
             readReplies: 'Czytaj odpowiedzi na głos',
             readRepliesSubtitle: 'Wypowiada każdą odpowiedź, gdy nadejdzie. Kod, diffy i wyniki narzędzi są pomijane.',

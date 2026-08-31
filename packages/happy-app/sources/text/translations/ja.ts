@@ -514,7 +514,7 @@ export const ja: TranslationStructure = {
             title: 'チャンネル',
             label: 'チャンネル',
             audioTitle: '音声',
-            speakPrompts: '確認を受け取ったら読み上げる',
+            speakPrompts: '確認の到着時に読み上げる',
             speakPromptsSubtitle: 'Cattle Drover の確認とその選択肢を、届いたときに読み上げます。',
             readReplies: '返信を読み上げる',
             readRepliesSubtitle: '届いた返信をそのつど読み上げます。コード、差分、ツール出力は読みません。',
