@@ -18,10 +18,12 @@ import {
     mixHex,
     parseHex,
     relativeLuminance,
+    saturation,
     subagentThemeName,
     subagentTintPaletteFor,
+    subagentTintRatios,
     toHex,
-    withAlpha,
+    washGrey,
 } from '@/utils/subagentTint';
 
 /**
@@ -41,6 +43,27 @@ const contrastRetention = 0.85;
 
 /** Below this the wash would be invisible and the ticket unfixed. */
 const visibleTint = 0.01;
+
+/**
+ * The wash may not carry a hue (DROVE-145). The bar cannot be zero, because a
+ * couple of base surfaces are already slightly off-neutral (#F2F2F7, #f0eee6)
+ * and a mix keeps what was already there. What the wash must never do is ADD a
+ * cast, which the "no more colourful than it started" check below guards.
+ */
+const neutralEnough = 0.04;
+
+/**
+ * What DROVE-109 shipped, kept here so "lighter than before" is a test rather
+ * than a memory. Every current ratio has to sit under its entry.
+ */
+const shippedRatios = {
+    light: { ground: 0.08, surface: 0.06, elevated: 0.09, header: 0.10, divider: 0.22, userMessage: 0.07 },
+    dark: { ground: 0.12, surface: 0.11, elevated: 0.12, header: 0.15, divider: 0.30, userMessage: 0.12 },
+} as const;
+
+type WashRole = keyof typeof shippedRatios.light;
+
+const roles = Object.keys(shippedRatios.light) as WashRole[];
 
 const themes = [
     { name: 'light', theme: lightTheme },
@@ -67,12 +90,14 @@ describe('colour maths', () => {
     });
 
     it('hands back colours it cannot parse instead of mangling them', () => {
-        expect(mixHex('rgba(0, 0, 0, 0.5)', '#007AFF', 0.2)).toBe('rgba(0, 0, 0, 0.5)');
-        expect(withAlpha('transparent', 0.5)).toBe('transparent');
+        expect(mixHex('rgba(0, 0, 0, 0.5)', '#808080', 0.2)).toBe('rgba(0, 0, 0, 0.5)');
     });
 
-    it('turns a hex into rgba', () => {
-        expect(withAlpha('#007AFF', 0.9)).toBe('rgba(0, 122, 255, 0.9)');
+    it('measures how far a colour sits from neutral', () => {
+        expect(saturation('#808080')).toBe(0);
+        expect(saturation('#ffffff')).toBe(0);
+        expect(saturation('#007AFF')).toBeCloseTo(1, 5);
+        expect(saturation('transparent')).toBe(0);
     });
 
     it('measures WCAG contrast', () => {
@@ -113,8 +138,10 @@ describe.each(themes)('the $name theme, tinted', ({ theme }) => {
         { role: 'userMessage', base: theme.colors.userMessageBackground, tint: tinted.colors.userMessageBackground, text: theme.colors.userMessageText },
     ];
 
-    it('takes its accent from the theme, not a hardcoded hex', () => {
-        expect(palette.accent).toBe(theme.colors.permission.acceptEdits);
+    it('washes towards a neutral grey, not the accent', () => {
+        expect(palette.wash).toBe(washGrey);
+        expect(saturation(palette.wash)).toBe(0);
+        expect(palette.wash).not.toBe(theme.colors.permission.acceptEdits);
     });
 
     it('leaves every text colour exactly where it was', () => {
@@ -148,13 +175,39 @@ describe.each(themes)('the $name theme, tinted', ({ theme }) => {
         expect(contrastRatio(secondary, tint)).toBeGreaterThanOrEqual(contrastRatio(secondary, base) * contrastRetention);
     });
 
-    it('gives the rail and its markers a translucent accent', () => {
-        expect(palette.rail.startsWith('rgba(')).toBe(true);
-        expect(palette.railMarker.startsWith('rgba(')).toBe(true);
+    it.each(surfaces)('leaves $role neutral, with no hue of its own', ({ tint }) => {
+        expect(saturation(tint)).toBeLessThanOrEqual(neutralEnough);
+    });
+
+    it.each(surfaces)('never makes $role more colourful than it started', ({ base, tint }) => {
+        expect(saturation(tint)).toBeLessThanOrEqual(saturation(base) + 0.005);
     });
 
     it('moves the divider further than the surface, so edges stay legible', () => {
         expect(colorDistance(theme.colors.divider, tinted.colors.divider))
             .toBeGreaterThan(colorDistance(theme.colors.surface, tinted.colors.surface));
+    });
+});
+
+describe('wash strength', () => {
+    const ratios = subagentTintRatios();
+
+    it('is pinned, so moving it has to be deliberate', () => {
+        expect(ratios).toEqual({
+            light: { ground: 0.07, surface: 0.05, elevated: 0.075, header: 0.085, divider: 0.18, userMessage: 0.06 },
+            dark: { ground: 0.10, surface: 0.09, elevated: 0.10, header: 0.12, divider: 0.25, userMessage: 0.10 },
+        });
+    });
+
+    it.each(['light', 'dark'] as const)('is lighter in %s than DROVE-109 shipped', (mode) => {
+        for (const role of roles) {
+            expect(ratios[mode][role]).toBeLessThan(shippedRatios[mode][role]);
+        }
+    });
+
+    it.each(['light', 'dark'] as const)('still moves every %s surface enough to see', (mode) => {
+        for (const role of roles) {
+            expect(ratios[mode][role]).toBeGreaterThanOrEqual(0.05);
+        }
     });
 });
