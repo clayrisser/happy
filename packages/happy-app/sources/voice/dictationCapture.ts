@@ -1,4 +1,5 @@
 import type { ReadAloudInterruption } from './readAloud';
+import { joinDictation } from './dictationDraft';
 import { DICTATION_LATCH_IDLE_MS, type MicMode } from './micMode';
 
 /**
@@ -19,7 +20,18 @@ import { DICTATION_LATCH_IDLE_MS, type MicMode } from './micMode';
  * is not a gesture at all, the idle stop, a speech cut, the recogniser
  * ending on its own, leaves the transcript in the composer, unsent.
  *
- * And one rule under that: A CAPTURE ENDING NEVER COSTS WORDS (DROVE-120).
+ * And one rule beside that: A LATCH ACCUMULATES ACROSS RECOGNISER TASKS
+ * (DROVE-140). Apple's recogniser finalises on its own after a pause, and the
+ * native module then starts a FRESH task on the same microphone. A fresh task
+ * reports from empty, so its first partial is not a revision of the sentence
+ * before the pause, it is the sentence after it. Which of the two a partial is
+ * cannot be told by comparing the strings: "yes" after "no" is a revision when
+ * the recogniser changed its mind and a continuation when he said them a
+ * breath apart. So it is keyed on the TASK the partial belongs to, which
+ * native reports alongside the text: the same task REVISES what it said
+ * before, a new task APPENDS to it.
+ *
+ * And one rule under those: A CAPTURE ENDING NEVER COSTS WORDS (DROVE-120).
  * Text that has already appeared in the composer is not removed by any path
  * in here. Endings differ only in whether they also SEND. The
  * single exception is the `cancel` gesture, which is the user asking; it is
@@ -98,6 +110,11 @@ export interface DictationCaptureEvents {
  *   cut off mid-sentence. Keep the longer one.
  * - Anything else is a genuine revision ("um hello" -> "hello", "twenty two"
  *   -> "22"), and the recogniser is the better authority on its own words.
+ *
+ * This compares a final against what is SHOWN, which is the whole capture
+ * including tasks that ended inside it. The native contract is that the final
+ * transcript covers the whole capture too, not merely the last task, so the
+ * two are comparable (DROVE-140).
  */
 export function keptTranscript(heard: string, final: string): string {
     const shown = heard.trim();
@@ -129,6 +146,16 @@ export class DictationCapture {
      * commit words into whatever the user has moved on to.
      */
     private generation = 0;
+    /**
+     * Words from recognition tasks that already ENDED inside this capture
+     * (DROVE-140). Everything the current task reports is appended to this,
+     * never written over it.
+     */
+    private banked = '';
+    /** The current task's latest text, revised in place while it runs. */
+    private heard = '';
+    /** Which recognition task `heard` belongs to; null until native names one. */
+    private task: number | null = null;
 
     constructor(engine: DictationEngine, events: DictationCaptureEvents, now: () => number = () => Date.now()) {
         this.engine = engine;
@@ -145,6 +172,9 @@ export class DictationCapture {
         if (this.state.active || this.state.settling) return;
         const started = this.now();
         const generation = this.generation;
+        this.banked = '';
+        this.heard = '';
+        this.task = null;
         this.set({
             active: true,
             mode,
@@ -193,18 +223,51 @@ export class DictationCapture {
         this.discard('cancel');
     }
 
-    /** A partial transcript landed. Under a latch a CHANGE is what "not idle" means. */
-    partial(text: string): void {
+    /**
+     * A partial transcript landed. Under a latch a CHANGE is what "not idle"
+     * means.
+     *
+     * `task` names the recognition task the text belongs to (DROVE-140). The
+     * same task REVISES: its text replaces what it said before, because the
+     * recogniser is improving its own guess. A DIFFERENT task CONTINUES: the
+     * words heard so far are banked and the new task's text is appended to
+     * them, because a fresh task always reports from empty and would
+     * otherwise wipe everything said before the pause.
+     *
+     * A build whose native side does not report a task leaves this undefined,
+     * and every partial then replaces, which is exactly what those builds did
+     * before. They never restart a task either, so nothing is silently lost:
+     * the capture simply ends when Apple finalises, with the words in the
+     * composer.
+     */
+    partial(text: string, task?: number): void {
         if (!this.state.active) return;
-        const changed = text !== this.state.transcript;
+        this.bankEndedTask(task);
+        this.heard = text;
+        const full = joinDictation(this.banked, this.heard);
+        const changed = full !== this.state.transcript;
         this.set({
             ...this.state,
-            transcript: text,
+            transcript: full,
             idleAt: changed && this.state.mode === 'latch'
                 ? this.now() + DICTATION_LATCH_IDLE_MS
                 : this.state.idleAt,
         });
-        if (changed) this.events.onPartial(text);
+        if (changed) this.events.onPartial(full);
+    }
+
+    /**
+     * Move the outgoing task's words into the bank when a NEW task's text
+     * arrives. No-op while the build reports no task at all, and no-op for
+     * the first task of a capture, which has nothing before it.
+     */
+    private bankEndedTask(task: number | undefined): void {
+        if (task === undefined) return;
+        if (this.task !== null && task !== this.task) {
+            this.banked = joinDictation(this.banked, this.heard);
+            this.heard = '';
+        }
+        this.task = task;
     }
 
     /**
@@ -237,14 +300,22 @@ export class DictationCapture {
     }
 
     /**
-     * The recogniser ended on its own: Apple finalises after a long silence,
-     * or gives up with "no speech detected", while the mic still looked
-     * live. Honest is to end now, in either ergonomic, with the words kept
-     * and unsent. Under hold the lift that follows finds nothing to do.
+     * The recogniser ended on its own and is NOT coming back: it gave up, or
+     * the build is one that cannot restart a task after Apple finalises. The
+     * mic still looked live, so honest is to end now, in either ergonomic,
+     * with the words kept and unsent. Under hold the lift that follows finds
+     * nothing to do.
+     *
+     * On a build that DOES continue across a pause this arrives only at the
+     * real end of the capture, so the words banked from earlier tasks are
+     * part of `text` as well as of what is shown (DROVE-140).
      */
-    recogniserEnded(text: string): void {
+    recogniserEnded(text: string, task?: number): void {
         if (!this.state.active) return;
-        const heard = this.state.transcript.trim();
+        this.bankEndedTask(task);
+        // Banking only moves words between the two halves of what is already
+        // shown, so this is the whole capture either way.
+        const heard = joinDictation(this.banked, this.heard).trim();
         this.generation += 1;
         void this.engine.cancel();
         this.set(idle);

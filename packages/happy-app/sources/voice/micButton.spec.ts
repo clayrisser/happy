@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
     CANCEL_SLOP,
+    HOLD_MIN_MS,
     idleMicGesture,
     isInsideTalkButton,
+    micOutcome,
+    pressElapsed,
     reduceMicGesture,
-    TAP_MAX_MS,
     type MicEffect,
     type MicGesture,
     type MicGestureEvent,
@@ -24,15 +26,22 @@ function drive(events: MicGestureEvent[], from: MicGesture = idleMicGesture) {
     return { gesture, states, effects };
 }
 
-/** The effects that decide what happens to the words, without the haptics. */
+/**
+ * The effects that decide what happens to the words, without the haptics or
+ * the hold timer, which are feedback and plumbing rather than outcomes.
+ */
 function outcome(effects: MicEffect[]): MicEffect[] {
-    return effects.filter((effect) => effect !== 'tick');
+    return effects.filter((effect) => effect !== 'tick' && effect !== 'watchHold');
 }
 
 const press = (at: number): MicGestureEvent => ({ type: 'pressIn', at });
 const lift = (at: number): MicGestureEvent => ({ type: 'pressOut', at });
 const slideOff: MicGestureEvent = { type: 'slide', inside: false };
 const slideBack: MicGestureEvent = { type: 'slide', inside: true };
+const holdConfirm: MicGestureEvent = { type: 'holdConfirm' };
+
+/** A gesture object, spelled once so a new field does not touch every case. */
+const gestureAt = (over: Partial<MicGesture>): MicGesture => ({ ...idleMicGesture, ...over });
 
 describe('reduceMicGesture', () => {
     /**
@@ -57,7 +66,7 @@ describe('reduceMicGesture', () => {
             },
             {
                 name: 'a hold lifted on the button sends',
-                events: [press(0), lift(TAP_MAX_MS + 1)],
+                events: [press(0), lift(HOLD_MIN_MS)],
                 outcome: ['open', 'send'],
                 ends: 'idle',
             },
@@ -104,10 +113,10 @@ describe('reduceMicGesture', () => {
     });
 
     describe('push-to-talk', () => {
-        it('opens on the press and sends on a lift after the tap window', () => {
-            const run = drive([press(1000), lift(1000 + TAP_MAX_MS + 1)]);
+        it('opens on the press and sends on a lift after the hold threshold', () => {
+            const run = drive([press(1000), lift(1000 + HOLD_MIN_MS)]);
             expect(run.states).toEqual(['held', 'idle']);
-            expect(run.effects).toEqual(['open', 'tick', 'send', 'tick']);
+            expect(run.effects).toEqual(['open', 'watchHold', 'tick', 'send', 'tick']);
         });
 
         it('stays held however long the finger stays down', () => {
@@ -119,30 +128,57 @@ describe('reduceMicGesture', () => {
 
         it('ignores a duplicate pressIn while held', () => {
             const run = drive([press(0), press(50)]);
-            expect(run.gesture).toEqual({ state: 'held', pressedAt: 0, outside: false });
-            expect(run.effects).toEqual(['open', 'tick']);
+            expect(run.gesture).toEqual(gestureAt({ state: 'held', pressedAt: 0 }));
+            expect(run.effects).toEqual(['open', 'watchHold', 'tick']);
         });
     });
 
     describe('tap to latch', () => {
-        it('a press released inside the window latches instead of sending', () => {
-            const run = drive([press(1000), lift(1000 + TAP_MAX_MS)]);
+        it('a press released before the hold threshold latches instead of sending', () => {
+            const run = drive([press(1000), lift(1000 + HOLD_MIN_MS - 1)]);
             expect(run.states).toEqual(['held', 'latched']);
-            expect(run.effects).toEqual(['open', 'tick', 'latch', 'tick']);
+            expect(run.effects).toEqual(['open', 'watchHold', 'tick', 'latch', 'tick']);
             expect(run.gesture.pressedAt).toBeNull();
         });
 
-        it('one millisecond past the window is a hold, not a tap', () => {
-            const tap = drive([press(0), lift(TAP_MAX_MS)]);
-            const hold = drive([press(0), lift(TAP_MAX_MS + 1)]);
+        it('one millisecond short of the threshold is a tap, and the threshold itself is a hold', () => {
+            const tap = drive([press(0), lift(HOLD_MIN_MS - 1)]);
+            const hold = drive([press(0), lift(HOLD_MIN_MS)]);
             expect(tap.gesture.state).toBe('latched');
             expect(hold.gesture.state).toBe('idle');
+        });
+
+        /**
+         * The regression DROVE-140 was filed for. The old window was 300 ms
+         * measured on `Date.now()` inside the two handlers, and press-in is
+         * the busiest moment the composer has: it opens the recogniser, fires
+         * a haptic and mounts the banner. That work landed inside the measured
+         * interval, so an ordinary tap measured well past the window, read as
+         * a hold, and closed the mic on the lift.
+         */
+        it('a short tap whose handler was delayed by a slow press-in still latches', () => {
+            // The finger was down for 140 ms. The lift handler ran 260 ms
+            // after that, because the mic was still opening.
+            const run = drive([
+                { type: 'pressIn', at: 1000, touchAt: 5000 },
+                { type: 'pressOut', at: 1400, touchAt: 5140 },
+            ]);
+            expect(run.gesture.state).toBe('latched');
+            expect(outcome(run.effects)).toEqual(['open', 'latch']);
+        });
+
+        it('a genuine hold still sends when the touch clock is available', () => {
+            const run = drive([
+                { type: 'pressIn', at: 1000, touchAt: 5000 },
+                { type: 'pressOut', at: 3200, touchAt: 7100 },
+            ]);
+            expect(outcome(run.effects)).toEqual(['open', 'send']);
         });
 
         it('a second tap stops a latched mic and never sends (DROVE-105)', () => {
             const run = drive([press(0), lift(100), press(5000), lift(5080)]);
             expect(run.states).toEqual(['held', 'latched', 'latched', 'idle']);
-            expect(run.effects).toEqual(['open', 'tick', 'latch', 'tick', 'stop', 'tick']);
+            expect(run.effects).toEqual(['open', 'watchHold', 'tick', 'latch', 'tick', 'stop', 'tick']);
             expect(run.effects).not.toContain('send');
         });
 
@@ -155,7 +191,7 @@ describe('reduceMicGesture', () => {
         });
 
         it('the press down on a latched mic changes nothing until the lift', () => {
-            const latched: MicGesture = { state: 'latched', pressedAt: null, outside: false };
+            const latched = gestureAt({ state: 'latched' });
             const step = reduceMicGesture(latched, press(10));
             expect(step.next.state).toBe('latched');
             expect(step.effects).toEqual([]);
@@ -166,15 +202,15 @@ describe('reduceMicGesture', () => {
         it('arms the cancel while the finger is off, and ticks on each crossing', () => {
             const off = drive([press(0), slideOff]);
             expect(off.gesture.outside).toBe(true);
-            expect(off.effects).toEqual(['open', 'tick', 'tick']);
+            expect(off.effects).toEqual(['open', 'watchHold', 'tick', 'tick']);
             const back = drive([press(0), slideOff, slideBack]);
             expect(back.gesture.outside).toBe(false);
-            expect(back.effects).toEqual(['open', 'tick', 'tick', 'tick']);
+            expect(back.effects).toEqual(['open', 'watchHold', 'tick', 'tick', 'tick']);
         });
 
         it('a repeated slide in the same direction changes nothing', () => {
             const run = drive([press(0), slideOff, slideOff, slideOff]);
-            expect(run.effects).toEqual(['open', 'tick', 'tick']);
+            expect(run.effects).toEqual(['open', 'watchHold', 'tick', 'tick']);
         });
 
         it('cancels however briefly the button was held', () => {
@@ -192,13 +228,13 @@ describe('reduceMicGesture', () => {
 
         it('a fresh press clears an armed cancel', () => {
             const run = drive([press(0), slideOff, lift(50), press(1000)]);
-            expect(run.gesture).toEqual({ state: 'held', pressedAt: 1000, outside: false });
+            expect(run.gesture).toEqual(gestureAt({ state: 'held', pressedAt: 1000 }));
         });
     });
 
     describe('the capture ending on its own', () => {
         it('drops a latched mic to idle with a tick, so the user knows it stopped', () => {
-            const latched: MicGesture = { state: 'latched', pressedAt: null, outside: false };
+            const latched = gestureAt({ state: 'latched' });
             const step = reduceMicGesture(latched, { type: 'ended' });
             expect(step.next).toEqual(idleMicGesture);
             expect(step.effects).toEqual(['tick']);
@@ -208,7 +244,7 @@ describe('reduceMicGesture', () => {
             const run = drive([press(0), { type: 'ended' }, lift(50)]);
             expect(run.states).toEqual(['held', 'idle', 'idle']);
             // The lift after an end must not latch: no 'latch', no send, no cancel.
-            expect(run.effects).toEqual(['open', 'tick']);
+            expect(run.effects).toEqual(['open', 'watchHold', 'tick']);
         });
 
         it('takes an armed cancel down with it', () => {
@@ -224,10 +260,122 @@ describe('reduceMicGesture', () => {
         });
     });
 
+    /**
+     * The second half of DROVE-140's fix: the split is decided under the
+     * finger, not computed after it. A timer started at press-in fires while
+     * the button is still down, ticks the haptic there, and from then on the
+     * lift sends however the clocks read.
+     */
+    describe('the hold is confirmed while the finger is still down', () => {
+        it('a press asks for the hold timer, and a press on a latch does not', () => {
+            expect(drive([press(0)]).effects).toContain('watchHold');
+            const onLatch = reduceMicGesture(gestureAt({ state: 'latched' }), press(10));
+            expect(onLatch.effects).not.toContain('watchHold');
+        });
+
+        it('confirming ticks once and arms the send', () => {
+            const run = drive([press(0), holdConfirm]);
+            expect(run.gesture.confirmed).toBe(true);
+            expect(run.effects).toEqual(['open', 'watchHold', 'tick', 'tick']);
+        });
+
+        it('a second confirm changes nothing', () => {
+            const run = drive([press(0), holdConfirm, holdConfirm]);
+            expect(run.effects).toEqual(['open', 'watchHold', 'tick', 'tick']);
+        });
+
+        it('a confirmed press sends even when the clocks say it was brief', () => {
+            const run = drive([press(1000), holdConfirm, lift(1001)]);
+            expect(outcome(run.effects)).toEqual(['open', 'send']);
+        });
+
+        it('a confirmed press slid off the button still cancels', () => {
+            const run = drive([press(0), holdConfirm, slideOff, lift(2000)]);
+            expect(outcome(run.effects)).toEqual(['open', 'cancel']);
+        });
+
+        it('a timer that outlives its press is inert', () => {
+            expect(reduceMicGesture(idleMicGesture, holdConfirm).effects).toEqual([]);
+            const latched = gestureAt({ state: 'latched' });
+            expect(reduceMicGesture(latched, holdConfirm).next).toBe(latched);
+        });
+
+        it('the latch clears the confirmation, so the next press starts fresh', () => {
+            const run = drive([press(0), lift(100), press(5000), lift(5010)]);
+            expect(run.gesture.confirmed).toBe(false);
+        });
+    });
+
+    /**
+     * `Date.now()` in a handler is the time the JS thread reached it. The OS's
+     * touch clock is the time the finger moved, which is the only one that
+     * measures a gesture.
+     */
+    describe('pressElapsed', () => {
+        it('prefers the touch clock when both events carry one', () => {
+            const gesture = gestureAt({ state: 'held', pressedAt: 1000, pressedTouchAt: 5000 });
+            expect(pressElapsed(gesture, { at: 1400, touchAt: 5140 })).toBe(140);
+        });
+
+        it('falls back to the wall clock when the platform gives no touch clock', () => {
+            const gesture = gestureAt({ state: 'held', pressedAt: 1000, pressedTouchAt: null });
+            expect(pressElapsed(gesture, { at: 1400 })).toBe(400);
+        });
+
+        it('never mixes the two clocks, whichever side is missing one', () => {
+            const withTouch = gestureAt({ state: 'held', pressedAt: 1000, pressedTouchAt: 5000 });
+            expect(pressElapsed(withTouch, { at: 1400 })).toBe(400);
+            const withoutTouch = gestureAt({ state: 'held', pressedAt: 1000, pressedTouchAt: null });
+            expect(pressElapsed(withoutTouch, { at: 1400, touchAt: 5140 })).toBe(400);
+        });
+
+        it('is infinite with no finger down, so a stray lift is never a tap', () => {
+            expect(pressElapsed(idleMicGesture, { at: 10, touchAt: 10 })).toBe(Infinity);
+        });
+    });
+
     it('a lift with no press behind it does nothing', () => {
         const step = reduceMicGesture(idleMicGesture, lift(5));
         expect(step.next).toBe(idleMicGesture);
         expect(step.effects).toEqual([]);
+    });
+});
+
+/**
+ * The banner lost both its text labels (DROVE-142), and one of them was the
+ * only thing saying which way a lift would go. This is where that signal
+ * lives now, so the glyph is a decision with a table rather than a thing to
+ * squint at on a phone.
+ */
+describe('micOutcome', () => {
+    const at = (over: Partial<Parameters<typeof micOutcome>[0]>) => micOutcome({
+        latched: false,
+        cancelArmed: false,
+        sendArmed: false,
+        ...over,
+    });
+
+    it('shows nothing while a press could still go either way', () => {
+        expect(at({})).toBe('undecided');
+    });
+
+    it('shows send once the press is a hold', () => {
+        expect(at({ sendArmed: true })).toBe('send');
+    });
+
+    it('shows stop on a latch, because a tap ends it', () => {
+        expect(at({ latched: true })).toBe('stop');
+    });
+
+    it('cancel wins over everything, so a finger off the button is never ambiguous', () => {
+        expect(at({ cancelArmed: true })).toBe('cancel');
+        expect(at({ cancelArmed: true, sendArmed: true })).toBe('cancel');
+        expect(at({ cancelArmed: true, latched: true })).toBe('cancel');
+        expect(at({ cancelArmed: true, latched: true, sendArmed: true })).toBe('cancel');
+    });
+
+    it('never shows send on a latch, whose lift keeps the words instead', () => {
+        expect(at({ latched: true, sendArmed: true })).toBe('stop');
     });
 });
 

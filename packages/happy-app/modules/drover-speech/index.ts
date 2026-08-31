@@ -77,9 +77,14 @@ type DroverSpeechModuleType = {
     stopDictation: () => Promise<string>;
     cancelDictation: () => Promise<void>;
     addListener: {
-        (eventName: 'onDictationPartial', listener: (event: { text: string }) => void): EventSubscription;
+        /**
+         * `text` is everything heard since the microphone opened, across every
+         * recognition task inside it. `task` names the task it came from and
+         * is absent on builds up to 12 (DROVE-140).
+         */
+        (eventName: 'onDictationPartial', listener: (event: { text: string; task?: number }) => void): EventSubscription;
         /** The recogniser stopped with no stop pending (DROVE-30). Build 10 and later. */
-        (eventName: 'onDictationEnded', listener: (event: { text: string; reason: string }) => void): EventSubscription;
+        (eventName: 'onDictationEnded', listener: (event: { text: string; reason: string; task?: number }) => void): EventSubscription;
         /** Input RMS 0..1 per PCM buffer, at most 20 a second (DROVE-74). Build 10 and later. */
         (eventName: 'onDictationLevel', listener: (event: { level: number }) => void): EventSubscription;
         /** The output route moved: the new output port types, and why (DROVE-119). Build 13 and later. */
@@ -292,22 +297,46 @@ export async function cancelDictation(): Promise<void> {
     }
 }
 
-export function addDictationPartialListener(listener: (text: string) => void) {
+/**
+ * What the recogniser has heard so far, and WHICH recognition task heard it
+ * (DROVE-140).
+ *
+ * The task id is the whole point. Apple finalises a task after a pause and the
+ * module starts another one on the same microphone, and a fresh task reports
+ * from empty. Without the id, a listener cannot tell that first empty-based
+ * transcript from the recogniser revising its own guess, and appending to the
+ * wrong one either duplicates the sentence or wipes it. The same id means
+ * REVISE, a new id means APPEND.
+ *
+ * Undefined on a build up to 12, which never restarts a task either: those
+ * builds end the capture when Apple finalises, so a partial that replaces is
+ * still correct there.
+ */
+export function addDictationPartialListener(listener: (text: string, task?: number) => void) {
     if (!native) return { remove: () => {} };
-    return native.addListener('onDictationPartial', (event) => listener(event.text));
+    return native.addListener('onDictationPartial', (event) => listener(event.text, event.task));
 }
 
 /**
- * The recogniser stopped on its own, Apple finalised after a long silence
- * or gave up with "no speech detected", while nobody had asked it to
- * (DROVE-30). A latched mic has to hear this, or it sits there looking live
- * over a dead task until its idle clock runs out. A binary whose module
- * predates the event simply never fires it; subscribing costs nothing.
+ * The recogniser stopped and is NOT coming back: it gave up with "no speech
+ * detected", or the build is one that cannot continue past Apple's own
+ * finalisation (DROVE-30). A latched mic has to hear this, or it sits there
+ * looking live over a dead task until its idle clock runs out. A binary whose
+ * module predates the event simply never fires it; subscribing costs nothing.
+ *
+ * From build 13 a pause no longer arrives here at all: the module starts a new
+ * recognition task instead and keeps the microphone open, so this is the real
+ * end of the capture and `text` covers all of it (DROVE-140).
  */
-export function addDictationEndedListener(listener: (text: string, reason: string) => void) {
+export function addDictationEndedListener(
+    listener: (text: string, reason: string, task?: number) => void,
+) {
     if (!native) return { remove: () => {} };
     try {
-        return native.addListener('onDictationEnded', (event) => listener(event.text, event.reason));
+        return native.addListener(
+            'onDictationEnded',
+            (event) => listener(event.text, event.reason, event.task),
+        );
     } catch {
         return { remove: () => {} };
     }

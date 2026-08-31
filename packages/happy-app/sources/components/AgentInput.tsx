@@ -85,8 +85,8 @@ interface AgentInputProps {
      * from `onMicPress`, which starts boss mode and on the compact composer
      * already owns the send button.
      */
-    onTalkPressIn?: () => void;
-    onTalkPressOut?: () => void;
+    onTalkPressIn?: (touchAt?: number) => void;
+    onTalkPressOut?: (touchAt?: number) => void;
     /** The finger crossed the button's edge while still down (DROVE-105). */
     onTalkSlide?: (inside: boolean) => void;
     onTalkCancel?: () => void;
@@ -94,6 +94,8 @@ interface AgentInputProps {
     talkState?: MicButtonState;
     /** The finger is off the button: the lift will cancel. */
     talkCancelArmed?: boolean;
+    /** The press is a hold now: the lift will send (DROVE-140, DROVE-142). */
+    talkSendArmed?: boolean;
     /** What the live banner draws. */
     talk?: DictationCaptureState;
     permissionMode?: PermissionMode | null;
@@ -2012,6 +2014,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         <LiveMicBanner
                             talk={props.talk}
                             cancelArmed={props.talkCancelArmed}
+                            sendArmed={props.talkSendArmed}
                         />
                     )}
                     {/* Input field */}

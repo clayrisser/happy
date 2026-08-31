@@ -1016,6 +1016,80 @@ describe('a sentence is never spoken twice (DROVE-126)', () => {
         expect(duplicatesIn(engine.spoken)).toEqual([]);
     });
 
+    /**
+     * The mic and the reader share one AVAudioSession, and dictation loses the
+     * fight (DROVE-143). `interrupt('mic')` cuts the sentence in flight, but
+     * the reader is a QUEUE: a reply still streaming in enqueues another
+     * sentence a moment later, that pumps, that speaks, and every speak sets
+     * the session to `.playback`. The recogniser then reads its input format
+     * in the wrong category and the native guard refuses the capture, which
+     * from outside is an alert and a mic button that will not stay open.
+     */
+    describe('while the microphone holds the audio session', () => {
+        it('says nothing, and stops what was already speaking', async () => {
+            reader.onMessages('s1', [agentText('m1', 'One. Two. Three.')]);
+            await settle();
+            expect(engine.spoken).toEqual(['One.']);
+
+            reader.setMicHeld(true);
+            expect(reader.isMicHeld).toBe(true);
+            // The session goes back, rather than a paused utterance keeping it.
+            expect(engine.stops).toBe(1);
+
+            engine.finishOne();
+            await settle();
+            expect(engine.spoken).toEqual(['One.']);
+        });
+
+        it('stays silent while a reply keeps arriving, and reads it after', async () => {
+            reader.setMicHeld(true);
+            reader.onMessages('s1', [agentText('m1', 'Arrived while the mic was open.')]);
+            await settle();
+            expect(engine.spoken).toEqual([]);
+
+            reader.setMicHeld(false);
+            await settle();
+            expect(engine.spoken).toEqual(['Arrived while the mic was open.']);
+        });
+
+        it('picks up where it left off rather than losing what it had not said', async () => {
+            reader.onMessages('s1', [agentText('m1', 'One. Two. Three.')]);
+            await settle();
+            reader.setMicHeld(true);
+            await settle();
+
+            reader.setMicHeld(false);
+            await settle();
+            // Two follows One: the position was held, not thrown away.
+            expect(engine.spoken).toEqual(['One.', 'Two.']);
+        });
+
+        it('is idempotent, so a second hold does not stop anything twice', async () => {
+            reader.onMessages('s1', [agentText('m1', 'One. Two.')]);
+            await settle();
+            reader.setMicHeld(true);
+            const stops = engine.stops;
+            reader.setMicHeld(true);
+            expect(engine.stops).toBe(stops);
+        });
+
+        it('the whole capture is covered, cut and gate together, the way the composer drives it', async () => {
+            reader.onMessages('s1', [agentText('m1', 'One. Two. Three.')]);
+            await settle();
+            // useVoiceComposer's mic-open effect, in order.
+            reader.setMicHeld(true);
+            reader.interrupt('mic');
+            // The reply is still being written while he talks.
+            reader.onMessages('s1', [agentText('m2', 'Still writing.', 2)]);
+            await settle();
+            expect(engine.spoken).toEqual(['One.']);
+
+            reader.setMicHeld(false);
+            await settle();
+            expect(engine.spoken).toEqual(['One.', 'Still writing.']);
+        });
+    });
+
     it('does not re-read the tail of a reply that was cut by a new turn', async () => {
         reader.onMessages('s1', [agentText('m1', sentences('Old', 4).join(' '), 1)]);
         await settle();
