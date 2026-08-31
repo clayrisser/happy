@@ -99,6 +99,12 @@ export function swipeDismisses(translationY: number, velocityY: number): boolean
 export interface GateOverlayDismissals {
     get(): ReadonlySet<string>;
     dismiss(ids: readonly string[]): void;
+    /**
+     * Put a dismissed gate back on the overlay. A tap on that gate's push is
+     * asking to see it, and a card swiped away an hour ago must not answer
+     * that tap with nothing (DROVE-94).
+     */
+    restore(ids: readonly string[]): void;
     subscribe(listener: () => void): () => void;
     /** Testing only: forget everything, as a relaunch would. */
     reset(): void;
@@ -115,6 +121,12 @@ export function createGateOverlayDismissals(): GateOverlayDismissals {
             snapshot = new Set([...snapshot, ...fresh]);
             for (const listener of listeners) listener();
         },
+        restore(ids) {
+            const held = ids.filter((id) => snapshot.has(id));
+            if (held.length === 0) return;
+            snapshot = new Set([...snapshot].filter((id) => !held.includes(id)));
+            for (const listener of listeners) listener();
+        },
         subscribe(listener) {
             listeners.add(listener);
             return () => { listeners.delete(listener); };
@@ -128,3 +140,73 @@ export function createGateOverlayDismissals(): GateOverlayDismissals {
 }
 
 export const gateOverlayDismissals = createGateOverlayDismissals();
+
+/**
+ * The card a tap on a gate push asked for, by gate id (DROVE-94).
+ *
+ * The index the deck will have for that gate once it is back in the deck:
+ * the dismissed set is applied with the focused gate taken OUT of it, because
+ * a push tap is a request to see the card whether or not it was swiped away
+ * earlier. The gate is matched on the request id it was filed under as well
+ * as the card id, since the push carries the bus event id and the store keys
+ * the card as `${session}:${event}`. -1 when this session lists no such gate,
+ * which is the case until the store has caught up after a cold start, and
+ * for good once the gate has been answered elsewhere.
+ */
+export function focusIndex<T extends GateOverlayCard & { requestId?: string }>(
+    entries: readonly T[],
+    dismissed: ReadonlySet<string>,
+    gateId: string,
+): number {
+    const matches = (entry: T) => entry.gate.id === gateId || entry.requestId === gateId;
+    const cards = entries.filter((entry) => matches(entry) || !dismissed.has(entry.gate.id));
+    return cards.findIndex(matches);
+}
+
+/**
+ * A request to show one gate on one session's overlay, made by the session
+ * route when it arrives with `?gate=` and consumed by the overlay once that
+ * gate is in its deck (DROVE-94).
+ *
+ * Held here rather than threaded through SessionView as a prop: the overlay
+ * is mounted several components down, and the same SessionView also draws in
+ * a side panel that has no route of its own to read the param from. One
+ * request at a time; a newer tap replaces an older one that never landed.
+ */
+export interface GateOverlayFocusRequest {
+    sessionId: string;
+    gateId: string;
+}
+
+export interface GateOverlayFocus {
+    get(): GateOverlayFocusRequest | null;
+    request(focus: GateOverlayFocusRequest): void;
+    /** Consumed, or given up on. Only clears the request it was handed. */
+    clear(focus: GateOverlayFocusRequest): void;
+    subscribe(listener: () => void): () => void;
+}
+
+export function createGateOverlayFocus(): GateOverlayFocus {
+    let snapshot: GateOverlayFocusRequest | null = null;
+    const listeners = new Set<() => void>();
+    const publish = () => { for (const listener of listeners) listener(); };
+    return {
+        get: () => snapshot,
+        request(focus) {
+            if (snapshot && snapshot.sessionId === focus.sessionId && snapshot.gateId === focus.gateId) return;
+            snapshot = { sessionId: focus.sessionId, gateId: focus.gateId };
+            publish();
+        },
+        clear(focus) {
+            if (snapshot !== focus) return;
+            snapshot = null;
+            publish();
+        },
+        subscribe(listener) {
+            listeners.add(listener);
+            return () => { listeners.delete(listener); };
+        },
+    };
+}
+
+export const gateOverlayFocus = createGateOverlayFocus();

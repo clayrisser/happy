@@ -29,7 +29,7 @@ import { initConsoleLogging, setConsoleOutputEnabled } from '@/utils/consoleLogg
 import { useLocalSetting } from '@/sync/storage';
 import { useUnistyles } from 'react-native-unistyles';
 import { AsyncLock } from '@/utils/lock';
-import { getSessionRouteFromNotificationResponse, isGatePushData } from '@/utils/notificationRouting';
+import { getRouteFromNotificationResponse, isGatePushData, parsePushRoute } from '@/utils/notificationRouting';
 import { navigateToSession } from '@/hooks/useNavigateToSession';
 import { applyVoiceUpsellOverride } from '@/realtime/voiceExperiment';
 import { useTauriZoom } from '@/hooks/useTauriZoom';
@@ -307,23 +307,25 @@ export default function RootLayout() {
                 '[PUSH ROUTING] notification.request.content.data:\n' +
                 stringifyNotificationPayload(response.notification.request.content.data)
             );
-            const route = getSessionRouteFromNotificationResponse(response);
+            // One decision for a tap while running and for the cold-start
+            // read below: a gate push lands on the gate that raised it, in
+            // its session when the push names one and in the inbox when it
+            // does not (DROVE-94). Anything else keeps the session route.
+            const route = getRouteFromNotificationResponse(response);
             console.log(`[PUSH ROUTING] Computed route: ${route ?? 'null'}`);
-            if (!route) {
-                console.log('[PUSH ROUTING] No session route found in notification.request.content.data');
+            const destination = route ? parsePushRoute(route) : null;
+            if (!destination) {
+                console.log('[PUSH ROUTING] No route found in notification.request.content.data');
                 return;
             }
 
-            const encodedSessionId = route.replace(/^\/session\//, '');
-            const sessionId = (() => {
-                try {
-                    return decodeURIComponent(encodedSessionId);
-                } catch {
-                    return encodedSessionId;
-                }
-            })();
-            console.log(`[PUSH ROUTING] Navigating to session: ${sessionId}`);
-            navigateToSession(router, sessionId);
+            if (destination.kind === 'inbox') {
+                console.log(`[PUSH ROUTING] Navigating to inbox, gate: ${destination.gateId}`);
+                router.push(`/gates?focus=${encodeURIComponent(destination.gateId)}`);
+                return;
+            }
+            console.log(`[PUSH ROUTING] Navigating to session: ${destination.sessionId}, gate: ${destination.gateId ?? 'none'}`);
+            navigateToSession(router, destination.sessionId, { gate: destination.gateId });
         } finally {
             try {
                 await Notifications.clearLastNotificationResponseAsync();

@@ -11,6 +11,8 @@ import { describePendingGates } from './pendingGatesSummary';
 import {
     clampIndex,
     createGateOverlayDismissals,
+    createGateOverlayFocus,
+    focusIndex,
     overlayCounter,
     overlayDeck,
     pageForOffset,
@@ -201,5 +203,66 @@ describe('SessionGateOverlay swipe-down', () => {
         expect(swipeDismisses(20, 100)).toBe(false);
         expect(swipeDismisses(-80, 900)).toBe(false);
         expect(swipeDismisses(0, 0)).toBe(false);
+    });
+});
+
+describe('SessionGateOverlay focus from a push tap', () => {
+    // DROVE-94. A tap on a gate push opens the raising session with `?gate=`,
+    // and the overlay has to page to that card, whatever was swiped away.
+    it('finds the card by its bus event id, which is what the push carries', () => {
+        // The store keys the card `${session}:${event}`; the push carries the
+        // event id alone.
+        expect(focusIndex(threeGates, new Set(), 'q1')).toBe(1);
+        expect(focusIndex(threeGates, new Set(), `${bridge}:p1`)).toBe(2);
+    });
+
+    it('counts the index against the deck the overlay will draw, dismissed cards gone', () => {
+        const dismissed = new Set([threeGates[0].gate.id]);
+        expect(focusIndex(threeGates, dismissed, 'p1')).toBe(1);
+    });
+
+    it('brings a dismissed gate back for the tap that asked for it', () => {
+        const dismissed = new Set([threeGates[1].gate.id]);
+        expect(focusIndex(threeGates, dismissed, 'q1')).toBe(1);
+    });
+
+    it('answers -1 for a gate this session does not list, so the request waits', () => {
+        expect(focusIndex(threeGates, new Set(), 'nope')).toBe(-1);
+        expect(focusIndex([], new Set(), 'q1')).toBe(-1);
+    });
+
+    it('restores a dismissed card and publishes once, nothing for a card that was not dismissed', () => {
+        const dismissals = createGateOverlayDismissals();
+        let published = 0;
+        dismissals.subscribe(() => { published += 1; });
+        dismissals.dismiss([threeGates[1].gate.id, threeGates[2].gate.id]);
+        dismissals.restore([threeGates[1].gate.id]);
+        expect(dismissals.get().has(threeGates[1].gate.id)).toBe(false);
+        expect(dismissals.get().has(threeGates[2].gate.id)).toBe(true);
+        expect(published).toBe(2);
+        dismissals.restore(['never-dismissed']);
+        expect(published).toBe(2);
+    });
+
+    it('holds one request until the overlay it is for consumes it', () => {
+        const focus = createGateOverlayFocus();
+        let published = 0;
+        focus.subscribe(() => { published += 1; });
+        focus.request({ sessionId: pane, gateId: 'q1' });
+        const held = focus.get();
+        expect(held).toEqual({ sessionId: pane, gateId: 'q1' });
+        // The same ask twice is one request, so a re-render of the route
+        // cannot re-page a card the reader has moved off.
+        focus.request({ sessionId: pane, gateId: 'q1' });
+        expect(published).toBe(1);
+        // A newer tap replaces an older one that never landed.
+        focus.request({ sessionId: pane, gateId: 'p1' });
+        const newer = focus.get();
+        expect(newer?.gateId).toBe('p1');
+        // Clearing the OLD request does nothing to the new one.
+        focus.clear(held!);
+        expect(focus.get()).toBe(newer);
+        focus.clear(newer!);
+        expect(focus.get()).toBeNull();
     });
 });
