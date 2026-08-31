@@ -364,19 +364,19 @@ export async function cancelDictation(): Promise<void> {
 }
 
 /**
- * What the recogniser has heard so far, and WHICH recognition task heard it
- * (DROVE-140).
+ * What the recogniser has heard so far (DROVE-140).
  *
- * The task id is the whole point. Apple finalises a task after a pause and the
- * module starts another one on the same microphone, and a fresh task reports
- * from empty. Without the id, a listener cannot tell that first empty-based
- * transcript from the recogniser revising its own guess, and appending to the
- * wrong one either duplicates the sentence or wipes it. The same id means
- * REVISE, a new id means APPEND.
+ * THE CONTRACT, and it has one owner, the native module: `text` is EVERYTHING
+ * HEARD SINCE THE MICROPHONE OPENED. A build that restarts a recognition task
+ * internally after Apple finalises folds the earlier tasks into this itself
+ * (`bankedTranscript + taskTranscript` in the Swift), so a listener REPLACES
+ * what it holds and never appends this to itself.
  *
- * Undefined on a build up to 12, which never restarts a task either: those
- * builds end the capture when Apple finalises, so a partial that replaces is
- * still correct there.
+ * `task` names the recognition task the last words came from. It is
+ * INFORMATIONAL: since the text already accumulates, a listener that banked on
+ * a task change would count the same words twice, which is precisely what one
+ * pause did to the shipped attempt at this ticket. Undefined on a build up to
+ * 12, which never restarts a task at all.
  */
 export function addDictationPartialListener(listener: (text: string, task?: number) => void) {
     if (!native) return { remove: () => {} };
@@ -384,15 +384,21 @@ export function addDictationPartialListener(listener: (text: string, task?: numb
 }
 
 /**
- * The recogniser stopped and is NOT coming back: it gave up with "no speech
- * detected", or the build is one that cannot continue past Apple's own
- * finalisation (DROVE-30). A latched mic has to hear this, or it sits there
- * looking live over a dead task until its idle clock runs out. A binary whose
- * module predates the event simply never fires it; subscribing costs nothing.
+ * The recogniser's task stopped and nobody asked it to (DROVE-30). A latched
+ * mic has to hear this, or it sits there looking live over a dead task until
+ * its idle clock runs out. A binary whose module predates the event simply
+ * never fires it; subscribing costs nothing.
  *
- * From build 13 a pause no longer arrives here at all: the module starts a new
- * recognition task instead and keeps the microphone open, so this is the real
- * end of the capture and `text` covers all of it (DROVE-140).
+ * `reason` IS LOAD-BEARING, and dropping it is what left a hold with a pause
+ * in it recording nothing (DROVE-140). `final` is Apple finalising an
+ * utterance after a second or so of silence: the microphone is fine and the
+ * user is mid-thought, so the caller banks what it has and opens the
+ * microphone again. Every other reason is the recogniser's error string, which
+ * means it cannot go on, and reopening into that is a restart loop.
+ *
+ * `text` covers everything heard since the microphone opened, the same
+ * contract the partials keep. On a build that restarts the task internally a
+ * pause does not arrive here at all.
  */
 export function addDictationEndedListener(
     listener: (text: string, reason: string, task?: number) => void,

@@ -20,16 +20,47 @@ import { DICTATION_LATCH_IDLE_MS, type MicMode } from './micMode';
  * is not a gesture at all, the idle stop, a speech cut, the recogniser
  * ending on its own, leaves the transcript in the composer, unsent.
  *
- * And one rule beside that: A LATCH ACCUMULATES ACROSS RECOGNISER TASKS
- * (DROVE-140). Apple's recogniser finalises on its own after a pause, and the
- * native module then starts a FRESH task on the same microphone. A fresh task
- * reports from empty, so its first partial is not a revision of the sentence
- * before the pause, it is the sentence after it. Which of the two a partial is
- * cannot be told by comparing the strings: "yes" after "no" is a revision when
- * the recogniser changed its mind and a continuation when he said them a
- * breath apart. So it is keyed on the TASK the partial belongs to, which
- * native reports alongside the text: the same task REVISES what it said
- * before, a new task APPENDS to it.
+ * And one rule beside that: A CAPTURE SURVIVES ITS RECOGNISER (DROVE-140).
+ * Apple ends an utterance on silence. That is the recogniser's business, not
+ * the user's, and it must not end HIS capture: a hold with a pause in it is
+ * one sentence he is still in the middle of saying. So a capture is a
+ * sequence of SEGMENTS, and it owns the boundary between them:
+ *
+ *   - `banked` is what segments this capture has already closed heard. It is
+ *     APPEND-ONLY for the life of the capture. Nothing removes a banked word.
+ *   - `heard` is the live segment, exactly as the recogniser last reported it.
+ *     Only this may be revised, which is what makes "to fifty too" -> "22"
+ *     still work.
+ *   - What the composer shows is the two joined, so the transcript can only
+ *     ever grow across a pause of any length, however many pauses there are.
+ *
+ * A segment closes on a signal from the recogniser, never on a comparison of
+ * strings. Strings cannot decide it: "yes" after "no" is a revision when the
+ * recogniser changed its mind and a new sentence when he said them a breath
+ * apart. There are two such signals and both are structural:
+ *
+ *   1. The native module ends the capture with reason `final`, which is Apple
+ *      finalising an utterance on silence. `recogniserEnded` banks that
+ *      segment and OPENS THE MICROPHONE AGAIN rather than ending under him.
+ *      This is the one that reaches the phone: it is JS, so it ships OTA.
+ *   2. On a native build that restarts the task itself, the module keeps the
+ *      microphone open and folds the earlier tasks into the text it reports,
+ *      so JS sees one growing transcript and does nothing. The task id it
+ *      stamps on each partial is informational there, NOT a second
+ *      accumulator: banking on it as well is how the shipped attempt at this
+ *      ticket came to duplicate every sentence before a pause.
+ *
+ * WHAT WENT WRONG THE FIRST TIME, because it is the reason this is written as
+ * one contract in one place. The Swift and the JS of DROVE-140 landed in one
+ * commit and disagreed about what a partial CONTAINS. Native sent
+ * `bankedTranscript + taskTranscript`, the whole capture; `partial()` read it
+ * as the current task alone and prepended everything it had already heard, so
+ * one pause turned "so the thing I wanted to say" into that sentence twice.
+ * The unit tests wrote down the JS side of the disagreement and so passed. The
+ * contract now has one owner, the native module, and it is stated once here
+ * and once in modules/drover-speech/index.ts: A PARTIAL IS EVERYTHING THE
+ * RECOGNISER HAS HEARD SINCE THE MICROPHONE OPENED. `banked` covers only the
+ * segments THIS FILE closed, so the two accumulators cannot overlap.
  *
  * And one rule under those: A CAPTURE ENDING NEVER COSTS WORDS (DROVE-120).
  * Text that has already appeared in the composer is not removed by any path
@@ -95,8 +126,28 @@ export interface DictationCaptureEvents {
 }
 
 /**
- * The words to keep when the recogniser's FINAL string and the partials
- * already on screen disagree (DROVE-105, DROVE-120).
+ * The native module's own word for "Apple finalised this utterance", as
+ * DroverSpeechModule.swift writes it on `onDictationEnded`. Every other reason
+ * is an error string: the recogniser saying it cannot go on.
+ */
+export const RECOGNISER_FINAL = 'final';
+
+/**
+ * How many segments may end in a row having heard nothing before the capture
+ * gives up (DROVE-140).
+ *
+ * Reopening the microphone after each of Apple's finalisations is what turns a
+ * pause into a pause rather than the end of the capture, but a recogniser that
+ * finalises instantly over silence would otherwise be reopened forever. Any
+ * segment that hears a word resets the count, so this bounds the SILENCE at
+ * the end of a capture, not its length: he can pause as often and as long as
+ * he likes as long as he carries on talking.
+ */
+export const MAX_SILENT_SEGMENTS = 3;
+
+/**
+ * The words to keep for ONE SEGMENT when the recogniser's final string and the
+ * partials already on screen disagree (DROVE-105, DROVE-120).
  *
  * The invariant is that a capture ending never takes back text the composer
  * has already shown, so the final only wins when it actually says more.
@@ -111,10 +162,12 @@ export interface DictationCaptureEvents {
  * - Anything else is a genuine revision ("um hello" -> "hello", "twenty two"
  *   -> "22"), and the recogniser is the better authority on its own words.
  *
- * This compares a final against what is SHOWN, which is the whole capture
- * including tasks that ended inside it. The native contract is that the final
- * transcript covers the whole capture too, not merely the last task, so the
- * two are comparable (DROVE-140).
+ * SEGMENT, not capture (DROVE-140). Both sides of this comparison describe the
+ * same stretch of recognition: the partials of the live segment against the
+ * final of that same segment. Words banked from earlier segments are never
+ * passed in and so can never lose to a final that does not mention them, which
+ * is what a whole-capture comparison would do the moment the microphone is
+ * reopened mid-hold.
  */
 export function keptTranscript(heard: string, final: string): string {
     const shown = heard.trim();
@@ -147,15 +200,24 @@ export class DictationCapture {
      */
     private generation = 0;
     /**
-     * Words from recognition tasks that already ENDED inside this capture
-     * (DROVE-140). Everything the current task reports is appended to this,
-     * never written over it.
+     * What the segments this capture has already CLOSED heard (DROVE-140).
+     * Append-only for the life of the capture: no path in here removes a word
+     * from it, which is the whole of the promise that a pause cannot cost him
+     * a sentence.
      */
     private banked = '';
-    /** The current task's latest text, revised in place while it runs. */
+    /**
+     * The live segment, exactly as the recogniser last reported it, which is
+     * everything heard since the microphone last opened. Revisable, because
+     * revising its own guess is what a recogniser does; `banked` is what
+     * protects the sentences before it.
+     */
     private heard = '';
-    /** Which recognition task `heard` belongs to; null until native names one. */
-    private task: number | null = null;
+    /**
+     * Segments closed in a row having heard nothing. Any segment that hears a
+     * word resets it. See MAX_SILENT_SEGMENTS.
+     */
+    private silentSegments = 0;
 
     constructor(engine: DictationEngine, events: DictationCaptureEvents, now: () => number = () => Date.now()) {
         this.engine = engine;
@@ -174,7 +236,7 @@ export class DictationCapture {
         const generation = this.generation;
         this.banked = '';
         this.heard = '';
-        this.task = null;
+        this.silentSegments = 0;
         this.set({
             active: true,
             mode,
@@ -227,47 +289,39 @@ export class DictationCapture {
      * A partial transcript landed. Under a latch a CHANGE is what "not idle"
      * means.
      *
-     * `task` names the recognition task the text belongs to (DROVE-140). The
-     * same task REVISES: its text replaces what it said before, because the
-     * recogniser is improving its own guess. A DIFFERENT task CONTINUES: the
-     * words heard so far are banked and the new task's text is appended to
-     * them, because a fresh task always reports from empty and would
-     * otherwise wipe everything said before the pause.
+     * `text` is EVERYTHING THE RECOGNISER HAS HEARD SINCE THE MICROPHONE
+     * OPENED, which is the native module's contract and not a guess: the Swift
+     * sends `bankedTranscript + taskTranscript` on every partial, so a task it
+     * restarts internally is already folded in. It therefore REPLACES the live
+     * segment and is never appended to itself. Appending it to itself is
+     * exactly what the first attempt at this ticket did, and one pause turned
+     * a sentence into that sentence twice.
      *
-     * A build whose native side does not report a task leaves this undefined,
-     * and every partial then replaces, which is exactly what those builds did
-     * before. They never restart a task either, so nothing is silently lost:
-     * the capture simply ends when Apple finalises, with the words in the
-     * composer.
+     * The sentences from BEFORE this microphone opened are in `banked`, which
+     * this does not touch. That is why a revision here can never reach them.
      */
-    partial(text: string, task?: number): void {
+    partial(text: string): void {
         if (!this.state.active) return;
-        this.bankEndedTask(task);
         this.heard = text;
+        this.showTranscript(true);
+    }
+
+    /**
+     * Put `banked` + `heard` on screen. `speech` says whether what caused this
+     * was the user talking, which is the only thing that pushes a latch's idle
+     * deadline out; a segment closing is the recogniser's doing, not his.
+     */
+    private showTranscript(speech: boolean): void {
         const full = joinDictation(this.banked, this.heard);
         const changed = full !== this.state.transcript;
         this.set({
             ...this.state,
             transcript: full,
-            idleAt: changed && this.state.mode === 'latch'
+            idleAt: changed && speech && this.state.mode === 'latch'
                 ? this.now() + DICTATION_LATCH_IDLE_MS
                 : this.state.idleAt,
         });
         if (changed) this.events.onPartial(full);
-    }
-
-    /**
-     * Move the outgoing task's words into the bank when a NEW task's text
-     * arrives. No-op while the build reports no task at all, and no-op for
-     * the first task of a capture, which has nothing before it.
-     */
-    private bankEndedTask(task: number | undefined): void {
-        if (task === undefined) return;
-        if (this.task !== null && task !== this.task) {
-            this.banked = joinDictation(this.banked, this.heard);
-            this.heard = '';
-        }
-        this.task = task;
     }
 
     /**
@@ -300,34 +354,95 @@ export class DictationCapture {
     }
 
     /**
-     * The recogniser ended on its own and is NOT coming back: it gave up, or
-     * the build is one that cannot restart a task after Apple finalises. The
-     * mic still looked live, so honest is to end now, in either ergonomic,
-     * with the words kept and unsent. Under hold the lift that follows finds
-     * nothing to do.
+     * The recogniser's task ended and nobody asked it to (DROVE-30,
+     * DROVE-140). `reason` is the native module's own word for why:
+     * `final` is Apple finalising an utterance, anything else is an error.
      *
-     * On a build that DOES continue across a pause this arrives only at the
-     * real end of the capture, so the words banked from earlier tasks are
-     * part of `text` as well as of what is shown (DROVE-140).
+     * A `final` IS A PAUSE, NOT AN ENDING. It is the recogniser deciding he
+     * has stopped talking, which is a judgement about a second and a half of
+     * silence and says nothing about whether he is finished. Ending his
+     * capture there is the fault he has reported three times: the microphone
+     * died under his thumb mid-hold, everything he said next went nowhere, and
+     * the sentence he had already said sat there looking like all he got. So a
+     * `final` BANKS the segment and opens the microphone again, and the button
+     * never even flickers.
+     *
+     * Anything else is the recogniser saying it cannot go on, and reopening
+     * into that is how a restart loop starts. It ends the capture with every
+     * word kept and nothing sent, in either ergonomic, so a latched mic never
+     * sits there looking live over a dead task.
      */
-    recogniserEnded(text: string, task?: number): void {
+    recogniserEnded(text: string, reason?: string): void {
         if (!this.state.active) return;
-        this.bankEndedTask(task);
-        // Banking only moves words between the two halves of what is already
-        // shown, so this is the whole capture either way.
-        const heard = joinDictation(this.banked, this.heard).trim();
+        // The final describes the LIVE segment only, so it is compared with
+        // the live segment only. Banked sentences are not in it and must not
+        // be judged by it (DROVE-140).
+        const segment = keptTranscript(this.heard, text);
+        if (reason === RECOGNISER_FINAL && this.reopen(segment)) return;
         this.generation += 1;
         void this.engine.cancel();
         this.set(idle);
         // The recogniser giving up, or being cut off at its own time limit,
         // must not erase the partials it already reported (DROVE-105,
         // DROVE-120).
-        const trimmed = keptTranscript(heard, text);
+        const trimmed = joinDictation(this.banked, segment).trim();
         if (trimmed.length > 0) {
             this.events.onCommit(trimmed, false, 'recogniser');
         } else {
             this.events.onDiscard('recogniser');
         }
+    }
+
+    /**
+     * Bank the segment that just closed and open the microphone again, so the
+     * capture outlives the utterance (DROVE-140). False when it should not be
+     * reopened, and the caller then ends the capture for real.
+     *
+     * The audio between the recogniser letting go and the next one running is
+     * not recorded. That is a real cost and it is the smaller one: it is the
+     * moment he is not talking, which is why the utterance finalised, and the
+     * alternative is the whole rest of what he says.
+     */
+    private reopen(segment: string): boolean {
+        this.silentSegments = segment.trim().length === 0 ? this.silentSegments + 1 : 0;
+        if (this.silentSegments > MAX_SILENT_SEGMENTS) return false;
+        this.banked = joinDictation(this.banked, segment);
+        this.heard = '';
+        // A final can revise the segment it closes, so the composer follows
+        // it. It cannot shrink what is banked: `banked` only ever grew.
+        this.showTranscript(false);
+        const generation = this.generation;
+        void Promise.resolve()
+            .then(() => this.engine.cancel())
+            .then(() => {
+                // The gesture ended the capture while the microphone was
+                // between recognisers. Starting one now would leave it live
+                // over a capture nobody is watching.
+                if (generation !== this.generation) return undefined;
+                return this.engine.start();
+            })
+            .then(() => {
+                // And the same race the other way round: the lift landed
+                // while the start was in flight, so the stop it fired had
+                // nothing to stop. Close what we opened.
+                if (generation !== this.generation) void this.engine.cancel();
+            })
+            .catch((error) => {
+                if (generation !== this.generation) return;
+                // The microphone would not reopen. Say so, and keep every
+                // word: a failure to continue is not a reason to lose what
+                // was already heard (DROVE-120).
+                this.generation += 1;
+                this.set(idle);
+                const kept = this.banked.trim();
+                if (kept.length > 0) {
+                    this.events.onCommit(kept, false, 'recogniser');
+                } else {
+                    this.events.onDiscard('recogniser');
+                }
+                this.events.onError(error instanceof Error ? error.message : String(error));
+            });
+        return true;
     }
 
     /**
@@ -345,8 +460,13 @@ export class DictationCapture {
     }
 
     private finish(reason: DictationEndReason, send: boolean): void {
-        // Read before settling: settling clears the live transcript.
-        const heard = this.state.transcript.trim();
+        // Read before settling: settling clears the live transcript. The two
+        // halves are kept apart on purpose (DROVE-140): the recogniser's final
+        // covers the segment it is finishing, so only that is put to it, and
+        // the sentences banked from earlier segments are joined back on
+        // afterwards where nothing can judge them away.
+        const banked = this.banked;
+        const live = this.heard;
         const generation = this.generation;
         this.generation += 1;
         this.set(settling);
@@ -360,7 +480,7 @@ export class DictationCapture {
                 // A final that says less than what is already on screen does
                 // NOT mean the words were never said (DROVE-105, DROVE-120);
                 // see keptTranscript.
-                const trimmed = keptTranscript(heard, text);
+                const trimmed = joinDictation(banked, keptTranscript(live, text)).trim();
                 if (trimmed.length === 0) {
                     this.events.onDiscard(reason);
                     return;

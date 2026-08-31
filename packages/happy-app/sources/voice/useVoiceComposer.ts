@@ -323,11 +323,18 @@ export function useVoiceComposer(options: VoiceComposerOptions): VoiceComposerSt
 
     // What the recogniser hears, and whether it gave up on its own.
     React.useEffect(() => {
-        // The task id is what makes a pause continue rather than overwrite
-        // (DROVE-140); it is undefined on a build that cannot restart a task,
-        // where every partial replaces exactly as it always did.
-        const partials = addDictationPartialListener((text, task) => capture.partial(text, task));
-        const ended = addDictationEndedListener((text, _reason, task) => capture.recogniserEnded(text, task));
+        // A partial is everything heard since the microphone opened, so it
+        // replaces the live segment and is never appended to itself; the
+        // sentences from before the last pause are the capture's own business
+        // (DROVE-140).
+        //
+        // The REASON is what makes a pause a pause. `final` is Apple
+        // finalising an utterance on silence, and the capture reopens the
+        // microphone on it rather than ending under his thumb. Dropping this
+        // argument on the floor is what left him with a dead mic mid-hold on
+        // every build that does not restart the task natively.
+        const partials = addDictationPartialListener((text) => capture.partial(text));
+        const ended = addDictationEndedListener((text, reason) => capture.recogniserEnded(text, reason));
         return () => {
             partials.remove();
             ended.remove();

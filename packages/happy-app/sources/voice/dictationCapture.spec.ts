@@ -251,11 +251,17 @@ describe('DictationCapture', () => {
         });
     });
 
+    /**
+     * The recogniser giving up. A `final` is a PAUSE and reopens the
+     * microphone instead of ending anything; that half lives in
+     * dictationContinuity.spec.ts (DROVE-140). These are the endings that
+     * really are endings: an error, or a reason nothing recognises.
+     */
     describe('the recogniser ending on its own', () => {
         it('ends the latch with the words kept and unsent', async () => {
             capture.begin('latch');
             await flush();
-            capture.recogniserEnded('that is all');
+            capture.recogniserEnded('that is all', 'No speech detected');
             expect(capture.current.active).toBe(false);
             expect(engine.cancels).toBe(1);
             expect(commits).toEqual([{ text: 'that is all', send: false, reason: 'recogniser' }]);
@@ -264,10 +270,31 @@ describe('DictationCapture', () => {
         it('ends a held mic too, so the button never lies about listening', async () => {
             capture.begin('hold');
             await flush();
-            capture.recogniserEnded('');
+            capture.recogniserEnded('', 'No speech detected');
             expect(capture.current.active).toBe(false);
             expect(commits).toEqual([]);
             expect(discards).toEqual(['recogniser']);
+        });
+
+        /**
+         * The reason is the whole of the difference, so it is asserted as a
+         * pair rather than one at a time. `final` is Apple ending an
+         * utterance after a silence and the capture outlives it; anything
+         * else is the recogniser saying it cannot go on.
+         */
+        it('a final keeps the mic open and an error closes it', async () => {
+            capture.begin('hold');
+            await flush();
+            capture.partial('mid sentence');
+            capture.recogniserEnded('mid sentence', 'final');
+            await flush();
+            expect(capture.current.active).toBe(true);
+            expect(engine.starts).toBe(2);
+
+            capture.recogniserEnded('', 'kAFAssistantErrorDomain 1110');
+            await flush();
+            expect(capture.current.active).toBe(false);
+            expect(commits).toEqual([{ text: 'mid sentence', send: false, reason: 'recogniser' }]);
         });
     });
 
@@ -367,7 +394,9 @@ describe('DictationCapture', () => {
             capture.begin('latch');
             await flush();
             capture.partial(heard);
-            capture.recogniserEnded(heard);
+            // An ERROR ends. A `final` is a pause and reopens the microphone
+            // instead; see dictationContinuity.spec.ts (DROVE-140).
+            capture.recogniserEnded(heard, 'No speech detected');
             await flush();
             expect(commits).toEqual([{ text: heard, send: false, reason: 'recogniser' }]);
         });
@@ -378,7 +407,7 @@ describe('DictationCapture', () => {
                 (c) => c.stop(),
                 (c) => c.cancel(),
                 (c) => c.tick(clock + DICTATION_LATCH_IDLE_MS + 1),
-                (c) => c.recogniserEnded(heard),
+                (c) => c.recogniserEnded(heard, 'No speech detected'),
             ];
             const sent: boolean[] = [];
             for (const end of ends) {
@@ -461,7 +490,7 @@ describe('DictationCapture', () => {
             capture.begin('latch');
             await flush();
             capture.partial('what I said before the pause');
-            capture.recogniserEnded('');
+            capture.recogniserEnded('', 'No speech detected');
             expect(discards).toEqual([]);
             expect(commits).toEqual([
                 { text: 'what I said before the pause', send: false, reason: 'recogniser' },
