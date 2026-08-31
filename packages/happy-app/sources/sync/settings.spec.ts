@@ -216,6 +216,7 @@ describe('settings', () => {
                 userMessageBubbleColor: 'gray',
                 usageLimitShowRemaining: false,
                 codeWrap: { terminal: false, code: false },
+                codeScroll: {},
                 streamTalk: { voiceId: null, rate: 0.52, pitch: 1.0, maxBacklogSeconds: 15 },
                 speakReplies: { on: 'auto' },
                 droverAnnounceVisual: true,
@@ -497,39 +498,70 @@ describe('settings', () => {
     });
 });
 
-describe('codeWrap (DROVE-95)', () => {
-    it('defaults both kinds off', () => {
-        expect(settingsDefaults.codeWrap).toEqual({ terminal: false, code: false });
-        expect(isCodeWrapOn(settingsDefaults, 'terminal')).toBe(false);
-        expect(isCodeWrapOn(settingsDefaults, 'code')).toBe(false);
+describe('codeWrap (DROVE-95, default flipped in DROVE-149)', () => {
+    it('wraps both kinds with no interaction', () => {
+        expect(settingsDefaults.codeScroll).toEqual({});
+        expect(isCodeWrapOn(settingsDefaults, 'terminal')).toBe(true);
+        expect(isCodeWrapOn(settingsDefaults, 'code')).toBe(true);
+    });
+
+    it('double-tap turns wrapping off, and again brings it back', () => {
+        const once = applySettings(settingsDefaults, toggleCodeWrap(settingsDefaults, 'terminal'));
+        expect(once.codeScroll).toEqual({ terminal: true });
+        expect(isCodeWrapOn(once, 'terminal')).toBe(false);
+        // The other kind is untouched, so it is still wrapped.
+        expect(isCodeWrapOn(once, 'code')).toBe(true);
+
+        const twice = applySettings(once, toggleCodeWrap(once, 'terminal'));
+        expect(twice.codeScroll).toEqual({ terminal: false });
+        expect(isCodeWrapOn(twice, 'terminal')).toBe(true);
+
+        const thrice = applySettings(twice, toggleCodeWrap(twice, 'terminal'));
+        expect(isCodeWrapOn(thrice, 'terminal')).toBe(false);
     });
 
     it('toggles one kind and leaves the other alone', () => {
-        const once = applySettings(settingsDefaults, toggleCodeWrap(settingsDefaults, 'terminal'));
-        expect(once.codeWrap).toEqual({ terminal: true, code: false });
-        expect(isCodeWrapOn(once, 'terminal')).toBe(true);
-        expect(isCodeWrapOn(once, 'code')).toBe(false);
+        const terminal = applySettings(settingsDefaults, toggleCodeWrap(settingsDefaults, 'terminal'));
+        const both = applySettings(terminal, toggleCodeWrap(terminal, 'code'));
+        expect(both.codeScroll).toEqual({ terminal: true, code: true });
+        expect(isCodeWrapOn(both, 'terminal')).toBe(false);
+        expect(isCodeWrapOn(both, 'code')).toBe(false);
+    });
 
-        const twice = applySettings(once, toggleCodeWrap(once, 'terminal'));
-        expect(twice.codeWrap).toEqual({ terminal: false, code: false });
+    it('reads one value per kind, so a merged run of shell cards moves together', () => {
+        // Consecutive terminal blocks fold into one card (DROVE-84). Every
+        // card inside it reads the same kind, so a double-tap on any member is
+        // a double-tap on the block.
+        const merged = applySettings(settingsDefaults, toggleCodeWrap(settingsDefaults, 'terminal'));
+        const perCard = [0, 1, 2].map(() => isCodeWrapOn(merged, 'terminal'));
+        expect(perCard).toEqual([false, false, false]);
+        const back = applySettings(merged, toggleCodeWrap(merged, 'terminal'));
+        expect([0, 1, 2].map(() => isCodeWrapOn(back, 'terminal'))).toEqual([true, true, true]);
+    });
 
-        const code = applySettings(once, toggleCodeWrap(once, 'code'));
-        expect(code.codeWrap).toEqual({ terminal: true, code: true });
+    it('ignores the legacy codeWrap key, which every synced account already has set to false', () => {
+        // DROVE-95 shipped codeWrap default {terminal: false, code: false} and
+        // settings sync POSTs the whole object, so that pair is on the server
+        // for anyone who ever changed a setting. It must not read as "off".
+        const legacy = settingsParse({ codeWrap: { terminal: false, code: false } });
+        expect(isCodeWrapOn(legacy, 'terminal')).toBe(true);
+        expect(isCodeWrapOn(legacy, 'code')).toBe(true);
     });
 
     it('survives a partial or missing object from another app version', () => {
-        expect(settingsParse({ codeWrap: { code: true } }).codeWrap).toEqual({ code: true });
-        expect(isCodeWrapOn({ codeWrap: { code: true } }, 'terminal')).toBe(false);
-        expect(isCodeWrapOn({ codeWrap: { code: true } }, 'code')).toBe(true);
-        expect(toggleCodeWrap({ codeWrap: undefined as any }, 'code')).toEqual({ codeWrap: { code: true } });
+        expect(settingsParse({ codeScroll: { code: true } }).codeScroll).toEqual({ code: true });
+        expect(isCodeWrapOn({ codeScroll: { code: true } }, 'terminal')).toBe(true);
+        expect(isCodeWrapOn({ codeScroll: { code: true } }, 'code')).toBe(false);
+        expect(toggleCodeWrap({ codeScroll: undefined as any }, 'code')).toEqual({ codeScroll: { code: true } });
         // A wrong type falls back to the default rather than poisoning the rest.
-        expect(settingsParse({ codeWrap: 'yes', viewInline: true }).codeWrap).toEqual(settingsDefaults.codeWrap);
+        expect(settingsParse({ codeScroll: 'yes', viewInline: true }).codeScroll).toEqual(settingsDefaults.codeScroll);
     });
 
     it('persists through the sync payload', () => {
-        const on = applySettings(settingsDefaults, toggleCodeWrap(settingsDefaults, 'code'));
-        expect(settingsToSyncPayload(on).codeWrap).toEqual({ terminal: false, code: true });
-        expect(settingsParse(settingsToSyncPayload(on)).codeWrap).toEqual({ terminal: false, code: true });
+        const off = applySettings(settingsDefaults, toggleCodeWrap(settingsDefaults, 'code'));
+        expect(settingsToSyncPayload(off).codeScroll).toEqual({ code: true });
+        expect(settingsParse(settingsToSyncPayload(off)).codeScroll).toEqual({ code: true });
+        expect(isCodeWrapOn(settingsParse(settingsToSyncPayload(off)), 'code')).toBe(false);
     });
 
     describe('streamTalk (DROVE-97, threshold reworked in DROVE-108)', () => {

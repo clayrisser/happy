@@ -29,10 +29,10 @@ export const CommandView = React.memo<CommandViewProps>(({
     hideEmptyOutput,
 }) => {
     const { theme } = useUnistyles();
-    // Double-tap flips soft wrap for every terminal card (DROVE-95). With
-    // wrap on, the text shrinks to the card and long tokens break at any
-    // character; with it off the card lays out as it always did, and the
-    // full view puts it in a horizontal ScrollView.
+    // Terminal cards arrive wrapped (DROVE-149): the text shrinks to the card
+    // and long tokens break at any character. A double-tap turns wrapping off
+    // for every terminal card, which lays the text out on one line and puts
+    // the full view back in a horizontal ScrollView; a second brings it back.
     const [wrap, toggleWrap] = useCodeWrap('terminal');
     // Use legacy output if new props aren't provided
     const hasNewProps = stdout !== undefined || stderr !== undefined || error !== undefined;
