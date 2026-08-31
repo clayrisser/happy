@@ -57,6 +57,10 @@ vi.mock('@/constants/Typography', () => ({ Typography: { default: () => ({}) } }
 vi.mock('./BubblePressable', () => ({ BubblePressable: host('BubblePressable') }));
 vi.mock('./GlassChromeControl', () => ({ GlassChromeSurface: host('GlassChromeSurface') }));
 vi.mock('./NativeSettingsMenu', () => ({ NativeSettingsMenu: host('NativeSettingsMenu') }));
+// The popover reaches haptics and the store, which reach expo-modules-core.
+// This file is about the capsule; EffortSliderPopover has its own module and
+// effortSlider.spec.ts holds the rules it draws (DROVE-200).
+vi.mock('./EffortSliderPopover', () => ({ EffortSliderPopover: host('EffortSliderPopover') }));
 
 const { ComposerSessionControls } = await import('./ComposerSessionControls');
 const { COMPOSER_CONTROL_PALETTE } = await import('./composerControlColour');
@@ -168,5 +172,83 @@ describe('the colour each glyph is drawn in (DROVE-176)', () => {
         const text = mount().root.findAllByType('Text' as any)
             .find((node: any) => node.props.children === 'Opus 5 1M');
         expect(text.props.style.color).toBe('text');
+    });
+});
+
+/**
+ * The effort segment as a SLIDER (DROVE-200). The rules live in
+ * effortSlider.spec.ts; these are the ones only a render can show.
+ */
+describe('the effort segment when it is a slider', () => {
+    const scale = { keys: ['low', 'medium', 'high', 'xhigh', 'max', 'ultracode'], names: ['Low', 'Medium', 'High', 'xHigh', 'Max', 'Ultracode'] };
+    function slider(overrides: Record<string, unknown> = {}) {
+        return {
+            active: false,
+            index: 3,
+            onPressIn: () => {},
+            onMove: () => {},
+            onRelease: () => {},
+            tapStop: () => {},
+            tapAuto: () => {},
+            step: () => {},
+            dismiss: () => {},
+            state: { phase: 'closed', anchorX: 0, anchorIndex: 3, index: 3, grabbed: false },
+            placement: null,
+            ...overrides,
+        } as any;
+    }
+
+    it('takes the touch for the whole gesture rather than letting the scroll view have it back', () => {
+        const renderer = mount({ effortSlider: slider(), effortScale: scale });
+        const segment = press(renderer, 'Reasoning effort');
+        expect(segment.props.onResponderGrant).toBeTypeOf('function');
+        expect(segment.props.onResponderMove).toBeTypeOf('function');
+        expect(segment.props.onResponderRelease).toBeTypeOf('function');
+        expect(segment.props.onResponderTerminationRequest()).toBe(false);
+    });
+
+    it('is adjustable, and moves a notch per VoiceOver action', () => {
+        const moves: number[] = [];
+        const renderer = mount({
+            effortSlider: slider({ step: (delta: number) => moves.push(delta) }),
+            effortScale: scale,
+        });
+        const segment = press(renderer, 'Reasoning effort');
+        expect(segment.props.accessibilityRole).toBe('adjustable');
+        segment.props.onAccessibilityAction({ nativeEvent: { actionName: 'increment' } });
+        segment.props.onAccessibilityAction({ nativeEvent: { actionName: 'decrement' } });
+        expect(moves).toEqual([1, -1]);
+    });
+
+    it('points the needle at the thumb while a drag runs, so the two cannot disagree', () => {
+        const needle = (renderer: any) => renderer.root.findByType('Line' as any).props;
+        // At rest the needle reads the session's own level, the fourth of six.
+        const resting = needle(mount({ effortSlider: slider(), effortScale: scale }));
+        // Mid-drag it reads the THUMB, which is at the ceiling: hard right,
+        // and the warning amber the DROVE-176 ramp ends on.
+        const dragging = needle(mount({
+            effortSlider: slider({ active: true, index: 5 }),
+            effortScale: scale,
+        }));
+        expect(dragging.stroke).toBe(palette.effort[2]);
+        expect(dragging.x2).toBeGreaterThan(resting.x2);
+        expect(dragging.stroke).not.toBe(resting.stroke);
+    });
+
+    it('hangs the popover off a wrapper that clips nothing, outside the glass', () => {
+        const renderer = mount({ effortSlider: slider({ active: true }), effortScale: scale });
+        const popover = renderer.root.findByType('EffortSliderPopover' as any);
+        expect(popover).toBeTruthy();
+        // The glass surface is a sibling of the popover, not its parent: the
+        // fallback material clips to its own bounds (DROVE-153).
+        const surface = renderer.root.findByType('GlassChromeSurface' as any);
+        expect(surface.findAllByType('EffortSliderPopover' as any)).toEqual([]);
+    });
+
+    it('keeps the picker when no slider is handed in, so a desktop still lists it', () => {
+        const renderer = mount();
+        const segment = press(renderer, 'Reasoning effort');
+        expect(segment.props.onResponderGrant).toBeUndefined();
+        expect(renderer.root.findAllByType('EffortSliderPopover' as any)).toEqual([]);
     });
 });
