@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import {
+    accountLoginPath,
+    accountLoginSessionName,
     buildAccountLoginArgv,
+    buildAccountLoginTmuxArgv,
     startAccountLogin,
     validAccountName,
 } from './accountLogin'
@@ -51,7 +54,10 @@ describe('startAccountLogin', () => {
             { droverBin: '/d/bin/drover', exists: () => true, launch },
         )
         expect(result).toEqual({ started: true, name: 'alt' })
-        expect(launch).toHaveBeenCalledWith(['/d/bin/drover', 'account', 'login', 'alt'])
+        expect(launch).toHaveBeenCalledWith(
+            ['/d/bin/drover', 'account', 'login', 'alt'],
+            'login-alt',
+        )
     })
 
     it('lets the login name itself when the phone sent no name', async () => {
@@ -61,7 +67,10 @@ describe('startAccountLogin', () => {
             { droverBin: '/d/bin/drover', exists: () => true, launch },
         )
         expect(result).toEqual({ started: true, name: null })
-        expect(launch).toHaveBeenCalledWith(['/d/bin/drover', 'account', 'login'])
+        expect(launch).toHaveBeenCalledWith(
+            ['/d/bin/drover', 'account', 'login'],
+            'login-new',
+        )
     })
 
     it('refuses a name that would break, before anything is spawned', async () => {
@@ -82,5 +91,77 @@ describe('startAccountLogin', () => {
             { droverBin: '/nope/bin/drover', exists: () => false, launch },
         )).rejects.toThrow(/DROVER_BIN/)
         expect(launch).not.toHaveBeenCalled()
+    })
+})
+
+describe('accountLoginSessionName', () => {
+    it('is a pure function of the account, because the name IS the lock', () => {
+        // Two taps for the same account have to want the same session name, or
+        // tmux has nothing to refuse and both logins race for one config dir.
+        expect(accountLoginSessionName('alt')).toBe('login-alt')
+        expect(accountLoginSessionName('alt')).toBe(accountLoginSessionName('alt'))
+    })
+
+    it('spells an email address in what tmux allows in a session name', () => {
+        // tmux forbids `.` and `:` in a session name, and an account is named
+        // after the address that signed in.
+        expect(accountLoginSessionName('clayrisser@gmail.com'))
+            .toBe('login-clayrisser-gmail-com')
+    })
+
+    it('gives a nameless add a placeholder both taps collide on', () => {
+        // Which account-N it lands on is decided inside the shell and renamed
+        // to there; until then two nameless adds must not both start.
+        expect(accountLoginSessionName()).toBe('login-new')
+        expect(accountLoginSessionName('')).toBe('login-new')
+        expect(accountLoginSessionName('   ')).toBe('login-new')
+    })
+})
+
+describe('accountLoginPath', () => {
+    it('appends the directory Claude Code installs into', () => {
+        // DROVE-212 in one line: ~/.local/bin is on an interactive shell's PATH
+        // and not on a launchd job's, so every login from the phone died on
+        // `command -v claude` with its stderr pointed at /dev/null.
+        const path = accountLoginPath({ HOME: '/', PATH: '/usr/bin:/bin' })
+        expect(path.startsWith('/usr/bin:/bin')).toBe(true)
+        expect(path.split(':')).toContain('/usr/local/bin')
+    })
+
+    it('drops node_modules/.bin, where `claude` is a stub with no shebang', () => {
+        const path = accountLoginPath({
+            HOME: '/',
+            PATH: '/repo/node_modules/.bin:/usr/bin',
+        })
+        expect(path.split(':')).not.toContain('/repo/node_modules/.bin')
+        expect(path.split(':')).toContain('/usr/bin')
+    })
+
+    it('adds nothing twice', () => {
+        const path = accountLoginPath({ HOME: '/', PATH: '/usr/local/bin:/usr/bin' })
+        expect(path.split(':').filter((d) => d === '/usr/local/bin')).toHaveLength(1)
+    })
+})
+
+describe('buildAccountLoginTmuxArgv', () => {
+    it('runs on its own socket so the session is not in anyone\'s picker', () => {
+        const argv = buildAccountLoginTmuxArgv({
+            argv: ['/d/bin/drover', 'account', 'login'],
+            session: 'login-new',
+            path: '/usr/bin',
+        })
+        expect(argv.slice(0, 5)).toEqual(['tmux', '-L', 'drover-login', 'new-session', '-d'])
+        expect(argv.slice(-3)).toEqual(['/d/bin/drover', 'account', 'login'])
+    })
+
+    it('names the window control, which is how a live login is told from a corpse', () => {
+        const argv = buildAccountLoginTmuxArgv({
+            argv: ['/d/bin/drover', 'account', 'login'],
+            session: 'login-new',
+            path: '/usr/bin',
+        })
+        expect(argv).toContain('control')
+        expect(argv).toContain('DROVER_LOGIN_PATH=/usr/bin')
+        expect(argv).toContain('DROVER_LOGIN_SESSION=login-new')
     })
 })
