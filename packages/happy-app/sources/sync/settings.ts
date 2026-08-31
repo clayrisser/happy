@@ -60,6 +60,20 @@ export const streamTalkDefaults: Required<StreamTalk> = {
     pitch: 1.0,
     maxLagSeconds: 15,
 };
+// The three feedback channels and how audio may answer (DROVE-72). Clay's
+// four ways of working (silent haptic, eyes-free audio, direct, hands-free
+// voice) are saved COMBINATIONS of these four keys, never code paths, and a
+// mode is derived from them rather than stored: a label that can disagree with
+// the switches under it is worse than none. Flat, one key per switch, so a
+// device that knows only some of them merges the rest untouched.
+//
+// These are THIS PHONE's switches, the same way the wrist has its own: a
+// buzz Clay cannot silence from the device in his hand is the failure the
+// local layer exists to prevent. Every write is also mirrored to the bus on
+// each connected Mac (droverChannels.mirrorToMachines), which is where the
+// event's `delivery` is stamped for the terminal, the push and the wrist.
+export const DROVER_ANSWER_AUDIO = ['off', 'click', 'speech', 'both'] as const;
+export type DroverAnswerAudio = typeof DROVER_ANSWER_AUDIO[number];
 
 export const SettingsSchema = z.object({
     // Schema version for compatibility detection
@@ -94,6 +108,10 @@ export const SettingsSchema = z.object({
     usageLimitShowRemaining: z.boolean().describe('Show plan rate limits as quota remaining instead of quota used'),
     codeWrap: CodeWrapSchema.describe('Soft-wrap monospace text in terminal cards and code blocks, toggled by double-tap'),
     streamTalk: StreamTalkSchema.describe('Read-aloud voice: chosen voice identifier, rate, pitch and the lag threshold before skipping ahead'),
+    droverAnnounceVisual: z.boolean().describe('Visual channel: the alert push and the gum client announce a Cattle Drover prompt'),
+    droverAnnounceHaptic: z.boolean().describe('Haptic channel: the phone taps and the wrist buzzes when a Cattle Drover prompt arrives'),
+    droverAnnounceAudio: z.boolean().describe('Audio channel: a Cattle Drover prompt is spoken aloud when it arrives'),
+    droverAnswerAudio: z.enum(DROVER_ANSWER_AUDIO).describe('How audio may answer a prompt: off, a headphone click, dictation, or both'),
 
     // Drives the archive-visibility toggle: it hides archived sessions, not
     // merely disconnected ones. The key keeps its original name because these
@@ -180,6 +198,13 @@ export const settingsDefaults: Settings = {
     usageLimitShowRemaining: false,
     codeWrap: { terminal: false, code: false },
     streamTalk: { ...streamTalkDefaults },
+    // Visual and haptic on, matching the bus's built-in defaults: the push and
+    // the wrist buzz are what Clay already has. Audio off until DROVE-73's
+    // measurements say what answering by click costs.
+    droverAnnounceVisual: true,
+    droverAnnounceHaptic: true,
+    droverAnnounceAudio: false,
+    droverAnswerAudio: 'off',
 
     hideInactiveSessions: true,
     sortSessionsByActivity: true,

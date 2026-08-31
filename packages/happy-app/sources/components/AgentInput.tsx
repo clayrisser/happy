@@ -50,6 +50,7 @@ import { LiveMicBanner } from './LiveMicBanner';
 import type { MicButtonState } from '@/voice/micButton';
 import type { DictationCaptureState } from '@/voice/dictationCapture';
 import { ComposerSheetRow } from './ComposerSheetRow';
+import { DroverChannelsSheet } from './DroverChannelsSheet';
 import { buildSessionPillLabel, buildSessionSheetRows, type SessionSheetRowKey } from './sessionPillLabel';
 
 interface AgentInputProps {
@@ -939,12 +940,14 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         setOpenPicker(row);
     }, []);
 
-    // Long-press on the primary button opens the channel sheet, where the
-    // audio channel (read aloud) lives now that its icon is off the composer.
+    // Long-press on the primary button opens the channel sheet (DROVE-72):
+    // the mode picker and the three channel switches, with DROVE-30's
+    // read-aloud switch kept inside the audio channel. DROVE-83 put audio
+    // here first because the sheet did not exist yet; the long-press stays as
+    // the shortcut and the sheet is DroverChannelsSheet.
     const handleChannelsLongPress = React.useCallback(() => {
-        if (!props.onReadAloudToggle) return;
         handlePickerPress('channels');
-    }, [handlePickerPress, props.onReadAloudToggle]);
+    }, [handlePickerPress]);
 
     // Handle settings selection
     const handleSettingsSelect = React.useCallback((mode: PermissionMode) => {
@@ -1637,21 +1640,12 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                         })}
                                     </View>
                                 ) : openPicker === 'channels' ? (
-                                    <View style={styles.overlaySection}>
-                                        <Text style={styles.overlaySectionTitle}>
-                                            {t('agentInput.channels.title')}
-                                        </Text>
-                                        <ComposerSheetRow
-                                            kind="toggle"
-                                            icon={props.readAloudEnabled ? 'volume-high-outline' : 'volume-mute-outline'}
-                                            title={t('agentInput.channels.audio')}
-                                            value={!!props.readAloudEnabled}
-                                            onValueChange={() => {
-                                                hapticsLight();
-                                                props.onReadAloudToggle?.();
-                                            }}
-                                        />
-                                    </View>
+                                    <DroverChannelsSheet
+                                        readAloudEnabled={props.readAloudEnabled}
+                                        onReadAloudToggle={props.onReadAloudToggle}
+                                        sectionStyle={styles.overlaySection}
+                                        titleStyle={styles.overlaySectionTitle}
+                                    />
                                 ) : openPicker === 'permission' ? (
                                     <View style={styles.overlaySection}>
                                         <Text style={styles.overlaySectionTitle}>

@@ -64,7 +64,52 @@ export interface DroverEvent {
         cwd?: string | null
         account?: string | null
     }
-    resolution?: { action: string; optionId?: string; optionIds?: string[]; text?: string; by: string } | null
+    /**
+     * Which channels ANNOUNCE this event and which may ANSWER it (DROVE-72).
+     *
+     * Stamped by the bus from the settings store; the bridge reads this and
+     * never a setting. Absent on an event that came off a journal older than
+     * the field, which reads as announced on a screen and answered on one.
+     */
+    delivery?: DroverDelivery | null
+    resolution?: {
+        action: string
+        optionId?: string
+        optionIds?: string[]
+        text?: string
+        by: string
+        /** `visual` or `audio`: which channel carried the answer (DROVE-72). */
+        channel?: string
+    } | null
+}
+
+export interface DroverDelivery {
+    announce: ('visual' | 'haptic' | 'audio')[]
+    answer: ('visual' | 'audio')[]
+    audioInput: 'click' | 'speech' | 'both' | null
+}
+
+/** What an event with no `delivery` reads as: every subscriber's old assumption. */
+const LEGACY_DELIVERY: DroverDelivery = { announce: ['visual'], answer: ['visual'], audioInput: null }
+
+export function deliveryOf(ev: Pick<DroverEvent, 'delivery'>): DroverDelivery {
+    return ev.delivery ?? LEGACY_DELIVERY
+}
+
+/**
+ * What the bridge FIRES for a new card, off `delivery.announce` alone (DROVE-72).
+ *
+ * The card itself is always mirrored: it is the inbox and the answer surface,
+ * and DROVE-74's rule is that visual-off must not hide it. What the toggle
+ * gates is the ALERT push — the one with a title, a body and a sound, the
+ * thing that lights the lock screen — and the sound on it is audio's half.
+ * The silent background wake is transport, not an announcement: it carries
+ * the card and the dismissal to the wrist and shows nothing, so it always
+ * goes. Pure, so the decision is tested without a bus or a phone.
+ */
+export function announcePlanFor(ev: Pick<DroverEvent, 'delivery'>): { alert: boolean; sound: boolean } {
+    const announce = deliveryOf(ev).announce
+    return { alert: announce.includes('visual'), sound: announce.includes('audio') }
 }
 
 /** What the app sends back over the `permission` RPC when a card is answered. */
@@ -158,6 +203,10 @@ function droverEventFor(ev: DroverEvent) {
             ...(ev.reason ? { reason: ev.reason } : {}),
             ...(ev.preview ? { command: ev.preview } : {}),
             ...(typeof ev.createdAt === 'number' ? { createdAt: ev.createdAt } : {}),
+            // Which channels announce and may answer, verbatim off the bus
+            // (DROVE-72). The phone buzzes and speaks off THIS, never off a
+            // setting of its own, so the card is the whole contract.
+            ...(ev.delivery ? { delivery: ev.delivery } : {}),
         },
     }
 }
@@ -319,6 +368,20 @@ function answerCandidates(answer: PermissionAnswer): string[] {
 }
 
 /**
+ * Which surface answered and over which channel, read off the answer's own
+ * stamps (DROVE-72). `via: 'watch'` is what droverWatchFeed puts on a wrist
+ * answer; `channel: 'audio'` is what the phone's audio answerer puts on a
+ * headphone click or a dictated pick. Anything else is a thumb on the phone.
+ */
+function answererOf(answer: PermissionAnswer): { by: string; channel: 'visual' | 'audio' } {
+    const input = answer.updatedInput as { via?: unknown; channel?: unknown } | undefined
+    return {
+        by: input?.via === 'watch' ? 'watch' : 'phone',
+        channel: input?.channel === 'audio' ? 'audio' : 'visual',
+    }
+}
+
+/**
  * The bus resolution an app answer means for THIS event, or null when it means
  * nothing the bus will take.
  *
@@ -343,6 +406,13 @@ export function busResolutionFor(
     // own refusal for the same namespace, so no event and no answer shape can
     // make a demo id resolve anything.
     if (isDroverDemoId(answer.id) || isDroverDemoId(ev?.id)) return null
+    // WHO and OVER WHICH CHANNEL (DROVE-72). This sent `...who` for every
+    // answer, so the bus could not tell a wrist from a thumb on the phone —
+    // which made "two channels answering the same event" unprovable on the
+    // ledger. The wrist stamps `via: 'watch'` on its answer; the audio
+    // answerer (headphone click, dictation) stamps `channel: 'audio'`;
+    // everything else is a thumb on a screen.
+    const who = answererOf(answer)
     if (ev?.kind === 'question') {
         // There is no "no" for a question. Denying one would resolve it for
         // every other surface with no answer to hand back.
@@ -363,14 +433,14 @@ export function busResolutionFor(
                 if (option && !ids.includes(option.id)) ids.push(option.id)
             }
             if (ids.length > 1) {
-                return { action: 'option', optionId: ids[0], optionIds: ids, by: 'happy' }
+                return { action: 'option', optionId: ids[0], optionIds: ids, ...who }
             }
         }
         for (const candidate of candidates) {
             const option = (ev.options ?? []).find((o) => o.id === candidate || o.label === candidate)
-            if (option) return { action: 'option', optionId: option.id, by: 'happy' }
+            if (option) return { action: 'option', optionId: option.id, ...who }
         }
-        if (candidates.length) return { action: 'text', text: candidates[0], by: 'happy' }
+        if (candidates.length) return { action: 'text', text: candidates[0], ...who }
         return null
     }
     if (ev?.kind === 'todo') {
@@ -393,7 +463,7 @@ export function busResolutionFor(
         const chosen = (ev.options ?? []).find((o) =>
             answerCandidates(answer).some((c) => c === o.id || c === o.label)
         )
-        if (chosen) return { action: 'option', optionId: chosen.id, by: 'happy' }
+        if (chosen) return { action: 'option', optionId: chosen.id, ...who }
         return null
     }
     // ALLOW, AND STOP ASKING. Both of the app's spellings mean it: the Claude
@@ -406,7 +476,7 @@ export function busResolutionFor(
         ((answer.allowTools?.length ?? 0) > 0 || answer.decision === 'approved_for_session')
     return {
         action: answer.approved ? 'allow' : 'deny',
-        by: 'happy',
+        ...who,
         ...(forSession ? { scope: 'session' } : {}),
         ...(answer.reason ? { text: answer.reason } : {}),
     }
@@ -588,31 +658,42 @@ export async function runDroverBridge(): Promise<void> {
             ...s,
             requests: { ...(s.requests ?? {}), [ev.id]: card },
         }))
-        // The push waits on one registry read so it can name the session that
-        // RAISED the gate (DROVE-94); the card above does not, so the phone's
-        // list is current whether or not the registry answers. The wake below
-        // does not wait either: the wrist reads the gate off the snapshot, not
-        // off the push.
-        void originRegistry.happySessionIdFor(ev.origin?.sessionId).then((raising) => {
-            if (ev.origin?.sessionId && !raising) {
-                logger.debug(`[drover] no happy session for origin ${ev.origin.sessionId}; push routes to the inbox`)
-            }
-            api.push().sendSessionNotification({
-                // A question is not a permission request, and a to-do is neither.
-                // The push TITLE is picked off this ("Clarification needed" /
-                // "Needs you" / "Permission request"), which on a lock screen is
-                // most of what you get to read.
-                kind: pushKindFor(ev),
-                // The body is the session summary, and the bridge holds ONE session
-                // for the whole machine, so every push read the same fixed line and
-                // said nothing about what was being asked or by which agent.
-                metadata: pushMetadata(client.getMetadata(), ev),
-                data: gatePushData(ev, card.tool, raising),
+        // The card ALWAYS mirrors, whatever the toggles say: it is the inbox
+        // and the answer surface. What `delivery.announce` gates is the alert
+        // push below, visual's half of the announcement, and the sound on it,
+        // which is audio's (DROVE-72). Nothing here reads a setting.
+        const plan = announcePlanFor(ev)
+        if (!plan.alert) {
+            logger.debug(`[drover] no alert push for ${ev.id}: visual announce is off`)
+        } else {
+            // The push waits on one registry read so it can name the session that
+            // RAISED the gate (DROVE-94); the card above does not, so the phone's
+            // list is current whether or not the registry answers. The wake below
+            // does not wait either: the wrist reads the gate off the snapshot, not
+            // off the push.
+            void originRegistry.happySessionIdFor(ev.origin?.sessionId).then((raising) => {
+                if (ev.origin?.sessionId && !raising) {
+                    logger.debug(`[drover] no happy session for origin ${ev.origin.sessionId}; push routes to the inbox`)
+                }
+                api.push().sendSessionNotification({
+                    // A question is not a permission request, and a to-do is neither.
+                    // The push TITLE is picked off this ("Clarification needed" /
+                    // "Needs you" / "Permission request"), which on a lock screen is
+                    // most of what you get to read.
+                    kind: pushKindFor(ev),
+                    // The body is the session summary, and the bridge holds ONE session
+                    // for the whole machine, so every push read the same fixed line and
+                    // said nothing about what was being asked or by which agent.
+                    metadata: pushMetadata(client.getMetadata(), ev),
+                    data: gatePushData(ev, card.tool, raising),
+                    sound: plan.sound,
+                })
             })
-        })
-        // The alert buzzes the phone; this wakes the app's JS so the WRIST
-        // learns about the gate while the app is suspended. Throttling,
-        // coalescing and the direct-to-Expo send all live in the push client.
+        }
+        // Transport, never an announcement, so it ALWAYS fires: this wakes the
+        // app's JS so the WRIST learns about the gate while the app is
+        // suspended, and it shows nothing on its own. Throttling, coalescing
+        // and the direct-to-Expo send all live in the push client.
         api.push().sendBackgroundWake('gate-raised')
         logger.debug(`[drover] mirrored ${ev.kind} ${ev.id}: ${ev.title}`)
     }
@@ -711,6 +792,20 @@ export async function runDroverBridge(): Promise<void> {
                         try {
                             ev = JSON.parse(line.slice(6))
                         } catch {
+                            continue
+                        }
+                        // A toggle moved (DROVE-72). Mirrored into the bridge
+                        // session's state so the phone and the wrist SEE the
+                        // machine's channels without polling the bus they
+                        // cannot reach; the app reads it out of the store it
+                        // already subscribes to.
+                        if (eventType === 'settings') {
+                            const frame = ev as unknown as { at?: number; defaults?: Record<string, unknown> }
+                            if (frame.defaults) {
+                                const droverSettings = { capturedAt: frame.at ?? Date.now(), ...frame.defaults }
+                                client.updateAgentState((s) => ({ ...s, droverSettings }))
+                                logger.debug('[drover] mirrored a settings change into the bridge session')
+                            }
                             continue
                         }
                         // `todo` joins the two kinds that get a card (DROVE-53).

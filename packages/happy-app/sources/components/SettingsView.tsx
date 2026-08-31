@@ -235,6 +235,15 @@ export const SettingsView = React.memo(function SettingsView({
                     icon={<Ionicons name="swap-horizontal-outline" size={29} color="#FF9500" />}
                     onPress={() => router.push('/settings/flip-policy' as any)}
                 />
+                {/* The three feedback channels and the four ways of working
+                    (DROVE-72). The composer's long-press sheet is the
+                    shortcut; this is the page. */}
+                <Item
+                    title="Channels"
+                    subtitle="Visual, audio, haptic, and the mode they spell"
+                    icon={<Ionicons name="notifications-outline" size={29} color="#AF52DE" />}
+                    onPress={() => router.push('/settings/channels' as any)}
+                />
                 {/* Every channel on demand (DROVE-75): each wrist buzz, the
                     voices, every card shape, and a real push, without waiting
                     for a gate. Shown once on first run; this is the way back. */}

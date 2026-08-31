@@ -2,6 +2,23 @@ import { describe, it, expect } from 'vitest';
 import { SettingsSchema, settingsParse, applySettings, settingsDefaults, settingsToSyncPayload, isCodeWrapOn, toggleCodeWrap, resolveStreamTalk, updateStreamTalk, type Settings } from './settings';
 
 describe('settings', () => {
+    describe('the delivery channels (DROVE-72)', () => {
+        it('ships visual and haptic on, audio off, and a screen as the only answerer', () => {
+            expect(settingsDefaults.droverAnnounceVisual).toBe(true);
+            expect(settingsDefaults.droverAnnounceHaptic).toBe(true);
+            expect(settingsDefaults.droverAnnounceAudio).toBe(false);
+            expect(settingsDefaults.droverAnswerAudio).toBe('off');
+        });
+
+        it('takes each switch on its own and refuses a value that is not a switch', () => {
+            expect(settingsParse({ droverAnnounceHaptic: false }).droverAnnounceHaptic).toBe(false);
+            expect(settingsParse({ droverAnswerAudio: 'click' }).droverAnswerAudio).toBe('click');
+            // A string "false" is the bug the bus refuses too; here it falls to the default.
+            expect(settingsParse({ droverAnnounceHaptic: 'false' }).droverAnnounceHaptic).toBe(true);
+            expect(settingsParse({ droverAnswerAudio: 'loud' }).droverAnswerAudio).toBe('off');
+        });
+    });
+
     describe('settingsParse', () => {
         it('should return defaults when given invalid input', () => {
             expect(settingsParse(null)).toEqual(settingsDefaults);
@@ -201,6 +218,10 @@ describe('settings', () => {
                 usageLimitShowRemaining: false,
                 codeWrap: { terminal: false, code: false },
                 streamTalk: { voiceId: null, rate: 0.52, pitch: 1.0, maxLagSeconds: 15 },
+                droverAnnounceVisual: true,
+                droverAnnounceHaptic: true,
+                droverAnnounceAudio: false,
+                droverAnswerAudio: 'off',
                 hideInactiveSessions: true,
                 sortSessionsByActivity: true,
                 expResumeSession: true,
