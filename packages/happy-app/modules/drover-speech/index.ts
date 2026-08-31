@@ -78,22 +78,60 @@ export async function getDictationSupport(localeTag?: string): Promise<Dictation
     }
 }
 
+/**
+ * The one dictation in flight, from the start call until stop or cancel
+ * settles. Native runs its permission prompts asynchronously, so a second
+ * press in that window used to reach it as a second start; native now rejects
+ * that, but a rejection there reads to the composer as a mic that failed when
+ * it is in fact live. So the second start joins the first instead, and a stop
+ * that arrives before the start has settled waits for it, so the microphone
+ * it stops is the one that was actually opened (DROVE-96).
+ */
+let dictationInFlight: Promise<boolean> | null = null;
+
 export async function startDictation(localeTag?: string): Promise<boolean> {
     if (!native) throw new Error('this build has no speech module');
-    return native.startDictation(localeTag ?? null);
+    if (dictationInFlight) return dictationInFlight;
+    const started = native.startDictation(localeTag ?? null);
+    dictationInFlight = started;
+    try {
+        return await started;
+    } catch (error) {
+        if (dictationInFlight === started) dictationInFlight = null;
+        throw error;
+    }
+}
+
+/** Let a pending start settle before acting on it; its failure is its own. */
+async function awaitDictationStart(): Promise<void> {
+    const pending = dictationInFlight;
+    if (!pending) return;
+    try {
+        await pending;
+    } catch {
+        // A start that failed has nothing to stop; the caller carries on.
+    }
 }
 
 export async function stopDictation(): Promise<string> {
     if (!native) return '';
-    return native.stopDictation();
+    await awaitDictationStart();
+    try {
+        return await native.stopDictation();
+    } finally {
+        dictationInFlight = null;
+    }
 }
 
 export async function cancelDictation(): Promise<void> {
     if (!native) return;
+    await awaitDictationStart();
     try {
         await native.cancelDictation();
     } catch {
         // Same reasoning as stopSpeaking: tearing down must not throw.
+    } finally {
+        dictationInFlight = null;
     }
 }
 
