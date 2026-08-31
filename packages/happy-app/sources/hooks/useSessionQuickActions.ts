@@ -12,7 +12,7 @@ import { resolveMessageModeMeta, UnsupportedPermissionModeError } from '@/sync/m
 import { t } from '@/text';
 import { HappyError } from '@/utils/errors';
 import { copySessionMetadataToClipboard, copySessionMetadataAndLogsToClipboard } from '@/utils/copySessionMetadataToClipboard';
-import { useSessionStatus } from '@/utils/sessionUtils';
+import { getSessionName, useSessionStatus } from '@/utils/sessionUtils';
 import { isMachineOnline } from '@/utils/machineUtils';
 import { getSessionForkSource } from '@/utils/sessionFork';
 import { useRouter } from 'expo-router';
@@ -21,6 +21,7 @@ import { DuplicateSheet } from '@/components/DuplicateSheet';
 import type { SessionActionShortcutId } from '@/keyboard/shortcuts';
 import { isRigMetadata } from '@/sync/rig';
 import { collectDroverAccountsFromSessions, droverFlipMessage } from '@/utils/droverAccounts';
+import { flipRiskWarning, sessionsLosingRemoteControl } from '@/utils/droverSessionAccount';
 
 /**
  * Menu rows are keyed by their keyboard shortcut where one exists. `flip-account`
@@ -206,6 +207,54 @@ export function useSessionQuickActions(
         void Promise.resolve(sync.sendMessage(session.id, droverFlipMessage(account))).catch(() => {});
     }, [session.id]);
 
+    // DROVE-37, said BEFORE the flip rather than after it. Claude Code binds
+    // Remote Control to one account per machine, so moving this session drops
+    // every other live session bound to a different one, and Clay's experience
+    // of that was a chat going silent with no explanation. The CLI announces it
+    // once the flip has happened; the phone knows the same sessions and can say
+    // it while it is still a choice. Read from the store at press time rather
+    // than subscribed: this hook runs once per row in the session lists, and a
+    // list of every session per row is a real cost for a sentence nobody sees
+    // until they tap.
+    //
+    // It warns and never blocks. A flip is usually asked for BECAUSE an account
+    // ran out, so refusing it would strand the session that asked.
+    const confirmFlip = React.useCallback((account: string | null) => {
+        const state = storage.getState();
+        const sessions = state.isDataReady
+            // Side chats are hidden children of a session, not panes of their
+            // own, so they are not sessions that can lose Remote Control.
+            ? Object.values(state.sessions).filter((s) => !s.metadata?.isSideChat)
+            : [];
+        const atRisk = sessionsLosingRemoteControl({
+            sessions,
+            selfId: session.id,
+            target: account,
+            nameOf: getSessionName,
+        });
+        const warning = flipRiskWarning(atRisk, account);
+        if (!warning) {
+            sendFlip(account);
+            return;
+        }
+        // Next tick: this runs from the account picker's own button handler, so
+        // the picker is still tearing down. Presenting straight into that is
+        // the classic way a second alert never appears at all.
+        setTimeout(() => {
+            Modal.alert(
+                'Other sessions will go quiet',
+                warning,
+                [
+                    { text: t('common.cancel'), style: 'cancel' },
+                    {
+                        text: account ? `Move to ${account}` : 'Move anyway',
+                        onPress: () => sendFlip(account),
+                    },
+                ],
+            );
+        }, 0);
+    }, [sendFlip, session.id]);
+
     const flipAccount = React.useCallback(() => {
         if (!canFlipAccount) return;
         // Always confirm through the sheet, even when this app only knows the
@@ -214,8 +263,8 @@ export function useSessionQuickActions(
         // nothing. Any OTHER accounts the app has seen become named rows.
         const targets = droverAccounts.filter((account) => account !== currentDroverAccount);
         const buttons: Array<{ text: string; onPress?: () => void; style?: 'cancel' | 'destructive' | 'default' }> = [
-            { text: 'Next available', onPress: () => sendFlip() },
-            ...targets.map((account) => ({ text: account, onPress: () => sendFlip(account) })),
+            { text: 'Next available', onPress: () => confirmFlip(null) },
+            ...targets.map((account) => ({ text: account, onPress: () => confirmFlip(account) })),
         ];
         buttons.push({ text: t('common.cancel'), style: 'cancel' });
         Modal.alert(
@@ -223,7 +272,7 @@ export function useSessionQuickActions(
             currentDroverAccount ? `Now on ${currentDroverAccount}` : undefined,
             buttons,
         );
-    }, [canFlipAccount, currentDroverAccount, droverAccounts, sendFlip]);
+    }, [canFlipAccount, confirmFlip, currentDroverAccount, droverAccounts]);
 
     const openDetails = React.useCallback(() => {
         router.push(`/session/${session.id}/info`);

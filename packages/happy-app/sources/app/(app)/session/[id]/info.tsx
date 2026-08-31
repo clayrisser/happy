@@ -7,7 +7,7 @@ import { Item } from '@/components/Item';
 import { ItemGroup } from '@/components/ItemGroup';
 import { ItemList } from '@/components/ItemList';
 import { Avatar } from '@/components/Avatar';
-import { useSession, useIsDataReady, useSessionProjectAvatar, useAllSessions } from '@/sync/storage';
+import { useSession, useIsDataReady, useSessionProjectAvatar, useAllSessions, useSetting } from '@/sync/storage';
 import { getSessionName, useSessionStatus, formatOSPlatform, formatPathRelativeToHome, getSessionAvatarId, getResumeCommand } from '@/utils/sessionUtils';
 import * as Clipboard from 'expo-clipboard';
 import { Modal } from '@/modal';
@@ -31,6 +31,9 @@ import { cloneLineageRows } from '@/utils/droverClone';
 import { MOBILE_GLASS_HEADER_HEIGHT } from '@/components/navigation/headerMetrics';
 import { Switch } from '@/components/Switch';
 import { findSessionForAtRisk, isAtRiskListFresh, resolveRemoteControlState, supportsRemoteControlToggle } from '@/components/remoteControlToggle';
+import { UsageAccountBars } from '@/components/UsageAccountBars';
+import type { UsageBarRow } from '@/components/agentInputUsage';
+import { flipRiskFooter, flipRiskSubtitle, resolveSessionAccount, sessionsLosingRemoteControl } from '@/utils/droverSessionAccount';
 import { describeDroverWakeBudget, getDroverWatchStatus, type DroverWatchStatus } from 'drover-watch';
 
 // Animated status dot component
@@ -107,6 +110,15 @@ function describeDroverWatch(status: DroverWatchStatus): string {
     return `${link}, ${describeDroverWakeBudget(status)}`;
 }
 
+/**
+ * The account's headroom, drawn with DROVE-117's row rather than a third
+ * variant of a bar. ItemGroup hands every child a `showDivider`, which a bare
+ * View would pass down to the DOM, so it is swallowed here.
+ */
+function AccountBar({ row }: { row: UsageBarRow; showDivider?: boolean }) {
+    return <UsageAccountBars groups={[{ key: 'account', title: '', rows: [row] }]} />;
+}
+
 function formatSandboxMetadata(sandbox: unknown, homeDir?: string): string {
     if (sandbox === null || sandbox === undefined) {
         return 'Disabled';
@@ -177,14 +189,29 @@ function SessionInfoContent({ session }: { session: Session }) {
     const watchStatus = useDroverWatchStatus();
     const sessionStatus = useSessionStatus(session);
     const {
+        canFlipAccount,
         canShowResume,
         canFork,
+        flipAccount,
         forking,
         forkSession,
         openDuplicateSheet,
         resumeSession,
         resumeSessionSubtitle,
     } = useSessionQuickActions(session);
+
+    // DROVE-137: which account this session is ON, and what leaving it costs.
+    // The screen talked about a flip POLICY without ever printing the value the
+    // policy applies to, so "Flip policy: prefer jamrizzi" sat above nothing
+    // that said where the session actually was. The name, the headroom and the
+    // bar are the composer popup's, not a second derivation (DROVE-129), and
+    // they follow metadata, so a flip from the Mac moves this line too.
+    const usageLimitShowRemaining = useSetting('usageLimitShowRemaining');
+    const sessionAccount = React.useMemo(() => resolveSessionAccount({
+        droverUsage: session.metadata?.droverUsage,
+        droverAccount: session.metadata?.droverAccount,
+        showRemaining: usageLimitShowRemaining,
+    }), [session.metadata?.droverUsage, session.metadata?.droverAccount, usageLimitShowRemaining]);
 
     // Clone lineage (DROVE-58), and the map from the CLAUDE session ids the
     // ledger names to the HAPPY ids this app routes by. Only sessions this
@@ -231,6 +258,18 @@ function SessionInfoContent({ session }: { session: Session }) {
     const handleWakeAtRisk = useCallback((sessionId: string) => {
         sessionSetAgentModes(sessionId, { remoteControl: 'on' });
     }, []);
+
+    // The same cost, said BEFORE the flip. `atRisk` above is the fallout of a
+    // flip that already happened; this is the list of live sessions a flip from
+    // here WOULD silence, computed by the rule the CLI uses. Target is unknown
+    // until an account is picked, so nothing is ruled safe: the confirm sheet
+    // narrows it once there is a target.
+    const flipRisk = React.useMemo(() => sessionsLosingRemoteControl({
+        sessions: allSessions,
+        selfId: session.id,
+        target: null,
+        nameOf: getSessionName,
+    }), [allSessions, session.id]);
 
     const handleCopySessionId = useCallback(async () => {
         if (!session) return;
@@ -494,8 +533,36 @@ function SessionInfoContent({ session }: { session: Session }) {
                     only when the CLI has reported one, which it does whenever
                     the machine has a drover account registry — a session on a
                     machine without one has no policy to set. */}
-                {(session.metadata?.droverPolicy || watchStatus) && (
-                    <ItemGroup title="Cattle Drover">
+                {(session.metadata?.droverPolicy || watchStatus || sessionAccount.name) && (
+                    <ItemGroup title="Cattle Drover" footer={canFlipAccount ? flipRiskFooter(flipRisk) : undefined}>
+                        {/* The account first, because Flip policy underneath it
+                            is a rule about this value and reads as nothing
+                            without it. Same line the composer popup heads its
+                            quota rows with. */}
+                        {sessionAccount.name && (
+                            <Item
+                                title="Account"
+                                subtitle={sessionAccount.label}
+                                icon={<Ionicons name="person-circle-outline" size={29} color="#FF9500" />}
+                                showChevron={false}
+                            />
+                        )}
+                        {sessionAccount.row && (
+                            <AccountBar row={sessionAccount.row} />
+                        )}
+                        {/* One flip path, not two. This is DROVE-28's action,
+                            the same `/flip` message the popover and the watch
+                            send, reached from the screen that now names the
+                            account. The confirm inside it carries DROVE-37's
+                            warning. */}
+                        {canFlipAccount && (
+                            <Item
+                                title="Switch account"
+                                subtitle={flipRiskSubtitle(flipRisk) ?? 'Move this session to another account'}
+                                icon={<Ionicons name="swap-horizontal-outline" size={29} color="#FF9500" />}
+                                onPress={flipAccount}
+                            />
+                        )}
                         {session.metadata?.droverPolicy && (
                             <Item
                                 title="Flip policy"

@@ -20,10 +20,11 @@
  * by which account it is, so 43% and 0% compare down the column at a glance.
  */
 import {
-    currentDroverUsageAccount,
+    currentDroverAccountRow,
     droverFamilyRows,
     droverOtherAccounts,
     usageLimitsFromDroverUsage,
+    type DroverOtherAccountRow,
     type DroverUsageLike,
 } from '@/utils/droverUsage';
 import {
@@ -186,7 +187,7 @@ export function truncateUsageName(name: string, limit = usageBarNameLimit): { na
     return { name: `${name.slice(0, Math.max(1, limit - 1))}\u2026`, truncated: true };
 }
 
-function barRow(input: {
+export function usageBarRowFrom(input: {
     key: string;
     name: string;
     percentLeft: number | null;
@@ -206,6 +207,73 @@ function barRow(input: {
         tone: usageBarTone(input.percentLeft),
         disabled: input.disabled === true,
     };
+}
+
+/**
+ * "jamrizzi · 51% left", or just the name when nothing was measured.
+ *
+ * The composer popup's heading and the session info screen's account line
+ * (DROVE-137) are the same sentence and have to stay that way, so it is built
+ * once here rather than spelled out on both screens (DROVE-129).
+ */
+export function droverAccountHeadroomLabel(
+    account: { name: string; headroom?: number | null } | null | undefined,
+    showRemaining: boolean,
+): string {
+    const name = account?.name;
+    if (!name) return '';
+    const headroom = account?.headroom;
+    if (typeof headroom !== 'number' || !Number.isFinite(headroom)) return name;
+    return `${name} · ${showRemaining
+        ? t('agentInput.usagePopup.left', { percent: Math.round(headroom) })
+        : t('agentInput.usagePopup.used', { percent: Math.round(100 - headroom) })}`;
+}
+
+/**
+ * One drover account as a bar row.
+ *
+ * Split out of resolveUsageStrip for DROVE-137: the session info screen draws
+ * the CURRENT account with the same row the composer popup draws the others
+ * with, rather than a third variant of a bar. Same rules either way. An
+ * account that is out says when it is back, one with no figure says why, and a
+ * logged-out one is dimmed rather than hidden.
+ */
+export function usageAccountBarRow(a: DroverOtherAccountRow, showRemaining: boolean): UsageBarRow {
+    // An account that is out says WHEN it is back; that is the fact worth the
+    // trailing slot. With no figure at all the trailing text is the reason
+    // there is none, so the empty track is explained.
+    const back = a.back != null
+        ? a.family
+            ? t('agentInput.usagePopup.familyBack', { family: a.family, time: formatUsageLimitResetTime(a.back) })
+            : t('agentInput.usagePopup.back', { time: formatUsageLimitResetTime(a.back) })
+        : '';
+    if (!a.loggedIn) {
+        return usageBarRowFrom({
+            key: `account:${a.name}`,
+            name: a.name,
+            percentLeft: null,
+            percentText: null,
+            trailing: t('agentInput.usagePopup.noLogin'),
+            disabled: true,
+        });
+    }
+    if (a.headroom == null) {
+        return usageBarRowFrom({
+            key: `account:${a.name}`,
+            name: a.name,
+            percentLeft: null,
+            percentText: null,
+            trailing: back || t('agentInput.usagePopup.unmeasured'),
+        });
+    }
+    const percent = showRemaining ? a.headroom : 100 - a.headroom;
+    return usageBarRowFrom({
+        key: `account:${a.name}`,
+        name: a.name,
+        percentLeft: a.headroom,
+        percentText: `${percent}%`,
+        trailing: back,
+    });
 }
 
 export function resolveUsageStrip(input: UsageStripInput): UsageStrip {
@@ -233,7 +301,7 @@ export function resolveUsageStrip(input: UsageStripInput): UsageStrip {
         // is left of it either way, only the printed number follows the setting.
         const left = 100 - row.utilization;
         const percent = getUsageLimitDisplayPercentage(row.utilization, input.showRemaining);
-        mine.push(barRow({
+        mine.push(usageBarRowFrom({
             key,
             name: label,
             percentLeft: left,
@@ -256,56 +324,15 @@ export function resolveUsageStrip(input: UsageStripInput): UsageStrip {
         // The heading carries the picker's own number for THIS account -
         // "jamrizzi · 65% left" - so the popup and `drover accounts` agree at
         // a glance.
-        const current = currentDroverUsageAccount(input.droverUsage, input.droverAccount);
-        const headroom = current?.headroom;
-        const title = current && typeof headroom === 'number' && Number.isFinite(headroom)
-            ? `${current.name} · ${input.showRemaining
-                ? t('agentInput.usagePopup.left', { percent: Math.round(headroom) })
-                : t('agentInput.usagePopup.used', { percent: Math.round(100 - headroom) })}`
-            : current?.name ?? '';
+        const current = currentDroverAccountRow(input.droverUsage, input.droverAccount);
+        const title = droverAccountHeadroomLabel(current, input.showRemaining);
         groups.push({ key: 'usage', title, rows: mine });
     }
     // Every OTHER account, folded under its own heading rather than dropped
     // (DROVE-47): the phone has to answer "where can I flip to" without a
     // terminal. Same figures the flip picker prints.
     const others = droverOtherAccounts(input.droverUsage, input.droverAccount)
-        .map((a) => {
-            // An account that is out says WHEN it is back; that is the fact
-            // worth the trailing slot. With no figure at all the trailing text
-            // is the reason there is none, so the empty track is explained.
-            const back = a.back != null
-                ? a.family
-                    ? t('agentInput.usagePopup.familyBack', { family: a.family, time: formatUsageLimitResetTime(a.back) })
-                    : t('agentInput.usagePopup.back', { time: formatUsageLimitResetTime(a.back) })
-                : '';
-            if (!a.loggedIn) {
-                return barRow({
-                    key: `account:${a.name}`,
-                    name: a.name,
-                    percentLeft: null,
-                    percentText: null,
-                    trailing: t('agentInput.usagePopup.noLogin'),
-                    disabled: true,
-                });
-            }
-            if (a.headroom == null) {
-                return barRow({
-                    key: `account:${a.name}`,
-                    name: a.name,
-                    percentLeft: null,
-                    percentText: null,
-                    trailing: back || t('agentInput.usagePopup.unmeasured'),
-                });
-            }
-            const percent = input.showRemaining ? a.headroom : 100 - a.headroom;
-            return barRow({
-                key: `account:${a.name}`,
-                name: a.name,
-                percentLeft: a.headroom,
-                percentText: `${percent}%`,
-                trailing: back,
-            });
-        });
+        .map((a) => usageAccountBarRow(a, input.showRemaining));
     // No heading over the list (DROVE-117). Clay: "Don't say other accounts.
     // Have each one listed." The rows above are quota WINDOWS within one
     // account and earn their heading; below is just the accounts, and a label
