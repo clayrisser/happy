@@ -467,9 +467,12 @@ export const es: TranslationStructure = {
             listening: 'Escuchando…',
             latched: 'Micrófono activo',
             releaseToSend: 'Suelta para enviar',
+            releaseToCancel: 'Suelta para cancelar',
             tapToStop: 'Toca para detener',
             stop: 'Detener',
             failed: 'Error al dictar',
+            noSpeechModule: 'Esta compilación no tiene módulo de voz, así que no puede transcribir.',
+            needsNewerBuild: ({ build }: { build: string }) => `La compilación ${build} no puede informar de lo que oye, así que el micrófono no se abre. Instala el último TestFlight.`,
         },
         permissionMode: {
             title: 'MODO DE PERMISOS',

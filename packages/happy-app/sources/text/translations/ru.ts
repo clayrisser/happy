@@ -483,9 +483,12 @@ export const ru: TranslationStructure = {
             listening: 'Слушаю…',
             latched: 'Микрофон включён',
             releaseToSend: 'Отпустите, чтобы отправить',
+            releaseToCancel: 'Отпустите, чтобы отменить',
             tapToStop: 'Коснитесь, чтобы остановить',
             stop: 'Стоп',
             failed: 'Ошибка диктовки',
+            noSpeechModule: 'В этой сборке нет речевого модуля, поэтому расшифровка невозможна.',
+            needsNewerBuild: ({ build }: { build: string }) => `Сборка ${build} не сообщает, что слышит, поэтому микрофон не открывается. Установите последний TestFlight.`,
         },
         permissionMode: {
             title: 'РЕЖИМ РАЗРЕШЕНИЙ',

@@ -467,9 +467,12 @@ export const zhHant: TranslationStructure = {
             listening: '正在聆聽…',
             latched: '麥克風已開啟',
             releaseToSend: '放開傳送',
+            releaseToCancel: '放開取消',
             tapToStop: '輕點停止',
             stop: '停止',
             failed: '聽寫失敗',
+            noSpeechModule: '此版本沒有語音模組，無法轉寫。',
+            needsNewerBuild: ({ build }: { build: string }) => `建置 ${build} 無法回報聽到的內容，麥克風不會開啟。請安裝最新的 TestFlight。`,
         },
         permissionMode: {
             title: '權限模式',

@@ -468,9 +468,12 @@ export const ja: TranslationStructure = {
             listening: '聞き取り中…',
             latched: 'マイクオン',
             releaseToSend: '離すと送信',
+            releaseToCancel: '離すとキャンセル',
             tapToStop: 'タップで停止',
             stop: '停止',
             failed: '音声入力に失敗しました',
+            noSpeechModule: 'このビルドには音声モジュールがないため、文字起こしできません。',
+            needsNewerBuild: ({ build }: { build: string }) => `ビルド ${build} は聞き取った内容を返せないため、マイクは開きません。最新の TestFlight をインストールしてください。`,
         },
         permissionMode: {
             title: '権限モード',

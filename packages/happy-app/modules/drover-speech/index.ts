@@ -169,6 +169,26 @@ export function audioRoute(): string[] {
     }
 }
 
+/**
+ * Whether the native module can REPORT on a dictation while it runs: the
+ * partial transcripts the composer fills from, and the `onDictationEnded`
+ * that says Apple finalised on its own (DROVE-105).
+ *
+ * There is no way to ask a module which events it declares, so this reads
+ * the build stamp that IS visible from JS: `audioRoute()` shipped in the
+ * same binary as `onDictationEnded` and `onDictationLevel` (TestFlight build
+ * 12, DROVE-92 landing beside DROVE-74), and no earlier build has it. A
+ * module without it is build 11 or older, where a latched mic sits looking
+ * live over a recogniser Apple already finished with and every stop pays a
+ * two-second timeout. The composer refuses to open the mic there rather than
+ * record into nothing. When the Swift grows a real capability call, this
+ * narrows to that and the proxy goes.
+ */
+export function dictationReportsProgress(): boolean {
+    if (!native) return false;
+    return typeof native.audioRoute === 'function';
+}
+
 export async function getDictationSupport(localeTag?: string): Promise<DictationSupport> {
     if (!native) return { supported: false, reason: 'this build has no speech module' };
     try {

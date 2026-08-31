@@ -1,13 +1,17 @@
 import * as React from 'react';
+import * as Application from 'expo-application';
 import {
     addDictationEndedListener,
     addDictationPartialListener,
     cancelDictation,
+    dictationReportsProgress,
     getDictationSupport,
+    isDroverSpeechAvailable,
     startDictation,
     stopDictation,
 } from 'drover-speech';
 import { useLocalSettingMutable } from '@/sync/storage';
+import { t } from '@/text';
 import { hapticsLight, hapticsSelection } from '@/components/haptics';
 import { readAloud } from './readAloudService';
 import { canReadAloud } from './speechEngine';
@@ -20,6 +24,7 @@ import {
     type MicGesture,
     type MicGestureEvent,
 } from './micButton';
+import { dictationBlock, unknownBuild } from './dictationCapability';
 
 /**
  * The composer's half of modes A and B (DROVE-30), and the talk button's
@@ -61,12 +66,17 @@ export interface VoiceComposerState {
     onTalkPressIn?: () => void;
     /** Finger up. Inside the tap window this latches; after it, it sends. */
     onTalkPressOut?: () => void;
-    /** The banner's Stop: end a latched mic and send. */
-    onTalkStop?: () => void;
+    /** The finger crossed the button's edge while still down. */
+    onTalkSlide?: (inside: boolean) => void;
     /** Drop the recording without transcribing. */
     onTalkCancel?: () => void;
     /** What the button draws: idle, held, latched. */
     talkState?: MicButtonState;
+    /**
+     * The finger is down but off the button, so the lift will cancel. The
+     * banner says so before it happens (DROVE-105).
+     */
+    talkCancelArmed?: boolean;
     /** Everything the live indicator draws from. */
     talk?: DictationCaptureState;
 }
@@ -86,6 +96,7 @@ export function useVoiceComposer(options: VoiceComposerOptions): VoiceComposerSt
     const [dictationEnabled] = useLocalSettingMutable('voiceDictationEnabled');
     const [talk, setTalk] = React.useState<DictationCaptureState>(idleTalk);
     const [talkState, setTalkState] = React.useState<MicButtonState>('idle');
+    const [talkCancelArmed, setTalkCancelArmed] = React.useState(false);
     const [dictationSupported, setDictationSupported] = React.useState(false);
 
     // The callbacks change identity with the screen; the capture does not.
@@ -166,6 +177,7 @@ export function useVoiceComposer(options: VoiceComposerOptions): VoiceComposerSt
         const step = reduceMicGesture(gestureRef.current, event);
         gestureRef.current = step.next;
         setTalkState(step.next.state);
+        setTalkCancelArmed(step.next.outside);
         for (const effect of step.effects) {
             switch (effect) {
                 case 'open':
@@ -181,8 +193,16 @@ export function useVoiceComposer(options: VoiceComposerOptions): VoiceComposerSt
                 case 'latch':
                     capture.latch();
                     break;
-                case 'close':
-                    capture.end();
+                case 'send':
+                    capture.send();
+                    break;
+                case 'stop':
+                    // The tap off a latch: the words land in the composer and
+                    // stay there. Nothing is sent (DROVE-105).
+                    capture.stop();
+                    break;
+                case 'cancel':
+                    capture.cancel();
                     break;
                 case 'tick':
                     hapticsSelection();
@@ -234,17 +254,27 @@ export function useVoiceComposer(options: VoiceComposerOptions): VoiceComposerSt
         // The recogniser is still settling the last stop: a press now would
         // open nothing and leave the button claiming otherwise.
         if (capture.current.settling) return;
+        // A module that cannot report is refused HERE, before any state
+        // moves, so the button never goes red over a recording nothing will
+        // ever read back (DROVE-105).
+        const block = dictationBlock({
+            moduleAvailable: isDroverSpeechAvailable(),
+            reportsProgress: dictationReportsProgress(),
+            build: Application.nativeBuildVersion,
+        });
+        if (block) {
+            callbacks.current.onError(block.kind === 'unsupported'
+                ? t('agentInput.dictate.noSpeechModule')
+                : t('agentInput.dictate.needsNewerBuild', { build: block.build ?? unknownBuild }));
+            return;
+        }
         dispatch({ type: 'pressIn', at: Date.now() });
     }, [capture, dispatch]);
     const onTalkPressOut = React.useCallback(() => {
         dispatch({ type: 'pressOut', at: Date.now() });
     }, [dispatch]);
-    const onTalkStop = React.useCallback(() => {
-        // The banner's Stop is a tap on a latched mic, without the press.
-        if (gestureRef.current.state !== 'latched') return;
-        const now = Date.now();
-        dispatch({ type: 'pressIn', at: now });
-        dispatch({ type: 'pressOut', at: now });
+    const onTalkSlide = React.useCallback((inside: boolean) => {
+        dispatch({ type: 'slide', inside });
     }, [dispatch]);
     const onTalkCancel = React.useCallback(() => capture.discard('left-session'), [capture]);
 
@@ -258,9 +288,10 @@ export function useVoiceComposer(options: VoiceComposerOptions): VoiceComposerSt
         onReadAloudToggle: offersReadAloud ? onReadAloudToggle : undefined,
         onTalkPressIn: offersDictation ? onTalkPressIn : undefined,
         onTalkPressOut: offersDictation ? onTalkPressOut : undefined,
-        onTalkStop: offersDictation ? onTalkStop : undefined,
+        onTalkSlide: offersDictation ? onTalkSlide : undefined,
         onTalkCancel: offersDictation ? onTalkCancel : undefined,
         talkState: offersDictation ? talkState : undefined,
+        talkCancelArmed: offersDictation ? talkCancelArmed : undefined,
         talk: offersDictation ? talk : undefined,
     };
 }
