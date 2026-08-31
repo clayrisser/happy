@@ -1,14 +1,20 @@
 import * as React from 'react';
-import { StyleSheet as RNStyleSheet, Text, View } from 'react-native';
+import { StyleSheet as RNStyleSheet, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Ionicons } from '@expo/vector-icons';
-import { Typography } from '@/constants/Typography';
+import Svg, { Circle, Line, Path } from 'react-native-svg';
 import { BubblePressable } from './BubblePressable';
 import { GlassChromeSurface } from './GlassChromeControl';
 import { NativeSettingsMenu, type NativeSettingsMenuGroup } from './NativeSettingsMenu';
 import {
-    COMPOSER_MODEL_FONT_SIZE,
-    COMPOSER_MODEL_TRUNCATION,
+    effortAccessibility,
+    effortGaugeAngle,
+    effortGaugePoint,
+    effortGaugeTrackPath,
+    permissionModeAccessibility,
+    permissionModeGlyph,
+} from './sessionControlGlyphs';
+import {
     COMPOSER_SESSION_CONTROL_SIZE,
     type SessionPillLabel,
 } from './sessionPillLabel';
@@ -21,25 +27,25 @@ import {
  * `Yolo · Opus 5 1M · High` that opened a sheet listing them again. Clay drew
  * an arrow from that row down into the button row, then said of the sheet:
  * "I don't like this extra menu, then I have to click twice." So the row is
- * the menu. The mode is an icon, the effort is an icon, the model keeps its
- * name as text, and each one opens its own picker on the first tap. Losing
- * the two words is what buys the model room to stay readable; losing the row
- * is what buys the chat its height back.
+ * the menu: each control opens its own picker on the first tap, and there is
+ * no intermediate menu anywhere in the path.
  *
- * ONE CAPSULE, THREE SEGMENTS (DROVE-153). Clay sent the Screenshot markup
- * toolbar as a reference and the thing to take from it is not the pixel size,
- * it is that two related actions share ONE capsule rather than sitting in two
- * separate circles. Mode, effort and model are the same idea three times over:
- * how this session is being run. So they are one glass capsule with hairline
- * dividers, not three discs with air between them.
+ * ONE CAPSULE (DROVE-153). Clay sent the Screenshot markup toolbar as a
+ * reference and the thing to take from it is not the pixel size, it is that
+ * related actions share ONE capsule rather than sitting in separate circles.
+ * Mode and effort are the same idea twice over: how this session is being run.
+ * So they are one glass capsule with a hairline between them, not two discs
+ * with air between them. Each segment is its own 44pt-tall, 44pt-wide press
+ * target with its own picker, so pressing effort cannot open the mode list.
  *
- * Grouping costs nothing in reach and buys a great deal in room. Each segment
- * is its own 44pt-tall, 44pt-wide press target with its own picker, so pressing
- * effort still cannot open the model list. And the five 6pt gaps that separated
- * seven discs are gone, which is where the model's name goes from 63pt to
- * 121pt at 393 (see resolveComposerModelTextBudget). The old geometry note that
- * lived here, about 38pt controls squeezing into what the discs left, described
- * a row that no longer exists.
+ * THE MODEL IS NOT IN THE CAPSULE ANY MORE (DROVE-138). Clay: "keep the full
+ * model name and slide it down there, that way it's more compact and fits."
+ * Even at DROVE-153's 121pt a name is a name among buttons, and `Opus 5 1M`
+ * was still the longest one that fit. The status line under the composer is
+ * text all the way across and has room for the whole name, so that is where it
+ * went; tapping it there opens the same model picker on the same first tap.
+ * The capsule is two segments now and the width the name held is slack the row
+ * gives back to the chat.
  */
 
 export type ComposerSessionPicker = 'permission' | 'model' | 'effort';
@@ -60,73 +66,65 @@ export interface ComposerSessionControlsProps {
      */
     nativeMenus?: boolean;
     modeGroups?: NativeSettingsMenuGroup[];
-    modelGroup?: NativeSettingsMenuGroup | null;
     effortGroup?: NativeSettingsMenuGroup | null;
     /** Which picker is open, so the pressed control reads as open. */
     openPicker?: ComposerSessionPicker | null;
 }
 
 /**
- * The permission mode as a glyph.
+ * The effort as a dial, the needle at the level (DROVE-141).
  *
- * Every mode we ship is one of a handful of ideas: review it yourself (auto),
- * edits only, plan first, read but never write, keep to the workspace, or do
- * not ask at all. The glyphs are the ones the permission list already draws
- * beside those rows, so a mode looks the same wherever it appears.
- */
-export function permissionModeGlyph(
-    kind: string | null | undefined,
-    key: string | null | undefined,
-): React.ComponentProps<typeof Ionicons>['name'] {
-    const value = (kind ?? key ?? '').toLowerCase();
-    if (value === 'read-only' || value === 'read') return 'lock-closed-outline';
-    if (value === 'safe-yolo' || value === 'workspace') return 'shield-checkmark-outline';
-    if (value === 'yolo' || value === 'bypasspermissions' || value === 'full') return 'warning-outline';
-    if (value === 'plan') return 'map-outline';
-    if (value === 'acceptedits' || value === 'edits') return 'create-outline';
-    if (value === 'auto') return 'sparkles-outline';
-    return 'shield-outline';
-}
-
-/**
- * The effort as a meter, filled to the level.
+ * It was a bar meter, and the lane that built it already named the flaw: four
+ * filled bars against five is a COUNT, and nobody counts at a glance, so the
+ * two levels Clay moves between most were the two hardest to tell apart. A
+ * needle is a POSITION. Hard left is the floor, hard right the ceiling, and
+ * the angle between them is read rather than counted.
  *
- * One glyph cannot say which of six (low, medium, high, xhigh, max,
- * ultracode) is on, because there is no family of six glyphs anyone reads as
- * ordered. A meter can: the reader counts rather than recognises, and it is
- * the idiom every phone already uses for signal. Bars are drawn only for the
- * levels the current model offers, so a four-level model shows four, and the
- * exact word is one tap away in the picker either way.
+ * The angle is interpolated across whatever scale the current model offers, so
+ * a four-level Codex and a six-level Claude both use the whole dial and the
+ * ends always mean the ends (DROVE-101). The exact word is one tap away in the
+ * picker, and in the accessibility value without one.
  */
-export function EffortMeter(props: { index: number; count: number; color: string; dim: string }) {
-    const count = Math.max(1, Math.min(6, props.count));
-    const index = Math.max(0, Math.min(count - 1, props.index));
+export function EffortGauge(props: { index: number; count: number; color: string; dim: string }) {
+    const size = 20;
+    const strokeWidth = 2;
+    const centre = size / 2;
+    const angle = effortGaugeAngle(props.index, props.count);
+    // Stops short of the track so the needle reads as pointing AT a position
+    // rather than as another piece of the ring.
+    const tip = effortGaugePoint(centre, (size - strokeWidth) / 2 - 3, angle);
     return (
-        <View style={styles.meter}>
-            {Array.from({ length: count }, (_unused, bar) => (
-                <View
-                    key={bar}
-                    style={[
-                        styles.meterBar,
-                        {
-                            height: 4 + (9 * bar) / Math.max(1, count - 1),
-                            backgroundColor: bar <= index ? props.color : props.dim,
-                        },
-                    ]}
-                />
-            ))}
-        </View>
+        <Svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+            <Path
+                d={effortGaugeTrackPath(size, strokeWidth)}
+                stroke={props.dim}
+                strokeWidth={strokeWidth}
+                strokeLinecap="round"
+                fill="none"
+            />
+            <Line
+                x1={centre}
+                y1={centre}
+                x2={tip.x}
+                y2={tip.y}
+                stroke={props.color}
+                strokeWidth={2.25}
+                strokeLinecap="round"
+            />
+            <Circle cx={centre} cy={centre} r={1.8} fill={props.color} />
+        </Svg>
     );
 }
 
 const styles = StyleSheet.create((theme) => ({
-    // The capsule the three segments share. The material is the surface's, so
-    // this carries only shape and flex.
+    // The capsule the two segments share. The material is the surface's, so
+    // this carries only shape and flex. It no longer shrinks: with the model's
+    // name gone (DROVE-138) there is no text in here to give way, and two 44pt
+    // segments are the whole of it.
     capsule: {
         flexDirection: 'row',
         alignItems: 'center',
-        flexShrink: 1,
-        minWidth: 0,
+        flexShrink: 0,
         height: COMPOSER_SESSION_CONTROL_SIZE,
     },
     control: {
@@ -151,29 +149,6 @@ const styles = StyleSheet.create((theme) => ({
         height: 20,
         backgroundColor: theme.colors.glass.divider,
     },
-    // The model's full name, not DROVE-83's middle-ellipsised remains of it.
-    modelPressable: {
-        flexShrink: 1,
-        minWidth: 0,
-        height: COMPOSER_SESSION_CONTROL_SIZE,
-        justifyContent: 'center',
-        paddingHorizontal: 12,
-    },
-    model: {
-        fontSize: COMPOSER_MODEL_FONT_SIZE,
-        color: theme.colors.text,
-        ...Typography.default(),
-    },
-    meter: {
-        flexDirection: 'row',
-        alignItems: 'flex-end',
-        gap: 1.5,
-        height: 13,
-    },
-    meterBar: {
-        width: 2.5,
-        borderRadius: 1.5,
-    },
 }));
 
 function Control(props: {
@@ -191,7 +166,11 @@ function Control(props: {
     if (props.nativeMenus && groups.length > 0) {
         return (
             <NativeSettingsMenu
-                accessibilityLabel={props.accessibilityLabel}
+                // The native host takes one string, so the state rides in the
+                // label there rather than being dropped (DROVE-141).
+                accessibilityLabel={props.accessibilityValue
+                    ? `${props.accessibilityLabel}, ${props.accessibilityValue}`
+                    : props.accessibilityLabel}
                 groups={groups}
                 style={{ width: COMPOSER_SESSION_CONTROL_SIZE, height: COMPOSER_SESSION_CONTROL_SIZE }}
             >
@@ -231,23 +210,22 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
         onPress,
         nativeMenus,
         modeGroups,
-        modelGroup,
         effortGroup,
         openPicker,
     } = props;
     const showMode = !!label.mode;
     const showEffort = !!label.effort && effortCount > 0 && effortIndex != null && effortIndex >= 0;
     const canOpenMode = (modeGroups?.length ?? 0) > 0;
-    const canOpenModel = !!modelGroup;
     const canOpenEffort = !!effortGroup;
-    if (!showMode && !showEffort && !label.model) {
+    if (!showMode && !showEffort) {
         return null;
     }
+    const mode = permissionModeAccessibility(label.mode);
+    const effort = effortAccessibility(label.effort, effortIndex ?? 0, effortCount);
     // A divider goes between two drawn segments, never at either end, so a
     // session with no effort scale does not leave a hairline floating in the
     // capsule.
     const effortNeedsDivider = showEffort && showMode;
-    const modelNeedsDivider = !!label.model && (showMode || showEffort);
     return (
         <GlassChromeSurface
             radius={COMPOSER_SESSION_CONTROL_SIZE / 2}
@@ -256,7 +234,8 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
             {showMode ? (
                 <Control
                     picker="permission"
-                    accessibilityLabel={label.mode!}
+                    accessibilityLabel={mode.label}
+                    accessibilityValue={mode.value}
                     groups={modeGroups}
                     nativeMenus={nativeMenus}
                     open={openPicker === 'permission'}
@@ -264,7 +243,7 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                 >
                     <Ionicons
                         name={permissionModeGlyph(modeKind, modeKey)}
-                        size={17}
+                        size={20}
                         color={theme.colors.text}
                     />
                 </Control>
@@ -273,57 +252,20 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
             {showEffort ? (
                 <Control
                     picker="effort"
-                    accessibilityLabel={label.effort!}
+                    accessibilityLabel={effort.label}
+                    accessibilityValue={effort.value}
                     group={effortGroup}
                     nativeMenus={nativeMenus}
                     open={openPicker === 'effort'}
                     onPress={canOpenEffort ? onPress : undefined}
                 >
-                    <EffortMeter
+                    <EffortGauge
                         index={effortIndex!}
                         count={effortCount}
                         color={theme.colors.text}
                         dim={theme.colors.divider}
                     />
                 </Control>
-            ) : null}
-            {modelNeedsDivider ? <View style={styles.segmentDivider} /> : null}
-            {label.model ? (
-                nativeMenus && modelGroup ? (
-                    <NativeSettingsMenu
-                        accessibilityLabel={label.model}
-                        groups={[modelGroup]}
-                        style={styles.modelPressable}
-                    >
-                        <Text
-                            style={styles.model}
-                            numberOfLines={1}
-                            ellipsizeMode={COMPOSER_MODEL_TRUNCATION.ellipsizeMode}
-                        >
-                            {label.model}
-                        </Text>
-                    </NativeSettingsMenu>
-                ) : (
-                    <BubblePressable
-                        onPress={canOpenModel && onPress ? () => onPress('model') : undefined}
-                        disabled={!canOpenModel || !onPress}
-                        style={(p) => [
-                            styles.modelPressable,
-                            { opacity: p.pressed && canOpenModel && onPress ? 0.7 : 1 },
-                        ]}
-                        accessibilityRole="button"
-                        accessibilityLabel={label.model}
-                        accessibilityState={{ expanded: openPicker === 'model', disabled: !canOpenModel }}
-                    >
-                        <Text
-                            style={styles.model}
-                            numberOfLines={1}
-                            ellipsizeMode={COMPOSER_MODEL_TRUNCATION.ellipsizeMode}
-                        >
-                            {label.model}
-                        </Text>
-                    </BubblePressable>
-                )
             ) : null}
         </GlassChromeSurface>
     );
