@@ -147,7 +147,7 @@ describe('summarizeLiveStatus main thread readout', () => {
 
     it('is the tool it is blocked on, the turn clock and the turn tokens', () => {
         expect(summarizeLiveStatus(mainBusy, now).main)
-            .toEqual({ label: 'Bash', elapsed: '17m 13s', tokens: '251.2k' });
+            .toEqual({ label: 'Bash', working: false, elapsed: '17m 13s', tokens: '251.2k' });
     });
 
     it('never lets the agents into that line, and counts them on their own', () => {
@@ -163,13 +163,26 @@ describe('summarizeLiveStatus main thread readout', () => {
             main: { startedAt: now - 1_033_000, tokens: 9_400 },
         };
         expect(summarizeLiveStatus(composing, now).main)
-            .toEqual({ label: 'working', elapsed: '17m 13s', tokens: '9.4k' });
+            .toEqual({ label: 'working', working: true, elapsed: '17m 13s', tokens: '9.4k' });
         expect(summarizeLiveStatus(composing, now).sideCount).toBe(0);
     });
 
     it('has no token count until the turn has spent one', () => {
         const fresh: LiveStatus = { at: now, main: { startedAt: now - 4_000 } };
-        expect(summarizeLiveStatus(fresh, now).main).toEqual({ label: 'working', elapsed: '4s' });
+        expect(summarizeLiveStatus(fresh, now).main).toEqual({ label: 'working', working: true, elapsed: '4s' });
+    });
+
+    it('says which of the two the label is, so the strip can order them (DROVE-223)', () => {
+        // The tool name and the working word are the same slot and give way in
+        // opposite orders: the name folds third of the text on the row, the
+        // word folds last of anything on it. The strip reads this flag rather
+        // than comparing the label to a string.
+        expect(summarizeLiveStatus(mainBusy, now).main!.working).toBe(false);
+        expect(summarizeLiveStatus({
+            at: now,
+            turnStartedAt: now - 1_000,
+            main: { startedAt: now - 1_000 },
+        }, now).main!.working).toBe(true);
     });
 
     it('is null while only background agents are out, which is what keeps the dot off', () => {
@@ -185,10 +198,10 @@ describe('summarizeLiveStatus main thread readout', () => {
 
     it('infers the main thread from an older CLI that publishes no block for it', () => {
         // A running tool IS the main thread waiting, whatever else is out.
-        expect(summarizeLiveStatus(busy, now).main).toEqual({ label: 'Bash', elapsed: '17m 13s' });
+        expect(summarizeLiveStatus(busy, now).main).toEqual({ label: 'Bash', working: false, elapsed: '17m 13s' });
         // Nothing else running: the snapshot can only be about the main thread.
         expect(summarizeLiveStatus({ at: now, turnStartedAt: now - 65_000 }, now).main)
-            .toEqual({ label: 'working', elapsed: '1m 5s' });
+            .toEqual({ label: 'working', working: true, elapsed: '1m 5s' });
         // Only agents, and no way to tell: it stays null rather than guessing.
         expect(summarizeLiveStatus({ ...busy, tool: undefined }, now).main).toBeNull();
     });

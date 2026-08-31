@@ -95,6 +95,22 @@ export const MOBILE_COMPOSER_METRICS = {
     // is now the padding on the composer LINE and on the control row, and the
     // card is what sits between them.
     shellInset: 10,
+    /**
+     * AgentInput's OUTER gutter, outside everything above (DROVE-223).
+     *
+     * `shellInset` is the padding on the composer line; this is the padding on
+     * the whole component, the one AgentInput's own container carries, and the
+     * status strip sits inside it as well. It was never written down anywhere
+     * a budget could read it, so `statusRowLayout` measured the strip against
+     * the screen and handed the row 16pt a phone does not have. In Clay's
+     * photograph the strip's dot starts 27pt from the screen edge: this 8 plus
+     * the row's own 19, which is what says the number is real.
+     *
+     * 12 above 700pt, where the composer is centred in a wide window and the
+     * air either side is not a phone's thumb margin.
+     */
+    shellGutter: 8,
+    shellGutterWide: 12,
     // Home's card only (DROVE-196). Its focused composer is still one card
     // holding the field and the control row, so it still needs air at both
     // ends. The chat bubble is the field and nothing else, and it keeps none:

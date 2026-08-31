@@ -36,6 +36,16 @@ export type LiveStatusWorkflow = NonNullable<LiveStatus['workflows']>[number];
  */
 export const LIVE_STATUS_STALE_MS = 120_000;
 
+/**
+ * What the main thread is called when no tool names it.
+ *
+ * One constant rather than three literals, because the status strip now has to
+ * RECOGNISE it: the working word is the last thing on the row to give way
+ * (DROVE-223), so the row has to be able to tell it apart from a tool's name,
+ * and a second spelling of it here would quietly turn that rule off.
+ */
+export const LIVE_STATUS_WORKING_WORD = 'working';
+
 export function isLiveStatusFresh(status: LiveStatus | null | undefined, now: number): boolean {
     if (!status) return false;
     // A clock skew between the Mac and the phone can put `at` in the future.
@@ -102,6 +112,16 @@ export interface LiveStatusRow {
 export interface LiveStatusMain {
     /** What the main thread is blocked on: the tool's name, or `working`. */
     label: string;
+    /**
+     * True when the label is the WORKING WORD rather than a tool's name
+     * (DROVE-223).
+     *
+     * The two look the same on the row and give way in opposite orders: a tool
+     * name folds first of the text on the strip, the working word folds last
+     * of anything on it. The strip reads this rather than comparing the label
+     * to a string, so the rule cannot drift from what `mainReadout` decided.
+     */
+    working: boolean;
     /** The turn's clock, ticking on this device. */
     elapsed: string;
     /** `251.2k`, absent until the turn has spent anything. */
@@ -210,7 +230,7 @@ export function summarizeLiveStatus(status: LiveStatus, now: number): LiveStatus
         // reply, which writes nothing until it is done. This is the
         // "Sketching… 17m 13s" state, and saying "working" is the honest
         // version of it.
-        headline = 'working';
+        headline = LIVE_STATUS_WORKING_WORD;
     }
 
     const parts = [
@@ -245,13 +265,15 @@ export function summarizeLiveStatus(status: LiveStatus, now: number): LiveStatus
  * which is the one case where the old CLI shows less than the new one.
  */
 function mainReadout(status: LiveStatus, now: number): LiveStatusMain | null {
-    const label = status.tool ? status.tool.name : 'working';
+    const label = status.tool ? status.tool.name : LIVE_STATUS_WORKING_WORD;
+    const working = !status.tool;
     const tokensOf = (tokens: unknown): { tokens?: string } => (
         typeof tokens === 'number' && tokens > 0 ? { tokens: formatTokens(tokens) } : {}
     );
     if (status.main) {
         return {
             label,
+            working,
             elapsed: formatElapsed(now - status.main.startedAt),
             ...tokensOf(status.main.tokens),
         };
@@ -260,7 +282,7 @@ function mainReadout(status: LiveStatus, now: number): LiveStatusMain | null {
     if (!status.tool && sideRunning) return null;
     const startedAt = status.turnStartedAt ?? status.tool?.startedAt;
     if (!startedAt) return null;
-    return { label, elapsed: formatElapsed(now - startedAt) };
+    return { label, working, elapsed: formatElapsed(now - startedAt) };
 }
 
 /**
@@ -290,7 +312,7 @@ export function liveStatusWatchLine(status: LiveStatus | null | undefined, now: 
     const agents = live.agents ?? [];
     const agentPhrase = countPhrase(agents.length, 'agent', 'agents');
     if (agentPhrase) parts.push(agentPhrase);
-    if (parts.length === 0) parts.push('working');
+    if (parts.length === 0) parts.push(LIVE_STATUS_WORKING_WORD);
     return parts.join(' · ');
 }
 
