@@ -15,23 +15,28 @@ import type { ReadAloudDetourSentence } from './readAloud';
  * free again and the position moves on a gesture, which is a fact rather than
  * an inference.
  *
- * ONE TAP, NOT TWO, and here is why. DROVE-146 picked a double tap because the
- * target was a whole message body and a double tap kept it clear of other
- * gestures. Neither half of that still holds:
+ * TWO TAPS, NOT ONE (DROVE-235). DROVE-163 cut this down to a single tap on
+ * the argument that a single tap on prose had meant nothing before, so there
+ * was nothing to collide with. True, and beside the point: Clay asked for a
+ * double tap twice, and a single tap on body text is the gesture a finger
+ * makes by ACCIDENT. A tap to dismiss the keyboard, a tap to stop a scroll, a
+ * mis-aimed tap at a link. Moving the read head is deliberate, so it costs a
+ * deliberate gesture, and the cheapest gesture on the screen should stay the
+ * one that does nothing.
  *
- *   - The gestures are separated by TARGET, not by tap count. DROVE-149's wrap
- *     toggle is a double tap on a code or terminal card, and those are their
- *     own components nested inside the reply; a link has its own press; a hold
- *     still raises copy. A single tap on plain prose meant nothing before this,
- *     so there is nothing for it to collide with.
- *   - A double tap is the wrong gesture for a precise target anyway. Hitting
- *     the same sentence twice inside 350 ms is harder than hitting it once,
- *     and getting it wrong the second time silently moves the reading
- *     somewhere else. Precision and a repeat gesture pull against each other.
+ * The collision with DROVE-149's wrap toggle is still settled by TARGET rather
+ * than by count, which is why sharing the count is safe. A code or terminal
+ * card is its own component and is handed no sentence press at all, so a
+ * double tap inside a fence has only ever had one handler: the wrap toggle
+ * keeps it. Its gesture is older and more local, and a code block is not
+ * something he asks to be read from. A link keeps its own single press, and a
+ * hold still raises copy.
  *
- * So prose takes a single tap now, and the block-level double tap is gone with
- * it: two taps on a sentence would otherwise seek twice and then be undone by
- * a third seek to the top of the block.
+ * The block-level double tap stays gone, and that is what keeps ONE route to
+ * the playhead (DROVE-146): two taps on a sentence would seek to it and then
+ * be undone by a third seek to the top of the block. `readFromHere` below is
+ * reached only as the sentence tap's own fallback, never from a gesture of its
+ * own.
  *
  * The decision is here, taking only a type from elsewhere, so all of it is
  * testable: the tap only moves the voice when read-aloud is on, and only from

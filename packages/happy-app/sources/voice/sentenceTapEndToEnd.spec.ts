@@ -1,3 +1,5 @@
+import { readFileSync, readdirSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parseMarkdown } from '@/components/markdown/parseMarkdown';
 import { splitIntoSentenceRuns } from '@/components/markdown/sentenceTargets';
@@ -6,26 +8,27 @@ import { ReadAloudReader, type SpeakOptions, type SpeechEngine } from './readAlo
 import { readSentenceFromHere } from './readAloudTap';
 
 /**
- * ONE TAP ON A SENTENCE, ALL THE WAY THROUGH (DROVE-195).
+ * A TAP ON A SENTENCE, ALL THE WAY THROUGH (DROVE-195, regesture DROVE-235).
  *
- * Clay reported "double tap on sentence to read from it didn't work". It is a
- * SINGLE tap since DROVE-163, and the question this file answers is the one
- * the ticket asked first: is the single tap actually broken on his build, or
- * did nobody tell him it changed?
+ * Clay reported "double tap on sentence to read from it didn't work", and
+ * then, later: "I thought I had told you DOUBLE press changes where we read
+ * not single." He had. DROVE-163 had made it a single tap, so the answer to
+ * the first report was that nobody told him it changed, and the answer to the
+ * second is this branch: it is a DOUBLE tap again.
  *
  * The pieces each had a test and the chain between them did not, so this walks
  * the whole of it with nothing faked but the synthesiser: the reply is real
  * markdown, `parseMarkdown` gives the blocks the renderer draws,
  * `splitIntoSentenceRuns` cuts them into the pressable runs a finger lands on,
- * and `run.sentence` is verbatim what `MarkdownView`'s `onPress` hands to
+ * and `run.sentence` is verbatim what `MarkdownView`'s press hands to
  * `MessageView`, which hands it to `readSentenceFromHere` against the real
  * reader fed by the real `onMessages`.
  *
  * What is NOT covered here is React: vitest runs on node and the suite is
- * `.ts` only, so the `<Text onPress>` per run is read rather than mounted.
- * That leaves one link untested and it is the one link DROVE-163 did not
- * change the shape of, since a link's press inside the same body has worked
- * throughout.
+ * `.ts` only, so the `<Text onPress>` per run is read rather than mounted. The
+ * gesture itself is therefore pinned two ways: the counting is measured in
+ * `components/doubleTapPress.spec.ts`, and the wiring is read out of the
+ * source at the bottom of this file.
  *
  * ANSWER: it works. Every sentence of a rendered reply resolves to itself.
  */
@@ -78,7 +81,7 @@ const reply = [
     'Nothing else needs doing.',
 ].join(' ');
 
-describe('a single tap on a sentence of a rendered reply (DROVE-195)', () => {
+describe('a double tap on a sentence of a rendered reply (DROVE-195, DROVE-235)', () => {
     function reading(): { reader: ReadAloudReader; engine: FakeEngine } {
         const engine = new FakeEngine();
         const reader = new ReadAloudReader(engine);
@@ -97,8 +100,8 @@ describe('a single tap on a sentence of a rendered reply (DROVE-195)', () => {
         await settle();
         expect(engine.spoken).toEqual(['Landed the change and pushed it.']);
 
-        // The third run, pressed once. This is the literal payload of
-        // MarkdownView's onPress.
+        // The third run, double tapped. `runs[2]` is the literal payload
+        // MarkdownView hands over once the second press lands.
         const runs = tappableSentences(reply);
         expect(readSentenceFromHere(reader, 's1', 'm1', runs[2], 1)).toBe(true);
         await settle();
@@ -151,12 +154,11 @@ describe('a single tap on a sentence of a rendered reply (DROVE-195)', () => {
     });
 
     /**
-     * A double tap is two presses. If Clay keeps reaching for the old gesture
-     * it must not be worse than one press, and it is not: the second press on
-     * the same run seeks to the same place, and on the NEXT run seeks to that
-     * one. Neither is silence, which is what he reported.
+     * Four presses on one run are two double taps, and the second must land
+     * where the first did rather than drift. Repeating the gesture on the same
+     * sentence is a no-op you can hear, not a wander.
      */
-    it('is not made worse by a second tap', async () => {
+    it('is not made worse by repeating the gesture', async () => {
         const { reader, engine } = reading();
         reader.onMessages('s1', [agentText('m1', reply)]);
         await settle();
@@ -181,5 +183,116 @@ describe('a single tap on a sentence of a rendered reply (DROVE-195)', () => {
         readSentenceFromHere(reader, 's1', 'm1', tappableSentences(reply)[2], 1);
         await settle();
         expect(heard).toEqual([]);
+    });
+});
+
+const sourcesRoot = resolve(__dirname, '..');
+
+function read(relative: string): string {
+    return readFileSync(join(sourcesRoot, relative), 'utf8');
+}
+
+/** Every source file under `sources/`, tests left out. */
+function sourceFiles(dir: string = sourcesRoot): string[] {
+    return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) {
+            return entry.name === 'node_modules' ? [] : sourceFiles(full);
+        }
+        if (!/\.tsx?$/.test(entry.name)) return [];
+        if (/\.(spec|test)\.tsx?$/.test(entry.name)) return [];
+        return [full];
+    });
+}
+
+/**
+ * The gesture, read out of the renderer (DROVE-235).
+ *
+ * vitest cannot mount the Text, so the wiring is asserted against the source.
+ * Coarse, and it catches the exact regression this ticket is about: a press
+ * bound straight to `onSentencePress` is a single tap again.
+ */
+describe('the sentence press is two taps (DROVE-235)', () => {
+    const markdownView = read('components/markdown/MarkdownView.tsx');
+
+    it('routes the sentence run press through the double-tap counter', () => {
+        expect(markdownView).toContain('useDoubleTapPress(seek)');
+        expect(markdownView).toContain('onPress={onPress}');
+    });
+
+    it('binds no press straight to onSentencePress, which is the single tap', () => {
+        expect(markdownView).not.toContain('onPress={() => onSentencePress(');
+    });
+
+    /**
+     * The collision, settled by target. A code block is its own component and
+     * is handed no sentence press, so its own double tap (DROVE-95,
+     * DROVE-149) is the only handler inside a fence. It keeps the gesture: it
+     * is older, more local, and a code block is not something Clay asks to be
+     * read from.
+     */
+    it('hands a code block no sentence press at all', () => {
+        const signature = markdownView.slice(
+            markdownView.indexOf('function RenderCodeBlock'),
+            markdownView.indexOf('function RenderCodeBlock') + 400,
+        );
+        expect(signature).not.toContain('onSentencePress');
+        expect(markdownView).toContain('<RenderCodeBlock content={block.content}');
+        const call = markdownView.slice(
+            markdownView.indexOf('<RenderCodeBlock content={block.content}'),
+            markdownView.indexOf('<RenderCodeBlock content={block.content}') + 260,
+        );
+        expect(call).not.toContain('onSentencePress');
+    });
+
+    it('leaves a code fence with no tappable sentence in it', () => {
+        const markdown = 'Here is the fix.\n\n```sh\nmake test. And again.\n```\n\nThat is all.';
+        expect(tappableSentences(markdown)).toEqual(['Here is the fix.', 'That is all.']);
+    });
+});
+
+/**
+ * ONE ROUTE TO THE PLAYHEAD, still (DROVE-146, DROVE-226).
+ *
+ * Changing the gesture must not add a second way in. Reading starts at new
+ * content unless Clay taps, and the tap is the only steer; DROVE-146's
+ * block-level double tap stayed deleted.
+ */
+describe('exactly one route moves the read position (DROVE-146)', () => {
+    const seekEntryPoints = [
+        'readAloudFromHere',
+        'readAloudSentenceFromHere',
+        'readAloudSubagentSentenceFromHere',
+    ];
+
+    it('has one surface calling a seek, and it is the sentence press', () => {
+        const callers = sourceFiles()
+            .filter((file) => !file.includes(join('sources', 'voice')))
+            .filter((file) => seekEntryPoints.some((name) => readFileSync(file, 'utf8').includes(`${name}(`)));
+        expect(callers.map((file) => file.slice(sourcesRoot.length + 1))).toEqual([
+            join('components', 'MessageView.tsx'),
+        ]);
+    });
+
+    it('never reaches the block-level seek from a gesture', () => {
+        const messageView = read('components/MessageView.tsx');
+        expect(messageView).not.toContain('readAloudFromHere(');
+        expect(messageView).toContain('readAloudSentenceFromHere(');
+    });
+
+    /**
+     * Every press MessageView draws is the same one callback: the reply body,
+     * the thinking block, and the thinking block's forward of it. So there is
+     * one destination however many surfaces show prose.
+     */
+    it('gives every prose surface the same single handler', () => {
+        const messageView = read('components/MessageView.tsx');
+        const bindings = messageView.match(/onSentencePress=\{[^}]+\}/g) ?? [];
+        expect(bindings.length).toBeGreaterThan(0);
+        expect(new Set(bindings)).toEqual(new Set([
+            'onSentencePress={readFromSentence}',
+            // ThinkingBlock passing the same callback down to MarkdownView.
+            'onSentencePress={props.onSentencePress}',
+        ]));
     });
 });
