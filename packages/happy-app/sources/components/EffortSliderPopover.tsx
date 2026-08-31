@@ -1,89 +1,90 @@
 import * as React from 'react';
-import { StyleSheet as RNStyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Typography } from '@/constants/Typography';
 import { useBackSwipeLock } from '@/hooks/useBackSwipeLock';
 import { hapticsSelection } from './haptics';
-import { BubblePressable } from './BubblePressable';
 import { GlassChromeSurface } from './GlassChromeControl';
 import { composerControlPalette, composerGlyphColour } from './composerControlColour';
-import { MOBILE_COMPOSER_METRICS } from './agentInputLayout';
-import { COMPOSER_SESSION_CONTROL_SIZE } from './sessionPillLabel';
 import {
     EFFORT_AUTO_INDEX,
+    EFFORT_POPOVER_DIVIDER_GEOMETRY,
+    EFFORT_POPOVER_GEOMETRY,
+    EFFORT_POPOVER_LABEL_GEOMETRY,
+    EFFORT_POPOVER_PIP_GEOMETRY,
+    EFFORT_POPOVER_RAIL_GEOMETRY,
+    EFFORT_POPOVER_STOP_GEOMETRY,
+    EFFORT_POPOVER_THUMB_GEOMETRY,
+    EFFORT_POPOVER_THUMB_STOP_GEOMETRY,
+    EFFORT_POPOVER_TRACK_GEOMETRY,
     EFFORT_SLIDER_METRICS,
     effortCommitKey,
     effortSliderAccessibility,
     effortSliderClosed,
     effortSliderIndex,
-    effortSliderPlacement,
     effortSliderReduce,
     effortSliderStopName,
-    effortStopX,
-    type EffortSliderPlacement,
     type EffortSliderScale,
     type EffortSliderState,
     type EffortSliderStep,
 } from './effortSlider';
 
 /**
- * The effort slider itself: the popover above the composer row, and the hook
- * that drives it (DROVE-200).
+ * The effort readout: the strip above the composer row, and the hook that
+ * drives it (DROVE-200, reworked by DROVE-229).
  *
  * The rules — where it lives, why it is not the dial, why the drag is a delta,
  * why `auto` is off the line, and why a write only ever happens on release —
  * are all in effortSlider.ts, which is pure and specced. This file draws them.
  *
- * WHAT IT REUSES RATHER THAN REDECIDES. The thumb reads the composer row's
- * foreground through `composerGlyphColour`, so the slider and the dial beside
- * it agree, and they now agree on the foreground: DROVE-215 took the ramp off
- * the needle, and a thumb that stayed on a ramp would be the dial's colour
- * argument reopened one surface away. Its POSITION is what says which level
- * this is, and the caption above it says the word. The material is DROVE-153's
- * chrome glass, and
- * the popover is 44pt tall for the same reason every other control is. The
- * detent tick is `hapticsSelection`, which is an INTERACTION haptic and is
- * therefore silent while the phone's haptics switch is off — its default
- * (DROVE-190). Nothing here reaches expo-haptics, so there is no way around
- * that switch.
+ * IT IS A READOUT AND NOTHING ELSE NOW. DROVE-200 LATCHED it open on a tap,
+ * with its stops tappable and a five second timer to put it away, so that a
+ * tap was not a dead gesture. Clay: "Allow me to actually size this and
+ * actually fully cover the width right when I click this. Or at least have it
+ * centered. And if I click a second time it will go away." Every one of those
+ * was the latch: it was narrow, it was anchored on his finger, a second tap
+ * re-opened it and restarted its timer rather than dismissing it, and there
+ * was no tap-outside and no back gesture either. So a tap opens the effort
+ * SHEET instead — the same full-width shell the other pickers use — and this
+ * surface lives exactly as long as the finger. It is `pointerEvents: 'none'`
+ * throughout, which means there is no state anyone can be stuck in.
  *
- * THE LATCH. A press that never moved is a tap, and a tap used to open a
- * picker, so it must not be a dead gesture. It leaves the popover up with its
- * stops tappable. That state times out rather than waiting for a tap outside,
- * because a full-screen backdrop over the composer would have to fight the
- * chat's own scroll responder for touches, and losing that fight leaves the
- * app with a modal nobody can dismiss.
+ * AND IT SPANS THE COMPOSER, BY LAYOUT. The control stack hands it
+ * `left: 0, right: 0` and its own gutter, so it is exactly as wide as the
+ * bubble above it and nothing here computes an x. It used to draw itself in
+ * page coordinates through a `left: -shellInset` frame, with the capsule
+ * centred on the touch and clamped to the screen edges — a hand-placed anchor,
+ * and the thing the ticket was filed about.
+ *
+ * WHAT IT REUSES RATHER THAN REDECIDES. The thumb reads the composer row's
+ * foreground through `composerGlyphColour`, so the readout and the dial beside
+ * it agree, and they agree on the foreground: DROVE-215 took the ramp off the
+ * needle, and a thumb that stayed on a ramp would be the dial's colour
+ * argument reopened one surface away. Its POSITION is what says which level
+ * this is, and the word at the head says it in words. The material is
+ * DROVE-153's chrome glass, and the strip is 44pt tall for the same reason
+ * every other control is. The detent tick is `hapticsSelection`, which is an
+ * INTERACTION haptic and is therefore silent while the phone's haptics switch
+ * is off — its default (DROVE-190). Nothing here reaches expo-haptics, so
+ * there is no way around that switch.
  */
 
-/** How long a latched popover stays up before it puts itself away. */
-const LATCH_TIMEOUT_MS = 5000;
-
-/** The caption above the thumb, and the air around the popover. */
-const CAPTION_HEIGHT = 22;
-const CAPTION_GAP = 6;
-/** Wide enough for `Ultracode`, the longest word on any scale. */
-const CAPTION_WIDTH = 88;
-const THUMB_SIZE = 26;
-
-export const EFFORT_SLIDER_POPOVER_HEIGHT =
-    EFFORT_SLIDER_METRICS.height + CAPTION_GAP + CAPTION_HEIGHT;
+export const EFFORT_SLIDER_POPOVER_HEIGHT = EFFORT_SLIDER_METRICS.height;
 
 export interface EffortSliderHandle {
-    /** The popover is up: dragging, or latched open after a tap. */
+    /** A finger is on the segment and the readout is up. */
     active: boolean;
     /** The stop the thumb is on, for the dial underneath to follow live. */
     index: number;
     onPressIn(pageX: number): void;
     onMove(pageX: number): void;
     onRelease(): void;
-    /** Taps on a latched popover. */
-    tapStop(index: number): void;
-    tapAuto(): void;
     /** VoiceOver's increment and decrement, since a drag is not available there. */
     step(delta: number): void;
     dismiss(): void;
     state: EffortSliderState;
-    placement: EffortSliderPlacement | null;
+    /** How many stops the line has, which is what the drag is clamped to. */
+    count: number;
 }
 
 /**
@@ -93,50 +94,44 @@ export interface EffortSliderHandle {
  * for a level, `null` for `auto`, which is the reset `/effort auto`
  * (paneModelSync). It goes to the same `sessionSetAgentModes` the picker used,
  * so it lands through the path DROVE-164 fixed rather than a second one.
+ *
+ * `onTap` is a press that never moved. The caller opens the effort picker with
+ * it, which is where every dismissal route lives (DROVE-229).
  */
 export function useEffortSlider(input: {
     scale: EffortSliderScale;
     currentKey: string | null | undefined;
     onCommit?: (key: string | null) => void;
+    onTap?: () => void;
     enabled?: boolean;
 }): EffortSliderHandle {
-    const { scale, currentKey, onCommit } = input;
+    const { scale, currentKey, onCommit, onTap } = input;
     const enabled = input.enabled !== false && scale.keys.length > 0;
-    const { width: screenWidth } = useWindowDimensions();
     // The screen's swipe-back, held for the drag (DROVE-216). Without it the
     // navigator takes the horizontal pan and the whole chat slides sideways
-    // with the popover still up, which is what Clay photographed.
+    // with the readout still up, which is what Clay photographed.
     const backSwipe = useBackSwipeLock();
     const [state, setState] = React.useState<EffortSliderState>(effortSliderClosed);
-    const [placement, setPlacement] = React.useState<EffortSliderPlacement | null>(null);
     const activeIndex = effortSliderIndex(scale, currentKey);
+    const count = scale.keys.length;
 
     // Handlers read the live gesture through refs rather than closing over
     // it, so a move arriving between renders is reduced against what the
     // finger actually did last, not a stale copy.
     const stateRef = React.useRef(state);
     stateRef.current = state;
-    const placementRef = React.useRef(placement);
-    placementRef.current = placement;
     const commitRef = React.useRef(onCommit);
     commitRef.current = onCommit;
+    const tapRef = React.useRef(onTap);
+    tapRef.current = onTap;
     const scaleRef = React.useRef(scale);
     scaleRef.current = scale;
-    const latchTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-
-    const clearLatch = React.useCallback(() => {
-        if (latchTimer.current) {
-            clearTimeout(latchTimer.current);
-            latchTimer.current = null;
-        }
-    }, []);
-    React.useEffect(() => clearLatch, [clearLatch]);
 
     /**
      * The one place a step is applied: the state lands, a crossed stop ticks,
-     * and a commit — which only a release or a tap can produce — is written
-     * once. This is where "one write on release" stops being a property of the
-     * reducer and becomes a property of the control.
+     * and a commit — which only a release can produce — is written once. This
+     * is where "one write on release" stops being a property of the reducer and
+     * becomes a property of the control.
      */
     const apply = React.useCallback((stepped: EffortSliderStep) => {
         if (stepped.state !== stateRef.current) {
@@ -145,23 +140,16 @@ export function useEffortSlider(input: {
         }
         if (stepped.detent) hapticsSelection();
         if (stepped.commit) commitRef.current?.(effortCommitKey(scaleRef.current, stepped.commit));
-        clearLatch();
-        if (stepped.state.phase === 'open') {
-            latchTimer.current = setTimeout(() => {
-                stateRef.current = effortSliderClosed;
-                setState(effortSliderClosed);
-            }, LATCH_TIMEOUT_MS);
-        }
-    }, [clearLatch]);
+        if (stepped.tap) tapRef.current?.();
+    }, []);
 
     const dismiss = React.useCallback(() => {
         backSwipe.end();
-        clearLatch();
         stateRef.current = effortSliderClosed;
         setState(effortSliderClosed);
-    }, [backSwipe, clearLatch]);
+    }, [backSwipe]);
 
-    // The popover cannot outlive the scale it was drawn from: switching model
+    // The readout cannot outlive the scale it was drawn from: switching model
     // re-scales the line, and a thumb on a stop that no longer exists would be
     // a lie about what the session is on.
     const scaleSignature = scale.keys.join(' ');
@@ -174,38 +162,29 @@ export function useEffortSlider(input: {
         // Taken on touch-down, not on the first move: the pop recogniser
         // decides the moment the finger travels, so anything later is too late.
         backSwipe.begin();
-        const next = effortSliderPlacement({
-            screenWidth,
-            anchorX: pageX,
-            count: scaleRef.current.keys.length,
-        });
-        placementRef.current = next;
-        setPlacement(next);
         apply(effortSliderReduce(
             effortSliderClosed,
             { type: 'press-in', x: pageX, index: activeIndex },
-            next,
+            scaleRef.current.keys.length,
         ));
-    }, [activeIndex, apply, backSwipe, enabled, screenWidth]);
+    }, [activeIndex, apply, backSwipe, enabled]);
 
     const onMove = React.useCallback((pageX: number) => {
-        apply(effortSliderReduce(stateRef.current, { type: 'move', x: pageX }, placementRef.current));
+        apply(effortSliderReduce(
+            stateRef.current,
+            { type: 'move', x: pageX },
+            scaleRef.current.keys.length,
+        ));
     }, [apply]);
 
     const onRelease = React.useCallback(() => {
-        // The drag is over at press-out even when the popover latches open, so
-        // the gesture goes back now rather than waiting out the latch.
         backSwipe.end();
-        apply(effortSliderReduce(stateRef.current, { type: 'press-out' }, placementRef.current));
+        apply(effortSliderReduce(
+            stateRef.current,
+            { type: 'press-out' },
+            scaleRef.current.keys.length,
+        ));
     }, [apply, backSwipe]);
-
-    const tapStop = React.useCallback((index: number) => {
-        apply(effortSliderReduce(stateRef.current, { type: 'tap-stop', index }, placementRef.current));
-    }, [apply]);
-
-    const tapAuto = React.useCallback(() => {
-        apply(effortSliderReduce(stateRef.current, { type: 'tap-auto' }, placementRef.current));
-    }, [apply]);
 
     /**
      * VoiceOver moves the value a notch at a time, because there is no drag to
@@ -227,233 +206,112 @@ export function useEffortSlider(input: {
         onPressIn,
         onMove,
         onRelease,
-        tapStop,
-        tapAuto,
         step,
         dismiss,
         state,
-        placement,
-    }), [activeIndex, dismiss, onMove, onPressIn, onRelease, placement, state, step, tapAuto, tapStop]);
+        count,
+    }), [activeIndex, count, dismiss, onMove, onPressIn, onRelease, state, step]);
 }
 
 const styles = StyleSheet.create((theme) => ({
     /**
-     * The page-coordinate frame the popover is placed in.
-     *
-     * The capsule is the FIRST thing in the control row, so the row's own
-     * gutter is all that stands between this wrapper and the screen's left
-     * edge: `left: -shellInset` puts x=0 here at x=0 on the screen. The WIDTH
-     * is set by the component from the window rather than by `right`, because
-     * `right` would measure from the capsule's edge — wherever the model's
-     * name happens to end — and not from the screen's.
-     *
-     * It sits ABOVE the control row, which is the whole point: the finger
-     * stays on the capsule and the readout is somewhere it does not cover.
+     * The strip. It carries no width and no position of its own: the layer
+     * around it is `left: 0, right: 0` inside the composer's gutter, and this
+     * stretches to it. That is the whole placement rule (DROVE-229).
      */
-    layer: {
-        position: 'absolute',
-        left: -MOBILE_COMPOSER_METRICS.shellInset,
-        bottom: COMPOSER_SESSION_CONTROL_SIZE + CAPTION_GAP,
-        height: EFFORT_SLIDER_POPOVER_HEIGHT,
-    },
-    capsule: {
-        position: 'absolute',
-        bottom: 0,
-        height: EFFORT_SLIDER_METRICS.height,
-        flexDirection: 'row',
-        alignItems: 'center',
-    },
-    auto: {
-        width: EFFORT_SLIDER_METRICS.autoWidth,
-        height: EFFORT_SLIDER_METRICS.height,
+    popover: EFFORT_POPOVER_GEOMETRY,
+    label: {
+        ...EFFORT_POPOVER_LABEL_GEOMETRY,
         alignItems: 'center',
         justifyContent: 'center',
     },
-    autoLabel: {
+    labelText: {
         fontSize: 13,
         color: theme.colors.text,
         ...Typography.default('semiBold'),
     },
-    /** The same hairline the capsule uses between its segments (DROVE-153). */
+    /** The same rule the capsule draws between its own segments (DROVE-153). */
     divider: {
-        width: RNStyleSheet.hairlineWidth,
-        height: 20,
-        marginLeft: EFFORT_SLIDER_METRICS.autoGap / 2,
-        marginRight: EFFORT_SLIDER_METRICS.autoGap / 2,
+        ...EFFORT_POPOVER_DIVIDER_GEOMETRY,
         backgroundColor: theme.colors.glass.divider,
     },
-    track: {
-        flex: 1,
-        height: EFFORT_SLIDER_METRICS.height,
-        justifyContent: 'center',
-    },
+    track: EFFORT_POPOVER_TRACK_GEOMETRY,
     rail: {
-        position: 'absolute',
-        left: EFFORT_SLIDER_METRICS.trackPadding,
-        right: EFFORT_SLIDER_METRICS.trackPadding,
-        top: (EFFORT_SLIDER_METRICS.height - 3) / 2,
-        height: 3,
-        borderRadius: 1.5,
+        ...EFFORT_POPOVER_RAIL_GEOMETRY,
         backgroundColor: theme.colors.divider,
     },
+    stop: EFFORT_POPOVER_STOP_GEOMETRY,
+    thumbStop: EFFORT_POPOVER_THUMB_STOP_GEOMETRY,
     pip: {
-        position: 'absolute',
-        top: (EFFORT_SLIDER_METRICS.height - 5) / 2,
-        width: 5,
-        height: 5,
-        borderRadius: 2.5,
+        ...EFFORT_POPOVER_PIP_GEOMETRY,
         backgroundColor: theme.colors.divider,
-    },
-    pipTarget: {
-        position: 'absolute',
-        width: EFFORT_SLIDER_METRICS.minStopSpacing,
-        top: 0,
-        bottom: 0,
     },
     thumb: {
-        position: 'absolute',
-        top: (EFFORT_SLIDER_METRICS.height - THUMB_SIZE) / 2,
-        width: THUMB_SIZE,
-        height: THUMB_SIZE,
-        borderRadius: THUMB_SIZE / 2,
+        ...EFFORT_POPOVER_THUMB_GEOMETRY,
         borderWidth: 2.5,
         backgroundColor: theme.colors.surface,
-    },
-    caption: {
-        position: 'absolute',
-        top: 0,
-        height: CAPTION_HEIGHT,
-        paddingHorizontal: 8,
-        borderRadius: CAPTION_HEIGHT / 2,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    captionText: {
-        fontSize: 12,
-        color: theme.colors.text,
-        ...Typography.default('semiBold'),
     },
 }));
 
 /**
- * The popover. Rendered by the composer's control row as an absolutely
- * positioned sibling of the capsule rather than a child of it: the glass
- * surface clips to its own rounded bounds on the fallback material, and a
- * readout that disappears on a device without Liquid Glass is worse than no
- * readout at all.
+ * The readout, drawn by the composer's control stack in a layer that spans the
+ * composer's own gutter.
+ *
+ * It takes no touches at all. There is nothing to tap here since DROVE-229
+ * moved `Auto` and the stops to the effort sheet, and a surface that takes no
+ * touches cannot fight the chat's scroll responder for them either, which is
+ * what the old latch's five second timer existed to avoid.
  */
 export function EffortSliderPopover(props: {
     handle: EffortSliderHandle;
     scale: EffortSliderScale;
 }) {
     const { theme } = useUnistyles();
-    const { width: screenWidth } = useWindowDimensions();
     const { handle, scale } = props;
-    const placement = handle.placement;
-    if (!handle.active || !placement || scale.keys.length === 0) return null;
+    if (!handle.active || scale.keys.length === 0) return null;
 
-    const latched = handle.state.phase === 'open';
     const palette = composerControlPalette(theme.dark);
-    const index = handle.state.index;
     // The LIVE pick, not the one the gesture started from: grabbing a stop
     // takes the session off auto before the finger has even lifted.
-    const onAuto = index === EFFORT_AUTO_INDEX;
+    const index = handle.state.index;
+    const thumbAt = Math.max(0, Math.min(scale.keys.length - 1, index));
     const thumbColour = composerGlyphColour(palette);
     const accessibility = effortSliderAccessibility(scale, index);
-    const captionX = effortStopX(index, placement) - placement.left;
     return (
-        <View
-            style={[styles.layer, { width: screenWidth }]}
-            pointerEvents={latched ? 'box-none' : 'none'}
+        <GlassChromeSurface
+            radius={EFFORT_SLIDER_METRICS.height / 2}
+            style={styles.popover}
+            pointerEvents="none"
         >
-            <GlassChromeSurface
-                radius={EFFORT_SLIDER_METRICS.height / 2}
-                style={[styles.capsule, { left: placement.left, width: placement.width }]}
-            >
-                <BubblePressable
-                    onPress={latched ? () => handle.tapAuto() : undefined}
-                    disabled={!latched}
-                    style={styles.auto}
-                    accessibilityRole="button"
-                    accessibilityLabel="Effort chosen automatically"
-                    accessibilityState={{ selected: onAuto }}
-                >
-                    {/* A picker marking its own current choice, which is the
-                        one thing DROVE-215's rule leaves alone: this surface
-                        exists only while a finger is down, so the accent is
-                        not a glyph sitting coloured on the row at rest. */}
-                    <Text
-                        style={[styles.autoLabel, { color: onAuto ? palette.accent : palette.foreground }]}
-                        numberOfLines={1}
-                    >
-                        Auto
-                    </Text>
-                </BubblePressable>
-                <View style={styles.divider} />
-                <View
-                    style={styles.track}
-                    accessible
-                    accessibilityRole="adjustable"
-                    accessibilityLabel={accessibility.label}
-                    accessibilityValue={{ text: accessibility.value }}
-                >
-                    <View style={styles.rail} />
-                    {scale.keys.map((key, stop) => {
-                        const x = effortStopX(stop, placement) - placement.trackLeft
-                            + EFFORT_SLIDER_METRICS.trackPadding;
-                        if (stop === index) return null;
-                        return (
-                            <React.Fragment key={key}>
-                                <View style={[styles.pip, { left: x - 2.5 }]} />
-                                {latched ? (
-                                    <BubblePressable
-                                        onPress={() => handle.tapStop(stop)}
-                                        style={[
-                                            styles.pipTarget,
-                                            { left: x - EFFORT_SLIDER_METRICS.minStopSpacing / 2 },
-                                        ]}
-                                        accessibilityRole="button"
-                                        accessibilityLabel={effortSliderStopName(scale, stop)}
-                                    />
-                                ) : null}
-                            </React.Fragment>
-                        );
-                    })}
-                    <View
-                        style={[
-                            styles.thumb,
-                            {
-                                left: effortStopX(index, placement) - placement.trackLeft
-                                    + EFFORT_SLIDER_METRICS.trackPadding - THUMB_SIZE / 2,
-                                borderColor: thumbColour,
-                            },
-                        ]}
-                    />
-                </View>
-            </GlassChromeSurface>
-            {/* The word, above the thumb, so the drag says which level it is
-                on before the finger lifts. Clamped inside the popover so it
-                cannot hang off the end at either extreme. */}
-            <View
-                style={[
-                    styles.caption,
-                    {
-                        left: Math.max(
-                            placement.left,
-                            Math.min(
-                                placement.left + placement.width - CAPTION_WIDTH,
-                                placement.left + captionX - CAPTION_WIDTH / 2,
-                            ),
-                        ),
-                        width: CAPTION_WIDTH,
-                        backgroundColor: theme.colors.surfaceHigh,
-                    },
-                ]}
-            >
-                <Text style={styles.captionText} numberOfLines={1}>
+            {/* The word, in a slot of its own at the head. It was a caption
+                floating over the thumb, clamped by hand so it could not hang
+                off either end; one fixed slot cannot hang off anything, and
+                the eye finds it in the same place every time. `Auto` reads
+                here too, until the drag takes the session off it. */}
+            <View style={styles.label}>
+                <Text style={styles.labelText} numberOfLines={1}>
                     {effortSliderStopName(scale, index)}
                 </Text>
             </View>
-        </View>
+            <View style={styles.divider} />
+            <View
+                style={styles.track}
+                accessible
+                accessibilityRole="adjustable"
+                accessibilityLabel={accessibility.label}
+                accessibilityValue={{ text: accessibility.value }}
+            >
+                <View style={styles.rail} />
+                {scale.keys.map((key, stop) => (
+                    <View key={key} style={stop === thumbAt ? styles.thumbStop : styles.stop}>
+                        {stop === thumbAt ? (
+                            <View style={[styles.thumb, { borderColor: thumbColour }]} />
+                        ) : (
+                            <View style={styles.pip} />
+                        )}
+                    </View>
+                ))}
+            </View>
+        </GlassChromeSurface>
     );
 }

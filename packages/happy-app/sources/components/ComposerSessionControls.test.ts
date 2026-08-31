@@ -64,9 +64,9 @@ vi.mock('@/constants/Typography', () => ({ Typography: { default: () => ({}) } }
 vi.mock('./BubblePressable', () => ({ BubblePressable: host('BubblePressable') }));
 vi.mock('./GlassChromeControl', () => ({ GlassChromeSurface: host('GlassChromeSurface') }));
 vi.mock('./NativeSettingsMenu', () => ({ NativeSettingsMenu: host('NativeSettingsMenu') }));
-// The popover reaches haptics and the store, which reach expo-modules-core.
-// This file is about the capsule; EffortSliderPopover has its own module and
-// effortSlider.spec.ts holds the rules it draws (DROVE-200).
+// The capsule imports the handle's TYPE from here and nothing else since
+// DROVE-229 moved the readout out to the control row, but the module still
+// reaches haptics and the store, which reach expo-modules-core.
 vi.mock('./EffortSliderPopover', () => ({ EffortSliderPopover: host('EffortSliderPopover') }));
 
 const { ComposerSessionControls } = await import('./ComposerSessionControls');
@@ -265,12 +265,10 @@ describe('the effort segment when it is a slider', () => {
             onPressIn: () => {},
             onMove: () => {},
             onRelease: () => {},
-            tapStop: () => {},
-            tapAuto: () => {},
             step: () => {},
             dismiss: () => {},
             state: { phase: 'closed', anchorX: 0, anchorIndex: 3, index: 3, grabbed: false },
-            placement: null,
+            count: 6,
             ...overrides,
         } as any;
     }
@@ -335,20 +333,18 @@ describe('the effort segment when it is a slider', () => {
         }))).toBe(palette.pending);
     });
 
-    it('hangs the popover off a wrapper that clips nothing, outside the glass', () => {
+    it('draws no readout of its own: the control row places it (DROVE-229)', () => {
+        // The readout spans the composer, which is wider than this capsule, so
+        // it cannot be laid out from in here. It used to hang off a wrapper
+        // around the capsule and pin itself back to the screen's edge with a
+        // negative left, which is the anchor Clay was looking at.
         const renderer = mount({ effortSlider: slider({ active: true }), effortScale: scale });
-        const popover = renderer.root.findByType('EffortSliderPopover' as any);
-        expect(popover).toBeTruthy();
-        // The glass surface is a sibling of the popover, not its parent: the
-        // fallback material clips to its own bounds (DROVE-153).
-        const surface = renderer.root.findByType('GlassChromeSurface' as any);
-        expect(surface.findAllByType('EffortSliderPopover' as any)).toEqual([]);
+        expect(renderer.root.findAllByType('EffortSliderPopover' as any)).toEqual([]);
     });
 
     it('keeps the picker when no slider is handed in, so a desktop still lists it', () => {
         const renderer = mount();
         const segment = press(renderer, 'Reasoning effort');
         expect(segment.props.onResponderGrant).toBeUndefined();
-        expect(renderer.root.findAllByType('EffortSliderPopover' as any)).toEqual([]);
     });
 });

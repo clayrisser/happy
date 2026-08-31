@@ -48,6 +48,7 @@ import {
     MOBILE_COMPOSER_METRICS,
     resolveMobileComposerActionGeometry,
     resolveMobileComposerControlRowGeometry,
+    resolveMobileComposerEffortLayerGeometry,
     resolveMobileComposerLineGeometry,
 } from './agentInputLayout';
 import {
@@ -68,8 +69,17 @@ import { buildSessionPillLabel } from './sessionPillLabel';
 import type { AgentModePendingFlags } from '@/sync/useAgentModePending';
 import { permissionModeGlyph } from './sessionControlGlyphs';
 import { ComposerSessionControls, type ComposerSessionPicker } from './ComposerSessionControls';
-import { useEffortSlider } from './EffortSliderPopover';
+import { EffortSliderPopover, useEffortSlider } from './EffortSliderPopover';
 import { effortSliderScaleFromLevels } from './effortSlider';
+import {
+    composerPickerClosed,
+    composerPickerDismiss,
+    composerPickerKeyboardGone,
+    composerPickerPress,
+    type ComposerPickerKind,
+    type ComposerPickerState,
+    type ComposerPickerStep,
+} from './composerPicker';
 import {
     COMPOSER_IN_FIELD_DISC,
     COMPOSER_IN_FIELD_DISC_OPEN,
@@ -228,6 +238,14 @@ function permissionKindIcon(kind: string | null | undefined): React.ComponentPro
 
 const MOBILE_COMPOSER_LINE_GEOMETRY = resolveMobileComposerLineGeometry();
 const MOBILE_CONTROL_ROW_GEOMETRY = resolveMobileComposerControlRowGeometry();
+const MOBILE_EFFORT_LAYER_GEOMETRY = resolveMobileComposerEffortLayerGeometry();
+
+/**
+ * How long a deferred picker waits for `keyboardDidHide` before opening
+ * anyway. Longer than any keyboard dismissal, short enough not to read as a
+ * dropped tap if the event never arrives.
+ */
+const PICKER_KEYBOARD_FALLBACK_MS = 420;
 const MOBILE_ICON_ACTION_GEOMETRY = resolveMobileComposerActionGeometry('icon');
 const MOBILE_PRIMARY_ACTION_GEOMETRY = resolveMobileComposerActionGeometry('primary');
 const MOBILE_ADD_ACTION_GEOMETRY = resolveMobileComposerActionGeometry('add');
@@ -310,6 +328,11 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
      * frame, and each of them carries glass of its own already.
      */
     mobileControlRow: MOBILE_CONTROL_ROW_GEOMETRY,
+    /**
+     * Where the effort readout is laid out (DROVE-229). The rule and the
+     * reasoning are on `resolveMobileComposerEffortLayerGeometry`.
+     */
+    mobileEffortLayer: MOBILE_EFFORT_LAYER_GEOMETRY,
     /**
      * Thumbnails inside a card with no padding would sit on its rim, so the
      * strip brings the air the card used to. 64pt thumb plus this is the 72
@@ -1083,19 +1106,40 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
      * handlePickerPress's keyboard dance: a sheet that opens under a keyboard
      * that is still on its way out lands in the wrong place.
      *
+     * 'effort' reaches here from a TAP ON THE SLIDER as well as from a plain
+     * segment press (DROVE-229). It did not before: the slider's segment is a
+     * raw responder, so a tap latched its own readout open and this toggle was
+     * dead code for the one control Clay was tapping. Every composer picker
+     * goes through this function now, which is what makes the second tap,
+     * the tap outside and the back gesture one set of rules rather than four.
+     *
      * The status row's two expanders are deliberately NOT here. They open
      * ComposerSheet from the row itself (DROVE-117's mechanism), and
      * that sheet's own click-away backdrop is what keeps them from stacking
      * with these pickers.
      */
-    type ComposerPicker = 'channels' | 'attach' | 'permission' | 'model' | 'effort';
-    const [openPicker, setOpenPicker] = React.useState<ComposerPicker | null>(null);
-    const pickerOpeningRef = React.useRef<ComposerPicker | null>(null);
+    /*
+     * The rules are composerPicker.ts and are specced there (DROVE-229); this
+     * is the wiring. `pickerRef` mirrors the state so a listener and a timer
+     * armed on an old render still reduce against what is true now.
+     */
+    const [picker, setPicker] = React.useState<ComposerPickerState>(composerPickerClosed);
+    const openPicker = picker.open;
+    /**
+     * What the CONTROL reads as, which is not the same thing (DROVE-229).
+     *
+     * A deferred picker is owed for a few hundred milliseconds before it is
+     * drawn. The control should look pressed for that whole time, or the tap
+     * reads as dropped and the obvious next move is to tap again. The sheets
+     * still key off `openPicker`; only the control's own state uses this.
+     */
+    const engagedPicker = picker.open ?? picker.opening;
+    const pickerRef = React.useRef(picker);
+    pickerRef.current = picker;
     const pickerKeyboardSubscriptionRef = React.useRef<ReturnType<typeof Keyboard.addListener> | null>(null);
     const pickerOpenTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const cancelPendingPickerOpen = React.useCallback(() => {
-        pickerOpeningRef.current = null;
         pickerKeyboardSubscriptionRef.current?.remove();
         pickerKeyboardSubscriptionRef.current = null;
         if (pickerOpenTimerRef.current) {
@@ -1104,39 +1148,41 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         }
     }, []);
 
-    const closePicker = React.useCallback(() => {
+    /** Land a step: the state, then whatever it asked the keyboard to do. */
+    const applyPickerStep = React.useCallback((step: ComposerPickerStep) => {
+        pickerRef.current = step.state;
+        setPicker(step.state);
+        // Whatever was armed goes, on every step: this one either no longer
+        // owes a picker or owes a different one and re-arms below. Leaving the
+        // old listener up is how a cancelled tap comes back as a sheet.
         cancelPendingPickerOpen();
-        setOpenPicker(null);
+        if (step.defer) {
+            // A sheet that opens under a keyboard still on its way out lands in
+            // the wrong place, so it waits — for the keyboard, or for the
+            // fallback if the event never comes.
+            const finishOpening = () => applyPickerStep(composerPickerKeyboardGone(pickerRef.current));
+            pickerKeyboardSubscriptionRef.current = Keyboard.addListener('keyboardDidHide', finishOpening);
+            pickerOpenTimerRef.current = setTimeout(finishOpening, PICKER_KEYBOARD_FALLBACK_MS);
+        }
+        if (step.dismissKeyboard) {
+            inputRef.current?.blur();
+            Keyboard.dismiss();
+        }
     }, [cancelPendingPickerOpen]);
+
+    const closePicker = React.useCallback(() => {
+        applyPickerStep(composerPickerDismiss());
+    }, [applyPickerStep]);
 
     React.useEffect(() => cancelPendingPickerOpen, [cancelPendingPickerOpen]);
 
-    const handlePickerPress = React.useCallback((picker: ComposerPicker) => {
+    const handlePickerPress = React.useCallback((kind: ComposerPickerKind) => {
         hapticsLight();
-        if (openPicker === picker || pickerOpeningRef.current === picker) {
-            closePicker();
-            return;
-        }
-
-        closePicker();
-        if (Platform.OS === 'web' || !Keyboard.isVisible()) {
-            setOpenPicker(picker);
-            return;
-        }
-
-        pickerOpeningRef.current = picker;
-        const finishOpening = () => {
-            const pickerToOpen = pickerOpeningRef.current;
-            cancelPendingPickerOpen();
-            if (pickerToOpen) {
-                setOpenPicker(pickerToOpen);
-            }
-        };
-        pickerKeyboardSubscriptionRef.current = Keyboard.addListener('keyboardDidHide', finishOpening);
-        pickerOpenTimerRef.current = setTimeout(finishOpening, 420);
-        inputRef.current?.blur();
-        Keyboard.dismiss();
-    }, [cancelPendingPickerOpen, closePicker, openPicker]);
+        applyPickerStep(composerPickerPress(pickerRef.current, kind, {
+            // Web has no keyboard to get out of the way of.
+            keyboardVisible: Platform.OS !== 'web' && Keyboard.isVisible(),
+        }));
+    }, [applyPickerStep]);
 
     const handleSettingsPress = React.useCallback(() => {
         handlePickerPress('permission');
@@ -1422,10 +1468,19 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         if (found >= 0) return found;
         return effortScale.keys.length > 0 ? effortScale.keys.length - 1 : -1;
     }, [effortScale, props.effortLevel]);
+    /*
+     * A tap on the effort segment is the effort PICKER (DROVE-229), through
+     * the same handler the mode and the model use. A drag is still a drag; a
+     * press that never moved is what lands here.
+     */
+    const handleEffortTap = React.useCallback(() => {
+        handlePickerPress('effort');
+    }, [handlePickerPress]);
     const effortSlider = useEffortSlider({
         scale: effortScale,
         currentKey: props.effortLevel?.key ?? null,
         onCommit: props.onEffortKeyChange,
+        onTap: handleEffortTap,
         enabled: compactMobileComposer && !!props.onEffortKeyChange,
     });
     const effortSliderOn = compactMobileComposer && !!props.onEffortKeyChange
@@ -1846,8 +1901,22 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
 
     // Channels and Add context have sheets of their own; what is left of the
     // picker is the three session controls, and it slides up on the same shell.
+    /*
+     * A SHEET WITH NOTHING IN IT DOES NOT OPEN (DROVE-229). Each branch below
+     * has a condition of its own — a model list, an effort list — and the
+     * shell did not, so a control whose rows are unavailable slid up an empty
+     * card. It was dismissible, so it was never the bug Clay reported, but
+     * "no picker can be left open with no way out" is easier to hold if a
+     * picker with no content is never open in the first place.
+     */
+    const mobilePickerHasRows = openPicker === 'permission'
+        // The model branch draws its own "configure in the CLI" line when the
+        // list is empty, so it always has something to say.
+        || openPicker === 'model'
+        || (openPicker === 'effort' && availableEffortLevels.length > 0 && !!props.onEffortLevelChange);
     const mobilePickerOpen = compactMobileComposer && !!openPicker
-        && openPicker !== 'channels' && openPicker !== 'attach';
+        && openPicker !== 'channels' && openPicker !== 'attach'
+        && mobilePickerHasRows;
 
 
     /** Whether the `+` is there to be drawn, which is what the field's leading padding turns on. */
@@ -1903,7 +1972,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 // one, so the held-down read survives the control gaining a
                 // resting fill.
                 styles.mobileInFieldDisc,
-                openPicker === 'attach' ? styles.mobileInFieldDiscOpen : undefined,
+                engagedPicker === 'attach' ? styles.mobileInFieldDiscOpen : undefined,
             ]}
         >
                 <BubblePressable
@@ -1920,7 +1989,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     onPress={handleAddContextPress}
                     accessibilityRole="button"
                     accessibilityLabel={t('imageUpload.addContextTitle')}
-                    accessibilityState={{ expanded: openPicker === 'attach' }}
+                    accessibilityState={{ expanded: engagedPicker === 'attach' }}
                 >
                     <Ionicons
                         name="add"
@@ -2318,6 +2387,78 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                                     <Text style={styles.overlaySectionTitle}>
                                                         {props.effortLevel?.name ?? t('agentInput.effort.title')}
                                                     </Text>
+                                                    {/* AUTO, at the head of the list (DROVE-229).
+                                                        It is a MODE, not a level: `/effort auto`
+                                                        hands the choice back to Claude Code, so it
+                                                        is not a seventh notch and it is not below
+                                                        `low` (DROVE-200). It was a pill on the
+                                                        slider's own popover, which is the surface
+                                                        that stopped taking touches; here it is a
+                                                        row like the levels beside it, on the sheet
+                                                        a tap opens. Its wire value is the reset,
+                                                        `effortLevel: null`, through the same
+                                                        `onEffortKeyChange` the drag commits on. */}
+                                                    {props.onEffortKeyChange ? (() => {
+                                                        const isSelected = !props.effortLevel;
+                                                        return (
+                                                            <BubblePressable
+                                                                key="__auto"
+                                                                onPress={() => {
+                                                                    hapticsLight();
+                                                                    props.onEffortKeyChange?.(null);
+                                                                    closePicker();
+                                                                }}
+                                                                style={({ pressed }) => ({
+                                                                    flexDirection: 'row',
+                                                                    alignItems: 'flex-start',
+                                                                    paddingHorizontal: 16,
+                                                                    paddingVertical: 8,
+                                                                    marginHorizontal: 8,
+                                                                    borderRadius: 14,
+                                                                    backgroundColor: pressed
+                                                                        ? theme.colors.surfacePressedOverlay
+                                                                        : isSelected
+                                                                            ? theme.colors.glass.backgroundSubtle
+                                                                            : 'transparent',
+                                                                })}
+                                                            >
+                                                                <View style={{
+                                                                    width: 16,
+                                                                    height: 16,
+                                                                    borderRadius: 8,
+                                                                    borderWidth: 2,
+                                                                    borderColor: isSelected ? theme.colors.radio.active : theme.colors.radio.inactive,
+                                                                    alignItems: 'center',
+                                                                    justifyContent: 'center',
+                                                                    marginRight: 12,
+                                                                    marginTop: 2,
+                                                                }}>
+                                                                    {isSelected && <View style={{
+                                                                        width: 6,
+                                                                        height: 6,
+                                                                        borderRadius: 3,
+                                                                        backgroundColor: theme.colors.radio.dot,
+                                                                    }} />}
+                                                                </View>
+                                                                <View style={{ flex: 1 }}>
+                                                                    <Text style={{
+                                                                        fontSize: 14,
+                                                                        color: isSelected ? theme.colors.radio.active : theme.colors.text,
+                                                                        ...Typography.default(),
+                                                                    }}>
+                                                                        Auto
+                                                                    </Text>
+                                                                    <Text style={{
+                                                                        fontSize: 11,
+                                                                        color: theme.colors.textSecondary,
+                                                                        ...Typography.default(),
+                                                                    }}>
+                                                                        Let the agent choose
+                                                                    </Text>
+                                                                </View>
+                                                            </BubblePressable>
+                                                        );
+                                                    })() : null}
                                                     {availableEffortLevels.map((level) => {
                                                         const isSelected = props.effortLevel?.key === level.key;
                                                         // Out of reach on this model: the row
@@ -2519,6 +2660,13 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         the card's old bottom padding still holding the status
                         row's tap targets off these buttons. */
                     <>
+                    {/* The stack the row and the effort readout share
+                        (DROVE-229). It carries no padding of its own, so the
+                        readout's `left: 0, right: 0` means the composer's full
+                        width and nothing else; the gutter comes back inside
+                        the layer, in normal flow, from the same token the
+                        bubble line uses. Nothing else about the row moved. */}
+                    <View>
                     <View style={styles.mobileControlRow}>
                         {/* Mode, effort and model: three segments in one glass
                             capsule (DROVE-153, DROVE-178), three pickers, one
@@ -2536,11 +2684,10 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                 modeGroups={permissionSettingsGroups}
                                 effortGroup={effortSliderOn ? null : effortSettingsGroup}
                                 effortSlider={effortSliderOn ? effortSlider : null}
-                                effortScale={effortSliderOn ? effortScale : null}
                                 modelGroup={modelSettingsGroup}
-                                openPicker={openPicker === 'permission' || openPicker === 'effort'
-                                    || openPicker === 'model'
-                                    ? openPicker
+                                openPicker={engagedPicker === 'permission' || engagedPicker === 'effort'
+                                    || engagedPicker === 'model'
+                                    ? engagedPicker
                                     : null}
                                 pending={props.pendingModes ? {
                                     permission: props.pendingModes.permissionMode,
@@ -2663,6 +2810,25 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         )}
                         </GlassChromeSurface>
                         ) : null}
+                    </View>
+                    {/* THE EFFORT READOUT, above the row and as wide as the
+                        composer (DROVE-229). It is not a picker: it is up only
+                        while a finger is on the effort segment, and it takes
+                        no touches, so there is nothing here to dismiss. A TAP
+                        on that segment opens the effort sheet instead, which
+                        is where every dismissal route lives.
+
+                        The layer is `left: 0, right: 0` on a stack with no
+                        padding, so the strip inside it is exactly as wide as
+                        the bubble above. That is the one placement rule, and
+                        it is the layout's, not a number computed here: the old
+                        popover pinned itself at `left: -shellInset` and
+                        centred a narrow capsule on the touch. */}
+                    {effortSliderOn ? (
+                        <View style={styles.mobileEffortLayer} pointerEvents="none">
+                            <EffortSliderPopover handle={effortSlider} scale={effortScale} />
+                        </View>
+                    ) : null}
                     </View>
                     </>
                     ) : null}

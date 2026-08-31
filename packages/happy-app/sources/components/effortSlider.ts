@@ -46,18 +46,28 @@
  * drawn stops rather than tracking the finger continuously, so nothing looks
  * out of step: it is a readout with detents, not a knob under the thumb.
  *
- * The popover itself is centred on the finger and clamped to the screen. That
- * is cosmetic only — the mapping never depends on where it landed — which is
- * why a clamp at either edge cannot make the control lie.
+ * THE POPOVER IS AS WIDE AS THE COMPOSER, AND THE LAYOUT GIVES IT THAT WIDTH
+ * (DROVE-229). It used to be centred on the finger and clamped to the screen,
+ * drawn through a frame pinned at `left: -shellInset` so its x=0 landed on the
+ * screen's edge. Clay: "Allow me to actually size this and actually fully
+ * cover the width right when I click this. Or at least have it centered." So
+ * it is stretched gutter to gutter by its container, exactly the rims the
+ * bubble above it has, and nothing in this file computes an x. What is left
+ * here is how the stops divide a width the layout hands down, expressed as a
+ * style tree `flexFrames` can resolve the way Yoga will.
+ *
+ * That was always cosmetic: the drag reads a DELTA (effortStopForDelta), so
+ * neither the old clamp nor this width can make the control lie.
  *
  * `AUTO` IS A MODE, NOT A LEVEL. `/effort auto` hands the choice back to
  * Claude Code; it is not a seventh notch and it is not below `low`. Putting it
  * on the line would mean dragging past the floor lands on it, which is the one
- * thing the ticket rules out. So it is a pill at the LEFT of the popover, off
- * the track, past a gap: reachable in one tap, never reachable by dragging.
- * The drag clamps at stop 0. Its wire value is `effortLevel: null`, which
- * paneModelSync spells `/effort auto` — the reset argument, the same path
- * DROVE-164 fixed.
+ * thing the ticket rules out. So it is never on the track and never reachable
+ * by dragging; the drag clamps at stop 0. CHOOSING it is a row on the effort
+ * sheet, which is what a tap opens (DROVE-229) — it was a pill on the popover
+ * until that popover stopped taking touches at all. Its wire value is
+ * `effortLevel: null`, which paneModelSync spells `/effort auto` — the reset
+ * argument, the same path DROVE-164 fixed.
  *
  * THE ENDS ARE THIS MODEL'S REAL ENDS. The stops come from
  * `getEffortLevelsForModel`, which is per model and which DROVE-164 rewrote as
@@ -73,9 +83,20 @@
  * level is out of reach; the slider just does not offer it.
  *
  * ONE WRITE, ON RELEASE. `effortSliderReduce` only ever returns a `commit`
- * from a release or a tap. A drag across five stops is five `detent` ticks and
- * zero writes. This matters more than it sounds: every write is a metadata
- * round trip that ends in a `/effort` typed at a live pane.
+ * from a release. A drag across five stops is five `detent` ticks and zero
+ * writes. This matters more than it sounds: every write is a metadata round
+ * trip that ends in a `/effort` typed at a live pane.
+ *
+ * AND A PRESS THAT NEVER MOVED IS A TAP, WHICH IS THE PICKER (DROVE-229).
+ * DROVE-200 LATCHED the popover open on a tap instead, with its stops tappable
+ * and a five second timer to put it away, so that a tap was not a dead
+ * gesture. That latch is what Clay was tapping at: a narrow readout anchored
+ * on his finger, which a second tap re-opened and re-armed rather than
+ * dismissing, and which had no tap-outside and no back gesture either. It is
+ * gone. The popover now lives exactly as long as the finger, so there is no
+ * state anyone can be left stuck in, and a tap opens the effort SHEET — the
+ * same full-width shell the mode, model, attach and channel pickers use, which
+ * brings all three dismissal routes with it and is where `Auto` lives now.
  *
  * DETENTS ARE INTERACTION FEEDBACK. Crossing a stop returns `detent: true`,
  * and the caller plays `hapticsSelection`, which goes through
@@ -89,6 +110,7 @@
  */
 
 import type { Metadata } from '@/sync/storageTypes';
+import type { FlexNode, FlexStyle } from './flexFrames';
 import {
     effortDisplayName,
     getEffortLevelsForModel,
@@ -99,25 +121,40 @@ import {
 export const EFFORT_SLIDER_METRICS = {
     /** DROVE-153's floor. The popover is a control, so it is a 44pt one. */
     height: 44,
-    /** Half a stop of air at each end, so an end stop is not on the rim. */
-    trackPadding: 22,
-    /** The widest a stop gap gets. Six of these fit any phone. */
-    maxStopSpacing: 44,
-    /** The narrowest gap that still reads as two stops and not one smear. */
-    minStopSpacing: 26,
+    /**
+     * The word slot at the head: the level the thumb is on, or `Auto`.
+     *
+     * It was a caption floating above the thumb, clamped by hand so it could
+     * not hang off either end (DROVE-200). One fixed slot cannot hang off
+     * anything, and it is legible in the same place every time.
+     */
+    labelWidth: 72,
+    /** The same rule the capsule draws between its own segments (DROVE-153). */
+    dividerWidth: 1,
+    /** Air either side of that rule. */
+    gap: 10,
+    /** A stop the thumb is not on. */
+    pipSize: 5,
+    thumbSize: 26,
     /**
      * How far the FINGER travels per notch, which is not how far the drawn
      * thumb moves. See the header: the segment has 83pt of room to its left,
      * and the longest scale is six stops, so a full sweep has to fit in 90.
      */
     gestureSpacing: 18,
-    /** The `auto` pill: off the track, at the left, past `autoGap`. */
-    autoWidth: 52,
-    autoGap: 10,
     /** How far the finger travels before it takes the thumb off its stop. */
     grabSlop: 6,
-    /** The popover never touches the screen edge. */
-    edgeMargin: 8,
+    /**
+     * The narrowest gap that still reads as two stops and not one smear.
+     *
+     * A FLOOR THE SPEC MEASURES, not a clamp the code applies (DROVE-229).
+     * Nothing here packs the stops: the track is a row of equal flex cells and
+     * flexbox divides whatever width the composer has. So the question "does
+     * the longest scale still read on the narrowest phone" is answered by
+     * resolving the real style tree, not by an arithmetic guard that would
+     * make the popover disagree with its own container.
+     */
+    minStopSpacing: 26,
 } as const;
 
 /** The index that means `auto`: not on the ordered run at all. */
@@ -206,47 +243,131 @@ export function effortSliderAccessibility(
     };
 }
 
-export interface EffortSliderPlacement {
-    /** Page x of the popover's left edge. */
-    left: number;
-    /** The whole popover, `auto` pill included. */
-    width: number;
-    /** Page x of stop 0. */
-    trackLeft: number;
-    /** Page x between two neighbouring stops. Zero on a one-stop scale. */
-    spacing: number;
-    count: number;
-}
+/**
+ * THE POPOVER'S LAYOUT, as style objects the renderer uses verbatim
+ * (DROVE-229, after DROVE-214's `composerBubbleLayout`).
+ *
+ * There is no `effortSliderPlacement` any more. It took a screen width and an
+ * anchor x and returned page coordinates for the popover, the track and every
+ * stop, and the renderer drew from those numbers — so a spec could prove the
+ * arithmetic and still miss what shipped, which is the failure flexFrames.ts
+ * was built for. These are the actual styles. `effortPopoverNode` assembles
+ * them into a tree `resolveFlexFrames` measures the way Yoga will, so the spec
+ * asserts frames rather than restating constants.
+ *
+ * NOTHING HERE CARRIES A POSITION. The popover is stretched to the composer's
+ * width by its container and the stops are equal flex cells, so a stop's x is
+ * something flexbox worked out and not something this file decided.
+ */
+
+/** The popover: the word, a hairline, and the track. */
+export const EFFORT_POPOVER_GEOMETRY: FlexStyle = {
+    flexDirection: 'row',
+    alignItems: 'center',
+    height: EFFORT_SLIDER_METRICS.height,
+    gap: EFFORT_SLIDER_METRICS.gap,
+};
+
+/** The word slot. A leaf: it holds one line of text and centres it itself. */
+export const EFFORT_POPOVER_LABEL_GEOMETRY: FlexStyle = {
+    width: EFFORT_SLIDER_METRICS.labelWidth,
+    height: EFFORT_SLIDER_METRICS.height,
+};
+
+export const EFFORT_POPOVER_DIVIDER_GEOMETRY: FlexStyle = {
+    width: EFFORT_SLIDER_METRICS.dividerWidth,
+    height: 20,
+};
+
+/** Everything left over after the word, divided into one cell per stop. */
+export const EFFORT_POPOVER_TRACK_GEOMETRY: FlexStyle = {
+    flex: 1,
+    height: EFFORT_SLIDER_METRICS.height,
+    flexDirection: 'row',
+    alignItems: 'center',
+};
 
 /**
- * Lay the popover out: centred on the finger, clamped inside the screen.
+ * The rail behind the stops.
  *
- * Cosmetic only. The drag reads a DELTA (effortStopForDelta), so where this
- * lands never changes which stop the finger is on. A popover pinned to the
- * screen's edge and one centred on the thumb behave identically; only the
- * first one is easier to read.
+ * `left: 0, right: 0` is the placement rule stated in the only two properties
+ * that can state it: the track's width is the rail's width, and no x is
+ * computed. It is a decoration under the pips, so it is drawn rather than laid
+ * out, which is why it is not in the node tree.
  */
-export function effortSliderPlacement(input: {
-    screenWidth: number;
-    anchorX: number;
-    count: number;
-}): EffortSliderPlacement {
-    const m = EFFORT_SLIDER_METRICS;
-    const count = Math.max(1, Math.round(input.count));
-    const chrome = m.autoWidth + m.autoGap + m.trackPadding * 2;
-    const room = input.screenWidth - m.edgeMargin * 2 - chrome;
-    const spacing = count > 1
-        ? clamp(room / (count - 1), m.minStopSpacing, m.maxStopSpacing)
-        : 0;
-    const width = chrome + spacing * (count - 1);
-    const highest = Math.max(m.edgeMargin, input.screenWidth - m.edgeMargin - width);
-    const left = clamp(input.anchorX - width / 2, m.edgeMargin, highest);
+export const EFFORT_POPOVER_RAIL_GEOMETRY = {
+    position: 'absolute' as const,
+    left: 0,
+    right: 0,
+    height: 3,
+    borderRadius: 1.5,
+};
+
+/**
+ * One stop. Equal cells, so the drawn spacing is the track divided by the
+ * scale and nothing multiplies a constant.
+ *
+ * The vertical padding is what centres the mark in the 44pt cell, spelled as
+ * padding rather than `justifyContent` so the resolver sees the same thing the
+ * renderer does. Two variants because the two marks are different sizes.
+ */
+export const EFFORT_POPOVER_STOP_GEOMETRY: FlexStyle = {
+    flex: 1,
+    height: EFFORT_SLIDER_METRICS.height,
+    alignItems: 'center',
+    paddingTop: (EFFORT_SLIDER_METRICS.height - EFFORT_SLIDER_METRICS.pipSize) / 2,
+    paddingBottom: (EFFORT_SLIDER_METRICS.height - EFFORT_SLIDER_METRICS.pipSize) / 2,
+};
+
+export const EFFORT_POPOVER_THUMB_STOP_GEOMETRY: FlexStyle = {
+    flex: 1,
+    height: EFFORT_SLIDER_METRICS.height,
+    alignItems: 'center',
+    paddingTop: (EFFORT_SLIDER_METRICS.height - EFFORT_SLIDER_METRICS.thumbSize) / 2,
+    paddingBottom: (EFFORT_SLIDER_METRICS.height - EFFORT_SLIDER_METRICS.thumbSize) / 2,
+};
+
+export const EFFORT_POPOVER_PIP_GEOMETRY: FlexStyle = {
+    width: EFFORT_SLIDER_METRICS.pipSize,
+    height: EFFORT_SLIDER_METRICS.pipSize,
+    borderRadius: EFFORT_SLIDER_METRICS.pipSize / 2,
+};
+
+export const EFFORT_POPOVER_THUMB_GEOMETRY: FlexStyle = {
+    width: EFFORT_SLIDER_METRICS.thumbSize,
+    height: EFFORT_SLIDER_METRICS.thumbSize,
+    borderRadius: EFFORT_SLIDER_METRICS.thumbSize / 2,
+};
+
+/**
+ * The popover as a style tree, with the thumb on `index`.
+ *
+ * Named `stop-0` … `stop-n`, `thumb` and `pip-n`, so a spec can find any of
+ * them by name and measure where the layout actually put it.
+ */
+export function effortPopoverNode(count: number, index: number): FlexNode {
+    const stops = Math.max(1, Math.round(count));
+    const thumbAt = clampIndex(index, stops);
+    const cells: FlexNode[] = [];
+    for (let stop = 0; stop < stops; stop += 1) {
+        const onThumb = stop === thumbAt;
+        cells.push({
+            name: `stop-${stop}`,
+            style: onThumb ? EFFORT_POPOVER_THUMB_STOP_GEOMETRY : EFFORT_POPOVER_STOP_GEOMETRY,
+            children: [{
+                name: onThumb ? 'thumb' : `pip-${stop}`,
+                style: onThumb ? EFFORT_POPOVER_THUMB_GEOMETRY : EFFORT_POPOVER_PIP_GEOMETRY,
+            }],
+        });
+    }
     return {
-        left,
-        width,
-        trackLeft: left + m.autoWidth + m.autoGap + m.trackPadding,
-        spacing,
-        count,
+        name: 'popover',
+        style: EFFORT_POPOVER_GEOMETRY,
+        children: [
+            { name: 'label', style: EFFORT_POPOVER_LABEL_GEOMETRY },
+            { name: 'divider', style: EFFORT_POPOVER_DIVIDER_GEOMETRY },
+            { name: 'track', style: EFFORT_POPOVER_TRACK_GEOMETRY, children: cells },
+        ],
     };
 }
 
@@ -264,26 +385,11 @@ export function effortStopForDelta(anchorIndex: number, dx: number, count: numbe
     return clampIndex(base + Math.round(dx / EFFORT_SLIDER_METRICS.gestureSpacing), levels);
 }
 
-/** Page x of a stop. */
-export function effortStopX(index: number, placement: EffortSliderPlacement): number {
-    return placement.trackLeft + placement.spacing * clampIndex(index, placement.count);
-}
-
-/** Page x of the `auto` pill's centre. */
-export function effortAutoX(placement: EffortSliderPlacement): number {
-    return placement.left + EFFORT_SLIDER_METRICS.autoWidth / 2;
-}
-
 /**
- * The stop nearest a page x. The hit test for a TAP on a latched popover, not
- * the drag: the drag is a delta (effortStopForDelta).
+ * Up, or not. There is no third phase (DROVE-229): the popover lives exactly
+ * as long as the finger, so it cannot be left open with nothing to close it.
  */
-export function effortStopForX(x: number, placement: EffortSliderPlacement): number {
-    if (placement.spacing <= 0) return 0;
-    return clampIndex(Math.round((x - placement.trackLeft) / placement.spacing), placement.count);
-}
-
-export type EffortSliderPhase = 'closed' | 'dragging' | 'open';
+export type EffortSliderPhase = 'closed' | 'dragging';
 
 export interface EffortSliderState {
     phase: EffortSliderPhase;
@@ -310,9 +416,6 @@ export type EffortSliderEvent =
     | { type: 'press-in'; x: number; index: number }
     | { type: 'move'; x: number }
     | { type: 'press-out' }
-    /** A tap on a stop while the popover is latched open. */
-    | { type: 'tap-stop'; index: number }
-    | { type: 'tap-auto' }
     | { type: 'dismiss' };
 
 export type EffortSliderCommit =
@@ -322,35 +425,44 @@ export type EffortSliderCommit =
 export interface EffortSliderStep {
     state: EffortSliderState;
     /**
-     * The one write. Only ever produced by a release or a tap, never by a
-     * move, however far the finger goes.
+     * The one write. Only ever produced by a release, never by a move, however
+     * far the finger goes.
      */
     commit: EffortSliderCommit | null;
     /** A stop was crossed: one interaction tick, subject to DROVE-190. */
     detent: boolean;
+    /**
+     * The press never moved, so it was a TAP (DROVE-229). The popover is down
+     * either way; the caller opens the effort picker.
+     */
+    tap: boolean;
 }
 
 function step(
     state: EffortSliderState,
     commit: EffortSliderCommit | null = null,
     detent: boolean = false,
+    tap: boolean = false,
 ): EffortSliderStep {
-    return { state, commit, detent };
+    return { state, commit, detent, tap };
 }
 
 /**
  * The whole gesture, as a reducer.
  *
- * press-in opens the popover and changes nothing. move slides the thumb and
+ * press-in raises the popover and changes nothing. move slides the thumb and
  * changes nothing. release commits, once, and only if the thumb actually
- * moved. A press that never moved leaves the popover LATCHED open, so a tap is
- * not a dead gesture: the stops are then tappable and the `auto` pill with
- * them.
+ * moved. A press that never moved puts the popover down and reports a TAP,
+ * which the caller turns into the effort picker (DROVE-229).
+ *
+ * `count` is the scale's length, which is all the drag needs: it clamps to the
+ * run. It used to be a placement, because a placement was also how the popover
+ * was drawn; the drawing is the layout's now.
  */
 export function effortSliderReduce(
     state: EffortSliderState,
     event: EffortSliderEvent,
-    placement: EffortSliderPlacement | null,
+    count: number,
 ): EffortSliderStep {
     switch (event.type) {
         case 'press-in':
@@ -362,31 +474,19 @@ export function effortSliderReduce(
                 grabbed: false,
             });
         case 'move': {
-            if (state.phase !== 'dragging' || !placement) return step(state);
+            if (state.phase !== 'dragging') return step(state);
             if (!state.grabbed && Math.abs(event.x - state.anchorX) < EFFORT_SLIDER_METRICS.grabSlop) {
                 return step(state);
             }
-            const index = effortStopForDelta(state.anchorIndex, event.x - state.anchorX, placement.count);
+            const index = effortStopForDelta(state.anchorIndex, event.x - state.anchorX, count);
             if (state.grabbed && index === state.index) return step(state);
             return step({ ...state, grabbed: true, index }, null, index !== state.index);
         }
         case 'press-out': {
             if (state.phase !== 'dragging') return step(state);
-            // A press that never moved is a tap. The popover stays up rather
-            // than flashing: the stops are the picker now.
-            if (!state.grabbed) return step({ ...state, phase: 'open' });
+            if (!state.grabbed) return step(effortSliderClosed, null, false, true);
             if (state.index === state.anchorIndex) return step(effortSliderClosed);
             return step(effortSliderClosed, { kind: 'level', index: state.index });
-        }
-        case 'tap-stop': {
-            if (state.phase === 'closed') return step(state);
-            if (event.index === state.anchorIndex) return step(effortSliderClosed);
-            return step(effortSliderClosed, { kind: 'level', index: event.index });
-        }
-        case 'tap-auto': {
-            if (state.phase === 'closed') return step(state);
-            if (state.anchorIndex === EFFORT_AUTO_INDEX) return step(effortSliderClosed);
-            return step(effortSliderClosed, { kind: 'auto' });
         }
         case 'dismiss':
             return step(effortSliderClosed);
@@ -400,11 +500,6 @@ export function effortCommitKey(
 ): string | null {
     if (commit.kind === 'auto') return null;
     return scale.keys[clampIndex(commit.index, scale.keys.length)] ?? null;
-}
-
-function clamp(value: number, low: number, high: number): number {
-    if (high < low) return low;
-    return Math.max(low, Math.min(high, value));
 }
 
 function clampIndex(index: number, count: number): number {
