@@ -20,8 +20,9 @@
  * read what to arm.
  */
 
-import * as Haptics from 'expo-haptics';
 import { isDroverSpeechAvailable, speakUtterance } from 'drover-speech';
+
+import { hapticsAnnounce } from '@/components/haptics';
 
 import { storage } from './storage';
 import { collectGateEntries } from './droverGates';
@@ -29,10 +30,18 @@ import { announceFor, newGateEntries, togglesFromSettings } from './droverChanne
 
 let started = false;
 
-/** Haptic for a prompt that wants a human: the "warning" pattern, two taps. */
-async function tap(): Promise<void> {
+/**
+ * Haptic for a prompt that wants a human: the "warning" pattern, two taps.
+ *
+ * This is THE notification haptic on the phone, and it is off unless Clay
+ * turned `phoneHaptics` on (DROVE-190). The wrist still buzzes for the same
+ * gate: that runs off `droverAnnounceHaptic`, which nothing here changes.
+ */
+function tap(): void {
     try {
-        await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+        if (!hapticsAnnounce()) {
+            console.log('[drover-announce] haptic skipped: phone haptics are off (DROVE-190)');
+        }
     } catch (error) {
         // The web and a simulator have no taptic engine, and a device with
         // haptics off in Settings refuses too; none of these is news.
@@ -82,7 +91,7 @@ export function startDroverAnnounce(): () => void {
         // landing together are one interruption, and the sentence names the
         // first with a count for the rest.
         const plans = fresh.map((entry) => announceFor(entry, local));
-        if (plans.some((p) => p.haptic)) void tap();
+        if (plans.some((p) => p.haptic)) tap();
         const spoken = plans.find((p) => p.speak);
         if (spoken?.speak) {
             const more = plans.filter((p) => p.speak).length - 1;

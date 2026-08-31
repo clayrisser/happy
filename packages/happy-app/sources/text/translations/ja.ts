@@ -518,6 +518,10 @@ export const ja: TranslationStructure = {
             speakPromptsSubtitle: 'Cattle Drover の確認とその選択肢を、届いたときに読み上げます。',
             readReplies: '返信を読み上げる',
             readRepliesSubtitle: '届いた返信をそのつど読み上げます。コード、差分、ツール出力は読みません。',
+            phoneHaptics: 'この端末の触覚',
+            phoneHapticsSubtitle: 'この端末を振動させます。届いた確認と、指の下の小さなタップの両方です。オフでも時計は振動し、端末は静かなままです。',
+            phoneHapticsTitle: 'この端末',
+            phoneHapticsFooter: '手首は知らせるための面です。端末は見て聞くための面で、返信を読み上げている間はポケットの中にあります。だから既定は無音です。ひとつのスイッチで両方、セッションの通知も操作の手応えも切り替えます。オンにしても時計は変わらず、オフにしても時計からは何も失われません。',
         },
         codexPermissionMode: {
             title: 'CODEX権限モード',

@@ -517,6 +517,10 @@ export const ca: TranslationStructure = {
             speakPromptsSubtitle: 'Una petició del Cattle Drover i les seves opcions es llegeixen en veu alta quan arriba.',
             readReplies: 'Llegeix les respostes en veu alta',
             readRepliesSubtitle: 'Pronuncia cada resposta a mesura que arriba. El codi, els diffs i la sortida de les eines s\'ometen.',
+            phoneHaptics: 'Hàptics del telèfon',
+            phoneHapticsSubtitle: 'Deixa que aquest telèfon vibri: les peticions que arriben i els petits tocs sota el dit. Apagat, el rellotge continua vibrant i el telèfon es queda quiet.',
+            phoneHapticsTitle: 'AQUEST TELÈFON',
+            phoneHapticsFooter: 'El canell és la superfície pensada per avisar-te. El telèfon és el que mires i escoltes, i és a la butxaca mentre es llegeix una resposta, així que arriba en silenci. Un sol interruptor per a totes dues coses: els avisos de sessió i el retorn tàctil. Activar-lo no fa res al rellotge, i desactivar-lo no li treu res.',
         },
         codexPermissionMode: {
             title: 'MODE DE PERMISOS CODEX',

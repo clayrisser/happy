@@ -545,6 +545,12 @@ export const en = {
             speakPromptsSubtitle: 'A Cattle Drover prompt and its options read out the moment it lands.',
             readReplies: 'Read replies aloud',
             readRepliesSubtitle: 'Speaks each assistant reply as it arrives. Code, diffs and tool output are skipped.',
+            // DROVE-190. Title stays inside the 21-character switch-row
+            // budget DROVE-175 set; the rest of the sentence is the subtitle.
+            phoneHaptics: 'Phone haptics',
+            phoneHapticsSubtitle: 'Let this handset buzz: prompts arriving, and the small taps under your finger. Off, the watch still buzzes and the phone stays still.',
+            phoneHapticsTitle: 'THIS PHONE',
+            phoneHapticsFooter: 'The wrist is the surface meant to tap you. The phone is the one you look at and hear, and it is in a pocket while a reply is read aloud, so it ships silent. One switch, both kinds: session announcements and touch feedback. Turning it on does nothing to the watch, and turning it off takes nothing from the watch.',
         },
         codexPermissionMode: {
             title: 'CODEX PERMISSION MODE',
