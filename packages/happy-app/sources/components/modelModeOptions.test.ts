@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
+import { permissionModeGlyph } from './sessionControlGlyphs';
 import {
     filterPermissionModesForCli,
     modeSupportedByCli,
     permissionModeSupportedByCli,
     includePaneModel,
     includePanePermissionMode,
+    toClaudePermissionMode,
     resolvePaneModelKey,
     getAgyModelModes,
     getAgyPermissionModes,
@@ -559,5 +561,88 @@ describe('includePanePermissionMode', () => {
             description: 'set in the terminal',
             disabled: true,
         });
+    });
+});
+
+/**
+ * DROVE-199. The app carries eight permission keys and Claude Code has six
+ * modes, so the two vocabularies do not line up and a raw string comparison
+ * reads half the picks as the pane disagreeing, forever.
+ */
+describe('toClaudePermissionMode', () => {
+    it('folds the Codex spellings onto the Claude modes the pane can report', () => {
+        expect(toClaudePermissionMode('yolo')).toBe('bypassPermissions');
+        expect(toClaudePermissionMode('safe-yolo')).toBe('default');
+        expect(toClaudePermissionMode('read-only')).toBe('default');
+    });
+
+    it('passes Claude\'s own modes through untouched', () => {
+        for (const mode of ['default', 'acceptEdits', 'plan', 'bypassPermissions', 'auto']) {
+            expect(toClaudePermissionMode(mode)).toBe(mode);
+        }
+    });
+
+    it('reads a cleared pick as no mode at all, not as default', () => {
+        // The caller's question is "does the pane contradict this pick", and
+        // nothing contradicts a pick that was never made.
+        expect(toClaudePermissionMode(null)).toBeNull();
+        expect(toClaudePermissionMode(undefined)).toBeNull();
+    });
+
+    it('agrees with the CLI\'s mapToClaudeMode, which is the other end of the wire', () => {
+        // The two ends disagreeing about what `yolo` means is precisely the
+        // class of bug this fold exists to avoid, so the table is pinned here
+        // in the same shape permissionMode.ts writes it.
+        const cli: Record<string, string> = {
+            yolo: 'bypassPermissions',
+            'safe-yolo': 'default',
+            'read-only': 'default',
+        };
+        for (const [key, mode] of Object.entries(cli)) {
+            expect(toClaudePermissionMode(key)).toBe(mode);
+        }
+    });
+});
+
+/**
+ * The padlock follows the PANE, not the last thing asked for (DROVE-199).
+ *
+ * The composition SessionView performs: the pane's observed mode gets a row to
+ * be selected against, the pane key is tried before the request, and the glyph
+ * is drawn for whatever came back. Spec'd here rather than in a renderer
+ * because every part of it is pure — and because "the icon didn't change" is
+ * the symptom Clay reported, so it wants a test that fails when it stops.
+ */
+describe('the permission glyph a pane session renders', () => {
+    const t = (key: string) => key;
+    function glyphFor(paneMode: string | null, requested: string | null) {
+        const modes = includePanePermissionMode(getClaudePermissionModes(t), paneMode);
+        const current = resolveCurrentOption(modes, [paneMode, requested]);
+        return permissionModeGlyph(null, current?.key ?? null);
+    }
+
+    it('draws the mode the terminal is in, not the one the app asked for', () => {
+        // Clay types shift+tab into plan mode while the composer still holds
+        // Yolo. The map is what should be on screen.
+        expect(glyphFor('plan', 'bypassPermissions')).toBe('map-outline');
+    });
+
+    it('moves with him as he cycles', () => {
+        expect(glyphFor('default', 'default')).toBe('lock-closed-outline');
+        expect(glyphFor('acceptEdits', 'default')).toBe('create-outline');
+        expect(glyphFor('bypassPermissions', 'default')).toBe('lock-open-outline');
+        expect(glyphFor('auto', 'default')).toBe('shield-checkmark-outline');
+    });
+
+    it('draws a mode only the keyboard can reach, rather than falling back to a shut lock', () => {
+        // `dontAsk` has no row in the menu, so without includePanePermissionMode
+        // the resolution finds nothing and the padlock silently reads as the
+        // mode that stops and asks — the opposite of what is running.
+        const modes = includePanePermissionMode(getClaudePermissionModes(t), 'dontAsk');
+        expect(resolveCurrentOption(modes, ['dontAsk', 'default'])?.key).toBe('dontAsk');
+    });
+
+    it('falls back to the request only when the pane has said nothing', () => {
+        expect(glyphFor(null, 'plan')).toBe('map-outline');
     });
 });

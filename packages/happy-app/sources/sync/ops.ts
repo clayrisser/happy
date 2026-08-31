@@ -10,7 +10,7 @@ import { describeDemoInput, isDroverDemoId, recordDemoAnswer } from './droverDem
 import type { AgentQuestionAnswer, MachineMetadata, SessionAgentModesPatch } from './storageTypes';
 import type { SessionInventoryPayload } from './sessionInventory';
 import { markAgentModePushPending, clearAgentModePushPending, type AgentModeField } from './agentModesPending';
-import { resolvePaneModelKey } from '@/components/modelModeOptions';
+import { resolvePaneModelKey, toClaudePermissionMode } from '@/components/modelModeOptions';
 import {
     isRigMetadata,
     rigCanAbort,
@@ -810,16 +810,27 @@ export function sessionSetAgentModes(sessionId: string, patch: SessionAgentModes
     // the app shows then matched the stale request and sent nothing, so the
     // picker was dead from the phone. A pick the PANE disagrees with is always
     // a change, whatever the mirror says.
-    const paneDisagrees = (value: string | null, field: 'modelMode' | 'effortLevel'): boolean => {
+    const paneDisagrees = (value: string | null, field: 'modelMode' | 'effortLevel' | 'permissionMode'): boolean => {
         if (field === 'modelMode') {
             const paneModel = session?.metadata?.paneModel;
             return !!paneModel && resolvePaneModelKey(paneModel, value) !== value;
+        }
+        // DROVE-199: the third field, and the one Clay moves by hand most —
+        // shift+tab is a key on his own keyboard, so the pane leaves the
+        // stored request behind every time he presses it. The composer
+        // correctly showed the pane's mode (resolveCurrentOption prefers
+        // panePermissionMode), so the row he tapped was the row already
+        // displayed, `isChanged` compared it against a request that had not
+        // moved, and the pick was dropped before it ever reached the wire.
+        if (field === 'permissionMode') {
+            const paneMode = session?.metadata?.panePermissionMode;
+            return !!paneMode && paneMode !== toClaudePermissionMode(value);
         }
         const paneEffort = session?.metadata?.paneEffort;
         return !!paneEffort && paneEffort !== value;
     };
     const changed: SessionAgentModesPatch = {};
-    if (patch.permissionMode !== undefined && isChanged(patch.permissionMode, 'permissionMode')) {
+    if (patch.permissionMode !== undefined && (isChanged(patch.permissionMode, 'permissionMode') || paneDisagrees(patch.permissionMode, 'permissionMode'))) {
         changed.permissionMode = patch.permissionMode;
     }
     if (patch.modelMode !== undefined && (isChanged(patch.modelMode, 'modelMode') || paneDisagrees(patch.modelMode, 'modelMode'))) {
