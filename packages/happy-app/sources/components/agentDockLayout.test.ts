@@ -26,7 +26,7 @@ import {
     resolveTranscriptBottomScrim,
     transparentOf,
 } from './agentDockLayout';
-import { MOBILE_COMPOSER_BASE_HEIGHT } from './agentInputLayout';
+import { MOBILE_COMPOSER_BASE_HEIGHT, MOBILE_COMPOSER_METRICS } from './agentInputLayout';
 import { COMPOSER_STRIP_HEIGHT } from './composerStripLayout';
 
 // Measured on the iPhone the DROVE-113 screenshot came from: composer card,
@@ -442,28 +442,47 @@ describe('seeing the transcript through the glass (DROVE-180, inverting DROVE-16
 /**
  * WHAT THE MOVE DID TO EVERYTHING THAT HANGS OFF THE DOCK (DROVE-236).
  *
- * Clay asked for the control row nearer the bubble, and three other lanes read
- * the geometry it sits in. This is the check that none of them needed a line
+ * Clay asked for the control row nearer the bubble; the first pass moved it up
+ * by 5 and he came back with the composer marked up in red: the row goes INTO
+ * the bubble and there is nothing under it. Four other lanes read the geometry
+ * that row sat in, and this is the check that none of them needs a line
  * changing, done by resolving them at both heights rather than by reasoning
- * about it: 148 is what DROVE-214 left, 143 is what the move leaves.
+ * about it.
+ *
+ *   148   DROVE-214's composer, with the row and a 9pt bubble floor
+ *   143   the first pass: the floor gives 5 back, the row comes up by it
+ *    93   this pass: the row is inside the bubble and the block is the
+ *         bubble plus the gap over the status strip
  */
-describe('the bottom row moves up and nothing else does', () => {
+describe('the bottom row moves into the bubble and nothing else moves', () => {
     const safeAreaBottom = 34;
-    const before = 148;
+    const beforeAll = 148;
+    const before = 143;
     const after = MOBILE_COMPOSER_BASE_HEIGHT;
 
-    it('shortens the composer by exactly 5, out of the bubble', () => {
-        expect(after).toBe(143);
-        expect(before - after).toBe(5);
+    it('shortens the composer by 50, which is the row and the gap above it', () => {
+        expect(after).toBe(93);
+        expect(before - after).toBe(50);
+        expect(beforeAll - after).toBe(55);
+        // The 50 is exactly the row's height plus the one gap that held it off
+        // the bubble. Nothing came out of the bubble itself: it is 85 on both
+        // sides of the move.
+        expect(before - after)
+            .toBe(MOBILE_COMPOSER_METRICS.actionRowHeight + MOBILE_COMPOSER_METRICS.controlGap);
     });
 
     it('takes the bottom fade with it, still equal to what the list reserves', () => {
-        // DROVE-219 hangs the fade off the dock's MEASURED height and returns
+        // DROVE-219 hangs the fade off the dock's MEASURED height, an
+        // `onLayout` on the dock rather than this constant, and returns
         // `resolveDockInset` itself, so the two cannot drift. Both move by the
-        // 5, and the overhang under the dock does not move at all.
+        // 50 with nothing edited, and the overhang under the dock does not
+        // move at all.
+        //
+        // The one thing that WOULD have broken it is moving a control out of
+        // the measured box. Nothing moved out: the row moved further in.
         const scrimBefore = resolveTranscriptBottomScrim(before, safeAreaBottom);
         const scrimAfter = resolveTranscriptBottomScrim(after, safeAreaBottom);
-        expect(scrimBefore.height - scrimAfter.height).toBe(5);
+        expect(scrimBefore.height - scrimAfter.height).toBe(50);
         expect(scrimAfter.overhang).toBe(scrimBefore.overhang);
         expect(scrimAfter.height).toBe(resolveDockInset({
             dockHeight: after,
@@ -475,16 +494,16 @@ describe('the bottom row moves up and nothing else does', () => {
 
     it('leaves the recording band at 20pt, where DROVE-221 pinned it', () => {
         // The band is `STATUS_ROW_ROW_HEIGHT` and its padding is `controlGap`.
-        // The move spent neither, which is why it was taken out of the bubble's
-        // floor instead: spending `controlGap` would have moved this.
+        // The move spent neither: the row did not shrink, it changed parent.
         expect(COMPOSER_STRIP_HEIGHT).toBe(20);
         expect(COMPOSER_STRIP_HEIGHT).toBe(STATUS_ROW_ROW_HEIGHT);
     });
 
     it('leaves the clear band and the tap floor exactly where they were', () => {
-        // Both are derived from `safeAreaBottom` and `controlsBottomGap`, so a
-        // shorter composer cannot reach them. DROVE-153's 14pt of upward slop
-        // still stops at the control row rather than over it.
+        // Both are derived from `safeAreaBottom` and `controlsBottomGap`, and
+        // `controlsBottomGap` changed owner rather than value: it was the
+        // control row's `marginBottom` and it is the composer line's. So a
+        // shorter composer cannot reach them.
         expect(resolveStatusStripBandHeight(safeAreaBottom)).toBe(36);
         expect(resolveComposerButtonFloor(safeAreaBottom)).toBe(44);
         expect(resolveTranscriptMask(before, safeAreaBottom).clearHeight)
@@ -492,9 +511,21 @@ describe('the bottom row moves up and nothing else does', () => {
         expect(resolveStatusRowTapFloor(safeAreaBottom)).toBe(HOME_INDICATOR_KEEP_OUT);
     });
 
-    it('gives the 5pt to the transcript, which is the point of it', () => {
+    it('gains the strip 4pt of clearance under the nearest button', () => {
+        // The floor says where the composer's controls START above the screen
+        // edge, and it is unchanged at 44. What changed is what is AT it: the
+        // control row's 44pt buttons filled the row down to its own rim, so
+        // the strip's 14pt of upward tap slop stopped exactly at a button.
+        // The bubble's discs stop `bubbleInsetBottom` short of the bubble's
+        // rim, so the nearest button is now 4pt above the same floor.
+        expect(resolveComposerButtonFloor(safeAreaBottom)
+            + MOBILE_COMPOSER_METRICS.bubbleInsetBottom).toBe(48);
+        expect(MOBILE_COMPOSER_METRICS.bubbleInsetBottom).toBe(4);
+    });
+
+    it('gives the 50pt to the transcript, which is the point of it', () => {
         const gradientBefore = resolveTranscriptMask(before, safeAreaBottom).gradientHeight;
         const gradientAfter = resolveTranscriptMask(after, safeAreaBottom).gradientHeight;
-        expect(gradientBefore - gradientAfter).toBe(5);
+        expect(gradientBefore - gradientAfter).toBe(50);
     });
 });

@@ -119,7 +119,38 @@ describe('the session capsule', () => {
         // Smaller before shorter: the failure DROVE-138 was filed about was
         // `Opus 5...`, so the segment scales the type instead of cutting it.
         expect(text.props.adjustsFontSizeToFit).toBe(true);
-        expect(text.props.minimumFontScale).toBe(0.85);
+        // 0.80 since DROVE-236 moved the capsule into the bubble and took 33pt
+        // off the name's budget. The floor is derived, not chosen: it is what
+        // `Opus 4.8 1M` needs to draw WHOLE at 320. sessionPillLabel.spec.ts
+        // runs the arithmetic.
+        expect(text.props.minimumFontScale).toBe(0.8);
+    });
+
+    /**
+     * THE CAPSULE TAKES ITS SIZE FROM THE ROW IT IS ON (DROVE-236).
+     *
+     * 44 on a row of its own, which is what Home draws. 36 inside the chat
+     * bubble's button row, so it is the same height as the discs either side
+     * of it and the bubble does not grow to hold it.
+     */
+    it('sizes to the row it is drawn on, and slops vertically only', () => {
+        const at = (size?: number) => {
+            const renderer = mount(size === undefined ? {} : { size, verticalSlop: 6 });
+            const pressables = renderer.root.findAllByProps({ accessibilityRole: 'button' })
+                .filter((node: any) => typeof node.type !== 'string');
+            return pressables;
+        };
+        // Default: the 44 it has always been.
+        const wide = at();
+        expect(wide.length).toBeGreaterThan(0);
+        // In the bubble: 36, with slop on the vertical axis and NONE on the
+        // horizontal, because these segments sit against each other inside one
+        // capsule and a segment claiming horizontal slop would be claiming its
+        // neighbour's ink.
+        const narrow = at(36);
+        for (const node of narrow) {
+            expect(node.props.hitSlop).toEqual({ top: 6, bottom: 6, left: 0, right: 0 });
+        }
     });
 
     it('opens the model picker on the first tap, never a menu of the three (DROVE-111)', () => {

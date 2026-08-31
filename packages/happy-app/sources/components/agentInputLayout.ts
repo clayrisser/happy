@@ -2,24 +2,37 @@
  * How much of its own em box an Ionicons glyph's OUTLINE fills, measured off
  * `Ionicons.ttf` (unitsPerEm 512) rather than guessed.
  *
- *   add          outline spans x 96..416 of 512, so 0.625 of the em
- *   paper-plane  outline spans x 32.26..480 of 512, so 0.874486
+ *   add          x  96.0000..416.0000   0.625000 of the em
+ *   send         x  16.0000..495.6452   0.936807, and y -16..399.5 is 0.811523
  *
  * IT SIZES ONE GLYPH AGAINST THE OTHER AND PLACES NEITHER (DROVE-214). Three
- * passes on this ticket used these ratios to compute where to put a glyph
+ * passes on that ticket used these ratios to compute where to put a glyph
  * inside a box, and all three shipped something Clay called wrong. Placement is
- * the layout engine's job: every glyph in the composer is now centred by
+ * the layout engine's job: every glyph in the composer is centred by
  * `alignItems`/`justifyContent` in the disc that holds it, and every offset
  * derived from these numbers is deleted.
  *
- * What survives is a question flexbox genuinely cannot answer: a paper plane
- * and a plus at the same point size draw different amounts of ink, so matching
+ * What survives is a question flexbox genuinely cannot answer: two different
+ * marks at the same point size draw different amounts of ink, so matching
  * their WEIGHT means matching ink rather than font size. That is `sendIconSize`
  * and nothing else.
+ *
+ * THE MEASURE IS THE LONGEST INK SPAN (DROVE-236). `paper-plane` was square in
+ * its own bounds, 0.874486 wide against 0.874407 tall, so DROVE-214 could
+ * write "the x span" and never meet the question. `send` is not square: it is
+ * 0.936807 wide and 0.811523 tall. Matching on the height would draw a mark
+ * 18.76pt across against the `+`'s 16.25pt box, which is a heavier right rim
+ * than left. Matching on the longest span caps the glyph's ink box at the
+ * `+`'s, so neither end of the row draws a bigger mark than the other. That is
+ * the same rule DROVE-214 applied, stated for a glyph where the two axes
+ * disagree.
+ *
+ * `paperPlane` is gone with the plane (DROVE-236). Its 0.874486 is kept in the
+ * prose above so the arithmetic that produced 18.58 can still be checked.
  */
 export const IONICON_INK_RATIO = {
     add: 0.625,
-    paperPlane: 0.874486,
+    send: 0.936807,
 } as const;
 
 export interface AgentInputLayoutGeometry {
@@ -42,12 +55,17 @@ export interface AgentInputLayout {
     /**
      * What the send glyph is drawn at, so that its ink is the `+`'s ink.
      *
-     * Clay: "the send button should actually be a send button", and a paper
-     * plane reads lighter than an arrow at the same point size. It does not
-     * get 16 because the arrow had 16; it gets whatever puts the `+`'s 16.25pt
-     * of ink in the disc, which for `paper-plane` at 0.874486 of the em is
-     * 18.58 (DROVE-214). The arrow it replaces carried 9.97 x 10.75 of ink, so
-     * this is a bigger mark as well as a different one.
+     * Clay, with a reference crop: "Shouldn't send look more like this?" The
+     * crop is the flat, solid, right-pointing arrowhead Slack and Telegram
+     * draw, not the tilted origami plane. Ionicons ships exactly that as
+     * `send`, so this costs no asset either.
+     *
+     * 17.35, down from 18.58 (DROVE-236). It does not get 18.58 because the
+     * plane had 18.58; it gets whatever puts the `+`'s 16.25pt of ink in the
+     * disc, which for `send` at 0.936807 of the em is 17.35. The mark is
+     * SHORTER than the plane's on the page and exactly as heavy in ink, which
+     * is the point: `send` is a wide, flat glyph and a wide glyph at the
+     * plane's size would have out-drawn the `+` at the other rim.
      *
      * The last survivor of the ink arithmetic, and it survives because it is a
      * SIZE rather than a position. Both glyphs are centred in their disc by the
@@ -253,14 +271,23 @@ export const MOBILE_COMPOSER_METRICS = {
      */
     controlGap: 6,
     /**
-     * What the control row keeps clear under itself, above the status strip.
+     * What the composer keeps clear under itself, above the status strip.
      *
      * This is the card's old `shellPaddingBottom` doing the same job from
      * outside the card. It is load-bearing, not decoration: the status row's
      * segments extend their touch area 14pt above their text
      * (STATUS_ROW_TAP_SLOP_TOP), and `resolveComposerButtonFloor` is what says
      * they stop before they are drawing over a control. Take this to 0 and the
-     * segments reach 8pt into the mode and mic buttons.
+     * segments reach 8pt into the composer's buttons.
+     *
+     * IT MOVED FROM THE CONTROL ROW TO THE COMPOSER LINE (DROVE-236) and did
+     * not change value. The row it used to hang off is gone; the line that
+     * holds the bubble carries it now, so the strip's 8pt of clear air is
+     * unchanged and the tap floor is where it was. What DID change is that the
+     * lowest control gained 4pt: the row's 44pt buttons filled the row down to
+     * its rim, and the bubble's discs stop `bubbleInsetBottom` short of the
+     * bubble's. So the strip's tap band now stops 4pt below the nearest
+     * button instead of exactly at it.
      */
     controlsBottomGap: 8,
 } as const;
@@ -277,14 +304,44 @@ export const MOBILE_COMPOSER_TEXT_ROW_BASE_HEIGHT = MOBILE_COMPOSER_METRICS.inpu
     + MOBILE_COMPOSER_METRICS.inputPaddingBottom;
 
 /**
- * The bubble's bottom row: the `+` and send, and exactly as tall as they are
- * drawn (DROVE-214).
+ * The bubble's bottom row: the `+`, the session controls, the audio button and
+ * send, and exactly as tall as they are drawn (DROVE-214, DROVE-236).
  *
  * A row sized to its buttons is what makes the discs' margin the bubble's
  * padding rather than a per-control offset. The touch target is the drawn disc
  * plus `primaryActionSlop`, which does not take space.
+ *
+ * IT DOES NOT GROW FOR THE THREE CONTROLS THAT JOINED IT (DROVE-236). They
+ * were drawn at 44 on a row of their own; in here they are drawn at 36, the
+ * size the row already is. That is the whole reason the bubble's height did
+ * not move: 85 before the move and 85 after it, with a row that holds five
+ * things instead of two.
  */
 export const MOBILE_COMPOSER_BUBBLE_ACTION_ROW_HEIGHT = MOBILE_COMPOSER_METRICS.primaryActionSize;
+
+/**
+ * What a session control is drawn at INSIDE the bubble (DROVE-236).
+ *
+ * 36, the row's own size, not `COMPOSER_SESSION_CONTROL_SIZE`'s 44. The
+ * permission glyph, the effort gauge, the model's segment and the audio button
+ * are all this tall, so the row is one family of objects rather than a 44pt
+ * capsule wedged between two 36pt discs.
+ *
+ * IT COSTS A TOUCH TARGET AND THAT IS THE TRADE, stated rather than buried.
+ * The two glyph segments are 36 WIDE as well as 36 tall, and they sit against
+ * each other inside one capsule, so horizontal slop is not available to them:
+ * a segment that claimed 6pt to its right would be claiming its neighbour's
+ * ink. Vertically they take `primaryActionSlop` like every other control on
+ * the row, so each answers a touch in a 36 x 48 box. That is under Apple's
+ * 44pt floor on ONE axis.
+ *
+ * The alternative was to keep them at 44 wide, and it is not affordable: the
+ * arithmetic is in `sessionPillLabel.ts`, and 44pt segments leave 66pt for the
+ * model's name at 320, which is under what `Opus 5` needs at any legible type
+ * size. So the choice is a 36pt-wide segment or no model name, and DROVE-138
+ * was filed about losing the model name.
+ */
+export const MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE = MOBILE_COMPOSER_METRICS.primaryActionSize;
 
 /**
  * The chat bubble, empty: padding, one line of text, the gap, the button row,
@@ -316,61 +373,66 @@ export const MOBILE_COMPOSER_BUBBLE_BASE_HEIGHT = MOBILE_COMPOSER_METRICS.bubble
     + MOBILE_COMPOSER_METRICS.bubbleInsetBottom;
 
 /**
- * The whole chat composer block, empty: bubble, gap, control row, and the gap
- * the row keeps over the status strip.
+ * The whole chat composer block, empty: the bubble, and the gap it keeps over
+ * the status strip.
  *
- * 143. DROVE-214 made it 148 by giving the buttons a row of their own inside
- * the bubble, and DROVE-236 takes 5 back off the bubble's bottom padding to
- * bring the control row nearer the message. The four terms:
+ * 93, down from 143. DROVE-214 made it 148 by giving the buttons a row of
+ * their own inside the bubble, DROVE-236 took 5 back off the bubble's floor,
+ * and this takes the whole control row away: it is INSIDE the bubble now, on
+ * the row the buttons already had. The terms, ticket by ticket:
  *
  *   DROVE-153   8 + 44 + 44 + 8      card padding, field, row, card padding
  *   DROVE-196       44 + 6 + 44 + 8  bubble, gap, row, gap over the strip
  *   DROVE-214       90 + 6 + 44 + 8  the bubble grew a button row
- *   DROVE-236       85 + 6 + 44 + 8  and gave 5 of its floor back
+ *   DROVE-236a      85 + 6 + 44 + 8  and gave 5 of its floor back
+ *   DROVE-236b      85         +  8  the row moved into that button row
  *
- * The paragraph below is DROVE-196's arithmetic and is kept because the gaps
- * it names are the ones still in the sum.
+ * Clay, with the composer marked up in red: "Dude didn't I tell you to do this
+ * already?" He did. The first pass moved the row NEARER the bubble; his
+ * annotation draws it INTO the bubble, with an arrow from the session capsule
+ * up into the empty middle beside the `+` and another from the audio button up
+ * to sit beside the mic at the right rim. So there is one bubble and nothing
+ * under it, and the 50pt the row and its gap were costing go to the transcript.
  *
- * The card's 16pt of padding is gone because the card no longer holds the row;
- * 6 of it comes back as the gap between the bubble and the row, and 8 as the
- * gap under the row, which is the same inert band the card's bottom padding
- * used to be (`resolveComposerButtonFloor` still reads 44 from the screen
- * edge). Net 2pt shorter, and landing back on DROVE-153's rejected number is a
- * coincidence of arithmetic, not a revert.
+ * THE BUBBLE DID NOT GROW TO TAKE THEM. Its button row is 36 tall and the
+ * three controls that joined it are drawn at 36 rather than the 44 they wore
+ * outside (`MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE`), so 85 is 85. What the move
+ * costs is width, not height, and the whole of that cost is the model name's
+ * budget: `composerModelBudget` in sessionPillLabel.ts, 33pt narrower at every
+ * screen width, with the give-way order and the three phones written out
+ * there.
  *
- * DROVE-106's claim survives intact and gets tighter: the empty composer is
- * one line, and the bubble around that line is now exactly the line.
- *
- * DROVE-206 rearranged everything inside those four numbers and did not move
- * one of them, which was checked rather than assumed. The `+` came off the
- * line and into the field, where it is a 36pt disc inset 4 in a 44pt box, so
- * the bubble's floor is what it was; the line it left was 44 tall because the
- * `+` and the bubble were both 44, and it is 44 now because the bubble is.
- * The waveform went the other way, onto the control row, which was already
- * 44 and holds a fourth 44pt control at the same height. So 102 STOOD through
- * DROVE-206, deliberately: an arrangement that changed at both ends of the
- * field and on the row under it cost the transcript nothing.
- *
- * WHAT THE MOVE DOES DOWNSTREAM (DROVE-236), because three other lanes read
- * this number and none of them needs a line changing:
+ * WHAT THE MOVE DOES DOWNSTREAM, because four other lanes hang off this
+ * number and only one of them needs a line changing:
  *
  *   the bottom fade      `resolveTranscriptBottomScrim` hangs off the dock's
- *                        MEASURED height (DROVE-219), so it is 5pt shorter and
- *                        its top edge 5pt lower, and it stays exactly equal to
- *                        `resolveDockInset` because it calls it.
+ *                        MEASURED height (DROVE-219), an `onLayout` on the
+ *                        dock rather than this constant, so it is 50pt shorter and
+ *                        its top edge 50pt lower with nothing edited, and it
+ *                        stays exactly equal to `resolveDockInset` because it
+ *                        calls it. The one thing that would have broken it is
+ *                        moving a control OUT of the measured box, and nothing
+ *                        moved out: the row moved further in.
  *   the transcript mask  same measured height. Its clear band is derived from
  *                        `safeAreaBottom` alone and does not move at all.
  *   the recording band   20pt, `STATUS_ROW_ROW_HEIGHT` (DROVE-221), and its
- *                        padding is `controlGap`. Neither is touched.
- *   the tap floor        `resolveComposerButtonFloor` is the strip plus
- *                        `controlsBottomGap`. Both unchanged, so DROVE-153's
- *                        STATUS_ROW_TAP_SLOP_TOP of 14 still holds.
+ *                        padding is `controlGap`. Neither is touched. Its
+ *                        left and right are `shellInset`, which the composer
+ *                        LINE still carries, so the band is still exactly as
+ *                        wide as the bubble over it. That is the one spec
+ *                        line that had to re-point, from the control row's
+ *                        gutter to the line's, at the same 10.
+ *   the status strip     reads `textInset` (19) and `shellGutter` (8) and
+ *                        neither moved, so DROVE-231's zones and give-way
+ *                        order are untouched. `resolveComposerButtonFloor`
+ *                        still answers 44 and the strip's tap slop still
+ *                        stops there; the nearest button is now 4pt above it
+ *                        rather than on it, because the bubble's discs stop
+ *                        `bubbleInsetBottom` short of its rim.
  *
- * The transcript gets the 5pt.
+ * The transcript gets the 50.
  */
 export const MOBILE_COMPOSER_BASE_HEIGHT = MOBILE_COMPOSER_BUBBLE_BASE_HEIGHT
-    + MOBILE_COMPOSER_METRICS.controlGap
-    + MOBILE_COMPOSER_METRICS.actionRowHeight
     + MOBILE_COMPOSER_METRICS.controlsBottomGap;
 
 export const MOBILE_COMPOSER_CHROME_HEIGHT = MOBILE_COMPOSER_BASE_HEIGHT
@@ -638,8 +700,8 @@ export function resolveMobileComposerActionRowGeometry(): MobileComposerGeometry
         // carry a surface.
         gap: MOBILE_COMPOSER_METRICS.controlGap,
         // No gutter of its own: this is the row as HOME draws it, inside a card
-        // that already supplies one. The chat's row is outside the card and
-        // carries the gutter itself (resolveMobileComposerControlRowGeometry).
+        // that already supplies one. The chat has no row of this kind any
+        // more: its controls are on the bubble's own button row (DROVE-236).
         paddingHorizontal: 0,
     };
 }
@@ -653,47 +715,53 @@ export function resolveMobileComposerActionRowGeometry(): MobileComposerGeometry
  * it is on a row of the bubble's own, along with send.
  *
  * This line stays a row rather than collapsing into the bubble's own style
- * because it carries the composer's GUTTER, which is what makes the bubble's
- * rims line up with the control row's ends and lets the recording banner be
- * exactly as wide as the composer above it (DROVE-157).
+ * because it carries the composer's GUTTER, which is what lets the recording
+ * banner be exactly as wide as the composer above it (DROVE-157). It used to
+ * be the control row that the banner's width was checked against; the row is
+ * gone and this line is the only thing left carrying `shellInset`, so it is
+ * what the banner is measured to now (DROVE-236).
+ *
+ * AND IT CARRIES THE GAP OVER THE STATUS STRIP (DROVE-236). That 8 was the
+ * control row's `marginBottom`; the row is gone, the gap is not, so it hangs
+ * off the last thing above the strip. Same number, same job: it is what stops
+ * the strip's 14pt of upward tap slop reaching the composer's buttons.
  */
 export function resolveMobileComposerLineGeometry(): MobileComposerGeometryStyle {
     return {
         flexDirection: 'row',
         alignItems: 'flex-end',
         paddingHorizontal: MOBILE_COMPOSER_METRICS.shellInset,
-    };
-}
-
-/**
- * The control row, OUTSIDE the bubble (DROVE-196).
- *
- * Clay: "the second row buttons should sit outside the speech bubble." Mode,
- * effort, model, speaker and mic are settings for the session, not part of the
- * message, so they are furniture beneath the card rather than tenants of it.
- * Every control keeps DROVE-153's 44pt (`actionSize`, and 40 for the chips'
- * capsule inside a 44pt row) and DROVE-176's colours: this row moved, it did
- * not change.
- *
- * DROVE-206 adds a fourth control, the waveform, at the head of the audio
- * capsule. Clay: "the boss should not be in the message box." It was the face
- * the in-field button wore on an empty composer, which made that button two
- * things depending on what you had typed; out here it is one thing next to
- * the two other audio controls, and the row's height does not move for it
- * because it is a 44pt control on a 44pt row.
- *
- * It carries the shell gutter itself, which is the whole difference from the
- * Home row, and the two gaps that used to be the card's padding: `controlGap`
- * above it, `controlsBottomGap` below it over the status strip.
- */
-export function resolveMobileComposerControlRowGeometry(): MobileComposerGeometryStyle {
-    return {
-        ...resolveMobileComposerActionRowGeometry(),
-        paddingHorizontal: MOBILE_COMPOSER_METRICS.shellInset,
-        marginTop: MOBILE_COMPOSER_METRICS.controlGap,
         marginBottom: MOBILE_COMPOSER_METRICS.controlsBottomGap,
     };
 }
+
+/*
+ * `resolveMobileComposerControlRowGeometry` stood here and is gone
+ * (DROVE-236).
+ *
+ * DROVE-196 wrote it for Clay's "the second row buttons should sit outside the
+ * speech bubble", and it was right for the bubble that existed then: one row
+ * of text with a control jammed into each rounded end, and no room in it for
+ * anything that was not the message. DROVE-214 gave the bubble a button row of
+ * its own, and that is the room. Clay's markup draws the arrow: the session
+ * capsule and the audio button go UP into that row, beside the `+`.
+ *
+ * So there is no row outside the bubble to give a geometry to. What the
+ * function carried is not lost, it is redistributed by the layout engine
+ * rather than by a style object:
+ *
+ *   paddingHorizontal   was the row's own gutter; the composer LINE already
+ *                       carries the same `shellInset` for the bubble.
+ *   marginTop           was `controlGap` between the row and the bubble; the
+ *                       controls are in the bubble, so there is nothing to
+ *                       gap from.
+ *   marginBottom        was `controlsBottomGap` over the status strip; it is
+ *                       on `resolveMobileComposerLineGeometry` now, unchanged.
+ *
+ * `resolveMobileComposerActionRowGeometry` stays. That is HOME's row, which
+ * still holds its controls in a card of its own and is untouched by any of
+ * this.
+ */
 
 /*
  * `MOBILE_COMPOSER_EFFORT_READOUT_GAP` and
@@ -708,19 +776,25 @@ export function resolveMobileComposerControlRowGeometry(): MobileComposerGeometr
 /**
  * A composer control's disc.
  *
- * `icon` is a control on the session row, drawn at the full 44. `primary` and
- * `add` are the two on the bubble's own bottom row, the same 36, and since
- * DROVE-214 they are the SAME OBJECT: identical style, no margins, no mirrored
- * offsets. The row places them, not they themselves.
+ * `icon` is a control on HOME's row, drawn at the full 44. `add`, `audio` and
+ * `primary` are the three on the chat bubble's own bottom row, all 36, and
+ * since DROVE-214 they are the SAME OBJECT: identical style, no margins, no
+ * mirrored offsets. The row places them, not they themselves.
  *
- * Both centre their glyph with `alignItems`/`justifyContent`, which is all a
- * glyph in a disc ever needed. The two variants remain distinct only so a
- * caller reads which end it is drawing.
+ * `audio` joined them in DROVE-236, coming off the control row where it was
+ * drawn at 44 inside a shared capsule. It is a disc now because it stands
+ * beside two discs: Clay's arrow puts it next to the mic at the bubble's right
+ * rim, and a 44pt capsule between two 36pt circles would have been the one
+ * object on the row that did not belong to it.
+ *
+ * All of them centre their glyph with `alignItems`/`justifyContent`, which is
+ * all a glyph in a disc ever needed. The variants remain distinct only so a
+ * caller reads which one it is drawing.
  */
 export function resolveMobileComposerActionGeometry(
-    variant: 'icon' | 'primary' | 'add',
+    variant: 'icon' | 'primary' | 'add' | 'audio',
 ): MobileComposerGeometryStyle {
-    const inBubble = variant === 'primary' || variant === 'add';
+    const inBubble = variant !== 'icon';
     const size = inBubble
         ? MOBILE_COMPOSER_METRICS.primaryActionSize
         : MOBILE_COMPOSER_METRICS.actionSize;
@@ -746,10 +820,10 @@ export function resolveAgentInputLayout({
         shellInset,
         addGlyphOffset,
         // The send glyph carries the `+`'s ink, not the `+`'s point size
-        // (DROVE-214). A paper plane fills more of its em than a plus does, so
-        // matching the number would have drawn a lighter mark than the one at
-        // the other end of the row.
-        sendIconSize: addIconSize * IONICON_INK_RATIO.add / IONICON_INK_RATIO.paperPlane,
+        // (DROVE-214, DROVE-236). `send` fills more of its em than a plus
+        // does, so matching the number would have drawn a heavier mark than
+        // the one at the other end of the row.
+        sendIconSize: addIconSize * IONICON_INK_RATIO.add / IONICON_INK_RATIO.send,
         // The bubble's interior edge: the composer's gutter plus the bubble's
         // own padding, and therefore literally where the caret starts and
         // where the `+`'s disc begins on the row below (DROVE-214).
