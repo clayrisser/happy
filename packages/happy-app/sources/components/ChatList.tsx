@@ -19,8 +19,13 @@ import { buildAgentTurnCopyTextByMessageId } from '@/utils/agentTurnCopy';
 import { collectSubagentTaskMessageIds } from '@/utils/subagentTaskLinks';
 import { visibleRangeOf } from './chatVisibleRange';
 import { reportVisibleRange } from '@/voice/readAloudViewport';
+import { NativeGlassIconButton, supportsNativeGlassIconButton } from './NativeGlassIconButton';
 
 const SCROLL_THRESHOLD = 300;
+// The jump-to-bottom control's size, and therefore its hit area (DROVE-139).
+// It used to be a 32pt disc at 0.9 opacity, which both missed the 44pt floor
+// and let chat text read straight through it.
+const SCROLL_BUTTON_SIZE = 44;
 const DOCK_DETAILS_SHOW_OFFSET = 16;
 const DOCK_DETAILS_HIDE_OFFSET = 48;
 // Visual gap between the button's bottom edge and the composer card's top
@@ -562,15 +567,28 @@ export const ChatListInternal = React.memo((props: {
                             : SCROLL_BUTTON_DOCK_GAP + (props.bottomContentInset ?? 0),
                     },
                 ]}>
-                    <Pressable
-                        style={({ pressed }) => [
-                            styles.scrollButton,
-                            pressed ? styles.scrollButtonPressed : styles.scrollButtonDefault
-                        ]}
-                        onPress={scrollToBottom}
-                    >
-                        <Octicons name="arrow-down" size={14} color={theme.colors.text} />
-                    </Pressable>
+                    {supportsNativeGlassIconButton() ? (
+                        <NativeGlassIconButton
+                            systemImage="arrow.down"
+                            accessibilityLabel="Jump to the newest message"
+                            onPress={scrollToBottom}
+                            size={SCROLL_BUTTON_SIZE}
+                            iconSize={17}
+                            tintColor={theme.colors.text}
+                        />
+                    ) : (
+                        <Pressable
+                            style={({ pressed }) => [
+                                styles.scrollButton,
+                                pressed ? styles.scrollButtonPressed : styles.scrollButtonDefault
+                            ]}
+                            accessibilityRole="button"
+                            accessibilityLabel="Jump to the newest message"
+                            onPress={scrollToBottom}
+                        >
+                            <Octicons name="arrow-down" size={17} color={theme.colors.text} />
+                        </Pressable>
+                    )}
                 </View>
             )}
         </View>
@@ -592,9 +610,9 @@ const styles = StyleSheet.create((theme) => ({
         pointerEvents: 'box-none',
     },
     scrollButton: {
-        borderRadius: 16,
-        width: 32,
-        height: 32,
+        borderRadius: SCROLL_BUTTON_SIZE / 2,
+        width: SCROLL_BUTTON_SIZE,
+        height: SCROLL_BUTTON_SIZE,
         alignItems: 'center',
         justifyContent: 'center',
         borderWidth: 1,
@@ -605,12 +623,14 @@ const styles = StyleSheet.create((theme) => ({
         shadowOpacity: theme.colors.shadow.opacity * 0.5,
         elevation: 2,
     },
+    // Fully opaque. A control floating over scrolling text has to hide it: at
+    // 0.9 the words behind the disc were still legible through it (DROVE-139),
+    // the same fault DROVE-113 fixed on the composer dock. The pressed state
+    // changes the fill rather than the opacity, so it never turns see-through.
     scrollButtonDefault: {
         backgroundColor: theme.colors.surface,
-        opacity: 0.9,
     },
     scrollButtonPressed: {
-        backgroundColor: theme.colors.surface,
-        opacity: 0.7,
+        backgroundColor: theme.colors.surfaceHigh,
     },
 }));

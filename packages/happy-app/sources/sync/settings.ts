@@ -114,11 +114,6 @@ export const SettingsSchema = z.object({
     avatarStyle: z.string().describe('Generated avatar style: brutalist, pixelated, or gradient'),
     avatarMonochrome: z.boolean().describe('Render generated avatars in black and white'),
     sessionListGrouping: z.enum(SESSION_LIST_GROUPING_MODES).describe('Home session list layout: flat activity list or grouped by project'),
-    // Cattle Drover account filter (BASED-98). Empty string = show every
-    // account; otherwise only sessions stamped with this account. A free
-    // string rather than an enum: accounts are user-defined and sync across
-    // devices that may not know the same set.
-    droverAccountFilter: z.string().describe('Show only Cattle Drover sessions for this account; empty shows all'),
     // Keep the legacy key for synced settings compatibility. It controls the
     // harness badges in the session list.
     showFlavorIcons: z.boolean().describe('Whether to show harness icons in the session list'),
@@ -211,7 +206,6 @@ export const settingsDefaults: Settings = {
     avatarStyle: 'brutalist',
     avatarMonochrome: false,
     sessionListGrouping: 'flat',
-    droverAccountFilter: '',
     showFlavorIcons: false,
     showHarnessIconInSessionHeader: true,
     userMessageBubbleColor: DEFAULT_USER_MESSAGE_BUBBLE_COLOR,
