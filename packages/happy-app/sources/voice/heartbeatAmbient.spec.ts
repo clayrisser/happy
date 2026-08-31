@@ -198,11 +198,11 @@ describe('the heartbeat is ambient, the earcon is an event', () => {
         // and going to waiting-on-Clay changes the pulse entirely. Either is
         // the moment the sound exists to report.
         run(1_000);
-        expect(beats()).toEqual(['working:1']);
+        expect(beats()).toEqual(['working:0']);
         mixer.setState({ reading: true, working: true, pendingKinds: ['question'], agents: 0 });
         // Past the working beat's own length: a change of state does not cut
         // the beat already sounding, it lands the moment that one is over.
         run(500);
-        expect(beats()).toEqual(['working:1', 'waitingQuestion']);
+        expect(beats()).toEqual(['working:0', 'waitingQuestion']);
     });
 });

@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parseWristCueSwift } from '@/utils/wristCues';
-import { ambientForGateKind, audioCues, cueDurationMs, cueSpec, heartbeatCount, workingCueFor, type AudioCueId } from './audioCues';
+import { ambientForGateKind, audioCues, cueDurationMs, cueSpec, workingCueFor, type AudioCueId } from './audioCues';
 import { ambientCue, isWaitingCue, type CueSessionState } from './audioCueState';
 import { resolveAudioCues, audioCuesDefaults, muteAudioCue } from '@/sync/settings';
 
@@ -93,19 +93,21 @@ describe('the cue table', () => {
     });
 
     it('keeps the counting heartbeat well inside its own cadence', () => {
-        // DROVE-182: the figure is a marker plus the thread count in Morse,
-        // and however many threads are running it has to leave clear silence
-        // inside the 6s working cadence or it stops being ambient.
-        for (const count of [1, 2, 4, 5, 9, 10, 15, 99]) {
+        // DROVE-182: the figure is a marker plus the subagent count in Morse,
+        // and however many are running it has to leave clear silence inside
+        // the 6s working cadence or it stops being ambient.
+        for (const count of [0, 1, 2, 4, 5, 9, 10, 15, 99]) {
             const spec = cueSpec(workingCueFor(count));
             expect(cueDurationMs(spec)).toBeLessThan(3_000);
         }
-        // The numbers, stated: main alone is 1240ms and ten threads 2340ms.
+        // The numbers, stated: none is 190ms, one subagent 1240ms and ten
+        // 2340ms.
+        expect(cueDurationMs(cueSpec(workingCueFor(0)))).toBe(190);
         expect(cueDurationMs(cueSpec(workingCueFor(1)))).toBe(1240);
         expect(cueDurationMs(cueSpec(workingCueFor(10)))).toBe(2340);
     });
 
-    it('says the thread count in Morse digits, most significant first', () => {
+    it('says the subagent count in Morse digits, most significant first', () => {
         // Five symbols a digit is the whole reason for Morse over ticks: the
         // rhythm is regular at any count, and counting eight ticks by ear is
         // not a thing anyone can do.
@@ -120,12 +122,23 @@ describe('the cue table', () => {
         expect(dits(12)).toBe('.----..---');
     });
 
-    it('counts the main thread as one, so a lone session is not zero', () => {
-        // DROVE-182, corrected: "number of subagents including main". The
-        // status row counts agents only, and this is the ONE place the two
-        // differ, by exactly one and by a written rule.
-        expect(heartbeatCount(0)).toBe(1);
-        expect(heartbeatCount(8)).toBe(9);
+    it('sounds none as the bare thump, with no digits at all', () => {
+        // DROVE-209: the count is subagents only, so a lone session is 0, and
+        // 0 in Morse is `-----`, the longest figure on the scale. Spending
+        // the longest sound on the commonest state is backwards, so zero is
+        // the marker alone and the silence after it says "none", which is
+        // what the heartbeat was before the count existed.
+        expect(cueSpec(workingCueFor(0)).beats).toEqual([{ hz: 196, ms: 190 }]);
+        expect(cueDurationMs(cueSpec(workingCueFor(0))))
+            .toBeLessThan(cueDurationMs(cueSpec(workingCueFor(1))));
+    });
+
+    it('passes the status row\'s agent count straight through, no offset', () => {
+        // The status row counts agents only (DROVE-155) and so does this, from
+        // one derivation, so the two surfaces can never differ.
+        expect(workingCueFor(0)).toBe('working:0');
+        expect(workingCueFor(4)).toBe('working:4');
+        expect(workingCueFor(8)).toBe('working:8');
     });
 
     it('keeps the ticks quieter than the marker thump', () => {
@@ -157,9 +170,10 @@ describe('the ambient state machine', () => {
     });
 
     it('pulses while working with nothing pending', () => {
-        // Main alone is 1, not 0 (DROVE-182).
-        expect(ambientCue(state({ working: true }))).toBe('working:1');
-        expect(ambientCue(state({ working: true, agents: 4 }))).toBe('working:5');
+        // Subagents only, so a lone session is 0 and 0 is the bare thump
+        // (DROVE-209).
+        expect(ambientCue(state({ working: true }))).toBe('working:0');
+        expect(ambientCue(state({ working: true, agents: 4 }))).toBe('working:4');
     });
 
     it('is silent when idle, because silence is the correct signal', () => {
@@ -181,15 +195,15 @@ describe('the ambient state machine', () => {
     });
 
     it('goes silent the instant speech starts, and comes back when it ends', () => {
-        const working = state({ working: true });
-        expect(ambientCue(working)).toBe('working:1');
+        const working = state({ working: true, agents: 2 });
+        expect(ambientCue(working)).toBe('working:2');
         expect(ambientCue({ ...working, speaking: true })).toBeNull();
-        expect(ambientCue(working)).toBe('working:1');
+        expect(ambientCue(working)).toBe('working:2');
     });
 
     it('is silent again once the gate is answered', () => {
         expect(ambientCue(state({ working: true, pendingKinds: ['question'] }))).toBe('waitingQuestion');
-        expect(ambientCue(state({ working: true, pendingKinds: [] }))).toBe('working:1');
+        expect(ambientCue(state({ working: true, pendingKinds: [] }))).toBe('working:0');
         expect(ambientCue(state({ working: false, pendingKinds: [] }))).toBeNull();
     });
 });

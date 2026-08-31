@@ -36,10 +36,10 @@ export interface CueBeat {
      * Loudness of THIS beat relative to the cue's own gain, 0 to 1, 1 unasked.
      *
      * Added by DROVE-182, which needs one figure to hold two loudnesses: the
-     * heartbeat's thump is the main thread and the ticks after it are the
-     * agents, and the ticket's words are "the ticks are quieter and shorter
-     * than the thump". A second cue would not do, because the two have to be
-     * one sound with one rhythm.
+     * heartbeat's thump is the marker and the ticks after it are the count,
+     * and the ticket's words are "the ticks are quieter and shorter than the
+     * thump". A second cue would not do, because the two have to be one sound
+     * with one rhythm.
      */
     gain?: number;
 }
@@ -52,7 +52,10 @@ export type AudioCueId =
      * heartbeat actually plays `working:<n>` (DROVE-182).
      */
     | 'working'
-    /** Working, with the thread count said in Morse after the thump. */
+    /**
+     * Working, with the subagent count said in Morse after the thump.
+     * `working:0` is the thump alone (DROVE-209).
+     */
     | `working:${number}`
     /** A yes/no gate is waiting on Clay. */
     | 'waitingPermission'
@@ -105,10 +108,9 @@ export interface AudioCueSpec {
 export const cueBeatGap = 160;
 
 /**
- * The heartbeat COUNTS what is running, in Morse (DROVE-182).
+ * The heartbeat COUNTS the subagents, in Morse (DROVE-182, DROVE-209).
  *
- * Clay: "The heartbeat is supposed to be number of subagents including main in
- * Morse code."
+ * Clay: "Counting for the Morse code, don't include the main thread."
  *
  * The first version of this ticket said one tick per agent, and that was the
  * weaker idea for the reason it already admitted: counting ticks past four by
@@ -128,19 +130,26 @@ export const cueBeatGap = 160;
  * that a count is starting, not the main thread's own tick. Then the digits,
  * most significant first.
  *
- * THE COUNT INCLUDES MAIN. One session working alone with no subagents is 1,
- * not 0, because the main thread is a thing that is running and a heartbeat
- * that said zero while the phone was clearly busy would say nothing. That is
- * one more than the number the status row shows, which counts agents only, and
- * the difference is stated rather than left to be discovered: see
- * `heartbeatCount`, which is the one place the +1 happens.
+ * THE COUNT IS SUBAGENTS ONLY. It is exactly the agent count the status row
+ * draws (DROVE-155), passed straight through with no arithmetic on it, so the
+ * ear and the screen say the same number and there is no offset anywhere to
+ * discover. An earlier build added the main thread and that is gone, along
+ * with the function that carried the +1.
+ *
+ * ZERO IS THE BARE THUMP, no digits. A lone session with no subagents is by
+ * far the commonest state, and in Morse 0 is `-----`, five dahs, the LONGEST
+ * figure on the scale. Spending the longest sound on the quietest state is
+ * backwards, so zero gets the marker alone and the silence after it carries
+ * "none". That is exactly what the heartbeat was before the count existed, so
+ * nothing about the ordinary case changed pitch or shape; digits only appear
+ * once there is something to count.
  *
  * TIMING, tuned so a digit is comfortably inside the cadence:
  *   dit 50ms, dah 150ms, one dit between symbols, three dits between digits,
  *   the thump 190ms with a 200ms gap after it.
- * So "1" (.----) is 850ms and the whole figure 1240ms; "0" (-----) is 950ms;
+ * So zero is 190ms, "1" (.----) is 850ms of digits and 1240ms of figure, and
  * "10" is 1950ms of digits and 2340ms of figure, the longest he will hear in
- * practice. At the default 6s cadence that leaves between 3.6 and 4.8 seconds
+ * practice. At the default 6s cadence that leaves between 3.6 and 5.8 seconds
  * of silence after the figure, so it stays ambient rather than becoming a
  * drum machine.
  */
@@ -171,25 +180,15 @@ export const morseDigits: Readonly<Record<string, string>> = {
     '9': '----.',
 };
 
-/**
- * The number the heartbeat says: subagents PLUS the main thread.
- *
- * The one derivation, and the only place the +1 lives. `agents` is
- * `summarizeLiveStatus`'s agent-row count, which is exactly the number the
- * status row draws (DROVE-155), so the two can never drift; what the heartbeat
- * adds to it is stated here and in the settings row rather than being a silent
- * off-by-one.
- */
-export function heartbeatCount(agents: number): number {
-    return Math.max(1, Math.round(agents) + 1);
-}
-
 /** The beats for a count, as Morse digits after the marker. */
 export function morseBeats(count: number): CueBeat[] {
+    // Zero is the marker alone: no digits, and the silence after it says
+    // "none". See the note above for why 0 does not get its `-----`.
+    if (count <= 0) return [countMarker];
     const beats: CueBeat[] = [countMarker, afterMarker];
     // Two digits is 99, which is far past anything real; a bigger number is
     // clamped rather than turned into a figure longer than the cadence.
-    const digits = String(Math.min(99, Math.max(1, Math.round(count))));
+    const digits = String(Math.min(99, Math.round(count)));
     for (let d = 0; d < digits.length; d++) {
         if (d > 0) beats.push({ hz: 0, ms: morseDigitGap });
         const symbols = morseDigits[digits[d]] ?? '';
@@ -214,7 +213,7 @@ export function morseBeats(count: number): CueBeat[] {
  * one meaning and a different number in it.
  */
 export function workingCueFor(count: number): AudioCueId {
-    return `working:${Math.min(99, Math.max(1, Math.round(count)))}` as AudioCueId;
+    return `working:${Math.min(99, Math.max(0, Math.round(count)))}` as AudioCueId;
 }
 
 /** Every working variant is the SAME settings row; muting one mutes all. */
@@ -222,11 +221,18 @@ export function isWorkingCue(id: AudioCueId): boolean {
     return id === 'working' || id.startsWith('working:');
 }
 
-/** The count inside a working cue id, or 1 for the plain row. */
+/**
+ * The count inside a working cue id, or 1 for the plain row.
+ *
+ * The plain row is the settings entry, not a state: its preview plays ONE
+ * subagent so pressing play demonstrates both halves of the sound, the thump
+ * and a digit. Previewing zero would play the thump alone and teach nothing
+ * about the count.
+ */
 export function workingCueCount(id: AudioCueId): number {
     if (!id.startsWith('working:')) return 1;
     const parsed = Number.parseInt(id.slice('working:'.length), 10);
-    return Number.isFinite(parsed) ? Math.max(1, parsed) : 1;
+    return Number.isFinite(parsed) ? Math.max(0, parsed) : 1;
 }
 
 function workingRow(id: AudioCueId): AudioCueSpec {
@@ -241,7 +247,7 @@ function workingRow(id: AudioCueId): AudioCueSpec {
         gain: 0.45,
         rank: 0,
         title: 'Working',
-        meaning: 'Something is running and nothing needs you. One low thump, then how many threads are running in Morse — the main thread plus its subagents, so one more than the agent count on the status row.',
+        meaning: 'Something is running and nothing needs you. One low thump, then how many subagents are out, in Morse. The same number the status row shows. No subagents is the thump on its own.',
     };
 }
 

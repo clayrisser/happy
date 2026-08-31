@@ -280,10 +280,10 @@ export const AudioCueSettings = React.memo(function AudioCueSettings() {
 
             <ItemGroup title={t('settingsVoice.cues.tableTitle')} footer={t('settingsVoice.cues.tableFooter')}>
                 {/*
-                  * The working heartbeat has six variants now, one per agent
-                  * count (DROVE-182), and they are ONE row: the sound is the
-                  * same sound with a different rhythm, and six rows saying
-                  * "Working" would be six ways to half-mute a heartbeat.
+                  * The working heartbeat has a variant per subagent count
+                  * (DROVE-182), and they are ONE row: the sound is the same
+                  * sound with a different rhythm, and a row per count would
+                  * be a dozen ways to half-mute a heartbeat.
                   */}
                 {cueTable.filter((cue) => cue.id === 'working' || !isWorkingCue(cue.id)).map((cue) => {
                     const silenced = cues.muted.includes(cue.id);

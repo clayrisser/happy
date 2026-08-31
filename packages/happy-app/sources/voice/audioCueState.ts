@@ -1,4 +1,4 @@
-import { ambientForGateKind, cueSpec, heartbeatCount, workingCueFor, type AudioCueId } from './audioCues';
+import { ambientForGateKind, cueSpec, workingCueFor, type AudioCueId } from './audioCues';
 
 /**
  * Which ambient cue a session's state deserves (DROVE-112).
@@ -30,7 +30,7 @@ export interface CueSessionState {
      * How many subagents are running on this session (DROVE-182). The count
      * the status row shows, from `summarizeLiveStatus`, and derived exactly
      * once: a heartbeat that disagrees with the screen is worse than no
-     * heartbeat.
+     * heartbeat. The main thread is NOT in it (DROVE-209).
      */
     agents: number;
     /** A sentence is at the synthesiser right now. */
@@ -71,11 +71,11 @@ export function ambientCueFor(state: CueSessionState): AudioCueId | null {
         }
         return best;
     }
-    // The working pulse COUNTS what is running, in Morse after the thump
-    // (DROVE-182). `heartbeatCount` is the one place the main thread is added
-    // to the agent count, so the number in the sound and the number on the
-    // status row differ by exactly one and by a stated rule.
-    if (state.working) return workingCueFor(heartbeatCount(state.agents));
+    // The working pulse COUNTS the subagents, in Morse after the thump
+    // (DROVE-182), and the agent count goes in untouched (DROVE-209): the
+    // number in the sound is the number on the status row, with no arithmetic
+    // between them to drift. None running is the thump on its own.
+    if (state.working) return workingCueFor(state.agents);
     return null;
 }
 

@@ -41,8 +41,11 @@ describe('AudioCueMixer', () => {
         mixer.setState({ reading: true, working: true, pendingKinds: [], agents });
     }
 
-    /** The working pulse for a thread count. `working:1` is main alone. */
-    function pulse(count = 1): string {
+    /**
+     * The working pulse for a subagent count. `working:0` is a lone session,
+     * which is the bare thump (DROVE-209).
+     */
+    function pulse(count = 0): string {
         return `working:${count}`;
     }
 
@@ -86,9 +89,9 @@ describe('AudioCueMixer', () => {
         run(250);
         expect(played).toEqual([pulse()]);
         mixer.setState({ reading: true, working: true, pendingKinds: ['question'], agents: 0 });
-        // The counting figure has to finish first (DROVE-182): it is 1240ms
-        // for a lone session, not one tick. What it does NOT do is wait out
-        // the six-second cadence, which is the point of the test.
+        // The counting figure has to finish first (DROVE-182), though for a
+        // lone session that is only the 190ms thump. What it does NOT do is
+        // wait out the six-second cadence, which is the point of the test.
         run(1_500);
         expect(played).toEqual([pulse(), 'waitingQuestion']);
     });

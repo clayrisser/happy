@@ -222,12 +222,14 @@ class AudioCueService {
                 // Build the sounds now rather than when the first one is due.
                 // The table, plus the working counts a session actually
                 // reaches (DROVE-182). A count is unbounded so it cannot all
-                // be warmed; one to twelve covers every fan-out Clay runs, and
-                // a count past that is a shade late on its first beat only.
+                // be warmed; zero to twelve covers every fan-out Clay runs,
+                // and a count past that is a shade late on its first beat
+                // only. Zero is in it because it is the commonest state of
+                // all: no subagents, the thump on its own (DROVE-209).
                 warmCuePlayers(
                     [
                         ...cueTable.map((cue) => cue.id),
-                        ...Array.from({ length: 12 }, (_, i) => workingCueFor(i + 1)),
+                        ...Array.from({ length: 13 }, (_, i) => workingCueFor(i)),
                     ],
                     settings().volume,
                 );
