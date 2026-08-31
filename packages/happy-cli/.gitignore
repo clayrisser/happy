@@ -43,3 +43,8 @@ happy-*.tgz
 
 # npm auth token (never commit)
 .npmrc
+
+# Build staging and record, scripts/build.cjs (DROVE-65)
+/dist.next
+/dist.prev
+/.build
