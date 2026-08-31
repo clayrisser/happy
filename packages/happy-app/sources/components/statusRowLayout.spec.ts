@@ -1,11 +1,20 @@
 /**
- * What fits on the status line, and what had to fold to make room (DROVE-138).
+ * What fits on the status line, and what had to fold to make room (DROVE-138,
+ * DROVE-178).
  *
  * The row gained the model's full name and the account it runs on, on the
- * busiest strip in the app, with no second line to spill onto. These are the
- * numbers behind that: the widest realistic row draws whole at 375pt, and each
- * of the three folds is shown to be load-bearing by putting it back and
- * watching the row go over.
+ * busiest strip in the app, with no second line to spill onto. Then DROVE-178
+ * took the model back to the button row, into the gap DROVE-153 opened, and
+ * these numbers are re-measured with it gone. Every fixture below is the row
+ * AS IT SHIPS: no model. The rows that still carry one are kept in one place,
+ * under `what the row cost with the model on it`, because they are what says
+ * how much DROVE-178 bought and because `statusRowFolds` still has the model
+ * branch for a caller that passes one.
+ *
+ * The headline: the widest realistic row, a working session with a task list,
+ * now needs only DROVE-155's tool-name fold at 375 and needs NOTHING at 393.
+ * With the model on it, the same row folded the name AND the model whole at
+ * both, and was still over at 320.
  */
 import { describe, expect, it } from 'vitest';
 import { MOBILE_COMPOSER_LAYOUT, MOBILE_COMPOSER_METRICS } from './agentInputLayout';
@@ -21,15 +30,17 @@ import {
     STATUS_ROW_MODEL_TRUNCATION,
 } from './statusRowLayout';
 
-/** A working session on Clay's phone: a tool running, an account, a model, a context reading. */
+/** A working session on Clay's phone: a tool running, an account, a context reading. */
 const workingRow = {
     live: 'Bash 1m 2s',
     liveExpands: true,
-    model: 'Opus 5 1M',
     quota: 'jamrizzi 23%',
     quotaExpands: true,
     contextGauge: true,
 } as const;
+
+/** The same row before DROVE-178, with the model's name still on it. */
+const workingRowWithModel = { ...workingRow, model: 'Opus 5 1M' } as const;
 
 /**
  * The same row once DROVE-155's main-thread readout lands: the tool, the turn
@@ -47,29 +58,42 @@ const foldedToolName = { ...mainThreadRow, live: '1m 2s 251.2k' } as const;
 
 /**
  * And with a task list (DROVE-167). THIS is the widest the row gets: a working
- * session that keeps a list, on the phone, with the model still on the row.
+ * session that keeps a list, on the phone.
  */
 const mainThreadRowWithTasks = { ...mainThreadRow, tasks: '1/3 tasks' } as const;
 
-/** The row DROVE-178 leaves, with the model back on the button row. */
-const { model: _model, ...mainThreadRowWithTasksNoModel } = mainThreadRowWithTasks;
+/** The same three, as they were with the model on the row. */
+const mainThreadRowWithModel = { ...mainThreadRow, model: 'Opus 5 1M' } as const;
+const foldedToolNameWithModel = { ...mainThreadRowWithModel, live: '1m 2s 251.2k' } as const;
+const mainThreadRowWithTasksAndModel = { ...mainThreadRowWithModel, tasks: '1/3 tasks' } as const;
 
 describe('the row at 375pt, the narrowest phone still supported', () => {
-    it('draws the whole of it, with the model and the account both on', () => {
+    it('draws the whole of it, with the account on and the model gone', () => {
         expect(statusRowUsableWidth(375)).toBe(337);
-        expect(estimateStatusRowWidth(workingRow)).toBe(291);
+        expect(estimateStatusRowWidth(workingRow)).toBe(221);
         expect(statusRowFits(workingRow, 375)).toBe(true);
     });
 
-    it('would not fit with the word `online` back on it, which is why it went', () => {
-        // The dot's colour was already the state, so the word repeated it and
-        // cost the width the account needed. It is 52pt with its separator.
-        const withWord = { ...workingRow, connection: 'online' };
-        expect(estimateStatusRowWidth(withWord) - estimateStatusRowWidth(workingRow)).toBe(52);
-        expect(statusRowFits(withWord, 375)).toBe(false);
+    it('is 70pt shorter than it was with the model on it, which is what DROVE-178 gave back', () => {
+        expect(estimateStatusRowWidth(workingRowWithModel)).toBe(291);
+        expect(estimateStatusRowWidth(workingRowWithModel) - estimateStatusRowWidth(workingRow)).toBe(70);
     });
 
-    it('holds every model name Clay actually runs, whole', () => {
+    it('costs 52pt for the word `online`, which is why it went', () => {
+        // The dot's colour was already the state, so the word repeated it and
+        // cost the width the account needed. It is 52pt with its separator,
+        // and with the model on the row that was the difference between
+        // fitting at 375 and not. The word fits again now, and it is still
+        // not coming back: the dot says the same thing for nothing.
+        const withWord = { ...workingRow, connection: 'online' };
+        expect(estimateStatusRowWidth(withWord) - estimateStatusRowWidth(workingRow)).toBe(52);
+        expect(statusRowFits({ ...workingRowWithModel, connection: 'online' }, 375)).toBe(false);
+    });
+
+    it('held every model name Clay runs, whole, back when it drew one', () => {
+        // Kept because it is the promise DROVE-138 made and the reason the
+        // name was here at all: it was never truncated on this row. The
+        // capsule keeps that promise now (sessionPillLabel.spec.ts).
         for (const model of ['Opus 5 1M', 'Fable 5', 'Opus 5', 'Sonnet 5', 'GPT-5.6 Sol']) {
             expect(statusRowFits({ ...workingRow, model }, 375), model).toBe(true);
         }
@@ -86,26 +110,29 @@ describe('the row at 375pt, the narrowest phone still supported', () => {
  * stops fitting at depends on how long all three happen to be.
  */
 describe('the row once the main thread reports its own numbers (DROVE-155)', () => {
-    it('needs the tool name folded away at 375, and fits once it is', () => {
-        expect(statusRowFits(mainThreadRow, 375)).toBe(false);
-        expect(statusRowFits(foldedToolName, 375)).toBe(true);
+    it('draws whole at 375 now the model has gone, where it used to need the name folded', () => {
+        expect(estimateStatusRowWidth(mainThreadRow)).toBe(283);
+        expect(statusRowFits(mainThreadRow, 375)).toBe(true);
+        expect(statusRowFolds(mainThreadRow, 375)).toEqual({ toolName: false, model: false });
+        // What the same row did with the model on it, which is why the fold
+        // exists at all.
+        expect(statusRowFits(mainThreadRowWithModel, 375)).toBe(false);
+        expect(statusRowFits(foldedToolNameWithModel, 375)).toBe(true);
     });
 
-    it('would not fit with the word `week` back on the quota', () => {
-        expect(statusRowFits({ ...foldedToolName, quota: 'jamrizzi 23% week' }, 375)).toBe(false);
+    it('would still not fit with the word `week` back on the quota, at 320', () => {
+        expect(statusRowFits({ ...foldedToolName, quota: 'jamrizzi 23% week' }, 320)).toBe(false);
     });
 
-    it('would not fit with the context percent printed as well as drawn', () => {
-        expect(statusRowFits({ ...foldedToolName, context: '42% context' }, 375)).toBe(false);
-    });
-
-    it('keeps the tool name at 393, where there is room for it', () => {
-        expect(statusRowFits(mainThreadRow, 393)).toBe(true);
-        expect(statusRowFolds(mainThreadRow, 393)).toEqual({ toolName: false, model: false });
-    });
-
-    it('folds the name and nothing else at 375', () => {
-        expect(statusRowFolds(mainThreadRow, 375)).toEqual({ toolName: true, model: false });
+    it('keeps the tool name at 393 and 375, and gives it up at 320 by a single point', () => {
+        for (const width of [393, 375]) {
+            expect(statusRowFits(mainThreadRow, width), String(width)).toBe(true);
+            expect(statusRowFolds(mainThreadRow, width), String(width))
+                .toEqual({ toolName: false, model: false });
+        }
+        // 283 against 282 usable. Under the model it went at 375 as well.
+        expect(statusRowUsableWidth(320)).toBe(282);
+        expect(statusRowFolds(mainThreadRow, 320)).toEqual({ toolName: true, model: false });
     });
 });
 
@@ -121,61 +148,89 @@ describe('the row with a task list on it (DROVE-167)', () => {
     it('costs the badge, its chevron and a separator', () => {
         expect(estimateStatusRowWidth(mainThreadRowWithTasks) - estimateStatusRowWidth(mainThreadRow))
             .toBe(9 * statusRowMetrics.glyphWidth + statusRowMetrics.chevron + statusRowMetrics.separator);
-        expect(estimateStatusRowWidth(mainThreadRowWithTasks)).toBe(436);
-        expect(estimateStatusRowWidth({ ...mainThreadRowWithTasks, tasks: '10/12 tasks' })).toBe(448);
+        expect(estimateStatusRowWidth(mainThreadRowWithTasks)).toBe(366);
+        expect(estimateStatusRowWidth({ ...mainThreadRowWithTasks, tasks: '10/12 tasks' })).toBe(378);
     });
 
-    it('does not fit at 393 with the name folded, so the model folds too, and then it does', () => {
-        expect(statusRowFits(mainThreadRowWithTasks, 393)).toBe(false);
-        expect(statusRowFits({ ...mainThreadRowWithTasks, live: '1m 2s 251.2k' }, 393)).toBe(false);
-        expect(statusRowFolds(mainThreadRowWithTasks, 393)).toEqual({ toolName: true, model: true });
-        expect(statusRowFits({ ...mainThreadRowWithTasks, live: '1m 2s 251.2k', model: null }, 393)).toBe(true);
-    });
-
-    it('folds the same two at 375, and is over at 320 with both gone, where the shrinking starts', () => {
-        expect(statusRowFolds(mainThreadRowWithTasks, 375)).toEqual({ toolName: true, model: true });
-        expect(statusRowFits({ ...mainThreadRowWithTasks, live: '1m 2s 251.2k', model: null }, 375)).toBe(true);
-        expect(statusRowFolds(mainThreadRowWithTasks, 320)).toEqual({ toolName: true, model: true });
-        expect(statusRowFits({ ...mainThreadRowWithTasks, live: '1m 2s 251.2k', model: null }, 320)).toBe(false);
-    });
-
-    it('needs only the name folded once the model is off the row (DROVE-178), at 393 and at 375', () => {
-        expect(estimateStatusRowWidth(mainThreadRowWithTasksNoModel)).toBe(366);
+    it('needs only the tool name at 393 and 375, and fits once it goes', () => {
+        // This is the whole of DROVE-178's effect on the fold order. The same
+        // row used to lose the name AND the model whole at both widths, and
+        // was still over at 320 with both gone. Now one fold covers 393 and
+        // 375, which are the two widths the app supports.
         for (const width of [393, 375]) {
-            expect(statusRowFits(mainThreadRowWithTasksNoModel, width), String(width)).toBe(false);
-            expect(statusRowFolds(mainThreadRowWithTasksNoModel, width), String(width))
+            expect(statusRowFits(mainThreadRowWithTasks, width), String(width)).toBe(false);
+            expect(statusRowFolds(mainThreadRowWithTasks, width), String(width))
                 .toEqual({ toolName: true, model: false });
-            expect(statusRowFits({ ...mainThreadRowWithTasksNoModel, live: '1m 2s 251.2k' }, width), String(width))
+            expect(statusRowFits({ ...mainThreadRowWithTasks, live: '1m 2s 251.2k' }, width), String(width))
                 .toBe(true);
         }
-        // 320 is over with the name gone and has no model to fold: it shrinks.
-        expect(statusRowFolds(mainThreadRowWithTasksNoModel, 320)).toEqual({ toolName: true, model: false });
     });
 
-    it('keeps the model on an idle row with a list at 393 and 375, and folds it at 320', () => {
-        const idle = { tasks: '1/3 tasks', model: 'Opus 5 1M', quota: 'jamrizzi 23%', quotaExpands: true, contextGauge: true };
-        expect(estimateStatusRowWidth(idle)).toBe(285);
-        expect(statusRowFolds(idle, 393)).toEqual({ toolName: false, model: false });
-        expect(statusRowFolds(idle, 375)).toEqual({ toolName: false, model: false });
-        expect(statusRowFolds(idle, 320)).toEqual({ toolName: false, model: true });
+    it('is still over at 320 with the name gone, where the shrinking starts', () => {
+        // 336 against 282 usable. There is no second fold left to fire, so
+        // the row gives way in `statusRowShrink`'s order: the account first,
+        // then the tool name's own segment. 320 is below the supported floor.
+        expect(estimateStatusRowWidth({ ...mainThreadRowWithTasks, live: '1m 2s 251.2k' })).toBe(336);
+        expect(statusRowFolds(mainThreadRowWithTasks, 320)).toEqual({ toolName: true, model: false });
+        expect(statusRowFits({ ...mainThreadRowWithTasks, live: '1m 2s 251.2k' }, 320)).toBe(false);
     });
 
     it('folds nothing on a row that fits, and never a part that is not there', () => {
         expect(statusRowFolds(mainThreadRowWithTasks, 500)).toEqual({ toolName: false, model: false });
-        expect(statusRowFolds({ ...mainThreadRowWithTasksNoModel, live: null, liveWithoutName: null }, 320))
+        expect(statusRowFolds({ ...mainThreadRowWithTasks, live: null, liveWithoutName: null }, 320))
             .toEqual({ toolName: false, model: false });
+    });
+});
+
+/**
+ * What the row cost with the model on it (DROVE-138 to DROVE-178).
+ *
+ * Kept, and only here, because it is the measurement DROVE-178 is justified
+ * by. The badge is 83pt with its separator, and until it was counted the
+ * estimate said a working row with a list fit at 393 by 2pt while the row
+ * really needed 436: the tool name held, the account went to `jam…` and the
+ * model to `Opus…`, which is the one thing this file promises never happens.
+ * Every one of those numbers is a case that cannot occur any more.
+ */
+describe('what the row cost with the model on it', () => {
+    it('was 436pt at its widest, 70 over the 366 it is now', () => {
+        expect(estimateStatusRowWidth(mainThreadRowWithTasksAndModel)).toBe(436);
+        expect(statusRowUsableWidth(393)).toBe(355);
+    });
+
+    it('folded the name AND the model whole at 393 and 375, and was still over at 320', () => {
+        for (const width of [393, 375]) {
+            expect(statusRowFolds(mainThreadRowWithTasksAndModel, width), String(width))
+                .toEqual({ toolName: true, model: true });
+            expect(statusRowFits(
+                { ...mainThreadRowWithTasksAndModel, live: '1m 2s 251.2k', model: null },
+                width,
+            ), String(width)).toBe(true);
+        }
+        expect(statusRowFolds(mainThreadRowWithTasksAndModel, 320)).toEqual({ toolName: true, model: true });
+        expect(statusRowFits(
+            { ...mainThreadRowWithTasksAndModel, live: '1m 2s 251.2k', model: null },
+            320,
+        )).toBe(false);
+    });
+
+    it('still folds a model for a caller that passes one, so the branch is not dead code', () => {
+        const idle = { tasks: '1/3 tasks', model: 'Opus 5 1M', quota: 'jamrizzi 23%', quotaExpands: true, contextGauge: true };
+        expect(estimateStatusRowWidth(idle)).toBe(285);
+        expect(statusRowFolds(idle, 393)).toEqual({ toolName: false, model: false });
+        expect(statusRowFolds(idle, 320)).toEqual({ toolName: false, model: true });
     });
 });
 
 describe('the row at 393pt, the handset Clay is on', () => {
     it('has room to spare, so nothing is near its edge in normal use', () => {
         expect(statusRowFits(workingRow, 393)).toBe(true);
-        expect(statusRowUsableWidth(393) - estimateStatusRowWidth(workingRow)).toBeGreaterThan(60);
+        // Was over 60 with the model on the row; the model's 70pt is on top.
+        expect(statusRowUsableWidth(393) - estimateStatusRowWidth(workingRow)).toBeGreaterThan(130);
     });
 
     it('carries an idle session whole, without the live segment', () => {
         expect(statusRowFits({
-            model: 'Opus 5 1M',
             quota: 'jamrizzi 23%',
             quotaExpands: true,
             contextGauge: true,
@@ -198,8 +253,9 @@ describe('when it does not fit', () => {
         expect(STATUS_ROW_MODEL_TRUNCATION).toEqual({ segment: 'model', ellipsizeMode: 'tail' });
     });
 
-    it('is over budget at 320pt, which is where the shrinking starts', () => {
-        expect(statusRowFits(workingRow, 320)).toBe(false);
+    it('fits at 320pt now, where it used to be over budget and shrinking', () => {
+        expect(statusRowFits(workingRow, 320)).toBe(true);
+        expect(statusRowFits(workingRowWithModel, 320)).toBe(false);
     });
 });
 

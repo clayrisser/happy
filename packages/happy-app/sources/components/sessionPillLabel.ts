@@ -1,6 +1,7 @@
 /**
- * What the composer says about the session's mode, model and effort
- * (DROVE-83, DROVE-111, DROVE-138).
+ * What the composer says about the session's mode, model and effort, and the
+ * room the model's name has on the button row (DROVE-83, DROVE-111,
+ * DROVE-138, DROVE-178).
  *
  * DROVE-83 read the three as one pill, `Yolo · Opus 5 1M · High`, on a row of
  * its own. DROVE-111 folded them into the button row: the mode a glyph, the
@@ -8,14 +9,27 @@
  * moved the model down to the status line, because a name sharing a row with
  * six buttons was showing `Opus 5 1M` as `Opus 5...`.
  *
- * So this file is now just the naming. The glyph controls read `mode` and
- * `effort` to know they have something to draw, the status row reads `model`,
- * and `text` is the whole sentence for a screen reader. The width arithmetic
- * left with the model and lives in statusRowLayout.ts.
+ * AND DROVE-178 BRINGS IT BACK UP, so the history is written here to stop it
+ * flipping a third time. Clay asked for the move DOWN when six 63pt buttons
+ * were cutting the name. DROVE-153 then collapsed the row to three objects
+ * and freed about 121pt at 393, and he circled "Fable 5" on the status row
+ * and drew an arrow up into exactly that gap. With that room the whole name
+ * fits, and the status row, which by then carried the main thread's clock,
+ * the agent count, the model and the account, needed to lose something. So
+ * the model is the third segment of the session capsule, after mode and
+ * effort, in full, and the status row no longer shows it. The name is the one
+ * thing on the row with priority: the spacer beside the capsule gives way
+ * before the name does, and nothing else on the row shrinks.
  *
- * Pure, so the names can be tested without a renderer.
- * ComposerSessionControls.tsx and AgentInputStatusRow.tsx draw them.
+ * The glyph controls read `mode` and `effort` to know they have something to
+ * draw, the capsule's third segment reads `model`, and `text` is the whole
+ * sentence for a screen reader.
+ *
+ * Pure, so the names and the budget can be tested without a renderer.
+ * ComposerSessionControls.tsx draws them.
  */
+
+import { MOBILE_COMPOSER_METRICS } from './agentInputLayout';
 
 export const SESSION_PILL_SEPARATOR = ' · ';
 
@@ -25,10 +39,80 @@ export const SESSION_PILL_SEPARATOR = ' · ';
  * 44, up from 38 (DROVE-153). They were half a step under the row's buttons
  * because seven separate discs had to fit across 357pt. They no longer have
  * to: the mode and the effort are one capsule now, the primary has moved into
- * the input, and DROVE-138 took the model off the row entirely, so the capsule
- * is two 44pt segments with nothing to squeeze.
+ * the input, so the glyph segments are 44pt with nothing to squeeze. The
+ * model segment (DROVE-178) is as tall, and as wide as its name needs.
  */
 export const COMPOSER_SESSION_CONTROL_SIZE = 44;
+
+/**
+ * The model's name inside the capsule (DROVE-178).
+ *
+ * 13pt, a step up from the 12 the DROVE-111 row squeezed it to, because the
+ * name now has DROVE-153's gap to itself rather than 63pt between six
+ * buttons. `glyphWidth` is a generous average advance for the system font at
+ * 13pt, so the estimate only ever errs toward "does not fit".
+ * `paddingHorizontal` is the inset each side of the text: the same air the
+ * 44pt glyph segments give their 20pt glyphs.
+ */
+export const COMPOSER_MODEL_SEGMENT = {
+    fontSize: 13,
+    glyphWidth: 7,
+    paddingHorizontal: 10,
+    /**
+     * Never an ellipsis. A name that will not fit at 13pt is drawn smaller
+     * before it is ever cut, down to this scale, because `Opus 5...` is the
+     * exact failure DROVE-138 was filed about. At 0.85 the longest name the
+     * picker offers still fits the narrowest phone; the spec pins it.
+     */
+    minimumFontScale: 0.85,
+} as const;
+
+/**
+ * Everything on the phone's action row that is NOT the model's name, in
+ * points, at the DROVE-153 sizes.
+ *
+ * The card is inset from the screen by `shellInset` and pads its content by
+ * `shellInset` again. Then, left to right: the `+`, a gap, the mode and
+ * effort segments, the model segment, the spacer, a gap, and the speaker and
+ * mic capsule. The two hairline dividers inside the capsule are counted at a
+ * point each, which over-counts them.
+ */
+export const COMPOSER_ROW_GEOMETRY = {
+    screenInset: MOBILE_COMPOSER_METRICS.shellInset,
+    cardPadding: MOBILE_COMPOSER_METRICS.shellInset,
+    add: MOBILE_COMPOSER_METRICS.actionSize,
+    gap: 6,
+    glyphSegments: 2,
+    segment: COMPOSER_SESSION_CONTROL_SIZE,
+    dividers: 2,
+    audioButtons: 2,
+    audioButton: MOBILE_COMPOSER_METRICS.actionSize,
+} as const;
+
+/** The width the model segment needs for a name, at a given type scale. */
+export function composerModelSegmentWidth(name: string, fontScale = 1): number {
+    const m = COMPOSER_MODEL_SEGMENT;
+    return Math.ceil(name.length * m.glyphWidth * fontScale) + 2 * m.paddingHorizontal;
+}
+
+/**
+ * What is left for the model's name on a phone of `screenWidth`, once
+ * everything else on the row has taken its fixed size. This is the gap the
+ * ticket points at, measured rather than quoted.
+ */
+export function composerModelBudget(screenWidth: number): number {
+    const g = COMPOSER_ROW_GEOMETRY;
+    const usable = screenWidth - 2 * g.screenInset - 2 * g.cardPadding;
+    const fixed = g.add + g.gap
+        + g.glyphSegments * g.segment + g.dividers
+        + g.gap + g.audioButtons * g.audioButton;
+    return usable - fixed;
+}
+
+/** True when the name draws whole at 13pt on this phone, with no scaling. */
+export function composerModelFits(name: string, screenWidth: number): boolean {
+    return composerModelSegmentWidth(name) <= composerModelBudget(screenWidth);
+}
 
 export interface SessionPillModelLike {
     key?: string | null;

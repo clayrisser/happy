@@ -27,7 +27,7 @@ import {
 import {
     MOBILE_COMPOSER_METRICS,
 } from './agentInputLayout';
-import { COMPOSER_SESSION_CONTROL_SIZE } from './sessionPillLabel';
+import { COMPOSER_SESSION_CONTROL_SIZE, composerModelSegmentWidth } from './sessionPillLabel';
 import { MOBILE_GLASS_CONTROL_SIZE } from './navigation/headerMetrics';
 import {
     HOME_INDICATOR_KEEP_OUT,
@@ -83,6 +83,16 @@ describe('every chrome control against Apple’s 44pt floor', () => {
         { name: 'composer add', drawnWidth: MOBILE_COMPOSER_METRICS.actionSize, drawnHeight: MOBILE_COMPOSER_METRICS.actionSize, slop: 0 },
         { name: 'permission mode segment', drawnWidth: COMPOSER_SESSION_CONTROL_SIZE, drawnHeight: COMPOSER_SESSION_CONTROL_SIZE, slop: 0 },
         { name: 'effort segment', drawnWidth: COMPOSER_SESSION_CONTROL_SIZE, drawnHeight: COMPOSER_SESSION_CONTROL_SIZE, slop: 0 },
+        {
+            // The model's name (DROVE-178). As tall as its siblings, and
+            // wider: the shortest name the picker offers is `Opus 5` and its
+            // segment is already over the floor with the padding on it, so
+            // the width is measured from the name rather than assumed.
+            name: 'model segment',
+            drawnWidth: composerModelSegmentWidth('Opus 5'),
+            drawnHeight: COMPOSER_SESSION_CONTROL_SIZE,
+            slop: 0,
+        },
         { name: 'speaker segment', drawnWidth: MOBILE_COMPOSER_METRICS.actionSize, drawnHeight: MOBILE_COMPOSER_METRICS.actionSize, slop: 0 },
         { name: 'mic segment', drawnWidth: MOBILE_COMPOSER_METRICS.actionSize, drawnHeight: MOBILE_COMPOSER_METRICS.actionSize, slop: 0 },
         {

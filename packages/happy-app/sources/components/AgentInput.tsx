@@ -59,6 +59,11 @@ import { DroverChannelsSheet } from './DroverChannelsSheet';
 import { buildSessionPillLabel } from './sessionPillLabel';
 import { permissionModeGlyph } from './sessionControlGlyphs';
 import { ComposerSessionControls, type ComposerSessionPicker } from './ComposerSessionControls';
+import {
+    composerControlPalette,
+    micColour,
+    primaryActionColour,
+} from './composerControlColour';
 
 interface AgentInputProps {
     // `initialValue` seeds the uncontrolled textarea once; keystrokes never
@@ -190,8 +195,6 @@ function permissionKindIcon(kind: string | null | undefined): React.ComponentPro
 
 const MOBILE_ACTION_ROW_GEOMETRY = resolveMobileComposerActionRowGeometry();
 const MOBILE_ICON_ACTION_GEOMETRY = resolveMobileComposerActionGeometry('icon');
-/** iOS system red: the colour of a live microphone everywhere else on the phone. */
-const TALK_RED = '#FF3B30';
 const MOBILE_PRIMARY_ACTION_GEOMETRY = resolveMobileComposerActionGeometry('primary');
 
 // Shared with the action-area offset reported to onActionAreaOffsetChange —
@@ -425,13 +428,18 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     // with a white glyph; latched is the resting surface inside a red ring
     // with a red glyph, so a mic that will stay open after the lift looks
     // different from one that will not, and both look different from idle.
+    //
+    // The ring and the glyph read the SAME entry (DROVE-176), because the
+    // light theme's recording red is a darker crimson than the banner's
+    // #FF3B30, which is 2.54:1 on the light glass; a ring one shade off its
+    // own glyph is a mistake nobody would make on purpose.
     talkButtonHeld: {
-        backgroundColor: TALK_RED,
+        backgroundColor: composerControlPalette(theme.dark).recording,
         borderRadius: 999,
     },
     talkButtonLatched: {
         borderWidth: 2,
-        borderColor: TALK_RED,
+        borderColor: composerControlPalette(theme.dark).recording,
         borderRadius: 999,
     },
     actionButtonsLeft: {
@@ -645,7 +653,12 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     // while still occupying its slot. The composer's own popup pickers below render
     // identically and work, so Android uses those instead of the native menu.
     const useNativeSettingsMenus = shouldUseExpoNativeSettingsMenu(Platform.OS, runningOnMac);
-    const activeSendIconColor = compactMobileComposer ? theme.colors.text : theme.colors.button.primary.tint;
+    /**
+     * The composer's colour vocabulary (DROVE-176). One place decides what
+     * each control's glyph means by its hue and every entry is measured on
+     * the glass; nothing here picks a colour of its own.
+     */
+    const composerPalette = composerControlPalette(theme.dark);
     const isSendBlocked = props.blockSend ?? false;
 
     // `hasText` drives only the send-button appearance/enabled state. It's
@@ -744,6 +757,23 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     const shouldShowStopButton = primaryAction === 'stop';
     const shouldShowVoiceButton = primaryAction === 'voice';
     const canSendMessage = primaryAction === 'send';
+    /**
+     * The in-field send/voice glyph: the accent once there is something to
+     * send, the theme's neutral when there is not (DROVE-176). The voice
+     * glyph is the "not" case: it is what the button offers with an empty
+     * field, so it stays neutral and the arrow that appears once you have
+     * typed is the one thing on the row that turns. Stop keeps its own colour
+     * and a blocked send keeps the lock's grey; neither reads this.
+     *
+     * Only on the phone's glass composer. The desktop keeps its filled primary
+     * disc, where the glyph is the button's tint and the FILL says active.
+     *
+     * Below `canSendMessage` on purpose: that IS "something to send", once the
+     * primary action has been resolved.
+     */
+    const activeSendIconColor = compactMobileComposer
+        ? primaryActionColour(composerPalette, canSendMessage)
+        : theme.colors.button.primary.tint;
     const mobileCanPressSendButton = !isAborting && primaryAction !== 'idle';
     const desktopCanPressSendButton = !props.isSending
         && !props.isSendDisabled
@@ -1015,15 +1045,11 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     }, [props.onPickFiles, props.onPickImages, props.onTakePhoto]);
 
     // Mode, effort and model each open their own picker, straight from the
-    // button row (DROVE-111).
+    // button row, never an intermediate menu (DROVE-111). All three are
+    // segments of the one capsule again since DROVE-178, so this is the only
+    // route to a picker from the row.
     const handleSessionControlPress = React.useCallback((picker: ComposerSessionPicker) => {
         handlePickerPress(picker);
-    }, [handlePickerPress]);
-
-    // The model's name lives on the status row now (DROVE-138); its tap opens
-    // the same picker the capsule's segments do, on the first tap.
-    const handleModelPress = React.useCallback(() => {
-        handlePickerPress('model');
     }, [handlePickerPress]);
 
     // Long-press on the primary button opens the channel sheet (DROVE-72):
@@ -2169,8 +2195,9 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         session's mode and effort glyphs, then the voice
                         cluster (stream-talk, talk, then send/boss/stop) on the
                         right (DROVE-98 put the speaker back). The model's name
-                        went down to the status row (DROVE-138). DROVE-83's
-                        dedicated pill row is gone, which is the row of
+                        is back in the capsule (DROVE-178), in the gap
+                        DROVE-153 opened. DROVE-83's dedicated pill row is
+                        gone, which is the row of
                         composer furniture MOBILE_COMPOSER_BASE_HEIGHT never
                         counted (DROVE-105) and therefore the end of
                         DROVE-106's over-tall composer. */
@@ -2194,20 +2221,28 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                 accessibilityLabel={t('imageUpload.addContextTitle')}
                                 accessibilityState={{ expanded: openPicker === 'attach' }}
                             >
+                                {/* The accent, always: the `+` is the one
+                                    affordance on the row that ADDS, and that
+                                    is a standing offer rather than a state
+                                    (DROVE-176). It was neutral until an image
+                                    was attached, which meant the row's only
+                                    accent appeared after the thing it invites
+                                    had already happened. Nothing is lost by
+                                    dropping that: an attachment is drawn as a
+                                    thumbnail over the field, which says it far
+                                    louder than a tinted glyph. */}
                                 <Ionicons
                                     name="add"
                                     size={MOBILE_COMPOSER_METRICS.addIconSize}
-                                    color={(props.selectedImages?.length ?? 0) > 0
-                                        ? theme.colors.radio.active
-                                        : theme.colors.text}
+                                    color={composerPalette.accent}
                                 />
                             </GlassChromeButton>
                         )}
 
-                        {/* Mode and effort: two segments in one glass capsule
-                            (DROVE-153), two pickers, one tap each (DROVE-111).
-                            The model's name moved down to the status row in
-                            DROVE-138, where it fits whole. */}
+                        {/* Mode, effort and model: three segments in one glass
+                            capsule (DROVE-153, DROVE-178), three pickers, one
+                            tap each (DROVE-111). The name is drawn in full and
+                            scales rather than truncating. */}
                         {!props.zenMode && (
                             <ComposerSessionControls
                                 label={sessionPillLabel}
@@ -2219,7 +2254,9 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                 nativeMenus={useNativeSettingsMenus}
                                 modeGroups={permissionSettingsGroups}
                                 effortGroup={effortSettingsGroup}
+                                modelGroup={modelSettingsGroup}
                                 openPicker={openPicker === 'permission' || openPicker === 'effort'
+                                    || openPicker === 'model'
                                     ? openPicker
                                     : null}
                             />
@@ -2250,12 +2287,18 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                 accessibilityState={{ selected: streamTalk.on }}
                                 accessibilityLabel={t(streamTalk.labelKey)}
                             >
+                                {/* The speaker is the one control whose FILL
+                                    already carries the state (DROVE-118): on
+                                    is a solid accent disc, so the glyph on it
+                                    is the tint that reads against that disc,
+                                    not a colour of its own. Off it is neutral
+                                    like the rest of the row (DROVE-176). */}
                                 <Ionicons
                                     name={streamTalk.icon}
                                     size={16}
                                     color={streamTalk.on
                                         ? theme.colors.button.primary.tint
-                                        : theme.colors.text}
+                                        : composerPalette.neutral}
                                 />
                             </BubblePressable>
                         )}
@@ -2275,8 +2318,12 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                 style={styles.mobileIconButton}
                                 heldStyle={styles.talkButtonHeld}
                                 latchedStyle={styles.talkButtonLatched}
-                                idleColor={theme.colors.text}
-                                activeColor={TALK_RED}
+                                // Neutral at rest, the recording red once it
+                                // is latched or held, which is DROVE-142's
+                                // banner red so the glyph and the bar under it
+                                // are one signal (DROVE-176).
+                                idleColor={micColour(composerPalette, 'idle')}
+                                activeColor={micColour(composerPalette, 'latched')}
                             />
                         )}
                         </GlassChromeSurface>
@@ -2315,19 +2362,16 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         weekPercent={weekPercent}
                         usageBarGroups={usageBarGroups}
                         // Zen mode strips the account's name off the quota,
-                        // as it strips the model below; the groups still go
-                        // down whole, because the sheet and the switch behind
-                        // the quota are not what zen hides (DROVE-160).
+                        // as it strips the whole session capsule above; the
+                        // groups still go down whole, because the sheet and
+                        // the switch behind the quota are not what zen hides
+                        // (DROVE-160).
                         hideAccount={!!props.zenMode}
-                        // Only the phone's composer sent its model down here
-                        // (DROVE-138); the desktop row still spells it out
-                        // beside the input, and two copies of one name says
-                        // nothing twice.
-                        modelName={compactMobileComposer && !props.zenMode ? sessionPillLabel.model : null}
-                        onModelPress={handleModelPress}
-                        modelGroup={modelSettingsGroup}
-                        nativeMenus={useNativeSettingsMenus}
-                        modelPickerOpen={openPicker === 'model'}
+                        // The model went back UP to the button row
+                        // (DROVE-178), into the gap DROVE-153 opened. The row
+                        // was carrying the main thread's clock, the agent
+                        // count, the model and the account; this is the
+                        // segment it gives back.
                         onSessionInfoPress={props.onSessionInfoPress}
                         showDetails={props.showStatusDetails !== false}
                     />

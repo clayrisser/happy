@@ -19,7 +19,6 @@ import { COMPOSER_STRIP_MIN_HEIGHT, COMPOSER_STRIP_PADDING_TOP } from './compose
 import { AnimatedFade } from './AnimatedOverlay';
 import { UsageAccountBarsSheet } from './UsageAccountBarsSheet';
 import type { UsageBarGroup } from './agentInputUsage';
-import { NativeSettingsMenu, type NativeSettingsMenuGroup } from './NativeSettingsMenu';
 import { SessionAgentsSheet } from './SessionAgentsSheet';
 import { SessionTasksSheet } from './SessionTasksSheet';
 import { useSessionTasks } from './SessionTasksList';
@@ -31,7 +30,6 @@ import {
     statusRowMetrics,
     statusRowQuotaText,
     statusRowShrink,
-    STATUS_ROW_MODEL_TRUNCATION,
 } from './statusRowLayout';
 import { useTickingNow } from './useTickingNow';
 
@@ -45,17 +43,16 @@ import { useTickingNow } from './useTickingNow';
  * week quota on its own line below (DROVE-47). Forty characters spread over
  * three lines of a phone screen. This is all of it on one line:
  *
- *     ● Bash 1m 2s 251.2k ⚇3 ˄ · Opus 5 1M · jamrizzi 23% ˄ · ◔
+ *     ● Bash 1m 2s 251.2k ⚇3 ˄ · jamrizzi 23% ˄ · ◔
  *
  * Left to right: what the MAIN thread is doing, for how long, and what it has
- * spent (DROVE-155); how many background agents are out; then the model it is
- * doing it on, the account it is spending, and the context gauge (DROVE-138).
+ * spent (DROVE-155); how many background agents are out; then the account it
+ * is spending, and the context gauge (DROVE-138).
  * The branch was here too until DROVE-90 moved it under the session title,
  * where tapping it lists the repo's worktrees; Clay found the row too full.
  * Nothing was dropped, only folded: the working segment opens the agent tree,
- * the DOT opens session info, the model opens the model picker, the quota
- * opens a bar per account and per window (DROVE-107), the gauge swaps to exact
- * tokens.
+ * the DOT opens session info, the quota opens a bar per account and per window
+ * (DROVE-107), the gauge swaps to exact tokens.
  *
  * THE DOT IS THE CONNECTION, AND THE WORD IS GONE (DROVE-138). Clay: "where it
  * says online that should just be a little dot." The dot's colour already WAS
@@ -64,9 +61,14 @@ import { useTickingNow } from './useTickingNow';
  * so session info is still one tap from here and a screen reader still hears
  * "online".
  *
- * THE MODEL AND THE ACCOUNT MOVED IN (DROVE-138). The model came down off the
- * button row, where a name among six buttons was showing `Opus 5 1M` as
- * `Opus 5...`; here it has the room to be read. The account was invisible
+ * THE ACCOUNT MOVED IN (DROVE-138), AND THE MODEL MOVED BACK OUT (DROVE-178).
+ * The model came down here because a name among six buttons was showing
+ * `Opus 5 1M` as `Opus 5...`; DROVE-153 then collapsed that row to three
+ * objects and freed the gap it needed, and Clay drew an arrow from the name
+ * here up into it. So the model is the session capsule's third segment again
+ * and this row is one segment shorter, which is what it needed: it was
+ * carrying the main thread's clock, the agent count, the model AND the
+ * account. The account stays. It was invisible
  * everywhere except the switch menu, and it heads the quota because the quota
  * is that account's and the sheet behind that tap is the list of accounts to
  * switch to (DROVE-160). It is read off `usageBarGroups`, the same list the
@@ -94,8 +96,8 @@ import { useTickingNow } from './useTickingNow';
  * clock, because "3 agents 29s" reading as the agents' time is the confusion
  * this replaced.
  *
- * Five things are FOLDED to keep one line on the narrowest phone with a model,
- * an account and a quota on it too, and nothing is truncated:
+ * Four things are FOLDED to keep one line on the narrowest phone with an
+ * account and a quota on it, and nothing is truncated:
  *
  *   - the word "agents" is a glyph and a count; the tree spells it out.
  *   - the word "online" is gone entirely; the dot's colour is the state.
@@ -106,15 +108,12 @@ import { useTickingNow } from './useTickingNow';
  *     whenever the account is on the row: the ring beside it fills with the
  *     same number and a tap still opens the exact figure.
  *   - the tool NAME goes and the numbers stay whenever the row would not
- *     otherwise fit. That was a 360pt constant before the model and the
- *     account were here; it is now asked of statusRowLayout's estimator with
- *     the row's real content, because the width it fires at depends on how
- *     long the tool, the model and the account happen to be.
- *   - the MODEL goes whole when the name alone did not save the row, which is
- *     a working session with a task list (DROVE-167) on a 393pt phone. The
- *     estimator counts the tasks segment, so it says so; before it did, the
- *     account and the model were being cut to `jam…` and `Opus…` around a
- *     badge that held its width. Idle, the model is back.
+ *     otherwise fit. That was a 360pt constant before the account was here; it
+ *     is now asked of statusRowLayout's estimator with the row's real content,
+ *     because the width it fires at depends on how long this tool and this
+ *     account happen to be. With the model gone (DROVE-178) it is the only
+ *     fold left, and it is enough at 375 and 393 even with a task list on the
+ *     row, which is the case that used to cost the model as well.
  *
  * Renders nothing at all when there is nothing to say, so an empty session
  * does not gain a blank strip. Its own module so a test can mount it without
@@ -220,22 +219,6 @@ export type StatusRowProps = {
      */
     usageBarGroups: UsageBarGroup[];
     /**
-     * The model's short name, spelled in full here rather than truncated on
-     * the button row (DROVE-138).
-     */
-    modelName?: string | null;
-    /** Opens the model picker directly, with no menu in between (DROVE-111). */
-    onModelPress?: () => void;
-    /**
-     * iOS anchors the model picker as a native menu on the label itself rather
-     * than opening an overlay, so this replaces the press. Either way the
-     * first tap is the list of models.
-     */
-    modelGroup?: NativeSettingsMenuGroup | null;
-    nativeMenus?: boolean;
-    /** Whether the model picker is the one currently open. */
-    modelPickerOpen?: boolean;
-    /**
      * Zen mode hides everything non-essential, and the account's NAME is one
      * of those: the quota reads `23% week` instead of `jamrizzi 23%`, and the
      * context percent stays printed, since the account is not taking its
@@ -339,7 +322,7 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
     }, [currentAccount, sessionId]);
 
     const hasUsage = p.weekPercent != null || p.contextStatus != null;
-    if (!summary && !p.connectionStatus && !hasUsage && !tasksBadge && !p.modelName) {
+    if (!summary && !p.connectionStatus && !hasUsage && !tasksBadge) {
         return null;
     }
 
@@ -364,10 +347,10 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
 
     // Which folds the row needs, asked of its real content rather than taken
     // from a width constant (DROVE-155, DROVE-138). The width the tool name
-    // folds at depends on how long this tool, this model, this account and
-    // the task badge happen to be, so a constant could only ever be right for
-    // one of them. The model folds whole after the name, when the name alone
-    // was not enough (statusRowLayout says when, and why the model).
+    // folds at depends on how long this tool, this account and the task badge
+    // happen to be, so a constant could only ever be right for one of them.
+    // With no model on the row (DROVE-178) `statusRowFolds` returns
+    // `model: false` and nothing else moves.
     const liveNumbers = main ? (main.tokens ? `${main.elapsed} ${main.tokens}` : main.elapsed) : null;
     const folds = statusRowFolds({
         live: main ? `${main.label} ${liveNumbers}` : null,
@@ -375,7 +358,6 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
         agentCount: sideCount,
         liveExpands: canExpand,
         tasks: p.sessionId ? tasksBadge : null,
-        model: p.modelName,
         quota: quotaText,
         quotaExpands: canOpenUsage,
         contextGauge: !!p.contextStatus,
@@ -396,12 +378,12 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
                     flexDirection: 'row',
                     alignItems: 'center',
                     gap: 3,
-                    // The last of the three that shrink, after the account and
-                    // the model: a long tool name must not push the quota off
-                    // the line, but the numbers beside it are what Clay is
-                    // watching (statusRowShrink). The cap is what keeps a
-                    // 30-character MCP name from squeezing the model and the
-                    // account before it has given way itself.
+                    // The last of the two that shrink, after the account: a
+                    // long tool name must not push the quota off the line, but
+                    // the numbers beside it are what Clay is watching
+                    // (statusRowShrink). The cap is what keeps a 30-character
+                    // MCP name from squeezing the account before it has given
+                    // way itself.
                     flexShrink: statusRowShrink.live,
                     maxWidth: '45%',
                     opacity: pressed && canExpand ? 0.6 : 1,
@@ -480,60 +462,6 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
                     color={theme.colors.textSecondary}
                 />
             </Pressable>,
-        );
-    }
-
-    // The model, in full, off the button row where a name among six buttons was
-    // being cut to `Opus 5...` (DROVE-138). One tap opens the model list, on
-    // iOS as the native menu anchored here and everywhere else as the picker:
-    // never a menu that then lists the controls (DROVE-111). Folded whole
-    // while a working row with a task list would not otherwise fit; back the
-    // moment the main thread is idle.
-    if (p.modelName && !folds.model) {
-        const modelText = (
-            <Text
-                numberOfLines={1}
-                ellipsizeMode={STATUS_ROW_MODEL_TRUNCATION.ellipsizeMode}
-                style={{
-                    fontSize: statusRowMetrics.fontSize,
-                    color: theme.colors.text,
-                    flexShrink: 1,
-                    ...Typography.default(),
-                }}
-            >
-                {p.modelName}
-            </Text>
-        );
-        const modelStyle = {
-            flexDirection: 'row',
-            alignItems: 'center',
-            flexShrink: statusRowShrink.model,
-            minWidth: 0,
-        } as const;
-        segments.push(
-            p.nativeMenus && p.modelGroup ? (
-                <NativeSettingsMenu
-                    key="model"
-                    accessibilityLabel={`Model, ${p.modelName}`}
-                    groups={[p.modelGroup]}
-                    style={modelStyle}
-                >
-                    {modelText}
-                </NativeSettingsMenu>
-            ) : p.onModelPress ? (
-                <Pressable
-                    key="model"
-                    onPress={p.onModelPress}
-                    hitSlop={segmentHitSlop}
-                    accessibilityRole="button"
-                    accessibilityLabel="Model"
-                    accessibilityValue={{ text: p.modelName }}
-                    accessibilityState={{ expanded: !!p.modelPickerOpen }}
-                    style={({ pressed }) => ({ ...modelStyle, opacity: pressed ? 0.6 : 1 })}
-                >
-                    {modelText}
-                </Pressable>
-            ) : <View key="model" style={modelStyle}>{modelText}</View>,
         );
     }
 
