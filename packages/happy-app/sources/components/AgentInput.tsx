@@ -1,6 +1,6 @@
 import { Ionicons, Octicons } from '@expo/vector-icons';
 import * as React from 'react';
-import { Keyboard, View, Platform, useWindowDimensions, Text, ActivityIndicator, Pressable, TouchableWithoutFeedback, LayoutChangeEvent } from 'react-native';
+import { Keyboard, View, Platform, useWindowDimensions, Text, ActivityIndicator, Pressable, LayoutChangeEvent } from 'react-native';
 import { Image } from 'expo-image';
 import { AgentInputAttachmentStrip } from './AgentInputAttachmentStrip';
 import type { AttachmentPreview } from '@/sync/attachmentTypes';
@@ -15,7 +15,7 @@ import { Shaker, ShakeInstance } from './Shaker';
 import { useActiveWord } from './autocomplete/useActiveWord';
 import { useActiveSuggestions } from './autocomplete/useActiveSuggestions';
 import { AgentInputAutocomplete } from './AgentInputAutocomplete';
-import { FloatingOverlay } from './FloatingOverlay';
+import { ComposerSheet } from './ComposerSheet';
 import { TextInputState, MultiTextInputHandle } from './MultiTextInput';
 import { applySuggestion } from './autocomplete/applySuggestion';
 import { GitStatusBadge, useHasMeaningfulGitStatus } from './GitStatusBadge';
@@ -30,7 +30,7 @@ import { t } from '@/text';
 import { Metadata } from '@/sync/storageTypes';
 import { isRunningOnMac } from '@/utils/platform';
 import { MobileGlassSurface } from './MobileGlass';
-import { AnimatedClickAwayBackdrop, AnimatedFade } from './AnimatedOverlay';
+import { AnimatedFade } from './AnimatedOverlay';
 import { BubblePressable } from './BubblePressable';
 import { resolveAgentInputPrimaryAction } from './agentInputPrimaryAction';
 import { resolveComposerPrimaryPress, type ComposerPrimaryGesture } from './composerPrimaryPress';
@@ -267,22 +267,6 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         right: 0,
         marginBottom: 8,
         zIndex: 1000,
-    },
-    settingsOverlay: {
-        position: 'absolute',
-        bottom: '100%',
-        left: 0,
-        right: 0,
-        marginBottom: 12,
-        zIndex: 1000,
-    },
-    overlayBackdrop: {
-        position: 'absolute',
-        top: -1000,
-        left: -1000,
-        right: -1000,
-        bottom: -1000,
-        zIndex: 999,
     },
     overlaySection: {
         paddingVertical: 8,
@@ -924,7 +908,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
      * that is still on its way out lands in the wrong place.
      *
      * The status row's two expanders are deliberately NOT here. They open
-     * ComposerAnchoredSheet from the row itself (DROVE-117's mechanism), and
+     * ComposerSheet from the row itself (DROVE-117's mechanism), and
      * that sheet's own click-away backdrop is what keeps them from stacking
      * with these pickers.
      */
@@ -1551,16 +1535,20 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         </Pressable>
     );
 
-    const desktopSettingsOverlay = !useNativeSettingsMenus && !compactMobileComposer && openPicker === 'permission' ? (
-        <>
-            <TouchableWithoutFeedback onPress={closePicker}>
-                <View style={styles.overlayBackdrop} />
-            </TouchableWithoutFeedback>
-            <View style={[
-                styles.settingsOverlay,
-                { paddingHorizontal: screenWidth > 700 ? 0 : 8 },
-            ]}>
-                <FloatingOverlay maxHeight={400} keyboardShouldPersistTaps="always">
+    // The desktop picker is on the same sheet as the phone's (DROVE-147).
+    // It used to be its own floating card anchored above the composer, which
+    // is the shape Clay has now asked three times to stop seeing.
+    const desktopPickerOpen = !useNativeSettingsMenus && !compactMobileComposer
+        && openPicker === 'permission';
+    const desktopSettingsOverlay = (
+        <ComposerSheet
+            open={desktopPickerOpen}
+            onClose={closePicker}
+            maxHeight={400}
+            keyboardShouldPersistTaps="always"
+        >
+            {desktopPickerOpen && (
+                <>
                     <View style={styles.overlaySection}>
                         <Text style={styles.overlaySectionTitle}>
                             {isCodex
@@ -1645,13 +1633,15 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                             </>
                         )}
                     </View>
-                </FloatingOverlay>
-            </View>
-        </>
-    ) : null;
+                </>
+            )}
+        </ComposerSheet>
+    );
 
-
-
+    // Channels and Add context have sheets of their own; what is left of the
+    // picker is the three session controls, and it slides up on the same shell.
+    const mobilePickerOpen = compactMobileComposer && !!openPicker
+        && openPicker !== 'channels' && openPicker !== 'attach';
 
     return (
         <View style={[
@@ -1689,7 +1679,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 <DroverChannelsSheet
                     open={compactMobileComposer && openPicker === 'channels'}
                     onClose={closePicker}
-                    horizontalInset={screenWidth > 700 ? 0 : 16}
                 />
 
                 {/* Camera, Photos, Files (DROVE-128), on the same shell. */}
@@ -1698,7 +1687,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     onClose={closePicker}
                     onSelect={handleAddContextSelect}
                     available={addContextAvailable}
-                    horizontalInset={screenWidth > 700 ? 0 : 16}
                 />
 
                 {/* On Android, the permission, model and effort pickers the
@@ -1706,19 +1694,16 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     are native menus anchored to the controls themselves, so
                     nothing renders here at all. DROVE-83's intermediate
                     session sheet is gone, and DROVE-123 took channels out to
-                    its own sheet. */}
-                {compactMobileComposer && openPicker
-                    && openPicker !== 'channels' && openPicker !== 'attach' && (
-                    <>
-                        <AnimatedClickAwayBackdrop
-                            onPress={closePicker}
-                            style={styles.overlayBackdrop}
-                        />
-                        <View style={[
-                            styles.settingsOverlay,
-                            { paddingHorizontal: screenWidth > 700 ? 0 : 16 }
-                        ]}>
-                            <FloatingOverlay maxHeight={400} keyboardShouldPersistTaps="always">
+                    its own sheet. It was the last floating card off the
+                    composer strip until DROVE-147 put it on the sheet too. */}
+                <ComposerSheet
+                    open={mobilePickerOpen}
+                    onClose={closePicker}
+                    maxHeight={400}
+                    keyboardShouldPersistTaps="always"
+                >
+                    {mobilePickerOpen && (
+                        <>
                                 {openPicker === 'permission' ? (
                                     <View style={styles.overlaySection}>
                                         <Text style={styles.overlaySectionTitle}>
@@ -1971,10 +1956,9 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                         )}
                                     </>
                                 )}
-                            </FloatingOverlay>
-                        </View>
-                    </>
-                )}
+                        </>
+                    )}
+                </ComposerSheet>
 
                 <AnimatedFade visible={props.showStatusDetails !== false}>
                     <AgentInputContextChips

@@ -11,12 +11,12 @@
  * scrolls on its own, and its width is known, which is what lets the columns
  * be fixed instead of fighting the composer for space.
  *
- * The chrome moved out to ComposerAnchoredSheet when DROVE-111 gave the agent
+ * The chrome moved out to ComposerSheet when DROVE-111 gave the agent
  * tree the same treatment, so the two are one sheet rather than two that look
  * alike. This is now just what goes in it.
  */
 import * as React from 'react';
-import { ComposerAnchoredSheet } from './ComposerAnchoredSheet';
+import { ComposerSheet } from './ComposerSheet';
 import { UsageAccountBars } from './UsageAccountBars';
 import type { UsageBarGroup } from './agentInputUsage';
 
@@ -24,16 +24,13 @@ export function UsageAccountBarsSheet(props: {
     groups: UsageBarGroup[];
     open: boolean;
     onClose: () => void;
-    /** Side inset, matching the composer's other sheets. */
-    horizontalInset?: number;
 }) {
     return (
-        <ComposerAnchoredSheet
+        <ComposerSheet
             open={props.open}
             onClose={props.onClose}
-            horizontalInset={props.horizontalInset}
         >
             <UsageAccountBars groups={props.groups} />
-        </ComposerAnchoredSheet>
+        </ComposerSheet>
     );
 }

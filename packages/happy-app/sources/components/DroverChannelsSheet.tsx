@@ -12,7 +12,7 @@
  * it is a rule and not three requests: anything that opens from the composer
  * strip is a bottom sheet. The mechanism is DROVE-117's, and since DROVE-128
  * it is literally DROVE-117's: this file carried a character-for-character
- * copy of the backdrop, the grabber and the drag until ComposerAnchoredSheet
+ * copy of the backdrop, the grabber and the drag until ComposerSheet
  * was extracted, and four copies of a gesture is three too many. Dismissed by
  * dragging the grabber down on the gate overlay's thresholds, or by tapping
  * outside, identically to the quota sheet, because it IS the quota sheet's
@@ -35,7 +35,7 @@ import { Ionicons } from '@expo/vector-icons';
 
 import { Typography } from '@/constants/Typography';
 import { BubblePressable } from './BubblePressable';
-import { ComposerAnchoredSheet } from './ComposerAnchoredSheet';
+import { ComposerSheet } from './ComposerSheet';
 import { ComposerSheetRow } from './ComposerSheetRow';
 import { channelSheetMaxHeight } from './droverChannelsSheetLayout';
 import { hapticsLight } from './haptics';
@@ -64,7 +64,6 @@ export interface DroverChannelsSheetProps {
     open: boolean;
     onClose: () => void;
     /** Side inset, matching the composer's other sheets. */
-    horizontalInset?: number;
 }
 
 export const DroverChannelsSheet = React.memo(function DroverChannelsSheet(props: DroverChannelsSheetProps) {
@@ -79,11 +78,10 @@ export const DroverChannelsSheet = React.memo(function DroverChannelsSheet(props
     const rows = audioRows({ announceAudio: channels.toggles.announceAudio, readAloudEnabled });
 
     return (
-        <ComposerAnchoredSheet
+        <ComposerSheet
             open={props.open}
             onClose={props.onClose}
             maxHeight={channelSheetMaxHeight(windowHeight)}
-            horizontalInset={props.horizontalInset}
             // The switches are one tap, and a keyboard on its way out would
             // otherwise eat it.
             keyboardShouldPersistTaps="always"
@@ -200,6 +198,6 @@ export const DroverChannelsSheet = React.memo(function DroverChannelsSheet(props
                     </View>
                 )}
             </View>
-        </ComposerAnchoredSheet>
+        </ComposerSheet>
     );
 });
