@@ -29,22 +29,27 @@ import { initConsoleLogging, setConsoleOutputEnabled } from '@/utils/consoleLogg
 import { useLocalSetting } from '@/sync/storage';
 import { useUnistyles } from 'react-native-unistyles';
 import { AsyncLock } from '@/utils/lock';
-import { getSessionRouteFromNotificationResponse } from '@/utils/notificationRouting';
+import { getSessionRouteFromNotificationResponse, isGatePushData } from '@/utils/notificationRouting';
 import { navigateToSession } from '@/hooks/useNavigateToSession';
 import { applyVoiceUpsellOverride } from '@/realtime/voiceExperiment';
 import { useTauriZoom } from '@/hooks/useTauriZoom';
 import { useTauriDrag } from '@/hooks/useTauriDrag';
 import { BrowserNavigationShortcuts } from '@/hooks/useBrowserNavigationShortcuts';
 
-// Configure notification handler — suppress push display when app is in foreground
+// Configure notification handler. A push is hidden while the app is in the
+// foreground, EXCEPT a gate (permission, question, to-do): that one must
+// banner and sound wherever the app is, because it is the thing the user is
+// waiting on (DROVE-85). shouldShowBanner/shouldShowList are the current API;
+// shouldShowAlert is kept for the older native side.
 Notifications.setNotificationHandler({
-    handleNotification: async () => {
+    handleNotification: async (notification) => {
         const isForeground = AppState.currentState === 'active';
+        const present = !isForeground || isGatePushData(notification.request.content.data);
         return {
-            shouldShowAlert: !isForeground,
-            shouldPlaySound: !isForeground,
+            shouldShowAlert: present,
+            shouldPlaySound: present,
             shouldSetBadge: true,
-            shouldShowBanner: !isForeground,
+            shouldShowBanner: present,
             shouldShowList: true,
         };
     },

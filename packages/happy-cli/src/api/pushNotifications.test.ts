@@ -1,10 +1,14 @@
 import axios from 'axios';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { Expo } from 'expo-server-sdk';
+import { logger } from '@/ui/logger';
 import type { Metadata } from './types';
 import {
     PushNotificationClient,
+    RECEIPT_DELAY_MS,
     buildWakeMessages,
     describePushError,
+    formatReceiptLine,
     getSessionNotificationBody,
     getSessionNotificationCopy,
     getSessionNotificationTitle,
@@ -266,5 +270,128 @@ describe('describePushError', () => {
 
     it('falls back to the message for an error that never reached the server', () => {
         expect(describePushError(new Error('offline'))).toBe('Error: offline');
+    });
+});
+
+describe('receipts', () => {
+    // "Accepted by Expo" is a ticket, not a delivery (DROVE-85). These drive
+    // the whole path from a send through the detached receipt check with the
+    // three bodies Expo actually returns, mocked at the SDK's HTTP boundary.
+    beforeEach(() => {
+        vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+        vi.restoreAllMocks();
+    });
+
+    function makeClient(receipts: Record<string, unknown>) {
+        const client = new PushNotificationClient('bearer', 'https://example.test');
+        const expo = (client as unknown as { expo: Expo }).expo;
+        vi.spyOn(expo, 'sendPushNotificationsAsync').mockResolvedValue([{ status: 'ok', id: 'ticket-1' }]);
+        const getReceipts = vi.spyOn(expo, 'getPushNotificationReceiptsAsync')
+            .mockResolvedValue(receipts as never);
+        const lines: string[] = [];
+        vi.spyOn(logger, 'debug').mockImplementation((message: string) => {
+            lines.push(message);
+        });
+        return { client, getReceipts, lines };
+    }
+
+    async function sendOne(client: PushNotificationClient) {
+        await client.sendPushNotifications([{ to: 'ExponentPushToken[a]', title: 'Needs you' }]);
+    }
+
+    it('logs the ticket at send and the ok receipt fifteen seconds later, without delaying the send', async () => {
+        const { client, getReceipts, lines } = makeClient({ 'ticket-1': { status: 'ok' } });
+        await sendOne(client);
+        expect(lines).toContain('[PUSH] ticket ticket-1 accepted');
+        // The send returned before any receipt was asked for.
+        expect(getReceipts).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(RECEIPT_DELAY_MS - 1);
+        expect(getReceipts).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(getReceipts).toHaveBeenCalledWith(['ticket-1']);
+        expect(lines).toContain('[PUSH] receipt ticket-1 ok');
+    });
+
+    it('names DeviceNotRegistered and the token it belongs to', async () => {
+        const { client, lines } = makeClient({
+            'ticket-1': {
+                status: 'error',
+                message: 'The recipient device is not registered with FCM/APNs.',
+                details: { error: 'DeviceNotRegistered', expoPushToken: 'ExponentPushToken[a]' },
+            },
+        });
+        await sendOne(client);
+        await vi.advanceTimersByTimeAsync(RECEIPT_DELAY_MS);
+        expect(lines).toContain(
+            '[PUSH] receipt ticket-1 DeviceNotRegistered The recipient device is not registered with FCM/APNs. token=ExponentPushToken[a]',
+        );
+    });
+
+    it('names InvalidCredentials, the missing-APNs-key failure this was written for', async () => {
+        const { client, lines } = makeClient({
+            'ticket-1': {
+                status: 'error',
+                message: 'Unable to retrieve the APNs credentials for this app.',
+                details: { error: 'InvalidCredentials' },
+            },
+        });
+        await sendOne(client);
+        await vi.advanceTimersByTimeAsync(RECEIPT_DELAY_MS);
+        expect(lines).toContain(
+            '[PUSH] receipt ticket-1 InvalidCredentials Unable to retrieve the APNs credentials for this app.',
+        );
+    });
+
+    it('says when Expo has no receipt yet rather than dropping the ticket', async () => {
+        const { client, lines } = makeClient({});
+        await sendOne(client);
+        await vi.advanceTimersByTimeAsync(RECEIPT_DELAY_MS);
+        expect(lines).toContain('[PUSH] receipt ticket-1 pending (Expo has no receipt for it yet)');
+    });
+
+    it('never lets a failed receipt fetch reach the send', async () => {
+        const { client, lines } = makeClient({});
+        const expo = (client as unknown as { expo: Expo }).expo;
+        vi.spyOn(expo, 'getPushNotificationReceiptsAsync').mockRejectedValue(new Error('offline'));
+        await expect(sendOne(client)).resolves.toBeUndefined();
+        await vi.advanceTimersByTimeAsync(RECEIPT_DELAY_MS);
+        expect(lines.some((line) => line.startsWith('[PUSH] receipts unavailable for 1 ticket(s): Error: offline'))).toBe(true);
+        expect(lines.some((line) => line.startsWith('[PUSH] receipt ticket-1'))).toBe(false);
+    });
+
+    it('schedules nothing when Expo issued no ticket', () => {
+        const client = new PushNotificationClient('bearer', 'https://example.test');
+        const spy = vi.spyOn(global, 'setTimeout');
+        client.scheduleReceiptCheck([]);
+        expect(spy).not.toHaveBeenCalled();
+    });
+});
+
+describe('formatReceiptLine', () => {
+    it('falls back to a bare error word when Expo names none', () => {
+        expect(formatReceiptLine('t', { status: 'error', message: 'boom' })).toBe('[PUSH] receipt t error boom');
+    });
+});
+
+describe('sendToAllDevices', () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it('does not claim success when Expo accepted nothing', async () => {
+        // `drover status` reads the success line as a verdict, so it must be
+        // written only when something was accepted (DROVE-85).
+        const client = new PushNotificationClient('bearer', 'https://example.test');
+        vi.spyOn(client, 'fetchPushTokens').mockResolvedValue([{ id: '1', token: 'ExponentPushToken[a]', createdAt: 0, updatedAt: 0 }]);
+        vi.spyOn(client, 'sendPushNotifications').mockResolvedValue({ sent: 0, failed: 1 });
+        const lines: string[] = [];
+        vi.spyOn(logger, 'debug').mockImplementation((message: string) => { lines.push(message); });
+        client.sendToAllDevices('Needs you', 'body');
+        await vi.waitFor(() => expect(lines).toContain('[PUSH] Push notifications reached NO device, 1 rejected by Expo'));
+        expect(lines).not.toContain('[PUSH] Push notifications sent successfully');
     });
 });

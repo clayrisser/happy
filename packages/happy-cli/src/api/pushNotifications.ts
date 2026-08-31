@@ -1,6 +1,6 @@
 import axios from 'axios'
 import { logger } from '@/ui/logger'
-import { Expo, ExpoPushMessage } from 'expo-server-sdk'
+import { Expo, ExpoPushMessage, ExpoPushReceipt, ExpoPushTicket } from 'expo-server-sdk'
 import type { Metadata } from './types'
 import { configuration } from '@/configuration'
 
@@ -58,6 +58,57 @@ const WAKE_TTL_SECONDS = 120
  * burst of bus events must not become a burst of wakes.
  */
 const WAKE_THROTTLE_MS = 3000
+
+/**
+ * How long after a send to ask Expo what became of it (DROVE-85).
+ *
+ * "Accepted by Expo" is a TICKET, not a delivery. Expo hands APNs the message
+ * afterwards and records the outcome as a receipt against that ticket id:
+ * `ok`, or the reason the phone stayed silent (DeviceNotRegistered,
+ * InvalidCredentials for a missing APNs key on the EAS project, MessageTooBig,
+ * MessageRateExceeded). Expo's own guidance is to poll roughly fifteen seconds
+ * later; sooner and the receipt is simply not there yet.
+ */
+export const RECEIPT_DELAY_MS = 15000
+
+/**
+ * One line per receipt, in the two shapes `drover status` reads
+ * (cattle-drover/libexec/drover-status):
+ *
+ *   [PUSH] receipt <ticket> ok
+ *   [PUSH] receipt <ticket> <error> <details>
+ *
+ * The error word comes first so a status screen can act on it without parsing
+ * prose, and the message follows because the word alone is not always enough
+ * ("DeviceNotRegistered" names the device only in the message). A ticket Expo
+ * has no receipt for yet is reported as such rather than dropped, so a quiet
+ * log still says the question was asked.
+ */
+export function formatReceiptLine(ticket: string, receipt: ExpoPushReceipt | undefined): string {
+    if (!receipt) {
+        return `[PUSH] receipt ${ticket} pending (Expo has no receipt for it yet)`
+    }
+    if (receipt.status === 'ok') {
+        return `[PUSH] receipt ${ticket} ok`
+    }
+    const error = receipt.details?.error ?? 'error'
+    const detail = [receipt.message, receipt.details?.expoPushToken ? `token=${receipt.details.expoPushToken}` : null]
+        .filter(Boolean)
+        .join(' ')
+    return `[PUSH] receipt ${ticket} ${error}${detail ? ` ${detail}` : ''}`
+}
+
+/**
+ * The send-side twin: one line per message with the ticket id, or the reason
+ * Expo refused it outright (a malformed token, a project it does not know).
+ */
+export function formatTicketLine(ticket: ExpoPushTicket): string {
+    if (ticket.status === 'ok') {
+        return `[PUSH] ticket ${ticket.id} accepted`
+    }
+    const error = ticket.details?.error ?? 'error'
+    return `[PUSH] ticket rejected ${error} ${ticket.message}`
+}
 
 /**
  * The one push shape that runs the phone app's JS while iOS has it suspended.
@@ -292,6 +343,18 @@ export class PushNotificationClient {
             while (true) {
                 try {
                     const ticketChunk = await this.expo.sendPushNotificationsAsync(chunk)
+
+                    // One line per message, ticket id and all (DROVE-85). The
+                    // counts logged below cannot say WHICH message Expo took,
+                    // and the receipt that says why a phone stayed silent is
+                    // keyed by this id, so throwing it away here is throwing
+                    // away the only measurement of delivery there is.
+                    for (const ticket of ticketChunk) {
+                        logger.debug(formatTicketLine(ticket))
+                    }
+                    this.scheduleReceiptCheck(
+                        ticketChunk.flatMap((ticket) => (ticket.status === 'ok' ? [ticket.id] : []))
+                    )
                     
                     // Log any errors but don't throw
                     const errors = ticketChunk.filter(ticket => ticket.status === 'error')
@@ -333,6 +396,40 @@ export class PushNotificationClient {
 
         logger.debug(`Push notifications: ${sent} accepted by Expo, ${failed} rejected`)
         return { sent, failed }
+    }
+
+    /**
+     * Ask Expo, a little later, what became of these tickets, and log one
+     * line per answer (DROVE-85).
+     *
+     * Detached on purpose. The timer is unref'd so a short `happy` invocation
+     * still exits, the fetch is wrapped so nothing here can reject into the
+     * send that scheduled it, and the caller never awaits it: a receipt is a
+     * measurement, and a measurement must not be the reason a push is late or
+     * a session fails. Exported for the tests, which drive it with fake
+     * timers.
+     */
+    scheduleReceiptCheck(ticketIds: string[], delayMs: number = RECEIPT_DELAY_MS): void {
+        if (ticketIds.length === 0) return
+        const timer = setTimeout(() => {
+            void this.fetchReceipts(ticketIds)
+        }, delayMs)
+        timer.unref()
+    }
+
+    private async fetchReceipts(ticketIds: string[]): Promise<void> {
+        for (const chunk of this.expo.chunkPushNotificationReceiptIds(ticketIds)) {
+            try {
+                const receipts = await this.expo.getPushNotificationReceiptsAsync(chunk)
+                for (const ticket of chunk) {
+                    logger.debug(formatReceiptLine(ticket, receipts[ticket]))
+                }
+            } catch (error) {
+                // The fetch failing is not a delivery verdict and must not
+                // read like one, so it is a different line from the two above.
+                logger.debug(`[PUSH] receipts unavailable for ${chunk.length} ticket(s): ${describePushError(error)}`)
+            }
+        }
     }
 
     /**
@@ -380,8 +477,16 @@ export class PushNotificationClient {
 
                 // Send notifications
                 logger.debug(`[PUSH] Sending ${messages.length} push notifications...`)
-                await this.sendPushNotifications(messages)
-                logger.debug('[PUSH] Push notifications sent successfully')
+                const outcome = await this.sendPushNotifications(messages)
+                // `drover status` reads the success line as a verdict
+                // (DROVE-85), so it is only written when Expo actually took
+                // at least one message. It used to be logged unconditionally,
+                // which made a push nobody accepted read as a success.
+                logger.debug(
+                    outcome.sent > 0
+                        ? '[PUSH] Push notifications sent successfully'
+                        : `[PUSH] Push notifications reached NO device, ${outcome.failed} rejected by Expo`
+                )
             } catch (error) {
                 logger.debug('[PUSH] Error sending to all devices:', error)
             }

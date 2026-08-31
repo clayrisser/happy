@@ -20,6 +20,7 @@ import { resolveSessionState, type SessionState } from './sessionState';
 import { getSessionActivityAt } from '@/utils/sessionActivity';
 import { applySettings, Settings } from "./settings";
 import { LocalSettings, applyLocalSettings } from "./localSettings";
+import type { PushPermissionInfo } from "./pushRegistration";
 import { Purchases, customerInfoToPurchases } from "./purchases";
 import { Profile } from "./profile";
 import { UserProfile, RelationshipUpdatedEvent } from "./friendTypes";
@@ -269,6 +270,10 @@ interface StorageState {
     feedLoaded: boolean;  // True after initial feed fetch
     friendsLoaded: boolean;  // True after initial friends fetch
     realtimeStatus: 'disconnected' | 'connecting' | 'connected' | 'error';
+    // What the OS last said about notification permission, written by the
+    // push-token sync on every launch and foreground (DROVE-85). null until
+    // the first sync answers.
+    pushPermission: PushPermissionInfo | null;
     realtimeMode: 'idle' | 'agent-speaking' | 'user-speaking';
     voiceSessionGeneration: number;
     socketStatus: 'disconnected' | 'connecting' | 'connected' | 'error';
@@ -300,6 +305,7 @@ interface StorageState {
     applyNativeUpdateStatus: (status: { available: boolean; updateUrl?: string } | null) => void;
     isMutableToolCall: (sessionId: string, callId: string) => boolean;
     setRealtimeStatus: (status: 'disconnected' | 'connecting' | 'connected' | 'error') => void;
+    setPushPermission: (permission: PushPermissionInfo | null) => void;
     setRealtimeMode: (mode: 'idle' | 'agent-speaking' | 'user-speaking', immediate?: boolean) => void;
     clearRealtimeModeDebounce: () => void;
     incrementVoiceSessionGeneration: () => void;
@@ -462,6 +468,7 @@ export const storage = create<StorageState>()((set, get) => {
         pathProjectFiles: {},
         sessionFileCache: {},
         realtimeStatus: 'disconnected',
+        pushPermission: null,
         realtimeMode: 'idle',
         voiceSessionGeneration: 0,
         socketStatus: 'disconnected',
@@ -1042,6 +1049,10 @@ export const storage = create<StorageState>()((set, get) => {
         setRealtimeStatus: (status: 'disconnected' | 'connecting' | 'connected' | 'error') => set((state) => ({
             ...state,
             realtimeStatus: status
+        })),
+        setPushPermission: (permission: PushPermissionInfo | null) => set((state) => ({
+            ...state,
+            pushPermission: permission
         })),
         setRealtimeMode: (mode: 'idle' | 'agent-speaking' | 'user-speaking', immediate?: boolean) => {
             if (immediate) {
@@ -1693,6 +1704,10 @@ export function useEntitlement(id: KnownEntitlements): boolean {
 
 export function useRealtimeStatus(): 'disconnected' | 'connecting' | 'connected' | 'error' {
     return storage(useShallow((state) => state.realtimeStatus));
+}
+
+export function usePushPermission(): PushPermissionInfo | null {
+    return storage(useShallow((state) => state.pushPermission));
 }
 
 export function useRealtimeMode(): 'idle' | 'agent-speaking' | 'user-speaking' {

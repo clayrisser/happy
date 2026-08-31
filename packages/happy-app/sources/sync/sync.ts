@@ -2353,6 +2353,10 @@ class Sync {
         log.log('registerPushToken');
         try {
             const result = await syncCurrentPushToken(this.credentials);
+            // The session screen shows a notice when this is denied
+            // (DROVE-85); a denied permission used to be a console line and
+            // nothing else, which is a silent no.
+            storage.getState().setPushPermission(result.permission);
             log.log('Push token sync result: ' + JSON.stringify({
                 registered: result.registered,
                 hasToken: !!result.token,
