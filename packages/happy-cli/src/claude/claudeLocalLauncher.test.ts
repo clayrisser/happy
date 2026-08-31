@@ -1721,6 +1721,100 @@ describe('claudeLocalLauncher in a tmux pane', () => {
             await launcher;
         });
     });
+
+    /**
+     * DROVE-79. The sixth way, and the one nobody had pulled yet: the `switch`
+     * RPC was still registered on a pane session, where it could not switch
+     * anything. exitReasonAfterChild returns `exit` for every pane child, so
+     * the handler SIGTERMed the child and the launcher ended the session. A
+     * takeover button that just kills the terminal.
+     */
+    describe('the switch RPC', () => {
+        /**
+         * A registry that answers a lookup the way RpcHandlerManager does, so
+         * "the app called switch" can be played out rather than assumed:
+         * handleRequest returns `{ error: 'Method not found' }` for a method
+         * with no handler and never touches this session.
+         */
+        function rpcRegistry(session: any) {
+            const handlers = new Map<string, (params: unknown) => unknown>();
+            session.client.rpcHandlerManager = {
+                registerHandler: vi.fn((name: string, fn: (params: unknown) => unknown) => {
+                    handlers.set(name, fn);
+                }),
+                unregisterHandler: vi.fn((name: string) => {
+                    handlers.delete(name);
+                }),
+            };
+            return {
+                names: () => [...handlers.keys()],
+                call: async (method: string, params: unknown) => {
+                    const handler = handlers.get(method);
+                    if (!handler) return { error: 'Method not found' };
+                    return await handler(params);
+                },
+            };
+        }
+
+        it('is never registered, so the app can see the capability is absent', async () => {
+            const runs = trackRuns();
+            const { session } = paneSession();
+            const rpc = rpcRegistry(session);
+
+            const launcher = claudeLocalLauncher(session as any);
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+
+            // Stop is still there. It is the one the app labels "cancel the
+            // active turn" and DROVE-13 gave it a pane-safe answer.
+            expect(rpc.names()).toContain('abort');
+            expect(rpc.names()).not.toContain('switch');
+
+            runs[0].run.resolve();
+            await expect(launcher).resolves.toEqual({ type: 'exit', code: 0 });
+            // Not even the finally's no-op: a registered method is a
+            // capability the app can call.
+            expect(rpc.names()).not.toContain('switch');
+        });
+
+        it('does not signal the child when the app calls switch anyway', async () => {
+            const runs = trackRuns();
+            const { session } = paneSession();
+            const rpc = rpcRegistry(session);
+
+            const launcher = claudeLocalLauncher(session as any);
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+
+            await expect(rpc.call('switch', { to: 'remote' }))
+                .resolves.toEqual({ error: 'Method not found' });
+
+            // The three things the old handler did: SIGTERM the child, end the
+            // launcher, and hand the pane to a headless run.
+            expect(runs[0].opts.abort.aborted).toBe(false);
+            expect(runs).toHaveLength(1);
+            expect(session.client.closeClaudeSessionTurn).not.toHaveBeenCalled();
+
+            runs[0].run.resolve();
+            await expect(launcher).resolves.toEqual({ type: 'exit', code: 0 });
+            expect(mockClaudeRemoteLauncher).not.toHaveBeenCalled();
+        });
+
+        it('still registers it for a PANELESS session, where remote mode is the only carrier', async () => {
+            vi.stubEnv('TMUX_PANE', '');
+            const runs = trackRuns();
+            const { session } = paneSession();
+            const rpc = rpcRegistry(session);
+
+            const launcher = claudeLocalLauncher(session as any);
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+
+            expect(rpc.names()).toContain('switch');
+            await rpc.call('switch', { to: 'remote' });
+            expect(runs[0].opts.abort.aborted).toBe(true);
+
+            runs[0].run.resolve();
+            await expect(launcher).resolves.toEqual({ type: 'switch' });
+        });
+    });
 });
 
 /**
