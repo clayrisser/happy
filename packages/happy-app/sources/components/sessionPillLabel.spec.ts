@@ -1,19 +1,14 @@
 /**
- * The composer's session label and the model name's width (DROVE-83,
- * DROVE-111).
+ * The composer's session label (DROVE-83, DROVE-111, DROVE-138).
  *
  * The short names come from the model id, the mode and the effort are drawn
- * as glyphs now so only the model is spelled out, and it truncates at the
- * tail when the button row cannot hold it. The budget test is what keeps the
- * row honest: it is the screen minus every button and every gap, and
- * `Opus 5 1M` has to survive it.
+ * as glyphs, and the model's name moved down to the status line where it has
+ * the room to be read whole. The width arithmetic went with it, so the budget
+ * is pinned in statusRowLayout.spec.ts now; this is the naming.
  */
 import { describe, expect, it } from 'vitest';
 import {
     buildSessionPillLabel,
-    composerModelNameFits,
-    COMPOSER_MODEL_TRUNCATION,
-    resolveComposerModelTextBudget,
     SESSION_PILL_SEPARATOR,
     shortModelName,
 } from './sessionPillLabel';
@@ -81,41 +76,4 @@ describe('buildSessionPillLabel', () => {
         expect(buildSessionPillLabel({ modeLabel: '  ' }).text).toBe('');
     });
 
-    it('only ever truncates the model, and at the tail now the row runs left to right', () => {
-        expect(COMPOSER_MODEL_TRUNCATION).toEqual({ segment: 'model', ellipsizeMode: 'tail' });
-    });
-});
-
-describe('the model name on the button row at 393pt', () => {
-    // add(42) + mode(38) + effort(38) + speaker(42) + mic(42) + primary(42)
-    // + the primary's 8pt margin + seven 6pt gaps, inside 8pt of container
-    // padding and 10pt of shell inset a side.
-    it('leaves the name the screen minus every button and every gap', () => {
-        expect(resolveComposerModelTextBudget(393))
-            .toBe(393 - 16 - 20 - 42 - 76 - 126 - 8 - 42);
-        expect(resolveComposerModelTextBudget(393)).toBe(63);
-    });
-
-    it('holds the names Clay actually runs', () => {
-        for (const model of [
-            { key: 'claude-opus-5[1m]' },
-            { key: 'claude-fable-5' },
-            { key: 'claude-opus-5' },
-            { key: 'claude-sonnet-5' },
-        ]) {
-            const name = shortModelName(model);
-            expect(composerModelNameFits(name, 393), name ?? '').toBe(true);
-        }
-    });
-
-    // Not every model fits, and that is the deal DROVE-111 made: the mode and
-    // the effort became glyphs so the model got the slack, and a name past
-    // nine or ten characters still tail-truncates. The picker spells it out.
-    it('reports a long provider name as one that will be cut', () => {
-        expect(composerModelNameFits('Gemini 3.1 Flash Lite', 393)).toBe(false);
-    });
-
-    it('never claims a missing name does not fit', () => {
-        expect(composerModelNameFits(null, 393)).toBe(true);
-    });
 });

@@ -65,6 +65,11 @@ vi.mock('./StatusDot', () => ({ StatusDot: host('StatusDot') }));
 
 vi.mock('./AnimatedOverlay', () => ({ AnimatedFade: host('AnimatedFade') }));
 
+// The model's picker is a native menu on iOS; the host module reaches for a
+// platform file vitest cannot resolve. What the row owes it is the group and
+// the label.
+vi.mock('./NativeSettingsMenu', () => ({ NativeSettingsMenu: host('NativeSettingsMenu') }));
+
 // Both sheets (DROVE-117's quota, DROVE-111's agent tree) pull in
 // gesture-handler and reanimated through ComposerSheet, neither of
 // which vitest can transform. What the row owes them is the open flag and the
@@ -158,6 +163,9 @@ function row(overrides: Partial<StatusRowProps> = {}) {
         contextStatus: null,
         weekPercent: strip.weekPercent,
         usageBarGroups: strip.usageBarGroups,
+        accountName: 'jamrizzi',
+        modelName: 'Opus 5 1M',
+        onModelPress: () => {},
         showDetails: true,
         ...overrides,
     }));
@@ -168,6 +176,13 @@ function line(renderer: ReturnType<typeof create>): string[] {
     return renderer.root.findAllByType('Text' as any).map((node: any) => (
         Array.isArray(node.props.children) ? node.props.children.join('') : String(node.props.children)
     ));
+}
+
+/** The one segment a screen reader calls `label`, so an assertion never counts indexes. */
+function segment(renderer: ReturnType<typeof create>, label: string): any {
+    return renderer.root.findAll(
+        (node: any) => typeof node.type === 'string' && node.props?.accessibilityLabel === label,
+    )[0];
 }
 
 const now = 1_700_000_000_000;
@@ -185,10 +200,15 @@ sessions.busy = {
 };
 
 describe('AgentInputStatusRow on an idle pane session', () => {
-    it('is connection, week, on one line with a dot between, and no branch', () => {
+    it('is the model, then the account and its quota, with no word for the connection (DROVE-138)', () => {
         const renderer = row();
-        expect(line(renderer)).toEqual(['online', '·', '23% week']);
+        expect(line(renderer)).toEqual(['Opus 5 1M', '·', 'jamrizzi', '23%']);
+        expect(line(renderer)).not.toContain('online');
         expect(renderer.root.findAllByType('AnimatedFade' as any)).toHaveLength(1);
+    });
+
+    it('keeps the window word only when there is no account to head the quota', () => {
+        expect(line(row({ accountName: null }))).toEqual(['Opus 5 1M', '·', '23% week']);
     });
 
     it('carries the connection colour on the dot and has nothing left that truncates from the left', () => {
@@ -198,18 +218,53 @@ describe('AgentInputStatusRow on an idle pane session', () => {
         const texts = renderer.root.findAllByType('Text' as any);
         expect(texts.some((node: any) => node.props.ellipsizeMode === 'head')).toBe(false);
         expect(renderer.root.findAllByType('Octicons' as any)).toHaveLength(0);
-        const week = texts.find((node: any) => node.props.children === '23% week');
-        expect(week.props.ellipsizeMode).toBeUndefined();
+        const percent = texts.find((node: any) => node.props.children === '23%');
+        expect(percent.props.ellipsizeMode).toBeUndefined();
     });
 
-    it('opens session info from the connection', () => {
+    it('says the connection in words on the dot, since the screen no longer does', () => {
+        const renderer = row();
+        expect(segment(renderer, 'online')).toBeTruthy();
+        expect(renderer.root.findByType('StatusDot' as any).props.size).toBe(7);
+    });
+
+    it('opens session info from the dot, which inherited the word\'s tap target', () => {
         const onSessionInfoPress = vi.fn();
         const renderer = row({ onSessionInfoPress });
-        const pressables = renderer.root.findAllByType('Pressable' as any);
-        // The connection, then the week figure that unfolds the bars.
-        expect(pressables).toHaveLength(2);
-        pressables[0].props.onPress();
+        act(() => {
+            segment(renderer, 'online').props.onPress();
+        });
         expect(onSessionInfoPress).toHaveBeenCalledTimes(1);
+    });
+
+    it('opens the model picker on the first tap, never a menu of the three controls (DROVE-111)', () => {
+        const onModelPress = vi.fn();
+        const renderer = row({ onModelPress });
+        const model = segment(renderer, 'Model');
+        expect(model.props.accessibilityValue).toEqual({ text: 'Opus 5 1M' });
+        act(() => {
+            model.props.onPress();
+        });
+        expect(onModelPress).toHaveBeenCalledTimes(1);
+    });
+
+    it('anchors the model picker as the native menu on iOS, still one tap', () => {
+        const renderer = row({
+            nativeMenus: true,
+            modelGroup: { key: 'model', label: 'Model', options: [], onSelect: () => {} } as any,
+        });
+        const menu = renderer.root.findByType('NativeSettingsMenu' as any);
+        expect(menu.props.groups.map((group: any) => group.key)).toEqual(['model']);
+        expect(menu.props.accessibilityLabel).toBe('Model, Opus 5 1M');
+    });
+
+    it('spells the model out rather than cutting it, and cuts the account before the model (DROVE-138)', () => {
+        const renderer = row({ modelName: 'Gemini 3.1 Flash Lite' });
+        const texts = renderer.root.findAllByType('Text' as any);
+        const model = texts.find((node: any) => node.props.children === 'Gemini 3.1 Flash Lite');
+        const account = texts.find((node: any) => node.props.children === 'jamrizzi');
+        expect(model.props.ellipsizeMode).toBe('tail');
+        expect(account.props.style.flexShrink).toBeGreaterThan(model.props.style.flexShrink);
     });
 
     it('opens the quota sheet from the week figure with every window for every account (DROVE-148)', () => {
@@ -218,7 +273,7 @@ describe('AgentInputStatusRow on an idle pane session', () => {
         const sheet = () => renderer.root.findByType('UsageAccountBarsSheet' as any);
         // Closed by default: the row is still one line until it is asked for.
         expect(sheet().props.open).toBe(false);
-        const week = renderer.root.findAllByType('Pressable' as any)[1];
+        const week = segment(renderer, 'Quota, jamrizzi 77%');
         act(() => {
             week.props.onPress();
         });
@@ -241,7 +296,7 @@ describe('AgentInputStatusRow on an idle pane session', () => {
         // The track is drawn even for the account at zero.
         expect(rows[4].fraction).toBe(0);
         expect(rows[4].tone).toBe('critical');
-        expect(line(renderer)).toContain('77% week');
+        expect(line(renderer)).toEqual(['Opus 5 1M', '·', 'jamrizzi', '77%']);
         // And the sheet closes itself, which is what the backdrop and the
         // grabber both call.
         act(() => {
@@ -250,10 +305,26 @@ describe('AgentInputStatusRow on an idle pane session', () => {
         expect(sheet().props.open).toBe(false);
     });
 
-    it('keeps the context gauge after the week figure when the session has one', () => {
-        const renderer = row({ contextStatus: { percent: 42, detailText: '84k / 200k context', color: 'ok' } });
-        expect(line(renderer)).toEqual(['online', '·', '23% week', '·', '42% context']);
+    it('draws the context gauge as the ring alone once the account is on the row (DROVE-138)', () => {
+        const context = { percent: 42, detailText: '84k / 200k context', color: 'ok' };
+        const renderer = row({ contextStatus: context });
+        // The ring fills with the same number the text was printing, so the
+        // text is the cheapest thing on a full row to lose.
+        expect(line(renderer)).toEqual(['Opus 5 1M', '·', 'jamrizzi', '23%', '·']);
         expect(renderer.root.findAllByType('Svg' as any)).toHaveLength(1);
+        // And the tap still prints the exact figure.
+        act(() => {
+            segment(renderer, 'Context').props.onPress();
+        });
+        expect(line(renderer)).toContain('84k / 200k context');
+    });
+
+    it('keeps the context percent printed when no account is taking the width', () => {
+        const renderer = row({
+            accountName: null,
+            contextStatus: { percent: 42, detailText: '84k / 200k context', color: 'ok' },
+        });
+        expect(line(renderer)).toEqual(['Opus 5 1M', '·', '23% week', '·', '42% context']);
     });
 
     it('fades with the rest of the composer detail while the chat is scrolled up', () => {
@@ -263,13 +334,23 @@ describe('AgentInputStatusRow on an idle pane session', () => {
 });
 
 describe('AgentInputStatusRow while the session is working', () => {
-    it('leads with the state and the turn clock, in the working colour, ahead of the connection', () => {
+    it('leads with the state and the turn clock, in the working colour, ahead of the model', () => {
         vi.useFakeTimers();
         vi.setSystemTime(now + 1_000);
         try {
             const renderer = row({ sessionId: 'busy' });
-            expect(line(renderer)).toEqual(['1 agent 1m 2s', '·', 'online', '·', '23% week']);
+            expect(line(renderer)).toEqual(['1 agent 1m 2s', '·', 'Opus 5 1M', '·', 'jamrizzi', '23%']);
             expect(renderer.root.findByType('StatusDot' as any).props.color).toBe('#007AFF');
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('says both the work and the connection in words on the dot', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(now + 1_000);
+        try {
+            expect(segment(row({ sessionId: 'busy' }), 'Working, online')).toBeTruthy();
         } finally {
             vi.useRealTimers();
         }
@@ -299,8 +380,7 @@ describe('AgentInputStatusRow while the session is working', () => {
             // Closed by default, and nothing unfolded under the row.
             expect(agents().props.open).toBe(false);
             expect(renderer.root.findAllByType('ScrollView' as any)).toHaveLength(0);
-            const working = renderer.root.findAllByType('Pressable' as any)[0];
-            expect(working.props.accessibilityLabel).toBe('Working: 1 agent running');
+            const working = segment(renderer, 'Working: 1 agent running');
             act(() => {
                 working.props.onPress();
             });
@@ -331,13 +411,12 @@ describe('AgentInputStatusRow while the session is working', () => {
             });
             const agents = () => renderer.root.findByType('SessionAgentsSheet' as any);
             const usage = () => renderer.root.findByType('UsageAccountBarsSheet' as any);
-            const pressables = renderer.root.findAllByType('Pressable' as any);
             act(() => {
-                pressables[0].props.onPress();
+                segment(renderer, 'Working: 1 agent running').props.onPress();
             });
             expect([agents().props.open, usage().props.open]).toEqual([true, false]);
             act(() => {
-                renderer.root.findAllByType('Pressable' as any)[2].props.onPress();
+                segment(renderer, 'Quota, jamrizzi 77%').props.onPress();
             });
             expect([agents().props.open, usage().props.open]).toEqual([false, true]);
         } finally {
@@ -347,10 +426,12 @@ describe('AgentInputStatusRow while the session is working', () => {
 });
 
 describe('AgentInputStatusRow with nothing to show', () => {
-    it('renders nothing for a session with no connection, no stream, no snapshot and no context', () => {
+    it('renders nothing for a session with no connection, no model, no stream, no snapshot and no context', () => {
         const strip = resolveUsageStrip({ usageLimits: null, droverUsage: null, showRemaining: false, contextShown: false });
         const renderer = row({
             connectionStatus: undefined,
+            accountName: null,
+            modelName: null,
             weekPercent: strip.weekPercent,
             usageBarGroups: strip.usageBarGroups,
         });
@@ -364,7 +445,14 @@ describe('AgentInputStatusRow with nothing to show', () => {
             showRemaining: false,
             contextShown: false,
         });
-        const renderer = row({ weekPercent: strip.weekPercent, usageBarGroups: strip.usageBarGroups });
-        expect(line(renderer)).toEqual(['online']);
+        const renderer = row({
+            accountName: null,
+            modelName: null,
+            weekPercent: strip.weekPercent,
+            usageBarGroups: strip.usageBarGroups,
+        });
+        // The dot alone, with the connection in its label and nothing in text.
+        expect(line(renderer)).toEqual([]);
+        expect(segment(renderer, 'online')).toBeTruthy();
     });
 });

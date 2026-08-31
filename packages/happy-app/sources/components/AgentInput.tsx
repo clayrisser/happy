@@ -55,6 +55,8 @@ import type { MicButtonState } from '@/voice/micButton';
 import type { DictationCaptureState } from '@/voice/dictationCapture';
 import { DroverChannelsSheet } from './DroverChannelsSheet';
 import { buildSessionPillLabel } from './sessionPillLabel';
+import { permissionModeGlyph } from './sessionControlGlyphs';
+import { resolveSessionAccount } from '@/utils/droverSessionAccount';
 import { ComposerSessionControls, type ComposerSessionPicker } from './ComposerSessionControls';
 
 interface AgentInputProps {
@@ -174,11 +176,16 @@ interface AgentInputProps {
     onAddImages?: (images: AttachmentPreview[]) => void;
 }
 
+/**
+ * The picker list's glyph is the button row's glyph (DROVE-129, DROVE-141).
+ *
+ * These were two maps that disagreed: the list drew a folder for the default
+ * and the button drew a shield, and the button drew a warning triangle for
+ * yolo, which read as an error. One derivation now, in sessionControlGlyphs.ts,
+ * so a mode looks the same wherever it appears.
+ */
 function permissionKindIcon(kind: string | null | undefined): React.ComponentProps<typeof Ionicons>['name'] {
-    if (kind === 'read-only') return 'lock-closed-outline';
-    if (kind === 'safe-yolo') return 'shield-checkmark-outline';
-    if (kind === 'yolo') return 'warning-outline';
-    return 'folder-open-outline';
+    return permissionModeGlyph(kind);
 }
 
 const MOBILE_ACTION_ROW_GEOMETRY = resolveMobileComposerActionRowGeometry();
@@ -694,6 +701,19 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         props.alwaysShowContextSize,
         usageLimitShowRemaining,
         contextStatus != null,
+    ]);
+
+    // The account this session runs on, for the status row (DROVE-138). Same
+    // derivation the session info screen reads (DROVE-137), so the two
+    // surfaces cannot call one account by two names (DROVE-129).
+    const sessionAccountName = React.useMemo(() => resolveSessionAccount({
+        droverUsage: props.sessionStatusDroverUsage ?? null,
+        droverAccount: props.sessionStatusDroverAccount,
+        showRemaining: usageLimitShowRemaining,
+    }).name, [
+        props.sessionStatusDroverUsage,
+        props.sessionStatusDroverAccount,
+        usageLimitShowRemaining,
     ]);
 
     const agentInputEnterToSend = useSetting('agentInputEnterToSend');
@@ -2027,9 +2047,10 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
 
                     {compactMobileComposer ? (
                     /* One row under the input (DROVE-111): add, then the
-                        session's mode, effort and model, then the voice
+                        session's mode and effort glyphs, then the voice
                         cluster (stream-talk, talk, then send/boss/stop) on the
-                        right (DROVE-98 put the speaker back). DROVE-83's
+                        right (DROVE-98 put the speaker back). The model's name
+                        moved to the status row in DROVE-138. DROVE-83's
                         dedicated pill row is gone, which is the row of
                         composer furniture MOBILE_COMPOSER_BASE_HEIGHT never
                         counted (DROVE-105) and therefore the end of
@@ -2042,9 +2063,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         {/* The plus opens the Add context sheet (DROVE-128)
                             rather than jumping straight into the photo
                             library, and it finally gets the surface every
-                            other control on this row got in DROVE-118. It was
-                            already 42pt wide, so the model name's 63pt budget
-                            is untouched. */}
+                            other control on this row got in DROVE-118. */}
                         {!props.zenMode && canAddContext && (
                             <BubblePressable
                                 onPress={handleAddContextPress}
@@ -2069,8 +2088,9 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                             </BubblePressable>
                         )}
 
-                        {/* Mode, effort, model: three controls, three pickers,
-                            one tap each (DROVE-111). */}
+                        {/* Mode and effort: two glyphs, two pickers, one tap
+                            each (DROVE-111). The model went down to the status
+                            row where its name fits (DROVE-138). */}
                         {!props.zenMode && (
                             <ComposerSessionControls
                                 label={sessionPillLabel}
@@ -2081,7 +2101,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                 onPress={handleSessionControlPress}
                                 nativeMenus={useNativeSettingsMenus}
                                 modeGroups={permissionSettingsGroups}
-                                modelGroup={modelSettingsGroup}
                                 effortGroup={effortSettingsGroup}
                                 openPicker={openPicker === 'permission' || openPicker === 'model' || openPicker === 'effort'
                                     ? openPicker
@@ -2233,6 +2252,15 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     contextStatus={contextStatus}
                     weekPercent={weekPercent}
                     usageBarGroups={usageBarGroups}
+                    accountName={props.zenMode ? null : sessionAccountName}
+                    // Only the phone's composer sent its model down here; the
+                    // desktop row still spells it out beside the input, and
+                    // two copies of one name says nothing twice.
+                    modelName={compactMobileComposer && !props.zenMode ? sessionPillLabel.model : null}
+                    onModelPress={() => handleSessionControlPress('model')}
+                    modelGroup={modelSettingsGroup}
+                    nativeMenus={useNativeSettingsMenus}
+                    modelPickerOpen={openPicker === 'model'}
                     onSessionInfoPress={props.onSessionInfoPress}
                     showDetails={props.showStatusDetails !== false}
                 />

@@ -1,38 +1,46 @@
 import * as React from 'react';
-import { Text, View } from 'react-native';
+import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Ionicons } from '@expo/vector-icons';
-import { Typography } from '@/constants/Typography';
+import Svg, { Circle, Line, Path } from 'react-native-svg';
 import { BubblePressable } from './BubblePressable';
 import { NativeSettingsMenu, type NativeSettingsMenuGroup } from './NativeSettingsMenu';
 import {
-    COMPOSER_MODEL_FONT_SIZE,
-    COMPOSER_MODEL_TRUNCATION,
+    effortAccessibility,
+    effortGaugeAngle,
+    effortGaugePoint,
+    effortGaugeTrackPath,
+    permissionModeAccessibility,
+    permissionModeGlyph,
+} from './sessionControlGlyphs';
+import {
     COMPOSER_SESSION_CONTROL_SIZE,
     type SessionPillLabel,
 } from './sessionPillLabel';
 
 /**
- * Permission mode, effort and model, folded into the composer's button row
- * (DROVE-111).
+ * Permission mode and effort, as two glyphs on the composer's button row
+ * (DROVE-111, DROVE-138, DROVE-141).
  *
- * DROVE-83 gave the three a row of their own, one pill reading
+ * DROVE-83 gave mode, model and effort a row of their own, one pill reading
  * `Yolo · Opus 5 1M · High` that opened a sheet listing them again. Clay drew
  * an arrow from that row down into the button row, then said of the sheet:
  * "I don't like this extra menu, then I have to click twice." So the row is
- * the menu. The mode is an icon, the effort is an icon, the model keeps its
- * name as text, and each one opens its own picker on the first tap. Losing
- * the two words is what buys the model room to stay readable; losing the row
- * is what buys the chat its height back.
+ * the menu: each control opens its own picker on the first tap, and there is
+ * no intermediate menu anywhere in the path.
  *
- * GEOMETRY. 393pt of phone leaves the action row 357. The plus and the three
- * on the right are 42 each and are not negotiable (DROVE-118 wants them
- * reading as buttons), which with 6pt gaps and the primary's 8pt margin is
- * 252 before these controls exist at all. At 38pt each the mode and the
- * effort leave the model 63pt, which holds `Opus 5 1M` at 12pt with a little
- * to spare and tail-truncates anything longer. 38 plus 3pt of slop a side is
- * exactly the 44pt target, and exactly the 6pt gap, so no two of these
- * controls' hit boxes overlap: pressing effort cannot open the model list.
+ * THE MODEL IS NOT HERE ANY MORE (DROVE-138). Clay: "keep the full model name
+ * and slide it down there, that way it's more compact and fits." A name
+ * squeezed between six 38-to-42pt buttons had 63pt to live in, which is
+ * `Opus 5 1M` and nothing longer, so `Opus 5 1M` was showing as `Opus 5...`.
+ * The status line under the composer is text all the way across and has room
+ * for the whole name, so that is where it went. Tapping it there opens the
+ * same model picker on the same first tap.
+ *
+ * GEOMETRY. Two 38pt controls with 3pt of slop a side is exactly the 44pt
+ * target and exactly the 6pt gap between them, so no two hit boxes overlap:
+ * pressing effort cannot open the mode list. What the model used to occupy is
+ * now slack on the row, which is DROVE-153's to spend on the glass capsule.
  */
 
 /** 38 + 3 + 3. Sized so neighbouring slop meets but never overlaps. */
@@ -56,62 +64,53 @@ export interface ComposerSessionControlsProps {
      */
     nativeMenus?: boolean;
     modeGroups?: NativeSettingsMenuGroup[];
-    modelGroup?: NativeSettingsMenuGroup | null;
     effortGroup?: NativeSettingsMenuGroup | null;
     /** Which picker is open, so the pressed control reads as open. */
     openPicker?: ComposerSessionPicker | null;
 }
 
 /**
- * The permission mode as a glyph.
+ * The effort as a dial, the needle at the level (DROVE-141).
  *
- * Every mode we ship is one of a handful of ideas: review it yourself (auto),
- * edits only, plan first, read but never write, keep to the workspace, or do
- * not ask at all. The glyphs are the ones the permission list already draws
- * beside those rows, so a mode looks the same wherever it appears.
- */
-export function permissionModeGlyph(
-    kind: string | null | undefined,
-    key: string | null | undefined,
-): React.ComponentProps<typeof Ionicons>['name'] {
-    const value = (kind ?? key ?? '').toLowerCase();
-    if (value === 'read-only' || value === 'read') return 'lock-closed-outline';
-    if (value === 'safe-yolo' || value === 'workspace') return 'shield-checkmark-outline';
-    if (value === 'yolo' || value === 'bypasspermissions' || value === 'full') return 'warning-outline';
-    if (value === 'plan') return 'map-outline';
-    if (value === 'acceptedits' || value === 'edits') return 'create-outline';
-    if (value === 'auto') return 'sparkles-outline';
-    return 'shield-outline';
-}
-
-/**
- * The effort as a meter, filled to the level.
+ * It was a bar meter, and the lane that built it already named the flaw: four
+ * filled bars against five is a COUNT, and nobody counts at a glance, so the
+ * two levels Clay moves between most were the two hardest to tell apart. A
+ * needle is a POSITION. Hard left is the floor, hard right the ceiling, and
+ * the angle between them is read rather than counted.
  *
- * One glyph cannot say which of six (low, medium, high, xhigh, max,
- * ultracode) is on, because there is no family of six glyphs anyone reads as
- * ordered. A meter can: the reader counts rather than recognises, and it is
- * the idiom every phone already uses for signal. Bars are drawn only for the
- * levels the current model offers, so a four-level model shows four, and the
- * exact word is one tap away in the picker either way.
+ * The angle is interpolated across whatever scale the current model offers, so
+ * a four-level Codex and a six-level Claude both use the whole dial and the
+ * ends always mean the ends (DROVE-101). The exact word is one tap away in the
+ * picker, and in the accessibility value without one.
  */
-export function EffortMeter(props: { index: number; count: number; color: string; dim: string }) {
-    const count = Math.max(1, Math.min(6, props.count));
-    const index = Math.max(0, Math.min(count - 1, props.index));
+export function EffortGauge(props: { index: number; count: number; color: string; dim: string }) {
+    const size = 17;
+    const strokeWidth = 1.75;
+    const centre = size / 2;
+    const angle = effortGaugeAngle(props.index, props.count);
+    // Stops short of the track so the needle reads as pointing AT a position
+    // rather than as another piece of the ring.
+    const tip = effortGaugePoint(centre, (size - strokeWidth) / 2 - 2.5, angle);
     return (
-        <View style={styles.meter}>
-            {Array.from({ length: count }, (_unused, bar) => (
-                <View
-                    key={bar}
-                    style={[
-                        styles.meterBar,
-                        {
-                            height: 4 + (9 * bar) / Math.max(1, count - 1),
-                            backgroundColor: bar <= index ? props.color : props.dim,
-                        },
-                    ]}
-                />
-            ))}
-        </View>
+        <Svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+            <Path
+                d={effortGaugeTrackPath(size, strokeWidth)}
+                stroke={props.dim}
+                strokeWidth={strokeWidth}
+                strokeLinecap="round"
+                fill="none"
+            />
+            <Line
+                x1={centre}
+                y1={centre}
+                x2={tip.x}
+                y2={tip.y}
+                stroke={props.color}
+                strokeWidth={2}
+                strokeLinecap="round"
+            />
+            <Circle cx={centre} cy={centre} r={1.6} fill={props.color} />
+        </Svg>
     );
 }
 
@@ -130,29 +129,6 @@ const styles = StyleSheet.create((theme) => ({
     controlOpen: {
         backgroundColor: theme.colors.surfaceHighest,
     },
-    // The model's full name, not DROVE-83's middle-ellipsised remains of it.
-    modelPressable: {
-        flexShrink: 1,
-        minWidth: 0,
-        height: COMPOSER_SESSION_CONTROL_SIZE,
-        justifyContent: 'center',
-        paddingHorizontal: 2,
-    },
-    model: {
-        fontSize: COMPOSER_MODEL_FONT_SIZE,
-        color: theme.colors.text,
-        ...Typography.default(),
-    },
-    meter: {
-        flexDirection: 'row',
-        alignItems: 'flex-end',
-        gap: 1.5,
-        height: 13,
-    },
-    meterBar: {
-        width: 2.5,
-        borderRadius: 1.5,
-    },
 }));
 
 function Control(props: {
@@ -170,7 +146,11 @@ function Control(props: {
     if (props.nativeMenus && groups.length > 0) {
         return (
             <NativeSettingsMenu
-                accessibilityLabel={props.accessibilityLabel}
+                // The native host takes one string, so the state rides in the
+                // label there rather than being dropped (DROVE-141).
+                accessibilityLabel={props.accessibilityValue
+                    ? `${props.accessibilityLabel}, ${props.accessibilityValue}`
+                    : props.accessibilityLabel}
                 groups={groups}
                 style={{ width: COMPOSER_SESSION_CONTROL_SIZE, height: COMPOSER_SESSION_CONTROL_SIZE }}
             >
@@ -211,24 +191,25 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
         onPress,
         nativeMenus,
         modeGroups,
-        modelGroup,
         effortGroup,
         openPicker,
     } = props;
     const showMode = !!label.mode;
     const showEffort = !!label.effort && effortCount > 0 && effortIndex != null && effortIndex >= 0;
     const canOpenMode = (modeGroups?.length ?? 0) > 0;
-    const canOpenModel = !!modelGroup;
     const canOpenEffort = !!effortGroup;
-    if (!showMode && !showEffort && !label.model) {
+    if (!showMode && !showEffort) {
         return null;
     }
+    const mode = permissionModeAccessibility(label.mode);
+    const effort = effortAccessibility(label.effort, effortIndex ?? 0, effortCount);
     return (
         <>
             {showMode ? (
                 <Control
                     picker="permission"
-                    accessibilityLabel={label.mode!}
+                    accessibilityLabel={mode.label}
+                    accessibilityValue={mode.value}
                     groups={modeGroups}
                     nativeMenus={nativeMenus}
                     open={openPicker === 'permission'}
@@ -244,57 +225,20 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
             {showEffort ? (
                 <Control
                     picker="effort"
-                    accessibilityLabel={label.effort!}
+                    accessibilityLabel={effort.label}
+                    accessibilityValue={effort.value}
                     group={effortGroup}
                     nativeMenus={nativeMenus}
                     open={openPicker === 'effort'}
                     onPress={canOpenEffort ? onPress : undefined}
                 >
-                    <EffortMeter
+                    <EffortGauge
                         index={effortIndex!}
                         count={effortCount}
                         color={theme.colors.text}
                         dim={theme.colors.divider}
                     />
                 </Control>
-            ) : null}
-            {label.model ? (
-                nativeMenus && modelGroup ? (
-                    <NativeSettingsMenu
-                        accessibilityLabel={label.model}
-                        groups={[modelGroup]}
-                        style={styles.modelPressable}
-                    >
-                        <Text
-                            style={styles.model}
-                            numberOfLines={1}
-                            ellipsizeMode={COMPOSER_MODEL_TRUNCATION.ellipsizeMode}
-                        >
-                            {label.model}
-                        </Text>
-                    </NativeSettingsMenu>
-                ) : (
-                    <BubblePressable
-                        onPress={canOpenModel && onPress ? () => onPress('model') : undefined}
-                        disabled={!canOpenModel || !onPress}
-                        hitSlop={controlHitSlop}
-                        style={(p) => [
-                            styles.modelPressable,
-                            { opacity: p.pressed && canOpenModel && onPress ? 0.7 : 1 },
-                        ]}
-                        accessibilityRole="button"
-                        accessibilityLabel={label.model}
-                        accessibilityState={{ expanded: openPicker === 'model', disabled: !canOpenModel }}
-                    >
-                        <Text
-                            style={styles.model}
-                            numberOfLines={1}
-                            ellipsizeMode={COMPOSER_MODEL_TRUNCATION.ellipsizeMode}
-                        >
-                            {label.model}
-                        </Text>
-                    </BubblePressable>
-                )
             ) : null}
         </>
     );

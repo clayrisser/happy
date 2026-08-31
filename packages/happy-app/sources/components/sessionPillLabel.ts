@@ -1,60 +1,26 @@
 /**
- * What the composer says about the session's mode, model and effort, and how
- * much room the model's name actually has (DROVE-83, DROVE-111).
+ * What the composer says about the session's mode, model and effort
+ * (DROVE-83, DROVE-111, DROVE-138).
  *
  * DROVE-83 read the three as one pill, `Yolo · Opus 5 1M · High`, on a row of
- * its own. DROVE-111 folded them into the button row: the mode is a glyph,
- * the effort is a meter, and the model is the only one still spelled out. So
- * the label is still built here (the glyph controls read `mode` and `effort`
- * to know they have something to draw, and `text` is what a screen reader
- * gets), but the width arithmetic is now about one name in one gap, not a
- * three-part string across a whole row.
+ * its own. DROVE-111 folded them into the button row: the mode a glyph, the
+ * effort a glyph, the model the only one still spelled out. DROVE-138 then
+ * moved the model down to the status line, because 63pt between six buttons
+ * was showing `Opus 5 1M` as `Opus 5...`.
  *
- * Pure, so the names and the budget can be tested without a renderer.
- * ComposerSessionControls.tsx draws them.
+ * So this file is now just the naming. The glyph controls read `mode` and
+ * `effort` to know they have something to draw, the status row reads `model`,
+ * and `text` is the whole sentence for a screen reader. The width arithmetic
+ * left with the model and lives in statusRowLayout.ts.
+ *
+ * Pure, so the names can be tested without a renderer.
+ * ComposerSessionControls.tsx and AgentInputStatusRow.tsx draw them.
  */
-import { MOBILE_COMPOSER_METRICS } from './agentInputLayout';
 
 export const SESSION_PILL_SEPARATOR = ' · ';
 
-/** The model name on the button row; small, because it shares the row. */
-export const COMPOSER_MODEL_FONT_SIZE = 12;
-
 /** Half a step under the 42pt action buttons, so the row still fits. */
 export const COMPOSER_SESSION_CONTROL_SIZE = 38;
-
-/**
- * Everything on the action row that is NOT the model's name, on a phone.
- *
- * AgentInput's container padding and the glass shell inset on both sides,
- * then the row itself: the add button, the mode glyph, the effort meter, the
- * speaker, the mic and the primary, with a gap between each and the primary's
- * own left margin. The container padding is a literal in AgentInput (8 below
- * 700pt), mirrored here.
- */
-export const COMPOSER_SESSION_ROW_GEOMETRY = {
-    containerPaddingHorizontal: 8,
-    shellInset: MOBILE_COMPOSER_METRICS.shellInset,
-    /** add, mode, effort, model, spacer, speaker, mic, primary: seven gaps. */
-    gaps: 7,
-    gap: 6,
-    addSize: MOBILE_COMPOSER_METRICS.actionSize,
-    controlSize: COMPOSER_SESSION_CONTROL_SIZE,
-    voiceButtons: 3,
-    voiceButtonSize: MOBILE_COMPOSER_METRICS.actionSize,
-    primaryMarginLeft: MOBILE_COMPOSER_METRICS.primaryActionMarginLeft,
-} as const;
-
-/**
- * Only the model can truncate, and it truncates at the TAIL now. DROVE-83 cut
- * it in the middle because it sat between a mode word and an effort word and
- * both ends carried meaning. It sits at the end of the row's left group now,
- * so the front of the name is the half worth keeping.
- */
-export const COMPOSER_MODEL_TRUNCATION = {
-    segment: 'model',
-    ellipsizeMode: 'tail',
-} as const;
 
 export interface SessionPillModelLike {
     key?: string | null;
@@ -123,38 +89,4 @@ export function buildSessionPillLabel(input: SessionPillInput): SessionPillLabel
         effort,
         text: [mode, model, effort].filter((segment): segment is string => !!segment).join(SESSION_PILL_SEPARATOR),
     };
-}
-
-/**
- * A generous average advance for the system font at 12pt: SF Pro Text
- * averages under 6.5pt across mixed-case words, Roboto about the same. A name
- * that fits by this estimate fits on the phone; the estimate only ever errs
- * toward "does not fit".
- */
-const AVERAGE_GLYPH_WIDTH = 6.5;
-
-export function estimateComposerModelTextWidth(text: string): number {
-    return text.length * AVERAGE_GLYPH_WIDTH;
-}
-
-/**
- * What is left for the model's name on a screen this wide, once every button
- * on the row and every gap between them has been paid for.
- */
-export function resolveComposerModelTextBudget(screenWidth: number): number {
-    const g = COMPOSER_SESSION_ROW_GEOMETRY;
-    return screenWidth
-        - 2 * g.containerPaddingHorizontal
-        - 2 * g.shellInset
-        - g.addSize
-        - 2 * g.controlSize
-        - g.voiceButtons * g.voiceButtonSize
-        - g.primaryMarginLeft
-        - g.gaps * g.gap;
-}
-
-/** True when the model's name is drawn whole rather than tail-truncated. */
-export function composerModelNameFits(name: string | null, screenWidth: number): boolean {
-    if (!name) return true;
-    return estimateComposerModelTextWidth(name) <= resolveComposerModelTextBudget(screenWidth);
 }
