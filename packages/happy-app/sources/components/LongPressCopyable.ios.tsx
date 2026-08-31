@@ -1,66 +1,19 @@
-import * as React from 'react';
-import { StyleSheet, View } from 'react-native';
-import { Button, ContextMenu, Host } from '@expo/ui/swift-ui';
-import * as Clipboard from 'expo-clipboard';
-import { useRouter } from 'expo-router';
-import { storeTempText } from '@/sync/persistence';
-import { t } from '@/text';
-import type { LongPressCopyableProps } from './LongPressCopyable';
-
-const iosSymbol = (name: string) =>
-    name as unknown as React.ComponentProps<typeof Button>['systemImage'];
-
 /**
- * The real UIKit context menu, not a menu we draw. UIContextMenuInteraction
- * anchors it at the finger, lifts and blurs the pressed view, plays the system
- * haptic and dismisses the way every other iOS menu does. None of that is ours
- * to position, so there is no anchor measurement here at all.
+ * iOS is back on the anchored menu, deliberately and temporarily.
+ *
+ * DROVE-154 put the real UIKit context menu on a message by hosting a SwiftUI
+ * ContextMenu around it (`@expo/ui`'s `Host`). Anchoring, the lift, the haptic
+ * and dismissal all worked. What did not is that a hosted SwiftUI view does
+ * not take its height from React Native children: `matchContents` measured a
+ * long markdown body short, so the message was CLIPPED mid-sentence with dead
+ * space under it, and Clay could not read his own transcript.
+ *
+ * Reading the transcript beats the menu being native, so the SwiftUI path is
+ * parked rather than shipped broken. It is kept verbatim at
+ * `LongPressCopyable.ios.tsx.native` beside this file and goes back the moment
+ * the host reports the body's real height, which is DROVE-154's open work.
+ *
+ * The anchored menu lives in the .android file; this is the same component,
+ * not an iOS-specific one, so it is re-exported rather than copied.
  */
-export function LongPressCopyable(props: LongPressCopyableProps) {
-    const router = useRouter();
-    const { text } = props;
-
-    const copy = React.useCallback(() => {
-        Clipboard.setStringAsync(text).catch((error) => {
-            console.error('Failed to copy message:', error);
-        });
-    }, [text]);
-
-    // The reader the markdown long press used to open. It has nowhere else to
-    // be reached from a message now that the hold raises this menu.
-    const selectText = React.useCallback(() => {
-        try {
-            router.push(`/text-selection?textId=${storeTempText(text)}`);
-        } catch (error) {
-            console.error('Error storing text for selection:', error);
-        }
-    }, [router, text]);
-
-    return (
-        <View style={props.style}>
-            {/* A hosted SwiftUI view sizes itself to its content, which cannot
-                resolve the agent turn's percentage width. Stretch it instead
-                and measure only the height back. */}
-            <Host
-                matchContents={props.fill ? { vertical: true } : true}
-                style={props.fill ? styles.fill : undefined}
-            >
-                <ContextMenu>
-                    <ContextMenu.Items>
-                        <Button label={t('common.copy')} onPress={copy} systemImage={iosSymbol('doc.on.doc')} />
-                        <Button label={t('textSelection.title')} onPress={selectText} systemImage={iosSymbol('selection.pin.in.out')} />
-                    </ContextMenu.Items>
-                    {/* No ContextMenu.Preview: without one iOS lifts the pressed
-                        view itself, which is the preview Clay is asking for. */}
-                    <ContextMenu.Trigger>{props.children}</ContextMenu.Trigger>
-                </ContextMenu>
-            </Host>
-        </View>
-    );
-}
-
-const styles = StyleSheet.create({
-    fill: {
-        alignSelf: 'stretch',
-    },
-});
+export { LongPressCopyable } from './LongPressCopyable.android';

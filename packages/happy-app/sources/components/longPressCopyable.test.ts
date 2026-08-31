@@ -140,57 +140,38 @@ function render(element: React.ReactElement): ReactTestRenderer {
 const MESSAGE = 'the exact text the pill used to copy';
 
 describe('LongPressCopyable on iOS', () => {
-    it('hands the hold to the platform context menu instead of a menu we position', () => {
+    /**
+     * iOS is parked on the anchored menu (see LongPressCopyable.ios.tsx).
+     *
+     * The SwiftUI ContextMenu anchored and lifted correctly, but a hosted
+     * SwiftUI view does not take its height from React Native children, so a
+     * long markdown body was measured short and the message rendered CLIPPED
+     * mid-sentence. Clay could not read the transcript. Reading it beats the
+     * menu being native, so this asserts the parked state ON PURPOSE, and it
+     * fails the moment the native path is wired back in without the height
+     * being solved.
+     */
+    it('is on the anchored menu, not a hosted SwiftUI view, until the host reports a real height', () => {
         const renderer = render(React.createElement(IosCopyable, {
             text: MESSAGE,
             children: React.createElement('Bubble'),
         }));
-
-        // The trigger is the message itself, so UIKit lifts and blurs what was
-        // pressed and anchors the menu at the finger.
-        const trigger = renderer.root.findByType('ExpoContextMenuTrigger' as any);
-        expect(trigger.findByType('Bubble' as any)).toBeDefined();
-        // Nothing of ours is drawn or placed: no modal, no anchored popup.
-        expect(renderer.root.findAllByType('RNModal' as any)).toHaveLength(0);
-        expect(renderer.root.findAllByType('AnimatedPopup' as any)).toHaveLength(0);
-        // No Preview: iOS lifts the pressed view when one is not given.
-        expect(renderer.root.findAllByType('ExpoContextMenuPreview' as any)).toHaveLength(0);
+        expect(renderer.root.findAllByType('ExpoHost' as any)).toHaveLength(0);
+        expect(renderer.root.findAllByType('ExpoContextMenuTrigger' as any)).toHaveLength(0);
+        // The content is still rendered in full, which is the whole point.
+        expect(renderer.root.findByType('Bubble' as any)).toBeDefined();
     });
 
-    it('copies the same text the pill copied, and offers the text reader', () => {
+    it('still copies the same text the pill copied', async () => {
         const renderer = render(React.createElement(IosCopyable, {
             text: MESSAGE,
             children: React.createElement('Bubble'),
         }));
-
-        const buttons = renderer.root.findAllByType('ExpoButton' as any);
-        expect(buttons.map((button: any) => button.props.label)).toEqual(['Copy', 'Select Text']);
-
-        act(() => buttons[0].props.onPress());
-        expect(shared.setStringAsync).toHaveBeenCalledOnce();
+        act(() => shared.longPressHandlers[0]());
+        const copyRow = renderer.root.findAllByType('Pressable' as any)
+            .find((row: any) => row.props.accessibilityLabel === 'Copy');
+        await act(async () => { await copyRow.props.onPress(); });
         expect(shared.setStringAsync).toHaveBeenCalledWith(MESSAGE);
-
-        act(() => buttons[1].props.onPress());
-        expect(shared.push).toHaveBeenCalledWith(`/text-selection?textId=temp:${MESSAGE.length}`);
-    });
-
-    it('stretches a filling turn and lets a bubble size itself', () => {
-        const agent = render(React.createElement(IosCopyable, {
-            fill: true,
-            text: MESSAGE,
-            children: React.createElement('Bubble'),
-        }));
-        const agentHost = agent.root.findByType('ExpoHost' as any);
-        expect(agentHost.props.matchContents).toEqual({ vertical: true });
-        expect(agentHost.props.style).toEqual({ alignSelf: 'stretch' });
-
-        const bubble = render(React.createElement(IosCopyable, {
-            text: MESSAGE,
-            children: React.createElement('Bubble'),
-        }));
-        const bubbleHost = bubble.root.findByType('ExpoHost' as any);
-        expect(bubbleHost.props.matchContents).toBe(true);
-        expect(bubbleHost.props.style).toBeUndefined();
     });
 });
 
