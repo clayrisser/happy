@@ -33,6 +33,9 @@ import { MobileGlassSurface } from './MobileGlass';
 import { AnimatedClickAwayBackdrop, AnimatedFade } from './AnimatedOverlay';
 import { BubblePressable } from './BubblePressable';
 import { resolveAgentInputPrimaryAction } from './agentInputPrimaryAction';
+import { resolveComposerPrimaryPress, type ComposerPrimaryGesture } from './composerPrimaryPress';
+import { ComposerToast } from './ComposerToast';
+import { flipStreamTalk, streamTalkButton } from '@/voice/streamTalk';
 import { NativeSettingsMenu, type NativeSettingsMenuGroup } from './NativeSettingsMenu';
 import { AgentInputStatusRow } from './AgentInputStatusRow';
 import { resolveUsageStrip } from './agentInputUsage';
@@ -1013,29 +1016,73 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         props.onMicPress();
     }, [props.isSendDisabled, props.onMicPress]);
 
-    // Stop, voice and send share one button, so which one fires is resolved from
-    // the live text rather than from `hasText`, which is set in a transition and
-    // lags a fast type-then-tap. Without the live read that tap would abort the
-    // agent or open dictation instead of sending what was just typed.
-    const handleMobilePrimaryPress = React.useCallback(() => {
+    // Stop, boss mode and send share one button, so which one fires is resolved
+    // from the live text rather than from `hasText`, which is set in a
+    // transition and lags a fast type-then-tap. Without the live read that tap
+    // would abort the agent or start a call instead of sending what was just
+    // typed. The tap / long-press split is resolveComposerPrimaryPress
+    // (DROVE-98), one table for both handlers.
+    const dispatchPrimaryGesture = React.useCallback((gesture: ComposerPrimaryGesture) => {
         const liveHasContent = (inputRef.current?.getText() ?? '').trim().length > 0 || hasImages;
-        if (!liveHasContent && shouldShowStopButton) {
-            handleAbortPress();
-            return;
+        const dispatch = resolveComposerPrimaryPress({
+            gesture,
+            action: primaryAction,
+            liveHasContent,
+            canPress: canPressSendButton,
+        });
+        switch (dispatch) {
+            case 'abort':
+                handleAbortPress();
+                return;
+            case 'boss':
+                handleMicrophonePress();
+                return;
+            case 'channels':
+                handleChannelsLongPress();
+                return;
+            case 'send':
+                handleSendPress();
+                return;
+            case 'none':
+                return;
         }
-        if (!liveHasContent && shouldShowVoiceButton) {
-            handleMicrophonePress();
-            return;
-        }
-        handleSendPress();
     }, [
+        canPressSendButton,
         handleAbortPress,
+        handleChannelsLongPress,
         handleMicrophonePress,
         handleSendPress,
         hasImages,
-        shouldShowStopButton,
-        shouldShowVoiceButton,
+        primaryAction,
     ]);
+    const handleMobilePrimaryPress = React.useCallback(() => dispatchPrimaryGesture('press'), [dispatchPrimaryGesture]);
+    const handleMobilePrimaryLongPress = React.useCallback(() => dispatchPrimaryGesture('longPress'), [dispatchPrimaryGesture]);
+
+    // The stream-talk button (DROVE-98): the speaker DROVE-83 took off the
+    // composer, back as a one-tap shortcut to the same local key the channel
+    // sheet row and Settings > Voice flip. A tick and a one-line toast, so the
+    // change is felt as well as seen.
+    const streamTalk = streamTalkButton(props.onReadAloudToggle ? props.readAloudEnabled : undefined);
+    const [composerToast, setComposerToast] = React.useState<string | null>(null);
+    const composerToastTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+    const showComposerToast = React.useCallback((text: string) => {
+        if (composerToastTimer.current) clearTimeout(composerToastTimer.current);
+        setComposerToast(text);
+        composerToastTimer.current = setTimeout(() => {
+            composerToastTimer.current = null;
+            setComposerToast(null);
+        }, 1400);
+    }, []);
+    React.useEffect(() => () => {
+        if (composerToastTimer.current) clearTimeout(composerToastTimer.current);
+    }, []);
+    const handleStreamTalkPress = React.useCallback(() => {
+        if (!props.onReadAloudToggle) return;
+        const flipped = flipStreamTalk(!!props.readAloudEnabled);
+        hapticsLight();
+        props.onReadAloudToggle();
+        showComposerToast(t(flipped.toastKey));
+    }, [props.onReadAloudToggle, props.readAloudEnabled, showComposerToast]);
 
     const permissionSettingsGroups = React.useMemo<NativeSettingsMenuGroup[]>(() => {
         if (!props.onPermissionModeChange || availableModes.length === 0) {
@@ -1586,6 +1633,8 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
 
                 {desktopSettingsOverlay}
 
+                <ComposerToast text={composerToast} />
+
                 {/* The session sheet and the channel sheet (DROVE-83), and on
                     Android the permission, model and effort pickers a session
                     row opens. On iOS those three are native menus anchored to
@@ -1963,7 +2012,8 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     {compactMobileComposer ? (
                     /* Two rows under the input (DROVE-83): the session pill
                         alone on the first, then add on the left and the voice
-                        cluster (talk, then send/voice/stop) on the right. */
+                        cluster (stream-talk, talk, then send/boss/stop) on the
+                        right (DROVE-98 put the speaker back). */
                     <>
                         {!props.zenMode && (
                             <ComposerSessionPill
@@ -1996,6 +2046,25 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         )}
 
                         <View style={{ flex: 1 }} />
+
+                        {streamTalk.shown && (
+                            <BubblePressable
+                                onPress={handleStreamTalkPress}
+                                hitSlop={6}
+                                style={styles.mobileIconButton}
+                                accessibilityRole="button"
+                                accessibilityState={{ selected: streamTalk.on }}
+                                accessibilityLabel={t(streamTalk.labelKey)}
+                            >
+                                <Ionicons
+                                    name={streamTalk.icon}
+                                    size={16}
+                                    color={streamTalk.on
+                                        ? theme.colors.radio.active
+                                        : theme.colors.text}
+                                />
+                            </BubblePressable>
+                        )}
 
                         {props.onTalkPressIn && (
                             <BubblePressable
@@ -2061,7 +2130,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                     hitSlop={6}
                                     onPress={handleMobilePrimaryPress}
                                     // Long-press: the channel sheet (DROVE-83).
-                                    onLongPress={handleChannelsLongPress}
+                                    onLongPress={handleMobilePrimaryLongPress}
                                     disabled={!canPressSendButton}
                                     accessibilityRole="button"
                                     accessibilityLabel={shouldShowStopButton ? 'Stop'

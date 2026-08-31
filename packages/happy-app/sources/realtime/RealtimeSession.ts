@@ -23,14 +23,32 @@ let currentVoiceConversationId: string | null = null;
 let currentVoiceSessionStartedAt: number | null = null;
 
 /**
+ * Boss mode's trace (DROVE-98). A tap that ends before the call is up used
+ * to leave nothing behind: the early returns below logged at `console.log`,
+ * which consoleLogging.ts drops entirely on a production build, and two of
+ * them showed no alert either. Only warn and error always reach the in-app
+ * buffer and the log server, so the start and every exit go out as
+ * warnings. That is what makes "I tapped it and nothing happened"
+ * measurable from the Mac.
+ */
+function bossLog(message: string): void {
+    console.warn(`[boss] ${message}`);
+}
+
+/**
  * Start a voice session. Returns the ElevenLabs conversation ID if started, null otherwise.
  */
 export async function startRealtimeSession(sessionId: string, initialContext?: string): Promise<string | null> {
     currentVoiceConversationId = null;
     currentVoiceSessionStartedAt = null;
+    bossLog(`starting session ${sessionId}`);
 
     if (!voiceSession) {
-        console.warn('No voice session registered');
+        // RealtimeVoiceSession (inside RealtimeProvider in app/_layout) has
+        // not registered, so there is nothing to start. Say so on screen:
+        // this used to be the one exit with no alert at all.
+        bossLog('no voice session registered: RealtimeVoiceSession is not mounted');
+        Modal.alert(t('common.error'), t('errors.voiceServiceUnavailable'));
         return null;
     }
 
@@ -41,6 +59,7 @@ export async function startRealtimeSession(sessionId: string, initialContext?: s
     // Critical for iOS/Android - first session will fail without this
     const permissionResult = await requestMicrophonePermission();
     if (!permissionResult.granted) {
+        bossLog(`microphone permission denied (canAskAgain ${permissionResult.canAskAgain})`);
         storage.getState().setRealtimeStatus('disconnected');
         showMicrophonePermissionDeniedAlert(permissionResult.canAskAgain);
         return null;
@@ -50,7 +69,7 @@ export async function startRealtimeSession(sessionId: string, initialContext?: s
         // Bypass Happy server token — only when user has their own custom agent
         const { voiceBypassToken, voiceCustomAgentId } = storage.getState().settings;
         if (voiceBypassToken && voiceCustomAgentId) {
-            console.log('[Voice] Bypassing token, custom agent ID:', voiceCustomAgentId);
+            bossLog(`bypassing the voice server, custom agent ${voiceCustomAgentId}`);
             currentSessionId = sessionId;
             const conversationId = await voiceSession.startSession({
                 sessionId,
@@ -60,11 +79,13 @@ export async function startRealtimeSession(sessionId: string, initialContext?: s
             currentVoiceConversationId = conversationId;
             currentVoiceSessionStartedAt = Date.now();
             voiceSessionStarted = true;
+            bossLog(`session up ${sessionId}, conversation ${conversationId ?? 'unknown'}`);
             return conversationId;
         }
 
         const credentials = await TokenStorage.getCredentials();
         if (!credentials) {
+            bossLog('no credentials on this phone');
             storage.getState().setRealtimeStatus('disconnected');
             Modal.alert(t('common.error'), t('errors.authenticationFailed'));
             return null;
@@ -74,6 +95,7 @@ export async function startRealtimeSession(sessionId: string, initialContext?: s
         console.log('[Voice] fetchVoiceCredentials response:', response);
 
         if (!response.allowed) {
+            bossLog(`voice server declined: ${response.reason}`);
             storage.getState().setRealtimeStatus('disconnected');
 
             if (response.reason === 'voice_conversation_limit_reached') {
@@ -91,6 +113,11 @@ export async function startRealtimeSession(sessionId: string, initialContext?: s
             if (result.purchased) {
                 return startRealtimeSession(sessionId, initialContext);
             }
+            // Without RevenueCat in the build the paywall is not presented
+            // and this returned in silence; a decline the user never saw
+            // reads as a dead button.
+            bossLog(`paywall did not end in a purchase (${result.error ?? 'dismissed'})`);
+            Modal.alert(t('errors.voiceLimitReachedTitle'), t('errors.voiceNotAllowed'));
             return null;
         }
 
@@ -143,8 +170,10 @@ export async function startRealtimeSession(sessionId: string, initialContext?: s
         currentVoiceConversationId = response.conversationId ?? startedConversationId;
         currentVoiceSessionStartedAt = Date.now();
         voiceSessionStarted = true;
+        bossLog(`session up ${sessionId}, conversation ${currentVoiceConversationId ?? 'unknown'}`);
         return currentVoiceConversationId;
     } catch (error) {
+        bossLog(`start failed: ${error instanceof Error ? error.message : String(error)}`);
         console.error('Failed to start realtime session:', error);
         storage.getState().setRealtimeStatus('disconnected');
         currentSessionId = null;
