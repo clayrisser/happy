@@ -619,6 +619,21 @@ export const zhHant: TranslationStructure = {
             running: '工具正在執行...',
             rawJsonDevMode: '原始 JSON（開發模式）',
         },
+        sendMessage: {
+            to: ({ to }: { to: string }) => `傳給 ${to} 的訊息`,
+            untitled: '訊息',
+            message: '訊息',
+            summary: '摘要',
+        },
+        agent: {
+            running: '執行中',
+            finished: '已完成',
+            failed: '失敗',
+            prompt: '提示詞',
+            result: '結果',
+            toolUses: ({ count }: { count: number }) => `${count} 次工具呼叫`,
+            details: '詳情',
+        },
         taskView: {
             initializing: '正在初始化 agent...',
             moreTools: ({ count }: { count: number }) => `+${count} 個更多${plural({ count, singular: '工具', plural: '工具' })}`,

@@ -620,6 +620,21 @@ export const zhHans: TranslationStructure = {
             running: '工具正在运行...',
             rawJsonDevMode: '原始 JSON（开发模式）',
         },
+        sendMessage: {
+            to: ({ to }: { to: string }) => `发给 ${to} 的消息`,
+            untitled: '消息',
+            message: '消息',
+            summary: '摘要',
+        },
+        agent: {
+            running: '运行中',
+            finished: '已完成',
+            failed: '失败',
+            prompt: '提示词',
+            result: '结果',
+            toolUses: ({ count }: { count: number }) => `${count} 次工具调用`,
+            details: '详情',
+        },
         taskView: {
             initializing: '正在初始化 agent...',
             moreTools: ({ count }: { count: number }) => `+${count} 个更多${plural({ count, singular: '工具', plural: '工具' })}`,

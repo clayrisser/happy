@@ -635,6 +635,21 @@ export const ru: TranslationStructure = {
             running: 'Выполняется...',
             rawJsonDevMode: 'Исходный JSON (режим разработчика)',
         },
+        sendMessage: {
+            to: ({ to }: { to: string }) => `Сообщение для ${to}`,
+            untitled: 'Сообщение',
+            message: 'Сообщение',
+            summary: 'Сводка',
+        },
+        agent: {
+            running: 'Выполняется',
+            finished: 'Завершено',
+            failed: 'Ошибка',
+            prompt: 'Запрос',
+            result: 'Результат',
+            toolUses: ({ count }: { count: number }) => count === 1 ? '1 вызов инструмента' : `${count} вызовов инструментов`,
+            details: 'Подробности',
+        },
         taskView: {
             initializing: 'Инициализация агента...',
             moreTools: ({ count }: { count: number }) => `+${count} ещё ${plural({ count, one: 'инструмент', few: 'инструмента', many: 'инструментов' })}`,

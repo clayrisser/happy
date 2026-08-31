@@ -619,6 +619,21 @@ export const es: TranslationStructure = {
             running: 'La herramienta está ejecutándose...',
             rawJsonDevMode: 'JSON crudo (modo desarrollador)',
         },
+        sendMessage: {
+            to: ({ to }: { to: string }) => `Mensaje a ${to}`,
+            untitled: 'Mensaje',
+            message: 'Mensaje',
+            summary: 'Resumen',
+        },
+        agent: {
+            running: 'En ejecución',
+            finished: 'Terminado',
+            failed: 'Fallido',
+            prompt: 'Instrucción',
+            result: 'Resultado',
+            toolUses: ({ count }: { count: number }) => count === 1 ? '1 uso de herramienta' : `${count} usos de herramientas`,
+            details: 'Detalles',
+        },
         taskView: {
             initializing: 'Inicializando agente...',
             moreTools: ({ count }: { count: number }) => `+${count} más ${plural({ count, singular: 'herramienta', plural: 'herramientas' })}`,

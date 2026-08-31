@@ -3,6 +3,7 @@ import { ToolCall, Message } from '@/sync/typesMessage';
 import { resolvePath } from '@/utils/pathUtils';
 import { stringifyToolCommand } from '@/utils/toolCommand';
 import { getWorkflowScript, parseWorkflowMeta } from '@/utils/workflowMeta';
+import { sendMessageFirstLine, sendMessageTitle } from '@/utils/sendMessageCard';
 import * as z from 'zod';
 import { Ionicons, Octicons } from '@expo/vector-icons';
 import React from 'react';
@@ -19,6 +20,7 @@ const ICON_EXIT = (size: number = 24, color: string = '#000') => <Ionicons name=
 const ICON_TODO = (size: number = 24, color: string = '#000') => <Ionicons name="bulb-outline" size={size} color={color} />;
 const ICON_REASONING = (size: number = 24, color: string = '#000') => <Octicons name="light-bulb" size={size} color={color} />;
 const ICON_QUESTION = (size: number = 24, color: string = '#000') => <Ionicons name="help-circle-outline" size={size} color={color} />;
+const ICON_MAIL = (size: number = 24, color: string = '#000') => <Ionicons name="mail-outline" size={size} color={color} />;
 
 /** The Workflow tool carries its script under one of a few field names depending on flavor. */
 function getPatchFiles(input: any): string[] {
@@ -40,17 +42,12 @@ const taskLikeTool = {
     },
     icon: ICON_TASK,
     isMutable: true,
-    minimal: (opts: { metadata: Metadata | null, tool: ToolCall, messages?: Message[] }) => {
-        const messages = opts.messages || [];
-        for (let m of messages) {
-            if (m.kind === 'tool-call'
-                && (m.tool.state === 'running' || m.tool.state === 'completed' || m.tool.state === 'error')) {
-                return false;
-            }
-        }
-        return true;
-    },
+    // Always a card, never a one-line activity row: the subagent type, the
+    // running/finished state and the prompt live in the card body, and a
+    // fan-out of agents is exactly what Clay wants to see one by one (DROVE-51).
+    minimal: false,
     input: z.object({
+        description: z.string().optional().describe('A short name for the task'),
         prompt: z.string().describe('The task for the agent to perform'),
         subagent_type: z.string().optional().describe('The type of specialized agent to use')
     }).partial().passthrough()
@@ -982,6 +979,26 @@ export const knownTools = {
             const firstQuestion = Array.isArray(input?.questions) ? input.questions[0] : input;
             return typeof firstQuestion?.question === 'string' ? firstQuestion.question : null;
         }
+    },
+    // Claude Code's SendMessage: a message to a subagent or another session.
+    // The row reads `Message to <to>: <first line>`; the body unfolds in the
+    // card (DROVE-51).
+    'SendMessage': {
+        title: (opts: { metadata: Metadata | null, tool: ToolCall }) => sendMessageTitle(opts.tool.input, {
+            to: (to: string) => t('tools.sendMessage.to', { to }),
+            untitled: t('tools.sendMessage.untitled'),
+        }),
+        icon: ICON_MAIL,
+        isMutable: true,
+        minimal: false,
+        input: z.object({
+            to: z.string().optional().describe('Who the message goes to'),
+            recipient: z.string().optional().describe('Older name for to'),
+            summary: z.string().optional().describe('A one-line gloss of the message'),
+            message: z.string().optional().describe('The message body'),
+            content: z.string().optional().describe('Older name for message'),
+        }).partial().passthrough(),
+        extractSubtitle: (opts: { metadata: Metadata | null, tool: ToolCall }) => sendMessageFirstLine(opts.tool.input) ?? null,
     },
     // A workflow script is many screens of code; the card shows its meta name and keeps the
     // script itself collapsed in the default input section.
