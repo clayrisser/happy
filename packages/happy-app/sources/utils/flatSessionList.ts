@@ -9,7 +9,15 @@ import { getRepoPath, getWorktreeName, isWorktreePath } from '@/utils/worktreePa
 export interface FlatSessionRowData {
     session: SessionRowData;
     projectName: string;
-    /** Null in a project's primary checkout, which needs no second name. */
+    /**
+     * Null in a project's primary checkout, which needs no second name.
+     *
+     * The header pill dropped its worktree half in DROVE-213; this one stays,
+     * on purpose. Different string, different job: a full-width row exists to
+     * tell sessions apart, and two sessions in one repo are told apart by
+     * their worktree, which the row is wide enough to print whole. The pill
+     * names where you already are, in a space that holds one fact.
+     */
     workspaceName: string | null;
 }
 

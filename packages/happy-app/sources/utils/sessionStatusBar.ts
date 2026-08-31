@@ -1,18 +1,5 @@
 export type ContextUsageLevel = 'normal' | 'warning' | 'critical';
 
-export function resolveStatusBarGitBranch(
-    gitStatusBranch: string | null | undefined,
-    metadataGitBranch: string | null | undefined,
-): string | null {
-    const gitBranch = gitStatusBranch?.trim();
-    if (gitBranch) {
-        return gitBranch;
-    }
-
-    const metadataBranch = metadataGitBranch?.trim();
-    return metadataBranch || null;
-}
-
 export function clampContextSize(value: number | null | undefined, maxValue: number): number {
     if (!Number.isFinite(value) || !Number.isFinite(maxValue) || maxValue <= 0) {
         return 0;

@@ -40,7 +40,7 @@ import { voiceHooks } from '@/realtime/hooks/voiceHooks';
 import { getCurrentVoiceConversationId, getCurrentVoiceSessionDurationSeconds, startRealtimeSession, stopRealtimeSession } from '@/realtime/RealtimeSession';
 import { gitStatusSync } from '@/sync/gitStatusSync';
 import { sessionAbort, sessionCancelCommunication, sessionGoalAction, sessionSetAgentModes, spawnSideChat, sessionKill, sessionArchive } from '@/sync/ops';
-import { storage, useIsDataReady, useLocalSetting, useRealtimeStatus, useSessionGitStatus, useSessionMessages, useSessionPendingCommunications, useSessionUsage, useSetting, useSideChatSessions } from '@/sync/storage';
+import { storage, useIsDataReady, useLocalSetting, useRealtimeStatus, useSessionMessages, useSessionPendingCommunications, useSessionUsage, useSetting, useSideChatSessions } from '@/sync/storage';
 import { useSession } from '@/sync/storage';
 import { getSessionForkSource } from '@/utils/sessionFork';
 import { useHappyAction } from '@/hooks/useHappyAction';
@@ -53,7 +53,7 @@ import { tracking } from '@/track';
 import { getVoiceMessageCount, getVoiceOnboardingPromptLoadCount } from '@/sync/persistence';
 import { isRunningOnMac } from '@/utils/platform';
 import { useDeviceType, useHeaderHeight, useIsLandscape, useIsTablet } from '@/utils/responsive';
-import { resolveStatusBarGitBranch } from '@/utils/sessionStatusBar';
+import { sessionHeaderSubtitle } from '@/utils/sessionHeaderSubtitle';
 import { sessionHeaderSheet, type SessionHeaderControl, type SessionHeaderSheet } from '@/utils/sessionHeaderRouting';
 import { WorktreeSheet } from '@/components/WorktreeSheet';
 import { SessionSettingsSheet } from '@/components/SessionSettingsSheet';
@@ -355,33 +355,26 @@ export const SessionView = React.memo((props: { id: string }) => {
     }, []);
 
     // Compute header props based on session state
-    const headerGitStatus = useSessionGitStatus(sessionId);
     const headerProps = useMemo(() => {
         if (!isDataReady) {
-            return { title: '', folderName: undefined, branch: null, isConnected: false };
+            return { title: '', folderName: undefined, isConnected: false };
         }
         if (!session) {
-            return { title: t('errors.sessionDeleted'), folderName: undefined, branch: null, isConnected: false };
+            return { title: t('errors.sessionDeleted'), folderName: undefined, isConnected: false };
         }
         const isConnected = session.presence === 'online';
-        const pathSegments = session.metadata?.path?.split(/[/\\]/).filter(Boolean);
-        const folderName = pathSegments?.[pathSegments.length - 1];
+        // The repo, and only the repo (DROVE-213). The branch used to sit
+        // beside it (DROVE-90) and the pill was never wide enough for both, so
+        // it read `...D-98-`. The worktrees are one tap away on the pill
+        // itself, with the branch spelled out and the current one checked.
+        const folderName = sessionHeaderSubtitle(session.metadata?.path);
         const sessionName = getSessionName(session);
-        // The branch lives under the title now, not in the row under the
-        // composer (DROVE-90): the live git status first, the metadata's
-        // branch until that arrives.
-        const metadataGitBranch = (session.metadata as { gitBranch?: unknown } | null)?.gitBranch;
-        const branch = resolveStatusBarGitBranch(
-            headerGitStatus?.branch,
-            typeof metadataGitBranch === 'string' ? metadataGitBranch : null,
-        );
         return {
             title: sessionName,
             folderName,
-            branch,
             isConnected,
         };
-    }, [session, isDataReady, headerGitStatus?.branch]);
+    }, [session, isDataReady]);
     /**
      * The header's two openers (DROVE-205). The pill is the session over its
      * worktree, so it opens the worktrees; the avatar is the profile control,
@@ -495,7 +488,6 @@ export const SessionView = React.memo((props: { id: string }) => {
                     <ChatHeaderView
                         title={headerProps.title}
                         folderName={headerProps.folderName}
-                        branch={headerProps.branch}
                         isConnected={headerProps.isConnected}
                         backdropVisible={headerBackdropVisible}
                         extraPathSegment={fileViewPath ?? undefined}
