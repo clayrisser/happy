@@ -511,6 +511,37 @@ Conversation history is preserved on the server, but in-flight tool calls are in
       process.exit(1)
     }
     return;
+  } else if (subcommand === 'cursor') {
+    // A Cursor agent session (DROVE-57). The daemon spawns this in a tmux
+    // window through the drover wrapper, exactly as it does `claude`.
+    try {
+      const { runCursor } = await import('@/cursor/runCursor');
+
+      let startedBy: 'daemon' | 'terminal' | undefined = undefined;
+      let model: string | null = null;
+      let resumeChatId: string | null = null;
+      for (let i = 1; i < args.length; i++) {
+        if (args[i] === '--started-by') {
+          startedBy = args[++i] as 'daemon' | 'terminal';
+        } else if (args[i] === '--model') {
+          model = args[++i] ?? null;
+        } else if (args[i] === '--resume') {
+          resumeChatId = args[++i] ?? null;
+        }
+      }
+
+      const { credentials } = await authAndSetupMachineIfNeeded();
+      await ensureDaemonRunning()
+
+      await runCursor({ credentials, startedBy, model, resumeChatId });
+    } catch (error) {
+      console.error(chalk.red('Error:'), error instanceof Error ? error.message : 'Unknown error')
+      if (process.env.DEBUG) {
+        console.error(error)
+      }
+      process.exit(1)
+    }
+    return;
   } else if (subcommand === 'agy') {
     try {
       const { runAgy } = await import('@/agy/runAgy');

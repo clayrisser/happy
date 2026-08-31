@@ -437,8 +437,13 @@ describe('harnesses with no mode controls', () => {
         expect(getAvailableModels('opencode', null, translate)).toEqual([]);
     });
 
-    it('offers none for cursor either, which has no inbox at all', () => {
-        expect(getAvailablePermissionModes('cursor', null, translate)).toEqual([]);
+    // DROVE-57 moved Cursor off the bus and onto a happy-cli runner, so it is
+    // no longer a pane harness. It has ONE permission mode, which hides the
+    // picker the same way an empty list does, and its models come from the
+    // session rather than from any table here.
+    it('offers cursor one permission mode and no hardcoded models', () => {
+        const modes = getAvailablePermissionModes('cursor', null, translate);
+        expect(modes.map((m) => m.key)).toEqual(['bypassPermissions']);
         expect(getAvailableModels('cursor', null, translate)).toEqual([]);
     });
 

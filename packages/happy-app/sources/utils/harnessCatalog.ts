@@ -8,6 +8,7 @@ import type { NewSessionAgentType } from '@/sync/persistence';
 export const HARNESS_NAMES: Record<NewSessionAgentType, string> = {
     claude: 'Claude Code',
     codex: 'Codex',
+    cursor: 'Cursor',
     rig: 'Cattle Drover',
     agy: 'Antigravity',
     gemini: 'Gemini',
@@ -32,6 +33,7 @@ export const RETIRED_HARNESSES: ReadonlySet<NewSessionAgentType> = new Set([
 export const HARNESS_ORDER: readonly NewSessionAgentType[] = [
     'claude',
     'codex',
+    'cursor',
     'agy',
     'rig',
 ];
@@ -65,6 +67,10 @@ export function isHarnessAvailable({
     // Antigravity is niche enough that an old or incomplete capability report
     // must not advertise it speculatively. Its daemon has to say it is installed.
     if (key === 'agy') return availability?.agy === true;
+    // Cursor for the same reason (DROVE-57): a daemon predating its detection
+    // reports nothing for it, and offering a harness on a machine that has no
+    // cursor-agent produces a spawn that fails after the tmux window opens.
+    if (key === 'cursor') return availability?.cursor === true;
     return !availability || availability[key] === true;
 }
 
@@ -93,7 +99,7 @@ export function listAvailableHarnesses({
         (key === selected && key !== 'agy')
         || isHarnessAvailable({ availability, happyAgentAvailable, key })
     ));
-    const fallback = HARNESS_ORDER.filter((key) => key !== 'agy');
+    const fallback = HARNESS_ORDER.filter((key) => key !== 'agy' && key !== 'cursor');
     return (keys.length > 0 ? keys : fallback).map((key) => ({
         key,
         name: HARNESS_NAMES[key],

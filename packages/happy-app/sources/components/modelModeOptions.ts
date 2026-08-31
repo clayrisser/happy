@@ -275,11 +275,12 @@ export function filterPermissionModesForCli<T extends ModeOption>(
 }
 
 /**
+
  * Harnesses drover drives as a PANE, whose own TUI owns the conversation
- * (DROVE-56/DROVE-57).
+ * (DROVE-56).
  *
  * They reach the phone through the drover bus rather than through a happy-cli
- * runner, and neither of them has a per-session mode or model switch to reach:
+ * runner, and they have no per-session mode or model switch to reach:
  *
  *   opencode  permissions are `permission: {bash: "ask"}` in opencode.json,
  *             read at startup. There is no route that changes them on a
@@ -287,8 +288,10 @@ export function filterPermissionModesForCli<T extends ModeOption>(
  *             does have a route (`POST /api/session/{id}/model`, measured on
  *             1.18.20) but nothing carries a pick to it yet, so the picker
  *             stays off until something does.
- *   cursor    cursor-agent exposes no inbox at all, so nothing typed in the
- *             app reaches a running session, a mode pick least of all.
+ *
+ * Cursor was in this set and is NOT any more (DROVE-57). It is a happy-cli
+ * runner now, not a bus-only pane, and it does have a model switch — see
+ * getHardcodedModelModes below.
  *
  * The lists are EMPTY rather than Claude's, which is what they used to fall
  * through to. That fallback is why this function is not just a default: the
@@ -302,15 +305,38 @@ export function filterPermissionModesForCli<T extends ModeOption>(
  * capsule when neither segment draws, and leaves the model off the status row
  * when there is no model to name.
  */
-const PANE_HARNESSES_WITHOUT_MODE_CONTROLS = new Set(['opencode', 'cursor']);
+const PANE_HARNESSES_WITHOUT_MODE_CONTROLS = new Set(['opencode']);
 
 export function harnessHasModeControls(flavor: AgentFlavor): boolean {
     return !PANE_HARNESSES_WITHOUT_MODE_CONTROLS.has(flavor ?? '');
 }
 
+/**
+ * Cursor has no permission mode to pick (DROVE-57).
+ *
+ * A drover Cursor turn is one `cursor-agent --print` process, and `--print`
+ * raises no approval prompt at all: there is nothing to answer, so the turn
+ * runs with `--force` or it stalls on the first shell command. One option, so
+ * the picker does not appear — Claude's four modes rendered on a session that
+ * honours none of them is the present-and-inert failure this ticket was
+ * reopened for.
+ */
+export function getCursorPermissionModes(): PermissionMode[] {
+    return [
+        {
+            key: 'bypassPermissions',
+            name: 'full access',
+            description: 'Cursor runs each turn with --force; it has no approval prompt to raise',
+        },
+    ];
+}
+
 export function getHardcodedPermissionModes(flavor: AgentFlavor, translate: Translate): PermissionMode[] {
     if (!harnessHasModeControls(flavor)) {
         return [];
+    }
+    if (flavor === 'cursor') {
+        return getCursorPermissionModes();
     }
     if (flavor === 'codex') {
         return getCodexPermissionModes(translate);
@@ -351,9 +377,16 @@ export function getAgyModelModes(): ModelMode[] {
 }
 
 export function getHardcodedModelModes(flavor: AgentFlavor, _translate: Translate): ModelMode[] {
-    // Same reason as the permission modes above: an OpenCode or Cursor pane
-    // read Claude's model list and every pick was silently dropped.
-    if (!harnessHasModeControls(flavor)) {
+    // Same reason as the permission modes above: an OpenCode pane read Claude's
+    // model list and every pick was silently dropped.
+    //
+    // Cursor lands here too, but for the opposite reason: its list is published
+    // by the SESSION (metadata.models, filled from `cursor-agent
+    // --list-models`), which the picker already prefers over this table. Cursor
+    // ships models faster than this file can be edited, and a stale key is a
+    // turn that fails at exec. No published list means no picker, which is the
+    // honest reading of "this login's models are unknown".
+    if (!harnessHasModeControls(flavor) || flavor === 'cursor') {
         return [];
     }
     if (flavor === 'codex') {
