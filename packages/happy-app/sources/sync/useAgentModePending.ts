@@ -9,6 +9,11 @@
  * arms one timer for the earliest deadline that is actually outstanding and
  * nothing at all when none is.
  *
+ * DROVE-232: a wait can also be started by the CLI rather than by a tap here,
+ * when a flip or a CLI relaunch brings up a fresh Claude Code and the session's
+ * picks have to be put back on it. That one rides in on metadata, so it is
+ * reactive for free.
+ *
  * The rule itself is in agentModeRequests.ts and is pure. This is only the
  * wiring.
  */
@@ -20,6 +25,7 @@ import {
     agentModePendingState,
     getAgentModeRequest,
     paneObservedMode,
+    reapplyRequest,
     subscribeAgentModeRequests,
     type AgentModeControl,
 } from './agentModeRequests';
@@ -50,11 +56,15 @@ export function useAgentModePending(session: Session): AgentModePendingFlags {
     let earliestDeadline = Number.POSITIVE_INFINITY;
     const flags: AgentModePendingFlags = { ...NONE_PENDING };
     for (const field of AGENT_MODE_CONTROLS) {
-        const request = getAgentModeRequest(sessionId, field);
+        const observed = paneObservedMode(metadata, field);
+        // A tap on THIS device outranks the CLI's re-apply: if both are live,
+        // the newer ask is the one Clay is watching for (DROVE-232).
+        const request = getAgentModeRequest(sessionId, field)
+            ?? reapplyRequest(metadata, stored[field], observed);
         const pending = agentModePendingState(field, {
             request,
             stored: stored[field],
-            observed: paneObservedMode(metadata, field),
+            observed,
             now,
         }) === 'pending';
         flags[field] = pending;
