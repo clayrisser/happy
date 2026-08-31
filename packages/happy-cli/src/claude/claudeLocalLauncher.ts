@@ -3,6 +3,7 @@ import { claudeLocal, ExitCodeError } from "./claudeLocal";
 import { applyCustomTitle, resumesExistingTranscript, Session } from "./session";
 import { Future } from "@/utils/future";
 import { createSessionScanner } from "./utils/sessionScanner";
+import { compactionLatch } from "./utils/compaction";
 import { launchFailureMessage } from "./utils/launchFailureMessage";
 import { ambientDataDir } from "@/drover/flip/accounts";
 import { parseFlipCommand } from "@/drover/flip/controller";
@@ -226,6 +227,11 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
         // real Claude writing the same files, and the app is still the only
         // place Clay can watch it from.
         isThinking: () => thinking,
+        // DROVE-257: and whether a COMPACTION is running, which no amount of
+        // reading the disk can tell you while it happens. The latch is opened
+        // by the `PreCompact` hook (runClaude wires the hook server to it) and
+        // closed by the `compact_boundary` record this same reader tails.
+        compaction: compactionLatch,
         onLiveStatus: (liveStatus) => session.client.updateMetadata((metadata) => ({
             ...metadata,
             liveStatus,

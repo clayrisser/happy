@@ -60,6 +60,14 @@ export interface SessionDotFacts {
     toolRunning: boolean;
     /** The context has reached the compaction point. */
     atCompaction: boolean;
+    /**
+     * The CLI says a compaction is running right now (DROVE-257).
+     *
+     * The observed fact, not the guess: `metadata.liveStatus.compacting`, off
+     * the `PreCompact` hook. Absent on a CLI too old to publish it, and the
+     * `atCompaction` inference above is what stands in until it arrives.
+     */
+    compacting: boolean;
     /** Blocked on Clay: a permission prompt, or a question. */
     waiting: boolean;
 }
@@ -71,6 +79,7 @@ export const idleSessionDotFacts: SessionDotFacts = {
     mainWorking: false,
     toolRunning: false,
     atCompaction: false,
+    compacting: false,
     waiting: false,
 };
 
@@ -98,7 +107,12 @@ export function sessionDotFacts(session: Session, now: number): SessionDotFacts 
         isOnline: online,
     });
     const live = session.metadata?.liveStatus ?? null;
-    const main = live && isLiveStatusFresh(live, now) ? liveStatusMain(live, now, null) : null;
+    const fresh = !!live && isLiveStatusFresh(live, now);
+    const main = fresh ? liveStatusMain(live!, now, null) : null;
+    // DROVE-257: the compaction, when the CLI is new enough to say so. Gated
+    // on the same freshness check as `main` — a snapshot too old to draw a
+    // clock from is too old to claim a two-minute pass is still running.
+    const compacting = fresh && !!live!.compacting;
     // The transcript's own context against the model's window, from the same
     // reading the strip's gauge draws (contextCompaction.ts). `latestUsage` is
     // on the Session itself, so every row has it; the open session's strip
@@ -114,9 +128,12 @@ export function sessionDotFacts(session: Session, now: number): SessionDotFacts 
             : typeof session.presence === 'number'
                 ? session.presence
                 : session.activeAt ?? null,
-        mainWorking: main !== null || state === 'thinking',
+        // A compaction IS the main thread working, and it is the one state
+        // where nothing else says so (DROVE-257).
+        mainWorking: main !== null || state === 'thinking' || compacting,
         toolRunning: !!main && !main.working,
         atCompaction: context?.atCompaction ?? false,
+        compacting,
         waiting: state === 'permission_required' || state === 'input_required',
     };
 }

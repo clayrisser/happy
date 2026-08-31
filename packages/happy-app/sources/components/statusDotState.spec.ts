@@ -89,6 +89,45 @@ describe('the three decisions, and what they are anchored to', () => {
         expect(statusDotState({ ...base, mainWorking: false, atCompaction: true })).toBe('connected');
     });
 
+    it('takes the CLI\'s word for a compaction over every inference (DROVE-257)', () => {
+        // The state Clay photographed. His terminal read `Compacting
+        // conversation… (1m 55s, 2.3k tokens)` over `100% context used`; the
+        // strip drew a flat GREEN dot beside three workers. `atCompaction` was
+        // true and `mainWorking` was FALSE — it is false for the whole pass,
+        // because Claude Code writes nothing to the transcript while it
+        // compacts and the CLI's fd 3 fetch counter drops at the response
+        // headers while the summary streams on for another two minutes.
+        //
+        // So the observed fact stands on its own. Every term that could
+        // corroborate it is precisely the term a compaction does not have.
+        expect(statusDotState({ ...base, compacting: true })).toBe('compacting');
+        expect(statusDotState({ ...base, compacting: true, mainWorking: false, atCompaction: false }))
+            .toBe('compacting');
+        // Including with a tool somehow still open, which the inference reads
+        // as plain working.
+        expect(statusDotState({ ...base, compacting: true, mainWorking: true, toolRunning: true }))
+            .toBe('compacting');
+        // And it is purple, and it blinks. The two halves of what Clay asked
+        // for and never once saw.
+        expect(statusDotColors.compacting).toBe('#AF52DE');
+        expect(statusDotBlinks('compacting')).toBe(true);
+    });
+
+    it('goes back to what it was when the compaction ends', () => {
+        // The other half of the acceptance criterion: the dot has to COME
+        // BACK. `compacting` is a fact about right now, so dropping it is the
+        // whole of ending the state.
+        expect(statusDotState({ ...base, compacting: false })).toBe('connected');
+        expect(statusDotState({ ...base, compacting: false, mainWorking: true })).toBe('working');
+    });
+
+    it('still says disconnected over a compaction nobody can see the end of', () => {
+        // A latch set just before the CLI died would otherwise leave a purple
+        // blinking dot on a session the phone cannot reach.
+        expect(statusDotState({ ...base, compacting: true, online: false, lastSeenAt: null }))
+            .toBe('disconnected');
+    });
+
     it('blinks on one period, so the hue is the only difference between the two', () => {
         expect(STATUS_DOT_BLINK_MS).toBe(2000);
         expect(STATUS_DOT_BLINK_HALF_MS).toBe(STATUS_DOT_BLINK_MS / 2);

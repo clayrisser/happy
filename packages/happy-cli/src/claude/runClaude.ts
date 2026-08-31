@@ -17,6 +17,7 @@ import { notifyDaemonSessionStarted } from '@/daemon/controlClient';
 import { initialMachineMetadata } from '@/daemon/run';
 import { startHappyServer } from '@/claude/utils/startHappyServer';
 import { startHookServer } from '@/claude/utils/startHookServer';
+import { compactionLatch } from '@/claude/utils/compaction';
 import { generateHookSettingsFile, cleanupHookSettingsFile } from '@/claude/utils/generateHookSettings';
 import { registerKillSessionHandler } from './registerKillSessionHandler';
 import { projectPath } from '../projectPath';
@@ -699,8 +700,28 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
 
     // Start Hook server for receiving Claude session notifications
     const hookServer = await startHookServer({
+        // DROVE-257: the compaction has started. Nothing else in this process
+        // can tell — the transcript stops moving for the length of the pass —
+        // so this is the whole of how the purple dot ever lights.
+        onPreCompact: (data) => {
+            const trigger = data.trigger === 'manual' || data.trigger === 'auto' ? data.trigger : undefined;
+            logger.debug(`[START] PreCompact hook received (trigger: ${trigger ?? 'unknown'})`);
+            compactionLatch.begin(trigger);
+        },
         onSessionHook: (sessionId, data) => {
             logger.debug(`[START] Session hook received: ${sessionId}`, data);
+
+            // A SESSION THAT STARTS ON A COMPACTED TRANSCRIPT IS PAST THE PASS
+            // (DROVE-257). The live status reader closes the latch on the
+            // `compact_boundary` record, which is the reliable end; this is the
+            // second one, and it earns its place because a compaction mints a
+            // fresh session id and the reader is re-pointed at the NEW
+            // transcript — which has no boundary line in it — the moment this
+            // hook fires.
+            if (data.source === 'compact') {
+                logger.debug('[START] Session restarted on a compacted transcript — compaction is over');
+                compactionLatch.end();
+            }
 
             // Tell the remote scanner about this sessionId so it knows
             // which JSONL to watch (and so it can fire onNewSession for

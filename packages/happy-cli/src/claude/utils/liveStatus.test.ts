@@ -4,6 +4,7 @@ import { join } from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
+import { createCompactionLatch } from './compaction'
 import {
     createLiveStatusReader,
     describeToolArg,
@@ -49,6 +50,28 @@ const toolResultRecord = (at: number, id: string) => JSON.stringify({
     timestamp: iso(at),
     uuid: `r-${at}`,
     message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: 'ok' }] },
+})
+
+/**
+ * The record Claude Code writes when a compaction lands (DROVE-257).
+ *
+ * Copied field for field off Clay's own 2026-08-29 transcript, including the
+ * `compactMetadata` block: `trigger: "auto"`, `preTokens: 1000254`,
+ * `postTokens: 28835`, `durationMs: 126552`.
+ */
+const compactBoundaryRecord = (at: number) => JSON.stringify({
+    type: 'system',
+    subtype: 'compact_boundary',
+    isSidechain: false,
+    timestamp: iso(at),
+    content: 'Conversation compacted',
+    level: 'info',
+    compactMetadata: {
+        trigger: 'auto',
+        preTokens: 1_000_254,
+        postTokens: 28_835,
+        durationMs: 126_552,
+    },
 })
 
 const assistantTextRecord = (at: number, text: string) => JSON.stringify({
@@ -323,6 +346,78 @@ describe('createLiveStatusReader', () => {
         expect(idle).toBeNull()
         const busy = createLiveStatusReader({ projectDir, sessionId, isThinking: () => true }).read(now)
         expect(busy!.turnStartedAt).toBe(now - 900_000)
+    })
+
+    /**
+     * DROVE-257. The state Clay photographed: a terminal reading `Compacting
+     * conversation… (1m 55s, 2.3k tokens)` over `100% context used`, and a
+     * phone drawing a flat green dot beside three workers.
+     *
+     * The transcript below is the shape of his real one — the last record is
+     * two minutes old and there is nothing after it, because Claude Code
+     * writes nothing at all while it compacts.
+     */
+    describe('a compaction in flight', () => {
+        it('is idle without the latch, which is the bug', () => {
+            const now = Date.now()
+            writeFileSync(transcript, [
+                promptRecord(now - 900_000, 'go'),
+                toolUseRecord(now - 132_000, 'toolu_a', 'Bash', { command: 'ls' }),
+                toolResultRecord(now - 131_000, 'toolu_a'),
+                '',
+            ].join('\n'))
+            // No tool open, nothing written for 131s, no fetch in flight.
+            expect(createLiveStatusReader({ projectDir, sessionId }).read(now)).toBeNull()
+        })
+
+        it('is working, and says so, once PreCompact has opened the latch', () => {
+            const now = Date.now()
+            writeFileSync(transcript, [
+                promptRecord(now - 900_000, 'go'),
+                toolUseRecord(now - 132_000, 'toolu_a', 'Bash', { command: 'ls' }),
+                toolResultRecord(now - 131_000, 'toolu_a'),
+                '',
+            ].join('\n'))
+            const compaction = createCompactionLatch()
+            compaction.begin('auto', now - 115_000)
+            const status = createLiveStatusReader({ projectDir, sessionId, compaction }).read(now)
+            expect(status).not.toBeNull()
+            expect(status!.compacting).toEqual({ startedAt: now - 115_000, trigger: 'auto' })
+            // And the main block is present, which is what the phone's dot
+            // reads. Without it the app draws `connected`, in green.
+            expect(status!.main).toBeTruthy()
+        })
+
+        it('lets go the moment the transcript writes its own compact_boundary', () => {
+            const now = Date.now()
+            writeFileSync(transcript, [
+                promptRecord(now - 900_000, 'go'),
+                toolResultRecord(now - 131_000, 'toolu_a'),
+                '',
+            ].join('\n'))
+            const compaction = createCompactionLatch()
+            compaction.begin('auto', now - 115_000)
+            const reader = createLiveStatusReader({ projectDir, sessionId, compaction })
+            expect(reader.read(now)!.compacting).toBeTruthy()
+            appendFileSync(transcript, `${compactBoundaryRecord(now - 1_000)}\n`)
+            // The purple goes at once.
+            expect(reader.read(now)!.compacting).toBeUndefined()
+            expect(compaction.read(now)).toBeNull()
+            // And the session goes back to idle once the boundary record is
+            // outside the ordinary idle grace, like any other write. This is
+            // the half Clay asked for by name: the dot has to come BACK.
+            expect(reader.read(now + 11_000)).toBeNull()
+        })
+
+        it('carries the pane percentage when something could read one', () => {
+            const now = Date.now()
+            writeFileSync(transcript, [promptRecord(now - 900_000, 'go'), ''].join('\n'))
+            const compaction = createCompactionLatch()
+            compaction.begin('manual', now - 40_000)
+            compaction.progress(38)
+            const status = createLiveStatusReader({ projectDir, sessionId, compaction }).read(now)
+            expect(status!.compacting!.percent).toBe(38)
+        })
     })
 
     it('picks up a tool started after the first read without re-reading the whole transcript', () => {

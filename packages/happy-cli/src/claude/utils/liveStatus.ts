@@ -61,6 +61,8 @@
 import { closeSync, fstatSync, openSync, readSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { basename, join } from 'node:path'
 
+import type { CompactionLatch, CompactionState } from './compaction'
+
 /** The tool the assistant is waiting on: one `tool_use` with no `tool_result`. */
 export interface LiveStatusTool {
     /** The `tool_use` id, so the app can find the card this is about. */
@@ -220,6 +222,19 @@ export interface LiveStatus {
     turnStartedAt?: number
     /** The main thread's own clock and tokens, absent while only agents are out. */
     main?: LiveStatusMain
+    /**
+     * The compaction pass, while one is running (DROVE-257).
+     *
+     * OBSERVED, not inferred. `PreCompact` opens it and the transcript's
+     * `compact_boundary` closes it, so the phone's dot no longer has to guess
+     * the pass from "busy at the top of the window" — a guess that read false
+     * for the whole of it, because Claude Code writes nothing to disk while it
+     * compacts. See compaction.ts for the measurement.
+     *
+     * Absent on an older CLI and absent when nothing is compacting, which mean
+     * the same thing to the app: fall back to DROVE-231's inference.
+     */
+    compacting?: CompactionState
     /** Main plus every subagent, this turn and this session (DROVE-184). */
     tokens?: LiveStatusTokens
     tool?: LiveStatusTool
@@ -532,6 +547,14 @@ export function createLiveStatusReader(opts: {
     sessionId: string | null
     /** The process's own "an API call is in flight" flag; see the file header. */
     isThinking?: () => boolean
+    /**
+     * The compaction pass, opened by the `PreCompact` hook (DROVE-257).
+     *
+     * Read here and CLOSED here: the `compact_boundary` record is written into
+     * the very transcript this reader is already tailing, so the end signal
+     * costs nothing extra and cannot be missed by a hook that failed to fire.
+     */
+    compaction?: CompactionLatch
     agentStaleMs?: number
     idleGraceMs?: number
     settleGraceMs?: number
@@ -609,6 +632,17 @@ export function createLiveStatusReader(opts: {
             if (record.isSidechain === true) continue
             const at = parseTimestamp(record.timestamp)
             if (at > 0) lastRecordAt = Math.max(lastRecordAt, at)
+
+            // THE COMPACTION IS OVER, said by the transcript itself
+            // (DROVE-257). Claude Code writes one `system` record with
+            // `subtype: "compact_boundary"` when the pass lands, carrying
+            // `compactMetadata` (trigger, preTokens, postTokens, durationMs).
+            // Closing the latch HERE rather than on a hook is what makes the
+            // end reliable: this reader is already tailing the file the
+            // boundary is written into, so there is no second process to fail.
+            if (record.type === 'system' && record.subtype === 'compact_boundary') {
+                opts.compaction?.end(at || Date.now())
+            }
 
             const kind = classify(record)
             if (kind !== 'other') lastKind = kind
@@ -905,6 +939,11 @@ export function createLiveStatusReader(opts: {
             const tool = openTools.size > 0 ? Array.from(openTools.values()).pop() : undefined
 
             const thinking = opts.isThinking?.() === true
+            // The compaction pass, if one is open (DROVE-257). Read AFTER the
+            // pump, so a boundary that landed in this very tick has already
+            // closed the latch and the last snapshot of a compaction is the
+            // one that drops it.
+            const compacting = opts.compaction?.read(now) ?? null
             // How long the transcript may stay quiet before the turn is over.
             //
             // `assistant-text` is the only record kind that can END a turn — a
@@ -921,7 +960,15 @@ export function createLiveStatusReader(opts: {
             // transcript still moving. Six background agents out on their own
             // are NOT the main thread working, and the phone's dot means this
             // and only this.
-            const mainWorking = !!tool || thinking || !quiet
+            //
+            // COMPACTING COUNTS AS WORKING, and it is the whole of DROVE-257.
+            // The other three terms are all false for the length of a
+            // compaction — no tool is open, the fd 3 fetch resolved at the
+            // response headers two minutes ago, and the transcript has not
+            // moved since before the pass began — so without this term the
+            // most disruptive thing a session does is the one thing that looks
+            // idle from outside.
+            const mainWorking = !!tool || thinking || !quiet || !!compacting
             const moving = mainWorking || agentRows.length > 0 || workflows.length > 0
             if (!moving) {
                 return null
@@ -961,6 +1008,7 @@ export function createLiveStatusReader(opts: {
                         },
                     }
                     : {}),
+                ...(compacting ? { compacting } : {}),
                 ...(tool ? { tool } : {}),
                 ...(agentRows.length > 0
                     ? { agents: agentRows.sort((a, b) => a.startedAt - b.startedAt) }
@@ -1054,6 +1102,12 @@ export class LiveStatusPublisher {
             // slow lane this class exists for (DROVE-184).
             tokens: undefined,
             main: status.main ? { ...status.main, tokens: 0 } : undefined,
+            // The compaction's PRESENCE is a shape change and must go out at
+            // once — it is the whole point of DROVE-257 — but its percentage
+            // creeps every tick for a couple of minutes, and left in here it
+            // would pin the fast lane for the length of the pass. Same
+            // argument as the token counts above.
+            compacting: status.compacting ? { ...status.compacting, percent: 0 } : undefined,
             agents: status.agents?.map((agent) => ({ ...agent, tokens: 0 })),
             workflows: status.workflows?.map((workflow) => ({ ...workflow, tokens: 0 })),
         })

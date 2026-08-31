@@ -459,6 +459,27 @@ export const MetadataSchema = z.object({
             // none, and the strip draws nothing for either.
             turnThinking: z.number().optional(),
         }).passthrough().optional(),
+        // The compaction pass, while one is running (DROVE-257). Clay:
+        // "It's compacting but it's not pulsing purple." The dot has had the
+        // hue and the blink since DROVE-231 and the state never once arrived:
+        // it was INFERRED from "main thread working at the top of the window",
+        // and the first half of that is false for the whole compaction because
+        // Claude Code writes nothing to the transcript while it runs. So the
+        // CLI now says it outright, off the `PreCompact` hook and the
+        // transcript's own `compact_boundary` record.
+        //
+        // Optional and absent on an older CLI, which DROVE-220 makes the
+        // common case for a session running right now: the app keeps
+        // DROVE-231's inference as the fallback rather than losing the state
+        // entirely on every session that has not relaunched.
+        compacting: z.object({
+            startedAt: z.number(),
+            trigger: z.string().optional(),
+            // 0-100, and only where something can see it: the terminal draws a
+            // progress bar for the pass and nothing else does, so this is read
+            // off the pane and is absent whenever there is no pane to read.
+            percent: z.number().optional(),
+        }).passthrough().optional(),
         tool: z.object({
             id: z.string(),
             name: z.string(),

@@ -281,6 +281,10 @@ export default React.memo(() => {
                 headline: title,
                 rows: childRows,
                 main: null,
+                // Scoped to one agent, and a compaction is the SESSION's
+                // (DROVE-257). Nothing on this screen is about the main
+                // thread's history being rewritten.
+                compacting: null,
                 sideCount: childRows.length,
                 // This screen is scoped to ONE agent, so it has no session
                 // total to show (DROVE-184). The sheet draws no tally line

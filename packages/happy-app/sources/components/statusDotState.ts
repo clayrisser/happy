@@ -87,6 +87,32 @@ export const DISCONNECT_RECENT_MS = LIVE_STATUS_STALE_MS;
  */
 export const COMPACTING_NEEDS_WORKING_MAIN = true;
 
+/**
+ * WHAT THE CLI NOW SAYS OUTRIGHT (DROVE-257), and why the inference above is
+ * kept underneath it rather than deleted.
+ *
+ * The paragraph above was right that the phone could not see the event, and
+ * wrong about which way the inference failed. It is not early — it never fires
+ * at all. Clay photographed both halves at once: the terminal reading
+ * `Compacting conversation… (1m 55s, 2.3k tokens)` over `100% context used`,
+ * and the strip drawing a flat GREEN dot beside three workers. `atCompaction`
+ * was true; `mainWorking` was false, and it is false for the WHOLE pass —
+ * Claude Code writes nothing to the transcript while it compacts (measured:
+ * 126552ms between the last tool result and the `compact_boundary` on his own
+ * session), and the CLI's fd 3 fetch counter drops at the response headers
+ * while the summary streams for another two minutes.
+ *
+ * So the CLI observes the pass instead: `PreCompact` opens it, the
+ * transcript's `compact_boundary` closes it, and `metadata.liveStatus.
+ * compacting` carries it. That fact wins outright when it is there.
+ *
+ * The inference stays as the fallback because DROVE-220 means a CLI change
+ * does not reach a session that is already running, so on every session Clay
+ * has open right now the observed fact is absent and the guess is all there
+ * is. It costs nothing when the fact arrives: `compacting` is checked first.
+ */
+export const COMPACTING_OBSERVED_WINS = true;
+
 export interface StatusDotInput {
     /** `session.presence === 'online'`. */
     online: boolean;
@@ -98,6 +124,15 @@ export interface StatusDotInput {
     toolRunning: boolean;
     /** The context has reached the compaction point (see contextCompaction.ts). */
     atCompaction: boolean;
+    /**
+     * The CLI says a compaction pass is running RIGHT NOW (DROVE-257).
+     *
+     * The observed fact, from `metadata.liveStatus.compacting`. Undefined on a
+     * CLI too old to publish it, which is not the same as false: false would
+     * mean "I looked and there is none", and the inference below is what
+     * covers the difference.
+     */
+    compacting?: boolean;
     /** Connected and blocked on Clay: a permission prompt, or a question. */
     waiting: boolean;
     now: number;
@@ -117,6 +152,11 @@ export function statusDotState(input: StatusDotInput): StatusDotState {
         if (typeof since !== 'number' || !Number.isFinite(since)) return 'disconnected';
         return input.now - since < DISCONNECT_RECENT_MS ? 'recentlyDisconnected' : 'disconnected';
     }
+    // The CLI's own word first, and it needs no other term to agree with it
+    // (DROVE-257): a compaction runs with no tool open, no transcript movement
+    // and no fetch in flight, so every fact that could corroborate it is
+    // exactly the fact it does not have.
+    if (input.compacting) return 'compacting';
     if (input.mainWorking && !input.toolRunning && input.atCompaction) return 'compacting';
     if (input.mainWorking) return 'working';
     if (input.waiting) return 'waiting';

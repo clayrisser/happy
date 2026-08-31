@@ -25,6 +25,8 @@ export type LiveStatusTool = NonNullable<LiveStatus['tool']>;
 export type LiveStatusAgent = NonNullable<LiveStatus['agents']>[number];
 export type LiveStatusWorkflow = NonNullable<LiveStatus['workflows']>[number];
 export type LiveStatusTokens = NonNullable<LiveStatus['tokens']>;
+/** The compaction pass, while the CLI says one is running (DROVE-257). */
+export type LiveStatusCompaction = NonNullable<LiveStatus['compacting']>;
 
 /**
  * How long a snapshot may sit before we stop drawing timers off it.
@@ -58,6 +60,19 @@ export const LIVE_STATUS_STALE_MS = 120_000;
  * here would quietly turn that rule off.
  */
 export const LIVE_STATUS_THINKING_WORD = 'thinking';
+
+/**
+ * And what it is called while it COMPACTS (DROVE-257).
+ *
+ * Not `thinking`. A compaction is the session rewriting the conversation it is
+ * standing on, and it is the state Clay most wants named — he photographed a
+ * terminal mid-compaction next to a phone claiming the session was idle. It
+ * does not go on the status strip, which has carried no word at all since
+ * DROVE-250 took `thinking` back off the line; the strip's signal is the
+ * purple blinking dot. This is for the sheet and the wrist, where there is
+ * room for a sentence.
+ */
+export const LIVE_STATUS_COMPACTING_WORD = 'compacting';
 
 export function isLiveStatusFresh(status: LiveStatus | null | undefined, now: number): boolean {
     if (!status) return false;
@@ -331,6 +346,17 @@ export interface LiveStatusSummary {
      */
     main: LiveStatusMain | null;
     /**
+     * The compaction pass, while one is running (DROVE-257).
+     *
+     * Carried whole rather than as a boolean because it holds the pass's own
+     * `startedAt` — which is NOT `main.startedAt`, the turn's — and, where a
+     * pane could be read, how far along it is.
+     *
+     * Null on a CLI older than the ticket, which is not the same as "not
+     * compacting": the dot keeps DROVE-231's inference for that case.
+     */
+    compacting: LiveStatusCompaction | null;
+    /**
      * Background agents plus workflows: the number beside the fold, the only
      * thing on the row that speaks for the agents, and THE ONE DERIVATION any
      * surface that counts agents reads (DROVE-155, DROVE-209, DROVE-185).
@@ -577,7 +603,18 @@ export function summarizeLiveStatus(status: LiveStatus, now: number): LiveStatus
     // the most specific thing running. A tool beats a fan-out because the tool
     // is what the turn is blocked on.
     let headline: string;
-    if (status.tool) {
+    if (status.compacting) {
+        // COMPACTING BEATS EVERYTHING, including a tool (DROVE-257). The pass
+        // rewrites the conversation the session is standing on, and a tool
+        // that happens to still be open under it is the smaller fact. It also
+        // has its own clock: the pass's, not the turn's, which is what makes
+        // the sheet's line agree with the terminal's `(1m 55s, …)`.
+        const elapsed = formatElapsed(now - status.compacting.startedAt);
+        const percent = typeof status.compacting.percent === 'number'
+            ? ` · ${Math.round(status.compacting.percent)}%`
+            : '';
+        headline = `${LIVE_STATUS_COMPACTING_WORD} · ${elapsed}${percent}`;
+    } else if (status.tool) {
         const elapsed = formatElapsed(now - status.tool.startedAt);
         headline = status.tool.arg
             ? `${status.tool.name} · ${status.tool.arg} · ${elapsed}`
@@ -610,6 +647,7 @@ export function summarizeLiveStatus(status: LiveStatus, now: number): LiveStatus
         rows,
         ...(parts.length > 0 ? { subtitle: parts.join(' · ') } : {}),
         main,
+        compacting: status.compacting ?? null,
         sideCount,
         tally,
         // Only when the main thread is NOT carrying the number itself, so the
@@ -717,6 +755,15 @@ export function liveStatusWatchLine(status: LiveStatus | null | undefined, now: 
     if (!isLiveStatusFresh(status, now)) return undefined;
     const live = status!;
     const parts: string[] = [];
+    // The compaction leads, and it leads ALONE (DROVE-257). Twenty characters
+    // is one fact wide, and while the session is rewriting its own history
+    // that fact is not which grep is open.
+    if (live.compacting) {
+        const percent = typeof live.compacting.percent === 'number'
+            ? ` ${Math.round(live.compacting.percent)}%`
+            : '';
+        return `${LIVE_STATUS_COMPACTING_WORD}${percent}`;
+    }
     if (live.tool) parts.push(live.tool.name);
     const workflows = live.workflows ?? [];
     if (workflows.length > 0) {
@@ -738,6 +785,13 @@ export function liveStatusWatchLine(status: LiveStatus | null | undefined, now: 
  */
 export function liveStatusSince(status: LiveStatus | null | undefined, now: number): string | undefined {
     if (!isLiveStatusFresh(status, now)) return undefined;
-    const started = status!.turnStartedAt ?? status!.tool?.startedAt;
+    // A compaction gets its OWN clock, because the line above is about the
+    // compaction and not about the turn (DROVE-257). The turn began whenever
+    // Clay last typed, which on the session he photographed was hours before
+    // the pass started; counting from there would put an hour beside the word
+    // `compacting` and make the wrist disagree with the terminal's `1m 55s`.
+    const started = status!.compacting?.startedAt
+        ?? status!.turnStartedAt
+        ?? status!.tool?.startedAt;
     return started ? new Date(started).toISOString() : undefined;
 }

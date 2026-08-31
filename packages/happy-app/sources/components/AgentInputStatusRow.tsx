@@ -568,9 +568,17 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
         // seconds before the first publish. Every list row asks the question
         // this way (`sessionDot.ts`), so widening it here is what stops the
         // strip drawing green on a session the list has already turned blue.
-        mainWorking: mainWorking || p.connectionStatus?.state === 'thinking',
+        mainWorking: mainWorking
+            || p.connectionStatus?.state === 'thinking'
+            // A compaction is the main thread working and NOTHING else on this
+            // row says so (DROVE-257): no tool is open, the transcript has not
+            // moved since before the pass began, and `thinking` went false at
+            // the response headers two minutes ago. This term is why the dot
+            // Clay photographed was green.
+            || !!summary?.compacting,
         toolRunning,
         atCompaction: context?.atCompaction ?? false,
+        compacting: !!summary?.compacting,
         waiting: p.connectionStatus?.state === 'permission_required'
             || p.connectionStatus?.state === 'input_required',
         now,

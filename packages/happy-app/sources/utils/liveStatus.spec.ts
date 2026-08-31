@@ -356,6 +356,60 @@ describe('liveStatusWatchLine', () => {
         expect(liveStatusWatchLine(busy, now + 300_000)).toBeUndefined();
         expect(liveStatusSince(null, now)).toBeUndefined();
     });
+
+    /**
+     * DROVE-257: the wrist has to say the same thing as the phone.
+     */
+    it('says only that it is compacting, and drops the tool and the counts', () => {
+        // Twenty characters is one fact wide, and while the session is
+        // rewriting the conversation it is standing on, that fact is not which
+        // grep happens to be open.
+        const compacting: LiveStatus = {
+            ...busy,
+            compacting: { startedAt: now - 115_000, trigger: 'auto' },
+        };
+        expect(liveStatusWatchLine(compacting, now)).toBe('compacting');
+        expect(liveStatusWatchLine({ ...compacting, compacting: { startedAt: now - 115_000, percent: 38 } }, now))
+            .toBe('compacting 38%');
+    });
+
+    it('counts up from the COMPACTION, not from the turn', () => {
+        // The turn began whenever Clay last typed, which on the session he
+        // photographed was hours before the pass started. Counting from there
+        // would put an hour beside the word and make the wrist disagree with
+        // the terminal's `1m 55s`.
+        const compacting: LiveStatus = {
+            ...busy,
+            compacting: { startedAt: now - 115_000, trigger: 'auto' },
+        };
+        expect(liveStatusSince(compacting, now)).toBe(new Date(now - 115_000).toISOString());
+    });
+});
+
+describe('a compaction in the summary (DROVE-257)', () => {
+    const compacting: LiveStatus = {
+        ...busy,
+        compacting: { startedAt: now - 115_000, trigger: 'auto' },
+    };
+
+    it('leads the headline, over the tool it interrupted', () => {
+        expect(summarizeLiveStatus(compacting, now).headline).toBe('compacting · 1m 55s');
+    });
+
+    it('puts the percentage on the line when a pane could be read', () => {
+        const withPercent: LiveStatus = { ...compacting, compacting: { startedAt: now - 115_000, percent: 38 } };
+        expect(summarizeLiveStatus(withPercent, now).headline).toBe('compacting · 1m 55s · 38%');
+    });
+
+    it('carries the block whole, so the dot can read it', () => {
+        expect(summarizeLiveStatus(compacting, now).compacting).toEqual({
+            startedAt: now - 115_000,
+            trigger: 'auto',
+        });
+        // Null, not undefined, on a CLI too old to publish it: the phone falls
+        // back to DROVE-231's inference there rather than losing the state.
+        expect(summarizeLiveStatus(busy, now).compacting).toBeNull();
+    });
 });
 
 /**

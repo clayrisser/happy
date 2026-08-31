@@ -104,6 +104,100 @@ describe('a session lands on Clay\'s table', () => {
         expect(stateOf(compacting)).toBe('compacting');
     });
 
+    /**
+     * DROVE-257. Clay photographed both halves at the same moment: a terminal
+     * reading `Compacting conversation… (1m 55s, 2.3k tokens)` over `100%
+     * context used`, and a phone drawing a flat GREEN dot beside three
+     * workers. This is that session, built the way the CLI actually leaves it.
+     */
+    describe('a compaction the CLI reports outright', () => {
+        /**
+         * The snapshot a compacting session really publishes.
+         *
+         * No `main` and no `tool` — Claude Code writes NOTHING to the
+         * transcript for the whole pass, so the CLI has no turn to report —
+         * and three agents, which is the only reason a snapshot exists at all
+         * and why the strip could still say `3`.
+         */
+        const midCompaction = (extra: Record<string, unknown> = {}) => session({
+            metadata: {
+                liveStatus: {
+                    at: now,
+                    compacting: { startedAt: now - 115_000, trigger: 'auto' },
+                    agents: [
+                        { id: 'a1', label: 'one', startedAt: now - 300_000 },
+                        { id: 'a2', label: 'two', startedAt: now - 280_000 },
+                        { id: 'a3', label: 'three', startedAt: now - 260_000 },
+                    ],
+                    ...extra,
+                },
+            } as never,
+            latestUsage: usage(compactionAt),
+        });
+
+        it('was green before this ticket, and that was the bug', () => {
+            // Same snapshot with the field the old CLI never wrote. Nothing
+            // else in it says the session is busy, which is exactly how the
+            // most disruptive thing a session does came to wear the idle hue.
+            const before = session({
+                metadata: {
+                    liveStatus: {
+                        at: now,
+                        agents: [{ id: 'a1', label: 'one', startedAt: now - 300_000 }],
+                    },
+                } as never,
+                latestUsage: usage(compactionAt),
+            });
+            expect(stateOf(before)).toBe('connected');
+        });
+
+        it('is purple and pulsing on every surface that draws the session', () => {
+            const facts = sessionDotFacts(midCompaction(), now);
+            expect(sessionDotState(facts, now)).toBe('compacting');
+            const strip = sessionDotPresentation(facts, now);
+            expect(strip.color).toBe('#AF52DE');
+            expect(strip.isPulsing).toBe(true);
+            // And the row, which takes the same hue and (since Clay overruled
+            // the argument in sessionDot.ts) the same pulse.
+            const row = sessionRowDot(facts, now);
+            expect(row.color).toBe(strip.color);
+            expect(row.isPulsing).toBe(SESSION_ROW_DOT_BLINKS);
+            expect(row.label).toBe('Compacting');
+        });
+
+        it('needs no help from the context reading, which is the point', () => {
+            // The inference wanted the transcript at the compaction point. A
+            // manual `/compact` typed at 12% of the window is just as real.
+            const early = session({
+                metadata: { liveStatus: { at: now, compacting: { startedAt: now - 4_000 } } } as never,
+                latestUsage: usage(Math.round(window * 0.12)),
+            });
+            expect(stateOf(early)).toBe('compacting');
+        });
+
+        it('goes back to green the moment the pass ends', () => {
+            // The CLI clears `compacting` on the transcript's own
+            // `compact_boundary`, and a compaction leaves a session with a
+            // short context, so nothing is left to hold the state on.
+            const after = session({
+                metadata: { liveStatus: { at: now, agents: [] } } as never,
+                latestUsage: usage(Math.round(window * 0.15)),
+            });
+            expect(stateOf(after)).toBe('connected');
+        });
+
+        it('is ignored once the snapshot is too old to believe', () => {
+            // A CLI that died mid-compaction must not leave the dot purple
+            // forever. Same staleness window the clocks use.
+            const stale = session({
+                metadata: {
+                    liveStatus: { at: now - 200_000, compacting: { startedAt: now - 260_000 } },
+                } as never,
+            });
+            expect(stateOf(stale)).toBe('connected');
+        });
+    });
+
     it('stays blue at the compaction point while a TOOL is running', () => {
         const tool = working(
             { tool: { id: 't', name: 'Bash', startedAt: now - 1_000 } },

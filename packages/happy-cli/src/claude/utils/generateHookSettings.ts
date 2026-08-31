@@ -11,6 +11,7 @@ import { configuration } from '@/configuration';
 import { logger } from '@/ui/logger';
 import { projectPath } from '@/projectPath';
 import { droverHooks, mergeHooks } from '@/drover/hooks';
+import { preCompactHookPath, sessionStartHookPath } from './startHookServer';
 
 /**
  * Generate a temporary settings file with SessionStart hook configuration
@@ -28,7 +29,13 @@ export function generateHookSettingsFile(port: number): string {
 
     // Path to the hook forwarder script
     const forwarderScript = resolve(projectPath(), 'scripts', 'session_hook_forwarder.cjs');
-    const hookCommand = `node "${forwarderScript}" ${port}`;
+    const hookCommand = `node "${forwarderScript}" ${port} ${sessionStartHookPath}`;
+    // DROVE-257: the one signal that a compaction has STARTED. Everything else
+    // about a compaction is invisible from outside the pane — the transcript
+    // does not move for the whole pass and the fd 3 fetch counter drops at the
+    // response headers — so without this hook the phone draws a session
+    // rewriting its own history as connected and idle.
+    const preCompactCommand = `node "${forwarderScript}" ${port} ${preCompactHookPath}`;
 
     // Cattle Drover (BASED-98): the bus producers ride along here, so a
     // question, an idle notice or a session's lifecycle reaches the phone,
@@ -44,6 +51,20 @@ export function generateHookSettingsFile(port: number): string {
                             {
                                 type: "command" as const,
                                 command: hookCommand
+                            }
+                        ]
+                    }
+                ],
+                // Both triggers: `manual` is a typed `/compact`, `auto` is the
+                // context filling up, and the dot means the same thing for
+                // either. Claude Code matches this field against the trigger.
+                PreCompact: [
+                    {
+                        matcher: "*",
+                        hooks: [
+                            {
+                                type: "command" as const,
+                                command: preCompactCommand
                             }
                         ]
                     }

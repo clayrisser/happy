@@ -6,6 +6,7 @@ import { readFile, stat } from "node:fs/promises";
 import { logger } from "@/ui/logger";
 import { startFileWatcher } from "@/modules/watcher/startFileWatcher";
 import { getProjectPath } from "./path";
+import type { CompactionLatch } from "./compaction";
 import { createLiveStatusReader, LiveStatusPublisher, type LiveStatus } from "./liveStatus";
 import { createSubagentTranscriptReader, type SubagentTranscriptRequest, type SubagentTranscriptResponse } from "./subagentTranscript";
 import { parseAgentNotifications, type AgentNotification } from "./agentNotification";
@@ -206,6 +207,12 @@ export async function createSessionScanner(opts: {
      * photographed.
      */
     isThinking?: () => boolean
+    /**
+     * The compaction pass in flight, when the caller is tracking one
+     * (DROVE-257). Opened by the `PreCompact` hook, closed by the
+     * `compact_boundary` record the live status reader already tails.
+     */
+    compaction?: CompactionLatch
     /**
      * How long a session transcript may stay absent before its watcher gives
      * up and the session is dropped. Defaults to the startFileWatcher default
@@ -486,6 +493,7 @@ export async function createSessionScanner(opts: {
             projectDir,
             sessionId: currentSessionId,
             isThinking: opts.isThinking,
+            compaction: opts.compaction,
         });
         liveStatusPublisher = new LiveStatusPublisher((status) => {
             try {

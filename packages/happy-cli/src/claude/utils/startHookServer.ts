@@ -82,12 +82,29 @@ export interface SessionHookData {
      * record.
      */
     session_title?: string;
+    /**
+     * PreCompact's own field (DROVE-257): `manual` for a typed `/compact`,
+     * `auto` when the context filled up. Absent on every other hook event.
+     */
+    trigger?: string;
     [key: string]: unknown;
 }
 
 export interface HookServerOptions {
     /** Called when a session hook is received with a valid session ID */
     onSessionHook: (sessionId: string, data: SessionHookData) => void;
+    /**
+     * Claude Code is about to compact (DROVE-257).
+     *
+     * The one signal that a compaction has STARTED. Nothing is written to the
+     * transcript for the whole pass — Clay's own session went 2m 06s between
+     * the last tool result and the boundary — and the fd 3 fetch counter drops
+     * at the response headers while the summary streams, so without this hook
+     * the phone's dot draws the idle colour through the most disruptive thing
+     * a session does. Unlike the session hook this one carries no session id
+     * worth acting on; the trigger (`manual` / `auto`) is what matters.
+     */
+    onPreCompact?: (data: SessionHookData) => void;
 }
 
 export interface HookServer {
@@ -97,6 +114,12 @@ export interface HookServer {
     stop: () => void;
 }
 
+/** Where the SessionStart forwarder posts. */
+export const sessionStartHookPath = '/hook/session-start';
+
+/** Where the PreCompact forwarder posts (DROVE-257). */
+export const preCompactHookPath = '/hook/pre-compact';
+
 /**
  * Start a dedicated HTTP server for receiving Claude session hooks
  * 
@@ -104,12 +127,36 @@ export interface HookServer {
  * @returns Promise resolving to the server instance with port info
  */
 export async function startHookServer(options: HookServerOptions): Promise<HookServer> {
-    const { onSessionHook } = options;
+    const { onSessionHook, onPreCompact } = options;
 
     return new Promise((resolve, reject) => {
         const server: Server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
+            // PreCompact (DROVE-257). Its own path rather than a branch inside
+            // the session-start handler, because it carries no session id and
+            // the handler below drops a payload without one on the floor.
+            if (req.method === 'POST' && req.url === preCompactHookPath) {
+                try {
+                    const chunks: Buffer[] = [];
+                    for await (const chunk of req) chunks.push(chunk as Buffer);
+                    const body = Buffer.concat(chunks).toString('utf-8');
+                    logger.debug('[hookServer] Received pre-compact hook:', body);
+                    let data: SessionHookData = {};
+                    try {
+                        data = JSON.parse(body);
+                    } catch (parseError) {
+                        logger.debug('[hookServer] Failed to parse pre-compact hook data:', parseError);
+                    }
+                    onPreCompact?.(data);
+                    res.writeHead(200, { 'Content-Type': 'text/plain' }).end('ok');
+                } catch (error) {
+                    logger.debug('[hookServer] Error handling pre-compact hook:', error);
+                    if (!res.headersSent) res.writeHead(500).end('error');
+                }
+                return;
+            }
+
             // Only handle POST to /hook/session-start
-            if (req.method === 'POST' && req.url === '/hook/session-start') {
+            if (req.method === 'POST' && req.url === sessionStartHookPath) {
                 // Set timeout to prevent hanging if Claude doesn't close stdin
                 const timeout = setTimeout(() => {
                     if (!res.headersSent) {
