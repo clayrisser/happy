@@ -7,7 +7,7 @@ import { resolveSpeaker } from './speaker';
 import { cueWatchReplyStart, watchSpeechEngine } from './watchSpeaker';
 import { storage } from '@/sync/storage';
 import { resolveStreamTalk } from '@/sync/settings';
-import { readFromHere } from './readAloudTap';
+import { readFromHere, readSentenceFromHere } from './readAloudTap';
 
 /**
  * The one reader the app owns (DROVE-30).
@@ -47,6 +47,18 @@ export const readAloud = new ReadAloudReader(
     ),
     {
         maxBacklogSeconds: () => resolveStreamTalk(storage.getState().settings).maxBacklogSeconds,
+        jumpBacklogSeconds: () => resolveStreamTalk(storage.getState().settings).jumpBacklogSeconds,
+        // The two speeds, as the one ratio the queue deals in (DROVE-116).
+        // Clay picks two absolute rates, a normal one and a fast one; the
+        // reader only ever asks for a MULTIPLIER on whatever rate the engine
+        // is about to use, so the fast speed reaches it as fast/normal and
+        // speechEngine multiplies straight back to the number he chose.
+        // Read per pump like the thresholds, so either slider applies to the
+        // next sentence rather than the next launch.
+        maxRateScale: () => {
+            const talk = resolveStreamTalk(storage.getState().settings);
+            return talk.rate > 0 ? talk.catchUpRate / talk.rate : 1;
+        },
         // Whether the agent is still generating. Without it the queue has to
         // infer that from how text arrives; with it, a finished reply can
         // never be cut short whatever the arrival stamps look like.
@@ -58,11 +70,24 @@ export const readAloud = new ReadAloudReader(
 );
 
 /**
- * Double tap a section and reading moves there (DROVE-146). The wiring only;
- * the rule about when a tap counts is in readAloudTap.ts.
+ * Tap a section and reading moves there (DROVE-146). The wiring only; the rule
+ * about when a tap counts is in readAloudTap.ts.
  */
 export function readAloudFromHere(sessionId: string, createdAt: number): boolean {
     return readFromHere(readAloud, sessionId, createdAt);
+}
+
+/**
+ * Tap a SENTENCE and reading starts from that sentence (DROVE-163), falling
+ * back to the block when the queue does not have it.
+ */
+export function readAloudSentenceFromHere(
+    sessionId: string,
+    messageId: string,
+    sentence: string,
+    createdAt: number,
+): boolean {
+    return readSentenceFromHere(readAloud, sessionId, messageId, sentence, createdAt);
 }
 
 audioCues.attach(readAloud);

@@ -50,11 +50,18 @@ export type CodeScroll = z.infer<typeof CodeScrollSchema>;
 // voice identifier is per-device in practice (an iPad may not have the
 // iPhone's voice installed), so a missing voice falls back to the best
 // installed one rather than to silence.
+//
+// DROVE-116 made the delivery four plain statements instead of one speed and
+// one threshold: the normal speed, the fast speed, when to speed up, and when
+// to jump. Clay: "you pick the speed you want it normally but then as it gets
+// behind you pick the fast speed", and "we can also set when it jumps".
 export const StreamTalkSchema = z.object({
     voiceId: z.string().nullable().optional(),
     rate: z.number().optional(),
+    catchUpRate: z.number().optional(),
     pitch: z.number().optional(),
     maxBacklogSeconds: z.number().optional(),
+    jumpBacklogSeconds: z.number().optional(),
 });
 export type StreamTalk = z.infer<typeof StreamTalkSchema>;
 
@@ -64,20 +71,51 @@ export type StreamTalk = z.infer<typeof StreamTalkSchema>;
  * slider covers the range that still sounds like a person.
  */
 export const streamTalkRateRange = { min: 0.4, max: 0.6 } as const;
+/**
+ * The absolute rate the engine may be driven to, above the speed slider's own
+ * maximum (DROVE-116).
+ *
+ * The slider bounds what the USER picks for ordinary prose. It must not also
+ * bound what catching up may add on top, which is the bug that made the whole
+ * catch-up a no-op: speechEngine clamped `rate * rateScale` back into
+ * streamTalkRateRange, so at the slider's own maximum the product clamped
+ * straight back to it and the voice never sped up at all. Anyone who likes
+ * fast speech, which is exactly the person who wants catch-up, silently got
+ * none of it. AVSpeechUtterance accepts up to 1.0 and the native module clamps
+ * there; 0.85 is the fastest that still parses as speech rather than a chipmunk.
+ */
+export const streamTalkRateCeiling = 0.85;
+/** The fast speed may sit anywhere from the normal floor up to that ceiling. */
+export const streamTalkCatchUpRateRange = { min: streamTalkRateRange.min, max: streamTalkRateCeiling } as const;
 /** AVSpeechUtterance.pitchMultiplier accepts 0.5 to 2.0. */
 export const streamTalkPitchRange = { min: 0.5, max: 2.0 } as const;
 /**
  * Seconds of UNSPOKEN AUDIO the voice may have queued behind a reply that is
- * still being written before it drops the backlog. Not a delay, and it never
- * applies to a finished reply, which is read to the end (DROVE-108).
+ * still being written before it starts reading FASTER. Not a delay, and it
+ * never applies to a finished reply, which is read to the end (DROVE-108).
  */
 export const streamTalkBacklogRange = { min: 10, max: 30 } as const;
+/**
+ * Seconds of unspoken audio past which the tail is dropped outright.
+ *
+ * Its own setting since DROVE-116, rather than twice the speed-up threshold.
+ * That derivation was not merely timid, it was self-defeating: the cut fired
+ * at the same number the ramp STARTED at, so the ramp between the two never
+ * ran and the voice jumped without ever having sped up. Kept strictly above
+ * the speed-up threshold by resolveStreamTalk, so there is always a band in
+ * which reading faster is tried first.
+ */
+export const streamTalkJumpRange = { min: 15, max: 120 } as const;
 
 export const streamTalkDefaults: Required<StreamTalk> = {
     voiceId: null,
     rate: 0.52,
+    // 1.5x the normal default, which is where audiobook listeners sit and is
+    // well past the 1.15x ceiling DROVE-108 shipped with.
+    catchUpRate: 0.78,
     pitch: 1.0,
     maxBacklogSeconds: 15,
+    jumpBacklogSeconds: 45,
 };
 
 // The eyes-free audio cue system (DROVE-112): the ambient heartbeat, the
@@ -155,10 +193,40 @@ export const asidePitchScale = 1.18;
 /**
  * The absolute rate an aside may reach, above the speed slider's own maximum.
  * The slider bounds what the USER picks for prose; it should not stop a title
- * being read as the quick footnote it is. Same argument DROVE-116 makes about
- * the catch-up clamp, and the same engine-safe ceiling.
+ * being read as the quick footnote it is.
+ *
+ * It is now literally the same engine-safe ceiling the catch-up uses
+ * (DROVE-116), and that is the whole guard against the two stacking: a title
+ * spoken while the voice is far behind gets rate x catch-up x aside, and this
+ * caps the product at the fastest ordinary prose can go rather than letting
+ * the two multipliers compound into something unintelligible.
  */
-export const asideRateCeiling = 0.75;
+export const asideRateCeiling = streamTalkRateCeiling;
+
+/**
+ * The rate one utterance is actually spoken at.
+ *
+ * Here rather than in speechEngine because this one expression is the whole of
+ * DROVE-116 and the whole of the aside's voice, and neither is testable behind
+ * a native module. `rateScale` is the reader's catch-up multiplier, 1 at rest.
+ *
+ * The floor is the speed slider's own minimum. The CEILING is the absolute
+ * engine-safe rate, NOT the slider's maximum, and that is the fix: clamping
+ * the product back into the slider's range meant that at the top of the slider
+ * `rate x anything` clamped straight back to the rate, so the catch-up did
+ * nothing at all for the person most likely to want it. The slider bounds what
+ * the user CHOOSES; it must not bound what the reader adds on top.
+ *
+ * An aside is a tool-call title (DROVE-112) and shares that ceiling, which is
+ * what stops the two multipliers compounding: a title spoken while the voice
+ * is far behind is capped at the same rate as the fastest prose rather than
+ * being taken to rate x catch-up x aside.
+ */
+export function resolveSpokenRate(rate: number, rateScale: number, aside: boolean): number {
+    const scaled = rate * rateScale * (aside ? asideRateScale : 1);
+    const ceiling = aside ? asideRateCeiling : streamTalkRateCeiling;
+    return Math.min(ceiling, Math.max(streamTalkRateRange.min, scaled));
+}
 // The three feedback channels and how audio may answer (DROVE-72). Clay's
 // four ways of working (silent haptic, eyes-free audio, direct, hands-free
 // voice) are saved COMBINATIONS of these four keys, never code paths, and a
@@ -215,7 +283,7 @@ export const SettingsSchema = z.object({
     usageLimitShowRemaining: z.boolean().describe('Show plan rate limits as quota remaining instead of quota used'),
     codeWrap: CodeWrapSchema.describe('Legacy opt-in soft wrap for monospace cards (no longer used; see codeScroll)'),
     codeScroll: CodeScrollSchema.describe('Which monospace kinds scroll horizontally instead of wrapping, toggled by double-tap'),
-    streamTalk: StreamTalkSchema.describe('Read-aloud voice: chosen voice identifier, rate, pitch and how much unspoken audio may pile up before skipping ahead'),
+    streamTalk: StreamTalkSchema.describe('Read-aloud voice: chosen voice identifier, pitch, the normal and catch-up speaking rates, and the backlogs at which the voice speeds up and at which it jumps ahead'),
     speakReplies: SpeakRepliesSchema.describe('Which device speaks replies aloud: phone, watch, or auto (the one whose audio route has headphones, else the phone)'),
     audioCues: AudioCuesSchema.describe('Eyes-free audio cues: the ambient heartbeat, the one-shot earcons, and the spoken titles of tool calls and agent spawns'),
     droverAnnounceVisual: z.boolean().describe('Visual channel: the alert push and the gum client announce a Cattle Drover prompt'),
@@ -445,11 +513,23 @@ function clamp(value: number | undefined, fallback: number, range: { min: number
  */
 export function resolveStreamTalk(settings: Pick<Settings, 'streamTalk'>): Required<StreamTalk> {
     const raw = settings.streamTalk ?? {};
+    const rate = clamp(raw.rate, streamTalkDefaults.rate, streamTalkRateRange);
+    const maxBacklogSeconds = clamp(raw.maxBacklogSeconds, streamTalkDefaults.maxBacklogSeconds, streamTalkBacklogRange);
     return {
         voiceId: typeof raw.voiceId === 'string' && raw.voiceId.length > 0 ? raw.voiceId : null,
-        rate: clamp(raw.rate, streamTalkDefaults.rate, streamTalkRateRange),
+        rate,
+        // The fast speed is never slower than the normal one. A pair that
+        // crossed over would read the backlog and then slow DOWN, and the UI
+        // enforces the same floor on the slider so the two cannot disagree.
+        catchUpRate: Math.max(rate, clamp(raw.catchUpRate, streamTalkDefaults.catchUpRate, streamTalkCatchUpRateRange)),
         pitch: clamp(raw.pitch, streamTalkDefaults.pitch, streamTalkPitchRange),
-        maxBacklogSeconds: clamp(raw.maxBacklogSeconds, streamTalkDefaults.maxBacklogSeconds, streamTalkBacklogRange),
+        maxBacklogSeconds,
+        // Strictly above the speed-up threshold, so there is always a band in
+        // which the voice reads faster before anything is thrown away.
+        jumpBacklogSeconds: Math.max(
+            maxBacklogSeconds + 1,
+            clamp(raw.jumpBacklogSeconds, streamTalkDefaults.jumpBacklogSeconds, streamTalkJumpRange),
+        ),
     };
 }
 

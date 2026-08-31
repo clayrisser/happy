@@ -509,9 +509,9 @@ describe('ReadAloudReader', () => {
             expect(talk.skipCount).toBe(0);
         });
 
-        it('reads the threshold live so a settings change applies to the next sentence', async () => {
-            let threshold = 30;
-            const talk = streamed({ maxBacklogSeconds: () => threshold });
+        it('reads both thresholds live so a settings change applies to the next sentence', async () => {
+            let jump = 30;
+            const talk = streamed({ maxBacklogSeconds: () => 4, jumpBacklogSeconds: () => jump });
             talk.onMessages('s1', [agentText('m1', sentences('Live', 4).join(' '))]);
             await settle();
             clock += 2000;
@@ -520,12 +520,91 @@ describe('ReadAloudReader', () => {
             await settle();
             expect(engine.spoken).toEqual(['Live sentence 1.', 'Live sentence 2.']);
 
-            threshold = 5;
+            jump = 5;
             clock += 1000;
             engine.finishOne();
             await settle();
             expect(engine.spoken).toEqual(['Live sentence 1.', 'Live sentence 2.', 'Skipping ahead.']);
             expect(talk.skipCount).toBe(1);
+        });
+
+        /**
+         * DROVE-116, and the reason catch-up never once saved a jump. The cut
+         * used to fire at the SAME number the ramp started at, so the band the
+         * ramp was described as running through did not exist: past the
+         * threshold the tail was thrown away rather than read faster.
+         */
+        describe('speeding up before jumping (DROVE-116)', () => {
+            it('reads faster right through the band between the two thresholds', async () => {
+                const talk = streamed({ maxBacklogSeconds: () => 4, jumpBacklogSeconds: () => 40 });
+                // 18 s of audio: well past the speed-up threshold and nowhere
+                // near the jump, which is exactly where the old code cut.
+                talk.onMessages('s1', [agentText('m1', sentences('Long', 6).join(' '))]);
+                await settle();
+                clock += 1000;
+                talk.onMessages('s1', [agentText('m2', sentences('More', 6).join(' '), 2)]);
+                engine.finishOne();
+                await settle();
+
+                expect(talk.skipCount).toBe(0);
+                expect(engine.rates.some((rate) => rate > 1)).toBe(true);
+                expect(engine.spoken).toEqual(['Long sentence 1.', 'Long sentence 2.']);
+            });
+
+            it('jumps only once the backlog passes the jump threshold', async () => {
+                const talk = streamed({ maxBacklogSeconds: () => 4, jumpBacklogSeconds: () => 10 });
+                talk.onMessages('s1', [agentText('m1', sentences('Long', 6).join(' '))]);
+                await settle();
+                clock += 1000;
+                // 15 more words on top of what is left: past 10 s, so the cut.
+                talk.onMessages('s1', [agentText('m2', sentences('More', 5).join(' '), 2)]);
+                engine.finishOne();
+                await settle();
+                expect(talk.skipCount).toBe(1);
+            });
+
+            it('ramps from 1 at the speed-up threshold to the ceiling at the jump', async () => {
+                const rates: number[] = [];
+                const talk = streamed({
+                    maxBacklogSeconds: () => 4,
+                    jumpBacklogSeconds: () => 12,
+                    maxRateScale: () => 2,
+                });
+                // Eight sentences, three words each: 24 s of audio, which is
+                // twice the jump threshold, so the first is read at the top of
+                // the ramp and each later one a little slower as it drains.
+                talk.onMessages('s1', [agentText('m1', sentences('Ramp', 8).join(' '))]);
+                await settle();
+                for (let i = 0; i < 7; i++) {
+                    rates.push(engine.rates[engine.rates.length - 1]);
+                    engine.finishOne();
+                    await settle();
+                }
+                expect(rates[0]).toBe(2);
+                // Monotonically down as the backlog drains, and back to 1 once
+                // there is less than the speed-up threshold left to say.
+                for (let i = 1; i < rates.length; i++) {
+                    expect(rates[i]).toBeLessThanOrEqual(rates[i - 1]);
+                }
+                expect(engine.rates[engine.rates.length - 1]).toBe(1);
+            });
+
+            /**
+             * The ceiling is read per pump, not captured in the constructor,
+             * so dragging either speed slider applies to the next sentence.
+             */
+            it('reads the ceiling live', async () => {
+                let ceiling = 1;
+                const talk = streamed({ maxBacklogSeconds: () => 4, jumpBacklogSeconds: () => 40, maxRateScale: () => ceiling });
+                talk.onMessages('s1', [agentText('m1', sentences('Live', 8).join(' '))]);
+                await settle();
+                expect(engine.rates[0]).toBe(1);
+
+                ceiling = 1.5;
+                engine.finishOne();
+                await settle();
+                expect(engine.rates[1]).toBeGreaterThan(1);
+            });
         });
     });
 

@@ -54,12 +54,21 @@ function normalize(source: string): Normalized {
 /**
  * Where `sentence` sits in `plain`, as a half-open range of source indices, or
  * null when it is not in there.
+ *
+ * `from` is a source index to start looking at, so a caller walking a block's
+ * sentences in order cannot match the second one against an identical first
+ * (DROVE-163). Left out, the whole string is searched, which is what the
+ * highlight wants: it has one sentence and no idea where it sits.
  */
-export function findSentenceRange(plain: string, sentence: string): { start: number; end: number } | null {
+export function findSentenceRange(plain: string, sentence: string, from = 0): { start: number; end: number } | null {
     const needle = normalize(sentence);
     if (needle.text.length === 0) return null;
     const hay = normalize(plain);
-    const at = hay.text.indexOf(needle.text);
+    let fromNormalized = 0;
+    while (fromNormalized < hay.sourceIndex.length && hay.sourceIndex[fromNormalized] < from) {
+        fromNormalized += 1;
+    }
+    const at = hay.text.indexOf(needle.text, fromNormalized);
     if (at === -1) return null;
     const start = hay.sourceIndex[at];
     const last = hay.sourceIndex[at + needle.text.length - 1];

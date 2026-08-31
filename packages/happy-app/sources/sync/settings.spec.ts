@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { SettingsSchema, settingsParse, applySettings, settingsDefaults, settingsToSyncPayload, isCodeWrapOn, toggleCodeWrap, resolveStreamTalk, updateStreamTalk, type Settings, resolveSpeakReplies } from './settings';
+import { SettingsSchema, settingsParse, applySettings, settingsDefaults, settingsToSyncPayload, isCodeWrapOn, toggleCodeWrap, resolveSpokenRate, resolveStreamTalk, streamTalkCatchUpRateRange, streamTalkJumpRange, streamTalkRateCeiling, streamTalkRateRange, updateStreamTalk, type Settings, resolveSpeakReplies } from './settings';
 
 describe('settings', () => {
     describe('the delivery channels (DROVE-72)', () => {
@@ -217,7 +217,7 @@ describe('settings', () => {
                 usageLimitShowRemaining: false,
                 codeWrap: { terminal: false, code: false },
                 codeScroll: {},
-                streamTalk: { voiceId: null, rate: 0.52, pitch: 1.0, maxBacklogSeconds: 15 },
+                streamTalk: { voiceId: null, rate: 0.52, catchUpRate: 0.78, pitch: 1.0, maxBacklogSeconds: 15, jumpBacklogSeconds: 45 },
                 speakReplies: { on: 'auto' },
                 audioCues: {
                     on: true,
@@ -578,17 +578,19 @@ describe('codeWrap (DROVE-95, default flipped in DROVE-149)', () => {
         expect(isCodeWrapOn(settingsParse(settingsToSyncPayload(off)), 'code')).toBe(false);
     });
 
-    describe('streamTalk (DROVE-97, threshold reworked in DROVE-108)', () => {
+    describe('streamTalk (DROVE-97, threshold reworked in DROVE-108, two speeds in DROVE-116)', () => {
         it('fills in every field from the defaults when nothing is set', () => {
             expect(resolveStreamTalk({ streamTalk: {} })).toEqual({
-                voiceId: null, rate: 0.52, pitch: 1.0, maxBacklogSeconds: 15,
+                voiceId: null, rate: 0.52, catchUpRate: 0.78, pitch: 1.0,
+                maxBacklogSeconds: 15, jumpBacklogSeconds: 45,
             });
             expect(resolveStreamTalk({ streamTalk: undefined as any })).toEqual(resolveStreamTalk(settingsDefaults));
         });
 
         it('keeps a chosen voice and clamps the sliders to their ranges', () => {
             expect(resolveStreamTalk({ streamTalk: { voiceId: 'com.apple.voice.premium.en-US.Zoe', rate: 0.9, pitch: 0.1, maxBacklogSeconds: 45 } })).toEqual({
-                voiceId: 'com.apple.voice.premium.en-US.Zoe', rate: 0.6, pitch: 0.5, maxBacklogSeconds: 30,
+                voiceId: 'com.apple.voice.premium.en-US.Zoe', rate: 0.6, catchUpRate: 0.78, pitch: 0.5,
+                maxBacklogSeconds: 30, jumpBacklogSeconds: 45,
             });
             expect(resolveStreamTalk({ streamTalk: { maxBacklogSeconds: 3 } }).maxBacklogSeconds).toBe(10);
             expect(resolveStreamTalk({ streamTalk: { voiceId: '' } }).voiceId).toBeNull();
@@ -602,7 +604,88 @@ describe('codeWrap (DROVE-95, default flipped in DROVE-149)', () => {
 
         it('patches one field and keeps the rest', () => {
             const patched = updateStreamTalk({ streamTalk: { voiceId: 'x', rate: 0.5 } }, { maxBacklogSeconds: 20 });
-            expect(patched).toEqual({ streamTalk: { voiceId: 'x', rate: 0.5, pitch: 1.0, maxBacklogSeconds: 20 } });
+            expect(patched).toEqual({
+                streamTalk: {
+                    voiceId: 'x', rate: 0.5, catchUpRate: 0.78, pitch: 1.0,
+                    maxBacklogSeconds: 20, jumpBacklogSeconds: 45,
+                },
+            });
+        });
+
+        /**
+         * DROVE-116. The fast speed is allowed ABOVE the normal slider's own
+         * maximum, because the slider bounds what the user picks for prose and
+         * must not also bound what catching up may add on top; that clamp was
+         * the bug that made catch-up a no-op for anyone with the speed up.
+         */
+        it('lets the fast speed exceed the normal slider, up to the engine ceiling', () => {
+            expect(streamTalkCatchUpRateRange.max).toBeGreaterThan(streamTalkRateRange.max);
+            expect(streamTalkCatchUpRateRange.max).toBe(streamTalkRateCeiling);
+            expect(resolveStreamTalk({ streamTalk: { catchUpRate: 0.84 } }).catchUpRate).toBe(0.84);
+            expect(resolveStreamTalk({ streamTalk: { catchUpRate: 2 } }).catchUpRate).toBe(streamTalkRateCeiling);
+        });
+
+        it('is at least 1.5x the normal speed by default', () => {
+            const talk = resolveStreamTalk({ streamTalk: {} });
+            expect(talk.catchUpRate / talk.rate).toBeGreaterThanOrEqual(1.5);
+        });
+
+        it('never lets the fast speed sit below the normal one', () => {
+            // Both directions: an old synced object with no fast speed at all,
+            // and one that names a slower fast speed outright.
+            expect(resolveStreamTalk({ streamTalk: { rate: 0.6, catchUpRate: 0.42 } })).toMatchObject({
+                rate: 0.6, catchUpRate: 0.6,
+            });
+            expect(resolveStreamTalk({ streamTalk: { rate: 0.6 } }).catchUpRate).toBeGreaterThanOrEqual(0.6);
+        });
+
+        /**
+         * The clamp DROVE-116 was really about. The engine used to bound
+         * `rate x rateScale` by the speed slider's own maximum, so at the top
+         * of that slider the product clamped straight back to it: anyone who
+         * likes fast speech, which is exactly the person who wants catch-up,
+         * silently got none of it and every backlog ended in a jump.
+         */
+        describe('the rate one utterance is actually spoken at (DROVE-116)', () => {
+            const top = streamTalkRateRange.max;
+
+            it('still rises with the backlog when the speed slider is at its maximum', () => {
+                const atRest = resolveSpokenRate(top, 1, false);
+                const behind = resolveSpokenRate(top, 1.25, false);
+                const farBehind = resolveSpokenRate(top, 1.5, false);
+                expect(atRest).toBe(top);
+                expect(behind).toBeGreaterThan(atRest);
+                expect(farBehind).toBeGreaterThan(behind);
+            });
+
+            it('never goes past the engine-safe ceiling, however big the multiplier', () => {
+                expect(resolveSpokenRate(top, 10, false)).toBe(streamTalkRateCeiling);
+                expect(resolveSpokenRate(0.4, 0.1, false)).toBe(streamTalkRateRange.min);
+            });
+
+            it('leaves an ordinary sentence at exactly the chosen rate', () => {
+                expect(resolveSpokenRate(0.52, 1, false)).toBeCloseTo(0.52, 5);
+            });
+
+            /**
+             * A title is read faster and higher than the reply (DROVE-112).
+             * The catch-up must not stack on top of that into something
+             * unintelligible, which is why both share one ceiling: a title
+             * spoken while far behind is never faster than the fastest prose.
+             */
+            it('keeps an aside above the prose around it and under the same ceiling', () => {
+                expect(resolveSpokenRate(0.52, 1, true)).toBeGreaterThan(resolveSpokenRate(0.52, 1, false));
+                expect(resolveSpokenRate(top, 1.5, true)).toBe(streamTalkRateCeiling);
+                expect(resolveSpokenRate(top, 1.5, true)).toBeLessThanOrEqual(streamTalkRateCeiling);
+            });
+        });
+
+        it('keeps the jump threshold strictly above the speed-up threshold', () => {
+            expect(resolveStreamTalk({ streamTalk: { maxBacklogSeconds: 30, jumpBacklogSeconds: 20 } })).toMatchObject({
+                maxBacklogSeconds: 30, jumpBacklogSeconds: 31,
+            });
+            expect(resolveStreamTalk({ streamTalk: { maxBacklogSeconds: 30, jumpBacklogSeconds: 30 } }).jumpBacklogSeconds).toBe(31);
+            expect(resolveStreamTalk({ streamTalk: { jumpBacklogSeconds: 500 } }).jumpBacklogSeconds).toBe(streamTalkJumpRange.max);
         });
     });
 
