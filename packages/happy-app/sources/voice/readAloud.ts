@@ -417,6 +417,21 @@ interface HeldTail {
     createdAt: number;
 }
 
+/**
+ * One sentence out of a transcript the reader is NOT following (DROVE-195).
+ *
+ * A subagent's transcript is fetched by its own screen and never reaches
+ * `onMessages`, so the reader has no copy of it and could not seek into it.
+ * These are handed in whole by whoever is drawing that transcript. The
+ * `messageId` is the subagent message's own, which is what puts the reading
+ * mark on the row the finger landed on.
+ */
+export interface ReadAloudDetourSentence {
+    readonly messageId: string;
+    readonly text: string;
+    readonly createdAt: number;
+}
+
 /** Words in a sentence, for the audio-duration estimate. */
 function countWords(text: string): number {
     const parts = text.trim().split(/\s+/);
@@ -544,6 +559,11 @@ export class ReadAloudReader {
      */
     private urgent: { key: string; text: string }[] = [];
     /**
+     * A transcript borrowed from another surface, read once and then given
+     * back (DROVE-195). See `readDetour`.
+     */
+    private detour: QueuedSentence[] = [];
+    /**
      * The app is not in the foreground (DROVE-189). Reading carries on; what
      * changes is that a drained queue no longer hands the audio session back,
      * because letting go of it in the background is what lets iOS suspend the
@@ -629,6 +649,7 @@ export class ReadAloudReader {
      */
     get speechPending(): boolean {
         if (this.urgent.length > 0) return true;
+        if (this.detour.length > 0) return true;
         return this.skipSpoken(this.cursor) < this.timeline.length;
     }
 
@@ -673,6 +694,70 @@ export class ReadAloudReader {
     /** Lines still waiting to jump the queue. For the tests. */
     get urgentPending(): number {
         return this.urgent.length;
+    }
+
+    /**
+     * Read a transcript this reader is NOT following, then come back
+     * (DROVE-195).
+     *
+     * Clay: "if you go to a subagent and tap a sentence from it while I'm in
+     * reading mode it will read it." The reader follows ONE session, and a
+     * subagent's transcript is fetched by the agent screen over its own RPC
+     * and never reaches `onMessages`. So the sentence he tapped is not in the
+     * timeline, cannot be, and `seekToSentence` would miss it and fall back to
+     * seeking the SESSION by createdAt, which moves the reading to whatever
+     * unrelated reply shares that minute. Silently wrong is worse than inert,
+     * and inert is what DROVE-164 already ruled out.
+     *
+     * THE DECISION, written down: the reader FOLLOWS HIM INTO THE SUBAGENT,
+     * and it does so as a detour rather than as a move. The session keeps its
+     * focus, its timeline, its cursor and every spoken mark; sentences still
+     * arriving for it still queue, because focus never left. All that changes
+     * is what is said next. When the borrowed sentences run out the session's
+     * own reading resumes at exactly the sentence it was going to say anyway.
+     *
+     * A move was the alternative and it is wrong twice over: `focus` throws
+     * the timeline away and nothing refills it (`onMessages` is fed deltas, so
+     * coming back would be silence until the model wrote something new), and
+     * while the focus was elsewhere the session's own arriving replies would
+     * be dropped on the floor.
+     *
+     * Gates still outrank this (DROVE-188): a session blocked on him costs
+     * more than a paragraph of an agent's transcript.
+     *
+     * IT SURVIVES HIM LEAVING THE AGENT SCREEN, because DROVE-179 settled that
+     * a surface going away is not a request for silence and this is the same
+     * rule: he asked for the agent's work to be read and swiping back is not
+     * him taking that back. The reading mark goes with the screen; the voice
+     * does not. What DOES end it is asking the session something new, which is
+     * him moving on, and anything the gate calls a real stop.
+     *
+     * Unlike `sayUrgent` this CUTS the sentence in flight, because it is a
+     * seek and seeks take effect under the finger (DROVE-163). It goes around
+     * `interrupt` for the same reason a seek does: a tap is not a reason to
+     * stop the microphone.
+     */
+    readDetour(sentences: readonly ReadAloudDetourSentence[]): boolean {
+        if (!this.enabled) return false;
+        if (sentences.length === 0) return false;
+        this.detour = sentences.map((at) => ({
+            text: at.text,
+            words: countWords(at.text),
+            turn: this.turn,
+            messageId: at.messageId,
+            createdAt: at.createdAt,
+            spoken: false,
+            aside: false,
+            thinking: false,
+        }));
+        this.cutCurrentUtterance();
+        this.pump();
+        return true;
+    }
+
+    /** Borrowed sentences still to say. For the tests. */
+    get detourPending(): number {
+        return this.detour.length;
     }
 
     /**
@@ -730,6 +815,7 @@ export class ReadAloudReader {
         this.cursor = 0;
         this.lastPosition = null;
         this.urgent = [];
+        this.detour = [];
         this.interrupt(reason);
     }
 
@@ -854,6 +940,11 @@ export class ReadAloudReader {
             if (message.kind === 'user-text' && message.createdAt > this.turnOpenedAt) {
                 this.turn += 1;
                 this.turnOpenedAt = message.createdAt;
+                // He has asked the session something new, so an agent's
+                // transcript he was part way through is no longer what he
+                // wants read (DROVE-195). The same rule the session's own
+                // backlog gets in `abandonTurnsBefore`, one turn earlier.
+                this.detour = [];
             }
 
             // The title of a tool call, a terminal call or an agent spawning
@@ -961,6 +1052,8 @@ export class ReadAloudReader {
         this.pendingTails.clear();
         // A gate line belongs to a session and a queue the user threw away.
         this.urgent = [];
+        // So does a transcript borrowed from one of its screens (DROVE-195).
+        this.detour = [];
         this.clearHold();
         this.speaking = false;
         this.speakingTurn = null;
@@ -1273,6 +1366,18 @@ export class ReadAloudReader {
         if (urgent !== undefined) {
             this.setPlayhead(null);
             this.speakNow(urgent.text, this.turn, 1, null);
+            return;
+        }
+
+        // A transcript borrowed from another surface (DROVE-195). Ahead of the
+        // session because he asked for it by tapping it, behind a gate because
+        // a gate is him being waited on. It carries its own playhead, so the
+        // mark lands on the subagent row he touched exactly as it does on a
+        // reply, and at the normal rate: the catch-up ramp is about falling
+        // behind a session that is still writing, which this is not.
+        const detour = this.detour.shift();
+        if (detour !== undefined) {
+            this.speakNow(detour.text, this.turn, 1, detour);
             return;
         }
 

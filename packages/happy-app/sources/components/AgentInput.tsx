@@ -20,7 +20,7 @@ import { TextInputState, MultiTextInputHandle } from './MultiTextInput';
 import { applySuggestion } from './autocomplete/applySuggestion';
 import { GitStatusBadge, useHasMeaningfulGitStatus } from './GitStatusBadge';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { useSetting } from '@/sync/storage';
+import { useLocalSetting, useSetting } from '@/sync/storage';
 import { hackMode, hackModes } from '@/sync/modeHacks';
 import { getPermissionModeMenuLabel, getPermissionModeShortLabel } from '@/utils/permissionModeLabels';
 import type { UsageLimitsLike } from '@/utils/sessionStatusBar';
@@ -1185,13 +1185,17 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     React.useEffect(() => () => {
         if (composerToastTimer.current) clearTimeout(composerToastTimer.current);
     }, []);
+    // Turning reading on is the moment the sentence tap starts working, so it
+    // is the moment to say the gesture exists (DROVE-195). Until he has used
+    // it once; after that the toast is the plain line again.
+    const sentenceTapUsed = useLocalSetting('sentenceTapUsed');
     const handleStreamTalkPress = React.useCallback(() => {
         if (!props.onReadAloudToggle) return;
-        const flipped = flipStreamTalk(!!props.readAloudEnabled);
+        const flipped = flipStreamTalk(!!props.readAloudEnabled, sentenceTapUsed);
         hapticsLight();
         props.onReadAloudToggle();
         showComposerToast(t(flipped.toastKey));
-    }, [props.onReadAloudToggle, props.readAloudEnabled, showComposerToast]);
+    }, [props.onReadAloudToggle, props.readAloudEnabled, sentenceTapUsed, showComposerToast]);
 
     const permissionSettingsGroups = React.useMemo<NativeSettingsMenuGroup[]>(() => {
         if (!props.onPermissionModeChange || availableModes.length === 0) {

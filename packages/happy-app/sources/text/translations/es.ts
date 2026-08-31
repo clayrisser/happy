@@ -459,6 +459,7 @@ export const es: TranslationStructure = {
         streamTalk: {
             on: 'Leyendo las respuestas en voz alta',
             off: 'No se leen las respuestas',
+            onHint: 'Leyendo las respuestas en voz alta. Toca una frase para leer desde ahí',
             headphonesOff: 'Lectura en voz alta desactivada, auriculares desconectados',
         },
         dictate: {

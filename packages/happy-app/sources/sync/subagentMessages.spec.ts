@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
     clearSubagentMessages,
     getSubagentMessage,
+    getSubagentMessages,
     hasSubagentScope,
     publishSubagentMessages,
     resetSubagentMessages,
@@ -203,6 +204,27 @@ describe('a row inside a consolidated card on an agent screen', () => {
 
         expect(openRow(`/session/${sessionId}/message/${first.id}?agentId=agent-other`)).toBeNull();
         expect(openRow(`/session/${sessionId}/message/${first.id}?agentId=${agentId}`)).toBe(first);
+    });
+
+    /**
+     * The reader needs the WHOLE transcript, not one row (DROVE-195): a tap on
+     * a sentence means "read from here on", and "on" is the rest of the
+     * agent's work.
+     */
+    it('hands the whole published transcript over for reading', () => {
+        const state = transcript();
+        publishSubagentMessages(sessionId, agentId, state.messagesMap);
+        const all = getSubagentMessages(sessionId, agentId);
+        expect(all.length).toBe(Object.keys(state.messagesMap).length);
+        expect(all.length).toBeGreaterThan(0);
+
+        // A scope nobody published is empty rather than throwing, so a tap
+        // arriving a frame before the first poll lands does nothing.
+        expect(getSubagentMessages(sessionId, 'agent-nobody')).toEqual([]);
+        expect(getSubagentMessages(null, agentId)).toEqual([]);
+
+        clearSubagentMessages(sessionId, agentId);
+        expect(getSubagentMessages(sessionId, agentId)).toEqual([]);
     });
 
     it('lets the scope go when the agent screen does', () => {

@@ -82,3 +82,46 @@ describe('the toast names what it flipped', () => {
         expect(settingsDefaults.droverAnnounceAudio).toBe(false);
     });
 });
+
+/**
+ * THE GESTURE ANNOUNCES ITSELF, ONCE (DROVE-195).
+ *
+ * DROVE-163 moved "read from this sentence" from a double tap to a single one
+ * and told nobody, so Clay kept double-tapping and reported the feature broken.
+ * It was not broken. The toast that fires when he turns reading on is the one
+ * moment the gesture becomes available, so that is where it is said, and using
+ * the gesture once retires the line.
+ */
+describe('the toast teaches the sentence tap until it has been used', () => {
+    it('hints on the first time reading is turned on', () => {
+        expect(flipStreamTalk(false, false)).toEqual({
+            readAloudEnabled: true,
+            toastKey: 'agentInput.streamTalk.onHint',
+        });
+    });
+
+    it('goes back to the plain line once he has tapped a sentence', () => {
+        expect(flipStreamTalk(false, true).toastKey).toBe('agentInput.streamTalk.on');
+    });
+
+    it('never hints on the way off, where the gesture is not the news', () => {
+        expect(flipStreamTalk(true, false).toastKey).toBe('agentInput.streamTalk.off');
+        expect(flipStreamTalk(true, true).toastKey).toBe('agentInput.streamTalk.off');
+    });
+
+    it('says the gesture in his words: one tap, on a sentence', () => {
+        expect(en.agentInput.streamTalk.onHint).toBe(
+            'Reading replies aloud. Tap a sentence to read from there',
+        );
+        // The plain line is still inside it, so the two never disagree about
+        // what turning it on did.
+        expect(en.agentInput.streamTalk.onHint).toContain(en.agentInput.streamTalk.on);
+    });
+
+    it('remembers on the device, off by default, and is not a preference', () => {
+        expect(localSettingsDefaults.sentenceTapUsed).toBe(false);
+        const used = applyLocalSettings(localSettingsDefaults, { sentenceTapUsed: true });
+        expect(used.sentenceTapUsed).toBe(true);
+        expect(localSettingsParse(used).sentenceTapUsed).toBe(true);
+    });
+});

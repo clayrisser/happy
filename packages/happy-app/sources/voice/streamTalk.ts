@@ -18,7 +18,10 @@
 
 export type StreamTalkIcon = 'volume-high' | 'volume-mute-outline';
 
-export type StreamTalkToastKey = 'agentInput.streamTalk.on' | 'agentInput.streamTalk.off';
+export type StreamTalkToastKey =
+    | 'agentInput.streamTalk.on'
+    | 'agentInput.streamTalk.onHint'
+    | 'agentInput.streamTalk.off';
 
 export interface StreamTalkButton {
     /** Drawn only when this surface has a reader; an embedded or disconnected chat has none. */
@@ -49,11 +52,30 @@ export function streamTalkButton(readAloudEnabled: boolean | undefined): StreamT
     };
 }
 
-/** What a tap does: the next value of the key, and the toast that announces it. */
-export function flipStreamTalk(readAloudEnabled: boolean): { readAloudEnabled: boolean; toastKey: StreamTalkToastKey } {
+/**
+ * What a tap does: the next value of the key, and the toast that announces it.
+ *
+ * TURNING IT ON ALSO TEACHES THE GESTURE, once (DROVE-195). DROVE-163 moved
+ * "read from this sentence" off a double tap and onto a single one, for good
+ * reasons, and told nobody. Clay went on double-tapping, got the second tap
+ * onto a different sentence or onto nothing, and reported the feature as
+ * broken. It was not broken; it was unannounced, which from where he sits is
+ * the same thing.
+ *
+ * The moment to say so is the moment the gesture starts working, which is
+ * this toast and no other place: a tip on a settings page is read by nobody
+ * and a permanent hint under the composer is clutter for someone who already
+ * knows. `used` retires it, so it is a hint until he does it once and a plain
+ * line forever after.
+ */
+export function flipStreamTalk(
+    readAloudEnabled: boolean,
+    sentenceTapUsed = true,
+): { readAloudEnabled: boolean; toastKey: StreamTalkToastKey } {
     const next = !readAloudEnabled;
+    if (!next) return { readAloudEnabled: next, toastKey: 'agentInput.streamTalk.off' };
     return {
         readAloudEnabled: next,
-        toastKey: next ? 'agentInput.streamTalk.on' : 'agentInput.streamTalk.off',
+        toastKey: sentenceTapUsed ? 'agentInput.streamTalk.on' : 'agentInput.streamTalk.onHint',
     };
 }
