@@ -9,7 +9,7 @@ import { parseFlipCommand } from "@/drover/flip/controller";
 import { capturePane, injectIntoPane, interruptPane, paneAcceptsCommand, paneIsIdle, pressPaneKey, registryStatus } from "./utils/paneInject";
 import { paneCommandKind, paneCommandOutcome, paneUltracodeActive } from "./utils/paneCommandOutcome";
 import { createPaneCommandQueue, paneCommandArgument, paneCommandsForSelection, paneModelAsRequest, paneSlashCommand, parseRemoteControlRequest, remoteControlCommand, type PaneModelSelection } from "./utils/paneModelSync";
-import { cyclePaneMode, pressCycleKey, readPaneMode, type PaneMode } from "./utils/panePermissionSync";
+import { cyclePaneMode, panePermissionAsRequest, pressCycleKey, readPaneMode, readPaneModeChip, type PaneMode } from "./utils/panePermissionSync";
 import { isPermissionMode, mapToClaudeMode } from "./utils/permissionMode";
 import { findInbox, sendToInbox, wrapForPane } from "./utils/inboxSocket";
 import {
@@ -187,11 +187,15 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
         // every call, and the app had no way at all to know what the pane was
         // actually in — the composer was showing its own stored pick. This is
         // also how a shift+tab typed at the keyboard reaches the phone.
+        //
+        // DROVE-199: and the observation now feeds the REQUEST as well as the
+        // pill. Reporting only `panePermissionMode` left `permissionMode`
+        // standing on whatever the app last picked, which is the field the
+        // app's own change test and this launcher's delta both run against —
+        // so a mode moved at the keyboard made the phone's next tap on that
+        // row a no-op twice over. See reportPanePermissionMode.
         onPermissionModeObserved: process.env.TMUX_PANE
-            ? (mode) => session.client.updateMetadata((metadata) => ({
-                ...metadata,
-                panePermissionMode: mode,
-            }))
+            ? (mode) => { void reportPanePermissionMode(mode); }
             : undefined,
         // DROVE-63: and whether Remote Control is on, from the same file, for
         // the same reason — the app's toggle has to show what is TRUE, so that
@@ -440,17 +444,26 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
         // paneModeFor, which runs the app's key through isPermissionMode and
         // mapToClaudeMode. And cyclePaneMode never acts on the value anyway —
         // it only compares it to what it reads back off the pane.
-        const outcome = await cyclePaneMode(mode as PaneMode, {
-            read: () => readPaneMode(tmuxPane!),
-            press: () => pressCycleKey(tmuxPane!),
-            settle: () => new Promise((r) => setTimeout(r, paneCycleSettleMs)),
-        });
+        //
+        // The watcher is held off for the length of the cycle (DROVE-199). It
+        // reads the same footer this loop is pressing against, and a read
+        // landing between a press and its settle would report a mode that is
+        // on its way somewhere else — then mirror it into the request and
+        // cancel the very pick being applied.
+        cyclingPermissionMode = true;
+        let outcome: Awaited<ReturnType<typeof cyclePaneMode>>;
+        try {
+            outcome = await cyclePaneMode(mode as PaneMode, {
+                read: () => readPaneMode(tmuxPane!),
+                press: () => pressCycleKey(tmuxPane!),
+                settle: () => new Promise((r) => setTimeout(r, paneCycleSettleMs)),
+            });
+        } finally {
+            cyclingPermissionMode = false;
+        }
         if (outcome === 'applied') {
             logger.debug(`[local]: pane is now in permission mode ${mode}`);
-            session.client.updateMetadata((metadata) => ({
-                ...metadata,
-                panePermissionMode: mode,
-            }));
+            await reportPanePermissionMode(mode, true);
             return true;
         }
         if (outcome === 'unreachable') {
@@ -463,10 +476,75 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
                     + 'it is not in the terminal\'s permission-mode cycle (disabled by '
                     + 'settings or policy). The pane is back on the mode it was in.',
             });
+            // And stop ASKING for it (DROVE-199, the same rule DROVE-191 wrote
+            // for a refused `/effort`). The cycle walked the pane back to where
+            // it started, so the request has to follow it there; leaving
+            // `permissionMode: "bypassPermissions"` standing after the session
+            // said no is a false value the app renders nowhere and this
+            // launcher would read as a pick still outstanding.
+            const settled = await readPaneMode(tmuxPane!);
+            if (settled !== null) await reportPanePermissionMode(settled, true);
             return true;
         }
         logger.debug(`[local]: could not reach the prompt to set ${mode} (${outcome}) — retrying later`);
         return false;
+    }
+
+    /**
+     * Write down the mode the pane is in, and make the app's request agree
+     * with it (DROVE-199).
+     *
+     * One place, three callers: the transcript's own per-turn record, the
+     * footer watcher below, and the cycle when it settles. Only ever called
+     * with a mode that was READ or CONFIRMED, never with one that was merely
+     * asked for.
+     */
+    async function reportPanePermissionMode(mode: string, applying = false): Promise<void> {
+        observedPermissionMode = mode;
+        session.client.updateMetadata((metadata) => ({
+            ...metadata,
+            panePermissionMode: mode,
+        }));
+        mirrorPanePermissionIntoRequest(applying);
+    }
+
+    /**
+     * How often the pane's footer is re-read for the permission mode
+     * (DROVE-199).
+     *
+     * The transcript is the wrong source for this one fact and the scanner
+     * says so in its own docs: Claude Code appends a `permission-mode` record
+     * as part of the state block around every PROMPT, so a shift+tab pressed
+     * at an idle prompt writes nothing at all and the phone's padlock stayed
+     * on the previous turn's mode until Clay sent another message. The footer
+     * says it the moment the key is pressed, which is why the carrier already
+     * reads it. Same interval as the command retry, which is well inside the
+     * "within a turn" the ticket asks for and is one `tmux capture-pane` — the
+     * gate already runs one of those on the same cadence whenever anything is
+     * queued.
+     */
+    const panePermissionPollMs = 2000;
+    let panePermissionTimer: NodeJS.Timeout | null = null;
+    /** True while cyclePaneMode is pressing. See applyPanePermissionMode. */
+    let cyclingPermissionMode = false;
+
+    /**
+     * Read the footer and report a mode that moved without us.
+     *
+     * The CHIP only, and only while a Claude child is in the foreground of the
+     * pane. Both guards are the same lesson, measured on a live run: the `❯`
+     * fallback that reads an absent chip as manual mode is right at a gated
+     * prompt and wrong on a timer, because the folder-trust dialog and a shell
+     * prompt both draw a `❯` and no chip. The first version of this watcher
+     * reported `default` for a session that came up in `auto`, and the mirror
+     * dutifully wrote that into the request.
+     */
+    async function watchPanePermissionMode(): Promise<void> {
+        if (!tmuxPane || !childAlive || cyclingPermissionMode) return;
+        const mode = await readPaneModeChip(tmuxPane);
+        if (mode === null || mode === observedPermissionMode) return;
+        logger.debug(`[local]: the pane's permission mode is ${mode} — reporting it`);
+        await reportPanePermissionMode(mode);
     }
 
     /**
@@ -689,6 +767,14 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
     /** What the pane is observed to be running, from the transcript or a slash command it took (DROVE-77). */
     let observedRun: { model?: string | null; effort?: string | null } = {};
 
+    /**
+     * The permission mode the pane is observed to be in (DROVE-36/DROVE-199).
+     * A Claude mode, never an app key. `undefined` means nothing has been read
+     * yet, which is the one state that must not be compared against: it is not
+     * the same as "the pane is on default".
+     */
+    let observedPermissionMode: string | undefined = undefined;
+
     let requestedRemoteControl: boolean | null = tmuxPane
         ? parseRemoteControlRequest(session.client.getMetadata()?.remoteControl)
         : null;
@@ -788,6 +874,38 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
         session.client.updateMetadata((m) => ({ ...m, ...patch }));
     }
 
+    /**
+     * The same mirror, for the permission mode (DROVE-199).
+     *
+     * Separate from the one above rather than a third branch inside it because
+     * the two do not share a vocabulary. `modelMode` and `effortLevel` are the
+     * same strings the pane speaks; `permissionMode` is an APP key that
+     * `paneModeFor` folds into a Claude mode, so `paneSelection` and the
+     * metadata field hold different values for the same choice and mixing them
+     * is how `yolo` would end up rewritten to `bypassPermissions` for nothing.
+     *
+     * A `#permission-mode` still waiting in the queue suppresses it, for the
+     * DROVE-191 reason: that command IS the request, on its way to the prompt,
+     * and mirroring the mode it is about to leave would cancel it.
+     */
+    function mirrorPanePermissionIntoRequest(applying = false): void {
+        if (!tmuxPane || observedPermissionMode === undefined) return;
+        // `applying` names the `#permission-mode` being carried out right now,
+        // whose queue entry has not been shifted off yet. Any OTHER one still
+        // waiting is a pick on its way to the prompt, and mirroring over it
+        // would cancel the very thing that is queued.
+        if (!applying && paneCommands.pending().some((c) => c.startsWith('#permission-mode '))) return;
+        const metadata = session.client.getMetadata();
+        const wanted = panePermissionAsRequest(observedPermissionMode, metadata?.permissionMode);
+        if (wanted === undefined || wanted === (metadata?.permissionMode ?? null)) return;
+        // Kept in step with the write, in the pane's own vocabulary, or the
+        // next metadata event would read this mirror as a fresh pick and press
+        // shift+tab at Clay's prompt for a mode it is already in.
+        paneSelection = { ...paneSelection, permissionMode: paneModeFor(wanted) };
+        logger.debug(`[local]: the pane's permission mode moved under the app's request — mirroring ${wanted}`);
+        session.client.updateMetadata((m) => ({ ...m, permissionMode: wanted }));
+    }
+
     const onMetadataChanged = (metadata: { modelMode?: string | null, effortLevel?: string | null, permissionMode?: string | null, remoteControl?: unknown } | null) => {
         if (!tmuxPane || !metadata) return;
         const next: PaneModelSelection = {
@@ -837,6 +955,23 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
                 paneSelection = { ...paneSelection, effortLevel: undefined };
             }
         }
+        // DROVE-199: and the third field, on the same rule. Both values here
+        // are already Claude modes — `next.permissionMode` came through
+        // paneModeFor and `observedPermissionMode` is read off the footer — so
+        // this is a plain comparison rather than the model's fold. A pick that
+        // names the mode the pane is already in is Clay's own shift+tab coming
+        // back round; one that differs from it forces a command out even when
+        // the stale request happens to match, which is the half that was
+        // broken. Null-safe on purpose: `default` and a cleared pick are the
+        // same mode, and `commandFor` spells both as `#permission-mode default`.
+        if (next.permissionMode !== undefined && observedPermissionMode !== undefined) {
+            if ((next.permissionMode ?? 'default') === observedPermissionMode) {
+                paneCommands.cancel('#permission-mode');
+                next.permissionMode = paneSelection.permissionMode;
+            } else {
+                paneSelection = { ...paneSelection, permissionMode: undefined };
+            }
+        }
         const commands = paneCommandsForSelection(paneSelection, next);
         if (commands.length === 0) return;
         // Record the intent even if the pane is busy. The queue owns the
@@ -844,19 +979,32 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
         // would just queue duplicates of what is already waiting.
         paneSelection = { ...paneSelection, ...next };
         logger.debug(`[local]: app changed the model/effort — queueing ${commands.join(', ')}`);
-        // Queued one at a time because they do not share a gate any more
-        // (DROVE-164). `/model` and `/effort` are typed at the prompt and
-        // Claude Code runs them mid-turn, so they take the weaker gate. The
-        // permission mode is a shift+tab loop that READS THE PANE BACK between
-        // presses (panePermissionSync), which wants the screen holding still,
-        // so it keeps waiting for idle. Order is preserved either way.
+        // Every picker command takes the weaker gate, permission mode included
+        // (DROVE-199). It used to keep waiting for idle on the reasoning that a
+        // shift+tab loop reading the pane back wants the screen holding still —
+        // but "idle" is not that property, it is the TURN being over, and
+        // DROVE-164 already measured what that costs: a session Clay is
+        // actually working is never idle, so the pick sat in the queue and the
+        // padlock never moved. What the loop actually needs is what
+        // `paneAcceptsCommand` checks and `paneIsIdle` does not: no dialog on
+        // screen and an empty input box. A running turn changes neither, the
+        // mode chip stays first in the footer while it streams, and the loop
+        // stops of its own accord the moment it loses sight of the prompt.
         for (const command of commands) {
-            paneCommands.request([command], { allowWhileBusy: command.startsWith('/') });
+            paneCommands.request([command], { allowWhileBusy: true });
         }
         pumpPaneCommands();
     };
     if (tmuxPane) {
         session.client.on('metadata', onMetadataChanged);
+        // The footer watcher (DROVE-199). Unconditional for a pane session
+        // rather than started on demand like the command retry: what it is
+        // watching for is a key Clay presses, which arrives on no signal this
+        // process can subscribe to. `watchPanePermissionMode` no-ops while
+        // there is no child in the pane, so the cost between spawns is a
+        // timer tick.
+        panePermissionTimer = setInterval(() => { void watchPanePermissionMode(); }, panePermissionPollMs);
+        panePermissionTimer.unref?.();
         // The scanner already reported the transcript's state, but it did so
         // before the queue existed. Decide once now, so a session relaunched
         // with the app's request still standing (a flip, a crash, a resume)
@@ -1695,6 +1843,10 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
         if (paneCommandTimer) {
             clearInterval(paneCommandTimer);
             paneCommandTimer = null;
+        }
+        if (panePermissionTimer) {
+            clearInterval(panePermissionTimer);
+            panePermissionTimer = null;
         }
 
         // Remove session found callback

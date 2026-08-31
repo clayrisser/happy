@@ -34,11 +34,14 @@ function paneSession(fields: {
     effortLevel?: string | null;
     paneModel?: string | null;
     paneEffort?: string | null;
+    permissionMode?: string | null;
+    panePermissionMode?: string | null;
 }) {
     sessions['s1'] = {
         id: 's1',
         modelMode: fields.modelMode ?? null,
         effortLevel: fields.effortLevel ?? null,
+        permissionMode: fields.permissionMode ?? null,
         metadataVersion: 1,
         metadata: {
             hasPane: true,
@@ -46,6 +49,8 @@ function paneSession(fields: {
             effortLevel: fields.effortLevel ?? null,
             paneModel: fields.paneModel ?? null,
             paneEffort: fields.paneEffort ?? null,
+            permissionMode: fields.permissionMode ?? null,
+            panePermissionMode: fields.panePermissionMode ?? null,
         },
     };
 }
@@ -100,6 +105,44 @@ describe('sessionSetAgentModes when the pane has moved under the app', () => {
         const { sessionSetAgentModes } = await import('./ops');
 
         sessionSetAgentModes('s1', { modelMode: 'claude-opus-5[1m]' });
+
+        expect(updateSessionAgentModes).not.toHaveBeenCalled();
+    });
+
+    it('sends a permission mode that equals the stored request but not the pane', async () => {
+        // DROVE-199, and the one Clay hits most: shift+tab is a key on his own
+        // keyboard, so the pane leaves the request behind every time he
+        // presses it. The composer showed the padlock for `plan` because
+        // resolveCurrentOption prefers panePermissionMode, so the row he
+        // tapped to get back to Yolo was compared against a request that still
+        // said `bypassPermissions` — and the pick was dropped before it could
+        // become a frame.
+        paneSession({ permissionMode: 'bypassPermissions', panePermissionMode: 'plan' });
+        const { sessionSetAgentModes } = await import('./ops');
+
+        sessionSetAgentModes('s1', { permissionMode: 'bypassPermissions' });
+
+        expect(updateSessionAgentModes).toHaveBeenCalledWith('s1', { permissionMode: 'bypassPermissions' });
+    });
+
+    it('sends nothing when the pane is already in the mode picked', async () => {
+        paneSession({ permissionMode: 'plan', panePermissionMode: 'plan' });
+        const { sessionSetAgentModes } = await import('./ops');
+
+        sessionSetAgentModes('s1', { permissionMode: 'plan' });
+
+        expect(updateSessionAgentModes).not.toHaveBeenCalled();
+    });
+
+    it('does not read Yolo against bypassPermissions as a disagreement', async () => {
+        // `yolo` is the Codex spelling of the same mode and the CLI folds it
+        // with mapToClaudeMode, so the pane can only ever report
+        // `bypassPermissions` for it. Comparing the raw strings would send a
+        // frame on every tap of the row that is already running.
+        paneSession({ permissionMode: 'yolo', panePermissionMode: 'bypassPermissions' });
+        const { sessionSetAgentModes } = await import('./ops');
+
+        sessionSetAgentModes('s1', { permissionMode: 'yolo' });
 
         expect(updateSessionAgentModes).not.toHaveBeenCalled();
     });

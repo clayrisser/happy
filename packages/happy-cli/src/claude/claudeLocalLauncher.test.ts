@@ -14,6 +14,7 @@ const {
     mockInterruptPane,
     mockClaudeRemoteLauncher,
     mockReadPaneMode,
+    mockReadPaneModeChip,
     mockPressCycleKey,
     callLog,
 } = vi.hoisted(() => ({
@@ -35,6 +36,7 @@ const {
     mockInterruptPane: vi.fn(),
     mockClaudeRemoteLauncher: vi.fn(async () => 'exit' as const),
     mockReadPaneMode: vi.fn(),
+    mockReadPaneModeChip: vi.fn(),
     mockPressCycleKey: vi.fn(),
     // DROVE-36 is partly a question of ORDER — did the mode reach the pane
     // before the message that came with it — and per-mock call counts cannot
@@ -98,6 +100,8 @@ vi.mock('./utils/inboxSocket', async (importOriginal) => ({
 vi.mock('./utils/panePermissionSync', async (importOriginal) => ({
     ...(await importOriginal<typeof import('./utils/panePermissionSync')>()),
     readPaneMode: mockReadPaneMode,
+    // DROVE-199: the watcher's read is the CHIP only, so it is its own seam.
+    readPaneModeChip: mockReadPaneModeChip,
     pressCycleKey: mockPressCycleKey,
 }));
 
@@ -673,7 +677,14 @@ describe('claudeLocalLauncher in a tmux pane', () => {
         // A pane nobody asked to change mode: reads back whatever it is on and
         // refuses nothing. Tests that care override it with `paneCycle`.
         mockReadPaneMode.mockResolvedValue('default');
+        mockReadPaneModeChip.mockResolvedValue('default');
         mockPressCycleKey.mockResolvedValue(true);
+        // And an open prompt. `vi.clearAllMocks` clears CALLS, not
+        // implementations, so a test that closed the gate used to leave it
+        // closed for whatever ran next — which is how three Remote Control
+        // specs came to depend on the gate a permission-mode spec had set.
+        mockPaneIsIdle.mockResolvedValue(true);
+        mockPaneAcceptsCommand.mockResolvedValue(true);
     });
 
     /**
@@ -685,6 +696,7 @@ describe('claudeLocalLauncher in a tmux pane', () => {
     function paneCycle(ring: string[], start: string) {
         let index = ring.indexOf(start);
         mockReadPaneMode.mockImplementation(async () => ring[index]);
+        mockReadPaneModeChip.mockImplementation(async () => ring[index]);
         mockPressCycleKey.mockImplementation(async () => {
             index = (index + 1) % ring.length;
             callLog.push(`cycle:${ring[index]}`);
@@ -1242,11 +1254,43 @@ describe('claudeLocalLauncher in a tmux pane', () => {
         // whichever pane holds focus. There is no second carrier left to order
         // the mode against, so the test went with the code it covered.
 
-        it('presses nothing while the pane is busy, and cycles when the prompt opens', async () => {
+        it('cycles the pane MID-TURN, because the idle gate never opens on a session being worked', async () => {
+            // DROVE-199. This is the hop the pick died on. `#permission-mode`
+            // was the one picker command still queued behind `paneIsIdle`, on
+            // the reasoning that a loop reading the pane back wants the screen
+            // holding still — but idle is not that property, it is the TURN
+            // being over, and DROVE-164 already measured what that costs: Clay
+            // works his sessions, so the prompt is never idle and the padlock
+            // never moved. A running turn changes neither the input box nor
+            // the dialog, and the mode chip stays first in the footer.
             const runs = trackRuns();
             const cycle = paneCycle(['default', 'bypassPermissions'], 'default');
-            const { session, emitMetadata } = paneSession({ permissionMode: 'default' });
+            const { session, emitMetadata, readMetadata } = paneSession({ permissionMode: 'default' });
             mockPaneIsIdle.mockResolvedValue(false);
+            mockPaneAcceptsCommand.mockResolvedValue(true);
+
+            const launcher = claudeLocalLauncher(session as any);
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+
+            emitMetadata({ permissionMode: 'bypassPermissions' });
+
+            await vi.waitFor(() => expect(cycle.at()).toBe('bypassPermissions'), { timeout: 5000 });
+            await vi.waitFor(() => expect(readMetadata().panePermissionMode).toBe('bypassPermissions'));
+
+            runs[0].run.resolve();
+            await launcher;
+        });
+
+        it('presses nothing while a dialog is on screen, and cycles once it clears', async () => {
+            // The safety property that survived the gate change. A shift+tab
+            // aimed at an open dialog is a keystroke landing on whatever is
+            // highlighted — the DROVE-80 mistake — and a half-typed line is
+            // the other thing a keystroke can ruin. `paneAcceptsCommand`
+            // checks exactly those two, and nothing about the turn.
+            const runs = trackRuns();
+            const cycle = paneCycle(['default', 'bypassPermissions'], 'default');
+            const { session, emitMetadata, readMetadata } = paneSession({ permissionMode: 'default' });
+            mockPaneAcceptsCommand.mockResolvedValue(false);
 
             const launcher = claudeLocalLauncher(session as any);
             await vi.waitFor(() => expect(runs).toHaveLength(1));
@@ -1255,12 +1299,64 @@ describe('claudeLocalLauncher in a tmux pane', () => {
             await new Promise((r) => setTimeout(r, 50));
             expect(mockPressCycleKey).not.toHaveBeenCalled();
 
-            mockPaneIsIdle.mockResolvedValue(true);
+            mockPaneAcceptsCommand.mockResolvedValue(true);
             await vi.waitFor(() => expect(cycle.at()).toBe('bypassPermissions'), { timeout: 5000 });
+            await vi.waitFor(() => expect(readMetadata().panePermissionMode).toBe('bypassPermissions'));
 
             runs[0].run.resolve();
             await launcher;
         });
+
+        it('follows a shift+tab Clay pressed himself, without waiting for a turn', async () => {
+            // DROVE-199, the second fault. The transcript's `permission-mode`
+            // record is written as part of the state block around a PROMPT, so
+            // a shift+tab at an idle prompt appends nothing and the padlock sat
+            // on the previous turn's mode until he sent another message. The
+            // footer says it the moment the key is pressed, so the launcher
+            // watches the footer.
+            //
+            // And the REQUEST follows the pane, not the other way round
+            // (DROVE-191's direction): leaving `permissionMode` on the mode he
+            // just left is what made his next tap on that row a no-op.
+            const runs = trackRuns();
+            const { session, readMetadata } = paneSession({ permissionMode: 'bypassPermissions' });
+            mockReadPaneMode.mockResolvedValue('bypassPermissions');
+            mockReadPaneModeChip.mockResolvedValue('bypassPermissions');
+
+            const launcher = claudeLocalLauncher(session as any);
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+
+            // Clay presses shift+tab at his own keyboard.
+            mockReadPaneModeChip.mockResolvedValue('plan');
+
+            await vi.waitFor(() => expect(readMetadata().panePermissionMode).toBe('plan'), { timeout: 8000 });
+            expect(readMetadata().permissionMode).toBe('plan');
+            // Read, not pressed: the launcher must not answer an observation
+            // with keystrokes of its own.
+            expect(mockPressCycleKey).not.toHaveBeenCalled();
+
+            runs[0].run.resolve();
+            await launcher;
+        }, 20000);
+
+        it('keeps the app\'s own spelling of a mode the pane cannot spell differently', async () => {
+            // `yolo` is Codex's word for `bypassPermissions` and the pane can
+            // only ever report the latter. Rewriting the request to the pane's
+            // word would flip the app's vocabulary under it for nothing — the
+            // same rule the `[1m]` model variant gets.
+            const runs = trackRuns();
+            const { session, readMetadata } = paneSession({ permissionMode: 'yolo' });
+            mockReadPaneModeChip.mockResolvedValue('bypassPermissions');
+
+            const launcher = claudeLocalLauncher(session as any);
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+            await vi.waitFor(() => expect(readMetadata().panePermissionMode).toBe('bypassPermissions'), { timeout: 8000 });
+
+            expect(readMetadata().permissionMode).toBe('yolo');
+
+            runs[0].run.resolve();
+            await launcher;
+        }, 20000);
 
         it('says so on the phone when the mode is not in this session\'s cycle, and puts the pane back', async () => {
             // Bypass disabled by settings: it is simply absent from the ring.
@@ -1268,7 +1364,7 @@ describe('claudeLocalLauncher in a tmux pane', () => {
             // a mode nobody picked.
             const runs = trackRuns();
             const cycle = paneCycle(['plan', 'default', 'acceptEdits'], 'acceptEdits');
-            const { session, emitMetadata } = paneSession({ permissionMode: 'default' });
+            const { session, emitMetadata, readMetadata } = paneSession({ permissionMode: 'default' });
 
             const launcher = claudeLocalLauncher(session as any);
             await vi.waitFor(() => expect(runs).toHaveLength(1));
@@ -1281,15 +1377,22 @@ describe('claudeLocalLauncher in a tmux pane', () => {
                 }),
             ), { timeout: 8000 });
             expect(cycle.at()).toBe('acceptEdits');
+            // DROVE-199: and it stops ASKING for it. The pane was walked back
+            // to where it started, so a request still reading
+            // `bypassPermissions` is a value that never happened — the same
+            // false field DROVE-191 found standing after a refused `/effort`.
+            await vi.waitFor(() => expect(readMetadata().permissionMode).toBe('acceptEdits'), { timeout: 8000 });
+            expect(readMetadata().panePermissionMode).toBe('acceptEdits');
 
             runs[0].run.resolve();
             await launcher;
-        });
+        }, 20000);
 
         it('presses nothing at all when it cannot see a prompt to press at', async () => {
             const runs = trackRuns();
             const { session, emitMetadata } = paneSession({ permissionMode: 'default' });
             mockReadPaneMode.mockResolvedValue(null);
+            mockReadPaneModeChip.mockResolvedValue(null);
 
             const launcher = claudeLocalLauncher(session as any);
             await vi.waitFor(() => expect(runs).toHaveLength(1));

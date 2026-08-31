@@ -55,6 +55,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 
 import { logger } from '@/ui/logger'
+import { isPermissionMode, mapToClaudeMode } from './permissionMode'
 
 const run = promisify(execFile)
 
@@ -101,21 +102,57 @@ const promptMarker = '❯'
  * sends is aimed at a prompt it believes is there.
  */
 export function paneModeFromCapture(capture: string): PaneMode | null {
+    const chip = paneModeChipFromCapture(capture)
+    if (chip !== null) return chip
+    return capture.includes(promptMarker) ? 'default' : null
+}
+
+/**
+ * The mode the footer's CHIP names, and nothing inferred (DROVE-199).
+ *
+ * The `❯`-means-manual-mode fallback above is right for the CYCLE, which only
+ * ever runs behind a gate that has already established there is a Claude
+ * prompt and no dialog on it. It is wrong for a watcher that reads the screen
+ * on a timer: measured on this build, the folder-trust dialog draws a `❯` of
+ * its own and no chip, so the fallback reported `default` for a session that
+ * was in fact about to come up in `auto` — a wrong mode on the phone, and
+ * briefly a wrong REQUEST once the mirror followed it.
+ *
+ * So the watcher takes this one and reports nothing rather than guessing. The
+ * cost, stated: if a future build stops drawing a chip for manual mode, a
+ * shift+tab INTO it is seen late — on the turn's own transcript record — as
+ * against being seen wrongly now.
+ */
+export function paneModeChipFromCapture(capture: string): PaneMode | null {
     const text = capture.toLowerCase()
     for (const [mode, indicator] of paneModeIndicators) {
         if (text.includes(indicator)) return mode
     }
-    return capture.includes(promptMarker) ? 'default' : null
+    return null
 }
 
 /** Read what mode the Claude in `pane` is in right now. */
 export async function readPaneMode(pane: string): Promise<PaneMode | null> {
+    const capture = await capturePaneScreen(pane)
+    return capture === null ? null : paneModeFromCapture(capture)
+}
+
+/**
+ * The same read for a WATCHER: the chip or nothing (DROVE-199). See
+ * paneModeChipFromCapture for why the two differ.
+ */
+export async function readPaneModeChip(pane: string): Promise<PaneMode | null> {
+    const capture = await capturePaneScreen(pane)
+    return capture === null ? null : paneModeChipFromCapture(capture)
+}
+
+async function capturePaneScreen(pane: string): Promise<string | null> {
     try {
         // `-p` to stdout, and only the visible screen: the mode chip is in the
         // footer, and pulling scrollback would find every chip this session has
         // ever drawn, newest last but with nothing to say which is current.
         const { stdout } = await run('tmux', ['capture-pane', '-p', '-t', pane])
-        return paneModeFromCapture(stdout)
+        return stdout
     } catch (e) {
         logger.debug('[panePermissionSync] capture-pane failed:', e)
         return null
@@ -216,4 +253,49 @@ export async function cyclePaneMode(
         current = next
     }
     return 'unreachable'
+}
+
+/**
+ * What the app should be storing as its permission REQUEST, given the mode the
+ * pane is observed to be in and what it currently asks for (DROVE-199).
+ *
+ * The twin of `paneModelAsRequest`, and it exists for the same reason. Since
+ * DROVE-36 `panePermissionMode` has tracked the terminal and the composer's
+ * padlock has rendered it, so the glyph was right whenever the transcript
+ * spoke. `permissionMode` — the REQUEST — was not: it stayed on whatever the
+ * app last picked, and both the app's "did this change?" test and the
+ * launcher's own delta run against that. So a pane moved by a shift+tab at the
+ * keyboard left the app asking for a mode it already believed it was on, and
+ * the next tap on that row sent nothing at all. Exactly the DROVE-191 shape,
+ * one field over.
+ *
+ * Mirroring the pane INTO the request is again the direction that terminates.
+ * Two things are deliberately NOT mirrored:
+ *
+ *   - a mode the app cannot HOLD. `dontAsk` is in Claude Code's cycle and has
+ *     an indicator, so a pane can be read as being in it, but it is absent
+ *     from `PermissionMode` — the app can render it as a disabled row and can
+ *     never ask for it. Writing it would be a request nothing downstream can
+ *     carry out.
+ *   - a request that FOLDS ONTO the observed mode. `yolo` and `safe-yolo` are
+ *     Codex spellings that mapToClaudeMode turns into `bypassPermissions` and
+ *     `default`; a session asking for `yolo` while the pane reads
+ *     `bypassPermissions` is not disagreeing with the pane, and rewriting it
+ *     would flip the app's own vocabulary under it for nothing. The same
+ *     "the request says more than the pane can say" rule the `[1m]` model
+ *     variant gets.
+ *
+ * `undefined` means "no opinion, leave the request where it is". Null is never
+ * returned: an observed mode is always some mode, and clearing a request on
+ * the strength of a pane we could not read is how a pick gets lost.
+ */
+export function panePermissionAsRequest(
+    observed: string | null,
+    requested: string | null | undefined,
+): string | undefined {
+    if (observed === null || !isPermissionMode(observed)) return undefined
+    if (requested && isPermissionMode(requested) && mapToClaudeMode(requested) === observed) {
+        return requested
+    }
+    return observed
 }

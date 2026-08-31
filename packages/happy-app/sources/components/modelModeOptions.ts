@@ -829,6 +829,32 @@ export function includePaneModel(models: ModelMode[], paneModelKey: string | nul
 }
 
 /**
+ * An app permission key as the Claude mode a pane would report for it
+ * (DROVE-199).
+ *
+ * The app carries eight keys and Claude Code has six modes, so the two
+ * vocabularies do not line up: `yolo` IS `bypassPermissions`, and `safe-yolo`
+ * and `read-only` are both Claude's `default` because Claude has nothing
+ * narrower. Comparing the raw strings would read every one of those as the
+ * pane disagreeing with the pick, forever.
+ *
+ * The twin of the CLI's own mapToClaudeMode, which is the only other place
+ * this fold is written down. Kept in step with it by
+ * modelModeOptions.test.ts, since the two ends of one wire disagreeing about
+ * what `yolo` means is precisely the class of bug this fold exists to avoid.
+ *
+ * A cleared pick has no mode at all, so it is null rather than `default`: the
+ * caller's question is "does the pane contradict this pick", and nothing
+ * contradicts a pick that was never made.
+ */
+export function toClaudePermissionMode(key: string | null | undefined): string | null {
+    if (!key) return null;
+    if (key === 'yolo') return 'bypassPermissions';
+    if (key === 'safe-yolo' || key === 'read-only') return 'default';
+    return key;
+}
+
+/**
  * Make sure the permission mode the pane is in has a row to be selected
  * against (DROVE-36).
  *

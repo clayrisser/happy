@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 
-import { cyclePaneMode, paneModeFromCapture, type PaneMode } from './panePermissionSync'
+import { cyclePaneMode, paneModeChipFromCapture, paneModeFromCapture, panePermissionAsRequest, type PaneMode } from './panePermissionSync'
 
 beforeEach(() => {
     // Never let a unit test reach the real drover bus.
@@ -147,5 +147,84 @@ describe('cyclePaneMode', () => {
             settle: async () => { },
         })).toBe('unreachable')
         expect(presses).toBe(1)
+    })
+})
+
+/**
+ * DROVE-199. `panePermissionMode` has tracked the terminal since DROVE-36, so
+ * the padlock was right; `permissionMode` — the REQUEST — was not, and that is
+ * the field the app's change test and the launcher's delta both run against.
+ * A pane moved by a shift+tab left the app asking for a mode it already
+ * believed it was on, and the next tap on that row sent nothing.
+ */
+describe('panePermissionAsRequest', () => {
+    it('follows the pane when they disagree', () => {
+        expect(panePermissionAsRequest('plan', 'bypassPermissions')).toBe('plan')
+    })
+
+    it('keeps a request that only SPELLS the observed mode differently', () => {
+        // `yolo` is Codex's word for the same mode and mapToClaudeMode folds
+        // it; the pane can never report anything but `bypassPermissions`.
+        // Rewriting the request there would flip the app's own vocabulary for
+        // nothing, and it is the same rule the `[1m]` model variant gets.
+        expect(panePermissionAsRequest('bypassPermissions', 'yolo')).toBe('yolo')
+        expect(panePermissionAsRequest('default', 'safe-yolo')).toBe('safe-yolo')
+        expect(panePermissionAsRequest('default', 'read-only')).toBe('read-only')
+    })
+
+    it('says nothing about a mode the app cannot hold', () => {
+        // `dontAsk` is in Claude Code's cycle and has an indicator, so a pane
+        // can be READ as being in it — but it is not in PermissionMode, so
+        // writing it as the request would ask for something nothing can carry
+        // out. The pill still shows it; the request is left alone.
+        expect(panePermissionAsRequest('dontAsk', 'plan')).toBeUndefined()
+    })
+
+    it('says nothing about a pane it could not read', () => {
+        // Null is not a mode. Clearing a request because the prompt was off
+        // screen for one poll is how a pick gets lost.
+        expect(panePermissionAsRequest(null, 'plan')).toBeUndefined()
+    })
+
+    it('follows the pane when nothing was ever requested', () => {
+        expect(panePermissionAsRequest('acceptEdits', null)).toBe('acceptEdits')
+        expect(panePermissionAsRequest('acceptEdits', undefined)).toBe('acceptEdits')
+    })
+})
+
+/**
+ * DROVE-199. The watcher reads the screen on a timer, with no gate to say
+ * there is a Claude prompt under it, so it cannot use the fallback that reads
+ * an absent chip as manual mode.
+ */
+describe('paneModeChipFromCapture', () => {
+    /**
+     * The folder-trust dialog, off a live run on 2026-08-31. It draws a `❯` of
+     * its own and no mode chip, and the lenient parse read it as `default` for
+     * a session that came up in `auto` — which the mirror then wrote into the
+     * request before correcting itself twenty seconds later.
+     */
+    const trustDialog = [
+        " Claude Code'll be able to read, edit, and execute files here.",
+        '',
+        ' Security guide',
+        '',
+        ' ❯ No, exit',
+        '   Yes, I trust this folder',
+        '',
+        ' Enter to confirm · Esc to cancel',
+    ].join('\n')
+
+    it('says nothing about a screen with a prompt marker but no chip', () => {
+        expect(paneModeChipFromCapture(trustDialog)).toBeNull()
+        // The lenient parse still answers, which is what the gated cycle wants.
+        expect(paneModeFromCapture(trustDialog)).toBe('default')
+    })
+
+    it('still reads every chip the footer can draw', () => {
+        expect(paneModeChipFromCapture('  ⏵⏵ auto mode on · ← for agents')).toBe('auto')
+        expect(paneModeChipFromCapture('  ⏵⏵ accept edits on · 1 shell')).toBe('acceptEdits')
+        expect(paneModeChipFromCapture('  ⏸ plan mode on (shift+tab to cycle)')).toBe('plan')
+        expect(paneModeChipFromCapture('  ⏸ manual mode on · ? for shortcuts')).toBe('default')
     })
 })
