@@ -572,6 +572,8 @@ export const pt: TranslationStructure = {
         suggestion: {
             fileLabel: 'ARQUIVO',
             folderLabel: 'PASTA',
+            commandLabel: 'CMD',
+            skillLabel: 'SKILL',
         },
         noMachinesAvailable: 'Sem máquinas',
     },

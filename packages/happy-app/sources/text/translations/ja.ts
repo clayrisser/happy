@@ -574,6 +574,8 @@ export const ja: TranslationStructure = {
         suggestion: {
             fileLabel: 'ファイル',
             folderLabel: 'フォルダ',
+            commandLabel: 'コマンド',
+            skillLabel: 'スキル',
         },
         noMachinesAvailable: 'マシンなし',
     },

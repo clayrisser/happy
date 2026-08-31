@@ -589,6 +589,8 @@ export const ru: TranslationStructure = {
         suggestion: {
             fileLabel: 'ФАЙЛ',
             folderLabel: 'ПАПКА',
+            commandLabel: 'КОМ.',
+            skillLabel: 'НАВЫК',
         },
         noMachinesAvailable: 'Нет машин',
     },

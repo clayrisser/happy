@@ -573,6 +573,8 @@ export const es: TranslationStructure = {
         suggestion: {
             fileLabel: 'ARCHIVO',
             folderLabel: 'CARPETA',
+            commandLabel: 'CMD',
+            skillLabel: 'HABILIDAD',
         },
         noMachinesAvailable: 'Sin máquinas',
     },

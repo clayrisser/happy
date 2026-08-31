@@ -25,6 +25,7 @@ import {
     EffortLevel,
 } from '@/components/modelModeOptions';
 import { getSuggestions } from '@/components/autocomplete/suggestions';
+import { primeCommands } from '@/sync/suggestionCommands';
 import { ChatHeaderView } from '@/components/ChatHeaderView';
 import { ChatList } from '@/components/ChatList';
 import { Deferred } from '@/components/Deferred';
@@ -991,6 +992,13 @@ export function SessionViewLoaded({
     const handleAutocompleteSuggestions = React.useCallback((query: string) => (
         getSuggestions(sessionId, query)
     ), [sessionId]);
+
+    // Ask the machine what this session can run before the user types, so the
+    // first `/` shows the real inventory rather than the fallback five and a
+    // keystroke of catch-up (DROVE-170).
+    React.useEffect(() => {
+        primeCommands(sessionId);
+    }, [sessionId]);
 
     const connectionStatus = React.useMemo(() => ({
         text: sessionStatus.statusText,

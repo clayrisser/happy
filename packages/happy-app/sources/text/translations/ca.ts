@@ -573,6 +573,8 @@ export const ca: TranslationStructure = {
         suggestion: {
             fileLabel: 'FITXER',
             folderLabel: 'CARPETA',
+            commandLabel: 'CMD',
+            skillLabel: 'HABILITAT',
         },
         noMachinesAvailable: 'Sense màquines',
     },

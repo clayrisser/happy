@@ -589,6 +589,8 @@ export const pl: TranslationStructure = {
         suggestion: {
             fileLabel: 'PLIK',
             folderLabel: 'FOLDER',
+            commandLabel: 'CMD',
+            skillLabel: 'UMIEJ.',
         },
         noMachinesAvailable: 'Brak maszyn',
     },
