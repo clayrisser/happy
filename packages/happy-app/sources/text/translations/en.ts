@@ -623,6 +623,7 @@ export const en: TranslationStructure = {
             windowReset: 'window reset',
             /** Said on the account heading when no figure survives that rule. */
             headroomUnknown: 'headroom unknown',
+            mooted: ({ window }: { window: string }) => `${window} spent`,
             bindingRow: 'binding limit',
             zoneNote: ({ zone }: { zone: string }) => `Times in ${zone}`,
             captured: ({ age }: { age: string }) => `Read ${age}`,

@@ -50,6 +50,25 @@
  * used it reads `Session 0%` beside `Week 100%`: a fresh session window on an
  * account whose week is spent, which is exactly what it is.
  *
+ * AND A WINDOW UNDER A SPENT ONE SHOWS NOTHING (DROVE-255).
+ *
+ * Filling as used fixed the direction and left one contradiction standing.
+ * Three of Clay's accounts read `0% left on Week` in the heading, with a
+ * SESSION row under it at 0% used: a solid track, a green sliver, no reset
+ * time. Both figures were correct. The five-hour window really was untouched,
+ * and it was also unspendable, because the week over it was gone — so the row
+ * carrying the healthy mark was the row that could not be used, drawn exactly
+ * like a fresh session on a healthy account.
+ *
+ * A window is MOOTED when a wider window that also applies to it is exhausted,
+ * and a mooted window must not advertise capacity. What "wider" means is
+ * `droverWindowCovers` in utils/droverUsage.ts, written down there rather than
+ * assumed here, because the longer window does not always win: the Fable week
+ * is seven days and moots no account-wide session row, which is the same fact
+ * this sheet's own caption states. A mooted row gets the treatment DROVE-204
+ * already built for a window with nothing to say — hollow track, a dash, the
+ * reason trailing — and the reason names the window that did it.
+ *
  * Every account gets all of them (DROVE-148). The current account had Session,
  * Week and Fable week; every other account had one bar for its fullest limit.
  * Clay: "This should be listing all three bars for each account." One number
@@ -62,6 +81,7 @@ import {
     currentDroverAccountRow,
     droverAccountsUsage,
     droverFamilyLabel,
+    droverMootingWindow,
     droverRowApplies,
     droverRowUsable,
     droverSnapshotAgeMs,
@@ -703,6 +723,20 @@ export function usageAccountBarGroup(
     for (const row of getUsageLimitRows(override ?? null)) {
         byId.set(row.id, { utilization: row.utilization, resetsAt: row.resetsAt, usable: true });
     }
+    // What each window is CALLED on this sheet, so a row that is blocked can
+    // name the window that blocked it (DROVE-255). A mooting window this
+    // cannot name is not used: the whole value of the reason is that it says
+    // WHICH window did it, and "spent" on its own says less than the reset
+    // time it would replace.
+    const label = new Map(measures.map((measure) => [measure.id, measure.label]));
+    // Every window this account has a reading for, whether or not it is drawn.
+    // The mooting rule is asked over the account's own windows and nobody
+    // else's: a week spent on `main` says nothing about `jamrizzi`.
+    const windows = [...byId.entries()].map(([id, window]) => ({
+        id,
+        utilization: window.utilization,
+        usable: window.usable,
+    }));
     const rows = measures.map((measure) => {
         const window = byId.get(measure.id);
         // A window that had already reset when this was captured keeps its row
@@ -717,16 +751,43 @@ export function usageAccountBarGroup(
         // looks like and the two are opposite facts. `percentLeft: null` makes
         // the row unmeasured, which is a bare track rather than an empty fill.
         const expired = window != null && !window.usable;
-        const utilization = expired ? null : window?.utilization ?? null;
+        // MOOTED: a wider window that also applies to this one is exhausted,
+        // so this one cannot be spent however much is left in it (DROVE-255).
+        // Clay: "When week has expired show session expired so it's more
+        // obvious." The session rows on his three dead accounts read 0% used
+        // with a green sliver, which under fill-as-used is the picture of a
+        // fresh window, sitting directly under a heading saying `0% left on
+        // Week`. Both facts were true and together they lied.
+        //
+        // It gets DROVE-204's treatment rather than a new one, because it is
+        // the same claim: this row's number describes capacity that is not
+        // there to be had. Hollow track, a dash, and the reason in the
+        // trailing slot. The reason NAMES the window that did it, which is
+        // also what the heading names, so the two now agree.
+        //
+        // The session's own reset time is what the trailing slot gives up for
+        // it. That is the right trade: when the week is gone, the hour the
+        // five-hour window turns over changes nothing, and the reset that does
+        // matter is printed on the Week row two lines down.
+        const mooted = window == null || expired
+            ? null
+            : droverMootingWindow(
+                { id: measure.id, utilization: window.utilization, usable: window.usable },
+                windows,
+            );
+        const mootedBy = mooted ? label.get(mooted.id) ?? null : null;
+        const utilization = expired || mootedBy != null ? null : window?.utilization ?? null;
         return usageBarRowFrom({
             key: `${account.name}:${measure.id}`,
             name: measure.label,
             percentLeft: utilization == null ? null : 100 - utilization,
             trailing: expired
                 ? t('agentInput.usagePopup.windowReset')
-                : window?.resetsAt != null
-                    ? t('agentInput.usagePopup.resets', { time: formatUsageLimitResetTime(window.resetsAt) })
-                    : '',
+                : mootedBy != null
+                    ? t('agentInput.usagePopup.mooted', { window: mootedBy })
+                    : window?.resetsAt != null
+                        ? t('agentInput.usagePopup.resets', { time: formatUsageLimitResetTime(window.resetsAt) })
+                        : '',
             disabled: !account.loggedIn,
             // Marked, never re-ranked here: the heading's number and this flag
             // have to come off one decision or they can point at two rows.

@@ -24,6 +24,15 @@
  * the window the account's heading was read off, tinted with that row's own
  * tone so it is not mistaken for the heading's current-account dot.
  *
+ * DROVE-255 gave that hollow track a second meaning, and deliberately did not
+ * give it a second PICTURE. A window a wider one has made unspendable — a
+ * session under a spent week — is drawn exactly like a window nobody read,
+ * because the claim is the same one: there is no capacity here to offer. What
+ * tells them apart is the trailing slot, which names the window that did it
+ * ("Week spent") where the unread row says "not measured". The rule itself is
+ * `droverWindowCovers` in utils/droverUsage.ts; nothing in this file decides
+ * it.
+ *
  * DROVE-117 made the columns hold their width. The first cut let the track
  * take whatever the trailing text did not use, so `jamrizzi` with no reset
  * time drew a longer bar than `bitspur.com` at a similar headroom, and `main`

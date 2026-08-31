@@ -15,10 +15,14 @@ import {
     droverFamilyRows,
     droverAccountStale,
     droverOtherAccounts,
+    droverMootingWindow,
     droverRowApplies,
     droverRowUsable,
     droverStaleAfterMs,
+    droverWindowCovers,
     droverWindowId,
+    droverWindowSpan,
+    droverWindowSpent,
     usageLimitsFromDroverUsage,
     type DroverUsageLike,
     type DroverUsageRowLike,
@@ -347,5 +351,105 @@ describe('an account carrying an expired window', () => {
         // an expired window is not passed on with its number.
         const limits = usageLimitsFromDroverUsage(expired);
         expect(getUsageLimitRows(limits).map((r) => r.id)).toEqual(['seven_day']);
+    });
+});
+
+/**
+ * WHICH WINDOW SITS OVER WHICH (DROVE-255).
+ *
+ * The relation the sheet's mooting rule is built on, pinned on its own because
+ * getting it wrong in the generous direction greys out headroom that is really
+ * there — a worse bug than the one it fixes. Two halves, and the second is the
+ * one "the longer window wins" would miss.
+ */
+describe('droverWindowSpan and droverWindowCovers', () => {
+    const session = { period: 'session' as const, family: null };
+    const week = { period: 'week' as const, family: null };
+    const fableWeek = { period: 'week' as const, family: 'fable' };
+    const fableSession = { period: 'session' as const, family: 'fable' };
+
+    it('reads the period and the family straight off the window id', () => {
+        // The one spelling both feeds share: the CLI's snapshot goes through
+        // droverWindowId, and the SDK stream already speaks these two.
+        expect(droverWindowSpan('five_hour')).toEqual(session);
+        expect(droverWindowSpan('seven_day')).toEqual(week);
+        expect(droverWindowSpan('seven_day_fable')).toEqual(fableWeek);
+        expect(droverWindowSpan('five_hour_fable')).toEqual(fableSession);
+        // A provider-internal kind, which `headroom` counts and the sheet does
+        // not draw. No period, so it covers nothing and nothing covers it.
+        expect(droverWindowSpan('nimbus_quill')).toEqual({ period: null, family: null });
+    });
+
+    it('lets a week contain a session and never the other way round', () => {
+        expect(droverWindowCovers(week, session)).toBe(true);
+        expect(droverWindowCovers(session, week)).toBe(false);
+        // A window does not contain itself: a spent window is drawn honestly
+        // by its own full bar, and hollowing it would say less, not more.
+        expect(droverWindowCovers(week, week)).toBe(false);
+        expect(droverWindowCovers(session, session)).toBe(false);
+    });
+
+    it('keeps a model-scoped week off a window it does not measure', () => {
+        // The half that matters. The Fable week is seven days and the session
+        // is five hours, and an Opus turn spends that session in full — the
+        // sheet's own caption says "Fable week not counted for Opus".
+        expect(droverWindowCovers(fableWeek, session)).toBe(false);
+        expect(droverWindowCovers(fableWeek, week)).toBe(false);
+        // It does cover a window scoped to the same family, which is what
+        // makes this a scope rule rather than a blanket exemption.
+        expect(droverWindowCovers(fableWeek, fableSession)).toBe(true);
+        // And an unscoped week measures every model, so it covers both.
+        expect(droverWindowCovers(week, fableSession)).toBe(true);
+    });
+
+    it('says nothing about a kind it cannot place', () => {
+        const unknown = droverWindowSpan('nimbus_quill');
+        expect(droverWindowCovers(week, unknown)).toBe(false);
+        expect(droverWindowCovers(unknown, session)).toBe(false);
+    });
+});
+
+describe('droverWindowSpent and droverMootingWindow', () => {
+    const window = (id: string, utilization: number | null, usable = true) => ({ id, utilization, usable });
+
+    it('reads spent the way the account heading rounds it', () => {
+        // The heading prints Math.round(headroom), so `0% left on Week` and
+        // "the week is spent" have to be one decision or the sheet argues
+        // with itself again.
+        expect(droverWindowSpent(window('seven_day', 100))).toBe(true);
+        expect(droverWindowSpent(window('seven_day', 99.6))).toBe(true);
+        expect(droverWindowSpent(window('seven_day', 99))).toBe(false);
+        expect(droverWindowSpent(window('seven_day', null))).toBe(false);
+    });
+
+    it('will not call an EXPIRED reading spent', () => {
+        // Unknown, not empty (DROVE-204): nobody knows what is in that window
+        // now, and an unknown window must not moot anything.
+        expect(droverWindowSpent(window('seven_day', 100, false))).toBe(false);
+        const windows = [window('five_hour', 0), window('seven_day', 100, false)];
+        expect(droverMootingWindow(windows[0], windows)).toBeNull();
+    });
+
+    it('names the spent week over a fresh session', () => {
+        const windows = [window('five_hour', 0), window('seven_day', 100)];
+        expect(droverMootingWindow(windows[0], windows)?.id).toBe('seven_day');
+        expect(droverMootingWindow(windows[1], windows)).toBeNull();
+    });
+
+    it('leaves alone a window with nothing to advertise', () => {
+        // No reading, so no capacity is being claimed and DROVE-204's own
+        // reason keeps the trailing slot.
+        const unmeasured = [window('five_hour', null), window('seven_day', 100)];
+        expect(droverMootingWindow(unmeasured[0], unmeasured)).toBeNull();
+        // Spent itself, so its full red bar is already the honest picture —
+        // and it is the row the heading may be quoting.
+        const both = [window('five_hour', 100), window('seven_day', 100)];
+        expect(droverMootingWindow(both[0], both)).toBeNull();
+    });
+
+    it('does not let a spent Fable week moot the account-wide session', () => {
+        const windows = [window('five_hour', 20), window('seven_day', 40), window('seven_day_fable', 100)];
+        expect(droverMootingWindow(windows[0], windows)).toBeNull();
+        expect(droverMootingWindow(windows[1], windows)).toBeNull();
     });
 });

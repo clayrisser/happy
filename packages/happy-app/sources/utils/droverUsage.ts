@@ -86,6 +86,145 @@ export function droverRowApplies(
 }
 
 /**
+ * WHICH WINDOW SITS OVER WHICH, AND WHAT THAT COSTS THE ONE UNDERNEATH
+ * (DROVE-255).
+ *
+ * Clay, at the sheet: "When week has expired show session expired so it's more
+ * obvious." Three accounts read `0% left on Week` over a SESSION row drawn at
+ * 0% used with a green sliver, which under fill-as-used (DROVE-230) is the
+ * picture of a brand new window with everything still in it. Both numbers were
+ * true. The five-hour window really had not been touched, and it was also
+ * completely unspendable, because the week above it was gone. The row wearing
+ * the healthy mark was the row that could not be used.
+ *
+ * So: A WINDOW IS MOOTED WHEN A WIDER WINDOW THAT ALSO APPLIES TO IT IS
+ * EXHAUSTED, and a mooted window must not advertise capacity.
+ *
+ * `covers` is the whole rule and it is written down here rather than left to
+ * "the longer one wins", because the longer one does NOT always win. The Fable
+ * week is seven days and the session is five hours, and an exhausted Fable
+ * week moots nothing on an account whose session window an Opus turn will
+ * spend — the sheet's own caption says as much ("Fable week not counted for
+ * Opus"). Greying a row that is genuinely usable is a worse bug than the one
+ * this fixes, so both halves have to hold:
+ *
+ *   PERIOD — the covering window's period is strictly LONGER. A week contains
+ *   a session; a session does not contain a week. A spent session therefore
+ *   moots nothing: the week still has room, it is simply not reachable until
+ *   the next five-hour window opens, and that is what the session row's own
+ *   full bar and reset time already say.
+ *
+ *   MODEL SCOPE — every model the narrow window measures, the wide one
+ *   measures too. An unscoped window measures every model, so it covers
+ *   anything narrower. A family window measures one family, so it covers only
+ *   a window scoped to that same family, and never the account-wide session
+ *   row.
+ *
+ * The rule is deliberately NOT model-aware, though the session's own model is
+ * known here. A Fable session on an account whose Fable week is spent really
+ * can spend nothing, so a model-aware rule would moot the account-wide session
+ * row for it. It would also moot that row on every OTHER account listed for a
+ * flip, whose Opus headroom is real and is exactly what the sheet is opened to
+ * find; and the model can change under a sheet that is already open. The
+ * structural rule is the conservative half, it fixes the reported bug, and it
+ * means a surface with no model context (the wrist) reads these windows the
+ * same way this one does (DROVE-129).
+ */
+export type DroverWindowPeriod = 'session' | 'week';
+
+export type DroverWindowSpan = {
+    /** Five hours or seven days. Null for a kind neither side knows. */
+    period: DroverWindowPeriod | null;
+    /** The model family it measures; null when it measures every model. */
+    family: string | null;
+};
+
+/** Longer is higher. The only ordering `droverWindowCovers` reads. */
+const droverWindowPeriodRank: Record<DroverWindowPeriod, number> = { session: 1, week: 2 };
+
+/**
+ * A window id back into the two facts the rule needs.
+ *
+ * Off the ID rather than the raw row, because the ids are the one spelling
+ * both feeds share: `droverWindowId` builds them from the CLI's snapshot and
+ * the SDK stream already speaks `five_hour` / `seven_day`, so a remote session
+ * and a pane session are covered by the same relation. A kind neither prefix
+ * matches — the provider-internal windows `headroom` counts and the sheet does
+ * not draw — comes back with no period, which covers nothing and is covered by
+ * nothing. That is the conservative end on purpose.
+ */
+export function droverWindowSpan(id: string): DroverWindowSpan {
+    for (const [prefix, period] of [['five_hour', 'session'], ['seven_day', 'week']] as const) {
+        if (id === prefix) return { period, family: null };
+        if (id.startsWith(`${prefix}_`)) return { period, family: id.slice(prefix.length + 1) };
+    }
+    return { period: null, family: null };
+}
+
+/** Does `wider` contain `narrower`, for every model `narrower` measures? */
+export function droverWindowCovers(wider: DroverWindowSpan, narrower: DroverWindowSpan): boolean {
+    if (!wider.period || !narrower.period) return false;
+    if (droverWindowPeriodRank[wider.period] <= droverWindowPeriodRank[narrower.period]) return false;
+    // Unscoped measures every model, so it covers anything shorter. A family
+    // window covers only the same family — this is the half that keeps an
+    // exhausted Fable week off the account-wide session row.
+    if (wider.family == null) return true;
+    return wider.family === narrower.family;
+}
+
+export type DroverMootableWindow = {
+    id: string;
+    /** Percent USED, the wire's direction; null when nothing was measured. */
+    utilization: number | null;
+    /** The reading still describes a window that exists (DROVE-204). */
+    usable: boolean;
+};
+
+/**
+ * Is there nothing left in this window?
+ *
+ * ROUNDED, the same way the account heading rounds `headroom`, so a row cannot
+ * be told it is fine underneath a heading that says `0% left on Week`. Making
+ * the rows agree with the heading is the entire point of the ticket, and a
+ * second rounding rule is how they would come apart again.
+ *
+ * A window whose reading has expired is not spent, it is unknown (DROVE-204),
+ * and unknown must not moot anything: the honest answer there is that nobody
+ * knows what is in it.
+ */
+export function droverWindowSpent(window: DroverMootableWindow): boolean {
+    if (!window.usable) return false;
+    if (typeof window.utilization !== 'number' || !Number.isFinite(window.utilization)) return false;
+    return Math.round(100 - window.utilization) <= 0;
+}
+
+/**
+ * The exhausted window that makes this one unspendable, or null.
+ *
+ * Two windows are left alone on purpose. One with NO figure advertises no
+ * capacity, so there is nothing to take away and DROVE-204's own reason keeps
+ * the trailing slot. One that is exhausted ITSELF is honestly drawn by its own
+ * full red bar, and it is also the row the heading may be quoting — the
+ * binding mark and a hollow track on one row would be the contradiction this
+ * ticket is removing, wearing different clothes.
+ */
+export function droverMootingWindow<T extends DroverMootableWindow>(
+    window: DroverMootableWindow,
+    windows: readonly T[],
+): T | null {
+    if (!window.usable) return null;
+    if (typeof window.utilization !== 'number' || !Number.isFinite(window.utilization)) return null;
+    if (droverWindowSpent(window)) return null;
+    const span = droverWindowSpan(window.id);
+    for (const other of windows) {
+        if (other.id === window.id) continue;
+        if (!droverWindowSpent(other)) continue;
+        if (droverWindowCovers(droverWindowSpan(other.id), span)) return other;
+    }
+    return null;
+}
+
+/**
  * How old a per-account reading may be before the sheet says so (DROVE-173).
  *
  * Claude Code refreshes an account's cache as a session starts, so an hour

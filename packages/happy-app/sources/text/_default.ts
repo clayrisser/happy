@@ -658,6 +658,20 @@ export const en = {
             /** Said on the account heading when no figure survives that rule. */
             headroomUnknown: 'headroom unknown',
             /**
+             * A window a WIDER one has made unspendable (DROVE-255). Clay:
+             * "When week has expired show session expired so it's more
+             * obvious." It names the window that did it, because a session row
+             * saying only that it is blocked leaves the reader hunting for
+             * which of the three above it is the culprit — and the account
+             * heading is already naming that same window.
+             *
+             * "spent" rather than Clay's "expired": the five-hour window has
+             * not expired, it is sitting there full and unreachable. And short
+             * enough that `Fable week spent` still fits the 88pt trailing
+             * column, which `blocked by Fable week` does not.
+             */
+            mooted: ({ window }: { window: string }) => `${window} spent`,
+            /**
              * Spoken on the row the account heading was read off (DROVE-230).
              * The sighted row is marked with a tinted dot; a screen reader
              * cannot see a dot, and "2% left on Week" over a session row at

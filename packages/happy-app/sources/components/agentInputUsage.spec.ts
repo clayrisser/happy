@@ -153,9 +153,14 @@ describe('resolveUsageStrip on a pane session', () => {
 
     // The row Clay screenshotted, and the proof the direction is the fix.
     // Under the old convention risserproperties read `Session 100%` beside
-    // `Week 0%` - correct, and nonsense. Filled as used it reads `Session 0%`
-    // beside `Week 100%`, which is exactly what it is.
-    it('reads risserproperties as a fresh session window on a spent week', () => {
+    // `Week 0%` - correct, and nonsense. Filled as used the week reads 100%,
+    // which is exactly what it is.
+    //
+    // The session row used to read `0%` here, and DROVE-255 took that away: a
+    // fresh five-hour window under a spent week is capacity nothing can
+    // reach, and 0% used with a green sliver is the picture of an account you
+    // can work on. Same account, same numbers, one fewer contradiction.
+    it('reads risserproperties as a spent week, and stops calling its session fresh', () => {
         const rp: DroverUsageLike = {
             capturedAt: 1_000,
             accounts: [{
@@ -169,14 +174,17 @@ describe('resolveUsageStrip on a pane session', () => {
         };
         const [block] = resolveUsageStrip({ ...pane, droverUsage: rp, droverAccount: 'risserproperties' })
             .usageBarGroups;
-        expect(block.rows.map((r) => [r.name, r.percentText])).toEqual([
-            ['Session', '0%'],
-            ['Week', '100%'],
+        expect(block.rows.map((r) => [r.name, r.percentText, r.trailing])).toEqual([
+            ['Session', null, 'Week spent'],
+            ['Week', '100%', `Resets ${formatUsageLimitResetTime(sep5)}`],
         ]);
         expect(block.rows.map((r) => r.fraction)).toEqual([0, 1]);
-        // Both are MEASURED. A 0% session is a reading, not a blank, and the
-        // flag is what stops it drawing as the bare track of a row nobody read.
-        expect(block.rows.every((r) => r.measured)).toBe(true);
+        // The week is MEASURED and full. The session is not measured at all
+        // any more (DROVE-255), which is what makes its empty track read as
+        // "no reading" rather than as "nothing used yet".
+        expect(block.rows.map((r) => r.measured)).toEqual([false, true]);
+        // And the heading is unchanged, which is the point: the rows now
+        // agree with it instead of arguing with it.
         expect(block.title).toBe('risserproperties \u00b7 0% left on Week');
     });
 
@@ -194,7 +202,9 @@ describe('resolveUsageStrip on a pane session', () => {
         // main: burnt for the week, barely touched on the session. That split
         // is the whole reason for three bars instead of one headroom figure.
         expect(groups[1].rows.map((r) => [r.name, r.percentText, r.trailing, r.tone])).toEqual([
-            ['Session', '4%', `Resets ${formatUsageLimitResetTime(1_500)}`, 'ample'],
+            // 4% used, and unreachable: the week over it is gone, so the row
+            // shows no figure and names what took it (DROVE-255).
+            ['Session', null, 'Week spent', 'unknown'],
             ['Week', '100%', `Resets ${formatUsageLimitResetTime(sep3)}`, 'critical'],
             // Never scoped a Fable limit. The row is drawn honestly rather
             // than dropped, so the measures stay level down the sheet.
@@ -483,6 +493,11 @@ describe('the trailing column at 320, 375 and 393', () => {
             `Back ${formatUsageLimitResetTime(now + 3 * 3_600_000, now)}`,
             'window reset',
             'not measured',
+            // DROVE-255, and the reason the wording is `Week spent` rather
+            // than `blocked by Week`: the family form of that one is 21
+            // characters and this column is 16.
+            'Week spent',
+            'Fable week spent',
         ];
         for (const label of labels) {
             expect(usageBarTrailingFits(label), label).toBe(true);
@@ -528,7 +543,10 @@ describe('resolveUsageStrip on a remote session', () => {
             .toEqual(['account:jamrizzi', 'account:main', 'account:bitspur.com', 'account:spare']);
         // The live stream overrides only the account it belongs to; the rest
         // are still read from the snapshot.
-        expect(strip.usageBarGroups[1].rows.map((r) => r.percentText)).toEqual(['4%', '100%', null]);
+        // main's session figure is withheld for the same reason it is on a
+        // pane session: its week is spent (DROVE-255). The rule reads the
+        // merged windows, so it holds whichever feed filled them.
+        expect(strip.usageBarGroups[1].rows.map((r) => r.percentText)).toEqual([null, '100%', null]);
     });
 });
 
@@ -977,5 +995,186 @@ describe('an expired window on the sheet', () => {
             ],
         };
         expect(droverBindingLimit(fresh, null, captured)).toMatchObject({ id: 'seven_day', percentLeft: 42 });
+    });
+});
+
+/**
+ * A WINDOW UNDER A SPENT ONE ADVERTISES NOTHING (DROVE-255).
+ *
+ * Clay, at the quota sheet: "When week has expired show session expired so
+ * it's more obvious." Three accounts read `0% left on Week` in the heading,
+ * with Week full and red, over a SESSION row at 0% used — a solid track, a
+ * green sliver, no reset time. Every figure was correct. The five-hour window
+ * genuinely had not been touched, and it was also unspendable, because the
+ * week above it was gone. The row wearing the healthy mark was the row that
+ * could not be used, and it was drawn exactly like a fresh session on a
+ * healthy account.
+ *
+ * These pin both halves. The mooted row loses its figure and names what took
+ * it; the rows that are genuinely usable keep everything, which is the half
+ * that matters more — greying out real headroom would be a worse bug than the
+ * one being fixed.
+ */
+describe('a window under a spent one', () => {
+    const captured = 5_000;
+    const sessionResets = captured + 3 * 3_600_000;
+    const weekResets = captured + 3 * 86_400_000;
+    const account = (
+        limits: NonNullable<NonNullable<DroverUsageLike>['accounts']>[number]['limits'],
+        headroom: number | null = 0,
+        modelFamily: string | null = 'opus',
+    ): DroverUsageLike => ({
+        capturedAt: captured,
+        modelFamily,
+        accounts: [{
+            name: 'main', current: true, loggedIn: true, fetchedAt: captured, headroom, cooling: null, limits,
+        }],
+    });
+    const spentWeek = account([
+        { kind: 'session', percent: 0, resetsAt: sessionResets, scope: null, family: null },
+        { kind: 'weekly_all', percent: 100, resetsAt: weekResets, scope: null, family: null },
+    ]);
+
+    it('takes the figure off a session whose week is spent, and names the window that did it', () => {
+        const [block] = resolveUsageStrip({ usageLimits: null, droverUsage: spentWeek }).usageBarGroups;
+        const [session, week] = block.rows;
+        // DROVE-230's treatment for a window with nothing to offer, reused
+        // rather than reinvented: hollow track, a dash, the reason trailing.
+        expect(session.percentText).toBeNull();
+        expect(session.percentSpoken).toBeNull();
+        expect(session.measured).toBe(false);
+        expect(session.fraction).toBe(0);
+        expect(session.tone).toBe('unknown');
+        // Naming the culprit is the requirement. "unusable" on its own would
+        // leave the reader hunting for which of the rows above did it, and
+        // the heading is already naming the same window.
+        expect(session.trailing).toBe('Week spent');
+        // The window that did it is untouched: full, red, measured, and still
+        // carrying the reset that is now the only time worth reading.
+        expect([week.percentText, week.measured, week.fraction, week.tone])
+            .toEqual(['100%', true, 1, 'critical']);
+        expect(week.trailing).toBe(`Resets ${formatUsageLimitResetTime(weekResets)}`);
+        // The headline the rows used to contradict.
+        expect(block.title).toBe('main · 0% left on Week');
+    });
+
+    it('reads spent the way the heading rounds it, so the two cannot disagree', () => {
+        // 99.6% used is `0% left` in the heading. A session row drawn as
+        // healthy under that heading is the bug however the arithmetic got
+        // there, so the rule rounds the same way the sentence does.
+        const nearly = account([
+            { kind: 'session', percent: 12, resetsAt: sessionResets, scope: null, family: null },
+            { kind: 'weekly_all', percent: 99.6, resetsAt: weekResets, scope: null, family: null },
+        ], 0.4);
+        const [block] = resolveUsageStrip({ usageLimits: null, droverUsage: nearly }).usageBarGroups;
+        expect(block.title).toBe('main · 0% left on Week');
+        expect(block.rows[0].trailing).toBe('Week spent');
+        expect(block.rows[0].percentText).toBeNull();
+    });
+
+    /**
+     * The half that would be worse to get wrong. The Fable week is seven days
+     * and the session is five hours, so "the longer window wins" would grey
+     * out a session row that an Opus turn can spend in full — and the sheet's
+     * own caption says as much: "Fable week not counted for Opus".
+     */
+    it('leaves the account-wide session alone when only a model-scoped week is spent', () => {
+        const fableOut = account([
+            { kind: 'session', percent: 30, resetsAt: sessionResets, scope: null, family: null },
+            { kind: 'weekly_all', percent: 40, resetsAt: weekResets, scope: null, family: null },
+            { kind: 'weekly_scoped', percent: 100, resetsAt: weekResets, scope: 'Fable', family: 'fable' },
+        ], 60);
+        const [block] = resolveUsageStrip({ usageLimits: null, droverUsage: fableOut }).usageBarGroups;
+        expect(block.rows.map((r) => [r.name, r.percentText, r.measured, r.trailing])).toEqual([
+            ['Session', '30%', true, `Resets ${formatUsageLimitResetTime(sessionResets)}`],
+            ['Week', '40%', true, `Resets ${formatUsageLimitResetTime(weekResets)}`],
+            ['Fable week', '100%', true, `Resets ${formatUsageLimitResetTime(weekResets)}`],
+        ]);
+    });
+
+    it('keeps that answer when the session IS running Fable, on purpose', () => {
+        // A Fable turn on this account really can spend nothing, so a
+        // model-aware rule would hollow the session row here. It would also
+        // hollow it on every other account listed for a flip, whose Opus
+        // headroom is real and is the thing the sheet is opened to find, and
+        // the model can change under a sheet that is already open. The
+        // structural rule is the conservative half and it is the one that
+        // ships; the caption is where the model-scoped caveat lives.
+        const fableOut = account([
+            { kind: 'session', percent: 30, resetsAt: sessionResets, scope: null, family: null },
+            { kind: 'weekly_scoped', percent: 100, resetsAt: weekResets, scope: 'Fable', family: 'fable' },
+        ], 0, 'fable');
+        const [block] = resolveUsageStrip({ usageLimits: null, droverUsage: fableOut }).usageBarGroups;
+        expect(block.rows[0].percentText).toBe('30%');
+        expect(block.rows[0].measured).toBe(true);
+    });
+
+    it('leaves a spent session to say nothing about the week over it', () => {
+        // The narrow window does not contain the wide one. The week's room is
+        // real, it is simply not reachable until the next five-hour window
+        // opens, and the session row's own full bar and reset time say that.
+        const spentSession = account([
+            { kind: 'session', percent: 100, resetsAt: sessionResets, scope: null, family: null },
+            { kind: 'weekly_all', percent: 20, resetsAt: weekResets, scope: null, family: null },
+        ], 0);
+        const [block] = resolveUsageStrip({ usageLimits: null, droverUsage: spentSession }).usageBarGroups;
+        expect(block.rows.map((r) => [r.name, r.percentText, r.measured])).toEqual([
+            ['Session', '100%', true],
+            ['Week', '20%', true],
+        ]);
+    });
+
+    it('never hollows the row the heading is quoting', () => {
+        // Both windows spent, so the binding limit is Session (a tie keeps the
+        // shorter window). A row that is exhausted ITSELF is honestly drawn by
+        // its own full red bar, and hollowing the binding row would be this
+        // ticket's own contradiction wearing different clothes.
+        const bothOut = account([
+            { kind: 'session', percent: 100, resetsAt: sessionResets, scope: null, family: null },
+            { kind: 'weekly_all', percent: 100, resetsAt: weekResets, scope: null, family: null },
+        ], 0);
+        const [block] = resolveUsageStrip({ usageLimits: null, droverUsage: bothOut }).usageBarGroups;
+        const marked = block.rows.filter((r) => r.binding);
+        expect(marked.map((r) => [r.name, r.percentText, r.measured])).toEqual([['Session', '100%', true]]);
+        expect(block.rows[1].percentText).toBe('100%');
+    });
+
+    it('leaves an EXPIRED week to DROVE-204 rather than calling it spent', () => {
+        // A reading whose window has already reset is unknown, not empty. The
+        // honest answer is that nobody knows what is in that week now, and an
+        // unknown week cannot moot anything.
+        const staleWeek = account([
+            { kind: 'session', percent: 30, resetsAt: sessionResets, scope: null, family: null, usable: true },
+            { kind: 'weekly_all', percent: 100, resetsAt: captured - 1, scope: null, family: null, usable: false },
+        ], null);
+        const [block] = resolveUsageStrip({ usageLimits: null, droverUsage: staleWeek }).usageBarGroups;
+        expect(block.rows.map((r) => [r.name, r.percentText, r.trailing])).toEqual([
+            ['Session', '30%', `Resets ${formatUsageLimitResetTime(sessionResets)}`],
+            ['Week', null, 'window reset'],
+        ]);
+    });
+
+    it('asks the question per account, and leaves a healthy block untouched', () => {
+        const groups = resolveUsageStrip(pane).usageBarGroups;
+        // jamrizzi is fine on all three and reads exactly as it did before.
+        expect(groups[0].rows.map((r) => [r.name, r.percentText, r.measured, r.trailing])).toEqual([
+            ['Session', '49%', true, `Resets ${formatUsageLimitResetTime(sessionReset)}`],
+            ['Week', '23%', true, `Resets ${formatUsageLimitResetTime(sep5)}`],
+            ['Fable week', '39%', true, `Resets ${formatUsageLimitResetTime(sep5)}`],
+        ]);
+        // main's spent week is main's business: it hollows main's session and
+        // nobody else's.
+        expect(groups[1].rows[0].trailing).toBe('Week spent');
+        // bitspur.com is out for Fable only, and its account-wide week is
+        // measured at 60% — a family window moots neither of the other two.
+        expect(groups[2].rows.map((r) => [r.name, r.percentText])).toEqual([
+            ['Session', null],
+            ['Week', '60%'],
+            ['Fable week', '100%'],
+        ]);
+        // And the sheet's order is DROVE-248's, unmoved: mooting changes what
+        // a row SAYS, never where its account sits.
+        expect(groups.map((g) => g.key))
+            .toEqual(['account:jamrizzi', 'account:main', 'account:bitspur.com', 'account:spare']);
     });
 });

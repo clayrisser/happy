@@ -1160,6 +1160,35 @@ describe('collectAccountRows', () => {
         expect('headroom' in byName.never).toBe(false);
     });
 
+    /**
+     * THE WRIST NEVER HAD THE PHONE'S BUG, AND MUST NOT GROW IT (DROVE-255).
+     *
+     * The phone's sheet drew a green `Session 0%` under a heading reading `0%
+     * left on Week`, so a mooted window now shows no figure there. The wrist
+     * draws ONE window per account — the binding one, which is the fullest
+     * that applies — and on this account that is the spent week itself. So the
+     * wrist already showed a full red bar named `Week`, and the mooting rule
+     * has nothing left to hide here. Pinned so a later change that pushes
+     * per-window rows to the watch cannot quietly reintroduce the fresh-looking
+     * session bar the phone just stopped drawing.
+     */
+    it('bars the account on its spent week, not on the fresh session under it', () => {
+        const [row] = collectAccountRows({
+            s1: session({
+                droverUsage: usage(10_000, [{
+                    name: 'main', headroom: 0, loggedIn: true, current: true,
+                    limits: [
+                        { kind: 'session', percent: 0, resetsAt: 90_000, scope: null, family: null },
+                        { kind: 'weekly_all', percent: 100, resetsAt: 900_000, scope: null, family: null },
+                    ],
+                }]),
+            }),
+        });
+        // The fullest window decides, so the untouched five-hour window never
+        // reaches the wrist as a number.
+        expect(row).toMatchObject({ name: 'main', headroom: 0, used: 100, limit: 'Week', tone: 'critical' });
+    });
+
     // The watch is a TestFlight binary and cannot be updated OTA, so a row it
     // has nothing to say about must stay exactly as small as it was — and one
     // NSNull anywhere fails the whole WatchConnectivity publish.
