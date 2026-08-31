@@ -15,11 +15,22 @@ export const SUPPORTED_SCHEMA_VERSION = 2;
 export const SESSION_LIST_GROUPING_MODES = ['flat', 'project'] as const;
 export type SessionListGrouping = typeof SESSION_LIST_GROUPING_MODES[number];
 
-// Soft wrap for monospace cards (DROVE-95): terminal cards (CommandView) and
-// fenced code blocks, each toggled by a double-tap on the card. One preference
-// with two targets, so one nested value rather than two flat keys. Both fields
+// Soft wrap for monospace cards: terminal cards (CommandView) and fenced code
+// blocks, each toggled by a double-tap on the card. One preference with two
+// targets, so one nested value rather than two flat keys. Both fields
 // optional: a partial object from another app version merges instead of
-// failing the whole settings parse. Default off, the horizontal scroll.
+// failing the whole settings parse.
+//
+// Wrapping is the default (DROVE-149). Horizontal scrolling is the exception
+// you reach for when column alignment matters, so the stored value names the
+// kinds that SCROLL and an absent kind wraps.
+//
+// The key is new rather than a flipped default on DROVE-95's codeWrap,
+// because settings sync POSTs the whole settings object: every account that
+// changed any setting after DROVE-95 already has codeWrap {terminal: false,
+// code: false} on the server, and a flipped default would read as "off" for
+// all of them. An older app version ignores codeScroll and keeps its own
+// behavior, which is what it had anyway.
 export const CODE_WRAP_KINDS = ['terminal', 'code'] as const;
 export type CodeWrapKind = typeof CODE_WRAP_KINDS[number];
 export const CodeWrapSchema = z.object({
@@ -27,6 +38,8 @@ export const CodeWrapSchema = z.object({
     code: z.boolean().optional(),
 });
 export type CodeWrap = z.infer<typeof CodeWrapSchema>;
+export const CodeScrollSchema = CodeWrapSchema;
+export type CodeScroll = z.infer<typeof CodeScrollSchema>;
 
 // Stream-talk voice (DROVE-97): which installed voice reads replies aloud,
 // how fast and how high, and how much unspoken audio may pile up behind a
@@ -120,7 +133,8 @@ export const SettingsSchema = z.object({
     showHarnessIconInSessionHeader: z.boolean().describe('Whether to show the harness icon in the session header'),
     userMessageBubbleColor: z.string().describe('User message bubble color preset'),
     usageLimitShowRemaining: z.boolean().describe('Show plan rate limits as quota remaining instead of quota used'),
-    codeWrap: CodeWrapSchema.describe('Soft-wrap monospace text in terminal cards and code blocks, toggled by double-tap'),
+    codeWrap: CodeWrapSchema.describe('Legacy opt-in soft wrap for monospace cards (no longer used; see codeScroll)'),
+    codeScroll: CodeScrollSchema.describe('Which monospace kinds scroll horizontally instead of wrapping, toggled by double-tap'),
     streamTalk: StreamTalkSchema.describe('Read-aloud voice: chosen voice identifier, rate, pitch and how much unspoken audio may pile up before skipping ahead'),
     speakReplies: SpeakRepliesSchema.describe('Which device speaks replies aloud: phone, watch, or auto (the one whose audio route has headphones, else the phone)'),
     droverAnnounceVisual: z.boolean().describe('Visual channel: the alert push and the gum client announce a Cattle Drover prompt'),
@@ -211,6 +225,7 @@ export const settingsDefaults: Settings = {
     userMessageBubbleColor: DEFAULT_USER_MESSAGE_BUBBLE_COLOR,
     usageLimitShowRemaining: false,
     codeWrap: { terminal: false, code: false },
+    codeScroll: {},
     streamTalk: { ...streamTalkDefaults },
     speakReplies: { on: speakRepliesDefault },
     // Visual and haptic on, matching the bus's built-in defaults: the push and
@@ -312,19 +327,22 @@ export function settingsToSyncPayload(settings: Settings): Partial<Settings> {
 }
 
 //
-// Code wrap (DROVE-95)
+// Code wrap (DROVE-95, default flipped to wrapped in DROVE-149)
 //
 
-export function isCodeWrapOn(settings: Pick<Settings, 'codeWrap'>, kind: CodeWrapKind): boolean {
-    return settings.codeWrap?.[kind] === true;
+/** A kind wraps unless it was explicitly turned over to horizontal scrolling. */
+export function isCodeWrapOn(settings: Pick<Settings, 'codeScroll'>, kind: CodeWrapKind): boolean {
+    return settings.codeScroll?.[kind] !== true;
 }
 
 /** The delta that flips one kind and leaves the other as it was. */
-export function toggleCodeWrap(settings: Pick<Settings, 'codeWrap'>, kind: CodeWrapKind): Pick<Settings, 'codeWrap'> {
+export function toggleCodeWrap(settings: Pick<Settings, 'codeScroll'>, kind: CodeWrapKind): Pick<Settings, 'codeScroll'> {
     return {
-        codeWrap: {
-            ...(settings.codeWrap ?? {}),
-            [kind]: !isCodeWrapOn(settings, kind),
+        codeScroll: {
+            ...(settings.codeScroll ?? {}),
+            // Scrolling becomes whatever wrapping is now, so a first double-tap
+            // on an untouched card turns wrapping off.
+            [kind]: isCodeWrapOn(settings, kind),
         },
     };
 }

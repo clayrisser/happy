@@ -187,8 +187,9 @@ function RenderNumberedListBlock(props: { items: { number: number, depth: number
 
 function RenderCodeBlock(props: { content: string, language: string | null, first: boolean, last: boolean, selectable: boolean }) {
     const [isHovered, setIsHovered] = React.useState(false);
-    // Double-tap flips soft wrap for every code block (DROVE-95): the
-    // horizontal ScrollView goes away and the text breaks inside the block.
+    // Code blocks arrive wrapped (DROVE-149): the text breaks inside the
+    // block. A double-tap flips every code block back to the horizontal
+    // ScrollView, for a table or a diff that wrapping ruins.
     const [wrap, toggleWrap] = useCodeWrap('code');
     const { theme } = useUnistyles();
 

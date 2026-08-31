@@ -4,7 +4,8 @@ import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { Ionicons } from '@expo/vector-icons';
 
 /**
- * Double-tap to toggle soft wrap on a monospace card (DROVE-95).
+ * Double-tap to toggle soft wrap on a monospace card (DROVE-95, wrapping by
+ * default since DROVE-149).
  *
  * A gesture-handler Tap with two taps on native, so it recognises inside the
  * chat list and inside a horizontal ScrollView without stealing either pan: a
@@ -63,19 +64,24 @@ interface WrapGlyphProps {
     style?: StyleProp<ViewStyle>;
 }
 
-/** The small corner glyph that says whether the card wraps. Bright when on, faint when off. */
+/**
+ * The small corner glyph that says how the card lays its text out. Wrapping is
+ * the default, so it is the quiet one: a faint return arrow. Horizontal
+ * scrolling is the state you chose, so it is bright and gets its own arrows
+ * (DROVE-149).
+ */
 export function WrapGlyph(props: WrapGlyphProps) {
     return (
         <View
             pointerEvents="none"
             style={[styles.glyph, props.style]}
-            accessibilityLabel={props.on ? 'Line wrap on' : 'Line wrap off'}
+            accessibilityLabel={props.on ? 'Line wrap on' : 'Horizontal scrolling on'}
         >
             <Ionicons
-                name="return-down-back-outline"
+                name={props.on ? 'return-down-back-outline' : 'swap-horizontal'}
                 size={14}
                 color={props.color}
-                style={{ opacity: props.on ? 1 : 0.35 }}
+                style={{ opacity: props.on ? 0.35 : 1 }}
             />
         </View>
     );
