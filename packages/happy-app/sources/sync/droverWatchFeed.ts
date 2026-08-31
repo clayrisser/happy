@@ -546,13 +546,14 @@ export function startDroverWatchFeed(): () => void {
     // A message dictated on the wrist (DROVE-92). It leaves this phone by the
     // same sync.sendMessage the composer's Send calls, so it reaches the
     // session's inbox and lands in the transcript, on both devices, exactly
-    // as a phone-typed message does. Whatever the phone was reading aloud is
-    // cut first, as SessionView cuts it on its own Send: a reply narrated
-    // over the question just asked is the wrong reply.
+    // as a phone-typed message does. It goes through the same userSent as
+    // SessionView's own Send (DROVE-122), so the wrist's capture stops while
+    // the phone keeps narrating the old reply until the new one has its first
+    // sentence to say.
     const says = addDroverSayListener((event) => {
         const text = (event.text ?? '').trim();
         if (!event.sessionId || !text) return;
-        readAloud.interrupt('sent');
+        readAloud.userSent();
         void Promise.resolve(sync.sendMessage(event.sessionId, text, { source: 'voice' })).catch(() => {});
     });
 

@@ -925,7 +925,11 @@ export function SessionViewLoaded({
     const handleSend = React.useCallback(() => {
         const liveMessage = composerHandleRef.current?.getMessage() ?? '';
         if (liveMessage.trim() || selectedImages.length > 0) {
-            readAloud.interrupt('sent');
+            // Stops the mic, not the narration (DROVE-122). The answer being
+            // asked for does not exist yet, so cutting here would be a silence
+            // as long as the model takes to start. The old reply is dropped
+            // when the new one has its first sentence to say.
+            readAloud.userSent();
             const attachments = selectedImages.length > 0 ? selectedImages : undefined;
             const communicationsToDismiss = [...pendingCommunications];
             composerHandleRef.current?.clearMessage();
