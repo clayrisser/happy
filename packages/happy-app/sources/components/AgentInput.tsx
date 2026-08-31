@@ -45,22 +45,22 @@ import { resolveUsageStrip } from './agentInputUsage';
 import { ProviderIcon } from './ProviderIcon';
 import { isRigMetadata } from '@/sync/rig';
 import {
+    MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE,
     MOBILE_COMPOSER_LAYOUT,
     MOBILE_COMPOSER_METRICS,
     resolveMobileComposerActionGeometry,
-    resolveMobileComposerControlRowGeometry,
     resolveMobileComposerLineGeometry,
 } from './agentInputLayout';
 import {
     COMPOSER_BUBBLE_ACTION_ROW_GEOMETRY,
+    COMPOSER_BUBBLE_GAP_GEOMETRY,
     COMPOSER_BUBBLE_GEOMETRY,
+    COMPOSER_BUBBLE_SESSION_CAPSULE_GEOMETRY,
     COMPOSER_BUBBLE_SPACER_GEOMETRY,
     COMPOSER_BUBBLE_TEXT_ROW_GEOMETRY,
 } from './composerBubbleLayout';
 import { COMPOSER_STRIP_BOX } from './composerStripLayout';
 import { LiveMicBanner } from './LiveMicBanner';
-import { TalkButton } from './TalkButton';
-import { talkButtonWiring } from './talkButtonWiring';
 import type { MicButtonState } from '@/voice/micButton';
 import type { DictationCaptureState } from '@/voice/dictationCapture';
 import { DroverChannelsSheet } from './DroverChannelsSheet';
@@ -259,7 +259,6 @@ function permissionKindIcon(kind: string | null | undefined): React.ComponentPro
 }
 
 const MOBILE_COMPOSER_LINE_GEOMETRY = resolveMobileComposerLineGeometry();
-const MOBILE_CONTROL_ROW_GEOMETRY = resolveMobileComposerControlRowGeometry();
 
 /**
  * How long a deferred picker waits for `keyboardDidHide` before opening
@@ -270,6 +269,7 @@ const PICKER_KEYBOARD_FALLBACK_MS = 420;
 const MOBILE_ICON_ACTION_GEOMETRY = resolveMobileComposerActionGeometry('icon');
 const MOBILE_PRIMARY_ACTION_GEOMETRY = resolveMobileComposerActionGeometry('primary');
 const MOBILE_ADD_ACTION_GEOMETRY = resolveMobileComposerActionGeometry('add');
+const MOBILE_AUDIO_ACTION_GEOMETRY = resolveMobileComposerActionGeometry('audio');
 
 // Shared with the action-area offset reported to onActionAreaOffsetChange —
 // the Shaker's layout.y is relative to innerContainer, which sits this far
@@ -350,13 +350,6 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         minWidth: 0,
     },
     /**
-     * Mode, effort, model, speaker and mic, under the bubble rather than in it
-     * (DROVE-196). Every control keeps its 44pt and its colours; only the
-     * surface behind them changed, from the card's glass to the dock's own
-     * frame, and each of them carries glass of its own already.
-     */
-    mobileControlRow: MOBILE_CONTROL_ROW_GEOMETRY,
-    /**
      * Thumbnails inside a card with no padding would sit on its rim, so the
      * strip brings the air the card used to. 64pt thumb plus this is the 72
      * `attachmentExtraHeight` has always promised.
@@ -406,6 +399,16 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     mobileBubbleActionRow: COMPOSER_BUBBLE_ACTION_ROW_GEOMETRY,
     /** Holds send at the trailing end even in zen mode, where no `+` is drawn. */
     mobileBubbleActionSpacer: COMPOSER_BUBBLE_SPACER_GEOMETRY,
+    /**
+     * One fixed gap between two controls on that row (DROVE-236).
+     *
+     * A child with a width, not a margin and not the row's `gap`. The row
+     * wants a fixed 6 in three places and slack in exactly one, and `gap`
+     * cannot say that; the reasoning is on `resolveComposerBubbleGapGeometry`.
+     */
+    mobileBubbleGap: COMPOSER_BUBBLE_GAP_GEOMETRY,
+    /** The session capsule, sized to its content, inside that row. */
+    mobileBubbleSessionCapsule: COMPOSER_BUBBLE_SESSION_CAPSULE_GEOMETRY,
     mobileAddButton: MOBILE_ADD_ACTION_GEOMETRY,
 
     // Overlay styles
@@ -521,25 +524,15 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     },
     mobileIconButton: MOBILE_ICON_ACTION_GEOMETRY,
     /**
-     * The audio pair's shared capsule (DROVE-153).
+     * THE AUDIO BUTTON, a disc on the bubble's own row (DROVE-236).
      *
-     * DROVE-118 gave the speaker and the mic a filled surface each so they read
-     * as buttons rather than as decoration beside the primary. That was right
-     * and this keeps it; what changes is that the surface is now one capsule
-     * around both, in the material, instead of two flat discs. Clay's
-     * Screenshot-toolbar reference is exactly this shape.
+     * It was 44 inside a shared capsule with the mic, on the row under the
+     * bubble. Clay circled it and drew an arrow up to the bubble's right rim,
+     * "beside the mic". So it is a 36pt disc next to two other 36pt discs, and
+     * the capsule it shared has nothing left to share: the mic that was the
+     * other half of it is the primary button now.
      */
-    mobileAudioCapsule: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        flexShrink: 0,
-        height: MOBILE_COMPOSER_METRICS.actionSize,
-    },
-    mobileAudioDivider: {
-        width: StyleSheet.hairlineWidth,
-        height: 20,
-        backgroundColor: theme.colors.glass.divider,
-    },
+    mobileAudioButton: MOBILE_AUDIO_ACTION_GEOMETRY,
     // Stream-talk on: the surface carries it, not just the glyph, which is
     // what a blue icon on nothing could never say at a glance.
     mobileIconButtonOn: {
@@ -633,8 +626,8 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
      * DROVE-206 spent `mobileIconButtonOpen` on this, arguing the `+` had no
      * resting fill so the fill itself could be the open state. It has one now,
      * so open needs a surface of its own; this is the value the send button's
-     * live state vacated on each theme. The control row's own controls keep
-     * `mobileIconButtonOpen` and are untouched.
+     * live state vacated on each theme. Home's own row keeps
+     * `mobileIconButtonOpen` and is untouched.
      */
     mobileInFieldDiscOpen: {
         backgroundColor: theme.dark
@@ -879,17 +872,34 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     const shakerRef = React.useRef<ShakeInstance>(null);
     const sendBlockShakerRef = React.useRef<ShakeInstance>(null);
     const inputRef = React.useRef<MultiTextInputHandle>(null);
-    // The handlers TalkButton needs, built once and passed BY REFERENCE
-    // (DROVE-210). Never wrap these in a lambda: an arrow that forgets to
-    // forward `touchAt` type-checks and silently undoes DROVE-140.
-    const talkWiring = React.useMemo(
-        () => talkButtonWiring({
-            onTalkPressIn: props.onTalkPressIn,
-            onTalkPressOut: props.onTalkPressOut,
-            onTalkSlide: props.onTalkSlide,
-        }),
-        [props.onTalkPressIn, props.onTalkPressOut, props.onTalkSlide],
-    );
+    /*
+     * `talkWiring` and the `TalkButton` it fed stood here and are gone
+     * (DROVE-236).
+     *
+     * Clay's markup crosses the control row's mic out: "it is already in the
+     * bubble." It is. The primary button IS the microphone whenever the
+     * composer has nothing to send or a capture is open, so a second mic on
+     * the row was the duplicate he struck through.
+     *
+     * WHAT THAT COSTS, NAMED RATHER THAN BURIED. TalkButton's gesture was
+     * press-and-HOLD with slide-off-to-cancel (DROVE-105, DROVE-140). The
+     * primary's is a tap: tap to open the latch, tap to close it. So the
+     * composer loses push-to-talk and slide-to-cancel from the SCREEN. What
+     * survives is the latch on the primary and the headphone press
+     * (DROVE-225), and DROVE-210's one-capture rule holds across both because
+     * the primary calls `onTalkTap`, the same handler every other entry point
+     * reaches.
+     *
+     * The hold could NOT simply move to the primary's long press: that gesture
+     * is the channel sheet at every face, which `composerPrimaryPress.ts` made
+     * a rule in this same ticket precisely so the second gesture stays one
+     * thing. Giving it back a home is a decision, not a refactor.
+     *
+     * `TalkButton.tsx` and `talkButtonWiring.ts` are left intact with their
+     * specs. The gesture is not deleted, its render site in the chat composer
+     * is, and `props.onTalkPressIn` / `onTalkPressOut` / `onTalkSlide` are
+     * still on the interface for whatever draws it next.
+     */
     /** The mic is open right now, latched by a tap or held under a finger. */
     const micLive = props.talkState === 'latched' || props.talkState === 'held';
     /**
@@ -915,7 +925,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
      * The in-field send glyph: the accent once there is something to send, the
      * theme's neutral when there is not (DROVE-176). It no longer wears a
      * second identity on an empty field, because the waveform moved out to the
-     * control row (DROVE-206), so the arrow that turns accent is the one thing
+     * control row (DROVE-206), so the glyph that turns accent is the one thing
      * this colour has to say. Stop keeps its own colour and a blocked send
      * keeps the lock's grey; neither reads this.
      *
@@ -1329,7 +1339,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 return;
             case 'mic':
                 // THE SAME CAPTURE, not a third one (DROVE-210, DROVE-236).
-                // `onTalkTap` is the join the control row's TalkButton and the
+                // `onTalkTap` is the join the headphone gesture and the
                 // headphone press already land on, so a latch opened on any of
                 // the three is closed by any of the three. It has been on this
                 // component since DROVE-210 with nowhere to be pressed from;
@@ -2018,15 +2028,18 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
      *
      * Clay: "we should have a send button, proper button." It used to turn
      * into the waveform on an empty composer, so the same spot did two
-     * unrelated things depending on what you had typed. The waveform is on the
-     * control row now and this is a send button with two things it can also
-     * be: Stop, on an empty composer while the agent works, and the lock when
-     * the gate refuses. Both are still send unable to proceed rather than
-     * other controls.
+     * unrelated things depending on what you had typed. The waveform is folded
+     * into the audio button two places along this same row now (DROVE-236),
+     * and this is a send button with three things it can also be: Stop, on an
+     * empty composer while the agent works, the lock when the gate refuses,
+     * and the microphone, which is dictation filling THIS composer rather than
+     * an unrelated second identity. The first two are still send unable to
+     * proceed; the third has its own table in `agentInputPrimaryAction.ts`.
      *
-     * DROVE-206 made this the CONTROL. DROVE-214 makes it the GLYPH: it drew a
+     * DROVE-206 made this the CONTROL. DROVE-214 made it the GLYPH: it drew a
      * bare up-arrow, which is the submit affordance a field uses when it has
-     * no send button, and it draws a paper plane now.
+     * no send button, and DROVE-236 draws the flat arrowhead Clay sent a crop
+     * of.
      *
      * On an empty composer it is DRAWN AND DISABLED. It is not hidden, because
      * a control that came and went would make the row twitch every time Stop
@@ -2124,22 +2137,27 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                 : micColour(composerPalette, 'idle')}
                         />
                     ) : (
-                        // A PAPER PLANE, not an arrow (DROVE-214). Clay: "the
-                        // send button should actually be a send button." An
-                        // up-arrow is what a chat field submits with when it
-                        // has no send button; a send button carries a send
-                        // glyph, and Ionicons already ships one so this costs
-                        // no asset.
+                        // A FLAT ARROWHEAD, not a tilted plane (DROVE-236).
+                        // Clay, with a reference crop: "Shouldn't send look
+                        // more like this?" The crop is the solid,
+                        // right-pointing dart Slack and Telegram draw, level
+                        // rather than pitched up at 45 degrees. Ionicons ships
+                        // exactly it as `send`, so this costs no asset either.
                         //
-                        // Sized by ink rather than by the number it replaces.
-                        // `paper-plane` fills 0.874486 of its em against
-                        // `add`'s 0.625, so 18.58 here and 26 at the other rim
-                        // draw the same 16.25pt of ink. The arrow it replaces
-                        // was 9.97 x 10.75, so this is the heavier mark Clay
-                        // asked for, and it is heavier by the same measure the
-                        // `+` is placed by.
+                        // DROVE-214's argument survives the swap: an up-arrow
+                        // is what a chat field submits with when it has no send
+                        // button, a send button carries a send glyph, and this
+                        // is one.
+                        //
+                        // Sized by ink rather than by the number it replaces,
+                        // and by the LONGEST ink span rather than the x one.
+                        // `send` is 0.936807 of its em wide and 0.811523 tall;
+                        // `paper-plane` was square in its bounds so DROVE-214
+                        // never had to choose. 17.35 here and 26 at the other
+                        // rim draw the same 16.25pt box of ink, so neither rim
+                        // out-weighs the other.
                         <Ionicons
-                            name="paper-plane"
+                            name="send"
                             size={MOBILE_COMPOSER_LAYOUT.sendIconSize}
                             color={canPressSendButton ? activeSendIconColor : theme.colors.textSecondary}
                             // The color has to travel in `style`, not just the
@@ -2165,6 +2183,128 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             </View>
         </Shaker>
     );
+
+    /**
+     * MODE, EFFORT AND MODEL, INSIDE THE BUBBLE (DROVE-236).
+     *
+     * They were a capsule on a row of their own under the bubble, which is
+     * where DROVE-196 put them: "the second row buttons should sit outside the
+     * speech bubble." Clay has drawn the reverse in red: the capsule circled,
+     * an arrow up into the bubble's empty middle beside the `+`. So they are
+     * on the bubble's own button row now, between the `+` and the audio
+     * button.
+     *
+     * NOTHING ABOUT THE PRESSES MOVED. Each segment still opens its own picker
+     * on the first tap through `handleSessionControlPress`, and every one of
+     * those is a sheet (DROVE-242). No long press, no drag, no intermediate
+     * menu: the three that were true on the row are true in here.
+     *
+     * WHAT DID MOVE IS THE SIZE, 44 to 36, because that is what the row is.
+     * The cost is a 36pt-wide touch target on the two glyph segments, argued
+     * on `MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE`, and 33pt off the model name's
+     * budget at every width, argued in `sessionPillLabel.ts`. Both are the
+     * price of one bubble instead of two rows.
+     */
+    const mobileSessionControls = props.zenMode ? null : (
+            <ComposerSessionControls
+                label={sessionPillLabel}
+                // The row's own geometry, resolved by the layout engine in
+                // `composerBubbleLayout.spec.ts` rather than restated here.
+                style={styles.mobileBubbleSessionCapsule}
+                size={MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE}
+                // The row's own slop, vertically. Horizontally these segments
+                // touch each other inside one capsule, so there is none to
+                // take.
+                verticalSlop={MOBILE_COMPOSER_METRICS.primaryActionSlop}
+                modeKind={isSandboxedYoloMode ? 'safe-yolo' : displayPermissionMode?.semanticKind}
+                modeKey={permissionModeKey}
+                effortIndex={effortIndex}
+                effortCount={effortScale.keys.length}
+                onPress={handleSessionControlPress}
+                canOpen={{
+                    permission: !!props.onPermissionModeChange && availableModes.length > 0,
+                    effort: availableEffortLevels.length > 0 && !!props.onEffortLevelChange,
+                    model: availableModels.length > 0 && !!props.onModelModeChange,
+                }}
+                openPicker={engagedPicker === 'permission' || engagedPicker === 'effort'
+                    || engagedPicker === 'model'
+                    ? engagedPicker
+                    : null}
+                pending={props.pendingModes ? {
+                    permission: props.pendingModes.permissionMode,
+                    effort: props.pendingModes.effortLevel,
+                    model: props.pendingModes.modelMode,
+                } : null}
+            />
+    );
+
+    /**
+     * THE AUDIO-OUT BUTTON, beside the mic at the bubble's right rim
+     * (DROVE-236).
+     *
+     * Clay circled the speaker and drew an arrow up to sit next to the mic. So
+     * it comes off the shared capsule, which has nothing left to share
+     * anyway, because the mic that was its other half IS the primary button
+     * now. It becomes the third disc on this row.
+     *
+     * IT KEEPS BOTH GESTURES AND THE WHOLE STATE TABLE. Single press is
+     * reading mode, long press is boss mode, and in reading mode the long
+     * press is the pause DROVE-233 built. `handleAudioOutPress` and
+     * `handleAudioOutLongPress` are the same two handlers the capsule wired;
+     * only the box around them changed.
+     *
+     * FOUR THINGS ON TWO CARRIERS, NO HUE PER STATE. The GLYPH says whether
+     * read-aloud is on: slashed off, waves on, paused included, which is
+     * DROVE-233's sentence unchanged. The FILL says what is happening NOW and
+     * nothing else: the accent disc while it is reading, the recording disc
+     * while a call is up. That is DROVE-215's rule, and both hues are already
+     * in composerControlColour.ts.
+     *
+     * AT REST IT WEARS THE ROW'S OWN DISC rather than nothing. On the control
+     * row it sat on a glass capsule that drew the button for it; there is no
+     * capsule here, and a bare glyph between two discs would read as
+     * decoration rather than as a button. So the resting face is
+     * `mobileInFieldDisc`, the same surface the `+` wears and the same one
+     * send wears with nothing to send. Normal and paused differ in the glyph,
+     * paused and reading in the fill, normal and reading in both. The state
+     * table in full is in composerAudioOut.ts.
+     */
+    const mobileAudioAction = audioOut.shown ? (
+        <View
+            style={[
+                styles.mobileAudioButton,
+                styles.mobileInFieldDisc,
+                audioOut.fill === 'accent' && styles.mobileIconButtonOn,
+                audioOut.fill === 'recording' && styles.mobileIconButtonCalling,
+            ]}
+        >
+            <BubblePressable
+                onPress={handleAudioOutPress}
+                onLongPress={handleAudioOutLongPress}
+                style={(p) => ({
+                    width: '100%',
+                    height: '100%',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    opacity: p.pressed ? 0.7 : 1,
+                })}
+                // 36 drawn plus 6 a side is a 48pt target, the same bargain the
+                // discs either side of it strike.
+                hitSlop={MOBILE_COMPOSER_METRICS.primaryActionSlop}
+                accessibilityRole="button"
+                accessibilityState={{ selected: audioOut.on }}
+                accessibilityLabel={t(audioOut.labelKey)}
+            >
+                <Ionicons
+                    name={audioOut.glyph}
+                    size={16}
+                    color={audioOut.fill === 'none'
+                        ? composerGlyphColour(composerPalette)
+                        : theme.colors.button.primary.tint}
+                />
+            </BubblePressable>
+        </View>
+    ) : null;
 
     return (
         <View style={[
@@ -2601,8 +2741,9 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         the opposite, so it went inside to the leading rim and
                         this line has one child. It stays a row because it
                         carries the composer's gutter, which is what lines the
-                        bubble's rims up with the control row and the recording
-                        banner (DROVE-157). */}
+                        bubble's rims up with the recording banner, which is
+                        the only thing left measured against it now the control
+                        row is inside the bubble (DROVE-157, DROVE-236). */}
                     <View style={compactMobileComposer ? styles.mobileComposerLine : undefined}>
                     <View style={[
                         compactMobileComposer && styles.unifiedPanelShadow,
@@ -2671,15 +2812,34 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     </View>
 
                     {/* THE BUTTON ROW, inside the bubble and under the text
-                        (DROVE-214). Clay: "put everything in the speech bubble
-                        with the buttons on the bottom and the text input one
-                        row above it". Only what acts on the MESSAGE is here;
-                        what acts on the session stays on the control row
-                        outside, which is DROVE-196 unchanged. */}
+                        (DROVE-214), and since DROVE-236 it is the ONLY row.
+                        Clay: "put everything in the speech bubble with the
+                        buttons on the bottom and the text input one row above
+                        it", then, with the composer marked up in red, an arrow
+                        from the session capsule and one from the audio button
+                        pointing up into this row's empty middle.
+
+                        Left to right: the `+`, a gap, the session capsule, a
+                        gap, the spacer, the audio button, a gap, send/mic. The
+                        gaps are children with a width rather than the row's
+                        `gap` property, because the row wants a fixed 6 in
+                        three places and slack in exactly one. See
+                        `resolveComposerBubbleGapGeometry`. */}
                     {compactMobileComposer ? (
                         <View style={styles.mobileBubbleActionRow}>
                             {showMobileAddButton ? mobileAddAction : null}
+                            {showMobileAddButton && mobileSessionControls
+                                ? <View style={styles.mobileBubbleGap} />
+                                : null}
+                            {mobileSessionControls}
+                            {mobileSessionControls
+                                ? <View style={styles.mobileBubbleGap} />
+                                : null}
                             <View style={styles.mobileBubbleActionSpacer} />
+                            {mobileAudioAction}
+                            {mobileAudioAction
+                                ? <View style={styles.mobileBubbleGap} />
+                                : null}
                             {mobilePrimaryAction}
                         </View>
                     ) : null}
@@ -2688,172 +2848,21 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         </MobileGlassSurface>
                     </View>
                     </View>
-
-                    {compactMobileComposer ? (
-                    /* The control row, OUTSIDE the bubble (DROVE-196). Clay:
-                        "the second row buttons should sit outside the speech
-                        bubble." Mode, effort and model, then the audio pair on
-                        the right (DROVE-111, DROVE-153, DROVE-178, and
-                        DROVE-98 put the speaker back). They are settings for
-                        the session rather than part of the message, so the
-                        card is the message and these are furniture under it.
-
-                        Nothing about the controls changed: 44pt targets, 40pt
-                        chips inside them, DROVE-176's colours. What changed is
-                        the surface behind them, from the card's glass to the
-                        dock's own frame, which each of them can carry because
-                        each already draws glass of its own. The row keeps the
-                        shell gutter itself and an 8pt gap under it, which is
-                        the card's old bottom padding still holding the status
-                        row's tap targets off these buttons. */
-                    <>
-                    {/* The stack the row and the effort readout shared
-                        (DROVE-229). The readout is deleted (DROVE-242) and the
-                        wrapper stays: it is what the row's own absolute
-                        children measure against, and collapsing it would move
-                        the row. It carries no padding, so it is inert. */}
-                    <View>
-                    <View style={styles.mobileControlRow}>
-                        {/* Mode, effort and model: three segments in one glass
-                            capsule (DROVE-153, DROVE-178), three pickers, one
-                            tap each (DROVE-111). The name is drawn in full and
-                            scales rather than truncating. */}
-                        {!props.zenMode && (
-                            <ComposerSessionControls
-                                label={sessionPillLabel}
-                                modeKind={isSandboxedYoloMode ? 'safe-yolo' : displayPermissionMode?.semanticKind}
-                                modeKey={permissionModeKey}
-                                effortIndex={effortIndex}
-                                effortCount={effortScale.keys.length}
-                                onPress={handleSessionControlPress}
-                                canOpen={{
-                                    permission: !!props.onPermissionModeChange && availableModes.length > 0,
-                                    effort: availableEffortLevels.length > 0 && !!props.onEffortLevelChange,
-                                    model: availableModels.length > 0 && !!props.onModelModeChange,
-                                }}
-                                openPicker={engagedPicker === 'permission' || engagedPicker === 'effort'
-                                    || engagedPicker === 'model'
-                                    ? engagedPicker
-                                    : null}
-                                pending={props.pendingModes ? {
-                                    permission: props.pendingModes.permissionMode,
-                                    effort: props.pendingModes.effortLevel,
-                                    model: props.pendingModes.modelMode,
-                                } : null}
-                            />
-                        )}
-
-                        <View style={{ flex: 1 }} />
-
-                        {/* The audio group, in ONE capsule (DROVE-153).
-                            Clay's Screenshot-toolbar reference groups related
-                            actions into a single capsule rather than separate
-                            circles, and these are the audio ones: what the
-                            session hears from a live voice turn, what it says
-                            out loud, and what it hears from the mic.
-
-                            The WAVEFORM is the third of them, at the head of
-                            the capsule, and it is new here (DROVE-206). Clay:
-                            "the boss should not be in the message box." It was
-                            the face the send button wore on an empty composer,
-                            which made one spot on the screen two controls
-                            depending on what you had typed. It is an audio
-                            control, so it belongs with the other two, and the
-                            row does not grow for it: a 44pt control on a 44pt
-                            row. Each third is still its own 44pt target. */}
-                        {(audioOut.shown || props.onTalkPressIn) ? (
-                        <GlassChromeSurface
-                            radius={MOBILE_COMPOSER_METRICS.actionSize / 2}
-                            interactive
-                            style={styles.mobileAudioCapsule}
-                        >
-                        {audioOut.shown && (
-                            <BubblePressable
-                                onPress={handleAudioOutPress}
-                                onLongPress={handleAudioOutLongPress}
-                                style={[
-                                    styles.mobileIconButton,
-                                    audioOut.fill === 'accent' && styles.mobileIconButtonOn,
-                                    audioOut.fill === 'recording' && styles.mobileIconButtonCalling,
-                                ]}
-                                accessibilityRole="button"
-                                accessibilityState={{ selected: audioOut.on }}
-                                accessibilityLabel={t(audioOut.labelKey)}
-                            >
-                                {/* ONE AUDIO-OUT BUTTON (DROVE-236). The
-                                    waveform and the speaker were two controls
-                                    for the two things this session can say out
-                                    loud, and Clay collapsed them: single press
-                                    is reading mode, long press is boss mode,
-                                    and in reading mode the long press is the
-                                    pause DROVE-233 built.
-
-                                    FOUR THINGS ON TWO CARRIERS, NO HUE PER
-                                    STATE. The GLYPH says whether read-aloud is
-                                    on: slashed off, waves on, paused included,
-                                    which is DROVE-233's sentence unchanged. The
-                                    FILL says what is happening NOW and nothing
-                                    else: the accent disc while it is reading,
-                                    the recording disc while a call is up, no
-                                    disc at rest or paused. That is DROVE-215's
-                                    rule, and both hues are already in
-                                    composerControlColour.ts.
-
-                                    Normal and paused differ in the glyph,
-                                    paused and reading in the fill, normal and
-                                    reading in both. The reasoning in full,
-                                    with the state table, is in
-                                    composerAudioOut.ts. */}
-                                <Ionicons
-                                    name={audioOut.glyph}
-                                    size={16}
-                                    color={audioOut.fill === 'none'
-                                        ? composerPalette.foreground
-                                        : theme.colors.button.primary.tint}
-                                />
-                            </BubblePressable>
-                        )}
-                        {audioOut.shown && props.onTalkPressIn ? (
-                            <View style={styles.mobileAudioDivider} />
-                        ) : null}
-
-                        {talkWiring && (
-                            // The gesture and the slide-off live in
-                            // TalkButton (DROVE-105); this row only says
-                            // where it sits and what it is drawn in.
-                            //
-                            // The handlers go in BY REFERENCE, never wrapped
-                            // in a lambda (DROVE-210). See talkButtonWiring.ts
-                            // for what a wrapper costs.
-                            <TalkButton
-                                state={props.talkState ?? 'idle'}
-                                onPressIn={talkWiring.onPressIn}
-                                onPressOut={talkWiring.onPressOut}
-                                onSlide={talkWiring.onSlide}
-                                style={styles.mobileIconButton}
-                                heldStyle={styles.talkButtonHeld}
-                                latchedStyle={styles.talkButtonLatched}
-                                // Neutral at rest, the recording red once it
-                                // is latched or held, which is DROVE-142's
-                                // banner red so the glyph and the bar under it
-                                // are one signal (DROVE-176).
-                                idleColor={micColour(composerPalette, 'idle')}
-                                activeColor={micColour(composerPalette, 'latched')}
-                            />
-                        )}
-                        </GlassChromeSurface>
-                        ) : null}
-                    </View>
-                    </View>
-                    </>
-                    ) : null}
                 </Shaker>
 
                 {/* The strip under the composer, and both things that live
-                    in it. It is under the CONTROL ROW now rather than under
-                    the card (DROVE-196) and its box did not move a point for
-                    it: 6pt of padding over the status text's 14pt line, 20 in
-                    total, with the row keeping its own 8pt clear above.
+                    in it. It is under the BUBBLE now, and there is nothing
+                    between them any more (DROVE-236): the control row it used
+                    to sit under is inside the bubble's own button row. Its box
+                    did not move a point for that either: 6pt of padding over
+                    the status text's 14pt line, 20 in total, with the composer
+                    line keeping the same 8pt clear above.
+
+                    The 8 changed OWNER, not value. It was the control row's
+                    `marginBottom` and it is the composer line's, so the tap
+                    floor is where it was and the nearest button is now 4pt
+                    further off it, because the bubble's discs stop
+                    `bubbleInsetBottom` short of the bubble's rim.
 
                     That 20 is `COMPOSER_STRIP_BOX`, and the floor here is the
                     same object's `minHeight` rather than a second number
@@ -2874,9 +2883,9 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     transcript up. Here it is absolutely positioned, so it adds
                     no height and the dock cannot move; the status row stays
                     mounted underneath, covered rather than unmounted, so its
-                    timer and its sheets survive the recording. The mic button
-                    on the action row is still the only control that stops or
-                    sends (DROVE-105) and it has not moved. */}
+                    timer and its sheets survive the recording. The control
+                    that stops the capture is the bubble's primary button,
+                    which draws a mic whenever one is open (DROVE-236). */}
                 <View style={compactMobileComposer && props.talk?.active
                     ? { minHeight: COMPOSER_STRIP_BOX.minHeight }
                     : undefined}

@@ -40,12 +40,22 @@ export interface ChromeControlSize {
     drawnWidth: number;
     drawnHeight: number;
     slop: number;
+    /**
+     * Slop on the HORIZONTAL axis, where it differs from `slop` (DROVE-236).
+     *
+     * A control that sits against its neighbour has no horizontal slop to
+     * take: claiming it would be claiming the neighbour's ink. That is true of
+     * the composer's session capsule, whose segments touch each other, and it
+     * is a fact about the shape rather than an oversight, so it is modelled
+     * rather than averaged into one number.
+     */
+    horizontalSlop?: number;
     /** Set where the target is deliberately under the floor, with the reason. */
     exemptReason?: string;
 }
 
 export function controlTargetWidth(control: ChromeControlSize): number {
-    return control.drawnWidth + control.slop * 2;
+    return control.drawnWidth + (control.horizontalSlop ?? control.slop) * 2;
 }
 
 export function controlTargetHeight(control: ChromeControlSize): number {

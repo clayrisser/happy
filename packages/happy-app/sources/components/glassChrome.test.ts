@@ -25,9 +25,10 @@ import {
     type ChromeControlSize,
 } from './glassChrome';
 import {
+    MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE,
     MOBILE_COMPOSER_METRICS,
 } from './agentInputLayout';
-import { COMPOSER_SESSION_CONTROL_SIZE, composerModelSegmentWidth } from './sessionPillLabel';
+import { composerModelSegmentWidth } from './sessionPillLabel';
 import { MOBILE_GLASS_CONTROL_SIZE } from './navigation/headerMetrics';
 import {
     HOME_INDICATOR_KEEP_OUT,
@@ -82,26 +83,12 @@ describe('every chrome control against Apple’s 44pt floor', () => {
         { name: 'jump to bottom', drawnWidth: CHROME_TARGET_MIN, drawnHeight: CHROME_TARGET_MIN, slop: 0 },
         // Home's `+`, still a 44pt button on a row of them.
         { name: 'home composer add', drawnWidth: MOBILE_COMPOSER_METRICS.actionSize, drawnHeight: MOBILE_COMPOSER_METRICS.actionSize, slop: 0 },
-        { name: 'permission mode segment', drawnWidth: COMPOSER_SESSION_CONTROL_SIZE, drawnHeight: COMPOSER_SESSION_CONTROL_SIZE, slop: 0 },
-        { name: 'effort segment', drawnWidth: COMPOSER_SESSION_CONTROL_SIZE, drawnHeight: COMPOSER_SESSION_CONTROL_SIZE, slop: 0 },
-        {
-            // The model's name (DROVE-178). As tall as its siblings, and
-            // wider: the shortest name the picker offers is `Opus 5` and its
-            // segment is already over the floor with the padding on it, so
-            // the width is measured from the name rather than assumed.
-            name: 'model segment',
-            drawnWidth: composerModelSegmentWidth('Opus 5'),
-            drawnHeight: COMPOSER_SESSION_CONTROL_SIZE,
-            slop: 0,
-        },
-        // The audio group, three across since DROVE-206 put the waveform on
-        // the row beside the other two.
-        { name: 'waveform segment', drawnWidth: MOBILE_COMPOSER_METRICS.actionSize, drawnHeight: MOBILE_COMPOSER_METRICS.actionSize, slop: 0 },
-        { name: 'speaker segment', drawnWidth: MOBILE_COMPOSER_METRICS.actionSize, drawnHeight: MOBILE_COMPOSER_METRICS.actionSize, slop: 0 },
-        { name: 'mic segment', drawnWidth: MOBILE_COMPOSER_METRICS.actionSize, drawnHeight: MOBILE_COMPOSER_METRICS.actionSize, slop: 0 },
-        // The two controls nested INSIDE the input capsule, one at each rim
-        // (DROVE-206). Both 36 drawn with 6pt of slop, so both meet the floor
-        // as a target rather than as a drawn size.
+        // THE CHAT COMPOSER IS ONE BUBBLE WITH ONE ROW IN IT (DROVE-236).
+        // Clay marked the composer up in red: the session capsule and the
+        // audio button move up into the bubble's button row beside the `+`,
+        // and the duplicate mic is struck out. So every control below is
+        // drawn at that row's own 36 rather than the 44 it wore outside, and
+        // each meets the floor as a TARGET.
         {
             name: 'in-field add',
             drawnWidth: MOBILE_COMPOSER_METRICS.primaryActionSize,
@@ -109,30 +96,100 @@ describe('every chrome control against Apple’s 44pt floor', () => {
             slop: MOBILE_COMPOSER_METRICS.primaryActionSlop,
         },
         {
-            name: 'in-field send / stop',
+            name: 'in-field audio out',
             drawnWidth: MOBILE_COMPOSER_METRICS.primaryActionSize,
             drawnHeight: MOBILE_COMPOSER_METRICS.primaryActionSize,
             slop: MOBILE_COMPOSER_METRICS.primaryActionSlop,
+        },
+        {
+            name: 'in-field send / stop / mic',
+            drawnWidth: MOBILE_COMPOSER_METRICS.primaryActionSize,
+            drawnHeight: MOBILE_COMPOSER_METRICS.primaryActionSize,
+            slop: MOBILE_COMPOSER_METRICS.primaryActionSlop,
+        },
+        // The three inside the session capsule. They take the row's slop
+        // vertically and NONE horizontally, because they sit against each
+        // other: a segment claiming 6pt to its right would be claiming its
+        // neighbour's ink. The model segment is over the floor on width
+        // anyway; the two glyph ones are the exception, and it is declared.
+        {
+            name: 'permission mode segment',
+            drawnWidth: MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE,
+            drawnHeight: MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE,
+            slop: MOBILE_COMPOSER_METRICS.primaryActionSlop,
+            horizontalSlop: 0,
+            exemptReason: 'inside the capsule, so no horizontal slop is available (DROVE-236)',
+        },
+        {
+            name: 'effort segment',
+            drawnWidth: MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE,
+            drawnHeight: MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE,
+            slop: MOBILE_COMPOSER_METRICS.primaryActionSlop,
+            horizontalSlop: 0,
+            exemptReason: 'inside the capsule, so no horizontal slop is available (DROVE-236)',
+        },
+        {
+            // The model's name (DROVE-178). As tall as its siblings, and
+            // wider: the shortest name the picker offers is `Opus 5` and its
+            // segment is already over the floor with the padding on it, so
+            // the width is measured from the name rather than assumed.
+            name: 'model segment',
+            drawnWidth: composerModelSegmentWidth('Opus 5'),
+            drawnHeight: MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE,
+            slop: MOBILE_COMPOSER_METRICS.primaryActionSlop,
+            horizontalSlop: 0,
         },
     ];
 
     it.each(controls.map((control) => [control.name, control] as const))(
         '%s answers a touch on at least 44 by 44',
         (_name, control) => {
-            expect(controlTargetWidth(control)).toBeGreaterThanOrEqual(CHROME_TARGET_MIN);
             expect(controlTargetHeight(control)).toBeGreaterThanOrEqual(CHROME_TARGET_MIN);
+            if (control.exemptReason === undefined) {
+                expect(controlTargetWidth(control)).toBeGreaterThanOrEqual(CHROME_TARGET_MIN);
+            }
         },
     );
 
-    it('draws every one of them at 36pt or more, and all but the nested pair at 44', () => {
+    /**
+     * THE ONE TARGET UNDER THE FLOOR IN THE COMPOSER, and what it bought
+     * (DROVE-236).
+     *
+     * The two glyph segments in the session capsule are 36 wide against
+     * Apple's 44, because they sit against each other inside one capsule and
+     * horizontal slop is not available to them. Keeping them at 44 was
+     * measured and is not affordable: it leaves 66pt for the model's name at
+     * 320, under what the shortest name the picker offers needs at any legible
+     * type size. So the choice was a 36pt-wide segment or no model name, and
+     * DROVE-138 was filed about losing the model name.
+     */
+    it('names the capsule segments as the composer\'s one sub-44 target, and why', () => {
+        const exempt = controls.filter((control) => control.exemptReason !== undefined);
+        expect(exempt.map((control) => control.name))
+            .toEqual(['permission mode segment', 'effort segment']);
+        for (const control of exempt) {
+            // Under the floor on ONE axis only, and over it on the other.
+            expect(controlTargetWidth(control), control.name).toBe(36);
+            expect(controlTargetHeight(control), control.name).toBe(48);
+            expect(control.horizontalSlop, control.name).toBe(0);
+        }
+    });
+
+    it('draws every composer control at the bubble row\'s own 36, with the slop', () => {
         const nested = controls.filter((control) => control.drawnHeight < CHROME_TARGET_MIN);
-        // Exactly two exceptions, and they are the pair INSIDE the 44pt input
-        // capsule, one at each rim (DROVE-206): drawing either at 44 would
-        // touch both of the field's edges. Messages nests its own mic at the
-        // same proportion. Both carry the slop, so neither is a special case
-        // of the other.
-        expect(nested.map((control) => control.name))
-            .toEqual(['in-field add', 'in-field send / stop']);
+        // Six now, not two, and they are the whole of the bubble's button row
+        // (DROVE-236). Drawing any of them at 44 would touch the field's
+        // edges, which is DROVE-206's reason for the original pair; the rest
+        // joined the row and took its size. Messages nests its own mic at the
+        // same proportion.
+        expect(nested.map((control) => control.name)).toEqual([
+            'in-field add',
+            'in-field audio out',
+            'in-field send / stop / mic',
+            'permission mode segment',
+            'effort segment',
+            'model segment',
+        ]);
         for (const control of nested) {
             expect(control.drawnHeight, control.name).toBe(36);
             expect(control.slop, control.name).toBe(MOBILE_COMPOSER_METRICS.primaryActionSlop);

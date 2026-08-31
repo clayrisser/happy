@@ -83,27 +83,39 @@ describe('agent input compact mobile layout', () => {
      * the bubble costs its own height and the air round it, and the transcript
      * pays. Written down here rather than discovered later.
      */
-    it('re-pins the empty composer at 143, and says where each point went', () => {
+    it('re-pins the empty composer at 93, and says where each point went', () => {
         const metrics = agentInputLayout.MOBILE_COMPOSER_METRICS;
 
-        // DROVE-196  44 + 6 + 44 + 8   one-row bubble, gap, control row, clearance
-        // DROVE-214  90 + 6 + 44 + 8   two-row bubble, and only the bubble moved
-        // DROVE-236  85 + 6 + 44 + 8   the bubble's floor gives 5 back and the
-        //                              control row comes up by it
-        expect(agentInputLayout.MOBILE_COMPOSER_BASE_HEIGHT).toBe(143);
+        // DROVE-196   44 + 6 + 44 + 8   one-row bubble, gap, control row, clearance
+        // DROVE-214   90 + 6 + 44 + 8   two-row bubble, and only the bubble moved
+        // DROVE-236a  85 + 6 + 44 + 8   the bubble's floor gives 5 back
+        // DROVE-236b  85         +  8   the row moves INTO the bubble's own
+        //                               button row and stops existing
+        expect(agentInputLayout.MOBILE_COMPOSER_BASE_HEIGHT).toBe(93);
         expect(agentInputLayout.MOBILE_COMPOSER_BASE_HEIGHT).toBe(
             agentInputLayout.MOBILE_COMPOSER_BUBBLE_BASE_HEIGHT
-            + metrics.controlGap
-            + metrics.actionRowHeight
             + metrics.controlsBottomGap,
         );
-        // The chrome under the bubble did not move at all, which is what says
-        // the move came out of the bubble's floor and nothing else. The status
-        // row's tap arithmetic reads exactly these two numbers.
-        expect(agentInputLayout.MOBILE_COMPOSER_CHROME_HEIGHT).toBe(58);
+        // The chrome under the bubble is the gap over the status strip and
+        // nothing else. That gap did not change value, it changed owner: it
+        // was the control row's `marginBottom` and it is the composer line's.
+        expect(agentInputLayout.MOBILE_COMPOSER_CHROME_HEIGHT).toBe(8);
+        expect(agentInputLayout.MOBILE_COMPOSER_CHROME_HEIGHT).toBe(metrics.controlsBottomGap);
+        expect(agentInputLayout.resolveMobileComposerLineGeometry().marginBottom)
+            .toBe(metrics.controlsBottomGap);
         expect(metrics.controlGap).toBe(6);
         expect(metrics.controlsBottomGap).toBe(8);
-        expect(agentInputLayout.MOBILE_COMPOSER_BASE_HEIGHT - 102).toBe(41);
+        // The whole 50 is the row plus the gap that held it off the bubble.
+        expect(143 - agentInputLayout.MOBILE_COMPOSER_BASE_HEIGHT)
+            .toBe(metrics.actionRowHeight + metrics.controlGap);
+        // And the bubble did NOT grow to take the row's controls: they are
+        // drawn at the button row's own 36 rather than the 44 they wore
+        // outside, so the composer is shorter than DROVE-196's while holding
+        // every control DROVE-196 had.
+        expect(agentInputLayout.MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE).toBe(36);
+        expect(agentInputLayout.MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE)
+            .toBe(agentInputLayout.MOBILE_COMPOSER_BUBBLE_ACTION_ROW_HEIGHT);
+        expect(agentInputLayout.MOBILE_COMPOSER_BASE_HEIGHT).toBeLessThan(102);
 
         // The bubble is padding, one line, the gap, the button row, and a
         // shallower floor.
@@ -170,11 +182,11 @@ describe('agent input compact mobile layout', () => {
 
         // `inputHeight` is the TEXT's measured height, so an empty composer is
         // one line box. Both ends of that convention are in one place now.
-        expect(resolveHeight(22)).toBe(143);
-        expect(resolveHeight(44)).toBe(165);
-        expect(resolveHeight(120)).toBe(241);
-        expect(resolveHeight(400)).toBe(241);
-        expect(resolveHeight(22, true)).toBe(221);
+        expect(resolveHeight(22)).toBe(93);
+        expect(resolveHeight(44)).toBe(115);
+        expect(resolveHeight(120)).toBe(191);
+        expect(resolveHeight(400)).toBe(191);
+        expect(resolveHeight(22, true)).toBe(171);
     });
 
     /**
@@ -316,71 +328,97 @@ describe('agent input compact mobile layout', () => {
     });
 
     /**
-     * The two rows outside the bubble, and the one thing that makes them the
-     * arrangement Clay asked for rather than a reshuffle.
+     * THERE IS NO ROW OUTSIDE THE BUBBLE ANY MORE (DROVE-236).
+     *
+     * The name of this test used to be "keeps the session controls outside the
+     * bubble", which is DROVE-196's instruction. Clay reversed it in red on a
+     * screenshot: an arrow from the session capsule up into the bubble's empty
+     * middle, another from the audio button up to the right rim, and an X
+     * through the mic that was already in there.
      */
-    it('keeps the session controls outside the bubble', () => {
+    it('has no control row outside the bubble, and gives its gap to the line', () => {
         const metrics = agentInputLayout.MOBILE_COMPOSER_METRICS;
         const line = agentInputLayout.resolveMobileComposerLineGeometry();
-        const controls = agentInputLayout.resolveMobileComposerControlRowGeometry();
+
+        // Gone, not renamed. A caller that still asks for it fails to compile
+        // rather than laying out a row nothing draws.
+        expect(agentInputLayout).not.toHaveProperty('resolveMobileComposerControlRowGeometry');
 
         // The line is the bubble and nothing else, so there is nothing left on
         // it to be spaced from: no gap. It stays a row because it carries the
-        // composer's gutter.
+        // composer's gutter, and the recording banner's width is measured
+        // against exactly that now the control row is not there to measure to.
         expect(line.flexDirection).toBe('row');
         expect(line.gap).toBeUndefined();
-
-        // Both rows carry the shell gutter themselves, which is the whole
-        // difference from a row inside a card: the card used to supply it, and
-        // the card is now just the bubble between them.
         expect(line.paddingHorizontal).toBe(metrics.shellInset);
-        expect(controls.paddingHorizontal).toBe(metrics.shellInset);
-        expect(agentInputLayout.resolveMobileComposerActionRowGeometry().paddingHorizontal).toBe(0);
 
-        // The card's old padding, reappearing outside it as the two gaps that
-        // hold the row off the bubble and off the status strip.
-        expect(controls.marginTop).toBe(metrics.controlGap);
-        expect(controls.marginBottom).toBe(metrics.controlsBottomGap);
+        // The control row's `marginBottom` moved here, same value, same job:
+        // it is what stops the status strip's 14pt of upward tap slop reaching
+        // the composer's buttons.
+        expect(line.marginBottom).toBe(metrics.controlsBottomGap);
+        expect(line.marginTop).toBeUndefined();
 
-        // DROVE-153's 44pt floor survives every move: the row is still 44 tall
-        // and still spaces its controls by the one composer gap.
-        expect(controls.height).toBe(metrics.actionRowHeight);
-        expect(controls.height).toBe(44);
-        expect(controls.gap).toBe(metrics.controlGap);
+        // HOME's row is untouched. It still holds its controls in a card of
+        // its own, still 44 tall, still spaced by the one composer gap.
+        const home = agentInputLayout.resolveMobileComposerActionRowGeometry();
+        expect(home.paddingHorizontal).toBe(0);
+        expect(home.height).toBe(metrics.actionRowHeight);
+        expect(home.height).toBe(44);
+        expect(home.gap).toBe(metrics.controlGap);
     });
 
     /**
-     * WHAT IS IN THE BUBBLE AND WHAT IS NOT (DROVE-214).
+     * WHAT IS IN THE BUBBLE. Everything (DROVE-236).
      *
-     * Inside, on the bubble's own bottom row: things that act on the MESSAGE,
-     * so the `+` and send. Outside, on the control row: things that act on the
-     * SESSION, so permission mode, effort, model, speaker and mic.
+     * DROVE-214 split it: the MESSAGE's controls inside, the SESSION's on the
+     * row below, on DROVE-196's "the second row buttons should sit outside the
+     * speech bubble." Clay has drawn the reverse in red and it is not
+     * ambiguous: an arrow from the session capsule up into the bubble's empty
+     * middle, another from the audio button to the right rim, an X through the
+     * duplicate mic, the middle scribbled over.
      *
-     * That reading keeps two earlier instructions of Clay's intact rather than
-     * reversing either. DROVE-196: "the second row buttons should sit outside
-     * the speech bubble." DROVE-206: "the boss should not be in the message
-     * box but the plus should be." Both were about session controls, and the
-     * Messages reference he sent puts nothing session-shaped in its bubble
-     * either.
+     * DROVE-206's "the boss should not be in the message box" is NOT reversed
+     * with it. Boss mode is not a control on this row: it is the audio
+     * button's long press, and that button is one thing at one spot rather
+     * than the two-identities-in-one-place that ticket was about.
      */
-    it('puts message controls in the bubble and session controls under it', () => {
+    it('puts every control in the bubble, at the row\'s own size', () => {
         const metrics = agentInputLayout.MOBILE_COMPOSER_METRICS;
 
         // The bubble's row is as tall as the discs it holds and no taller, so
         // their margin is the bubble's padding rather than a number of theirs.
         expect(agentInputLayout.MOBILE_COMPOSER_BUBBLE_ACTION_ROW_HEIGHT)
             .toBe(metrics.primaryActionSize);
-        // The session row is a different height, because it holds different
-        // things: 44pt controls drawn at 44.
-        expect(metrics.actionRowHeight).toBe(44);
-        expect(agentInputLayout.MOBILE_COMPOSER_BUBBLE_ACTION_ROW_HEIGHT)
-            .not.toBe(metrics.actionRowHeight);
+        // And the controls that joined it are drawn at exactly that, which is
+        // the whole reason the bubble did not grow: 85 before, 85 after.
+        expect(agentInputLayout.MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE)
+            .toBe(agentInputLayout.MOBILE_COMPOSER_BUBBLE_ACTION_ROW_HEIGHT);
+        expect(agentInputLayout.MOBILE_COMPOSER_BUBBLE_BASE_HEIGHT).toBe(85);
 
-        // Both in-bubble discs clear DROVE-153's 44pt floor the same way: 36
-        // drawn plus 6pt of slop a side is a 48pt target.
+        // The audio button is the same disc as the `+` and send now, not the
+        // 44pt icon button it was inside the shared capsule.
+        const audio = agentInputLayout.resolveMobileComposerActionGeometry('audio');
+        expect(audio).toEqual(agentInputLayout.resolveMobileComposerActionGeometry('primary'));
+        expect(audio.width).toBe(metrics.primaryActionSize);
+
+        // HOME's row is the one that still holds 44pt controls at 44.
+        expect(metrics.actionRowHeight).toBe(44);
+        expect(agentInputLayout.resolveMobileComposerActionGeometry('icon').width)
+            .toBe(metrics.actionSize);
+
+        // Every disc on the bubble's row clears DROVE-153's 44pt floor the
+        // same way: 36 drawn plus 6pt of slop a side is a 48pt target.
         const target = metrics.primaryActionSize + metrics.primaryActionSlop * 2;
         expect(target).toBe(48);
         expect(target).toBeGreaterThanOrEqual(44);
+
+        // The two GLYPH SEGMENTS are the exception and it is stated rather
+        // than buried: they sit against each other inside one capsule, so
+        // there is no horizontal slop to take and their touch box is 36 x 48.
+        // The argument for spending it is on the constant.
+        expect(agentInputLayout.MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE).toBeLessThan(44);
+        expect(agentInputLayout.MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE
+            + metrics.primaryActionSlop * 2).toBe(48);
     });
 
     it('uses identical row and circular-button geometry in both composers', () => {
@@ -440,14 +478,31 @@ describe('agent input compact mobile layout', () => {
         expect(agentInputLayout.IONICON_INK_RATIO.add).toBe(0.625);
         expect(metrics.addIconSize * agentInputLayout.IONICON_INK_RATIO.add).toBe(16.25);
 
-        // The send glyph is sized so its ink IS that ink. A paper plane fills
-        // more of its em than a plus does, so equal ink means a smaller number
-        // than 26 and a bigger one than the 16 the arrow had.
-        expect(layout.sendIconSize).toBeCloseTo(18.582, 3);
-        expect(layout.sendIconSize * agentInputLayout.IONICON_INK_RATIO.paperPlane)
+        // The send glyph is sized so its ink IS that ink. `send` fills more of
+        // its em than a plus does, so equal ink means a smaller number than 26.
+        expect(agentInputLayout.IONICON_INK_RATIO.send).toBe(0.936807);
+        expect(layout.sendIconSize).toBeCloseTo(17.346, 3);
+        expect(layout.sendIconSize * agentInputLayout.IONICON_INK_RATIO.send)
             .toBeCloseTo(16.25, 6);
         expect(layout.sendIconSize).toBeGreaterThan(16);
         expect(layout.sendIconSize).toBeLessThan(metrics.addIconSize);
+
+        // 17.35, DOWN FROM the plane's 18.58 (DROVE-236). Clay sent a crop of
+        // the flat right-pointing arrowhead Slack and Telegram draw and asked
+        // "Shouldn't send look more like this?" `send` is that glyph, it is
+        // WIDER in its em than the plane was, and matching ink therefore
+        // means a smaller point size. The mark on the page is shorter and
+        // exactly as heavy, which is the point of measuring ink at all.
+        expect(layout.sendIconSize).toBeLessThan(18.582);
+        expect(agentInputLayout.IONICON_INK_RATIO).not.toHaveProperty('paperPlane');
+
+        // THE MEASURE IS THE LONGEST INK SPAN. `paper-plane` was square in its
+        // own bounds so DROVE-214 never met the question; `send` is 0.936807
+        // wide against 0.811523 tall. Sizing on the height would have drawn a
+        // mark 18.76pt across against the `+`'s 16.25pt box, so the wider axis
+        // is what caps it and neither rim out-draws the other.
+        expect(layout.sendIconSize * 0.811523).toBeLessThan(16.25);
+        expect(16.25 / 0.811523).toBeGreaterThan(metrics.addIconSize * 0.625 / 0.936807);
 
         // And the ink clears the disc it sits in by a wide margin, which is
         // all that ever needed checking now that the disc centres it.

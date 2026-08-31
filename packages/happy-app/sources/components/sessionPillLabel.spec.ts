@@ -13,12 +13,12 @@ import { describe, expect, it } from 'vitest';
 import {
     buildSessionPillLabel,
     COMPOSER_MODEL_SEGMENT,
-    composerAudioDividers,
     composerModelBudget,
     composerModelFits,
+    composerModelScaleFor,
     composerModelSegmentWidth,
     composerRowFixedWidth,
-    COMPOSER_ROW_GEOMETRY,
+    COMPOSER_BUBBLE_ROW_GEOMETRY,
     SESSION_PILL_SEPARATOR,
     shortModelName,
 } from './sessionPillLabel';
@@ -89,24 +89,34 @@ describe('buildSessionPillLabel', () => {
 });
 
 /**
- * The budget, at the two widths the app supports.
+ * The budget, at the three widths DROVE-236 names.
  *
  * `statusRowLayout.spec.ts` calls 375 the narrowest phone still supported and
- * 393 the handset Clay is on, so those are the two that have to hold. 320 is
- * below the floor for both files, and it is stated rather than skipped.
+ * 393 the handset Clay is on. 320 is below that floor and is measured anyway,
+ * because it is where the row full of five controls actually has to decide
+ * something.
  */
 describe('the model segment on the button row (DROVE-178)', () => {
-    it('has 143pt at 393 and 125 at 375 once the row is what it draws (DROVE-206)', () => {
-        expect(composerModelBudget(393)).toBe(143);
-        expect(composerModelBudget(375)).toBe(125);
+    /**
+     * WHAT THE MOVE INTO THE BUBBLE COSTS THE NAME (DROVE-236).
+     *
+     * The row is not a row any more, it is the bubble's own button row, so the
+     * name shares its width with the `+` and send and pays the bubble's
+     * padding as well as the composer's gutter. 33pt at every phone.
+     */
+    it('has 155pt at 393, 137 at 375 and 82 at 320, inside the bubble', () => {
+        expect(composerModelBudget(393)).toBe(155);
+        expect(composerModelBudget(375)).toBe(137);
+        expect(composerModelBudget(320)).toBe(82);
     });
 
     /**
      * The budget is only worth a number if the terms it subtracts are the row
-     * that is drawn, and for two tickets they were not: the `+` was counted
-     * here after DROVE-196 put it beside the field, and the card's padding was
-     * counted on top of the screen inset after DROVE-196 moved that padding
-     * onto this row.
+     * that is drawn, and for three tickets they were not: the `+` was counted
+     * after DROVE-196 put it beside the field, the card's padding was counted
+     * on top of the screen inset after DROVE-196 moved that padding onto the
+     * row, and `audioButtons: 3` went stale the moment this same ticket
+     * collapsed the audio pair, which left the budget 45pt pessimistic.
      *
      * So the claim is arithmetic rather than a remembered number: everything
      * on the row, plus the name's budget, is exactly the phone. A term that
@@ -115,7 +125,8 @@ describe('the model segment on the button row (DROVE-178)', () => {
     it('adds up to the phone, which is what makes the budget checkable', () => {
         for (const width of [320, 375, 393]) {
             expect(
-                2 * COMPOSER_ROW_GEOMETRY.screenInset
+                2 * COMPOSER_BUBBLE_ROW_GEOMETRY.screenInset
+                + 2 * COMPOSER_BUBBLE_ROW_GEOMETRY.bubbleInset
                 + composerRowFixedWidth()
                 + composerModelBudget(width),
                 `the row at ${width}`,
@@ -123,20 +134,35 @@ describe('the model segment on the button row (DROVE-178)', () => {
         }
     });
 
-    /**
-     * DROVE-206 moved two things and the name came out ahead of both.
-     */
-    it('gains what the plus gave back and pays for the waveform out of it', () => {
-        const g = COMPOSER_ROW_GEOMETRY;
-        // The `+` is inside the field now, so the row is not paying for it or
-        // for the gap it needed. 44 + 6.
-        expect(g).not.toHaveProperty('add');
-        // And the audio capsule is three controls, not two.
-        expect(g.audioButtons).toBe(3);
-        expect(composerAudioDividers).toBe(2);
-        // 50 back for the `+`, 20 back for the card padding that stopped
-        // existing in DROVE-196, 45 spent on the waveform and its hairline.
-        expect(composerModelBudget(393) - 119).toBe(24);
+    /** The row Clay drew, term by term, so a control that appears or vanishes shows up here. */
+    it('counts three discs, three gaps and two glyph segments, and no audio capsule', () => {
+        const g = COMPOSER_BUBBLE_ROW_GEOMETRY;
+        // The `+` and send are ON this row now, which is the whole change.
+        expect(g.discs).toBe(3);
+        expect(g.disc).toBe(36);
+        expect(g.gaps).toBe(3);
+        // No audio capsule left: the pair collapsed into one button earlier in
+        // this ticket, and the mic that was its other half is the primary.
+        expect(g).not.toHaveProperty('audioButtons');
+        expect(g).not.toHaveProperty('audioButton');
+        // The glyph segments are the row's own size, not the 44 they wore
+        // outside it.
+        expect(g.segment).toBe(36);
+        expect(g.glyphSegments).toBe(2);
+        expect(g.dividers).toBe(2);
+        expect(composerRowFixedWidth()).toBe(200);
+    });
+
+    it('costs the name 33pt at every phone, which is what the move is paid in', () => {
+        // The row as it was DRAWN outside the bubble, measured the same way:
+        // one gutter each side, two 44pt glyph segments with two hairlines,
+        // one gap, and the collapsed audio pair as two 44pt buttons with one
+        // hairline between them.
+        const outside = (width: number) => width - 20 - (2 * 44 + 2) - 6 - (2 * 44 + 1);
+        expect([320, 375, 393].map(outside)).toEqual([115, 170, 188]);
+        for (const width of [320, 375, 393]) {
+            expect(outside(width) - composerModelBudget(width), `${width}`).toBe(33);
+        }
     });
 
     it('draws every Claude name whole at both widths, at full size', () => {
@@ -151,13 +177,15 @@ describe('the model segment on the button row (DROVE-178)', () => {
         expect(composerModelSegmentWidth('Opus 4.8 1M')).toBe(97);
     });
 
-    it('scales rather than truncating, and after DROVE-206 the scale is headroom', () => {
+    it('scales rather than truncating, and the scale is still headroom at 375 and up', () => {
         // Smaller before shorter is the rule the segment draws by, so the
-        // honest number is how long a name each size buys. The full size now
-        // carries every name the app has: `GPT-5.6 Luna` and `Gemini 3.1 Pro`
-        // both used to need the scale at their width and neither does.
+        // honest number is how long a name each size buys. The full size still
+        // carries every name the app has at 375 and above: `GPT-5.6 Luna` and
+        // `Gemini 3.1 Pro` both used to need the scale at their width and
+        // neither does.
         const scale = COMPOSER_MODEL_SEGMENT.minimumFontScale;
-        expect(scale).toBe(0.85);
+        // 0.80 since DROVE-236, and the one number the move actually spends.
+        expect(scale).toBe(0.8);
         for (const [name, width] of [['GPT-5.6 Luna', 375], ['GPT-5.6 Sol', 375],
             ['Gemini 3.1 Pro', 393], ['Gemini 3 Flash', 393]] as const) {
             expect(composerModelFits(name, width), `${name} at ${width}`).toBe(true);
@@ -173,8 +201,8 @@ describe('the model segment on the button row (DROVE-178)', () => {
                 <= composerModelBudget(width)) glyphs += 1;
             return glyphs;
         };
-        expect([longest(375, 1), longest(375, scale)]).toEqual([15, 17]);
-        expect([longest(393, 1), longest(393, scale)]).toEqual([17, 20]);
+        expect([longest(375, 1), longest(375, scale)]).toEqual([16, 20]);
+        expect([longest(393, 1), longest(393, scale)]).toEqual([19, 24]);
     });
 
     it('is what the row could NOT hold before DROVE-153, which is why DROVE-138 moved it', () => {
@@ -183,13 +211,57 @@ describe('the model segment on the button row (DROVE-178)', () => {
         expect(composerModelBudget(393)).toBeGreaterThan(63);
     });
 
-    it('has 70pt at 320, below the floor both files draw at but no longer nothing', () => {
-        expect(composerModelBudget(320)).toBe(70);
-        // 46 could not hold the shortest name in the family. 70 holds it by a
-        // point, which is not room to design against and is the reason 320
-        // stays below the supported floor rather than a width the row is
-        // tuned for. `Opus 5 1M` still does not fit and still scales.
-        expect(composerModelFits('Fable 5', 320)).toBe(true);
-        expect(composerModelFits('Opus 5 1M', 320)).toBe(false);
+    /**
+     * 320, WHICH IS WHERE THE ROW ACTUALLY DECIDES SOMETHING (DROVE-236).
+     *
+     * The ticket asks what gives when the row will not hold five things. This
+     * is the answer, run rather than argued: at 375 and 393 nothing gives, and
+     * at 320 the four longest names shrink their type and none of them is cut.
+     * Nothing is dropped and no name becomes a glyph.
+     */
+    it('holds every name whole at 320 by shrinking type, never by cutting it', () => {
+        expect(composerModelBudget(320)).toBe(82);
+        // Whole at 13pt: the short names.
+        for (const name of ['Opus 5', 'Fable 5', 'Sonnet 5']) {
+            expect(composerModelFits(name, 320), name).toBe(true);
+        }
+        // Scaled, not cut: the long ones, worst case first.
+        expect(composerModelScaleFor('Opus 4.8 1M', 320)).toBeCloseTo(0.805, 3);
+        expect(composerModelScaleFor('Sonnet 4.5', 320)).toBeCloseTo(0.886, 3);
+        expect(composerModelScaleFor('Opus 5 1M', 320)).toBeCloseTo(0.984, 3);
+        // And every one of them draws WHOLE at the floor, which is the claim
+        // the floor exists to make.
+        for (const name of ['Opus 4.8 1M', 'Sonnet 4.5', 'Haiku 4.5', 'Opus 5 1M',
+            'Sonnet 5', 'Fable 5', 'Opus 5']) {
+            expect(
+                composerModelSegmentWidth(name, COMPOSER_MODEL_SEGMENT.minimumFontScale),
+                name,
+            ).toBeLessThanOrEqual(composerModelBudget(320));
+        }
+        // 0.85 would not have. That is why the floor moved, and it is the
+        // whole of what the move into the bubble costs the name.
+        expect(composerModelSegmentWidth('Opus 4.8 1M', 0.85))
+            .toBeGreaterThan(composerModelBudget(320));
+    });
+
+    /**
+     * THE CANDIDATE THAT WAS REFUSED, on the record so it is not quietly taken
+     * next time (DROVE-236).
+     *
+     * Dropping the NAME for a glyph makes 320 comfortable at a stroke. It is
+     * refused because the name is the only thing on this row carrying a value
+     * rather than a state: a padlock reads as a mode and a dial reads as a
+     * level, and no glyph reads as "Opus 5". DROVE-138 was filed about exactly
+     * this name being cut, and DROVE-178 brought it back up here after Clay
+     * circled it on the status row and drew an arrow at the gap.
+     */
+    it('would gain room at 320 by dropping the name, and does not', () => {
+        // A glyph segment where the name is would be the row's own 36.
+        const glyphInstead = COMPOSER_BUBBLE_ROW_GEOMETRY.segment;
+        expect(composerModelSegmentWidth('Opus 5') - glyphInstead).toBe(26);
+        expect(composerModelSegmentWidth('Opus 4.8 1M') - glyphInstead).toBe(61);
+        // What it would buy against what it would cost: the name draws at 320
+        // as it is.
+        expect(composerModelFits('Opus 5', 320)).toBe(true);
     });
 });

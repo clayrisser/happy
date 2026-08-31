@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { StyleSheet as RNStyleSheet, Text, View } from 'react-native';
+import { StyleSheet as RNStyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Ionicons } from '@expo/vector-icons';
 import Svg, { Circle, Line, Path } from 'react-native-svg';
@@ -102,6 +102,35 @@ export type ComposerSessionPicker = 'permission' | 'model' | 'effort';
 
 export interface ComposerSessionControlsProps {
     label: SessionPillLabel;
+    /**
+     * How tall the capsule is, and how wide each glyph segment (DROVE-236).
+     *
+     * 44 on a row of its own, which is where this started. 36 inside the chat
+     * bubble's button row, because that row is 36 and a 44pt capsule wedged
+     * between two 36pt discs is the one object on the row that does not
+     * belong to it. The trade the smaller size makes on the touch target is
+     * argued on `MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE`.
+     */
+    size?: number;
+    /**
+     * The capsule's own frame, handed in by the caller (DROVE-236).
+     *
+     * The chat draws this inside the bubble's button row, and that row's
+     * geometry is exported so a spec can resolve it through the layout engine.
+     * Taking the style from there rather than restating it here is the whole
+     * lesson of DROVE-214: three green suites shipped a broken composer
+     * because the spec asserted a model of the layout while the renderer's own
+     * stylesheet quietly did something else.
+     */
+    style?: StyleProp<ViewStyle>;
+    /**
+     * Extra touch area around the capsule's segments, in points (DROVE-236).
+     *
+     * VERTICAL ONLY, and that is a fact about the shape rather than an
+     * oversight: the segments sit against each other inside one capsule, so a
+     * segment claiming horizontal slop would be claiming its neighbour's ink.
+     */
+    verticalSlop?: number;
     /** Which permission mode, for the glyph. Falls back to the mode's key. */
     modeKind?: string | null;
     modeKey?: string | null;
@@ -198,17 +227,16 @@ const styles = StyleSheet.create((theme) => ({
     // The capsule the segments share. The material is the surface's, so this
     // carries only shape and flex. It shrinks only through the model segment,
     // which is the one part of it with a width of its own (DROVE-178); the
-    // glyph segments stay 44pt whatever happens.
+    // glyph segments keep their size whatever happens. The HEIGHT comes from
+    // the caller (DROVE-236), because the chat draws this inside the bubble's
+    // 36pt button row and Home draws it on a 44pt row of its own.
     capsule: {
         flexDirection: 'row',
         alignItems: 'center',
         flexShrink: 1,
         minWidth: 0,
-        height: COMPOSER_SESSION_CONTROL_SIZE,
     },
     control: {
-        width: COMPOSER_SESSION_CONTROL_SIZE,
-        height: COMPOSER_SESSION_CONTROL_SIZE,
         alignItems: 'center',
         justifyContent: 'center',
         flexShrink: 0,
@@ -217,10 +245,9 @@ const styles = StyleSheet.create((theme) => ({
      * The model's name: as wide as the name, and the only thing in the capsule
      * that can give way, after the spacer beside it has (DROVE-178).
      * `flexShrink: 1` with `minWidth: 0` is what lets the text inside scale
-     * rather than push the audio capsule off the row.
+     * rather than push the audio button off the row.
      */
     modelSegment: {
-        height: COMPOSER_SESSION_CONTROL_SIZE,
         paddingHorizontal: COMPOSER_MODEL_SEGMENT.paddingHorizontal,
         alignItems: 'center',
         justifyContent: 'center',
@@ -255,11 +282,15 @@ function Control(props: {
     accessibilityValue?: string;
     open: boolean;
     onPress?: (picker: ComposerSessionPicker) => void;
-    /** The 44pt square by default; the model segment sizes to its name. */
+    /** The square glyph segment by default; the model segment sizes to its name. */
     wide?: boolean;
+    size: number;
+    verticalSlop: number;
     children: React.ReactNode;
 }) {
-    const segmentStyle = props.wide ? styles.modelSegment : styles.control;
+    const segmentStyle = props.wide
+        ? [styles.modelSegment, { height: props.size }]
+        : [styles.control, { width: props.size, height: props.size }];
     // Inside the capsule's own material, so the press is drawn by
     // UIGlassEffect and this segment must not fade on top of it (DROVE-202).
     // A dimming glyph in a frame that does not move is the "scaling up inside"
@@ -269,8 +300,11 @@ function Control(props: {
         <BubblePressable
             onPress={props.onPress ? () => props.onPress?.(props.picker) : undefined}
             disabled={!props.onPress}
+            // Vertical only. See `verticalSlop` on the props for why the other
+            // axis is not available inside a shared capsule.
+            hitSlop={{ top: props.verticalSlop, bottom: props.verticalSlop, left: 0, right: 0 }}
             style={(p) => [
-                segmentStyle,
+                ...segmentStyle,
                 props.open && styles.controlOpen,
                 { opacity: shouldDrawPressedFallback(nativePress, p.pressed, !props.onPress) ? 0.7 : 1 },
             ]}
@@ -298,6 +332,9 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
         canOpen,
         openPicker,
         pending,
+        size = COMPOSER_SESSION_CONTROL_SIZE,
+        verticalSlop = 0,
+        style,
     } = props;
     const palette = composerControlPalette(theme.dark);
     const permissionPending = !!pending?.permission;
@@ -327,9 +364,9 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
     // needing a press animation of its own (DROVE-178).
     return (
         <GlassChromeSurface
-            radius={COMPOSER_SESSION_CONTROL_SIZE / 2}
+            radius={size / 2}
             interactive
-            style={styles.capsule}
+            style={[styles.capsule, { height: size }, style]}
         >
             {showMode ? (
                 <Control
@@ -338,6 +375,8 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                     accessibilityValue={unconfirmedAccessibilityValue(mode.value, permissionPending)}
                     open={openPicker === 'permission'}
                     onPress={canOpenMode ? onPress : undefined}
+                    size={size}
+                    verticalSlop={verticalSlop}
                 >
                     {/* The foreground in every mode (DROVE-215). The mode is
                         a value the session holds, not a thing it is doing, so
@@ -359,6 +398,8 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                     accessibilityValue={unconfirmedAccessibilityValue(effort.value, effortPending)}
                     open={openPicker === 'effort'}
                     onPress={canOpenEffort ? onPress : undefined}
+                    size={size}
+                    verticalSlop={verticalSlop}
                 >
                     {/* The dial is DROVE-141's resting glyph, unchanged by the
                         drag's removal: it was never the slider, and the level
@@ -384,6 +425,8 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                     accessibilityValue={unconfirmedAccessibilityValue(label.model!, modelPending)}
                     open={openPicker === 'model'}
                     onPress={canOpenModel ? onPress : undefined}
+                    size={size}
+                    verticalSlop={verticalSlop}
                     wide
                 >
                     <Text

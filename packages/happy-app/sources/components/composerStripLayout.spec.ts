@@ -4,7 +4,6 @@ import {
     MOBILE_COMPOSER_BASE_HEIGHT,
     MOBILE_COMPOSER_BUBBLE_BASE_HEIGHT,
     MOBILE_COMPOSER_METRICS,
-    resolveMobileComposerControlRowGeometry,
     resolveMobileComposerHeight,
     resolveMobileComposerLineGeometry,
 } from './agentInputLayout';
@@ -63,18 +62,17 @@ describe('the layout does not move when a recording starts', () => {
     });
 
     it('never lets the banner into the composer that the input and buttons size', () => {
-        // The block is the bubble plus its furniture and nothing else. If the
-        // banner is ever put back above the text field, this is the number
-        // that grows. DROVE-214 put the `+` and send on a row inside the
-        // bubble, so the bubble is 85 rather than 44 and the block is 143; the
-        // decomposition around it did not change.
+        // The block is the bubble plus the gap over this strip and nothing
+        // else. If the banner is ever put back above the text field, this is
+        // the number that grows. DROVE-214 put the `+` and send on a row
+        // inside the bubble, so the bubble is 85 rather than 44; DROVE-236
+        // then moved the control row into that same row, so there is no
+        // second term left.
         expect(composerBlockHeight).toBe(
             MOBILE_COMPOSER_BUBBLE_BASE_HEIGHT
-            + MOBILE_COMPOSER_METRICS.controlGap
-            + MOBILE_COMPOSER_METRICS.actionRowHeight
             + MOBILE_COMPOSER_METRICS.controlsBottomGap,
         );
-        expect(composerBlockHeight).toBe(143);
+        expect(composerBlockHeight).toBe(93);
     });
 
     it('opens the strip only when a silent session has a recording to show', () => {
@@ -98,15 +96,20 @@ describe('where the recording banner lives', () => {
     it('makes the bar exactly as wide as the composer above it', () => {
         // The shell inset is the composer's outer gutter since DROVE-196: the
         // padding on the composer's line, and on the control row under it. The
-        // banner runs rim to rim with both. Before that the card spanned the
+        // banner ran rim to rim with both. Before that the card spanned the
         // whole dock and carried the gutter inside itself, so this assertion
         // was true of the number and false of the picture.
+        //
+        // DROVE-236 leaves ONE thing carrying that gutter, because the control
+        // row is inside the bubble now. So this re-points from the row to the
+        // line, at the same 10, and it is the only line in the three
+        // downstream lanes that had to change at all.
         expect(RECORDING_BANNER_FRAME.left).toBe(MOBILE_COMPOSER_METRICS.shellInset);
         expect(RECORDING_BANNER_FRAME.right).toBe(MOBILE_COMPOSER_METRICS.shellInset);
         expect(RECORDING_BANNER_FRAME.left)
             .toBe(resolveMobileComposerLineGeometry().paddingHorizontal);
-        expect(RECORDING_BANNER_FRAME.left)
-            .toBe(resolveMobileComposerControlRowGeometry().paddingHorizontal);
+        expect(RECORDING_BANNER_FRAME.right)
+            .toBe(resolveMobileComposerLineGeometry().paddingHorizontal);
     });
 
     /**
@@ -116,17 +119,18 @@ describe('where the recording banner lives', () => {
      * 6 over 18 whatever the composer is arranged like, so a recording still
      * cannot resize the dock or shove the transcript.
      */
-    it('survives the plus moving into the field and the waveform onto the row', () => {
+    it('survives every rearrangement of the composer above it', () => {
         expect(COMPOSER_STRIP_PADDING_TOP).toBe(6);
         expect(COMPOSER_STRIP_CONTENT_HEIGHT).toBe(14);
         expect(COMPOSER_STRIP_HEIGHT).toBe(20);
         expect(resolveComposerStripHeight(true, true)).toBe(resolveComposerStripHeight(false, true));
 
         // And the bar is the bubble's own two rims, whatever is inside it.
-        // DROVE-214 made the bubble two rows and 46pt taller and DROVE-236
-        // took 5 of that back off its floor; the strip's box is unchanged
-        // through both, which is the guarantee this test exists for.
-        expect(MOBILE_COMPOSER_BASE_HEIGHT).toBe(143);
+        // DROVE-214 made the bubble two rows and 46pt taller, DROVE-236 took 5
+        // back off its floor and then moved the whole control row inside it,
+        // taking the block from 143 to 93. The strip's box is unchanged
+        // through all three, which is the guarantee this test exists for.
+        expect(MOBILE_COMPOSER_BASE_HEIGHT).toBe(93);
     });
 
     it('leaves the bar tall enough to hold the dot, clock, level and glyph', () => {
