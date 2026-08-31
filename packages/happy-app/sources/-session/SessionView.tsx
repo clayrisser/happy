@@ -6,6 +6,7 @@ import { SessionGateOverlay } from '@/components/SessionGateOverlay';
 import { PushPermissionNotice } from '@/components/PushPermissionNotice';
 import { AgentInput } from '@/components/AgentInput';
 import { readAloud } from '@/voice/readAloudService';
+import { composerVoiceEvent } from '@/voice/composerVoice';
 import { useVoiceComposer } from '@/voice/useVoiceComposer';
 import { ReadAloudRouteToast } from '@/voice/ReadAloudRouteToast';
 import { resolveVisibleAgentGoalStatus } from '@/components/agentGoalStatus';
@@ -636,10 +637,13 @@ const ChatComposer = React.memo(function ChatComposer(props: ChatComposerProps) 
     const dictatingRef = React.useRef(false);
 
     const handleChangeText = React.useCallback((text: string) => {
-        // Typing means the user has stopped listening and started writing, so
-        // read-aloud is cut here rather than at the end of the sentence
-        // (DROVE-30). Idempotent: only the first keystroke reaches the engine.
-        if (!dictatingRef.current) readAloud.interrupt('typed');
+        // Typing stops the dictation and nothing else (DROVE-162). Clay: "And
+        // don't stop talking when I'm typing" — he is usually typing the next
+        // thing while listening to the current reply, and this line used to
+        // call interrupt('typed'), which threw the reading away on the first
+        // keystroke and made read-aloud and the keyboard mutually exclusive.
+        // The rule is in composerVoice.ts so a spec drives the SAME code.
+        composerVoiceEvent(readAloud, dictatingRef.current ? 'dictation-write' : 'keystroke');
         // Transition keeps the textarea responsive even when the draft
         // autosave / re-render takes longer than a frame.
         React.startTransition(() => setMessage(text));

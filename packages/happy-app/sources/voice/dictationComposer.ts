@@ -62,6 +62,12 @@ export const dictationRestoresDraft = {
      * nothing about what he dictated, so his words stay.
      */
     'headphones-unplugged': false,
+    /**
+     * A voice preview in settings took the speaker (DROVE-162). It cannot
+     * happen while he is dictating into a session at all, and it says nothing
+     * about what he said, so his words stay.
+     */
+    preview: false,
 } satisfies Record<DictationEndReason, boolean>;
 
 /**

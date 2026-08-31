@@ -3,11 +3,9 @@ import { isDroverSpeechAvailable, listVoices, speakUtterance, stopSpeaking, type
 import { storage } from '@/sync/storage';
 import {
     asidePitchScale,
-    asideRateCeiling,
-    asideRateScale,
+    resolveSpokenRate,
     resolveStreamTalk,
     streamTalkPitchRange,
-    streamTalkRateRange,
 } from '@/sync/settings';
 import type { SpeakOptions, SpeechEngine } from './readAloud';
 import { pickVoice } from './voicePick';
@@ -25,8 +23,9 @@ import { pickVoice } from './voicePick';
  * passes no identifier.
  *
  * DROVE-108: the queue may ask for a faster read when it is behind. That is
- * a multiplier on the chosen rate, clamped back into the speed slider's own
- * range, so catching up never sounds like a setting the user did not pick.
+ * a multiplier on the chosen rate, clamped against the absolute engine-safe
+ * ceiling rather than the speed slider's own maximum (DROVE-116) — see the
+ * comment on `ceiling` below for why that distinction is the whole feature.
  */
 
 let voicesCache: SpeechVoice[] | null = null;
@@ -58,16 +57,13 @@ export const speechEngine: SpeechEngine = {
         const voices = await installedVoices();
         const voice = pickVoice(voices, language, talk.voiceId);
         const aside = options?.aside === true;
-        const scaled = talk.rate * (options?.rateScale ?? 1) * (aside ? asideRateScale : 1);
-        // An aside is the title of a tool call, not the reply (DROVE-112), and
-        // it has to sound like one. Its ceiling is the engine's rather than the
-        // speed slider's: the slider bounds what the user picked for PROSE, and
-        // a footnote read at exactly the same speed as the answer is the thing
-        // this is trying not to be. Pitch carries the rest of the difference,
-        // because the native module takes no per-utterance volume.
-        const ceiling = aside ? asideRateCeiling : streamTalkRateRange.max;
+        // The rate is resolveSpokenRate's business (settings.ts): an aside is
+        // the title of a tool call and has to sound like one (DROVE-112), and
+        // the catch-up is clamped against the engine's ceiling rather than the
+        // speed slider's (DROVE-116). Pitch carries the rest of the aside's
+        // difference, because the native module takes no per-utterance volume.
         return speakUtterance(text, {
-            rate: Math.min(ceiling, Math.max(streamTalkRateRange.min, scaled)),
+            rate: resolveSpokenRate(talk.rate, options?.rateScale ?? 1, aside),
             pitch: aside
                 ? Math.min(streamTalkPitchRange.max, talk.pitch * asidePitchScale)
                 : talk.pitch,

@@ -1,5 +1,6 @@
 import type { Message } from '@/sync/typesMessage';
 import { chunkStreamed } from './sentenceStream';
+import { sameSentence } from './sentenceMatch';
 import { stripToSpeakableProse } from './speakable';
 
 /**
@@ -44,10 +45,25 @@ import { stripToSpeakableProse } from './speakable';
  * nothing left to say and silence is then correct.
  *
  * Nothing new bounds how long that stale tail may run, on purpose. The
- * backlog rules above already do it: past the threshold of unspoken audio the
- * voice reads faster, and past twice it the tail is dropped outright (the
- * numbers being too timid is DROVE-116, not a third rule). And the window is
- * only ever as long as the model takes to produce one sentence.
+ * backlog rules above already do it, and the window is only ever as long as
+ * the model takes to produce one sentence.
+ *
+ * DROVE-116 gave those rules the two numbers they were missing. Clay: "when
+ * you're getting behind, instead of just jumping to the newest stuff, could
+ * you first start talking faster, and then only if you get too far behind you
+ * jump", and "we can also set when it jumps". There are now two thresholds,
+ * both his: `maxBacklogSeconds` is where the voice starts reading faster, and
+ * `jumpBacklogSeconds` is where the tail is dropped. Before, the cut fired at
+ * the same number the ramp started at, so the ramp had no band to run in and
+ * the answer was always a jump; and its ceiling was 1.15x, which the engine
+ * then clamped back into the speed slider's own range, so a fast slider
+ * cancelled the catch-up outright. See `catchUpRate`.
+ *
+ * DROVE-162 took typing out of the reader entirely. `userTyped` tells the
+ * captures to stop and leaves the voice alone, the way `userSent` already
+ * did: Clay is usually typing the next thing while listening to the current
+ * reply. The mic gate below is untouched, because the mic really does need
+ * the audio route and a keyboard does not.
  *
  * DROVE-114 turned the private cursor into a PLAYHEAD. The queue is no longer
  * a queue that forgets what it said: every sentence stays in `timeline` and
@@ -69,9 +85,16 @@ import { stripToSpeakableProse } from './speakable';
  *
  *   A SENTENCE THAT HAS BEEN SPOKEN IS NEVER SPOKEN AGAIN, ON ITS OWN.
  *
- * See `skipSpoken`. Nothing the queue does by itself repeats. A double tap
- * is not the queue doing something by itself: it is a request to read from
- * there, so it clears the marks from that point and reads on.
+ * See `skipSpoken`. Nothing the queue does by itself repeats. A tap is not
+ * the queue doing something by itself: it is a request to read from there, so
+ * it clears the marks from that point and reads on.
+ *
+ * DROVE-163 made that tap land on the SENTENCE rather than the block. Clay:
+ * "Whatever SENTENCE I tap is where you start reading". `seekToSentence` is
+ * the way in, and it is a lookup rather than a measurement: every sentence
+ * already carries the message it came from, so given the rendered text under
+ * the finger the queue can find its own copy of it. `seekTo` stays as the
+ * fallback for a tap that resolves to no sentence.
  *
  * DROVE-112 added a second KIND of thing to say and took one away, and both
  * are hooks rather than logic, because none of the policy belongs here:
@@ -88,7 +111,10 @@ import { stripToSpeakableProse } from './speakable';
  *     something". So the app passes no words and plays an earcon instead.
  */
 
-/** Why speech stopped. Carried for logs and for the tests to assert on. */
+/**
+ * Why speech stopped, or in the case of `typed` and `sent`, why every CAPTURE
+ * stopped while reading carried on. Carried for logs and for the tests.
+ */
 export type ReadAloudInterruption =
     | 'typed'
     | 'sent'
@@ -97,7 +123,9 @@ export type ReadAloudInterruption =
     | 'switched-session'
     | 'toggled-off'
     | 'call-started'
-    | 'headphones-unplugged';
+    | 'headphones-unplugged'
+    /** A voice preview in settings wants the speaker to itself. */
+    | 'preview';
 
 /** Per-utterance knobs: the catch-up rate (DROVE-108) and asides (DROVE-112). */
 export interface SpeakOptions {
@@ -146,11 +174,21 @@ export interface ReadAloudOptions {
     /** Clock, injectable for the tests. */
     now?: () => number;
     /**
-     * How many seconds of UNSPOKEN AUDIO may pile up before a still-arriving
-     * turn is cut. Read at every pump rather than once, so a slider in
+     * How many seconds of UNSPOKEN AUDIO may pile up before the voice starts
+     * reading FASTER. Read at every pump rather than once, so a slider in
      * settings takes effect on the next sentence instead of the next launch.
      */
     maxBacklogSeconds?: () => number;
+    /**
+     * How many seconds of unspoken audio may pile up before the tail is
+     * dropped outright (DROVE-116). Its own number rather than twice
+     * `maxBacklogSeconds`, which is what it used to be in the comments and
+     * was not even that in the code: the cut fired at exactly the number the
+     * ramp started at, so the voice jumped without ever having sped up.
+     * Left out, it defaults to twice the speed-up threshold, which is the
+     * shape DROVE-108 described.
+     */
+    jumpBacklogSeconds?: () => number;
     /** What is said when the backlog is dropped. */
     skipMarker?: string;
     /**
@@ -178,8 +216,14 @@ export interface ReadAloudOptions {
      * to be inferred. Left out, the arrival stamps decide alone.
      */
     turnStillRunning?: (sessionId: string) => boolean;
-    /** The most the catch-up may speed the voice up. */
-    maxRateScale?: number;
+    /**
+     * The most the catch-up may speed the voice up, as a multiplier on the
+     * chosen rate. A function since DROVE-116, and read at every pump like
+     * the thresholds are: the app derives it from two absolute speeds Clay
+     * picks (the normal one and the fast one), so dragging either slider has
+     * to apply to the next sentence rather than the next launch.
+     */
+    maxRateScale?: () => number;
     /**
      * The one line to say for a message that is not prose: the title of a tool
      * call, a terminal call or an agent spawning (DROVE-112). Null for a
@@ -235,12 +279,16 @@ export const defaultWordsPerMinute = 150;
  */
 export const defaultArrivalWindowMs = 4000;
 /**
- * Bounds on the catch-up: at worst the voice reads 15 percent faster, which
- * is still comfortably inside the speed slider's range and does not sound
- * like a different setting. It ramps in linearly and reaches the top when
- * the backlog is twice the threshold.
+ * Bounds on the catch-up, when the caller supplies none.
+ *
+ * DROVE-108 shipped 1.15, which was the timid half of why catch-up never
+ * saved a jump: 15 percent buys nothing against a real backlog, and the
+ * engine then clamped even that back into the speed slider's range. 1.5x is
+ * where audiobook listeners already sit. It ramps in linearly and reaches
+ * the top at the jump threshold, so the whole band between speeding up and
+ * jumping is spent reading faster (DROVE-116).
  */
-export const defaultMaxRateScale = 1.15;
+export const defaultMaxRateScale = 1.5;
 const defaultHoldMs = 1500;
 
 interface QueuedSentence {
@@ -257,7 +305,7 @@ interface QueuedSentence {
      * It has been handed to the synthesiser once. Never again on the queue's
      * own initiative (DROVE-126). On the sentence rather than in the cursor
      * because the cursor moves backwards now, so it cannot be the record of
-     * what was said. A double tap clears it from that point (DROVE-146).
+     * what was said. A tap clears it from that point (DROVE-146, DROVE-163).
      */
     spoken: boolean;
     /**
@@ -293,11 +341,12 @@ export class ReadAloudReader {
     private readonly engine: SpeechEngine;
     private readonly now: () => number;
     private readonly maxBacklogSeconds: () => number;
+    private readonly jumpBacklogSeconds: () => number;
     private readonly skipMarker: string;
     private readonly holdMs: number;
     private readonly wordsPerMinute: number;
     private readonly arrivalWindowMs: number;
-    private readonly maxRateScale: number;
+    private readonly maxRateScale: () => number;
     private readonly turnStillRunning: ((sessionId: string) => boolean) | null;
     private readonly asideFor: ((message: Message, sessionId: string) => string | null) | null;
     private readonly onSkip: (() => void) | null;
@@ -376,11 +425,12 @@ export class ReadAloudReader {
         this.engine = engine;
         this.now = options.now ?? Date.now;
         this.maxBacklogSeconds = options.maxBacklogSeconds ?? (() => defaultMaxBacklogSeconds);
+        this.jumpBacklogSeconds = options.jumpBacklogSeconds ?? (() => this.maxBacklogSeconds() * 2);
         this.skipMarker = options.skipMarker ?? defaultSkipMarker;
         this.holdMs = options.holdMs ?? defaultHoldMs;
         this.wordsPerMinute = options.wordsPerMinute ?? defaultWordsPerMinute;
         this.arrivalWindowMs = options.arrivalWindowMs ?? defaultArrivalWindowMs;
-        this.maxRateScale = options.maxRateScale ?? defaultMaxRateScale;
+        this.maxRateScale = options.maxRateScale ?? (() => defaultMaxRateScale);
         this.turnStillRunning = options.turnStillRunning ?? null;
         this.asideFor = options.asideFor ?? null;
         this.onSkip = options.onSkip ?? null;
@@ -524,8 +574,54 @@ export class ReadAloudReader {
         // Nothing sayable at or after the tap. Leave reading where it is
         // rather than parking the cursor past the end.
         if (next === this.timeline.length) return;
-        for (let i = next; i < this.timeline.length; i++) this.timeline[i].spoken = false;
-        this.cursor = next;
+        this.readFrom(next);
+    }
+
+    /**
+     * Read from the SENTENCE that was tapped (DROVE-163).
+     *
+     * Clay, refining DROVE-146: "Whatever SENTENCE I tap is where you start
+     * reading". `seekTo` resolves a tap to the first sayable thing at or after
+     * a message's createdAt, which in the middle of a long reply is the top of
+     * the block rather than the line under his finger. Every sentence in the
+     * timeline already carries the message it came from, so given the rendered
+     * text of the one he touched this is a lookup, not a measurement: no
+     * coordinates, no layout, nothing that could fight the list.
+     *
+     * The search runs over the whole timeline rather than the message's own
+     * range because one reply arrives as several messages and the same
+     * sentence can occur twice; the FIRST match inside the tapped message is
+     * the one under the finger, which is why messageId is matched first.
+     *
+     * Returns false when the sentence is not in the queue at all — read-aloud
+     * was off when the reply landed, or the renderer shows something the
+     * speaker dropped. The caller then falls back to `seekTo`, which is
+     * DROVE-146's behaviour exactly.
+     */
+    seekToSentence(messageId: string, sentence: string): boolean {
+        for (let i = 0; i < this.timeline.length; i++) {
+            const at = this.timeline[i];
+            if (at.messageId !== messageId) continue;
+            if (!sameSentence(at.text, sentence)) continue;
+            this.readFrom(i);
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Move reading to `index` and carry on from there.
+     *
+     * Deliberate, so it outranks DROVE-126: the marks from here onwards are
+     * cleared and the material is read again. That invariant exists to stop
+     * the QUEUE repeating itself while nobody asked; being asked is the
+     * exception it was always missing. Nothing here is reachable from a scroll
+     * frame any more (DROVE-146), so a repeated seek costs nothing and cannot
+     * stutter.
+     */
+    private readFrom(index: number): void {
+        for (let i = index; i < this.timeline.length; i++) this.timeline[i].spoken = false;
+        this.cursor = index;
         // Whatever is in the air belongs to the old position. Cut it without
         // going through interrupt(): a tap is not a reason to stop the mic.
         this.cutCurrentUtterance();
@@ -642,6 +738,29 @@ export class ReadAloudReader {
      */
     userSent(): void {
         this.notifyInterrupted('sent');
+    }
+
+    /**
+     * The user typed into the composer (DROVE-162).
+     *
+     * Every capture stops, exactly as `interrupt('typed')` made it: keystrokes
+     * landing on top of a live transcription is the mess DROVE-30 wired the
+     * interrupt listeners to prevent. Reading does NOT stop.
+     *
+     * Clay: "And don't stop talking when I'm typing". He is usually typing the
+     * next thing WHILE listening to the current reply, which is the entire
+     * point of read-aloud on a phone, so a keystroke cutting the voice made
+     * the two features mutually exclusive. Nothing about typing says the
+     * answer being read is no longer wanted, and nothing about it needs the
+     * audio session either — which is what separates it from the mic
+     * (DROVE-143), where the recogniser genuinely cannot share the route.
+     *
+     * Same shape as `userSent`, and for the same reason: `interrupt` had two
+     * jobs welded together, telling the captures to stop and throwing the
+     * reading away, and only the first of them was ever wanted here.
+     */
+    userTyped(): void {
+        this.notifyInterrupted('typed');
     }
 
     private notifyInterrupted(reason: ReadAloudInterruption): void {
@@ -789,13 +908,24 @@ export class ReadAloudReader {
     }
 
     /**
-     * Read faster rather than cut. Flat 1 until the backlog passes the
-     * threshold, then linear to `maxRateScale` at twice the threshold.
+     * Read faster rather than cut (DROVE-108, corrected by DROVE-116).
+     *
+     * Flat 1 until the backlog passes `speedUp`, then linear to
+     * `maxRateScale()` at `jump`, which is where the tail is dropped instead.
+     * The whole band between the two thresholds is therefore spent reading
+     * faster, which is what Clay asked for: "instead of just jumping to the
+     * newest stuff, could you first start talking faster, and then only if you
+     * get too far behind you jump".
+     *
+     * Before DROVE-116 the ramp ended at twice `speedUp` while the cut fired
+     * at `speedUp` itself, so the ramp had no band to run in at all and the
+     * voice went straight to the jump every time.
      */
-    private catchUpRate(backlogSeconds: number, threshold: number): number {
-        if (threshold <= 0 || backlogSeconds <= threshold) return 1;
-        const over = Math.min(1, (backlogSeconds - threshold) / threshold);
-        return 1 + over * (this.maxRateScale - 1);
+    private catchUpRate(backlogSeconds: number, speedUp: number, jump: number): number {
+        if (speedUp <= 0 || backlogSeconds <= speedUp) return 1;
+        const band = jump - speedUp;
+        const over = band > 0 ? Math.min(1, (backlogSeconds - speedUp) / band) : 1;
+        return 1 + over * (this.maxRateScale() - 1);
     }
 
     private armHold(): void {
@@ -850,16 +980,22 @@ export class ReadAloudReader {
         // this line is about unread material only (DROVE-126).
         this.cursor = this.skipSpoken(this.cursor);
 
-        const threshold = this.maxBacklogSeconds();
+        const speedUp = this.maxBacklogSeconds();
+        // Never below the speed-up threshold, whatever a caller hands over:
+        // a jump at or under it would put the cut back where DROVE-116 found
+        // it, firing before the ramp had any room to run.
+        const jump = Math.max(speedUp, this.jumpBacklogSeconds());
         const backlog = this.backlogSeconds();
 
-        // The cut (DROVE-108). Three things have to hold at once: there is
-        // something newer to skip TO, more than the threshold of unspoken
-        // audio is waiting, and the turn is still being written so that
-        // newer material actually exists. A finished turn fails the third
-        // test however long it is, which is the whole point.
+        // The cut (DROVE-108, moved out to its own threshold by DROVE-116).
+        // Three things have to hold at once: there is something newer to skip
+        // TO, more than the JUMP threshold of unspoken audio is waiting, and
+        // the turn is still being written so that newer material actually
+        // exists. A finished turn fails the third test however long it is,
+        // which is the whole point. Between the two thresholds nothing is
+        // thrown away and the voice simply reads faster.
         if (this.timeline.length - this.cursor > 1
-            && backlog > threshold
+            && backlog > jump
             && this.stillArriving()) {
             this.cursor = this.timeline.length - 1;
             this.markerDue = true;
@@ -889,7 +1025,7 @@ export class ReadAloudReader {
             return;
         }
         this.cursor += 1;
-        this.speakNow(next.text, next.turn, this.catchUpRate(backlog, threshold), next);
+        this.speakNow(next.text, next.turn, this.catchUpRate(backlog, speedUp, jump), next);
     }
 
     private speakNow(text: string, turn: number, rateScale: number, at: QueuedSentence | null): void {

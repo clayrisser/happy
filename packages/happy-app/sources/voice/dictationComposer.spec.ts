@@ -138,6 +138,7 @@ describe('the dictation invariant: a capture ending never costs words', () => {
             'idle',
             'left-session',
             'mic',
+            'preview',
             'recogniser',
             'send',
             'sent',
@@ -200,6 +201,7 @@ describe('read-aloud interrupts arriving mid-hold', () => {
         'toggled-off',
         'call-started',
         'headphones-unplugged',
+        'preview',
     ] as const;
 
     // Fails to compile if ReadAloudInterruption grows or shrinks, so a new

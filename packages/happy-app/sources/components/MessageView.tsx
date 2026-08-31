@@ -19,8 +19,7 @@ import { LongPressCopyable } from './LongPressCopyable';
 import { extractThinkingText, isEmptyThinking } from '@/utils/thinkingText';
 import { useElapsedTime } from '@/hooks/useElapsedTime';
 import { useSpokenSentence } from '@/voice/readAloudPlayhead';
-import { readAloudFromHere } from '@/voice/readAloudService';
-import { DoubleTap } from './CodeWrapToggle';
+import { readAloudSentenceFromHere } from '@/voice/readAloudService';
 import { formatWorkDuration } from '@/hooks/useGroupedMessages';
 import { agentLongPressCopyText } from '@/utils/agentTurnCopy';
 import { DisclosureFooter, useInlineDisclosure } from './DisclosureFooter';
@@ -217,13 +216,19 @@ function AgentTextBlock(props: {
   // changes, and read above the early return below because hooks are hooks.
   const spokenSentence = useSpokenSentence(props.message.id);
 
-  // Double tap this section and reading moves here (DROVE-146). The one way
-  // the voice is steered now that scrolling does not touch it.
+  // Tap a sentence and reading starts there (DROVE-146, DROVE-163). The one
+  // way the voice is steered now that scrolling does not touch it, and it
+  // resolves to the sentence under the finger rather than to the top of this
+  // block. A SINGLE tap: a single tap on prose meant nothing before, the
+  // gestures around it are separated by target rather than by tap count, and
+  // hitting the same sentence twice inside the double-tap window is harder
+  // than hitting it once. The reasoning is written out in readAloudTap.ts.
   const sessionId = props.sessionId;
+  const messageId = props.message.id;
   const createdAt = props.message.createdAt;
-  const readFromHere = React.useCallback(() => {
-    readAloudFromHere(sessionId, createdAt);
-  }, [sessionId, createdAt]);
+  const readFromSentence = React.useCallback((sentence: string) => {
+    readAloudSentenceFromHere(sessionId, messageId, sentence, createdAt);
+  }, [sessionId, messageId, createdAt]);
 
   // The model's reasoning is folded, never dropped — one muted row that opens
   // to the whole of what the CLI sent.
@@ -248,24 +253,26 @@ function AgentTextBlock(props: {
       onOptionPress={handleOptionPress}
       sessionId={props.sessionId}
       highlightSentence={spokenSentence}
+      onSentencePress={readFromSentence}
       externalCopyHandler={copyText !== null}
     />
   );
 
-  // The tap sits on the PROSE, outside the code and terminal cards, which
-  // carry their own double tap for wrapping (DROVE-95, DROVE-149). Those are
-  // nested inside this one, and a gesture-handler tap in a descendant wins
-  // over its ancestor, so the two never have to guess at each other: a double
-  // tap on a monospace card wraps it, a double tap on prose reads from there.
+  // The tap sits on the PROSE itself, one sentence at a time, and never on the
+  // code and terminal cards, which keep their own double tap for wrapping
+  // (DROVE-95, DROVE-149) and are rendered by their own components. So the two
+  // gestures are told apart by what was touched rather than by how many times.
+  //
+  // DROVE-146's block-level double tap is gone rather than kept alongside
+  // this: two taps on a sentence would have seeked to it and then been undone
+  // by a third seek to the top of the block.
   return (
     <View style={styles.agentMessageContainer}>
-      <DoubleTap onDoubleTap={readFromHere}>
-        {copyText !== null ? (
-          <LongPressCopyable fill style={styles.agentCopyTarget} text={copyText}>
-            {body}
-          </LongPressCopyable>
-        ) : body}
-      </DoubleTap>
+      {copyText !== null ? (
+        <LongPressCopyable fill style={styles.agentCopyTarget} text={copyText}>
+          {body}
+        </LongPressCopyable>
+      ) : body}
     </View>
   );
 }
