@@ -19,6 +19,7 @@ import {
 } from './sessionControlGlyphs';
 import {
     composerControlPalette,
+    composerGaugeTrack,
     composerGlyphColour,
     pendingOrSettled,
 } from './composerControlColour';
@@ -141,11 +142,19 @@ export function unconfirmedAccessibilityValue(value: string | undefined, pending
  * ends always mean the ends (DROVE-101). The exact word is one tap away in the
  * picker, and in the accessibility value without one.
  *
- * The needle's colour is that same position read as heat (DROVE-176): cool at
- * the floor, the warning amber at the ceiling. The track stays dim, so the
- * angle is still the primary reading.
+ * BOTH MARKS ARE THE FOREGROUND, at two strengths (DROVE-215, DROVE-227). The
+ * needle is the foreground itself, because a level is a value and the angle
+ * was always the reading the dial was chosen for. The track is the foreground
+ * at a reduced opacity, which is a two-sided measurement rather than a taste:
+ * it has to separate from the capsule it is drawn on AND stay under the needle
+ * it is read against. `composerGaugeTrack` owns the number and
+ * composerControlColour.spec.ts asserts both floors on both themes.
+ *
+ * It shipped once with the track at `theme.colors.divider`, which measures
+ * 1.05:1 on the dark glass. Clay: "This icon isn't contrasting." That is the
+ * whole of DROVE-227: a gauge with an invisible dial is a floating diagonal.
  */
-export function EffortGauge(props: { index: number; count: number; color: string; dim: string }) {
+export function EffortGauge(props: { index: number; count: number; color: string; track: string }) {
     const size = 20;
     const strokeWidth = 2;
     const centre = size / 2;
@@ -157,7 +166,7 @@ export function EffortGauge(props: { index: number; count: number; color: string
         <Svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
             <Path
                 d={effortGaugeTrackPath(size, strokeWidth)}
-                stroke={props.dim}
+                stroke={props.track}
                 strokeWidth={strokeWidth}
                 strokeLinecap="round"
                 fill="none"
@@ -421,12 +430,14 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                             The ANGLE follows it; the colour is the foreground
                             at every level (DROVE-215), because a level is a
                             value and the angle was always the reading the dial
-                            was chosen for (DROVE-101). */}
+                            was chosen for (DROVE-101). The track under it is
+                            that same foreground at a reduced opacity, held off
+                            the capsule and under the needle (DROVE-227). */}
                         <EffortGauge
                             index={effortSlider.active ? effortSlider.index : effortIndex!}
                             count={effortCount}
                             color={pendingOrSettled(palette, effortPending, composerGlyphColour(palette))}
-                            dim={theme.colors.divider}
+                            track={composerGaugeTrack(theme.dark)}
                         />
                     </View>
                 ) : (
@@ -443,7 +454,7 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                             index={effortIndex!}
                             count={effortCount}
                             color={pendingOrSettled(palette, effortPending, composerGlyphColour(palette))}
-                            dim={theme.colors.divider}
+                            track={composerGaugeTrack(theme.dark)}
                         />
                     </Control>
                 )

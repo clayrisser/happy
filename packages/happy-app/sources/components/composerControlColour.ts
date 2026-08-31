@@ -118,7 +118,14 @@
  * read it.
  */
 
-import { CHROME_GLASS_TINT, CHROME_GROUND } from './glassChrome';
+import {
+    CHROME_GLASS_TINT,
+    CHROME_GROUND,
+    compositeOver,
+    compositeSurface,
+    contrastRatio,
+    parseColor,
+} from './glassChrome';
 
 /**
  * The states that earn a colour. Everything else on the row is the foreground.
@@ -323,3 +330,133 @@ export const COMPOSER_DISC_SEPARATION_FLOOR = 1.3;
  * rather than hidden inside a shared number.
  */
 export const COMPOSER_DISC_STEP_FLOOR = 1.25;
+
+/**
+ * THE EFFORT GAUGE IS TWO MARKS, NOT ONE (DROVE-227).
+ *
+ * Clay, with the effort control cropped: "This icon isn't contrasting." The
+ * NEEDLE was already right. DROVE-215 made it the foreground at every level
+ * and the angle carries the value (DROVE-141). What it missed is that the dial
+ * is a mark PLUS a track, and only the mark got the foreground. The track kept
+ * `theme.colors.divider`, a hairline chosen to separate two list rows, which
+ * measures 1.05:1 against the control row's glass on dark and 1.13:1 on light.
+ * That is not a dim arc, it is no arc, so the control read as a lone diagonal
+ * with no instrument around it.
+ *
+ * THE CONSTRAINT IS TWO-SIDED, which is what makes this more than "lighten
+ * it". The arc has to separate from the CAPSULE, and the needle has to
+ * separate from the ARC it points across. A track at the needle's own colour
+ * clears the first and fails the second: the instrument goes blank in the
+ * other direction. The two floors below are both, and the needle's is the
+ * larger of the two on purpose, because the needle is the reading and the arc
+ * is only the thing it is read against.
+ *
+ * The arc's whole luminance range is bounded by those two: on the dark glass
+ * the needle is 15.09:1 off the capsule and on the light glass 15.40:1, and
+ * the arc splits that room. 2.5:1 and 6:1 is where it is split.
+ *
+ * IT IS THE FOREGROUND AT A REDUCED OPACITY, NOT A GREY OF ITS OWN, and the
+ * reason is the surface rather than the tidiness. The in-field disc could be
+ * an opaque hex (DROVE-214) because it is a solid fill that REPLACES the
+ * material under it, so one measured value is the whole truth. The arc is a
+ * 2pt hairline drawn ON a live UIGlassEffect that refracts whatever the chat
+ * is showing; `composerGlyphLayers` models that as a ground plus a tint, which
+ * is close but not the surface. A translucent stroke moves WITH the material
+ * and holds its ratio when the model and the real thing disagree; an opaque
+ * hex is pinned to the model and drifts. The gauge's own open state is the
+ * proof: pressing it washes the capsule with `glass.backgroundSubtle`, which
+ * on light lifts it by 42%, and the translucent track follows it to 2.54:1
+ * where a hex tuned for the resting glass would have collapsed.
+ *
+ * Saying it as the FOREGROUND, rather than as white and black, also settles
+ * DROVE-215's rule for the track by construction: there is no hue to reach
+ * for. The arc is the same colour as the needle with less of it, which is the
+ * thing the eye is being asked to read.
+ *
+ * The alphas differ by theme because the two glasses are not mirror images:
+ * 0.28 over a near-black capsule and 0.37 over a near-white one both land on
+ * the same 2.5:1. One shared alpha would have given light 1.95:1.
+ */
+export const COMPOSER_GAUGE_TRACK_ALPHA = { dark: 0.28, light: 0.37 } as const;
+
+/**
+ * The dial's arc: the row's foreground, at the alpha above.
+ *
+ * Derived from the palette rather than written out, so the track cannot become
+ * a colour without the foreground becoming one first.
+ */
+export function composerGaugeTrack(dark: boolean): string {
+    const { r, g, b } = parseColor(composerControlPalette(dark).foreground);
+    const channels = [r, g, b].map((value) => Math.round(value * 255)).join(', ');
+    return `rgba(${channels}, ${dark ? COMPOSER_GAUGE_TRACK_ALPHA.dark : COMPOSER_GAUGE_TRACK_ALPHA.light})`;
+}
+
+/**
+ * How far the arc has to sit off the capsule to read as an instrument.
+ *
+ * Above DROVE-214's 1.3 disc floor, and that is deliberate rather than
+ * inherited: a 44pt circle can be found at 1.36:1 because it is a large area,
+ * and a 2pt hairline at the same separation is a smudge. The shipped values
+ * measure 2.51:1 on dark and 2.50:1 on light, and 2.39:1 at the worst of the
+ * three materials the gauge is drawn on.
+ */
+export const COMPOSER_GAUGE_TRACK_FLOOR = 2.3;
+
+/**
+ * And the other side of it: how far the needle has to sit off the arc.
+ *
+ * WCAG's 3:1 would be enough to SEE the needle. This is higher because seeing
+ * it is not the job: the needle is the value (DROVE-141) and the arc is the
+ * scale behind it, so the two marks have to rank, not merely differ. Asserted
+ * to be greater than the track's floor, which is the ranking written down.
+ * The shipped values measure 6.01:1 on dark and 6.16:1 on light, 5.11:1 at the
+ * worst material.
+ */
+export const COMPOSER_GAUGE_NEEDLE_FLOOR = 4.5;
+
+/**
+ * `theme.colors.glass.backgroundSubtle`, the wash a control takes while its
+ * picker is open or a drag is running (`controlOpen`).
+ *
+ * Here because it is a material the gauge is really drawn on, not decoration:
+ * on light it is a 42% white lift, easily enough to strand a track tuned only
+ * against the resting glass.
+ */
+export const COMPOSER_CONTROL_OPEN_WASH = {
+    dark: 'rgba(255, 255, 255, 0.07)',
+    light: 'rgba(255, 255, 255, 0.42)',
+} as const;
+
+/**
+ * Every material the effort gauge is drawn on, as layer stacks over the chat.
+ *
+ * Three, and all three are ordinary: the control row's glass, the opaque
+ * fallback a device with no Liquid Glass gets, and the glass under the open
+ * wash. The floors hold on all of them.
+ */
+export function composerGaugeMaterials(dark: boolean): Readonly<Record<string, readonly string[]>> {
+    const glass = composerGlyphLayers(dark);
+    return {
+        glass,
+        fallback: [dark ? COMPOSER_FALLBACK_SURFACE.dark : COMPOSER_FALLBACK_SURFACE.light],
+        open: [...glass, dark ? COMPOSER_CONTROL_OPEN_WASH.dark : COMPOSER_CONTROL_OPEN_WASH.light],
+    };
+}
+
+/**
+ * Both sides of the gauge's contrast at once, over one material.
+ *
+ * The arithmetic lives here rather than in the spec so the two numbers are
+ * computed the same way everywhere they are quoted, and so a reader can ask
+ * the module what the gauge measures without running a test.
+ */
+export function composerGaugeContrast(
+    dark: boolean,
+    layers: readonly string[],
+    backdrop: string,
+): { track: number; needle: number } {
+    const bed = compositeSurface(backdrop, layers);
+    const arc = compositeOver(composerGaugeTrack(dark), bed);
+    const needle = parseColor(composerControlPalette(dark).foreground);
+    return { track: contrastRatio(arc, bed), needle: contrastRatio(needle, arc) };
+}
