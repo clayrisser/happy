@@ -82,11 +82,28 @@ export interface StatusStripContent {
     /** The dot is drawn. It is the only thing on the strip that never folds. */
     dot?: boolean;
     /**
-     * The tool the main thread is blocked on. NEVER the working word: the dot
-     * says the session is working now, so the word is not drawn at all
-     * (DROVE-231) and the caller passes null for it.
+     * WHAT the main thread is doing: the tool it is blocked on, or the word
+     * `thinking` when none is in flight (DROVE-244).
+     *
+     * It held only a tool's name between DROVE-231 and DROVE-244. Clay: "Don't
+     * show text working" — the dot beside it blinks blue and said the session
+     * was working, so a word repeating that earned nothing and went. `thinking`
+     * is not that word. The dot says the session is working; this says what it
+     * is working ON, and with no tool in flight the slot used to go blank and
+     * hold the last thing it knew.
      */
     toolName?: string | null;
+    /**
+     * The slot above holds the STATE WORD, not a tool's name (DROVE-244).
+     *
+     * The two are the same slot and they give way in opposite orders — a tool
+     * name folds early, the state word folds last of anything on the strip
+     * (DROVE-223) — so the fold has to be told which one it is looking at
+     * rather than comparing the string to a constant.
+     */
+    stateWord?: boolean;
+    /** `3.4k` — what this thinking has cost, beside the word (DROVE-244). */
+    thinkingTokens?: string | null;
     /** The turn's clock, `4m 20s`. */
     elapsed?: string | null;
     /** The centre zone's number: the tally, main plus every subagent. */
@@ -121,6 +138,7 @@ export const statusStripZoneOf: Record<StatusRowGiveWay, StatusStripZone> = {
     toolName: 'left',
     elapsed: 'left',
     tasks: 'left',
+    thinkingTokens: 'left',
     account: 'right',
     tokens: 'centre',
 };
@@ -134,6 +152,7 @@ export interface StatusStripFolds {
     toolName: boolean;
     elapsed: boolean;
     tasks: boolean;
+    thinkingTokens: boolean;
     tokens: boolean;
 }
 
@@ -143,6 +162,7 @@ export const noStatusStripFolds: StatusStripFolds = {
     toolName: false,
     elapsed: false,
     tasks: false,
+    thinkingTokens: false,
     tokens: false,
 };
 
@@ -154,6 +174,7 @@ export function statusStripDrawn(
     return {
         ...content,
         ...(folds.toolName ? { toolName: null } : null),
+        ...(folds.thinkingTokens ? { thinkingTokens: null } : null),
         ...(folds.elapsed ? { elapsed: null } : null),
         ...(folds.tasks ? { tasks: null } : null),
         ...(folds.tokens ? { tokens: null } : null),
@@ -179,17 +200,28 @@ function leaf(name: string, width: number): FlexNode {
 }
 
 /**
- * The LIVE cluster: what the main thread is doing and how much is out.
+ * The LIVE cluster: what the main thread is doing, what it is costing, and how
+ * much is out.
  *
- * The working word is not here and cannot be. Clay: "Don't show text working."
- * The dot beside it blinks blue instead, which is the whole point of
- * DROVE-231's dot table, so the label slot only ever holds a TOOL's name.
+ * The label slot holds a TOOL's name, or the word `thinking` when no tool is
+ * in flight (DROVE-244). It holds neither at once, and it never holds the old
+ * `working` word: the dot blinks blue and says the session is working, which
+ * is the whole point of DROVE-231's dot table, so a word that only repeated
+ * the dot went and a word that says WHAT came back.
  */
 function liveCluster(content: StatusStripContent): FlexNode | null {
     const m = statusStripMetrics;
     const children: FlexNode[] = [];
     if (content.toolName) children.push(leaf('toolName', text(content.toolName)));
     if (content.elapsed) children.push(leaf('elapsed', text(content.elapsed)));
+    // LAST OF THE THREE, because that is the shape Clay already reads
+    // (DROVE-244). Claude Code's own status line prints
+    // `✳ Actualizing… (20s · ↓ 424 tokens)` — a verb, the clock, then the
+    // tokens — and the strip's tool state is already `Bash 2m 58s`, name then
+    // clock. Putting the count third agrees with both instead of inventing a
+    // third ordering for the same three facts. It never appears beside a tool
+    // name; the caller only supplies it in the thinking state.
+    if (content.thinkingTokens) children.push(leaf('thinkingTokens', text(content.thinkingTokens)));
     if (content.workers && content.workers > 0) {
         children.push(leaf('workersGlyph', m.workersGlyph));
         children.push(leaf('workersCount', text(String(content.workers))));
@@ -319,6 +351,31 @@ export function statusStripZoneWidths(content: StatusStripContent, screenWidth: 
 }
 
 /**
+ * The order this strip actually gives way in, with DROVE-223's ONE exception
+ * applied (DROVE-244).
+ *
+ * `toolName` is a slot, not a fact. While it holds a tool's name it is cheap:
+ * the tool is also a row in the sheet one tap away, and DROVE-155 ruled the
+ * name folds early. While it holds the STATE WORD it is the most expensive
+ * thing on the line, because it is the only place the strip says what the
+ * session is doing at all — take it and the remaining `3.4k 4m 20s` describes
+ * nothing. So the step moves to the very end and everything else, the centre's
+ * own figure included, gives way ahead of it.
+ *
+ * The order is REORDERED rather than a second list, so there is still one
+ * `STATUS_ROW_GIVE_WAY` and every pair of ranks it fixes still holds between
+ * the steps around it. That is what stopped DROVE-223's rule from drifting the
+ * last time the strip grew a fact.
+ */
+export function statusStripOrderFor(
+    content: StatusStripContent,
+    order: readonly StatusRowGiveWay[],
+): StatusRowGiveWay[] {
+    if (!content.stateWord) return [...order];
+    return [...order.filter((what) => what !== 'toolName'), 'toolName'];
+}
+
+/**
  * WHICH FOLDS THIS STRIP NEEDS, taken in `STATUS_ROW_GIVE_WAY`'s order.
  *
  * ZONE-AWARE, which the old row's loop had no reason to be. A step only fires
@@ -338,6 +395,7 @@ export function statusStripFolds(
     order: readonly StatusRowGiveWay[],
 ): StatusStripFolds {
     const folds: StatusStripFolds = { ...noStatusStripFolds };
+    const steps = statusStripOrderFor(content, order);
     const fits = () => {
         const widths = statusStripZoneWidths(statusStripDrawn(content, folds), screenWidth);
         return {
@@ -348,7 +406,7 @@ export function statusStripFolds(
     };
     let state = fits();
     if (state.left && state.right && state.centre) return folds;
-    for (const what of order) {
+    for (const what of steps) {
         if (what === 'account') continue;
         const zone = statusStripZoneOf[what];
         if (state[zone]) continue;

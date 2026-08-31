@@ -125,9 +125,12 @@ describe('summarizeLiveStatus', () => {
             .toBe('2 agents running');
     });
 
-    it('says "working" while the model is composing, which puts nothing on disk', () => {
+    it('says "thinking" while the model is composing, which puts nothing on disk', () => {
         const summary = summarizeLiveStatus({ at: now, turnStartedAt: now - 1_033_000 }, now);
-        expect(summary.headline).toBe('working');
+        // DROVE-244. It said `working` until Clay pointed out the dot already
+        // says that; the word's job is to say WHAT, and with no tool in flight
+        // what it is doing is thinking.
+        expect(summary.headline).toBe('thinking');
         expect(summary.turnElapsed).toBe('17m 13s');
         expect(summary.rows).toEqual([]);
     });
@@ -162,24 +165,24 @@ describe('summarizeLiveStatus main thread readout', () => {
         expect(summary.main!.label).not.toMatch(/agent|drover-relaunch/);
     });
 
-    it('says "working" while the model composes and puts nothing on disk', () => {
+    it('says "thinking" while the model composes and puts nothing on disk', () => {
         const composing: LiveStatus = {
             at: now,
             turnStartedAt: now - 1_033_000,
             main: { startedAt: now - 1_033_000, tokens: 9_400 },
         };
         expect(summarizeLiveStatus(composing, now).main)
-            .toEqual({ label: 'working', working: true, elapsed: '17m 13s', tokens: '9.4k' });
+            .toEqual({ label: 'thinking', working: true, elapsed: '17m 13s', tokens: '9.4k' });
         expect(summarizeLiveStatus(composing, now).sideCount).toBe(0);
     });
 
     it('has no token count until the turn has spent one', () => {
         const fresh: LiveStatus = { at: now, main: { startedAt: now - 4_000 } };
-        expect(summarizeLiveStatus(fresh, now).main).toEqual({ label: 'working', working: true, elapsed: '4s' });
+        expect(summarizeLiveStatus(fresh, now).main).toEqual({ label: 'thinking', working: true, elapsed: '4s' });
     });
 
     it('says which of the two the label is, so the strip can order them (DROVE-223)', () => {
-        // The tool name and the working word are the same slot and give way in
+        // The tool name and the state word are the same slot and give way in
         // opposite orders: the name folds third of the text on the row, the
         // word folds last of anything on it. The strip reads this flag rather
         // than comparing the label to a string.
@@ -207,7 +210,7 @@ describe('summarizeLiveStatus main thread readout', () => {
         expect(summarizeLiveStatus(busy, now).main).toEqual({ label: 'Bash', working: false, elapsed: '17m 13s' });
         // Nothing else running: the snapshot can only be about the main thread.
         expect(summarizeLiveStatus({ at: now, turnStartedAt: now - 65_000 }, now).main)
-            .toEqual({ label: 'working', working: true, elapsed: '1m 5s' });
+            .toEqual({ label: 'thinking', working: true, elapsed: '1m 5s' });
         // Only agents, and no way to tell: it stays null rather than guessing.
         expect(summarizeLiveStatus({ ...busy, tool: undefined }, now).main).toBeNull();
     });
@@ -238,6 +241,8 @@ describe('the tally across main and every subagent (DROVE-184)', () => {
             sessionMain: '402.0k',
             // The fan-out's share, which is the session less the main thread.
             sessionAgents: '3.6M',
+            // Nothing published a thinking share, so it is 0 (DROVE-244).
+            turnThinking: 0,
             raw: { turn: 1_377_722, turnMain: 251_200, session: 4_012_000, sessionMain: 402_000 },
         });
     });
@@ -457,5 +462,89 @@ describe('the count the row shows and the wrist beats', () => {
         // The CLI collapses a workflow's agents into done/total and keeps them
         // out of `agents` entirely, so the workflow row IS that fan-out here.
         expect(summarizeLiveStatus(busy, now).sideCount).toBe(3);
+    });
+});
+
+/**
+ * WHAT THE STRIP SAYS WHILE THE MAIN THREAD IS THINKING (DROVE-244).
+ *
+ * Clay: "When it's thinking instead of bashing on the main thread show the
+ * thinking token count." His screenshot reads `● Bash 2m 58s 👥6 ^` — the slot
+ * naming the running tool, working exactly as DROVE-223 built it. The state it
+ * could not name was the other one: main thread working, no tool in flight,
+ * where the slot went blank and the line held the last thing it knew.
+ *
+ * The word costs no CLI change; the number does. That split is the point of
+ * these cases: DROVE-220 means a session running right now never picks up a
+ * new CLI, so the half that works today has to keep working on its own.
+ */
+describe('the thinking state (DROVE-244)', () => {
+    const thinking: LiveStatus = {
+        at: now,
+        turnStartedAt: now - 178_000,
+        main: { startedAt: now - 178_000, tokens: 51_600 },
+        tokens: { turn: 51_600, turnMain: 51_600, session: 251_600, sessionMain: 251_600, turnThinking: 3_412 },
+    };
+
+    it('names the state in the slot the tool name uses, and flags it as the word', () => {
+        const main = summarizeLiveStatus(thinking, now).main!;
+        expect(main.label).toBe('thinking');
+        // The flag, not the string, is what the strip's fold order reads.
+        expect(main.working).toBe(true);
+        expect(main.elapsed).toBe('2m 58s');
+    });
+
+    it('carries what this thinking has cost, from the CLI\'s own per-turn figure', () => {
+        expect(summarizeLiveStatus(thinking, now).main!.thinkingTokens).toBe('3.4k');
+        expect(summarizeLiveStatus(thinking, now).tally!.turnThinking).toBe(3_412);
+    });
+
+    it('is a SHARE of the row\'s number and never an addition to it', () => {
+        // Extended thinking is billed inside output tokens, so 3.4k of the
+        // 51.6k beside it IS thinking. Nothing anywhere may add the two.
+        const summary = summarizeLiveStatus(thinking, now);
+        expect(summary.main!.tokens).toBe('51.6k');
+        expect(summary.tally!.raw.turnMain).toBe(51_600);
+        expect(summary.tally!.turnThinking).toBeLessThan(summary.tally!.raw.turnMain);
+    });
+
+    it('says the word on a CLI too old to publish the figure', () => {
+        // The whole reason the word is derived rather than published: DROVE-220
+        // means Clay's running session will never see a new CLI, and the word
+        // is the half of this that can reach it anyway.
+        const old: LiveStatus = { at: now, turnStartedAt: now - 178_000, main: { startedAt: now - 178_000 } };
+        const main = summarizeLiveStatus(old, now).main!;
+        expect(main.label).toBe('thinking');
+        expect(main.thinkingTokens).toBeUndefined();
+    });
+
+    it('draws no number when the model did no extended thinking', () => {
+        // A real 0 and an absent field mean the same thing and get the same
+        // nothing. `0` beside the word would be furniture.
+        const none: LiveStatus = {
+            ...thinking,
+            tokens: { turn: 51_600, turnMain: 51_600, session: 51_600, sessionMain: 51_600, turnThinking: 0 },
+        };
+        expect(summarizeLiveStatus(none, now).main!.thinkingTokens).toBeUndefined();
+    });
+
+    it('says nothing about thinking while a tool is running', () => {
+        // The word names the tool then, and a thinking count beside a tool
+        // name would be describing something other than what the line says.
+        const withTool: LiveStatus = { ...thinking, tool: { id: 't1', name: 'Bash', startedAt: now - 4_000 } };
+        const main = summarizeLiveStatus(withTool, now).main!;
+        expect(main.label).toBe('Bash');
+        expect(main.working).toBe(false);
+        expect(main.thinkingTokens).toBeUndefined();
+    });
+
+    it('refuses a thinking share larger than the turn it is a share of', () => {
+        // A malformed snapshot, and drawing it would put a bigger number beside
+        // the word than the one in the centre.
+        const bogus: LiveStatus = {
+            ...thinking,
+            tokens: { turn: 51_600, turnMain: 51_600, session: 51_600, sessionMain: 51_600, turnThinking: 900_000 },
+        };
+        expect(summarizeLiveStatus(bogus, now).tally!.turnThinking).toBe(51_600);
     });
 });

@@ -203,6 +203,39 @@ import type { SessionState } from '@/sync/sessionState';
  */
 
 /**
+ * AND DROVE-244 PUT A WORD BACK IN THE SLOT, BUT NOT THAT WORD.
+ *
+ * Clay: "When it's thinking instead of bashing on the main thread show the
+ * thinking token count." His screenshot reads `● Bash 2m 58s 👥6 ^` — the
+ * label naming the running tool, which is DROVE-223's `toolName` working
+ * exactly as intended. What that slot could not say is the other state: the
+ * main thread thinking with no tool in flight. It went blank there and the
+ * line held the last thing it knew, through the one state where he most wants
+ * to know something is happening and what it is costing.
+ *
+ * So the slot now holds a tool's name OR the word `thinking`, and nothing
+ * else. That is not `working` coming back. `working` said what the blinking
+ * blue dot already said, which is why 231 took it off; `thinking` says WHAT,
+ * which is the job the slot has always had. No term was added to the line —
+ * the strip is the same three zones with the same slot filled in one more
+ * state.
+ *
+ * The count sits next to the word, in the left zone, because it describes the
+ * CURRENT ACTIVITY. The centre keeps meaning the session's spend and only that
+ * (DROVE-241 is moving it from the turn to the session total); a figure that
+ * changed meaning whenever the model started reasoning would be worse than no
+ * figure. Two numbers, two zones, two scopes, and the one on the left is a
+ * SHARE of the one in the centre rather than an addition to it, because
+ * extended thinking is billed inside output tokens.
+ *
+ * The number needs a CLI that publishes `tokens.turnThinking`; the WORD does
+ * not, because "the main thread is working and no tool is in flight" is
+ * already on the wire. That split is deliberate — DROVE-220 means a session
+ * running right now will never pick up a new CLI, so the half that could work
+ * today does.
+ */
+
+/**
  * Touch area around each segment's 11pt text.
  *
  * The bottom number is load-bearing (DROVE-144): the dock now sits 16pt above
@@ -402,6 +435,12 @@ function accessibilityLabelFor(
         // "251.2k tokens" beside "Main thread" would still describe the old,
         // main-only reading.
         if (main.tokens) parts.push(`${main.tokens} tokens across main and agents`);
+        // Named as a SHARE, because it is one (DROVE-244): extended thinking
+        // is billed inside output tokens, so a reader hearing the two numbers
+        // in a row must not be left to add them.
+        if (main.thinkingTokens) {
+            parts.push(`${main.thinkingTokens} of them thinking this turn`);
+        }
     }
     if (sideCount > 0) parts.push(`${sideCount} ${sideCount === 1 ? 'agent' : 'agents'}`);
     if (!main && sideTokens) parts.push(`${sideTokens} tokens across main and agents`);
@@ -567,13 +606,26 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
     /**
      * WHAT THE STRIP WANTS TO SAY, before the line decides what it can afford.
      *
-     * The working word is not among it. Clay: "Don't show text working." The
-     * dot beside it is blinking blue at that moment, which is the whole reason
-     * the dot's table exists, so the label is null unless a TOOL is running.
+     * The label slot names the running TOOL, or says `thinking` when the main
+     * thread is working with none in flight (DROVE-244). Clay: "When it's
+     * thinking instead of bashing on the main thread show the thinking token
+     * count." The old `working` word is still gone and stays gone — the dot is
+     * blinking blue at that moment and a word repeating it earned nothing —
+     * but a blank slot was not the answer either: it held the last thing it
+     * knew through the one state where Clay most wants to know something is
+     * happening.
+     *
+     * TWO TOKEN FIGURES, AND THEY NEVER TRADE PLACES (DROVE-241). The centre
+     * is the session's spend and means the same thing at every moment; the
+     * left one is what THIS thinking has cost and exists only while the word
+     * beside it does. Different zones, different scopes, and the centre is
+     * untouched by any of this.
      */
     const content: StatusStripContent = {
         dot: hasDot,
-        toolName: toolRunning ? main!.label : null,
+        toolName: mainWorking ? main!.label : null,
+        stateWord: mainWorking && main!.working,
+        thinkingTokens: main?.thinkingTokens ?? null,
         elapsed: main?.elapsed ?? null,
         tokens: main?.tokens ?? sideTokens,
         workers: sideCount,
@@ -635,7 +687,7 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
         </Pressable>
     ) : null;
 
-    const hasLive = !!(drawn.toolName || drawn.elapsed || sideCount > 0);
+    const hasLive = !!(drawn.toolName || drawn.thinkingTokens || drawn.elapsed || sideCount > 0);
     const liveNode = hasLive ? (
         <Pressable
             key="live"
@@ -656,9 +708,20 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
             })}
         >
             {drawn.toolName ? (
+                /* A TOOL's name may be cut mid-string; the STATE WORD may not
+                   (DROVE-223, DROVE-244). `mcp__chrome_devtools__take_scr…` is
+                   still recognisable and `think…` is not, and the word does
+                   not need cutting anyway: it folds whole, last of anything on
+                   the strip, and the layout has already found a line it fits
+                   on by the time this draws. */
                 <Text
-                    numberOfLines={1}
-                    style={{ fontSize: 11, color: theme.colors.text, flexShrink: 1, ...Typography.default() }}
+                    numberOfLines={drawn.stateWord ? undefined : 1}
+                    style={{
+                        fontSize: 11,
+                        color: theme.colors.text,
+                        flexShrink: drawn.stateWord ? 0 : 1,
+                        ...Typography.default(),
+                    }}
                 >
                     {drawn.toolName}
                 </Text>
@@ -666,6 +729,19 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
             {drawn.elapsed ? (
                 <Text style={{ fontSize: 11, color: theme.colors.text, ...Typography.default() }}>
                     {drawn.elapsed}
+                </Text>
+            ) : null}
+            {drawn.thinkingTokens ? (
+                /* What this thinking has cost, third of the three and in the
+                   SECONDARY colour like the worker count beside it
+                   (DROVE-244). Third because Claude Code's own status line is
+                   `Actualizing… (20s · ↓ 424 tokens)` and the strip's tool
+                   state is `Bash 2m 58s`: verb, clock, tokens, in both. The
+                   secondary weight is what keeps it from reading as a second
+                   copy of the centre's figure, which is the session and a
+                   different number entirely (DROVE-241). */
+                <Text style={{ fontSize: 11, color: theme.colors.textSecondary, ...Typography.default() }}>
+                    {drawn.thinkingTokens}
                 </Text>
             ) : null}
             {sideCount > 0 ? (

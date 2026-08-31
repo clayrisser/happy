@@ -430,6 +430,13 @@ export const MetadataSchema = z.object({
             turnMain: z.number(),
             session: z.number(),
             sessionMain: z.number(),
+            // What the MAIN thread spent THINKING this turn (DROVE-244). A
+            // SHARE of `turnMain`, never an addition to it — extended thinking
+            // is billed inside output tokens, so it is already in every total
+            // beside it. Optional and omitted at zero: an older CLI sends
+            // none, and a model doing no extended thinking honestly spent
+            // none, and the strip draws nothing for either.
+            turnThinking: z.number().optional(),
         }).passthrough().optional(),
         tool: z.object({
             id: z.string(),

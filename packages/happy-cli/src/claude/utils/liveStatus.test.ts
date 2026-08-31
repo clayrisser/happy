@@ -68,6 +68,27 @@ const assistantUsageRecord = (at: number, usage: Record<string, number>) => JSON
     message: { role: 'assistant', content: [{ type: 'text', text: 'thinking' }], usage },
 })
 
+/**
+ * The same record with a thinking share on it (DROVE-244).
+ *
+ * `usage.output_tokens_details.thinking_tokens` is what the API returns and
+ * Claude Code writes into the transcript verbatim. Measured across this
+ * machine's transcripts: absent before 2026-08-11, present on 99% of records
+ * from 2026-08-13. It is a SHARE of `output_tokens`, so the fixture keeps it
+ * under that number the way a real one does.
+ */
+const thinkingUsageRecord = (at: number, usage: Record<string, number>, thinking: number) => JSON.stringify({
+    type: 'assistant',
+    isSidechain: false,
+    timestamp: iso(at),
+    uuid: `th-${at}`,
+    message: {
+        role: 'assistant',
+        content: [{ type: 'thinking', thinking: '', signature: 'sig' }],
+        usage: { ...usage, output_tokens_details: { thinking_tokens: thinking } },
+    },
+})
+
 const agentRecord = (at: number, usage?: Record<string, number>) => JSON.stringify({
     type: usage ? 'assistant' : 'user',
     isSidechain: true,
@@ -514,6 +535,92 @@ describe('createLiveStatusReader', () => {
      * spawnDepth 2 down and absent at depth 1. These fixtures are that layout:
      * a1 launched by the pane, a2 launched by a1, a3 launched by a2.
      */
+    /**
+     * THE THINKING SHARE OF THE TURN (DROVE-244).
+     *
+     * Clay: "When it's thinking instead of bashing on the main thread show the
+     * thinking token count." Folded at the same `countTokens(usageOf(record))`
+     * call the other totals come off, so there is one pass over the transcript
+     * and the thinking count cannot drift from the number it is a share of.
+     */
+    describe('the thinking share (DROVE-244)', () => {
+        it('folds the per-record figure the API already reports', () => {
+            const now = Date.now()
+            writeFileSync(transcript, [
+                promptRecord(now - 300_000, 'go'),
+                thinkingUsageRecord(now - 200_000, { input_tokens: 100, output_tokens: 4_000 }, 3_000),
+                thinkingUsageRecord(now - 100_000, { input_tokens: 100, output_tokens: 900 }, 412),
+                assistantTextRecord(now - 4_000, 'Done thinking.'),
+                '',
+            ].join('\n'))
+            const tokens = createLiveStatusReader({ projectDir, sessionId }).read(now)!.tokens!
+            expect(tokens.turnThinking).toBe(3_412)
+            // A SHARE of the turn, never an addition to it: extended thinking
+            // is billed inside output tokens, so it is already in turnMain.
+            expect(tokens.turnMain).toBe(5_100)
+            expect(tokens.turnThinking!).toBeLessThan(tokens.turnMain)
+        })
+
+        it('says nothing at all when no record reports one', () => {
+            const now = Date.now()
+            writeFileSync(transcript, [
+                promptRecord(now - 300_000, 'go'),
+                // An older Claude Code, or a model doing no extended thinking.
+                // Both are honestly zero and both draw nothing on the strip, so
+                // the field is omitted rather than sent as 0.
+                assistantUsageRecord(now - 4_000, { input_tokens: 100, output_tokens: 900 }),
+                '',
+            ].join('\n'))
+            const tokens = createLiveStatusReader({ projectDir, sessionId }).read(now)!.tokens!
+            expect(tokens.turnThinking).toBeUndefined()
+            expect(tokens.turnMain).toBe(1_000)
+        })
+
+        it('starts over at a prompt, with the turn it is a share of', () => {
+            const now = Date.now()
+            writeFileSync(transcript, [
+                promptRecord(now - 600_000, 'first'),
+                thinkingUsageRecord(now - 590_000, { input_tokens: 10, output_tokens: 9_000 }, 8_000),
+                '',
+            ].join('\n'))
+            const reader = createLiveStatusReader({ projectDir, sessionId })
+            // Read while that first turn is still moving; ten minutes later
+            // the reader would call the session idle and publish nothing.
+            expect(reader.read(now - 589_000)!.tokens!.turnThinking).toBe(8_000)
+
+            appendFileSync(transcript, [
+                promptRecord(now - 60_000, 'second'),
+                thinkingUsageRecord(now - 4_000, { input_tokens: 10, output_tokens: 500 }, 120),
+                '',
+            ].join('\n'))
+            // The new turn's own reasoning, not the last one's carried over.
+            const after = reader.read(now)!.tokens!
+            expect(after.turnThinking).toBe(120)
+            expect(after.sessionMain).toBe(9_520)
+        })
+
+        it('ignores a subagent\'s thinking, because the word is about the main thread', () => {
+            const now = Date.now()
+            writeFileSync(transcript, [
+                promptRecord(now - 300_000, 'go'),
+                thinkingUsageRecord(now - 200_000, { input_tokens: 10, output_tokens: 900 }, 500),
+                '',
+            ].join('\n'))
+            writeFileSync(join(subagents, 'agent-a1.meta.json'), JSON.stringify({ description: 'Sweep' }))
+            writeFileSync(join(subagents, 'agent-a1.jsonl'), [
+                agentRecord(now - 250_000),
+                // Sidechain records are dropped from the main pass anyway, and
+                // an agent's own transcript is read by a different loop that
+                // never touches this counter.
+                thinkingUsageRecord(now - 100_000, { input_tokens: 10, output_tokens: 50_000 }, 40_000),
+                '',
+            ].join('\n'))
+            touch(join(subagents, 'agent-a1.jsonl'), now - 1_000)
+            expect(createLiveStatusReader({ projectDir, sessionId }).read(now)!.tokens!.turnThinking)
+                .toBe(500)
+        })
+    })
+
     describe('nesting', () => {
         const writeAgent = (id: string, now: number, meta: Record<string, unknown>) => {
             writeFileSync(join(subagents, `agent-${id}.meta.json`), JSON.stringify(meta))

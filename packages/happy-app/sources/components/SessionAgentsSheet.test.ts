@@ -267,6 +267,11 @@ describe('the session tally in the agents sheet (DROVE-184)', () => {
         session: '1.9M',
         sessionMain: '210.0k',
         sessionAgents: '1.6M',
+        // The main thread's thinking share of the turn (DROVE-244). The sheet
+        // does not draw it — it belongs beside the word on the strip, not in
+        // the session breakdown — but it is always a number, 0 on a CLI too
+        // old to publish one.
+        turnThinking: 0,
         raw: { turn: 312_000, turnMain: 51_600, session: 1_851_600, sessionMain: 210_000 },
     };
 

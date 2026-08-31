@@ -218,6 +218,32 @@ export const STATUS_ROW_MODEL_TRUNCATION = {
  * `model` is not on the list. It left the row in DROVE-178 and the fold is
  * kept only for a caller that still passes one; where it fires it fires with
  * the tool name, which is where DROVE-167 put it.
+ *
+ * `thinkingTokens` is NEW (DROVE-244) and slots between `tasks` and
+ * `account`, which is the ONE insertion that changes no pair the list already
+ * fixed: the tool name still folds before the account, the clock still folds
+ * before the badge, the account still truncates before the tally. Every rank
+ * DROVE-155, DROVE-167 and DROVE-223 argued for is where they left it.
+ *
+ * Why it outranks the clock and the badge rather than yielding to them, which
+ * is what a new fact usually should do. Measured on Clay's own worst row
+ * (`thinking`, 6 workers, a 3-item task list, the account, the quota and the
+ * gauge) the left zone wants 245pt against a 146pt share at 393. The word
+ * alone costs 44 of that, so SOMETHING established has to go in the thinking
+ * state whatever the order says; there is no arrangement where nothing moves.
+ * Given that, the order picks which two of the clock, the badge and the count
+ * survive, and Clay asked for the count. It is also the cheapest of the three
+ * at 22pt, so protecting it buys the most line back per point. It still yields
+ * before the account and before the centre's figure, which are the two things
+ * DROVE-223 protected hardest.
+ *
+ * `toolName` is BACK to holding a word in the thinking state (DROVE-244), and
+ * that word does not fold where the rank says. DROVE-223's rule — the state
+ * word is the last thing on the row to give way — is enforced in
+ * `statusStripFolds` by moving this step to the end of the order while the
+ * slot holds the word rather than a tool's name. Two words, one slot, opposite
+ * orders, which is exactly what 223 wrote down and 231 was able to drop only
+ * while the slot could hold nothing but a tool.
  */
 export const STATUS_ROW_GIVE_WAY = [
     'contextPercent',
@@ -225,6 +251,7 @@ export const STATUS_ROW_GIVE_WAY = [
     'toolName',
     'elapsed',
     'tasks',
+    'thinkingTokens',
     'account',
     'tokens',
 ] as const;

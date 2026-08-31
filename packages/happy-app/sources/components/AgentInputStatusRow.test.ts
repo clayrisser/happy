@@ -497,11 +497,12 @@ describe('AgentInputStatusRow while the session is working', () => {
             const renderer = row({ sessionId: 'busy' });
             // The main thread first, then the agents as a bare count: the two
             // never share a number (DROVE-155).
-            // NO WORKING WORD. Clay: "Don't show text working." The dot is
-            // blinking blue instead, which is the whole of DROVE-231's table.
-            // Left: the clock and the workers. Centre: the tally. Right: the
-            // account and its percentage.
-            expect(line(renderer)).toEqual(['1m 2s', '1', '251.2k', 'jamrizzi', '23%']);
+            // STILL NO WORKING WORD. Clay: "Don't show text working." The dot
+            // is blinking blue instead, which is the whole of DROVE-231's
+            // table. What the slot holds is `thinking`, which says WHAT rather
+            // than repeating the dot (DROVE-244). Left: the word, the clock
+            // and the workers. Centre: the tally. Right: the account.
+            expect(line(renderer)).toEqual(['thinking', '1m 2s', '1', '251.2k', 'jamrizzi', '23%']);
             expect(line(renderer)).not.toContain('working');
             const dot = renderer.root.findByType('StatusDot' as any);
             expect(dot.props.color).toBe(statusDotColors.working);
@@ -519,7 +520,7 @@ describe('AgentInputStatusRow while the session is working', () => {
             act(() => {
                 vi.advanceTimersByTime(3_000);
             });
-            expect(line(renderer)[0]).toBe('1m 5s');
+            expect(line(renderer).slice(0, 2)).toEqual(['thinking', '1m 5s']);
         } finally {
             vi.useRealTimers();
         }
@@ -559,8 +560,10 @@ describe('AgentInputStatusRow while the session is working', () => {
             // quota number are not among them.
             const shrinking = renderer.root.findAllByType('Text' as any)
                 .filter((node: any) => node.props.numberOfLines === 1);
-            // Only the account, now the working word is gone: nothing else on
-            // the strip may be cut mid-string.
+            // Only the account. The row is in the THINKING state here, and
+            // the state word is explicitly not among the shrinking texts
+            // (DROVE-223, DROVE-244): `think…` says nothing, so the word folds
+            // whole or not at all and nothing else may be cut mid-string.
             expect(shrinking.map((node: any) => node.props.children))
                 .toEqual(['jamrizzi']);
         } finally {
@@ -574,11 +577,17 @@ describe('AgentInputStatusRow while the session is working', () => {
         screen.width = 320;
         try {
             // This used to fold the tool name AND then the model whole, and
-            // 320 was still 6pt over after both. With the model back on the
-            // button row the same row draws entire on the narrowest phone
-            // there is, which is the width DROVE-178 bought back.
+            // 320 was still 6pt over after both; DROVE-178 bought that back by
+            // moving the model off the row.
+            //
+            // The thinking word spends some of it again (DROVE-244), and this
+            // is the exact price, measured: the left zone wants 129pt against
+            // a 107pt share here, so the clock folds and the word stays. That
+            // is the give-way order doing its job — the word is what Clay
+            // asked for and the clock is the cheapest thing left that can pay
+            // for it. At 375 and 393 both are on the line (see below).
             expect(line(row({ sessionId: 'busy' })))
-                .toEqual(['1m 2s', '1', '251.2k', 'jamrizzi', '23%']);
+                .toEqual(['thinking', '1', '251.2k', 'jamrizzi', '23%']);
         } finally {
             screen.width = 390;
             vi.useRealTimers();
@@ -662,19 +671,135 @@ describe('AgentInputStatusRow while the session is working', () => {
         vi.setSystemTime(now + 1_000);
         try {
             // The widest row there is: six workers, a task list, the account
-            // and the ring. The give-way order says what goes, in what order,
-            // and the tally Clay centred is last of everything.
+            // and the ring, with a TOOL running so the label folds early. The
+            // give-way order says what goes, in what order, and the tally Clay
+            // centred is last of everything.
+            sessions.photographedToolWithTasks = {
+                metadata: {
+                    liveStatus: {
+                        ...sessions.photographed.metadata.liveStatus!,
+                        tool: { id: 't1', name: 'Bash', startedAt: now - 5_000 },
+                    },
+                },
+                todos: sessions.photographedWithTasks.todos,
+            };
             screen.width = 393;
-            const wide = line(row({ sessionId: 'photographedWithTasks', contextUsage: context }));
+            const wide = line(row({ sessionId: 'photographedToolWithTasks', contextUsage: context }));
             expect(wide).toContain('1/3 tasks');
             expect(wide).toContain('51.6k');
             expect(wide.join(' ')).not.toContain('4m 20s');
 
             screen.width = 320;
-            const narrow = line(row({ sessionId: 'photographedWithTasks', contextUsage: context }));
+            const narrow = line(row({ sessionId: 'photographedToolWithTasks', contextUsage: context }));
             expect(narrow.join(' ')).not.toContain('1/3 tasks');
             expect(narrow).toContain('51.6k');
             expect(narrow).toContain('jamrizzi');
+        } finally {
+            screen.width = 390;
+            vi.useRealTimers();
+        }
+    });
+
+    /**
+     * WHAT THE STRIP SAYS WHILE THE MAIN THREAD IS THINKING (DROVE-244).
+     *
+     * Clay: "When it's thinking instead of bashing on the main thread show the
+     * thinking token count." His screenshot is `● Bash 2m 58s 👥6 ^` — the
+     * label naming the running tool. The state it could not name is the other
+     * one, and this is that row.
+     */
+    it('says it is thinking, and what the thinking has cost', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(now + 1_000);
+        try {
+            sessions.thinking = {
+                metadata: {
+                    liveStatus: {
+                        at: now,
+                        turnStartedAt: now - 61_000,
+                        main: { startedAt: now - 61_000, tokens: 251_200 },
+                        tokens: {
+                            turn: 251_200,
+                            turnMain: 251_200,
+                            session: 251_200,
+                            sessionMain: 251_200,
+                            turnThinking: 3_412,
+                        },
+                    },
+                },
+            };
+            // Verb, clock, tokens — the shape Claude Code's own status line
+            // uses (`Actualizing… (20s · ↓ 424 tokens)`) and the shape the
+            // strip's tool state already has in `Bash 2m 58s`.
+            screen.width = 393;
+            expect(line(row({ sessionId: 'thinking' })))
+                .toEqual(['thinking', '1m 2s', '3.4k', '251.2k', 'jamrizzi', '23%']);
+            // And it is the MAIN thread's dot, blinking blue, saying the same
+            // thing the word does in a different register (DROVE-231).
+            const dot = row({ sessionId: 'thinking' }).root.findByType('StatusDot' as any);
+            expect(dot.props.color).toBe(statusDotColors.working);
+            expect(dot.props.isPulsing).toBe(true);
+        } finally {
+            screen.width = 390;
+            vi.useRealTimers();
+        }
+    });
+
+    it('keeps the word at every width and drops the numbers under it', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(now + 1_000);
+        try {
+            // The measured price of the word, at the three widths that matter.
+            // 393 and 375 hold the word and ONE number; 320 holds the word
+            // alone. The word itself never goes: it is the only place the
+            // strip says what the session is doing.
+            for (const width of [393, 375]) {
+                screen.width = width;
+                const text = line(row({ sessionId: 'thinking' }));
+                expect(text[0], String(width)).toBe('thinking');
+                expect(text, String(width)).toContain('3.4k');
+                expect(text, String(width)).toContain('jamrizzi');
+            }
+            screen.width = 320;
+            const narrow = line(row({ sessionId: 'thinking' }));
+            expect(narrow[0]).toBe('thinking');
+            expect(narrow).toContain('251.2k');
+            expect(narrow).toContain('jamrizzi');
+        } finally {
+            screen.width = 390;
+            vi.useRealTimers();
+        }
+    });
+
+    it('gives up the task badge to say it, which a tool never has to (DROVE-167)', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(now + 1_000);
+        try {
+            // Measured, not argued: `thinking` plus the badge wants 179pt in
+            // the left zone and the widest share on any phone here is 165 at
+            // 430, so the two cannot share a line at ALL. Something had to go
+            // and the give-way order says which. The badge comes back the
+            // moment a tool runs, and the tasks sheet is still reachable from
+            // the session screen; the word is the only thing that says the
+            // session is thinking rather than stuck.
+            sessions.thinkingWithTasks = {
+                metadata: sessions.thinking.metadata,
+                todos: [
+                    { content: 'Read the reducer', status: 'completed' },
+                    { content: 'Write the sheet', status: 'in_progress' },
+                    { content: 'Wire the wrist', status: 'pending' },
+                ],
+            };
+            for (const width of [320, 375, 393]) {
+                screen.width = width;
+                const text = line(row({ sessionId: 'thinkingWithTasks' }));
+                expect(text[0], String(width)).toBe('thinking');
+                expect(text.join(' '), String(width)).not.toContain('1/3 tasks');
+                // And never at the account's or the tally's expense: they are
+                // in other zones and the fold loop is zone-aware.
+                expect(text, String(width)).toContain('jamrizzi');
+                expect(text, String(width)).toContain('251.2k');
+            }
         } finally {
             screen.width = 390;
             vi.useRealTimers();
@@ -720,7 +845,7 @@ describe('AgentInputStatusRow while the session is working', () => {
             // Closed by default, and nothing unfolded under the row.
             expect(agents().props.open).toBe(false);
             expect(renderer.root.findAllByType('ScrollView' as any)).toHaveLength(0);
-            const working = segment(renderer, 'Main thread: working 1m 2s, 251.2k tokens across main and agents, 1 agent');
+            const working = segment(renderer, 'Main thread: thinking 1m 2s, 251.2k tokens across main and agents, 1 agent');
             act(() => {
                 working.props.onPress();
             });
@@ -752,7 +877,7 @@ describe('AgentInputStatusRow while the session is working', () => {
             const agents = () => renderer.root.findByType('SessionAgentsSheet' as any);
             const usage = () => renderer.root.findByType('UsageAccountBarsSheet' as any);
             act(() => {
-                segment(renderer, 'Main thread: working 1m 2s, 251.2k tokens across main and agents, 1 agent').props.onPress();
+                segment(renderer, 'Main thread: thinking 1m 2s, 251.2k tokens across main and agents, 1 agent').props.onPress();
             });
             expect([agents().props.open, usage().props.open]).toEqual([true, false]);
             act(() => {
@@ -970,7 +1095,7 @@ describe('AgentInputStatusRow going idle', () => {
                 },
             };
             const renderer = row({ sessionId: 'turning' });
-            expect(line(renderer)).toEqual(['1m 2s', '251.2k', 'jamrizzi', '23%']);
+            expect(line(renderer)).toEqual(['thinking', '1m 2s', '251.2k', 'jamrizzi', '23%']);
             // The CLI writes an explicit null the moment the turn ends.
             sessions.turning.metadata.liveStatus = null;
             act(() => {
@@ -1111,8 +1236,13 @@ describe('AgentInputStatusRow never draws an empty strip', () => {
                 const text = line(renderer);
                 expect(text, `width ${width}`).toContain('jamrizzi');
                 expect(text, `width ${width}`).toContain('23%');
-                // The live segment is on it too, whichever way the tool name folded.
-                expect(text.some((part) => part.includes('1m 2s')), `width ${width}`).toBe(true);
+                // The live segment is on it too, whichever way it folded: the
+                // word, the clock, or both (DROVE-244). What this asserts is
+                // that the left zone never empties, not which fact survived.
+                expect(
+                    text.some((part) => part === 'thinking' || part.includes('1m 2s')),
+                    `width ${width}`,
+                ).toBe(true);
                 // And it is visible, not a box with nothing painted in it.
                 expect(renderer.root.findByType('AnimatedFade' as any).props.visible, `width ${width}`)
                     .toBe(true);
@@ -1199,25 +1329,41 @@ describe('AgentInputStatusRow tasks', () => {
         vi.useFakeTimers();
         vi.setSystemTime(now + 1_000);
         try {
+            // A TOOL IS RUNNING here, which is the state DROVE-167 wrote its
+            // rule for: the label is a tool's name and folds early, so the
+            // question the rule answers is whether the clock or the badge goes
+            // next. In the thinking state the label is a word that does not
+            // fold, and the answer is different — the case below this one.
             sessions.busyWithTasks = {
                 ...sessions.busy,
+                metadata: {
+                    liveStatus: {
+                        ...sessions.busy.metadata.liveStatus!,
+                        tool: { id: 't1', name: 'Bash', startedAt: now - 5_000 },
+                    },
+                },
                 todos: [
                     { content: 'Read the reducer', status: 'completed' },
                     { content: 'Write the sheet', status: 'in_progress' },
                     { content: 'Wire the wrist', status: 'pending' },
                 ],
             };
-            // Wide enough for everything: the clock and the workers on the
-            // left with the badge, the tally centred, the account right.
-            for (const width of [430, 500]) {
-                screen.width = width;
-                expect(line(row({ sessionId: 'busyWithTasks' })), String(width))
-                    .toEqual(['1m 2s', '1', '1/3 tasks', '251.2k', 'jamrizzi', '23%']);
-            }
+            // Wide enough for everything: the name, the clock and the workers
+            // on the left with the badge, the tally centred, the account right.
+            screen.width = 500;
+            expect(line(row({ sessionId: 'busyWithTasks' })))
+                .toEqual(['Bash', '1m 2s', '1', '1/3 tasks', '251.2k', 'jamrizzi', '23%']);
             // THE LEFT ZONE IS A HALF OF WHAT THE CENTRE LEAVES, not the whole
-            // line, so the clock goes first on a phone. The badge stays: Clay
-            // has asked for the task list by name three times and the badge is
-            // the only tap that opens it (STATUS_ROW_GIVE_WAY).
+            // line, so the name and then the clock go first on a phone. The
+            // badge stays: Clay has asked for the task list by name three
+            // times and the badge is the only tap that opens it
+            // (STATUS_ROW_GIVE_WAY). 430 is already inside that: the left zone
+            // wants 170pt against a 169pt share, so the NAME goes for one
+            // point and the clock survives, which is the whole argument for
+            // measuring the zone rather than eyeballing the line.
+            screen.width = 430;
+            expect(line(row({ sessionId: 'busyWithTasks' })))
+                .toEqual(['1m 2s', '1', '1/3 tasks', '251.2k', 'jamrizzi', '23%']);
             for (const width of [393, 375]) {
                 screen.width = width;
                 expect(line(row({ sessionId: 'busyWithTasks' })), String(width))
