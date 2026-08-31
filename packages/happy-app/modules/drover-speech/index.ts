@@ -66,6 +66,11 @@ type DroverSpeechModuleType = {
      * of the current audio route, as AVAudioSession names them (DROVE-92).
      */
     audioRoute?: () => string[];
+    /**
+     * Optional: builds up to 12 have no such function. Its presence is the
+     * build stamp for `onAudioRouteChange` (DROVE-119).
+     */
+    watchesAudioRoute?: () => boolean;
     dictationSupport: (localeTag: string | null) => Promise<DictationSupport>;
     startDictation: (localeTag: string | null) => Promise<boolean>;
     /** Resolves with the final transcript. */
@@ -77,6 +82,8 @@ type DroverSpeechModuleType = {
         (eventName: 'onDictationEnded', listener: (event: { text: string; reason: string }) => void): EventSubscription;
         /** Input RMS 0..1 per PCM buffer, at most 20 a second (DROVE-74). Build 10 and later. */
         (eventName: 'onDictationLevel', listener: (event: { level: number }) => void): EventSubscription;
+        /** The output route moved: the new output port types, and why (DROVE-119). Build 13 and later. */
+        (eventName: 'onAudioRouteChange', listener: (event: { outputs: string[]; reason: string }) => void): EventSubscription;
     };
 };
 
@@ -166,6 +173,36 @@ export function audioRoute(): string[] {
         return native.audioRoute();
     } catch {
         return [];
+    }
+}
+
+/**
+ * Whether this binary tells JS when the audio route MOVES (DROVE-119), as
+ * opposed to only answering `audioRoute()` when asked.
+ *
+ * Same build-stamp trick as `dictationReportsProgress`, and for the same
+ * reason: a module cannot be asked which events it declares, so JS asks for
+ * the function that shipped in the same binary. False means the only way to
+ * notice an AirPod coming out is to poll, which leaves up to a poll's worth
+ * of the reply playing out loud. The guard says so rather than claiming a
+ * protection it does not have.
+ */
+export function audioRouteChangeReported(): boolean {
+    if (!native) return false;
+    return typeof native.watchesAudioRoute === 'function';
+}
+
+/**
+ * The audio route moved. `outputs` is the NEW route's port types, the same
+ * names `audioRoute()` returns. On a build without the event nothing ever
+ * arrives and the subscription is an empty shell.
+ */
+export function addAudioRouteChangeListener(listener: (outputs: string[], reason: string) => void) {
+    if (!native) return { remove: () => {} };
+    try {
+        return native.addListener('onAudioRouteChange', (event) => listener(event.outputs, event.reason));
+    } catch {
+        return { remove: () => {} };
     }
 }
 

@@ -14,6 +14,7 @@ import { useLocalSettingMutable } from '@/sync/storage';
 import { t } from '@/text';
 import { hapticsLight, hapticsSelection } from '@/components/haptics';
 import { readAloud } from './readAloudService';
+import { startAudioRouteGuard } from './audioRouteGuardService';
 import { canReadAloud } from './speechEngine';
 import { DictationCapture, type DictationCaptureState } from './dictationCapture';
 import { joinDictation } from './dictationDraft';
@@ -170,6 +171,15 @@ export function useVoiceComposer(options: VoiceComposerOptions): VoiceComposerSt
     // goes quiet for the duration rather than fighting it.
     React.useEffect(() => {
         readAloud.setEnabled(active && readAloudEnabled && !voiceCallActive);
+    }, [active, readAloudEnabled, voiceCallActive]);
+
+    // Headphones coming out mid-reply stops it and turns it off (DROVE-119).
+    // Watched only over exactly the window where a leak is possible: this
+    // surface is the one reading, and reading is on. Turning it off tears
+    // the guard down through this same dependency list.
+    React.useEffect(() => {
+        if (!(active && readAloudEnabled && !voiceCallActive)) return;
+        return startAudioRouteGuard();
     }, [active, readAloudEnabled, voiceCallActive]);
 
     /** Feed the gesture reducer and carry out what it asks for. */

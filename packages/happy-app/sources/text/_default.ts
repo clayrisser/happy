@@ -474,6 +474,7 @@ export const en = {
         streamTalk: {
             on: 'Reading replies aloud',
             off: 'Not reading replies aloud',
+            headphonesOff: 'Read aloud off, headphones disconnected',
         },
         dictate: {
             label: 'Hold to talk, tap to latch',

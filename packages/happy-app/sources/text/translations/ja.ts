@@ -460,6 +460,7 @@ export const ja: TranslationStructure = {
         streamTalk: {
             on: '返信を読み上げます',
             off: '返信は読み上げません',
+            headphonesOff: '読み上げをオフにしました。イヤホンが外れました',
         },
         dictate: {
             label: '長押しで話す、タップで固定',

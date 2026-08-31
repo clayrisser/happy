@@ -41,7 +41,8 @@ export type ReadAloudInterruption =
     | 'left-session'
     | 'switched-session'
     | 'toggled-off'
-    | 'call-started';
+    | 'call-started'
+    | 'headphones-unplugged';
 
 /** Per-utterance knobs. Today only the catch-up rate (DROVE-108). */
 export interface SpeakOptions {

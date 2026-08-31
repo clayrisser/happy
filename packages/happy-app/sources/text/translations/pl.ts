@@ -475,6 +475,7 @@ export const pl: TranslationStructure = {
         streamTalk: {
             on: 'Czytam odpowiedzi na głos',
             off: 'Nie czytam odpowiedzi',
+            headphonesOff: 'Czytanie na głos wyłączone, słuchawki odłączone',
         },
         dictate: {
             label: 'Przytrzymaj, aby mówić, dotknij, aby zablokować',

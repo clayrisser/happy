@@ -459,6 +459,7 @@ export const ca: TranslationStructure = {
         streamTalk: {
             on: 'Llegint les respostes en veu alta',
             off: 'No es llegeixen les respostes',
+            headphonesOff: 'Lectura en veu alta desactivada, auriculars desconnectats',
         },
         dictate: {
             label: 'Mantén premut per parlar, toca per fixar',
