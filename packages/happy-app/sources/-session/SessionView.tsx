@@ -927,6 +927,18 @@ export function SessionViewLoaded({
         sessionSetAgentModes(sessionId, { effortLevel: level.key });
     }, [sessionId]);
 
+    /**
+     * The slider's write (DROVE-200). Same call, same field, same path the
+     * picker used and DROVE-164 fixed — one write, on release.
+     *
+     * `null` is `auto`, which is a mode and not a level: it clears the pick,
+     * and paneModelSync types the cleared field as `/effort auto`, which is
+     * the reset argument that command actually takes.
+     */
+    const updateEffortKey = React.useCallback((key: string | null) => {
+        sessionSetAgentModes(sessionId, { effortLevel: key });
+    }, [sessionId]);
+
     // Memoize header-dependent styles to prevent re-renders
     const headerDependentStyles = React.useMemo(() => ({
         contentContainer: {
@@ -1201,6 +1213,7 @@ export function SessionViewLoaded({
                 effortLevel={effortLevel}
                 availableEffortLevels={pickerEffortLevels}
                 onEffortLevelChange={isRigReasoningSelectionEnabled(session.metadata) ? updateEffortLevel : undefined}
+                onEffortKeyChange={isRigReasoningSelectionEnabled(session.metadata) ? updateEffortKey : undefined}
                 metadata={session.metadata}
                 connectionStatus={connectionStatus}
                 blockSend={isRig && session.thinking && session.metadata?.capabilities?.steering !== true}

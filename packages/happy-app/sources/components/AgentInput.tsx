@@ -60,6 +60,8 @@ import { DroverChannelsSheet } from './DroverChannelsSheet';
 import { buildSessionPillLabel } from './sessionPillLabel';
 import { permissionModeGlyph } from './sessionControlGlyphs';
 import { ComposerSessionControls, type ComposerSessionPicker } from './ComposerSessionControls';
+import { useEffortSlider } from './EffortSliderPopover';
+import { effortSliderScaleFromLevels } from './effortSlider';
 import {
     composerControlPalette,
     micColour,
@@ -116,6 +118,13 @@ interface AgentInputProps {
     effortLevel?: EffortLevel | null;
     availableEffortLevels?: EffortLevel[];
     onEffortLevelChange?: (level: EffortLevel) => void;
+    /**
+     * The effort slider's write (DROVE-200). A wire key, or `null` for `auto`,
+     * which is a mode rather than a level and so has no key: paneModelSync
+     * spells a null effort `/effort auto`, the reset. Absent means the phone
+     * still lists effort rather than dragging it.
+     */
+    onEffortKeyChange?: (key: string | null) => void;
     metadata?: Metadata | null;
     onAbort?: () => void | Promise<void>;
     showAbortButton?: boolean;
@@ -1311,11 +1320,38 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         model: props.modelMode,
         effortLabel,
     }), [effortLabel, permissionShortLabel, props.modelMode]);
+    /**
+     * The scale the DIAL and the SLIDER share (DROVE-200).
+     *
+     * `availableEffortLevels` is the picker's list, which appends the levels
+     * this model cannot reach as disabled rows so the sheet can say why
+     * (DROVE-101). Neither the needle nor the line may count those: the ticket
+     * asks for the current model's REAL ends, and a needle drawn 3 of 6 on a
+     * model whose ceiling is the fourth stop is the same lie the bar meter
+     * told. So both read the reachable run.
+     */
+    const effortScale = React.useMemo(
+        () => effortSliderScaleFromLevels(availableEffortLevels),
+        [availableEffortLevels],
+    );
     // Where this effort sits on the scale the current model offers, for the
-    // meter on the session control.
-    const effortIndex = props.effortLevel
-        ? availableEffortLevels.findIndex((level) => level.key === props.effortLevel?.key)
-        : -1;
+    // meter on the session control. A level that is on the sheet but not on
+    // the reachable run — the disabled row DROVE-101 draws — reads as the
+    // ceiling rather than dropping the segment off the row entirely.
+    const effortIndex = React.useMemo(() => {
+        if (!props.effortLevel) return -1;
+        const found = effortScale.keys.indexOf(props.effortLevel.key);
+        if (found >= 0) return found;
+        return effortScale.keys.length > 0 ? effortScale.keys.length - 1 : -1;
+    }, [effortScale, props.effortLevel]);
+    const effortSlider = useEffortSlider({
+        scale: effortScale,
+        currentKey: props.effortLevel?.key ?? null,
+        onCommit: props.onEffortKeyChange,
+        enabled: compactMobileComposer && !!props.onEffortKeyChange,
+    });
+    const effortSliderOn = compactMobileComposer && !!props.onEffortKeyChange
+        && effortScale.keys.length > 1;
 
 
     // Handle keyboard navigation
@@ -2296,11 +2332,13 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                 modeKind={isSandboxedYoloMode ? 'safe-yolo' : displayPermissionMode?.semanticKind}
                                 modeKey={permissionModeKey}
                                 effortIndex={effortIndex}
-                                effortCount={availableEffortLevels.length}
+                                effortCount={effortScale.keys.length}
                                 onPress={handleSessionControlPress}
                                 nativeMenus={useNativeSettingsMenus}
                                 modeGroups={permissionSettingsGroups}
-                                effortGroup={effortSettingsGroup}
+                                effortGroup={effortSliderOn ? null : effortSettingsGroup}
+                                effortSlider={effortSliderOn ? effortSlider : null}
+                                effortScale={effortSliderOn ? effortScale : null}
                                 modelGroup={modelSettingsGroup}
                                 openPicker={openPicker === 'permission' || openPicker === 'effort'
                                     || openPicker === 'model'
