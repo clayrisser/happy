@@ -16,6 +16,7 @@ import {
     COMPOSER_CONTROL_PALETTE,
     COMPOSER_FALLBACK_SURFACE,
     COMPOSER_BUBBLE_MATERIAL,
+    COMPOSER_CAPSULE_DIVIDER_FLOOR,
     COMPOSER_DISC_SEPARATION_FLOOR,
     COMPOSER_DISC_STEP_FLOOR,
     COMPOSER_GAUGE_NEEDLE_FLOOR,
@@ -23,14 +24,18 @@ import {
     COMPOSER_GAUGE_TRACK_FLOOR,
     COMPOSER_IN_FIELD_DISC,
     COMPOSER_IN_FIELD_DISC_OPEN,
+    COMPOSER_SESSION_CAPSULE_FILL,
+    composerCapsuleDivider,
     composerControlPalette,
-    composerFillTint,
     composerGaugeContrast,
     composerGaugeMaterials,
+    composerFillTint,
     composerGaugeTrack,
     composerGlyphColour,
     composerPausedFill,
     composerPausedTint,
+    composerPrimarySurface,
+    composerSessionCapsuleFill,
     pendingOrSettled,
     composerGlyphLayers,
     micColour,
@@ -39,6 +44,7 @@ import {
 import {
     CHROME_BACKDROP_EXTREMES,
     CHROME_CONTRAST_FLOOR,
+    CHROME_GLASS_TINT,
     colorAlpha,
     compositeOver,
     compositeSurface,
@@ -422,7 +428,7 @@ describe.each(themes)('the effort gauge on the $name theme is two marks, not one
      */
     it('fails the floor for the divider the track used to be drawn in', () => {
         const wasTrack = dark ? '#2A2A2A' : '#eaeaea';
-        const bed = compositeSurface('#000000', composerGaugeMaterials(dark).glass);
+        const bed = compositeSurface('#000000', composerGaugeMaterials(dark).capsule);
         expect(contrastRatio(parseColor(wasTrack), bed)).toBeLessThan(COMPOSER_GAUGE_TRACK_FLOOR);
         // And it passed the OTHER side comfortably, which is why one-sided
         // testing would have called the shipped gauge fine.
@@ -437,7 +443,7 @@ describe.each(themes)('the effort gauge on the $name theme is two marks, not one
      */
     it('fails the floor for a track drawn in the needle’s own colour', () => {
         const palette = composerControlPalette(dark);
-        const bed = compositeSurface('#000000', composerGaugeMaterials(dark).glass);
+        const bed = compositeSurface('#000000', composerGaugeMaterials(dark).capsule);
         const needle = parseColor(palette.foreground);
         expect(contrastRatio(needle, bed)).toBeGreaterThan(COMPOSER_GAUGE_TRACK_FLOOR);
         expect(contrastRatio(needle, needle)).toBeLessThan(COMPOSER_GAUGE_NEEDLE_FLOOR);
@@ -487,17 +493,19 @@ describe.each(themes)('the effort gauge on the $name theme is two marks, not one
  * The numbers this landed on, quoted once so a reader does not have to run the
  * suite to know what "clears the floor" bought (DROVE-227).
  *
- * Both themes split roughly 15:1 of available room the same way, which is the
+ * Both themes split roughly 14:1 of available room the same way, which is the
  * point of the two per-theme alphas: 0.28 over a near-black capsule and 0.37
- * over a near-white one are the same arc.
+ * over a near-white one are the same arc. The room shrank a little when
+ * DROVE-254 made the capsule an opaque fill instead of glass; the split did
+ * not move.
  */
 describe('what the gauge measures, written down', () => {
     it.each([
-        ['dark', true, 2.51, 6.01],
-        ['light', false, 2.50, 6.16],
+        ['dark', true, 2.50, 5.90],
+        ['light', false, 2.46, 5.61],
     ] as const)('%s: the arc is %s:1 off the capsule and the needle %s:1 off the arc', (_n, dark, track, needle) => {
-        const glass = composerGaugeMaterials(dark).glass;
-        const measured = composerGaugeContrast(dark, glass, '#000000');
+        const capsule = composerGaugeMaterials(dark).capsule;
+        const measured = composerGaugeContrast(dark, capsule, '#000000');
         expect(measured.track).toBeCloseTo(track, 2);
         expect(measured.needle).toBeCloseTo(needle, 2);
     });
@@ -506,17 +514,197 @@ describe('what the gauge measures, written down', () => {
         // The arc splits this; it does not add to it. Quoted so the two
         // numbers above are visibly a split of one budget rather than free.
         for (const dark of [true, false]) {
-            const glass = composerGaugeMaterials(dark).glass;
-            const bed = compositeSurface('#000000', glass);
+            const capsule = composerGaugeMaterials(dark).capsule;
+            const bed = compositeSurface('#000000', capsule);
             const needle = parseColor(composerControlPalette(dark).foreground);
             const room = contrastRatio(needle, bed);
-            const measured = composerGaugeContrast(dark, glass, '#000000');
-            expect(room).toBeGreaterThan(15);
+            const measured = composerGaugeContrast(dark, capsule, '#000000');
+            expect(room).toBeGreaterThan(13);
             expect(measured.track * measured.needle).toBeCloseTo(room, 4);
         }
     });
 });
 
+
+/**
+ * THE SESSION CAPSULE ON THE BUBBLE (DROVE-254).
+ *
+ * Clay, on the row DROVE-236 built: "This blends in which is annoying." The
+ * padlock, the gauge and the model's name read as loose glyphs in the field
+ * while the `+` and the mic either side of them read as objects.
+ *
+ * Three things this pins. That the capsule's surface is OPAQUE, which is the
+ * actual fix: a translucent tint inside the bubble's own glass has no single
+ * value, so no number could be held about it. That the value it does have
+ * clears DROVE-214's floor on both themes. And that it is the discs' exact
+ * fill rather than a third grey on a row of two.
+ */
+describe.each(themes)('the session capsule on the $name theme', ({ name, dark }) => {
+    const bubble = parseColor(dark ? COMPOSER_BUBBLE_MATERIAL.dark : COMPOSER_BUBBLE_MATERIAL.light);
+    const fill = composerSessionCapsuleFill(dark);
+
+    it('is an OPAQUE fill, because a tint inside the bubble\u2019s glass has no value to measure', () => {
+        // The whole ticket in one assertion. The bubble is a `UIGlassEffect`
+        // and the capsule used to be a second one inside it; a glass effect
+        // nested in a glass effect has nothing left to refract, which is why
+        // the arithmetic and Clay's eye disagreed. An opaque fill REPLACES the
+        // material under it, so one value is the whole truth (DROVE-214).
+        expect(colorAlpha(fill)).toBe(1);
+        expect(fill.startsWith('#')).toBe(true);
+    });
+
+    it('clears the disc\u2019s separation floor off the bubble it now sits inside', () => {
+        expect(contrastRatio(parseColor(fill), bubble))
+            .toBeGreaterThanOrEqual(COMPOSER_DISC_SEPARATION_FLOOR);
+    });
+
+    it('is the in-field disc\u2019s exact fill, so the row is two greys and not three', () => {
+        // Clay's read, and the one the measurement backs: they are peers on
+        // one row, the band has room for one value, and the area objection is
+        // answered by the dividers rather than by a second grey.
+        expect(fill).toBe(dark ? COMPOSER_IN_FIELD_DISC.dark : COMPOSER_IN_FIELD_DISC.light);
+        expect(COMPOSER_SESSION_CAPSULE_FILL).toBe(COMPOSER_IN_FIELD_DISC);
+    });
+
+    it('measures the same 1.36:1 the discs do, because it is the same value', () => {
+        const capsule = contrastRatio(parseColor(fill), bubble);
+        const disc = contrastRatio(parseColor(dark ? COMPOSER_IN_FIELD_DISC.dark : COMPOSER_IN_FIELD_DISC.light), bubble);
+        expect(capsule).toBeCloseTo(disc, 6);
+        expect(capsule).toBeCloseTo(1.36, 2);
+    });
+
+    /**
+     * THE VALUE THAT SHIPPED, FAILING, which is what stops this coming back.
+     *
+     * It was `GlassChromeSurface`'s default tint, `CHROME_GLASS_TINT`. It fails
+     * on the axis that matters first: it is translucent, so inside the bubble's
+     * own glass there is no separation to assert. And modelled generously, as
+     * if the platform simply added it to the bubble's material, light comes out
+     * at 1.22:1 and fails the floor outright. Dark models at 1.58:1, passes the
+     * arithmetic and still blends on the phone, which is the whole reason the
+     * opacity assertion is the one that leads.
+     */
+    it('fails the spec for the glass tint the capsule used to be drawn in', () => {
+        const tint = dark ? CHROME_GLASS_TINT.dark : CHROME_GLASS_TINT.light;
+        expect(colorAlpha(tint)).toBeLessThan(1);
+        const modelled = contrastRatio(compositeOver(tint, bubble), bubble);
+        expect(modelled).toBeCloseTo(name === 'dark' ? 1.577 : 1.222, 3);
+        if (name === 'light') {
+            expect(modelled).toBeLessThan(COMPOSER_DISC_SEPARATION_FLOOR);
+        }
+    });
+
+    /**
+     * THE TWO HAIRLINES INSIDE IT ARE KEPT, and held to the same bar the
+     * gauge's track is.
+     *
+     * The ticket asks whether a capsule that reads properly still needs them.
+     * It does: they are what stops 154pt of one tone reading as a slab, and
+     * what says the three segments are three presses. So they get the fill's
+     * treatment rather than the fill's exemption.
+     */
+    it('draws its dividers as the gauge\u2019s track, so the capsule holds two tones and not four', () => {
+        expect(composerCapsuleDivider(dark)).toBe(composerGaugeTrack(dark));
+        expect(COMPOSER_CAPSULE_DIVIDER_FLOOR).toBe(COMPOSER_GAUGE_TRACK_FLOOR);
+    });
+
+    it('separates a divider from the fill, at rest and under an open segment\u2019s wash', () => {
+        for (const [material, layers] of Object.entries(composerGaugeMaterials(dark))) {
+            const bed = compositeSurface('#000000', layers);
+            const hairline = compositeOver(composerCapsuleDivider(dark), bed);
+            expect(contrastRatio(hairline, bed), material)
+                .toBeGreaterThanOrEqual(COMPOSER_CAPSULE_DIVIDER_FLOOR);
+        }
+    });
+
+    /**
+     * And the token they were drawn in, failing. `theme.colors.glass.divider`
+     * is a rule for two list rows meeting on an opaque background; on the
+     * capsule's fill it is DROVE-227's gauge track again, a mark that is not
+     * dim but absent.
+     */
+    it('fails the floor for the list hairline the dividers used to be drawn in', () => {
+        const wasDivider = dark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(60, 60, 67, 0.12)';
+        const bed = parseColor(fill);
+        expect(contrastRatio(compositeOver(wasDivider, bed), bed))
+            .toBeLessThan(COMPOSER_CAPSULE_DIVIDER_FLOOR);
+    });
+});
+
+/**
+ * WHICH SURFACE THE PRIMARY BUTTON WEARS (DROVE-254).
+ *
+ * Clay, on the trailing button: "No circle on this icon unless pressed as
+ * mic." DROVE-236 collapsed send and the mic into one control, so that is an
+ * instruction about two of five faces and the table decides the rest.
+ */
+describe('the primary button\u2019s surface, face by face', () => {
+    const face = (over: Partial<Parameters<typeof composerPrimarySurface>[0]> = {}) =>
+        composerPrimarySurface({ stop: false, blocked: false, mic: false, micLive: false, ...over });
+
+    it('takes the circle off the mic at rest, which is the instruction', () => {
+        expect(face({ mic: true })).toBe('none');
+    });
+
+    it('puts it back the moment the mic is actually open, held or latched (DROVE-210)', () => {
+        expect(face({ mic: true, micLive: true })).toBe('recording');
+    });
+
+    it('leaves send its disc, with something to send and without', () => {
+        // Send has no ON state to spend a surface on: "there is something to
+        // send" is what the glyph's accent has always carried (DROVE-214,
+        // DROVE-215). The mic does have one, which is what buys the change.
+        expect(face()).toBe('disc');
+    });
+
+    it('keeps Stop and the gate\u2019s lock on their own surfaces, and ranks them first', () => {
+        // Stop outranks everything: a blank composer on a non-steerable agent
+        // is both blocked and abortable and must not look locked.
+        expect(face({ stop: true, blocked: true, mic: true, micLive: true })).toBe('stop');
+        expect(face({ blocked: true, mic: true, micLive: true })).toBe('locked');
+    });
+
+    it('spends no new colour: the only fill it gains is the recording red the glyph already wore', () => {
+        // DROVE-215's rule on the surface axis. A disc that appears only while
+        // the mic is open is a state change, which is exactly what earns one,
+        // and the fill it takes is DROVE-142's banner red rather than a second
+        // red drawn for the surface. The white glyph on it clears the floor on
+        // both themes, so the pair is one signal.
+        for (const dark of [true, false]) {
+            const palette = composerControlPalette(dark);
+            expect(contrastRatio(parseColor('#FFFFFF'), parseColor(palette.recording)))
+                .toBeGreaterThanOrEqual(CHROME_CONTRAST_FLOOR);
+        }
+    });
+});
+
+/**
+ * AND THE BARE MIC GLYPH HAS TO CARRY ITSELF (DROVE-254).
+ *
+ * Taking the disc away takes the anchor DROVE-214 measured with it, so the
+ * glyph is now read straight off the bubble's material. Measured rather than
+ * assumed: a glyph that was fine on a #282828 disc is not automatically fine
+ * on a #3D3D3D bubble.
+ */
+describe.each(themes)('the mic\u2019s glyph with no disc under it, on the $name theme', ({ dark }) => {
+    it('clears the 3:1 floor on the bubble it is drawn straight onto', () => {
+        const bubble = parseColor(dark ? COMPOSER_BUBBLE_MATERIAL.dark : COMPOSER_BUBBLE_MATERIAL.light);
+        const glyph = parseColor(micColour(composerControlPalette(dark), 'idle'));
+        expect(contrastRatio(glyph, bubble)).toBeGreaterThanOrEqual(CHROME_CONTRAST_FLOOR);
+    });
+
+    it('loses contrast against the disc it used to sit on, and still has room to spare', () => {
+        // The honest half: 14.74 -> 10.86 on dark. The disc was a step DOWN
+        // from the bubble, so a white glyph on it was further off than a white
+        // glyph on the bubble. Both are miles over the floor, which is why the
+        // circle was spendable at all.
+        const bubble = parseColor(dark ? COMPOSER_BUBBLE_MATERIAL.dark : COMPOSER_BUBBLE_MATERIAL.light);
+        const disc = parseColor(dark ? COMPOSER_IN_FIELD_DISC.dark : COMPOSER_IN_FIELD_DISC.light);
+        const glyph = parseColor(micColour(composerControlPalette(dark), 'idle'));
+        expect(contrastRatio(glyph, bubble)).toBeGreaterThan(CHROME_CONTRAST_FLOOR * 3);
+        expect(contrastRatio(glyph, disc)).toBeGreaterThan(CHROME_CONTRAST_FLOOR * 3);
+    });
+});
 
 /**
  * THE PAUSED READER'S DISC (DROVE-258).
@@ -547,13 +735,27 @@ describe.each(themes)('the pause disc on the $name theme', ({ dark }) => {
         expect(Object.keys(palette).sort()).toEqual(['accent', 'foreground', 'pending', 'recording']);
     });
 
-    it('reads as a disc against the bubble, past the strictest separation bar in this file', () => {
+    /**
+     * OPAQUE, WHICH IS DROVE-254's HARD SPEC AND NOT A PREFERENCE. That ticket
+     * found the capsule was a `UIGlassEffect` nested inside the bubble's own,
+     * so the platform never added the tint the contrast model assumed and a
+     * translucent surface in there has no single value to measure. Every fill
+     * on this row is an opaque hex for that reason, and the pause disc is a
+     * fill on this row.
+     */
+    it('is opaque, so there is one value to measure rather than a composite', () => {
+        expect(colorAlpha(fill)).toBe(1);
+    });
+
+    it('reads as a disc against the bubble, past the strictest separation bar on the row', () => {
         // A fill is held to COMPOSER_DISC_SEPARATION_FLOOR (1.3) and a hairline
-        // to the gauge track's 2.3. This is asserted against the HARDER of the
-        // two, because a state indicator that only just clears the bar a
-        // decoration clears is the invisibility this ticket is about, and
-        // because DROVE-254 aliases the gauge floor as the capsule's own.
-        expect(worstContrast(fill, [bubble])).toBeGreaterThanOrEqual(COMPOSER_GAUGE_TRACK_FLOOR);
+        // inside the capsule to COMPOSER_CAPSULE_DIVIDER_FLOOR (2.3, DROVE-254,
+        // which is the gauge track's floor by construction). Asserted against
+        // the HARDER of the two, because a state indicator that only just
+        // clears the bar a decoration clears is the invisibility this ticket is
+        // about.
+        expect(COMPOSER_CAPSULE_DIVIDER_FLOOR).toBeGreaterThan(COMPOSER_DISC_SEPARATION_FLOOR);
+        expect(worstContrast(fill, [bubble])).toBeGreaterThanOrEqual(COMPOSER_CAPSULE_DIVIDER_FLOOR);
     });
 
     it('reads apart from the resting disc it replaces, which is what OFF wears', () => {

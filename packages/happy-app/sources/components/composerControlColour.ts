@@ -79,6 +79,14 @@
  * (DROVE-101). DROVE-176 promised colour was never the only carrier. Removing
  * it is what that promise was for.
  *
+ * AND SINCE DROVE-254 THERE IS A SECOND AXIS: the SURFACE behind the glyph.
+ * It says the same thing colour does and it says it for the same reason. A
+ * control wears a fill when it is an object you press, and the primary button
+ * gains a fill when its mic is actually open and has none when it is not. No
+ * hue is spent on that; the fill it gains is the recording red the glyph
+ * already wore. The rule below is about glyphs, the rule on
+ * `composerPrimarySurface` is about fills, and they agree.
+ *
  * WHAT KEPT COLOUR, and none of it is a mode value:
  *   - the mic and the waveform while a mic is open (recording).
  *   - the send button while there is something to send (accent). Empty, it is
@@ -308,6 +316,11 @@ export const COMPOSER_IN_FIELD_DISC_OPEN = { dark: '#3A3A3C', light: '#f0f0f0' }
  * It exists so the disc's separation can be a test. A circle Clay cannot see
  * is what sent this ticket round a third time, and a value that goes back to
  * blending into the capsule should fail rather than ship.
+ *
+ * SINCE DROVE-236 IT IS THE BACKDROP FOR THE WHOLE BUTTON ROW, not just the
+ * two discs: the session capsule and the audio button moved inside the bubble
+ * too. So it is also what the capsule's fill is measured against, and what the
+ * mic's bare glyph is measured against once DROVE-254 takes its disc away.
  */
 export const COMPOSER_BUBBLE_MATERIAL = { dark: '#3D3D3D', light: '#F2F2F7' } as const;
 
@@ -333,6 +346,128 @@ export const COMPOSER_DISC_SEPARATION_FLOOR = 1.3;
 export const COMPOSER_DISC_STEP_FLOOR = 1.25;
 
 /**
+ * THE SESSION CAPSULE'S SURFACE, and why it stopped being glass (DROVE-254).
+ *
+ * Clay, on the row after DROVE-236 moved it inside the bubble: "This blends in
+ * which is annoying." The padlock, the gauge and the model's name read as
+ * loose glyphs in the field rather than as one control, while the `+` and the
+ * mic either side of them are plainly objects.
+ *
+ * THE CAUSE IS GLASS ON GLASS, not a tint that is one step too weak. The
+ * bubble is a `GlassView` carrying a `UIGlassEffect` (AgentInput's
+ * `MobileGlassSurface material="liquid"`), and until this ticket the capsule
+ * was a SECOND `GlassView` inside it. A glass effect draws by sampling what is
+ * behind its own view; when that is already a glass effect over the same chat,
+ * the inner one has nothing left to refract that its host has not refracted
+ * already. Apple groups glass with `UIGlassContainerEffect` for exactly this
+ * reason and does not nest it. DROVE-153 gave the capsule glass when it lived
+ * OUTSIDE the bubble on the dock scrim, where glass over the chat was the
+ * right material; DROVE-236 moved it inside and the material stopped being
+ * true without anything being changed.
+ *
+ * WHICH IS ALSO WHY THE OLD VALUE COULD NOT BE MEASURED. Modelled as a tint
+ * over the bubble, `CHROME_GLASS_TINT` composites to rgb(90,90,90) on dark and
+ * rgb(220,220,225) on light: 1.58:1 and 1.22:1 off the bubble. Light fails
+ * `COMPOSER_DISC_SEPARATION_FLOOR` outright. Dark passes the arithmetic and
+ * still blends on the phone, because the arithmetic assumes the tint is added
+ * to the bubble's material and the platform does not add it. A translucent
+ * surface inside another glass surface has no single value, so there is
+ * nothing a spec can hold. That is the whole argument for the fix.
+ *
+ * SO IT IS AN OPAQUE FILL, the same move DROVE-214 made one element over: a
+ * fill REPLACES the material under it, so one measured value is the whole
+ * truth. It is also what the other three controls on that row already are.
+ * Plain views with opaque fills; the capsule was the only glass object among
+ * them, which is the inconsistency Clay was looking at.
+ *
+ * AND IT IS THE DISCS' EXACT FILL, not a value of its own.
+ *
+ *   1. They are peers on one row. Three greys on one line is worse than two,
+ *      and there is no third thing for a third grey to mean.
+ *   2. The band has room for one value. The discs are a step DOWN from the
+ *      bubble on both themes, so a lighter capsule is the failure this ticket
+ *      is about and a darker one would make the capsule the darkest surface
+ *      on the row, ranking a control that HOLDS values above the two that DO
+ *      something. That is DROVE-215's rule wearing a grey instead of a hue.
+ *   3. The area objection is real and it is answered by the dividers rather
+ *      than by the fill. At 320 the capsule is about 154 x 36, five times a
+ *      36pt disc, and one tone over five times the area does read heavier.
+ *      What stops it presenting as a slab is that it is cut into three by two
+ *      hairlines, which is the same reason Apple's grouped capsules and its
+ *      single circles share one material. It measures 1.36:1 on both themes,
+ *      the same number the discs land on, because it is the same value.
+ */
+export const COMPOSER_SESSION_CAPSULE_FILL = COMPOSER_IN_FIELD_DISC;
+
+export function composerSessionCapsuleFill(dark: boolean): string {
+    return dark ? COMPOSER_SESSION_CAPSULE_FILL.dark : COMPOSER_SESSION_CAPSULE_FILL.light;
+}
+
+/**
+ * The two hairlines inside it are KEPT, and re-measured. They are what stops
+ * 154pt of one tone reading as a slab, which is the other half of the argument
+ * for the fill above. `composerCapsuleDivider` is below, with the gauge's
+ * floors, because it is derived from the gauge's track.
+ */
+
+/**
+ * WHICH SURFACE THE PRIMARY BUTTON WEARS, at every face it has (DROVE-254).
+ *
+ * Clay, on the trailing button: "No circle on this icon unless pressed as
+ * mic." DROVE-236 collapsed send and the mic into one control, so that button
+ * has five faces and the instruction names two of them. The rest are decided
+ * here rather than left to a ternary at the call site.
+ *
+ *   stop      its own surface. Stop is another ACTION, not another state of
+ *             send, and DROVE-214 already ruled it out of the shared disc.
+ *   blocked   the locked surface. A lock with no surface reads as decoration
+ *             rather than as a button refusing.
+ *   mic live  the recording disc, which is the whole of "unless pressed as
+ *             mic": held or latched (DROVE-210), the same red fill the row's
+ *             talk button wears, so an open mic looks the same wherever it was
+ *             opened from. No new hue: `recording` is DROVE-142's banner red,
+ *             already in the palette, already worn by the glyph.
+ *   mic rest  NOTHING. A bare glyph on the bubble.
+ *   send      the disc, at every length of text, and `idle` with it, because
+ *             `idle` draws the send arrowhead disabled and is a send face.
+ *
+ * WHY THE `+` AND SEND KEEP THEIR DISCS WHILE THE MIC AT REST DOES NOT, which
+ * is the part that needs an argument rather than an instruction. A disc is
+ * what makes a control look pressable, so taking one away costs something and
+ * has to buy something. What it buys is the one property this button has that
+ * neither of the other two does: it is the only control on the row that
+ * CHANGES WHAT IT IS. The `+` is always the `+`; send is always send. This
+ * slot is send or the mic, which is exactly what DROVE-236 collapsed it for,
+ * and a bare glyph at rest against a filled disc when live gives that slot a
+ * visible off and on it did not have. It is the surface saying "this is
+ * happening now", which is DROVE-215's rule on the axis this ticket is about.
+ * Send's disc stays because send has no ON state to spend one on: "there is
+ * something to send" is carried by the glyph's accent and always has been.
+ *
+ * THE BOX DOES NOT MOVE. Only the fill goes; the button is the same 36pt
+ * reservation at every face, so the model's name keeps the 82pt it has at 320
+ * (`sessionPillLabel.ts`, `discs: 3`). A cosmetic change must not quietly cost
+ * the name.
+ */
+export type ComposerPrimarySurface = 'stop' | 'locked' | 'recording' | 'disc' | 'none';
+
+export function composerPrimarySurface(state: {
+    /** The agent is working on an empty composer, so the button is Stop. */
+    stop: boolean;
+    /** The gate refuses this send. */
+    blocked: boolean;
+    /** The button is the microphone right now rather than send. */
+    mic: boolean;
+    /** And that microphone is OPEN: held or latched (DROVE-210). */
+    micLive: boolean;
+}): ComposerPrimarySurface {
+    if (state.stop) return 'stop';
+    if (state.blocked) return 'locked';
+    if (!state.mic) return 'disc';
+    return state.micLive ? 'recording' : 'none';
+}
+
+/**
  * THE EFFORT GAUGE IS TWO MARKS, NOT ONE (DROVE-227).
  *
  * Clay, with the effort control cropped: "This icon isn't contrasting." The
@@ -352,9 +487,12 @@ export const COMPOSER_DISC_STEP_FLOOR = 1.25;
  * larger of the two on purpose, because the needle is the reading and the arc
  * is only the thing it is read against.
  *
- * The arc's whole luminance range is bounded by those two: on the dark glass
- * the needle is 15.09:1 off the capsule and on the light glass 15.40:1, and
- * the arc splits that room. 2.5:1 and 6:1 is where it is split.
+ * The arc's whole luminance range is bounded by those two: the needle is
+ * 14.74:1 off the capsule on dark and 13.80:1 on light, and the arc splits
+ * that room. 2.5:1 and 5.6:1 is where it is split. Those numbers moved when
+ * DROVE-254 made the capsule an opaque fill instead of glass. The alphas did
+ * not, because they were chosen against a near-black and a near-white surface
+ * and that is still what they sit on.
  *
  * IT IS THE FOREGROUND AT A REDUCED OPACITY, NOT A GREY OF ITS OWN, and the
  * reason is the surface rather than the tidiness. The in-field disc could be
@@ -366,8 +504,8 @@ export const COMPOSER_DISC_STEP_FLOOR = 1.25;
  * and holds its ratio when the model and the real thing disagree; an opaque
  * hex is pinned to the model and drifts. The gauge's own open state is the
  * proof: pressing it washes the capsule with `glass.backgroundSubtle`, which
- * on light lifts it by 42%, and the translucent track follows it to 2.54:1
- * where a hex tuned for the resting glass would have collapsed.
+ * on light lifts it by 42%, and the translucent track follows it to 2.52:1
+ * where a hex tuned for the resting fill would have collapsed.
  *
  * Saying it as the FOREGROUND, rather than as white and black, also settles
  * DROVE-215's rule for the track by construction: there is no hue to reach
@@ -398,8 +536,8 @@ export function composerGaugeTrack(dark: boolean): string {
  * Above DROVE-214's 1.3 disc floor, and that is deliberate rather than
  * inherited: a 44pt circle can be found at 1.36:1 because it is a large area,
  * and a 2pt hairline at the same separation is a smudge. The shipped values
- * measure 2.51:1 on dark and 2.50:1 on light, and 2.39:1 at the worst of the
- * three materials the gauge is drawn on.
+ * measure 2.50:1 on dark and 2.46:1 on light, and 2.37:1 at the worse of the
+ * two materials the gauge is drawn on.
  */
 export const COMPOSER_GAUGE_TRACK_FLOOR = 2.3;
 
@@ -410,10 +548,49 @@ export const COMPOSER_GAUGE_TRACK_FLOOR = 2.3;
  * it is not the job: the needle is the value (DROVE-141) and the arc is the
  * scale behind it, so the two marks have to rank, not merely differ. Asserted
  * to be greater than the track's floor, which is the ranking written down.
- * The shipped values measure 6.01:1 on dark and 6.16:1 on light, 5.11:1 at the
- * worst material.
+ * The shipped values measure 5.90:1 on dark and 5.61:1 on light, 5.02:1 at the
+ * worse material.
  */
 export const COMPOSER_GAUGE_NEEDLE_FLOOR = 4.5;
+
+/**
+ * THE TWO HAIRLINES INSIDE IT ARE KEPT, and re-measured against the new fill
+ * (DROVE-254).
+ *
+ * The question the ticket asks is whether a capsule that reads properly still
+ * needs them. It does, and the reason is the one that settled the fill: the
+ * dividers are what keep 154pt of one tone from reading as a slab, and they
+ * are what say the three segments are three separate presses rather than one
+ * long button. Removing them would also hand the model's name 2pt it has not
+ * asked for and move a budget `sessionPillLabel.ts` measured (`dividers: 2`).
+ *
+ * They needed the same treatment as the fill. `theme.colors.glass.divider` is
+ * a hairline chosen to separate two list rows: over the new fill it measures
+ * 1.28:1 on dark and 1.20:1 on light, which is DROVE-227's gauge track all
+ * over again, a mark that is not dim but absent.
+ *
+ * SO A DIVIDER IS THE GAUGE'S TRACK, at the same strength, derived from it
+ * rather than restated. Both are structure drawn at reduced weight on the same
+ * surface, so the capsule holds exactly two tones: the foreground for the
+ * glyphs, the foreground at the hairline alpha for everything that is only
+ * scaffolding. A third value would be a third thing to read and there is no
+ * third thing being said. Shape keeps them apart: a straight 20pt rule against
+ * a curved arc, and the ranking DROVE-227 pinned (needle over track) is
+ * untouched, because a divider is never read against the needle.
+ */
+export function composerCapsuleDivider(dark: boolean): string {
+    return composerGaugeTrack(dark);
+}
+
+/**
+ * How far a hairline inside the capsule has to sit off the fill.
+ *
+ * The gauge track's floor, by construction and not by coincidence: it is the
+ * same kind of mark on the same surface, and DROVE-227 already argued why a
+ * hairline needs more separation than a 36pt disc does. It measures 2.50:1 on
+ * dark and 2.46:1 on light, and 2.37:1 under the wash a pressed segment takes.
+ */
+export const COMPOSER_CAPSULE_DIVIDER_FLOOR = COMPOSER_GAUGE_TRACK_FLOOR;
 
 /**
  * `theme.colors.glass.backgroundSubtle`, the wash a control takes while its
@@ -421,7 +598,7 @@ export const COMPOSER_GAUGE_NEEDLE_FLOOR = 4.5;
  *
  * Here because it is a material the gauge is really drawn on, not decoration:
  * on light it is a 42% white lift, easily enough to strand a track tuned only
- * against the resting glass.
+ * against the resting fill.
  */
 export const COMPOSER_CONTROL_OPEN_WASH = {
     dark: 'rgba(255, 255, 255, 0.07)',
@@ -431,16 +608,22 @@ export const COMPOSER_CONTROL_OPEN_WASH = {
 /**
  * Every material the effort gauge is drawn on, as layer stacks over the chat.
  *
- * Three, and all three are ordinary: the control row's glass, the opaque
- * fallback a device with no Liquid Glass gets, and the glass under the open
- * wash. The floors hold on all of them.
+ * TWO SINCE DROVE-254, WHERE THERE WERE THREE. The capsule is an opaque fill
+ * rather than glass, so the gauge sits on the same surface at rest whatever
+ * the device can draw: there is no separate fallback material for a phone with
+ * no Liquid Glass, and no chat backdrop showing through. The wash a pressed
+ * segment takes is the only thing that still moves it.
+ *
+ * The stacks are still expressed over a backdrop, because that is what
+ * `composerGaugeContrast` takes and because the arithmetic then says the thing
+ * out loud: an opaque first layer makes the backdrop irrelevant, which is the
+ * whole reason a fill was chosen over a tint.
  */
 export function composerGaugeMaterials(dark: boolean): Readonly<Record<string, readonly string[]>> {
-    const glass = composerGlyphLayers(dark);
+    const fill = composerSessionCapsuleFill(dark);
     return {
-        glass,
-        fallback: [dark ? COMPOSER_FALLBACK_SURFACE.dark : COMPOSER_FALLBACK_SURFACE.light],
-        open: [...glass, dark ? COMPOSER_CONTROL_OPEN_WASH.dark : COMPOSER_CONTROL_OPEN_WASH.light],
+        capsule: [fill],
+        open: [fill, dark ? COMPOSER_CONTROL_OPEN_WASH.dark : COMPOSER_CONTROL_OPEN_WASH.light],
     };
 }
 
@@ -498,10 +681,25 @@ export function composerGaugeContrast(
  * which is a pass that would not survive anyone touching either value, and the
  * amber AS the disc clears it by a margin instead.
  *
+ * OPAQUE, WHICH IS DROVE-254's RULE AND NOT A STYLE CHOICE. That ticket found
+ * the session capsule was a `UIGlassEffect` nested inside the bubble's own, so
+ * the platform never added the tint the contrast model assumed: a translucent
+ * surface inside another glass surface has no single value, and there is
+ * nothing a spec can hold. Every fill on this row is an opaque hex for that
+ * reason, this one included, and `colorAlpha` is asserted rather than assumed.
+ *
+ * IT IS NOT A FACE ON `composerPrimarySurface`. That table is the PRIMARY
+ * button's five faces — stop, locked, the mic open, the mic at rest, send —
+ * and read-aloud is not one of them; the two controls sit side by side and are
+ * different buttons. The audio-out button has its own table and has since
+ * DROVE-236: `audioOutButton`'s `fill` in composerAudioOut.ts, which is where
+ * this face is added rather than at a call site.
+ *
  * WHAT THIS DOES NOT DO. It does not colour anything else. The `+`, send at
  * rest, the padlock, the needle, the model's name and the mic are the
  * foreground exactly as DROVE-215 left them, and the mic still takes no circle
- * until it is open. This is one hue on one state.
+ * until it is open, which is DROVE-254's and is untouched here. This is one
+ * hue on one state.
  */
 export function composerPausedFill(dark: boolean): string {
     return composerGlyphColour(composerControlPalette(dark), 'pending');
