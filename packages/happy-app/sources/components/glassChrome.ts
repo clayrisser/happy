@@ -219,3 +219,89 @@ export function minimumFillAlpha(
     }
     return 1;
 }
+
+//
+// Separation: why the composer had no edge, and the number that fixes it
+// (DROVE-171).
+//
+// Clay, on a close-up of the composer against the black chat: "There's no
+// contrast here". The cause is arithmetic rather than taste. The dark theme's
+// glass tint is `rgba(16, 16, 16, 0.08)`, which is a NEAR-BLACK wash at 8%
+// over a `#000000` chat: composited it lands on rgb(1, 1, 1), a contrast ratio
+// of 1.008:1 against the ground. The material was tinted TOWARD the background
+// it was meant to float over.
+//
+// The other half of the answer is DROVE-168's fade, and the two decide each
+// other. Once the transcript is taken to nothing before it reaches the glass,
+// the ground behind the composer is the page background at every scroll
+// position, on both themes. That is what makes a fixed tint safe: it only ever
+// has to separate from ONE colour per theme, not from whatever message happens
+// to be underneath. A tint chosen to lift off black would wash out against a
+// white code block, and that pair is exactly what the fade removes.
+//
+// It is worth being blunt about the direction, because the obvious reading of
+// DROVE-171 is the opposite one: letting content run behind the glass does NOT
+// give it more to refract here. DROVE-168 requires nothing legible under the
+// composer, so the fade makes the ground MORE uniform, not less. The
+// separation has to come from the material's own tint.
+//
+
+/** The chat behind the composer, once the fade has taken the transcript out. */
+export const CHROME_GROUND = { dark: '#000000', light: '#F2F2F7' } as const;
+
+/**
+ * `UIGlassEffect.tintColor` for chrome, per theme.
+ *
+ * A translucent wash, not a fill: at 16% and 10% the material still refracts
+ * and blurs what is behind it, which is the difference between a glass surface
+ * and a grey rectangle. `chromeTintOpacity` is asserted below the fill bar for
+ * exactly that reason.
+ */
+export const CHROME_GLASS_TINT = {
+    dark: 'rgba(255, 255, 255, 0.16)',
+    light: 'rgba(0, 0, 0, 0.10)',
+} as const;
+
+export function chromeGlassTint(dark: boolean): string {
+    return dark ? CHROME_GLASS_TINT.dark : CHROME_GLASS_TINT.light;
+}
+
+export function chromeGround(dark: boolean): string {
+    return dark ? CHROME_GROUND.dark : CHROME_GROUND.light;
+}
+
+/**
+ * What the tint composites to over its theme's ground, and how far that sits
+ * from the ground. This is the number DROVE-171 asks to be stated rather than
+ * eyeballed.
+ *
+ * dark  rgba(255,255,255,0.16) over #000000 -> rgb(41, 41, 41),    1.44:1
+ * light rgba(0,0,0,0.10)       over #F2F2F7 -> rgb(218, 218, 222), 1.25:1
+ * was   rgba(16,16,16,0.08)    over #000000 -> rgb(1, 1, 1),       1.01:1
+ */
+export function chromeSurfaceSeparation(dark: boolean): number {
+    const ground = chromeGround(dark);
+    return contrastRatio(compositeSurface(ground, [chromeGlassTint(dark)]), parseColor(ground));
+}
+
+/**
+ * The floor each theme's separation has to clear.
+ *
+ * Dark is the higher bar because black gives the material nothing of its own:
+ * a glass control over `#000000` is whatever its tint makes it. Light is lower
+ * on purpose. There the ground is already bright, the material keeps a visible
+ * rim and shadow against it, and pushing the tint to the dark theme's number
+ * turns a glass slab into a grey one, which is the failure mode DROVE-171
+ * names ("a flat fill that happens to have contrast fails").
+ */
+export const CHROME_SEPARATION_FLOOR = { dark: 1.35, light: 1.2 } as const;
+
+/**
+ * The most opaque a chrome tint may be and still be a tint.
+ *
+ * `minimumFillAlpha` answers the opposite question, how opaque a fill has to
+ * be to carry a glyph against ANY backdrop, and the answer there is far higher
+ * than this. Staying under a quarter is what keeps the backdrop visible
+ * through the surface.
+ */
+export const CHROME_TINT_MAX_ALPHA = 0.25;

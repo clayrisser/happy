@@ -5,14 +5,9 @@ import { GlassView, isGlassEffectAPIAvailable, type GlassStyle } from 'expo-glas
 import { LinearGradient } from 'expo-linear-gradient';
 import { useUnistyles } from 'react-native-unistyles';
 import { isRunningOnMac } from '@/utils/platform';
-import Animated, {
-    Easing,
-    useAnimatedStyle,
-    useSharedValue,
-    withSpring,
-    withTiming,
-} from 'react-native-reanimated';
+import { chromeGlassTint } from './glassChrome';
 import { getNativeGlassInteractivity } from './glassInteractionPolicy';
+import { GlassPressProvider } from './glassPress';
 
 type MobileGlassMaterial = 'liquid' | 'static' | 'frosted';
 
@@ -27,9 +22,6 @@ type MobileGlassSurfaceProps = ViewProps & {
     style?: StyleProp<ViewStyle>;
 };
 
-const AnimatedGlassView = Animated.createAnimatedComponent(GlassView);
-const AnimatedBlurView = Animated.createAnimatedComponent(BlurView);
-
 // Header chrome is the only consumer of the static material. Letting more blur
 // through, and painting less flat tint over it, is what makes these controls
 // read as glass rather than as filled circles.
@@ -42,66 +34,15 @@ const STATIC_MATERIAL_BLUR_CAP = 44;
  * `material="frosted"` adds a denser tint and blur for writing surfaces where
  * background content must not compete with the foreground text.
  * Content surfaces remain opaque so glass stays a distinct functional layer.
+ *
+ * `interactive` used to mean "wrap this in a reanimated scale" (DROVE-169). It
+ * now means what it says: ask `UIGlassEffect` for its own press response. The
+ * spring it replaced was the imitation Clay was looking at, and scaling a
+ * `GlassView` is also what produced the refractive blob the old comment
+ * described. There is no animated variant of this component any more, because
+ * nothing here animates.
  */
-export function MobileGlassSurface(props: MobileGlassSurfaceProps) {
-    // Scaling a native static GlassView during a press or native-stack push
-    // produces a large refractive blob on iOS 26. Static chrome uses stable
-    // material blur and lets its surrounding Pressable own the interaction.
-    if (props.interactive && props.material !== 'static' && Platform.OS !== 'web' && !isRunningOnMac()) {
-        return <InteractiveMobileGlassSurface {...props} />;
-    }
-    return <MobileGlassSurfaceBase {...props} />;
-}
-
-function InteractiveMobileGlassSurface({
-    onTouchStart,
-    onTouchEnd,
-    onTouchCancel,
-    style,
-    ...props
-}: MobileGlassSurfaceProps) {
-    const pressScale = useSharedValue(1);
-    const bubbleStyle = useAnimatedStyle(() => ({
-        transform: [{ scale: pressScale.value }],
-    }));
-    const releaseBubble = React.useCallback(() => {
-        pressScale.value = withSpring(1, {
-            damping: 14,
-            stiffness: 520,
-            mass: 0.4,
-            overshootClamping: false,
-        });
-    }, [pressScale]);
-    const handleTouchStart = React.useCallback<NonNullable<ViewProps['onTouchStart']>>((event) => {
-        pressScale.value = withTiming(1.035, {
-            duration: 65,
-            easing: Easing.out(Easing.quad),
-        });
-        onTouchStart?.(event);
-    }, [onTouchStart, pressScale]);
-    const handleTouchEnd = React.useCallback<NonNullable<ViewProps['onTouchEnd']>>((event) => {
-        releaseBubble();
-        onTouchEnd?.(event);
-    }, [onTouchEnd, releaseBubble]);
-    const handleTouchCancel = React.useCallback<NonNullable<ViewProps['onTouchCancel']>>((event) => {
-        releaseBubble();
-        onTouchCancel?.(event);
-    }, [onTouchCancel, releaseBubble]);
-
-    return (
-        <MobileGlassSurfaceBase
-            {...props}
-            interactive
-            onTouchStart={handleTouchStart}
-            onTouchEnd={handleTouchEnd}
-            onTouchCancel={handleTouchCancel}
-            style={[style, bubbleStyle]}
-            animated
-        />
-    );
-}
-
-function MobileGlassSurfaceBase({
+export function MobileGlassSurface({
     enabled = Platform.OS !== 'web' && !isRunningOnMac(),
     intensity = 72,
     interactive = false,
@@ -111,37 +52,20 @@ function MobileGlassSurfaceBase({
     tintColor,
     style,
     children,
-    animated = false,
     ...props
-}: MobileGlassSurfaceProps & { animated?: boolean }) {
+}: MobileGlassSurfaceProps) {
     const { theme } = useUnistyles();
     const usesStaticMaterial = nativeEffect && material === 'static';
     const usesFrostedMaterial = nativeEffect && material === 'frosted';
 
     if (!enabled || Platform.OS === 'web' || isRunningOnMac()) {
-        return animated ? (
-            <Animated.View
-                {...props}
-                style={style}
-            >
-                {children}
-            </Animated.View>
-        ) : (
-            <View {...props} style={style}>{children}</View>
-        );
+        return <View {...props} style={style}>{children}</View>;
     }
 
     // Liquid Glass is navigation chrome, not a general card background. Keeping
     // content opaque also avoids compositing dozens of translucent layers.
     if (!nativeEffect) {
-        return animated ? (
-            <Animated.View
-                {...props}
-                style={[{ backgroundColor: theme.colors.surface }, style]}
-            >
-                {children}
-            </Animated.View>
-        ) : (
+        return (
             <View {...props} style={[{ backgroundColor: theme.colors.surface }, style]}>
                 {children}
             </View>
@@ -190,12 +114,7 @@ function MobileGlassSurfaceBase({
             </BlurView>
         );
 
-        return animated ? (
-            <Animated.View {...props} style={[style, styles.staticMaterialShell]}>
-                {staticMaterial}
-                {children}
-            </Animated.View>
-        ) : (
+        return (
             <View {...props} style={[style, styles.staticMaterialShell]}>
                 {staticMaterial}
                 {children}
@@ -203,46 +122,30 @@ function MobileGlassSurfaceBase({
         );
     }
 
+    // The tint is the chrome tint, not `theme.colors.glass.tint` (DROVE-171).
+    // That token is `rgba(16, 16, 16, 0.08)` on the dark theme, a near-black
+    // wash over a black chat: composited it lands on rgb(1, 1, 1), 1.008:1
+    // from its own ground, which is why the composer read as a smudge.
     if (Platform.OS === 'ios' && isGlassEffectAPIAvailable() && material === 'liquid') {
-        return animated ? (
-            <AnimatedGlassView
-                {...props}
-                glassEffectStyle={glassEffectStyle}
-                colorScheme={theme.dark ? 'dark' : 'light'}
-                tintColor={tintColor ?? theme.colors.glass.tint}
-                isInteractive={getNativeGlassInteractivity(interactive)}
-                style={style}
-            >
-                {surfaceOverlay}
-                {children}
-            </AnimatedGlassView>
-        ) : (
+        return (
             <GlassView
                 {...props}
                 glassEffectStyle={glassEffectStyle}
                 colorScheme={theme.dark ? 'dark' : 'light'}
-                tintColor={tintColor ?? theme.colors.glass.tint}
-                isInteractive={getNativeGlassInteractivity(interactive)}
+                tintColor={tintColor ?? chromeGlassTint(theme.dark)}
+                isInteractive={getNativeGlassInteractivity(interactive, isGlassEffectAPIAvailable())}
                 style={style}
             >
                 {surfaceOverlay}
-                {children}
+                <GlassPressProvider value={interactive}>
+                    {children}
+                </GlassPressProvider>
             </GlassView>
         );
     }
 
     if (Platform.OS === 'ios') {
-        return animated ? (
-            <AnimatedBlurView
-                {...props}
-                intensity={Math.min(intensity, usesFrostedMaterial ? 42 : usesStaticMaterial ? STATIC_MATERIAL_BLUR_CAP : 36)}
-                tint={theme.dark ? 'systemUltraThinMaterialDark' : 'systemUltraThinMaterialLight'}
-                style={style}
-            >
-                {surfaceOverlay}
-                {children}
-            </AnimatedBlurView>
-        ) : (
+        return (
             <BlurView
                 {...props}
                 intensity={Math.min(intensity, usesFrostedMaterial ? 42 : usesStaticMaterial ? STATIC_MATERIAL_BLUR_CAP : 36)}
@@ -255,15 +158,7 @@ function MobileGlassSurfaceBase({
         );
     }
 
-    return animated ? (
-        <Animated.View
-            {...props}
-            style={[{ backgroundColor: theme.colors.glass.background }, style]}
-        >
-            {surfaceOverlay}
-            {children}
-        </Animated.View>
-    ) : (
+    return (
         <View
             {...props}
             style={[{ backgroundColor: theme.colors.glass.background }, style]}

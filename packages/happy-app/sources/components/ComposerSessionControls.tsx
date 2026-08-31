@@ -226,9 +226,18 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
     // session with no effort scale does not leave a hairline floating in the
     // capsule.
     const effortNeedsDivider = showEffort && showMode;
+    // One interactive surface for the capsule, not one per segment
+    // (DROVE-169). UIGlassEffect follows the touch inside the effect view it
+    // is on, so the segment under the finger brightens and its neighbour
+    // answers with it, which is how the system draws a grouped control.
+    //
+    // DROVE-169 also computed a divider for the model here. The model left
+    // this capsule with DROVE-138, so the capsule is mode and effort and the
+    // one hairline between them is drawn below.
     return (
         <GlassChromeSurface
             radius={COMPOSER_SESSION_CONTROL_SIZE / 2}
+            interactive
             style={styles.capsule}
         >
             {showMode ? (

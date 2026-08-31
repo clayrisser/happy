@@ -2115,10 +2115,13 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                             GlassView, which is a UIVisualEffectView carrying a
                             UIGlassEffect, and `regular` is the style the system
                             uses for its own floating controls. Legibility does
-                            not depend on the material: the dock paints an opaque
-                            scrim behind itself (resolveDockScrimHeight), so the
-                            glass has a known surface under it rather than
-                            whatever the chat is showing. */}
+                            not depend on the material: the transcript is masked
+                            to nothing before it reaches the card (DROVE-168,
+                            resolveTranscriptMask), so the glass has a known
+                            surface under it rather than whatever the chat is
+                            showing. It is the page itself now rather than a
+                            painted slab, and the card takes its separation from
+                            the measured chrome tint (DROVE-171). */}
                         <MobileGlassSurface
                             enabled={compactMobileComposer}
                             nativeEffect
@@ -2234,6 +2237,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         {(streamTalk.shown || props.onTalkPressIn) ? (
                         <GlassChromeSurface
                             radius={MOBILE_COMPOSER_METRICS.actionSize / 2}
+                            interactive
                             style={styles.mobileAudioCapsule}
                         >
                         {streamTalk.shown && (

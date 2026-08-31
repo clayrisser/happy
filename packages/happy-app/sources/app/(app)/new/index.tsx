@@ -17,7 +17,7 @@ import {
     Keyboard,
     useWindowDimensions,
 } from 'react-native';
-import { GlassView } from 'expo-glass-effect';
+import { GlassView, isGlassEffectAPIAvailable } from 'expo-glass-effect';
 import { Ionicons, Octicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { Typography } from '@/constants/Typography';
@@ -583,7 +583,7 @@ function PathPickerContent({
                             <GlassView
                                 glassEffectStyle="regular"
                                 tintColor="rgba(255,255,255,0.10)"
-                                isInteractive={getNativeGlassInteractivity(true)}
+                                isInteractive={getNativeGlassInteractivity(true, isGlassEffectAPIAvailable())}
                                 style={[
                                     pickerStyles.doneButtonGlass,
                                     { borderColor: 'rgba(255,255,255,0.16)' },

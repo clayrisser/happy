@@ -6,7 +6,7 @@
  *
  *  - where the dock's frame sits above the screen edge,
  *  - how much height the inverted chat list reserves at its visual bottom,
- *  - how tall the opaque backdrop behind the dock has to be.
+ *  - how far the transcript is faded before it reaches the composer.
  *
  * They drifted apart twice before. DROVE-82 put the status row inside the
  * dock and DROVE-88 mounted the gate overlay inside it at `bottom: '100%'`,
@@ -34,8 +34,88 @@
  */
 export const DOCK_CONTENT_BOTTOM_PADDING = 8;
 
-/** Height of the fade from the chat into the opaque dock backdrop. */
-export const DOCK_SCRIM_FADE_HEIGHT = 28;
+/**
+ * How tall the transcript's fade is, and why it is this number (DROVE-168).
+ *
+ * Clay: "Honestly let the text go behind my liquid glass here. But they should
+ * be faded out by the time they get here." That reverses part of DROVE-113 on
+ * purpose. DROVE-113 made the dock opaque because chat text stayed legible
+ * through a 66% scrim and read as a bug; the composer is real Liquid Glass now
+ * (DROVE-153), and a solid slab of `groupped.background` painted behind it is
+ * the thing that made it look flat.
+ *
+ * The fade replaces that slab. It runs on the TRANSCRIPT, not on the dock:
+ * `AgentContentView.ios.tsx` masks the chat's own alpha to nothing over this
+ * band, so the last line dissolves instead of being covered, and the material
+ * keeps the real screen behind it. That distinction is the whole point. An
+ * opacity on the dock is what killed the material the first time.
+ *
+ * 32pt, and the length is the ticket. The transcript's tallest ordinary line
+ * box is 24pt (`MarkdownView`'s paragraph and list rows); code is 20pt. The
+ * floor is one line box: below that a line goes from full strength to nothing
+ * across less than its own height, which reads as a clip rather than a fade,
+ * and Clay would be looking at text colliding with the glass edge. The ceiling
+ * is the reading area, because the two are the same number. The list has to
+ * hold the newest line above the ramp or it sits dimmed at rest, so every
+ * point of fade is a point of transcript. 32 is one and a third body lines,
+ * one and three fifths of a code line, and the smallest multiple of the app's
+ * 8pt grid that clears a body line.
+ *
+ * It costs 24pt: the list used to keep 8pt over the dock and now keeps 32.
+ * On a portrait phone that is about 4% of the visible chat, one line of body
+ * text, paid once at the bottom.
+ */
+export const TRANSCRIPT_FADE_HEIGHT = 32;
+
+/**
+ * The ramp's shape, top of the band down to the glass edge.
+ *
+ * Eased, and eased the opposite way from the obvious guess. The temptation is
+ * to collapse the alpha early so nothing survives anywhere near the glass, but
+ * that only drags the dimming up into the part of the band the eye is reading.
+ * What actually has to hold is narrower: nothing at all at the glass edge, and
+ * no line cut off at full strength on its way there.
+ *
+ * So the ramp holds 88% a quarter of the way in, is at 62% halfway, and spends
+ * its last quarter falling from 30% to nothing. A 24pt body line whose
+ * baseline sits exactly on the edge dissolves from 88% at its cap height to
+ * zero at its baseline, across its own height, which is what a fade looks
+ * like. Under one line box the same line would go from full strength to
+ * nothing over a third of itself, which is what a clip looks like, and that is
+ * the floor the length is set by.
+ */
+export const TRANSCRIPT_FADE_ALPHAS = [1, 0.88, 0.62, 0.3, 0] as const;
+export const TRANSCRIPT_FADE_LOCATIONS = [0, 0.25, 0.5, 0.75, 1] as const;
+
+/**
+ * The same stops as a mask gradient. A mask reads ALPHA only, so the colour is
+ * arbitrary and the alphas are the whole content. Spelled out rather than
+ * mapped so the tuple survives into `LinearGradient`'s props; a test keeps it
+ * honest against `TRANSCRIPT_FADE_ALPHAS`.
+ */
+export const TRANSCRIPT_FADE_MASK_COLORS = [
+    'rgba(0, 0, 0, 1)',
+    'rgba(0, 0, 0, 0.88)',
+    'rgba(0, 0, 0, 0.62)',
+    'rgba(0, 0, 0, 0.3)',
+    'rgba(0, 0, 0, 0)',
+] as const;
+
+/** Alpha at `distance` points above the glass edge. Linear between stops. */
+export function transcriptFadeAlphaAbove(distance: number): number {
+    const t = 1 - Math.min(Math.max(distance / TRANSCRIPT_FADE_HEIGHT, 0), 1);
+    for (let i = 1; i < TRANSCRIPT_FADE_LOCATIONS.length; i += 1) {
+        const from = TRANSCRIPT_FADE_LOCATIONS[i - 1];
+        const to = TRANSCRIPT_FADE_LOCATIONS[i];
+        if (t <= to) {
+            const span = to - from;
+            const ratio = span === 0 ? 0 : (t - from) / span;
+            return TRANSCRIPT_FADE_ALPHAS[i - 1]
+                + (TRANSCRIPT_FADE_ALPHAS[i] - TRANSCRIPT_FADE_ALPHAS[i - 1]) * ratio;
+        }
+    }
+    return TRANSCRIPT_FADE_ALPHAS[TRANSCRIPT_FADE_ALPHAS.length - 1];
+}
 
 /**
  * The home indicator's own strip, measured from the screen edge up.
@@ -211,14 +291,53 @@ export function resolveDockInset({
 }
 
 /**
- * The opaque backdrop covers the dock and the gap below it, plus a fade above
- * so chat scrolling into it does not hit a hard edge.
+ * How far the transcript has to be held above the screen edge so its newest
+ * line is never sitting inside the ramp at rest.
+ *
+ * This replaces the flat 8pt gap the list used to keep over the dock. It is
+ * the ramp's full height rather than the ramp plus a gap: the band already
+ * reads as air, so adding a gap on top of it would spend the reading area
+ * twice.
+ */
+export function resolveTranscriptBottomClearance(): number {
+    return TRANSCRIPT_FADE_HEIGHT;
+}
+
+/**
+ * The mask over the transcript, measured from the screen edge up.
+ *
+ * `clearHeight` is everything from the glass edge down, the dock and the gap
+ * under it, and it is masked to nothing. That is what DROVE-113 was
+ * protecting: no scroll position leaves anything legible under the composer.
+ * `fadeHeight` is the ramp sitting directly on top of it.
+ */
+export function resolveTranscriptMask(dockHeight: number, safeAreaBottom: number): {
+    fadeHeight: number;
+    clearHeight: number;
+} {
+    if (dockHeight <= 0) {
+        return { fadeHeight: 0, clearHeight: 0 };
+    }
+    return {
+        fadeHeight: TRANSCRIPT_FADE_HEIGHT,
+        clearHeight: dockHeight + resolveDockBottomOffset(safeAreaBottom, true),
+    };
+}
+
+/**
+ * Android and web keep a painted backdrop rather than a mask.
+ *
+ * The material only exists on iOS 26. `resolveGlassChromeMaterial` returns
+ * `fallback` everywhere else, so there is no glass for the transcript to run
+ * behind and nothing to gain from masking a list on those platforms. They get
+ * the same ramp length so the two paths cannot drift, over the chat's own
+ * surface so the band is invisible against it.
  */
 export function resolveDockScrimHeight(dockHeight: number, safeAreaBottom: number): number {
     if (dockHeight <= 0) {
         return 0;
     }
-    return dockHeight + resolveDockBottomOffset(safeAreaBottom, true) + DOCK_SCRIM_FADE_HEIGHT;
+    return dockHeight + resolveDockBottomOffset(safeAreaBottom, true) + TRANSCRIPT_FADE_HEIGHT;
 }
 
 /**
