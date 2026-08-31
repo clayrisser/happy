@@ -254,6 +254,7 @@ export const es: TranslationStructure = {
         sessionNotFound: 'Sesión no encontrada',
         voiceSessionFailed: 'Falló al iniciar sesión de voz',
         voiceServiceUnavailable: 'El servicio de voz no está disponible temporalmente',
+        voiceNotAllowed: 'El servidor de voz rechazó iniciar el modo jefe. Necesita minutos de voz o una suscripción en ese servidor, y esta versión no puede mostrar la pantalla de pago.',
         voiceLimitReachedTitle: 'Límite de voz alcanzado',
         voiceHardLimitReached: ({ hours }: { hours: number }) => `Has usado ${hours}+ horas de voz este mes. Este es el máximo permitido. Puedes configurar tu propio agente ElevenLabs en la configuración de voz para usar tu propia cuota.`,
         voiceConversationLimitReached: 'Has alcanzado el número máximo de conversaciones de voz este mes. Es posible que en el futuro agreguemos uso de voz bajo demanda — por favor crea un issue en github.com/nicepkg/happy/issues si alcanzas este límite.',
@@ -459,6 +460,10 @@ export const es: TranslationStructure = {
             label: 'Leer respuestas en voz alta',
             settingsTitle: 'Leer respuestas en voz alta',
             settingsSubtitle: 'Pronuncia cada respuesta a medida que llega. Se omiten el código, los diffs y la salida de herramientas.',
+        },
+        streamTalk: {
+            on: 'Stream-talk activado',
+            off: 'Stream-talk desactivado',
         },
         dictate: {
             label: 'Mantén pulsado para hablar, toca para fijar',

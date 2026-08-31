@@ -254,6 +254,7 @@ export const ca: TranslationStructure = {
         sessionNotFound: 'Sessió no trobada',
         voiceSessionFailed: 'Ha fallat l\'inici de la sessió de veu',
         voiceServiceUnavailable: 'El servei de veu no està disponible temporalment',
+        voiceNotAllowed: 'El servidor de veu ha rebutjat iniciar el mode cap. Necessita minuts de veu o una subscripció en aquell servidor, i aquesta versió no pot mostrar la pantalla de pagament.',
         voiceLimitReachedTitle: 'Límit de veu assolit',
         voiceHardLimitReached: ({ hours }: { hours: number }) => `Has utilitzat ${hours}+ hores de veu aquest mes. Aquest és el màxim permès. Pots configurar el teu propi agent ElevenLabs a la configuració de veu per utilitzar la teva pròpia quota.`,
         voiceConversationLimitReached: 'Has assolit el nombre màxim de converses de veu aquest mes. És possible que en el futur afegim ús de veu sota demanda — si us plau, crea un issue a github.com/nicepkg/happy/issues si arribes a aquest límit.',
@@ -459,6 +460,10 @@ export const ca: TranslationStructure = {
             label: 'Llegeix les respostes en veu alta',
             settingsTitle: 'Llegeix les respostes en veu alta',
             settingsSubtitle: 'Pronuncia cada resposta a mesura que arriba. El codi, els diffs i la sortida de les eines s\'ometen.',
+        },
+        streamTalk: {
+            on: 'Stream-talk activat',
+            off: 'Stream-talk desactivat',
         },
         dictate: {
             label: 'Mantén premut per parlar, toca per fixar',

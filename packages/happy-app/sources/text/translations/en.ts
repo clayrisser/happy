@@ -268,6 +268,7 @@ export const en: TranslationStructure = {
         sessionNotFound: 'Session not found',
         voiceSessionFailed: 'Failed to start voice session',
         voiceServiceUnavailable: 'Voice service is temporarily unavailable',
+        voiceNotAllowed: 'The voice server declined to start boss mode. It needs voice minutes or a subscription on that server, and this build cannot show the paywall.',
         voiceLimitReachedTitle: 'Voice Limit Reached',
         voiceHardLimitReached: ({ hours }: { hours: number }) => `You've used ${hours}+ hours of voice this month. This is the maximum allowed. You can configure your own ElevenLabs agent in Voice settings to use your own quota.`,
         voiceConversationLimitReached: 'You\'ve reached the maximum number of voice conversations this month. We may add on-demand voice usage in the future — please file an issue at github.com/nicepkg/happy/issues if you hit this limit.',
@@ -473,6 +474,10 @@ export const en: TranslationStructure = {
             label: 'Read replies aloud',
             settingsTitle: 'Read replies aloud',
             settingsSubtitle: 'Speaks each assistant reply as it arrives. Code, diffs and tool output are skipped.',
+        },
+        streamTalk: {
+            on: 'Stream-talk on',
+            off: 'Stream-talk off',
         },
         dictate: {
             label: 'Hold to talk, tap to latch',

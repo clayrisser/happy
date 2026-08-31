@@ -254,6 +254,7 @@ export const zhHant: TranslationStructure = {
         sessionNotFound: '工作階段未找到',
         voiceSessionFailed: '啟動語音工作階段失敗',
         voiceServiceUnavailable: '語音服務暫時無法使用',
+        voiceNotAllowed: '語音伺服器拒絕啟動老闆模式。需要該伺服器上的語音時長或訂閱，而此版本無法顯示付費頁面。',
         voiceLimitReachedTitle: '已達語音上限',
         voiceHardLimitReached: ({ hours }: { hours: number }) => `您本月已使用超過 ${hours} 小時的語音。這是允許的最大用量。您可以在語音設定中配置自己的 ElevenLabs 代理，以使用您自己的配額。`,
         voiceConversationLimitReached: '您本月已達到語音對話的最大次數。我們未來可能會新增按需語音使用功能——如果您遇到此限制，請在 github.com/nicepkg/happy/issues 提交 issue。',
@@ -459,6 +460,10 @@ export const zhHant: TranslationStructure = {
             label: '朗讀回覆',
             settingsTitle: '朗讀回覆',
             settingsSubtitle: '每則助理回覆抵達時朗讀。程式碼、差異與工具輸出會略過。',
+        },
+        streamTalk: {
+            on: 'Stream-talk 已開啟',
+            off: 'Stream-talk 已關閉',
         },
         dictate: {
             label: '按住說話，輕點鎖定',

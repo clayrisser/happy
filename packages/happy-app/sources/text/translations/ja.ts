@@ -255,6 +255,7 @@ export const ja: TranslationStructure = {
         sessionNotFound: 'セッションが見つかりません',
         voiceSessionFailed: '音声セッションの開始に失敗しました',
         voiceServiceUnavailable: '音声サービスは一時的に利用できません',
+        voiceNotAllowed: '音声サーバーがボスモードの開始を拒否しました。そのサーバーで音声の残り時間かサブスクリプションが必要で、このビルドでは購入画面を表示できません。',
         voiceLimitReachedTitle: '音声の上限に達しました',
         voiceHardLimitReached: ({ hours }: { hours: number }) => `今月${hours}時間以上の音声を使用しました。これは許可される最大量です。音声設定で独自の ElevenLabs エージェントを設定して、自分のクォータを使用できます。`,
         voiceConversationLimitReached: '今月の音声会話の最大数に達しました。将来的にオンデマンドの音声利用を追加する可能性があります。この制限に達した場合は、github.com/nicepkg/happy/issues で issue を作成してください。',
@@ -460,6 +461,10 @@ export const ja: TranslationStructure = {
             label: '返信を読み上げる',
             settingsTitle: '返信を読み上げる',
             settingsSubtitle: '届いた返信をそのつど読み上げます。コード、差分、ツール出力は読みません。',
+        },
+        streamTalk: {
+            on: 'Stream-talk オン',
+            off: 'Stream-talk オフ',
         },
         dictate: {
             label: '長押しで話す、タップで固定',
