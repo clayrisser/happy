@@ -1,10 +1,28 @@
 import type { SessionState } from '@/sync/sessionState';
+import { statusDotColors } from '@/components/statusDotState';
 
+/**
+ * THE FLAT ROW'S MARK IS A BADGE, NOT THE SESSION'S DOT (DROVE-243).
+ *
+ * Worth stating, because it is the one place a session row draws something
+ * round and deliberately does NOT speak DROVE-231's vocabulary. This mark sits
+ * in the TIMESTAMP slot and replaces it, so it can only ever appear on the few
+ * rows that have something to say; a dot that means "connected" would take
+ * every row's timestamp away to tell Clay what he can already see. It is the
+ * unread badge from any chat list, and the row's status lives elsewhere: the
+ * title shimmers while the session works, and it fades when the session is
+ * gone.
+ *
+ * The blocked hue is `statusDotColors.waiting` all the same. That state means
+ * the identical thing here and on the strip — the session is holding a
+ * permission or a question for Clay — so the amber has one definition even
+ * though the mark around it plays a different role.
+ */
 export const SESSION_READY_DOT_COLOR = '#007AFF';
-export const SESSION_BLOCKED_DOT_COLOR = '#FF9500';
+export const SESSION_BLOCKED_DOT_COLOR = statusDotColors.waiting;
 
 export type FlatSessionRowTopRight =
-    | { type: 'dot'; color: typeof SESSION_READY_DOT_COLOR | typeof SESSION_BLOCKED_DOT_COLOR }
+    | { type: 'dot'; color: string }
     | { type: 'timestamp' };
 
 /**

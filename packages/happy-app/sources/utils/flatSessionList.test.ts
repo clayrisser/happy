@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { idleSessionDotFacts } from '@/components/sessionDot';
 import { buildFlatSessionRows } from './flatSessionList';
 import type { SessionListViewItem, SessionRowData } from '@/sync/storage';
 
@@ -18,6 +19,7 @@ function row(overrides: Partial<SessionRowData> & { id: string }): SessionRowDat
         gitDeletions: null,
         gitInsertions: null,
         state: 'waiting',
+        dot: idleSessionDotFacts,
         createdAt: 0,
         lastActivityAt: 0,
         hasDraft: false,

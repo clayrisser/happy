@@ -14,6 +14,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useHasArchivedSessions, useVisibleSessionListViewData } from '@/hooks/useVisibleSessionListViewData';
 import { Typography } from '@/constants/Typography';
 import { StatusDot } from './StatusDot';
+import { useSessionRowDot } from './sessionDot';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useIsTablet } from '@/utils/responsive';
 import { getHarnessName } from '@/utils/harnessCatalog';
@@ -609,12 +610,19 @@ export function SessionsList({
     );
 }
 
-const STATUS_CONFIG: Record<SessionState, { color: string; dotColor: string; isPulsing: boolean; isConnected: boolean }> = {
-    disconnected: { color: '#999', dotColor: '#999', isPulsing: false, isConnected: false },
-    thinking: { color: '#007AFF', dotColor: '#007AFF', isPulsing: true, isConnected: true },
-    waiting: { color: '#34C759', dotColor: '#34C759', isPulsing: false, isConnected: true },
-    permission_required: { color: '#FF9500', dotColor: '#FF9500', isPulsing: true, isConnected: true },
-    input_required: { color: '#FF9500', dotColor: '#FF9500', isPulsing: true, isConnected: true },
+/**
+ * The TEXT beside the dot, and whether the row reads as connected.
+ *
+ * The dot is no longer in here (DROVE-243). It came from `statusDotColors` via
+ * `useSessionRowDot` now, so the list and the session's own strip cannot paint
+ * the same session two colours. What is left is prose and the avatar's tint.
+ */
+const STATUS_CONFIG: Record<SessionState, { color: string; isConnected: boolean }> = {
+    disconnected: { color: '#999', isConnected: false },
+    thinking: { color: '#007AFF', isConnected: true },
+    waiting: { color: '#34C759', isConnected: true },
+    permission_required: { color: '#FF9500', isConnected: true },
+    input_required: { color: '#FF9500', isConnected: true },
 };
 
 const SessionItem = React.memo(({ session, selected, isFirst, isLast, isSingle }: {
@@ -629,10 +637,15 @@ const SessionItem = React.memo(({ session, selected, isFirst, isLast, isSingle }
     const [actionsAnchor, setActionsAnchor] = React.useState<SessionActionsAnchor | null>(null);
     const baseStatus = STATUS_CONFIG[session.state];
     const needsUserAction = session.state === 'permission_required' || session.state === 'input_required';
-    // User action stays orange and pulsing even when the request also marked the session unread.
+    // User action keeps its own words even when the request also marked the
+    // session unread.
     const status = session.hasUnread && !needsUserAction
-        ? { ...baseStatus, color: '#007AFF', dotColor: '#007AFF', isPulsing: false, isConnected: baseStatus.isConnected }
+        ? { ...baseStatus, color: '#007AFF' }
         : baseStatus;
+    // The one dot (DROVE-243). Unread no longer recolours it: blue means the
+    // main thread is working, everywhere, and the row still says "unread" in
+    // the line of text beside it.
+    const dot = useSessionRowDot(session.dot);
 
     const vibingMessage = React.useMemo(() => {
         return vibingMessages[Math.floor(Math.random() * vibingMessages.length)].toLowerCase() + '…';
@@ -736,7 +749,11 @@ const SessionItem = React.memo(({ session, selected, isFirst, isLast, isSingle }
 
                 <View style={styles.statusRow}>
                     <View style={styles.statusDotContainer}>
-                        <StatusDot color={status.dotColor} isPulsing={status.isPulsing} />
+                        <StatusDot
+                            color={dot.color}
+                            isPulsing={dot.isPulsing}
+                            accessibilityLabel={dot.label}
+                        />
                     </View>
                     <Text style={[
                         styles.statusText,

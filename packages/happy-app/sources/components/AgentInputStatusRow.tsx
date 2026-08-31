@@ -521,7 +521,15 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
     const dotState = statusDotState({
         online: !offline,
         lastSeenAt,
-        mainWorking,
+        // THE DOT'S `working` IS WIDER THAN THE ROW'S (DROVE-243). The segments
+        // above need a live snapshot to draw a clock and a tool name, so
+        // `mainWorking` is the snapshot and nothing else. The DOT only needs to
+        // know the session is busy, and `thinking` says so on a session that
+        // publishes no snapshot at all — an older CLI, a Rig session, the
+        // seconds before the first publish. Every list row asks the question
+        // this way (`sessionDot.ts`), so widening it here is what stops the
+        // strip drawing green on a session the list has already turned blue.
+        mainWorking: mainWorking || p.connectionStatus?.state === 'thinking',
         toolRunning,
         atCompaction: context?.atCompaction ?? false,
         waiting: p.connectionStatus?.state === 'permission_required'

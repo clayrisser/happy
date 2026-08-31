@@ -3,6 +3,13 @@ import { Session } from '@/sync/storageTypes';
 import { resolveSessionState } from '@/sync/sessionState';
 import type { SessionState } from '@/sync/sessionState';
 import { t } from '@/text';
+import {
+    SESSION_DOT_TICK_MS,
+    sessionDotFacts,
+    sessionDotPresentation,
+} from '@/components/sessionDot';
+import type { StatusDotState } from '@/components/statusDotState';
+import { useTickingNow } from '@/components/useTickingNow';
 import { buildResumeCommand, buildResumeCommandBlock, ResumeCommandBlock } from './resumeCommand';
 import { sessionDisplayTitle } from './sessionTitle';
 
@@ -13,8 +20,21 @@ export interface SessionStatus {
     isConnected: boolean;
     statusText: string;
     shouldShowStatus: boolean;
+    /** The colour of the WORDS. Prose, and still its own thing. */
     statusColor: string;
+    /**
+     * The dot, from `statusDotColors` (DROVE-231, DROVE-243).
+     *
+     * This used to be `statusColor` again: grey for gone, and the same three
+     * hues as the two list tables. It is the shared palette now, so the card on
+     * the session info screen and the strip at the bottom of the chat cannot
+     * disagree about the session they are both looking at.
+     */
     statusDotColor: string;
+    /** Which of DROVE-231's six states the dot is in. */
+    dotState: StatusDotState;
+    /** What a screen reader hears for the dot. */
+    dotLabel: string;
     isPulsing?: boolean;
 }
 
@@ -30,9 +50,30 @@ export function useSessionStatus(session: Session): SessionStatus {
         isOnline,
     });
 
+    // The dot, once, for every surface that is ABOUT this session (DROVE-243).
+    // It blinks here, unlike a list row: there is one of it on the screen and
+    // it is the session Clay is in, which is the same argument the strip makes.
+    // The clock runs while the session is down (yellow has to become red) or
+    // while a live snapshot is on it (which goes stale on a threshold too).
+    const live = session.metadata?.liveStatus ?? null;
+    const now = useTickingNow(!isOnline || !!live, SESSION_DOT_TICK_MS);
+    const dot = React.useMemo(
+        () => sessionDotPresentation(sessionDotFacts(session, now), now),
+        [session, now],
+    );
+
     const vibingMessage = React.useMemo(() => {
         return vibingMessages[Math.floor(Math.random() * vibingMessages.length)].toLowerCase() + '…';
     }, [state]);
+
+    // One shape for the dot, spread into whichever branch answers. The words
+    // and the colour of the words still branch on the state; the dot does not.
+    const dotFields = {
+        statusDotColor: dot.color,
+        dotState: dot.state,
+        dotLabel: dot.label,
+        isPulsing: dot.isPulsing,
+    };
 
     if (state === 'disconnected') {
         return {
@@ -41,7 +82,7 @@ export function useSessionStatus(session: Session): SessionStatus {
             statusText: t('status.lastSeen', { time: formatLastSeen(session.activeAt, false) }),
             shouldShowStatus: true,
             statusColor: '#999',
-            statusDotColor: '#999'
+            ...dotFields,
         };
     }
 
@@ -52,8 +93,7 @@ export function useSessionStatus(session: Session): SessionStatus {
             statusText: t('status.permissionRequired'),
             shouldShowStatus: true,
             statusColor: '#FF9500',
-            statusDotColor: '#FF9500',
-            isPulsing: true
+            ...dotFields,
         };
     }
 
@@ -64,8 +104,7 @@ export function useSessionStatus(session: Session): SessionStatus {
             statusText: t('status.inputRequired'),
             shouldShowStatus: true,
             statusColor: '#FF9500',
-            statusDotColor: '#FF9500',
-            isPulsing: true,
+            ...dotFields,
         };
     }
 
@@ -76,8 +115,7 @@ export function useSessionStatus(session: Session): SessionStatus {
             statusText: vibingMessage,
             shouldShowStatus: true,
             statusColor: '#007AFF',
-            statusDotColor: '#007AFF',
-            isPulsing: true
+            ...dotFields,
         };
     }
 
@@ -87,7 +125,7 @@ export function useSessionStatus(session: Session): SessionStatus {
         statusText: t('status.online'),
         shouldShowStatus: false,
         statusColor: '#34C759',
-        statusDotColor: '#34C759'
+        ...dotFields,
     };
 }
 

@@ -930,6 +930,29 @@ describe('AgentInputStatusRow dot rule', () => {
         }
     });
 
+    /**
+     * The strip and a LIST ROW answer "is it working" the same way (DROVE-243).
+     *
+     * A session that reports `thinking` and publishes no snapshot used to draw
+     * green here while every list row drew it blue, which is the disagreement
+     * Clay circled from the other direction. The segments still need a snapshot
+     * to have anything to say; the dot does not.
+     */
+    it('is the working blue on a session that only reports thinking', () => {
+        sessions.silent = { metadata: { liveStatus: null } };
+        const dot = row({
+            sessionId: 'silent',
+            connectionStatus: { ...online, state: 'thinking' },
+        }).root.findByType('StatusDot' as any);
+        expect(dot.props.color).toBe(statusDotColors.working);
+        expect(dot.props.isPulsing).toBe(true);
+        // And the row says nothing else: the working word is gone (DROVE-231).
+        expect(line(row({
+            sessionId: 'silent',
+            connectionStatus: { ...online, state: 'thinking' },
+        }))).toEqual(['jamrizzi', '23%']);
+    });
+
     it('stays blue, not purple, when a TOOL is what is running at the same context', () => {
         vi.useFakeTimers();
         vi.setSystemTime(now + 1_000);

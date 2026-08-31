@@ -18,6 +18,14 @@ export interface StatusDotProps {
     isPulsing?: boolean;
     size?: number;
     style?: ViewStyle;
+    /**
+     * What a screen reader hears (DROVE-243). A dot has no text of its own, and
+     * on a list row there is no Pressable around it to carry the label the way
+     * the strip's has, so it says the state itself. Absent leaves the dot
+     * invisible to the reader, which is right when the words are already beside
+     * it.
+     */
+    accessibilityLabel?: string;
 }
 
 /**
@@ -34,7 +42,7 @@ export interface StatusDotProps {
  * loses nothing but the animation. `ReduceMotion.System` is belt and braces
  * for a setting that changes while the dot is on screen.
  */
-export const StatusDot = React.memo(({ color, isPulsing, size = 6, style }: StatusDotProps) => {
+export const StatusDot = React.memo(({ color, isPulsing, size = 6, style, accessibilityLabel }: StatusDotProps) => {
     const opacity = useSharedValue(1);
     const reduceMotion = useReducedMotion();
 
@@ -70,6 +78,9 @@ export const StatusDot = React.memo(({ color, isPulsing, size = 6, style }: Stat
 
     return (
         <Animated.View
+            accessible={accessibilityLabel !== undefined}
+            accessibilityRole={accessibilityLabel !== undefined ? 'image' : undefined}
+            accessibilityLabel={accessibilityLabel}
             style={[
                 baseStyle,
                 animatedStyle,
