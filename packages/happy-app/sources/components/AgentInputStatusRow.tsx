@@ -1,12 +1,11 @@
 import * as React from 'react';
 import { Pressable, Text, View } from 'react-native';
-import { Ionicons, Octicons } from '@expo/vector-icons';
+import { Ionicons } from '@expo/vector-icons';
 import Svg, { Circle } from 'react-native-svg';
 import { useUnistyles } from 'react-native-unistyles';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 import { useSession } from '@/sync/storage';
-import { compactCount } from '@/utils/rigGitLineChanges';
 import { isLiveStatusFresh, summarizeLiveStatus, type LiveStatusSummary } from '@/utils/liveStatus';
 import { AnimatedFade } from './AnimatedOverlay';
 import { NativeSettingsMenu, type NativeSettingsMenuGroup } from './NativeSettingsMenu';
@@ -24,15 +23,15 @@ import { useTickingNow } from './useTickingNow';
  * week quota on its own line below (DROVE-47). Forty characters spread over
  * three lines of a phone screen. This is all of it on one line:
  *
- *     ● Bash 1m 1s ˄ · online · lane/BASED-98-cattle-drover · 65% week
+ *     ● Bash 1m 1s ˄ · online · 65% week
  *
  * Left to right: what the session is doing and for how long, then the
- * connection, then the branch, then the quota and the context gauge. The
- * branch is the only thing that shrinks and it truncates from the LEFT, so
- * the ticket key at the end of a lane name is what survives. Nothing was
+ * connection, then the quota and the context gauge. The branch was here
+ * too until DROVE-90 moved it under the session title, where tapping it
+ * lists the repo's worktrees; Clay found the row too full. Nothing was
  * dropped, only folded: the working segment unfolds the agent tree under the
- * row, the connection and branch open session info, the quota opens the
- * usage popup, the gauge swaps to exact tokens.
+ * row, the connection opens session info, the quota opens the usage popup,
+ * the gauge swaps to exact tokens.
  *
  * Renders nothing at all when there is nothing to say, so an empty session
  * does not gain a blank strip. Its own module so a test can mount it without
@@ -99,8 +98,6 @@ export type StatusRowProps = {
     /** Absent on a preview with no session behind it; the working segment needs one. */
     sessionId?: string;
     connectionStatus?: StatusRowConnection;
-    gitBranch: string | null;
-    gitChanges: { insertions: number; deletions: number; approximate: boolean } | null;
     contextStatus: { percent: number; detailText: string; color: string } | null;
     weekPercent: number | null;
     /**
@@ -108,7 +105,7 @@ export type StatusRowProps = {
      * second group with every other drover account folded under it (DROVE-47).
      */
     usageMenuGroups: NativeSettingsMenuGroup[];
-    /** Opens the session info screen; the connection and branch segments tap into it. */
+    /** Opens the session info screen; the connection segment taps into it. */
     onSessionInfoPress?: () => void;
     /**
      * The composer fades its detail rows while the chat is scrolled off the
@@ -162,7 +159,7 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
     const summary = useLiveStatusSummary(p.sessionId);
 
     const hasUsage = p.weekPercent != null || p.contextStatus != null;
-    if (!summary && !p.connectionStatus && !p.gitBranch && !hasUsage) {
+    if (!summary && !p.connectionStatus && !hasUsage) {
         return null;
     }
 
@@ -229,42 +226,6 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
                             <CliCheck name="gemini" ok={connection.cliStatus.gemini} />
                         ) : null}
                     </>
-                ) : null}
-            </Pressable>,
-        );
-    }
-
-    if (p.gitBranch) {
-        segments.push(
-            <Pressable
-                key="branch"
-                onPress={p.onSessionInfoPress}
-                disabled={!p.onSessionInfoPress}
-                hitSlop={{ top: 12, bottom: 14, left: 6, right: 6 }}
-                style={{ flexDirection: 'row', alignItems: 'center', gap: 4, flexShrink: 1 }}
-            >
-                <Octicons name="git-branch" size={11} color={theme.colors.textSecondary} />
-                <Text
-                    numberOfLines={1}
-                    // From the left: `…BASED-98-cattle-drover` keeps the
-                    // ticket key, `lane/BASED-98-cattle-dr…` keeps nothing.
-                    ellipsizeMode="head"
-                    style={{ fontSize: 11, color: theme.colors.textSecondary, flexShrink: 1, ...Typography.default() }}
-                >
-                    {p.gitBranch}
-                </Text>
-                {p.gitChanges?.approximate ? (
-                    <Text style={{ fontSize: 11, color: theme.colors.textSecondary, ...Typography.default() }}>≈</Text>
-                ) : null}
-                {p.gitChanges && p.gitChanges.insertions > 0 ? (
-                    <Text style={{ fontSize: 11, fontWeight: '600', color: theme.colors.gitAddedText, ...Typography.default() }}>
-                        +{compactCount(p.gitChanges.insertions)}
-                    </Text>
-                ) : null}
-                {p.gitChanges && p.gitChanges.deletions > 0 ? (
-                    <Text style={{ fontSize: 11, fontWeight: '600', color: theme.colors.gitRemovedText, ...Typography.default() }}>
-                        -{compactCount(p.gitChanges.deletions)}
-                    </Text>
                 ) : null}
             </Pressable>,
         );

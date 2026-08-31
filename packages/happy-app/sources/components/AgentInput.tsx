@@ -119,9 +119,6 @@ interface AgentInputProps {
      * out, so callers anchoring to AgentInput would float above empty space.
      */
     onActionAreaOffsetChange?: (offset: number) => void;
-    sessionStatusGitBranch?: string | null;
-    /** Unstaged line changes for the checkout, matching the session list. */
-    sessionStatusGitChanges?: { insertions: number; deletions: number; approximate: boolean } | null;
     /** Plan quota windows from agent state, for the week stat and its popup. */
     sessionStatusUsageLimits?: UsageLimitsLike | null;
     /**
@@ -2194,8 +2191,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 <AgentInputStatusRow
                     sessionId={props.sessionId}
                     connectionStatus={props.connectionStatus}
-                    gitBranch={props.sessionStatusGitBranch ?? null}
-                    gitChanges={props.sessionStatusGitChanges ?? null}
                     contextStatus={contextStatus}
                     weekPercent={weekPercent}
                     usageMenuGroups={usageMenuGroups}

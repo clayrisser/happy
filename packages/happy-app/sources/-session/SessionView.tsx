@@ -49,7 +49,7 @@ import { getVoiceMessageCount, getVoiceOnboardingPromptLoadCount } from '@/sync/
 import { isRunningOnMac } from '@/utils/platform';
 import { useDeviceType, useHeaderHeight, useIsLandscape, useIsTablet } from '@/utils/responsive';
 import { resolveStatusBarGitBranch } from '@/utils/sessionStatusBar';
-import { visibleRigGitLineChanges } from '@/utils/rigGitLineChanges';
+import { WorktreeSheet } from '@/components/WorktreeSheet';
 import { FilesSidebar, SidebarMode } from '@/components/FilesSidebar';
 import { AllFilesDiffView } from '@/components/AllFilesDiffView';
 import { FileViewPanel } from '@/components/FileViewPanel';
@@ -73,7 +73,6 @@ import { resolveAgentDefaultConfig } from '@/sync/agentDefaults';
 import { performAgentGoalAction } from './agentGoalActionHandler';
 import { MOBILE_GLASS_HEADER_HEIGHT } from '@/components/navigation/headerMetrics';
 import {
-    getRigGitSummary,
     getRigReasoningSelection,
     isRigMetadata,
     isRigMetadataV1,
@@ -349,23 +348,36 @@ export const SessionView = React.memo((props: { id: string }) => {
     }, []);
 
     // Compute header props based on session state
+    const headerGitStatus = useSessionGitStatus(sessionId);
     const headerProps = useMemo(() => {
         if (!isDataReady) {
-            return { title: '', folderName: undefined, isConnected: false };
+            return { title: '', folderName: undefined, branch: null, isConnected: false };
         }
         if (!session) {
-            return { title: t('errors.sessionDeleted'), folderName: undefined, isConnected: false };
+            return { title: t('errors.sessionDeleted'), folderName: undefined, branch: null, isConnected: false };
         }
         const isConnected = session.presence === 'online';
         const pathSegments = session.metadata?.path?.split(/[/\\]/).filter(Boolean);
         const folderName = pathSegments?.[pathSegments.length - 1];
         const sessionName = getSessionName(session);
+        // The branch lives under the title now, not in the row under the
+        // composer (DROVE-90): the live git status first, the metadata's
+        // branch until that arrives.
+        const metadataGitBranch = (session.metadata as { gitBranch?: unknown } | null)?.gitBranch;
+        const branch = resolveStatusBarGitBranch(
+            headerGitStatus?.branch,
+            typeof metadataGitBranch === 'string' ? metadataGitBranch : null,
+        );
         return {
             title: sessionName,
             folderName,
+            branch,
             isConnected,
         };
-    }, [session, isDataReady]);
+    }, [session, isDataReady, headerGitStatus?.branch]);
+    const openWorktreeSheet = React.useCallback(() => {
+        Modal.show({ component: WorktreeSheet, props: { sessionId } });
+    }, [sessionId]);
     const headerRight = session && deviceType === 'phone' && Platform.OS !== 'web'
         ? (
             <Pressable
@@ -453,6 +465,8 @@ export const SessionView = React.memo((props: { id: string }) => {
                     <ChatHeaderView
                         title={headerProps.title}
                         folderName={headerProps.folderName}
+                        branch={headerProps.branch}
+                        onBranchPress={session ? openWorktreeSheet : undefined}
                         isConnected={headerProps.isConnected}
                         backdropVisible={headerBackdropVisible}
                         extraPathSegment={fileViewPath ?? undefined}
@@ -812,7 +826,6 @@ export function SessionViewLoaded({
 
     const sessionStatus = useSessionStatus(session);
     const sessionUsage = useSessionUsage(sessionId);
-    const gitStatus = useSessionGitStatus(sessionId);
     const alwaysShowContextSize = useSetting('alwaysShowContextSize');
     const experiments = useSetting('experiments');
     const { canResume, resumeSession, resumingSession } = useSessionQuickActions(session);
@@ -954,30 +967,6 @@ export function SessionViewLoaded({
             contextWindow: source.contextWindow,
         };
     }, [sessionUsage, session.latestUsage]);
-    const metadataGitBranch = React.useMemo(() => {
-        const gitBranch = (session.metadata as { gitBranch?: unknown } | null)?.gitBranch;
-        return typeof gitBranch === 'string' && gitBranch.trim() ? gitBranch.trim() : null;
-    }, [session.metadata]);
-    const statusBarGitBranch = resolveStatusBarGitBranch(gitStatus?.branch, metadataGitBranch);
-    // Same source and fallback chain as the session list rows.
-    const statusBarGitChanges = React.useMemo(() => {
-        const liveInsertions = gitStatus?.unstagedLinesAdded ?? 0;
-        const liveDeletions = gitStatus?.unstagedLinesRemoved ?? 0;
-        if (liveInsertions > 0 || liveDeletions > 0) {
-            return { approximate: false, insertions: liveInsertions, deletions: liveDeletions };
-        }
-        const rigGit = getRigGitSummary(session.metadata);
-        if (rigGit && rigGit.changedFiles !== null) {
-            return visibleRigGitLineChanges({
-                changedFiles: rigGit.changedFiles,
-                countsExact: rigGit.countsExact ?? true,
-                deletions: rigGit.deletions ?? 0,
-                insertions: rigGit.insertions ?? 0,
-            });
-        }
-        return null;
-    }, [gitStatus?.unstagedLinesAdded, gitStatus?.unstagedLinesRemoved, session.metadata]);
-
     const visibleAgentGoal = React.useMemo(() => (
         resolveVisibleAgentGoalStatus(session)
     ), [
@@ -1182,8 +1171,6 @@ export function SessionViewLoaded({
                 alwaysShowContextSize={alwaysShowContextSize}
                 zenMode={zenMode}
                 showStatusDetails={showBottomDockDetails}
-                sessionStatusGitBranch={statusBarGitBranch ?? 'main'}
-                sessionStatusGitChanges={statusBarGitChanges}
                 sessionStatusUsageLimits={session.agentState?.usageLimits ?? null}
                 sessionStatusDroverUsage={session.metadata?.droverUsage ?? null}
                 sessionStatusDroverAccount={session.metadata?.droverAccount ?? null}

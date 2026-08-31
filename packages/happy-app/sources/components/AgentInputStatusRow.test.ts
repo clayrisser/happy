@@ -4,9 +4,10 @@
  * utils/liveStatus.spec.ts proves the live summary, utils/droverUsage.spec.ts
  * the usage mapping and agentInputUsage.spec.ts the derivation; this is the
  * render. The segments come out in the order Clay asked for, the branch is
- * the one that truncates and it does so from the left, the working segment
- * unfolds the agent tree, and a session with nothing to say renders nothing,
- * which is the shape the composer relies on to collapse the row.
+ * no longer among them (DROVE-90 moved it under the session title), the
+ * working segment unfolds the agent tree, and a session with nothing to say
+ * renders nothing, which is the shape the composer relies on to collapse
+ * the row.
  */
 import * as React from 'react';
 // @ts-expect-error react-test-renderer has no declarations in this workspace.
@@ -146,8 +147,6 @@ function row(overrides: Partial<StatusRowProps> = {}) {
     return mount(React.createElement(AgentInputStatusRow, {
         sessionId: 'idle',
         connectionStatus: online,
-        gitBranch: 'lane/BASED-98-cattle-drover',
-        gitChanges: null,
         contextStatus: null,
         weekPercent: strip.weekPercent,
         usageMenuGroups: strip.usageMenuGroups,
@@ -178,33 +177,30 @@ sessions.busy = {
 };
 
 describe('AgentInputStatusRow on an idle pane session', () => {
-    it('is connection, branch, week, on one line with dots between', () => {
+    it('is connection, week, on one line with a dot between, and no branch', () => {
         const renderer = row();
-        expect(line(renderer)).toEqual(['online', '·', 'lane/BASED-98-cattle-drover', '·', '23% week']);
+        expect(line(renderer)).toEqual(['online', '·', '23% week']);
         expect(renderer.root.findAllByType('AnimatedFade' as any)).toHaveLength(1);
     });
 
-    it('carries the connection colour on the dot and truncates only the branch, from the left', () => {
+    it('carries the connection colour on the dot and has nothing left that truncates from the left', () => {
         const renderer = row();
         const dot = renderer.root.findByType('StatusDot' as any);
         expect(dot.props.color).toBe('green');
-        const branch = renderer.root.findAllByType('Text' as any)
-            .find((node: any) => node.props.children === 'lane/BASED-98-cattle-drover');
-        expect(branch.props.numberOfLines).toBe(1);
-        expect(branch.props.ellipsizeMode).toBe('head');
-        expect(branch.props.style.flexShrink).toBe(1);
-        const week = renderer.root.findAllByType('Text' as any)
-            .find((node: any) => node.props.children === '23% week');
+        const texts = renderer.root.findAllByType('Text' as any);
+        expect(texts.some((node: any) => node.props.ellipsizeMode === 'head')).toBe(false);
+        expect(renderer.root.findAllByType('Octicons' as any)).toHaveLength(0);
+        const week = texts.find((node: any) => node.props.children === '23% week');
         expect(week.props.ellipsizeMode).toBeUndefined();
     });
 
-    it('opens session info from the connection and the branch', () => {
+    it('opens session info from the connection', () => {
         const onSessionInfoPress = vi.fn();
         const renderer = row({ onSessionInfoPress });
         const pressables = renderer.root.findAllByType('Pressable' as any);
-        expect(pressables).toHaveLength(2);
-        for (const pressable of pressables) pressable.props.onPress();
-        expect(onSessionInfoPress).toHaveBeenCalledTimes(2);
+        expect(pressables).toHaveLength(1);
+        pressables[0].props.onPress();
+        expect(onSessionInfoPress).toHaveBeenCalledTimes(1);
     });
 
     it('puts the usage popup behind the week figure, this account first and the others folded', () => {
@@ -227,7 +223,7 @@ describe('AgentInputStatusRow on an idle pane session', () => {
 
     it('keeps the context gauge after the week figure when the session has one', () => {
         const renderer = row({ contextStatus: { percent: 42, detailText: '84k / 200k context', color: 'ok' } });
-        expect(line(renderer)).toEqual(['online', '·', 'lane/BASED-98-cattle-drover', '·', '23% week', '·', '42% context']);
+        expect(line(renderer)).toEqual(['online', '·', '23% week', '·', '42% context']);
         expect(renderer.root.findAllByType('Svg' as any)).toHaveLength(1);
     });
 
@@ -243,9 +239,7 @@ describe('AgentInputStatusRow while the session is working', () => {
         vi.setSystemTime(now + 1_000);
         try {
             const renderer = row({ sessionId: 'busy' });
-            expect(line(renderer)).toEqual([
-                '1 agent 1m 2s', '·', 'online', '·', 'lane/BASED-98-cattle-drover', '·', '23% week',
-            ]);
+            expect(line(renderer)).toEqual(['1 agent 1m 2s', '·', 'online', '·', '23% week']);
             expect(renderer.root.findByType('StatusDot' as any).props.color).toBe('#007AFF');
         } finally {
             vi.useRealTimers();
@@ -287,11 +281,10 @@ describe('AgentInputStatusRow while the session is working', () => {
 });
 
 describe('AgentInputStatusRow with nothing to show', () => {
-    it('renders nothing for a session with no connection, no branch, no stream, no snapshot and no context', () => {
+    it('renders nothing for a session with no connection, no stream, no snapshot and no context', () => {
         const strip = resolveUsageStrip({ usageLimits: null, droverUsage: null, showRemaining: false, contextShown: false });
         const renderer = row({
             connectionStatus: undefined,
-            gitBranch: null,
             weekPercent: strip.weekPercent,
             usageMenuGroups: strip.usageMenuGroups,
         });
@@ -306,6 +299,6 @@ describe('AgentInputStatusRow with nothing to show', () => {
             contextShown: false,
         });
         const renderer = row({ weekPercent: strip.weekPercent, usageMenuGroups: strip.usageMenuGroups });
-        expect(line(renderer)).toEqual(['online', '·', 'lane/BASED-98-cattle-drover']);
+        expect(line(renderer)).toEqual(['online']);
     });
 });

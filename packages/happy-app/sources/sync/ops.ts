@@ -565,6 +565,40 @@ export async function machineStopDaemon(machineId: string): Promise<{ message: s
     return result;
 }
 
+export type MachineWorktree = {
+    path: string;
+    branch: string | null;
+    head: string;
+    dirty: boolean;
+    isMain: boolean;
+    bare: boolean;
+    detached: boolean;
+};
+
+export type MachineListWorktreesResult =
+    | { ok: true; worktrees: MachineWorktree[] }
+    | { ok: false; error: string };
+
+/**
+ * The worktrees of the repo around `repoRoot`, from the daemon's
+ * `list-worktrees` (DROVE-90). Any directory inside the repo will do; the
+ * session's cwd is what the branch sheet sends.
+ */
+export async function machineListWorktrees(machineId: string, repoRoot: string): Promise<MachineListWorktreesResult> {
+    try {
+        return await apiSocket.machineRPC<MachineListWorktreesResult, { repoRoot: string }>(
+            machineId,
+            'list-worktrees',
+            { repoRoot },
+        );
+    } catch (error) {
+        return {
+            ok: false,
+            error: error instanceof Error ? error.message : 'Failed to list worktrees',
+        };
+    }
+}
+
 /**
  * Execute a bash command on a specific machine
  */
