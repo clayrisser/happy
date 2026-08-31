@@ -245,6 +245,39 @@ sessions.photographedWithTasks = {
 };
 
 /**
+ * Clay's night, from a CLI that publishes the tally (DROVE-184): the main
+ * thread spent 51.6k and nine subagents spent 200k each, so the row's old
+ * number understated it by an order of magnitude.
+ */
+sessions.tallied = {
+    metadata: {
+        liveStatus: {
+            at: now,
+            turnStartedAt: now - 259_000,
+            main: { startedAt: now - 259_000, tokens: 51_600 },
+            tokens: { turn: 1_851_600, turnMain: 51_600, session: 1_851_600, sessionMain: 51_600 },
+            agents: [1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => ({
+                id: `a${n}`, label: `Agent ${n}`, startedAt: now - 20_000, tokens: 200_000,
+            })),
+        },
+    },
+};
+
+/** The same fan-out once it has outlived the turn: no main block, tally still live. */
+sessions.talliedAgentsOnly = {
+    metadata: {
+        liveStatus: {
+            at: now,
+            turnStartedAt: now - 400_000,
+            tokens: { turn: 1_800_000, turnMain: 51_600, session: 1_851_600, sessionMain: 51_600 },
+            agents: [1, 2, 3].map((n) => ({
+                id: `a${n}`, label: `Agent ${n}`, startedAt: now - 380_000, tokens: 600_000,
+            })),
+        },
+    },
+};
+
+/**
  * The case the dot used to get wrong (DROVE-155): the turn is over, the main
  * thread is idle, and a background fan-out is still running.
  */
@@ -643,7 +676,7 @@ describe('AgentInputStatusRow while the session is working', () => {
             // Closed by default, and nothing unfolded under the row.
             expect(agents().props.open).toBe(false);
             expect(renderer.root.findAllByType('ScrollView' as any)).toHaveLength(0);
-            const working = segment(renderer, 'Main thread: working 1m 2s, 251.2k tokens, 1 agent');
+            const working = segment(renderer, 'Main thread: working 1m 2s, 251.2k tokens across main and agents, 1 agent');
             act(() => {
                 working.props.onPress();
             });
@@ -675,7 +708,7 @@ describe('AgentInputStatusRow while the session is working', () => {
             const agents = () => renderer.root.findByType('SessionAgentsSheet' as any);
             const usage = () => renderer.root.findByType('UsageAccountBarsSheet' as any);
             act(() => {
-                segment(renderer, 'Main thread: working 1m 2s, 251.2k tokens, 1 agent').props.onPress();
+                segment(renderer, 'Main thread: working 1m 2s, 251.2k tokens across main and agents, 1 agent').props.onPress();
             });
             expect([agents().props.open, usage().props.open]).toEqual([true, false]);
             act(() => {
@@ -695,6 +728,85 @@ describe('AgentInputStatusRow while the session is working', () => {
  * are running or when we're actually thinking in the main chat". The dot means
  * the MAIN thread. The count means the agents.
  */
+describe('the token tally on the strip (DROVE-184)', () => {
+    /**
+     * Clay: "where's my damn token counter showing tally of all tokens used
+     * across main agent and all subagents". The row drew `main.tokens`, the
+     * MAIN transcript alone, so a night of nine agents at 200k each read as
+     * 51.6k.
+     */
+    it('draws main plus every subagent in the row\'s one token slot', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(now + 1_000);
+        try {
+            const text = line(row({ sessionId: 'tallied' })).join(' ');
+            expect(text).toContain('4m 20s 1.9M');
+            // The main-only number is no longer what the row says.
+            expect(text).not.toContain('51.6k');
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('adds no term to the line: same slot, at 320, 375 and 393', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(now + 1_000);
+        try {
+            for (const width of [320, 375, 393]) {
+                screen.width = width;
+                const text = line(row({ sessionId: 'tallied' }));
+                // DROVE-223's rule holds unchanged: the working word is last
+                // to give way and nothing above it has been crowded out.
+                expect(text, `width ${width}`).toContain('working');
+                expect(text.join(' '), `width ${width}`).toContain('4m 20s 1.9M');
+            }
+        } finally {
+            screen.width = 390;
+            vi.useRealTimers();
+        }
+    });
+
+    it('still shows the spend once the fan-out has outlived the turn', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(now + 1_000);
+        try {
+            const renderer = row({ sessionId: 'talliedAgentsOnly' });
+            const text = line(renderer);
+            // No clock and no working word, because the MAIN thread is idle
+            // and the dot has to stay honest (DROVE-155). The number is there
+            // anyway, which is the whole point: this is the state Clay was
+            // looking at when he asked where it was.
+            expect(text.join(' ')).toContain('1.8M');
+            expect(text).not.toContain('working');
+            expect(renderer.root.findByType('StatusDot' as any).props.color).toBe('green');
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('tells a screen reader the number is a total, not the main thread\'s', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(now + 1_000);
+        try {
+            const live = row({ sessionId: 'tallied' }).root.findAllByType('Pressable' as any)
+                .find((node: any) => String(node.props.accessibilityLabel).startsWith('Main thread:'));
+            expect(live.props.accessibilityLabel).toContain('1.9M tokens across main and agents');
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('keeps the main-only number on a CLI too old to publish a tally', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(now + 1_000);
+        try {
+            expect(line(row({ sessionId: 'photographed' })).join(' ')).toContain('4m 20s 51.6k');
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+});
+
 describe('AgentInputStatusRow dot rule', () => {
     it('is the working blue only while the MAIN thread is working', () => {
         vi.useFakeTimers();

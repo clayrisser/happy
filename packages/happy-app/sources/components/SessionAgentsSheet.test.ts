@@ -102,12 +102,12 @@ const summary = {
     ],
 } as unknown as LiveStatusSummary;
 
-function mount(onClose: () => void) {
+function mount(onClose: () => void, override: Partial<LiveStatusSummary> = {}) {
     let renderer: ReturnType<typeof create>;
     act(() => {
         renderer = create(React.createElement(SessionAgentsSheet, {
             sessionId: 'session-1',
-            summary,
+            summary: { ...summary, ...override },
             open: true,
             onClose,
         }));
@@ -115,6 +115,7 @@ function mount(onClose: () => void) {
     return {
         rows: () => renderer!.root.findAllByType('Pressable' as any),
         shell: () => renderer!.root.findByType('ComposerSheet' as any),
+        text: () => renderer!.root.findAllByType('Text' as any).map((node: any) => String(node.props.children)),
     };
 }
 
@@ -150,5 +151,34 @@ describe('tapping an agent in the agents sheet (DROVE-183)', () => {
         const sheet = mount(() => {});
         act(() => sheet.shell().props.onClosed());
         expect(pushed).toEqual([]);
+    });
+});
+
+describe('the session tally in the agents sheet (DROVE-184)', () => {
+    /**
+     * The row has room for one number and spends it on the TURN. The two facts
+     * it cannot carry are what the whole session has cost and how much of that
+     * was the main thread rather than the fan-out, so both live here, one tap
+     * away. The session line is the one that keeps FINISHED agents: a finished
+     * agent leaves the tree 90s after its last write, and its tokens are still
+     * spent.
+     */
+    const tally = {
+        turn: '312.0k',
+        turnMain: '51.6k',
+        session: '1.9M',
+        sessionMain: '210.0k',
+        sessionAgents: '1.6M',
+        raw: { turn: 312_000, turnMain: 51_600, session: 1_851_600, sessionMain: 210_000 },
+    };
+
+    it('spells out the session total, the split and the turn', () => {
+        const sheet = mount(() => {}, { tally });
+        expect(sheet.text()).toContain('Session 1.9M · main 210.0k · agents 1.6M · this turn 312.0k');
+    });
+
+    it('says nothing at all on a CLI too old to publish a tally', () => {
+        const sheet = mount(() => {}, { tally: null });
+        expect(sheet.text().join(' ')).not.toContain('Session');
     });
 });
