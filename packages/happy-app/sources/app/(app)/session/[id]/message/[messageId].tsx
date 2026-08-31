@@ -2,6 +2,7 @@ import * as React from 'react';
 import { useLocalSearchParams, Stack, useRouter } from "expo-router";
 import { Text, View, ActivityIndicator } from "react-native";
 import { useMessage, useSession, useSessionMessages } from "@/sync/storage";
+import { useSubagentMessage, useSubagentScopeLoaded } from '@/sync/subagentMessages';
 import { sync } from '@/sync/sync';
 import { Deferred } from "@/components/Deferred";
 import { ToolFullView } from '@/components/tools/ToolFullView';
@@ -30,14 +31,24 @@ const stylesheet = StyleSheet.create((theme) => ({
 }));
 
 export default React.memo(() => {
-    const { id: sessionId, messageId } = useLocalSearchParams<{ id: string; messageId: string }>();
+    const { id: sessionId, messageId, agentId } = useLocalSearchParams<{ id: string; messageId: string; agentId?: string }>();
     const router = useRouter();
     const session = useSession(sessionId!);
-    const { isLoaded: messagesLoaded } = useSessionMessages(sessionId!);
-    const message = useMessage(sessionId!, messageId!);
+    const { isLoaded: sessionMessagesLoaded } = useSessionMessages(sessionId!);
+    const sessionMessage = useMessage(sessionId!, messageId!);
+    // Opened from an agent screen, the id is the AGENT's and is not in the
+    // session's map. The agent screen publishes what it draws, so the row and
+    // this screen read the same object (DROVE-166). Nothing published means no
+    // agent screen is behind this one, so it is a stale link: fall back to the
+    // session and end the way it always did rather than spin forever.
+    const agentScope = agentId && agentId.length > 0 ? agentId : null;
+    const agentMessage = useSubagentMessage(sessionId, agentScope, messageId);
+    const scoped = useSubagentScopeLoaded(sessionId, agentScope);
+    const message = scoped ? agentMessage : sessionMessage;
+    const messagesLoaded = scoped ? true : sessionMessagesLoaded;
     const { theme } = useUnistyles();
     const styles = stylesheet;
-    
+
     // Trigger session visibility when component mounts
     React.useEffect(() => {
         if (sessionId) {

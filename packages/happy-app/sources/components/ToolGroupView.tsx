@@ -19,6 +19,7 @@ import { Message, ToolCallMessage } from '@/sync/typesMessage';
 import { getToolActivityLabel, getToolSummaryCategory, ToolSummaryCategory } from '@/utils/toolDisplay';
 import { toolRunLabel } from '@/utils/toolRunGroups';
 import { getToolRowRoute } from '@/utils/toolRowRoute';
+import { useSubagentScope } from '@/sync/subagentMessages';
 import { useRouter } from 'expo-router';
 import { DisclosureFooter } from './DisclosureFooter';
 import { footerCollapseAnchorY } from './inlineDisclosure';
@@ -54,6 +55,9 @@ export const ToolGroupView = React.memo<ToolGroupViewProps>((props) => {
         forceCompleted,
     } = props;
     const router = useRouter();
+    // Null in the session's own transcript, the agent's id on an agent screen
+    // (DROVE-166).
+    const agentId = useSubagentScope();
     // A same-tool run reads `Ran 4 shell commands` and opens onto the full
     // per-call rows, exactly as they draw on their own (DROVE-84).
     const runCategory = group.runCategory ?? null;
@@ -77,13 +81,14 @@ export const ToolGroupView = React.memo<ToolGroupViewProps>((props) => {
         }
         const route = getToolRowRoute({
             sessionId,
+            agentId,
             messageId: singleToolMessage.id,
             tool: singleToolMessage.tool,
         });
         if (route) {
             router.push(route);
         }
-    }, [onToggle, router, sessionId, singleToolMessage]);
+    }, [agentId, onToggle, router, sessionId, singleToolMessage]);
     const handleAnchoredToggle = useAnchoredToggle(expanded, onToggle, onAnchorLayoutChange);
     // Every consolidated group draws the same openable row, a same-tool run
     // included. Folding a run saved vertical space; it never meant the command
@@ -446,11 +451,13 @@ function ToolSummaryRow(props: {
 }) {
     const { theme } = useUnistyles();
     const router = useRouter();
+    const agentId = useSubagentScope();
     const { tool } = props.message;
     const category = getToolSummaryCategory(tool.name);
     const label = getToolActivityLabel(tool);
     const route = getToolRowRoute({
         sessionId: props.sessionId,
+        agentId,
         messageId: props.message.id,
         tool,
     });
