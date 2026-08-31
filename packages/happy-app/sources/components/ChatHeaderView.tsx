@@ -31,14 +31,21 @@ interface ChatHeaderViewProps {
     /**
      * The checkout's branch, shown after the folder name under the title and
      * truncated from the left so the ticket key at its end survives (DROVE-90).
+     *
+     * It is not its own target any more (DROVE-205). The whole pill opens the
+     * worktrees, so a nested Pressable the width of a branch name would only
+     * be a second, smaller way to do what the pill already does.
      */
     branch?: string | null;
-    /** Tapping the branch; opens the worktree sheet. */
-    onBranchPress?: () => void;
     /** Extra path segment appended to the title with a separator (used for the file-view overlay). */
     extraPathSegment?: string;
     /** Optional content rendered at the right edge of the header (used by file-view / diff overlays). */
     rightSlot?: React.ReactNode;
+    /**
+     * Tapping the pill. It opens the worktrees now, not the session settings
+     * (DROVE-205): the pill draws the session name over its worktree, so it
+     * should be about the worktree. Settings moved to the avatar.
+     */
     onTitlePress?: () => void;
     onBackPress?: () => void;
     backgroundColor?: string;
@@ -54,7 +61,6 @@ export const ChatHeaderView: React.FC<ChatHeaderViewProps> = ({
     title,
     folderName,
     branch,
-    onBranchPress,
     extraPathSegment,
     rightSlot,
     onTitlePress,
@@ -150,21 +156,13 @@ export const ChatHeaderView: React.FC<ChatHeaderViewProps> = ({
                                     {showBranch && (
                                         <>
                                             <Text style={[styles.webSeparator, { color: theme.colors.textSecondary, ...Typography.default() }]}>·</Text>
-                                            <Pressable
-                                                onPress={onBranchPress}
-                                                disabled={!onBranchPress}
-                                                accessibilityRole="button"
-                                                accessibilityLabel={`Branch ${branch}, show worktrees`}
-                                                style={styles.branchPressable}
+                                            <Text
+                                                numberOfLines={1}
+                                                ellipsizeMode="head"
+                                                style={[styles.webBranch, { color: theme.colors.textSecondary, ...Typography.default() }]}
                                             >
-                                                <Text
-                                                    numberOfLines={1}
-                                                    ellipsizeMode="head"
-                                                    style={[styles.webBranch, { color: theme.colors.textSecondary, ...Typography.default() }]}
-                                                >
-                                                    {branch}
-                                                </Text>
-                                            </Pressable>
+                                                {branch}
+                                            </Text>
                                         </>
                                     )}
                                     {hasExtra && (
@@ -232,28 +230,20 @@ export const ChatHeaderView: React.FC<ChatHeaderViewProps> = ({
                         <Text style={[styles.separator, { color: folderNameColor, ...Typography.default() }]}>·</Text>
                     )}
                     {showBranch && (
-                        <Pressable
-                            onPress={onBranchPress}
-                            disabled={!onBranchPress}
-                            hitSlop={{ top: 8, bottom: 8, left: 4, right: 8 }}
-                            accessibilityRole="button"
-                            accessibilityLabel={`Branch ${branch}, show worktrees`}
-                            style={styles.branchPressable}
+                        <Text
+                            numberOfLines={1}
+                            // From the left: `…BASED-98-cattle-drover` keeps the
+                            // ticket key, `lane/BASED-98-cattle-dr…` keeps nothing.
+                            ellipsizeMode="head"
+                            style={[
+                                styles.folderName,
+                                glassEnabled && styles.mobileFolderName,
+                                styles.branchText,
+                                { color: folderNameColor, ...Typography.default() },
+                            ]}
                         >
-                            <Text
-                                numberOfLines={1}
-                                // From the left: `…BASED-98-cattle-drover` keeps the
-                                // ticket key, `lane/BASED-98-cattle-dr…` keeps nothing.
-                                ellipsizeMode="head"
-                                style={[
-                                    styles.folderName,
-                                    glassEnabled && styles.mobileFolderName,
-                                    { color: folderNameColor, ...Typography.default() },
-                                ]}
-                            >
-                                {branch}
-                            </Text>
-                        </Pressable>
+                            {branch}
+                        </Text>
                     )}
                     {showFolderSubtitle && hasExtra && (
                         <Text style={[styles.separator, { color: theme.colors.textSecondary, ...Typography.default() }]}>•</Text>
@@ -611,7 +601,10 @@ const styles = StyleSheet.create((theme) => ({
     folderNameBesideBranch: {
         flexShrink: 0,
     },
-    branchPressable: {
+    // What the Pressable around the branch used to carry (DROVE-205 took the
+    // gesture off it): the branch is what gives way when the pill runs out of
+    // room, so it keeps the shrink.
+    branchText: {
         flexShrink: 1,
         minWidth: 0,
     },

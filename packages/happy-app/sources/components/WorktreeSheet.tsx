@@ -1,34 +1,44 @@
 import * as React from 'react';
-import { ActivityIndicator, Platform, Pressable, ScrollView, Text, View, useWindowDimensions } from 'react-native';
+import { ActivityIndicator, Pressable, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { useRouter } from 'expo-router';
 import { Octicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import { Modal } from '@/modal';
 import { t } from '@/text';
 import { useAllSessions, useMachine, useSession } from '@/sync/storage';
 import { machineListWorktrees, machineSpawnNewSession, type MachineWorktree } from '@/sync/ops';
 import { sync } from '@/sync/sync';
 import { navigateToSession } from '@/hooks/useNavigateToSession';
-import { getDuplicateSheetFrame } from '@/utils/duplicateSheetLayout';
-import { buildWorktreeRows, type WorktreeRow } from '@/utils/worktreeRows';
-import { MobileGlassSurface } from './MobileGlass';
+import { buildWorktreeRows, resolveWorktreeOpen, type WorktreeRow } from '@/utils/worktreeRows';
+import { ComposerSheet } from './ComposerSheet';
 
 /**
- * The sheet behind the branch in the session header (DROVE-90).
+ * The worktrees, opened from the session header's title pill (DROVE-90, moved
+ * onto the pill by DROVE-205).
  *
- * Clay: "for the branch, when I click on it, shouldn't it show all
- * worktrees?" So: every worktree of this session's repo, from the daemon's
- * `list-worktrees`, each with its branch, dirty or clean, how many live
- * sessions run there, and the one this session is in marked. Tapping a
- * worktree with a live session goes to that session. Tapping one without
- * asks the daemon for a new session there, through the same spawn RPC the
- * new-session screen uses, which is what opens a tmux window on the right
- * account (DROVE-76, DROVE-87). It behaves like `cd <worktree> && drover`.
+ * Clay: "clicking the middle button that has the title of the session and the
+ * name of the worktree below it should open up the list of the worktrees in a
+ * sheet." The pill shows the session over its worktree, so the pill is about
+ * the worktree. It used to hang off the branch text inside the pill, which is
+ * a target the width of a word.
+ *
+ * Every worktree of this session's repo, from the daemon's `list-worktrees`,
+ * each with its branch, dirty or clean, how many live sessions run there, and
+ * the one this session is in marked. What tapping one does is
+ * `resolveWorktreeOpen`, written down there rather than here: a worktree with
+ * a live session opens THAT session, the way the sessions list does, and this
+ * session is left where it is; one without gets a session started in it
+ * through the same spawn RPC the new-session screen uses (DROVE-76, DROVE-87),
+ * which behaves like `cd <worktree> && drover`.
+ *
+ * On ComposerSheet, the one shell everything slides up through (DROVE-147),
+ * and it closes before it navigates (DROVE-183). It used to draw its own
+ * floating card, which is exactly what DROVE-147 exists to stop.
  */
 export interface WorktreeSheetProps {
     sessionId: string;
-    /** Injected by the modal infra. */
-    onClose?: () => void;
+    open: boolean;
+    onClose: () => void;
 }
 
 type DaemonAgent = 'claude' | 'codex' | 'gemini';
@@ -38,15 +48,11 @@ function agentForSpawn(flavor: string | null | undefined): DaemonAgent {
 }
 
 export const WorktreeSheet = React.memo(function WorktreeSheet(props: WorktreeSheetProps) {
-    const { sessionId, onClose } = props;
+    const { sessionId, open, onClose } = props;
     const session = useSession(sessionId);
     const router = useRouter();
     const { theme } = useUnistyles();
-    const windowSize = useWindowDimensions();
-    const sheetFrame = React.useMemo(
-        () => getDuplicateSheetFrame(windowSize),
-        [windowSize.width, windowSize.height],
-    );
+    const styles = stylesheet;
 
     const machineId = session?.metadata?.machineId ?? null;
     const currentPath = session?.metadata?.path ?? null;
@@ -65,12 +71,16 @@ export const WorktreeSheet = React.memo(function WorktreeSheet(props: WorktreeSh
     const [starting, setStarting] = React.useState<string | null>(null);
 
     React.useEffect(() => {
+        // Asked once per opening, so a sheet reopened after a spawn shows the
+        // worktree that spawn created rather than the list from before it.
+        if (!open) return;
         let cancelled = false;
         if (!machineId || !currentPath) {
             setError(t('session.forkErrorMissingMetadata'));
             setWorktrees([]);
             return;
         }
+        setWorktrees(null);
         void machineListWorktrees(machineId, currentPath).then((result) => {
             if (cancelled) return;
             if (result.ok) {
@@ -82,25 +92,50 @@ export const WorktreeSheet = React.memo(function WorktreeSheet(props: WorktreeSh
             }
         });
         return () => { cancelled = true; };
-    }, [machineId, currentPath]);
+    }, [open, machineId, currentPath]);
 
     const rows = React.useMemo(() => (
         worktrees ? buildWorktreeRows({ worktrees, currentPath, homeDir, sessions: machineSessions }) : []
     ), [worktrees, currentPath, homeDir, machineSessions]);
 
-    const open = React.useCallback(async (row: WorktreeRow) => {
+    /**
+     * Held until the sheet is off the screen (DROVE-183, on AddContextSheet's
+     * mechanism). The sheet is a Modal and owns the presentation context for
+     * the length of its slide down, so a push fired on the tap arrives under a
+     * sheet still sliding, and so does an alert.
+     */
+    const pending = React.useRef<(() => void) | null>(null);
+    const closeThen = React.useCallback((action: () => void) => {
+        pending.current = action;
+        onClose();
+    }, [onClose]);
+    const handleClosed = React.useCallback(() => {
+        const action = pending.current;
+        pending.current = null;
+        action?.();
+    }, []);
+    React.useEffect(() => {
+        if (open) pending.current = null;
+    }, [open]);
+
+    const openRow = React.useCallback(async (row: WorktreeRow) => {
         if (starting) return;
-        if (row.liveSessionIds.length > 0) {
-            onClose?.();
-            navigateToSession(router, row.liveSessionIds[0]);
+        const target = resolveWorktreeOpen(row);
+        if (target.type === 'none') return;
+        if (target.type === 'session') {
+            const id = target.sessionId;
+            closeThen(() => navigateToSession(router, id));
             return;
         }
         if (!machineId) return;
+        // The spawn happens with the sheet still up, because it is a round
+        // trip to the machine and closing first would leave him back on the
+        // session with nothing happening.
         setStarting(row.path);
         try {
             const result = await machineSpawnNewSession({
                 machineId,
-                directory: row.path,
+                directory: target.directory,
                 agent: agentForSpawn(session?.metadata?.flavor),
             });
             if (result.type !== 'success') {
@@ -109,34 +144,30 @@ export const WorktreeSheet = React.memo(function WorktreeSheet(props: WorktreeSh
                     : result.type === 'requestToApproveDirectoryCreation'
                         ? `${row.label} is not on the machine any more`
                         : 'The session was created, but it is still syncing. It should appear shortly.';
-                Modal.alert(t('common.error'), message);
+                closeThen(() => Modal.alert(t('common.error'), message));
                 return;
             }
             await sync.refreshSessions().catch(() => { /* the list catches up on its own */ });
-            onClose?.();
-            navigateToSession(router, result.sessionId);
+            const id = result.sessionId;
+            closeThen(() => navigateToSession(router, id));
         } finally {
             setStarting(null);
         }
-    }, [starting, machineId, session?.metadata?.flavor, onClose, router]);
+    }, [starting, machineId, session?.metadata?.flavor, closeThen, router]);
 
+    // The pickers' cap, not the agent tree's: a repo has more worktrees than
+    // either, and 400 is what DROVE-90's own list was capped at. DROVE-201 is
+    // replacing the cap with "grow to content, scroll only at full screen",
+    // and when it lands this number goes with it.
     return (
-        <MobileGlassSurface
-            enabled={Platform.OS !== 'web'}
-            nativeEffect
-            glassEffectStyle="regular"
-            intensity={88}
-            tintColor={theme.colors.glass.overlayTint}
-            style={[styles.sheet, sheetFrame]}
-        >
-            <View style={styles.header}>
-                <Text style={styles.title}>Worktrees</Text>
-                <Text style={styles.subtitle} numberOfLines={1}>
-                    {currentPath ? currentPath.split(/[/\\]/).filter(Boolean).pop() : ''}
-                </Text>
-            </View>
-
-            <ScrollView style={styles.list} contentContainerStyle={styles.listContent}>
+        <ComposerSheet open={open} onClose={onClose} onClosed={handleClosed} maxHeight={400}>
+            <View style={styles.body}>
+                <View style={styles.header}>
+                    <Text style={styles.title}>Worktrees</Text>
+                    <Text style={styles.subtitle} numberOfLines={1}>
+                        {currentPath ? currentPath.split(/[/\\]/).filter(Boolean).pop() : ''}
+                    </Text>
+                </View>
                 {worktrees === null ? (
                     <View style={styles.loadingContainer}>
                         <ActivityIndicator />
@@ -151,7 +182,7 @@ export const WorktreeSheet = React.memo(function WorktreeSheet(props: WorktreeSh
                     return (
                         <Pressable
                             key={row.path}
-                            onPress={() => { void open(row); }}
+                            onPress={() => { void openRow(row); }}
                             disabled={!!starting || row.bare}
                             accessibilityRole="button"
                             accessibilityLabel={`${row.label}, ${row.branch}, ${row.dirty ? 'dirty' : 'clean'}, ${live} live`}
@@ -188,60 +219,29 @@ export const WorktreeSheet = React.memo(function WorktreeSheet(props: WorktreeSh
                         </Pressable>
                     );
                 })}
-            </ScrollView>
-
-            <View style={styles.actions}>
-                <Pressable
-                    onPress={onClose}
-                    style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]}
-                >
-                    <Text style={styles.buttonText}>{t('common.cancel')}</Text>
-                </Pressable>
             </View>
-        </MobileGlassSurface>
+        </ComposerSheet>
     );
 });
 
-const styles = StyleSheet.create((theme) => ({
-    sheet: {
-        backgroundColor: Platform.select({
-            web: theme.colors.surface,
-            ios: theme.colors.glass.overlay,
-            android: theme.colors.glass.backgroundStrong,
-            default: theme.colors.surface,
-        }),
-        borderRadius: 16,
-        overflow: 'hidden',
-        borderWidth: Platform.OS === 'web' ? 0 : StyleSheet.hairlineWidth,
-        borderColor: theme.colors.glass.border,
-        alignSelf: 'center',
-        minWidth: 0,
+const stylesheet = StyleSheet.create((theme) => ({
+    body: {
+        paddingBottom: 6,
     },
     header: {
         paddingHorizontal: 20,
-        paddingTop: 20,
-        paddingBottom: 12,
-        borderBottomWidth: StyleSheet.hairlineWidth,
-        borderBottomColor: theme.colors.divider,
+        paddingTop: 2,
+        paddingBottom: 8,
     },
     title: {
-        fontSize: 17,
+        fontSize: 15,
         fontWeight: '600' as const,
         color: theme.colors.text,
     },
     subtitle: {
-        marginTop: 4,
-        fontSize: 13,
+        marginTop: 2,
+        fontSize: 12,
         color: theme.colors.textSecondary,
-    },
-    list: {
-        flexGrow: 0,
-        flexShrink: 1,
-        maxHeight: 420,
-        minHeight: 0,
-    },
-    listContent: {
-        paddingVertical: 8,
     },
     loadingContainer: {
         paddingVertical: 32,
@@ -304,25 +304,5 @@ const styles = StyleSheet.create((theme) => ({
     },
     rowLive: {
         color: theme.colors.success,
-    },
-    actions: {
-        flexDirection: 'row',
-        justifyContent: 'flex-end',
-        paddingHorizontal: 16,
-        paddingVertical: 12,
-        borderTopWidth: StyleSheet.hairlineWidth,
-        borderTopColor: theme.colors.divider,
-    },
-    button: {
-        paddingHorizontal: 16,
-        paddingVertical: 8,
-        borderRadius: 10,
-    },
-    buttonPressed: {
-        opacity: 0.7,
-    },
-    buttonText: {
-        fontSize: 15,
-        color: theme.colors.text,
     },
 }));
