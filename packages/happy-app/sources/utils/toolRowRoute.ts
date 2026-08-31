@@ -1,3 +1,5 @@
+import type { Href } from 'expo-router';
+
 import { ToolCall } from '@/sync/typesMessage';
 
 /**
@@ -40,17 +42,20 @@ export function getToolRowRoute(params: {
     sessionId: string | null | undefined;
     messageId: string | null | undefined;
     tool: Pick<ToolCall, 'name' | 'input'>;
-}): string | null {
+}): Href | null {
     const { sessionId, messageId, tool } = params;
     if (!sessionId) {
         return null;
     }
     const filePath = getToolRowFilePath(tool);
     if (filePath) {
-        return `/session/${sessionId}/file?path=${btoa(filePath)}`;
+        // Cast once here rather than at each call site. expo-router's typed
+        // routes cannot see through an interpolated id, and these two paths are
+        // covered by toolRowRoute.spec.ts.
+        return `/session/${sessionId}/file?path=${btoa(filePath)}` as Href;
     }
     if (!messageId) {
         return null;
     }
-    return `/session/${sessionId}/message/${messageId}`;
+    return `/session/${sessionId}/message/${messageId}` as Href;
 }

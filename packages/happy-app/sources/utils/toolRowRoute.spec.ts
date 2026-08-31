@@ -68,7 +68,7 @@ describe('getToolRowRoute', () => {
             tool: { name: 'Edit', input: { file_path: '/tmp/a.ts' } },
         });
         expect(route).toBe(`/session/sess1/file?path=${btoa('/tmp/a.ts')}`);
-        expect(atob(route!.split('path=')[1])).toBe('/tmp/a.ts');
+        expect(atob(String(route).split('path=')[1])).toBe('/tmp/a.ts');
     });
 
     it('covers every consolidated family, not just shell', () => {
