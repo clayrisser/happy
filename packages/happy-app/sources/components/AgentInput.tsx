@@ -36,7 +36,7 @@ import { BubblePressable } from './BubblePressable';
 import { resolveAgentInputPrimaryAction } from './agentInputPrimaryAction';
 import { resolveComposerPrimaryPress, type ComposerPrimaryGesture } from './composerPrimaryPress';
 import { ComposerToast } from './ComposerToast';
-import { flipStreamTalk, streamTalkButton } from '@/voice/streamTalk';
+import { flipStreamTalk, streamTalkButton, streamTalkPauseToast } from '@/voice/streamTalk';
 import { NativeSettingsMenu, type NativeSettingsMenuGroup } from './NativeSettingsMenu';
 import { AgentInputStatusRow } from './AgentInputStatusRow';
 import { AddContextSheet, type AddContextSource } from './AddContextSheet';
@@ -98,7 +98,11 @@ interface AgentInputProps {
      * synthesiser at all, so the toggle is not offered where it cannot work.
      */
     readAloudEnabled?: boolean;
+    /** On and holding its place (DROVE-233). */
+    readAloudPaused?: boolean;
     onReadAloudToggle?: () => void;
+    /** Long press: pause or carry on. Returns the state it ended in (DROVE-233). */
+    onReadAloudPauseToggle?: () => boolean | null;
     /**
      * Dictation (DROVE-30 mode A, DROVE-74, DROVE-105). One button, three
      * outcomes: press and hold, released ON the button, sends; a tap latches
@@ -1293,7 +1297,10 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     // composer, back as a one-tap shortcut to the same local key the channel
     // sheet row and Settings > Voice flip. A tick and a one-line toast, so the
     // change is felt as well as seen.
-    const streamTalk = streamTalkButton(props.onReadAloudToggle ? props.readAloudEnabled : undefined);
+    const streamTalk = streamTalkButton(
+        props.onReadAloudToggle ? props.readAloudEnabled : undefined,
+        props.readAloudPaused === true,
+    );
     const [composerToast, setComposerToast] = React.useState<string | null>(null);
     const composerToastTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
     const showComposerToast = React.useCallback((text: string) => {
@@ -1318,6 +1325,28 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         props.onReadAloudToggle();
         showComposerToast(t(flipped.toastKey));
     }, [props.onReadAloudToggle, props.readAloudEnabled, sentenceTapUsed, showComposerToast]);
+    /**
+     * The long press pauses and resumes (DROVE-233).
+     *
+     * Clay: "if you long press the read back it goes into pause so when you
+     * resume it goes back to where it was reading". The TAP is untouched and
+     * still means on/off; this is a second gesture on the same control, which
+     * is the pattern the send button already uses (resolveComposerPrimaryPress).
+     *
+     * The decision is `transportEffect`'s, over in the voice layer beside the
+     * headphone and lock-screen presses, so the three surfaces cannot come to
+     * mean different things. Null back means the press meant nothing, which is
+     * only ever with read-aloud off, and the toast says so rather than leaving
+     * a long press feeling broken.
+     */
+    const handleStreamTalkLongPress = React.useCallback(() => {
+        if (!props.onReadAloudPauseToggle) return;
+        const paused = props.onReadAloudPauseToggle();
+        hapticsLight();
+        showComposerToast(paused === null
+            ? t('agentInput.streamTalk.off')
+            : t(streamTalkPauseToast(paused)));
+    }, [props.onReadAloudPauseToggle, showComposerToast]);
 
     const permissionSettingsGroups = React.useMemo<NativeSettingsMenuGroup[]>(() => {
         if (!props.onPermissionModeChange || availableModes.length === 0) {
@@ -2612,9 +2641,10 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         {streamTalk.shown && (
                             <BubblePressable
                                 onPress={handleStreamTalkPress}
+                                onLongPress={handleStreamTalkLongPress}
                                 style={[
                                     styles.mobileIconButton,
-                                    streamTalk.on && styles.mobileIconButtonOn,
+                                    streamTalk.filled && styles.mobileIconButtonOn,
                                 ]}
                                 accessibilityRole="button"
                                 accessibilityState={{ selected: streamTalk.on }}
@@ -2626,11 +2656,24 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                     is the tint that reads against that disc,
                                     not a colour of its own. Off it is the row's
                                     foreground like everything else on it
-                                    (DROVE-176, DROVE-215). */}
+                                    (DROVE-176, DROVE-215).
+
+                                    THREE STATES SINCE DROVE-233, on the two
+                                    carriers this button already had. The GLYPH
+                                    says whether read-aloud is on: slashed off,
+                                    waves on, paused included. The FILL says
+                                    whether it is reading right now, which is a
+                                    narrowing of what it meant — enabled before,
+                                    not-paused now — and is the first time it
+                                    obeys DROVE-215's rule that a colour names
+                                    something happening. No new hue: paused
+                                    wears the row's foreground on no disc,
+                                    exactly like off, and the shape tells them
+                                    apart. */}
                                 <Ionicons
                                     name={streamTalk.icon}
                                     size={16}
-                                    color={streamTalk.on
+                                    color={streamTalk.filled
                                         ? theme.colors.button.primary.tint
                                         : composerPalette.foreground}
                                 />

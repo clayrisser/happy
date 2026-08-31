@@ -34,6 +34,20 @@ import Speech
 /// happens on the main one, so the reference is held behind a lock rather than
 /// raced on. The critical section is one load, which is short enough that a
 /// lock on the audio thread is the lesser evil against a torn read.
+/// What read-aloud is doing, as JS reports it (DROVE-233).
+///
+/// Three playback states of one session, not three reasons to publish a card.
+/// `off` is also what a binary looks like before JS has said anything, which
+/// is why every fallback below reads it as "the DROVE-189 behaviour".
+enum ReadingState: String {
+    /// Read-aloud is disabled. No card, no commands.
+    case off
+    /// On: speaking, or resting between sentences with more to come.
+    case reading
+    /// On and holding its place. Silent, and the card says so with rate 0.
+    case paused
+}
+
 final class RequestBox {
     private let lock = NSLock()
     private var request: SFSpeechAudioBufferRecognitionRequest?
@@ -157,6 +171,10 @@ public final class DroverSpeechModule: Module {
     private var sessionHeld = false
     /// Remote commands are registered once, lazily, on the first utterance.
     private var remoteCommandsWired = false
+    /// What JS says read-aloud is doing (DROVE-233). See `setReadingState`.
+    private var readingState: ReadingState = .off
+    /// The sentence the card is titled with, kept across a republish.
+    private var lastNowPlayingTitle: String?
 
     /// The session as it was before dictation took it over, put back when
     /// dictation lets go. Nil while nobody is dictating.
@@ -260,14 +278,83 @@ public final class DroverSpeechModule: Module {
             // 10 ended up in the compact voice whatever was picked.
             utterance.prefersAssistiveTechnologySettings = false
             self.synthesizer.speak(utterance)
-            // Only while the session is HELD, which is the background case.
-            // In the foreground there is nothing to show a now-playing entry
-            // on and registering one would put Drover in the Control Centre
-            // for every reply (DROVE-189).
-            if self.sessionHeld {
+            // The card is titled with what is being said. It EXISTS because
+            // read-aloud is on (`setReadingState`), not because this utterance
+            // started, which is what DROVE-233 changed: an audio player whose
+            // card comes and goes with each sentence has no play/pause to
+            // press between them. On a binary JS has not called
+            // `setReadingState` on, `readingState` is `.off` and the old
+            // held-session rule stands unchanged (DROVE-189).
+            if self.readingState != .off || self.sessionHeld {
                 self.wireRemoteCommands()
                 self.updateNowPlaying(title: String(text.prefix(60)))
             }
+        }
+
+        /// Read-aloud is on, paused, or off (DROVE-233).
+        ///
+        /// THE CARD'S LIFETIME, and it is the reason this function exists.
+        /// Clay, on build 14, photographed a lock screen with nothing on it:
+        /// no title, no transport, nothing between the clock and the torch. He
+        /// had read-aloud on and the session idle. Before this, the now-playing
+        /// entry was published from exactly two places — the start of an
+        /// utterance, and `holdSession(true)` — so it existed only while a
+        /// sentence was in flight or while JS had asked for a BACKGROUND hold.
+        /// Read-aloud on with nothing to read produced no card, and with no
+        /// card there is no play/pause button, so the pause state this ticket
+        /// is about had nowhere to live on that surface.
+        ///
+        /// Speaking, paused and waiting for the next reply are three PLAYBACK
+        /// STATES of one session, not three reasons to publish or withdraw a
+        /// card. `MPNowPlayingInfoPropertyPlaybackRate` is the field that
+        /// carries the difference; the card's existence carries only "read
+        /// aloud is on".
+        ///
+        /// SEPARATE FROM `holdSession`, deliberately. Those two were welded
+        /// and they cost different things:
+        ///
+        ///   `holdSession` keeps the AVAudioSession ACTIVE so iOS does not
+        ///   suspend the app in the background (DROVE-189). It costs ducked
+        ///   music for as long as it is held, which is why JS only asks for it
+        ///   while backgrounded and drops it on the way to the foreground.
+        ///
+        ///   This one publishes a dictionary and registers command targets.
+        ///   It activates NOTHING, so it ducks nothing and keeps nothing
+        ///   alive, and it is therefore safe to leave on for as long as
+        ///   read-aloud is on — foreground included.
+        ///
+        /// THE COST, named rather than shipped quietly: while read-aloud is on
+        /// Drover holds the Now Playing card, so it is in the Control Centre
+        /// and on the lock screen even in the foreground with nothing being
+        /// said, and the next-track glyph that opens the microphone
+        /// (DROVE-225) is on it the whole time. That is what an audio player
+        /// looks like and it is what was asked for. Battery is not part of the
+        /// cost: no session is activated here.
+        ///
+        /// The rate is taken from what JS says the READER is doing, never from
+        /// `synthesizer.isSpeaking`, because the synthesiser is idle between
+        /// two sentences of ordinary reading and a card that flickered to
+        /// "paused" in every gap would be worse than no card.
+        AsyncFunction("setReadingState") { (state: String) -> Void in
+            let next = ReadingState(rawValue: state) ?? .off
+            self.readingState = next
+            if next == .off {
+                self.teardownRemoteCommands()
+                return
+            }
+            self.wireRemoteCommands()
+            self.updateNowPlaying(title: nil)
+        }
+
+        /// Whether this binary owns the card's lifetime (DROVE-233).
+        ///
+        /// Its own stamp, like `handlesInterruptions` and `handlesMicCommand`,
+        /// because it ships in a different build from both. False means build
+        /// 14 or earlier: the card still comes and goes with `holdSession`, so
+        /// the lock screen has controls only while the app is backgrounded and
+        /// read-aloud is on. JS keeps calling `holdSession` either way.
+        Function("handlesReadingState") { () -> Bool in
+            true
         }
 
         /// Every voice installed on the device, with the fields JS picks on.
@@ -302,7 +389,15 @@ public final class DroverSpeechModule: Module {
             // app, and a suspended app never speaks the next reply (DROVE-189).
             if !self.isDictating && !self.sessionHeld {
                 self.deactivateSession()
-                self.clearNowPlaying()
+                // The card outlives the sentence while read-aloud is on
+                // (DROVE-233): a drained queue is an audio player waiting for
+                // the next track, and withdrawing its card is what left Clay's
+                // lock screen empty. Only `setReadingState(.off)` takes it
+                // away, and on a binary JS never calls that on this is exactly
+                // the old behaviour.
+                if self.readingState == .off {
+                    self.clearNowPlaying()
+                }
             }
         }
 
@@ -321,7 +416,15 @@ public final class DroverSpeechModule: Module {
                 self.updateNowPlaying(title: nil)
             } else if !self.synthesizer.isSpeaking && !self.isDictating {
                 self.deactivateSession()
-                self.clearNowPlaying()
+                // Coming back to the foreground hands the SESSION back so
+                // ducked music comes up exactly when it used to. It no longer
+                // takes the card with it (DROVE-233): the card belongs to
+                // read-aloud being on, and `setReadingState` is the only thing
+                // that ends it. Still cleared here on a binary that has no
+                // reading state, which is the DROVE-189 behaviour unchanged.
+                if self.readingState == .off {
+                    self.clearNowPlaying()
+                }
             }
         }
 
@@ -600,6 +703,12 @@ public final class DroverSpeechModule: Module {
     /// Nothing here decides anything. The command goes up as an event and JS
     /// decides what it means, so the queue, the buttons and the microphone
     /// cannot disagree about what a press did.
+    ///
+    /// WHEN THIS RUNS CHANGED IN DROVE-233. It used to run only while the
+    /// audio session was HELD, which is read-aloud on AND the app backgrounded,
+    /// so a locked phone with an idle session had no card and therefore no
+    /// buttons — the empty lock screen Clay photographed on build 14. It now
+    /// runs whenever read-aloud is ON, and `setReadingState` says when that is.
     private func wireRemoteCommands() {
         guard !remoteCommandsWired else { return }
         remoteCommandsWired = true
@@ -649,18 +758,40 @@ public final class DroverSpeechModule: Module {
     /// when the commands are wired. No duration and no elapsed time: speech is
     /// a stream of sentences, not a track, and a fake scrubber would be worse
     /// than none.
+    /// `title` nil means "keep the one that is up". A pause has to republish
+    /// the card to move the rate, and republishing it under the generic
+    /// "Reading" would wipe the sentence he stopped on off the lock screen.
     private func updateNowPlaying(title: String?) {
+        if let title { lastNowPlayingTitle = title }
         var info: [String: Any] = [
-            MPMediaItemPropertyTitle: title ?? "Reading",
+            MPMediaItemPropertyTitle: lastNowPlayingTitle ?? "Reading",
             MPMediaItemPropertyArtist: "Cattle Drover",
             MPNowPlayingInfoPropertyIsLiveStream: true,
-            MPNowPlayingInfoPropertyPlaybackRate: synthesizer.isSpeaking && !synthesizer.isPaused ? 1.0 : 0.0
+            MPNowPlayingInfoPropertyPlaybackRate: nowPlayingRate
         ]
         info[MPNowPlayingInfoPropertyMediaType] = MPNowPlayingInfoMediaType.audio.rawValue
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
     }
 
+    /// What the lock screen's play/pause glyph reads as (DROVE-233).
+    ///
+    /// The READER's state, not the synthesiser's. `synthesizer.isSpeaking` is
+    /// false in the gap between two sentences of perfectly ordinary reading,
+    /// so driving the glyph from it made the card flicker to "paused" several
+    /// times a paragraph. Reading and waiting-for-the-next-reply are both
+    /// playing, at rate 1; only a pause is 0. A binary JS has not called
+    /// `setReadingState` on falls back to the old question, which is the
+    /// DROVE-189 behaviour it already had.
+    private var nowPlayingRate: Double {
+        switch readingState {
+        case .reading: return 1.0
+        case .paused: return 0.0
+        case .off: return synthesizer.isSpeaking && !synthesizer.isPaused ? 1.0 : 0.0
+        }
+    }
+
     private func clearNowPlaying() {
+        lastNowPlayingTitle = nil
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
     }
 

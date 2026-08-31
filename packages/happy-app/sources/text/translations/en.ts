@@ -474,6 +474,8 @@ export const en: TranslationStructure = {
             on: 'Reading replies aloud',
             off: 'Not reading replies aloud',
             onHint: 'Reading replies aloud. Tap a sentence to read from there',
+            paused: 'Paused. Long press to carry on where it stopped',
+            resumed: 'Reading on from where it stopped',
             headphonesOff: 'Headphones disconnected, now on speaker',
         },
         dictate: {

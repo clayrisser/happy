@@ -4,9 +4,10 @@ import {
     addRemoteCommandListener,
     addSpeechInterruptionListener,
     holdAudioSession,
+    setReadingState,
     speechInterruptionsHandled,
 } from 'drover-speech';
-import { isTransportCommand } from './headphonePress';
+import { readAloudTransport, remoteTransportGesture, transportEffect } from './readAloudTransport';
 
 /**
  * Read-aloud keeps talking with the phone in a pocket (DROVE-189).
@@ -57,17 +58,43 @@ import { isTransportCommand } from './headphonePress';
  * spoken. He came back to an app that was running, connected and silent, with
  * nothing left to read. `isStalled` and `audioSessionRecovered` are that fix's
  * two ends, and this file is one of the things that calls the second one.
+ *
+ * ## The card is not the session (DROVE-233)
+ *
+ * Two things were welded to `holdSession` and only one of them belongs to it.
+ *
+ *   THE SESSION keeps the app alive in the background, and it costs ducked
+ *   music for as long as it is held. So it is asked for only while
+ *   backgrounded with read-aloud on, and dropped on the way to the foreground.
+ *   Unchanged, pauses included: a pause that released it would let iOS suspend
+ *   the app, and a suspended app cannot be resumed from the lock screen.
+ *
+ *   THE NOW-PLAYING CARD is what carries the lock screen's play/pause. It
+ *   activates nothing and ducks nothing, so tying its life to the session's
+ *   was a cost saved that was never being paid. It meant read-aloud on with
+ *   nothing being said produced no card at all, which is the empty lock screen
+ *   Clay photographed on build 14: no title, no transport, nothing. It now
+ *   lives for as long as read-aloud is on, and `setReadingState` says so.
+ *
+ * That split needs a build (15). On build 14 `setReadingState` is a no-op and
+ * the card still comes and goes with the hold, so the pause below works from
+ * the app and from the headphones and the lock screen keeps the gap.
  */
 
 /** What this needs of the reader, and nothing more. */
 export interface BackgroundReader {
     readonly isEnabled: boolean;
+    /** He paused it and it is holding its place (DROVE-233). */
+    readonly isPaused: boolean;
     setBackgrounded(backgrounded: boolean): void;
-    interrupt(reason: 'toggled-off'): void;
+    /** Pause or resume. The one state all three surfaces drive (DROVE-233). */
+    setPaused(paused: boolean): void;
     /** An interruption ended, so an utterance the session refused may go now. */
     audioSessionRecovered(): void;
     /** Told when the reader stops, which is how the hold learns it is over. */
     addInterruptListener(listener: (reason: string) => void): () => void;
+    /** Told when on/paused/off changes, which is how the card learns. */
+    addTransportListener(listener: () => void): () => void;
 }
 
 /**
@@ -94,15 +121,38 @@ export function startBackgroundAudio(reader: BackgroundReader): () => void {
     // keystroke, so the call across the bridge is made only when the answer
     // actually changes.
     let held: boolean | null = null;
+    // The last state the lock screen was told, for the same reason `held` is
+    // kept: this runs on every interrupt and every pause, and a bridge call
+    // per keystroke is worth avoiding.
+    let published: string | null = null;
     const apply = () => {
         try {
             reader.setBackgrounded(backgrounded);
             // Only hold while there is something to stay alive FOR. Holding
             // with read-aloud off would keep music ducked for no one.
+            //
+            // A PAUSE STILL HOLDS (DROVE-233). `isEnabled` is true while
+            // paused, on purpose: the session is what keeps the app from being
+            // suspended, and an app iOS has suspended cannot be resumed from
+            // the lock screen. Releasing it on a pause would make the pause
+            // one-way, which is the whole feature gone. The cost is DROVE-189's
+            // and unchanged: music stays ducked while he is listening to the
+            // session, paused or not.
             const next = backgrounded && reader.isEnabled;
-            if (next === held) return;
-            held = next;
-            void holdAudioSession(next);
+            if (next !== held) {
+                held = next;
+                void holdAudioSession(next);
+            }
+            // The CARD, which is a different question from the session
+            // (DROVE-233). It exists for as long as read-aloud is on, in the
+            // foreground too, so there is always a play/pause to press. On
+            // build 14 and earlier this is a no-op and the hold above is still
+            // the only thing that puts a card up.
+            const state = readAloudTransport(reader.isEnabled, reader.isPaused);
+            if (state !== published) {
+                published = state;
+                void setReadingState(state === 'off' ? 'off' : state === 'paused' ? 'paused' : 'reading');
+            }
         } catch {
             // Nothing about staying alive is worth taking the reader down for.
         }
@@ -135,38 +185,62 @@ export function startBackgroundAudio(reader: BackgroundReader): () => void {
     });
 
     /**
-     * Lock-screen and AirPod play/pause (DROVE-189).
+     * Lock-screen and AirPod play/pause (DROVE-189, rewritten by DROVE-233).
      *
-     * Pause means stop talking and keep the place; the reader's own toggle is
-     * the honest way to say that, because it is the same thing turning
-     * read-aloud off does and there is then exactly one way to be silent.
-     * Play is left to the app's own control rather than re-enabling here: a
-     * squeeze that turned the voice back on for a session he had walked away
-     * from would be a surprise, and the button is one tap away.
+     * WHAT THIS USED TO DO, because it is the bug rather than a simplification
+     * of it: `pause` called `interrupt('toggled-off')`. That is not a pause, it
+     * is the off switch — `interrupt` moves the cursor to the end of the
+     * timeline, drops the tails, the gate lines and the detour. A squeeze in
+     * his pocket therefore ended the reading, and pressing again started at
+     * the newest content because DROVE-226 says a start does. There was
+     * nowhere for a held place to live, so the honest thing was to say pause
+     * and off were the same. They are not, and now they are not.
+     *
+     * `play` still never turns read-aloud ON, which is DROVE-189's rule kept
+     * verbatim: "a squeeze that turned the voice back on for a session he had
+     * walked away from would be a surprise, and the button is one tap away".
+     * All that changed is that there is now a pause for it to come back from.
+     * `transportEffect` is where that lives, beside the button's own gestures,
+     * so the three surfaces cannot come to disagree.
+     *
+     * Only the TRANSPORT presses reach the reader (DROVE-225). A double press
+     * is the microphone and has its own subscription in useVoiceComposer;
+     * `remoteTransportGesture` returning null is what keeps this file about the
+     * transport and nothing else.
      */
     const remote = addRemoteCommandListener((command) => {
-        // Only the TRANSPORT presses reach the reader (DROVE-225). Until this
-        // guard, every command that was not `play` fell through to the toggle
-        // below, so the double press that now opens the microphone would have
-        // turned read-aloud off on its way there. The mic's own subscription
-        // is in useVoiceComposer; the two read the same table and cannot
-        // disagree about which press is whose.
-        if (!isTransportCommand(command)) return;
-        if (command === 'play') return;
+        const gesture = remoteTransportGesture(command);
+        if (gesture === null) return;
         try {
-            reader.interrupt('toggled-off');
+            const effect = transportEffect(gesture, readAloudTransport(reader.isEnabled, reader.isPaused));
+            if (effect === 'pause') reader.setPaused(true);
+            else if (effect === 'resume') reader.setPaused(false);
+            // 'turn-on', 'turn-off' and 'nothing' are unreachable from a remote
+            // press by the table above, and doing nothing is the right answer
+            // to all three from a pocket.
         } catch {
             // A dead lock-screen button is better than a dead reader.
         }
     });
 
+    // The card and the hold both read the reader's state, and a pause changes
+    // it without interrupting anything, so it needs its own subscription
+    // (DROVE-233). This is also what makes turning read-aloud ON publish a
+    // card: `addInterruptListener` fires when it goes off and never when it
+    // comes on, which is why a freshly-enabled reader put nothing on the lock
+    // screen until something happened to be said.
+    const transportChanged = reader.addTransportListener(() => { apply(); });
+
     return () => {
         started = false;
         held = null;
+        published = null;
         appState.remove();
         enabledChanged();
+        transportChanged();
         interruption.remove();
         remote.remove();
         void holdAudioSession(false);
+        void setReadingState('off');
     };
 }

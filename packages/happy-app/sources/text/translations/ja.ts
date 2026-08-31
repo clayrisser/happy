@@ -461,6 +461,8 @@ export const ja: TranslationStructure = {
             on: '返信を読み上げます',
             off: '返信は読み上げません',
             onHint: '返信を読み上げています。文をタップするとそこから読みます',
+            paused: '一時停止しました。長押しすると止まったところから続きます',
+            resumed: '止まったところから読み上げを再開します',
             headphonesOff: 'ヘッドホンが切断されました。スピーカーで再生します',
         },
         dictate: {
