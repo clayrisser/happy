@@ -103,7 +103,7 @@ interface ClaudeSessionRecord {
  * that outlived its parent), the one whose `tmux` handle ends in this pane is
  * the one on screen.
  */
-async function registryStatus(
+export async function registryStatus(
     configDir: string | null | undefined,
     claudeSessionId: string | null | undefined,
     pane: string,

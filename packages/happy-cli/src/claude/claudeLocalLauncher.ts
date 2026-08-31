@@ -6,7 +6,7 @@ import { createSessionScanner } from "./utils/sessionScanner";
 import { launchFailureMessage } from "./utils/launchFailureMessage";
 import { ambientDataDir } from "@/drover/flip/accounts";
 import { parseFlipCommand } from "@/drover/flip/controller";
-import { capturePane, injectIntoPane, interruptPane, paneAcceptsCommand, paneIsIdle, pressPaneKey } from "./utils/paneInject";
+import { capturePane, injectIntoPane, interruptPane, paneAcceptsCommand, paneIsIdle, pressPaneKey, registryStatus } from "./utils/paneInject";
 import { paneCommandKind, paneCommandOutcome, paneUltracodeActive } from "./utils/paneCommandOutcome";
 import { createPaneCommandQueue, paneCommandArgument, paneCommandsForSelection, paneModelAsRequest, paneSlashCommand, parseRemoteControlRequest, remoteControlCommand, type PaneModelSelection } from "./utils/paneModelSync";
 import { cyclePaneMode, pressCycleKey, readPaneMode, type PaneMode } from "./utils/panePermissionSync";
@@ -27,6 +27,15 @@ import { AgentLaunchIndex, agentStopResult } from "./utils/agentNotification";
 // one out now (BASED-127). It used to be defined here, which is precisely why
 // a flip requested in remote mode queued and never happened.
 import { applyPendingFlip, transcriptPathFor } from "@/drover/flip/apply";
+// DROVE-172: a session keeps running the bundle node read at spawn, so a
+// shipped CLI fix reached the daemon and none of Clay's open sessions. The
+// launcher watches its own dist and hands the session to the new one between
+// turns.
+import { announceRelaunch } from "@/drover/relaunch/announce";
+import { startRelaunchGate, type RelaunchGate } from "@/drover/relaunch/gate";
+import { relaunchExitCode } from "@/drover/relaunch/handover";
+import { loadedDistStamp, distEntrypoint, distEntryIsComplete, readDistStamp } from "@/drover/relaunch/stamp";
+import { createStaleWatcher } from "@/drover/relaunch/staleWatcher";
 
 export type LauncherResult = { type: 'switch' } | { type: 'exit', code: number };
 
@@ -888,6 +897,10 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
     // signal stays aborted and would kill the new child on spawn.
     let processAbortController = new AbortController();
     let exutFuture = new Future<void>();
+    // DROVE-172: declared out here so the finally can stop its timer. Assigned
+    // beside the flip probes below, which is where the facts it gates on live.
+    let relaunchGate: RelaunchGate | null = null;
+
     try {
         async function abort() {
 
@@ -1142,6 +1155,54 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
         // stays a pure decision-maker with no idea a transcript exists.
         session.flip?.setInFlightProbe(() => inflight.snapshot());
 
+        // DROVE-172, and it rides the same two facts the flip gate does. A
+        // relaunch is a SIGTERM to the child, so it waits for the turn to end
+        // and for every subagent to report, exactly as BASED-135 requires --
+        // the difference is only what comes back afterwards.
+        relaunchGate = startRelaunchGate({
+            watcher: createStaleWatcher({
+                loaded: loadedDistStamp,
+                read: () => readDistStamp(distEntrypoint()),
+                complete: () => distEntryIsComplete(distEntrypoint()),
+            }),
+            claudeSessionId: () => session.sessionId,
+            isBusy: () => thinking || inflight.count() > 0,
+            /**
+             * Claude Code's own word for it, not ours.
+             *
+             * `thinking` above is the fd3 fetch counter and it reads FALSE for
+             * the whole of a long tool call — measured on 2026-08-31, a
+             * `sleep 150` in the pane looked quiet for every second of it and
+             * the first version of this gate killed it. The record Claude keeps
+             * in `<config dir>/sessions/` does not: it reads `busy` inside a
+             * turn and `shell` inside a bash tool. `paneIsIdle` is the same
+             * check plus "no permission card on screen and the pane is still
+             * Claude's", which is a stop this must also not walk into, so a
+             * pane session takes that whole gate.
+             *
+             * Paneless (remote-only) sessions have no pane to read, so they
+             * take the registry alone. Either way anything unreadable is
+             * `false`: the session stays stale and `drover stale-sessions`
+             * names it, which is the safe half of the trade.
+             */
+            turnIsOver: async () => {
+                const configDir = session.claudeEnvVars?.CLAUDE_CONFIG_DIR;
+                if (tmuxPane) {
+                    return paneIsIdle({
+                        pane: tmuxPane,
+                        configDir,
+                        claudeSessionId: session.sessionId,
+                    });
+                }
+                return (await registryStatus(configDir, session.sessionId, '')) === 'idle';
+            },
+            childAlive: () => childAlive,
+            abortChild: () => {
+                if (!processAbortController.signal.aborted) processAbortController.abort();
+            },
+            announce: announceRelaunch,
+        });
+
         // Messages this launcher accepted but could not hand over yet. They
         // stay ON the queue until the spawn that serves them actually starts,
         // so nothing is dropped in between; the queue no longer means "switch"
@@ -1365,6 +1426,12 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
          * queue is exactly the reason to do it.
          */
         function exitReasonAfterChild(code: number): LauncherResult {
+            // DROVE-172 first, before anything else looks at the queue. The
+            // child was stopped so a newer bundle could take this session, and
+            // runClaude turns this code into the handover. A pane session and a
+            // paneless one both want it: the alternative is remote mode on the
+            // OLD code, which is the bug.
+            if (relaunchGate?.requested()) return { type: 'exit', code: relaunchExitCode };
             const pending = session.queue.size();
             if (tmuxPane) {
                 if (pending > 0) {
@@ -1619,6 +1686,7 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
         // queued until the session came back to local mode. Each launcher owns
         // the handler for exactly as long as it owns a child.
         session.flip?.setAbortHandler(null);
+        relaunchGate?.stop();
         takeDeferredSwitch = null;
         // DROVE-45: the launcher is re-entered on every local/remote switch, so
         // a listener left behind would be added again on the next pass and

@@ -38,6 +38,7 @@ import { decodeBase64, encodeBase64 } from '@/api/encryption';
 import type { Session as ApiSession } from '@/api/types';
 import { getProjectPath, resolveClaudeConfigDir } from './utils/path';
 import { discoverSessionInventory, type SessionInventoryResponse } from '@/utils/sessionInventory';
+import { writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { RawJSONLinesSchema, type RawJSONLines } from './types';
@@ -49,6 +50,8 @@ import { PolicyReporter } from '@/drover/flip/policy';
 import { registerDroverPolicyHandler } from '@/drover/flip/policyRpc';
 import { findHappySessionForClaudeSession, resumedClaudeSessionId } from '@/resume/reattachClaudeSession';
 import type { ReconnectableHappySession } from '@/resume/resolveHappySession';
+import { buildRelaunchArgv, relaunchExitCode, relaunchFileEnv, type RelaunchRequest } from '@/drover/relaunch/handover';
+import { distEntrypoint, loadedDistStamp } from '@/drover/relaunch/stamp';
 
 /** JavaScript runtime to use for spawning Claude Code */
 export type JsRuntime = 'node' | 'bun'
@@ -1363,6 +1366,19 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
         logger.debug(`[clone] seeded from ${options.seedFile} (${seedPrompt.length} chars)`);
     }
 
+    /**
+     * Which build of the CLI this session is actually running (DROVE-172).
+     *
+     * The whole failure was that nobody -- not Clay, not the log -- could tell.
+     * A rebuild rewrites `dist/index.mjs` and every open session keeps
+     * executing the bytes node read at spawn, and there was no line anywhere
+     * saying which those were. This is that line, and after a handover it is
+     * the proof the new bundle is the one running.
+     */
+    logger.debug(`[relaunch] running dist ${distEntrypoint()} stamp=${loadedDistStamp === null
+        ? 'none (dev)'
+        : `${new Date(loadedDistStamp.mtimeMs).toISOString()}/${loadedDistStamp.size}`}`);
+
     const exitCode = await loop({
         path: workingDirectory,
         initialPrompt: seedPrompt,
@@ -1444,6 +1460,41 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
     policyReporter?.stop();
     cloneReporter.stop();
 
+    /**
+     * The bundle was rebuilt under us and the launcher stopped the child at a
+     * quiet moment so the new one could take over (DROVE-172).
+     *
+     * Everything below this point tears the session DOWN, and a handover is
+     * the opposite of that. `sendSessionDeath` in particular is skipped: the
+     * phone must not see the session end and come back, because from the app's
+     * side nothing is ending. What it does see is the same session id going
+     * quiet for the couple of seconds the new process takes to reconnect --
+     * which is what a flip already looks like.
+     */
+    if (exitCode === relaunchExitCode) {
+        const claudeSessionId = (currentSession as Session | null)?.sessionId ?? null;
+        const relaunchFile = process.env[relaunchFileEnv];
+        if (claudeSessionId !== null && relaunchFile) {
+            const request: RelaunchRequest = {
+                argv: buildRelaunchArgv(process.argv.slice(2), claudeSessionId),
+                happySessionId: session.sessionId,
+            };
+            writeFileSync(relaunchFile, JSON.stringify(request), 'utf8');
+            logger.debug(`[relaunch] handing ${session.sessionId} to the new bundle: ${request.argv.join(' ')}`);
+            (currentSession as Session | null)?.cleanup();
+            await session.flush();
+            await session.close();
+            happyServer.stop();
+            hookServer.stop();
+            cleanupHookSettingsFile(hookSettingsPath);
+            process.exit(relaunchExitCode);
+        }
+        // Nothing to resume onto, or nobody to relaunch us. Falling through
+        // ends the session the ordinary way rather than pretending.
+        logger.debug('[relaunch] asked for, but not possible here — exiting normally');
+        process.exitCode = 0;
+    }
+
     // Cleanup session resources (intervals, callbacks) - prevents memory leak
     // Note: currentSession is set by onSessionReady callback during loop()
     (currentSession as Session | null)?.cleanup();
@@ -1469,5 +1520,5 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
     logger.debug('Stopped Hook server and cleaned up settings file');
 
     // Exit with the code from Claude
-    process.exit(exitCode);
+    process.exit(exitCode === relaunchExitCode ? 0 : exitCode);
 }

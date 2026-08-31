@@ -7,6 +7,8 @@ import { configuration } from '@/configuration';
 import { readCredentials, readPersistedSessions } from '@/persistence';
 import { logger } from '@/ui/logger';
 
+import { handoverSessionEnv } from '@/drover/relaunch/handover';
+
 import type { ReconnectableHappySession } from './resolveHappySession';
 
 /**
@@ -85,6 +87,17 @@ type ServerSession = {
  * wrapper still live on it.
  */
 export async function findHappySessionForClaudeSession(claudeSessionId: string): Promise<ReconnectableHappySession | null> {
+    /**
+     * The one session whose live-wrapper check is waived (DROVE-172).
+     *
+     * A relaunch onto a rebuilt bundle is a wrapper handing a session to its
+     * own replacement, and the outgoing keepalive is seconds old when the
+     * replacement asks. Left alone, the check below would decline and mint a
+     * duplicate -- the exact twin-session bug BASED-98 closed. `bin/drover.mjs`
+     * names the session it is releasing, and only that one: any other live
+     * session still gets the refusal it should.
+     */
+    const handoverSessionId = process.env[handoverSessionEnv] ?? null;
     const persisted = readPersistedSessions();
     if (Object.keys(persisted).length === 0) return null;
     const credentials = await readCredentials();
@@ -122,7 +135,7 @@ export async function findHappySessionForClaudeSession(claudeSessionId: string):
         }
         if (!metadata || metadata.claudeSessionId !== claudeSessionId) continue;
 
-        if (raw.active && Date.now() - raw.activeAt < liveWindowMs) {
+        if (raw.active && Date.now() - raw.activeAt < liveWindowMs && raw.id !== handoverSessionId) {
             // Two wrappers on one Happy session would both answer the phone.
             logger.debug(`[REATTACH] Happy session ${raw.id} is live on another wrapper, starting a fresh one`);
             return null;
