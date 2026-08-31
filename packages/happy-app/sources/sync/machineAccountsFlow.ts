@@ -24,10 +24,21 @@
  *                                  not see would be the same lie in reverse.
  *
  * The step in the middle is Clay's, and no part of it is automatable here: he
- * opens the URL, signs in, and sends the code back on the card. No agent, and
- * nothing in this app, ever holds that code or the token it buys — the card
- * hands the code straight to the waiting `claude auth login` on the Mac, which
- * is the only process that writes a credential.
+ * signs in and sends the code back on the card. What IS automatable is getting
+ * him there, and DROVE-212 is what happened when it was not — the link sat two
+ * taps away behind a share sheet, so from a phone Start login looked like a
+ * button that did nothing. The page now opens in his browser by itself
+ * (`autoOpenLoginUrl`). No agent, and nothing in this app, ever holds that code
+ * or the token it buys — the card hands the code straight to the waiting
+ * `claude auth login` on the Mac, which is the only process that writes a
+ * credential.
+ *
+ * NOTHING IS ASKED FIRST, and this is settled (DROVE-212). Clay: "I told you
+ * the account gets named after you login based on what you logged in with." So
+ * there is no name to collect and no phase field holding one. `drover account
+ * login` names the account after the address Claude Code reports once the login
+ * succeeds. Renaming an account afterwards is a different feature and is not
+ * this one.
  */
 
 /** A pending login card, as the Accounts screen needs to see it. */
@@ -38,6 +49,8 @@ export interface PendingAccountLogin {
     machineId: string;
     /** The authorize URL, when the card carries one. */
     url: string | null;
+    /** When the machine raised it, so the newest card beats a stale one. */
+    createdAt: number | null;
 }
 
 /** The narrow slice of a session this file reads. */
@@ -69,22 +82,33 @@ export function pendingAccountLogins(
         const requests = session?.agentState?.requests;
         if (!requests) continue;
         for (const request of Object.values(requests)) {
-            const row = request as { tool?: string; arguments?: unknown } | null;
+            const row = request as { tool?: string; arguments?: unknown; createdAt?: unknown } | null;
             if (row?.tool !== 'DroverAccountLogin') continue;
             const args = row.arguments as { url?: unknown } | null;
             const url = typeof args?.url === 'string' && args.url.startsWith('https://') ? args.url : null;
-            found.push({ sessionId, machineId, url });
+            const createdAt = typeof row.createdAt === 'number' ? row.createdAt : null;
+            found.push({ sessionId, machineId, url, createdAt });
         }
     }
     return found;
 }
 
-/** The card for one machine, or null. First wins; a second is a retry's. */
+/**
+ * The card for one machine, or null. NEWEST wins.
+ *
+ * A retry mints a fresh URL and a fresh card, and an abandoned login leaves its
+ * old card behind. Taking the first would hand back a URL whose login is gone,
+ * which on a phone is a sign-in page that cannot be finished. Both timestamps
+ * come off the same Mac, so comparing them is safe in a way comparing one to
+ * the phone's clock would not be.
+ */
 export function pendingAccountLoginFor(
     sessions: Record<string, AccountFlowSession | undefined>,
     machineId: string,
 ): PendingAccountLogin | null {
-    return pendingAccountLogins(sessions).find((c) => c.machineId === machineId) ?? null;
+    const mine = pendingAccountLogins(sessions).filter((c) => c.machineId === machineId);
+    if (mine.length === 0) return null;
+    return mine.reduce((best, c) => ((c.createdAt ?? 0) > (best.createdAt ?? 0) ? c : best));
 }
 
 export type AddAccountPhase =
@@ -100,10 +124,19 @@ export type AddAccountPhase =
         kind: 'waiting';
         startedAt: number;
         before: string[];
-        /** The name Clay typed, or null for "call it after the address". */
-        requested: string | null;
         /** A card with a URL is on the bus, so there is something to open. */
         linkReady: boolean;
+        /**
+         * Long enough went by with no card that the screen says so.
+         *
+         * The login runs detached on a Mac nobody is watching, so a Mac-side
+         * failure reaches the phone as nothing at all: the FAILED card the
+         * shell raises carries a sentence and no URL, which this flow cannot
+         * tell from any other pending question. Silence is the one thing the
+         * phone CAN see, so silence is what gets said. Still watching, because
+         * a late link is still a link.
+         */
+        linkLate: boolean;
     }
     | { kind: 'added'; name: string }
     | { kind: 'failed'; reason: string }
@@ -112,7 +145,7 @@ export type AddAccountPhase =
 
 export type AddAccountEvent =
     | { type: 'start' }
-    | { type: 'started'; at: number; before: string[]; requested: string | null }
+    | { type: 'started'; at: number; before: string[] }
     | { type: 'startFailed'; reason: string }
     | { type: 'link'; ready: boolean }
     | { type: 'accounts'; at: number; names: string[] }
@@ -129,6 +162,17 @@ export type AddAccountEvent =
  */
 export const addAccountWatchMs = 30 * 60_000;
 
+/**
+ * How long the phone waits for the sign-in link before it says there is none.
+ *
+ * The Mac prints the URL within a second or two of `claude auth login`
+ * starting, so a minute of nothing is not slowness. It is the login having
+ * died over there, and DROVE-212 is what that looked like: Clay tapped Start
+ * login and the screen would have kept the spinner for half an hour. Saying so
+ * is not calling it failed, because it may still arrive.
+ */
+export const addAccountLinkWaitMs = 60_000;
+
 export const addAccountIdle: AddAccountPhase = { kind: 'idle' };
 
 /**
@@ -139,6 +183,7 @@ export function advanceAddAccount(
     phase: AddAccountPhase,
     event: AddAccountEvent,
     watchMs: number = addAccountWatchMs,
+    linkWaitMs: number = addAccountLinkWaitMs,
 ): AddAccountPhase {
     switch (event.type) {
         case 'start':
@@ -156,8 +201,8 @@ export function advanceAddAccount(
                 kind: 'waiting',
                 startedAt: event.at,
                 before: [...event.before],
-                requested: event.requested,
                 linkReady: false,
+                linkLate: false,
             };
 
         case 'startFailed':
@@ -167,7 +212,10 @@ export function advanceAddAccount(
         case 'link':
             if (phase.kind !== 'waiting') return phase;
             if (phase.linkReady === event.ready) return phase;
-            return { ...phase, linkReady: event.ready };
+            // A link that turns up after the screen said there was none takes
+            // the sentence with it. Leaving it up beside a live link would be
+            // the screen contradicting itself.
+            return { ...phase, linkReady: event.ready, linkLate: event.ready ? false : phase.linkLate };
 
         case 'accounts': {
             if (phase.kind !== 'waiting') return phase;
@@ -178,12 +226,42 @@ export function advanceAddAccount(
             const added = event.names.find((name) => !phase.before.includes(name));
             if (added !== undefined) return { kind: 'added', name: added };
             if (event.at - phase.startedAt >= watchMs) return { kind: 'stoppedWatching' };
+            if (!phase.linkReady && !phase.linkLate && event.at - phase.startedAt >= linkWaitMs) {
+                return { ...phase, linkLate: true };
+            }
             return phase;
         }
 
         case 'dismiss':
             return { kind: 'idle' };
     }
+}
+
+/**
+ * The sign-in page to hand the phone's browser by itself, or null.
+ *
+ * DROVE-212, Clay on the phone: "Happen when I did this I should've opened my
+ * browser". He was right and nothing did. The URL lived one screen and two taps
+ * away, on a card in the Cattle Drover thread, behind a button that raises the
+ * iOS SHARE SHEET rather than a browser. From a phone that is a Start login
+ * that appears to do nothing.
+ *
+ * So the link opens itself the moment it exists, only while a login this screen
+ * started is in flight, and only once per URL. `opened` is the last URL handed
+ * to the browser, so a re-render, a poll tick or a second card cannot throw Clay
+ * back out to Safari over and over.
+ */
+export function autoOpenLoginUrl(input: {
+    phase: AddAccountPhase;
+    url: string | null | undefined;
+    /** The URL this screen has already opened for that machine. */
+    opened: string | null;
+}): string | null {
+    if (input.phase.kind !== 'waiting') return null;
+    const url = typeof input.url === 'string' ? input.url : null;
+    if (!url || !url.startsWith('https://')) return null;
+    if (url === input.opened) return null;
+    return url;
 }
 
 /** Is a login in flight for this machine? Used to disable the add row. */
@@ -199,6 +277,12 @@ export interface AddAccountStatus {
     watching: boolean;
     /** True when there is a card to open. */
     hasLink: boolean;
+    /**
+     * Show a spinner. Separate from `watching` because the screen goes on
+     * watching after it has said no link came back, and a spinner next to that
+     * sentence would be the row disagreeing with itself.
+     */
+    spinner: boolean;
 }
 
 /**
@@ -216,28 +300,47 @@ export function addAccountStatus(phase: AddAccountPhase): AddAccountStatus | nul
                 detail: '',
                 watching: false,
                 hasLink: false,
+                spinner: true,
             };
         case 'waiting':
-            return phase.linkReady
-                ? {
-                    title: 'Waiting for you to finish the login',
-                    detail: 'Open the sign-in link, sign in, then send the code back on the same card. '
-                        + 'This screen adds the account as soon as that machine reports it.',
+            if (phase.linkReady) {
+                return {
+                    title: 'Sign in, then bring the code back',
+                    detail: 'The sign-in page is open in your browser. Sign in, then paste the code it '
+                        + 'gives you into Enter the code below.',
                     watching: true,
                     hasLink: true,
-                }
-                : {
-                    title: 'Waiting for the sign-in link…',
-                    detail: 'The machine is starting Claude Code’s login. The link arrives as a card.',
+                    spinner: false,
+                };
+            }
+            if (phase.linkLate) {
+                // Not "the login failed": nothing here saw it fail. What is
+                // true is that no link came, and that the Mac is where the
+                // reason for that is.
+                return {
+                    title: 'No sign-in link came back',
+                    detail: 'That machine started the login but has sent no link, so it may have failed '
+                        + 'over there. Try again, or run drover account login on that machine to see why.',
                     watching: true,
                     hasLink: false,
+                    spinner: false,
                 };
+            }
+            return {
+                title: 'Waiting for the sign-in link…',
+                detail: 'That machine is starting Claude Code’s login. Your browser opens as soon as '
+                    + 'the link arrives.',
+                watching: true,
+                hasLink: false,
+                spinner: true,
+            };
         case 'added':
             return {
                 title: `Added ${phase.name}`,
                 detail: 'It is in that machine’s registry now, so a session can flip onto it.',
                 watching: false,
                 hasLink: false,
+                spinner: false,
             };
         case 'failed':
             return {
@@ -245,6 +348,7 @@ export function addAccountStatus(phase: AddAccountPhase): AddAccountStatus | nul
                 detail: phase.reason,
                 watching: false,
                 hasLink: false,
+                spinner: false,
             };
         case 'stoppedWatching':
             // NOT "the login failed". The phone cannot see a browser, so it has
@@ -256,6 +360,7 @@ export function addAccountStatus(phase: AddAccountPhase): AddAccountStatus | nul
                     + 'finished, the account is in the list.',
                 watching: false,
                 hasLink: false,
+                spinner: false,
             };
     }
 }

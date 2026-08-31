@@ -29,16 +29,25 @@
  * one moves on something genuinely observed; a watch that runs out says it
  * stopped watching, never that the login failed.
  *
+ * NOTHING IS ASKED BEFORE THE LOGIN (DROVE-212). Clay: "when I try to add
+ * account it's still asking me to name the account. I told you the account gets
+ * named after you login based on what you logged in with." Adding an account is
+ * one tap: the login starts, the sign-in page opens in HIS browser as soon as
+ * the machine sends the link, and `drover account login` names the account
+ * after the address that signed in. Renaming one afterwards is a different
+ * feature and is not built here.
+ *
  * DROVE-208 gave this screen a second way in. The quota sheet under the
  * composer is where Clay compares accounts and notices one missing, so its
  * list ends in an add row; that row lands here with `addMachineId` set and the
  * login starts on that machine by itself. Nothing about the flow is duplicated
- * over there. The prompt, the poll, the card link and the watch are all still
- * only here, which is the point.
+ * over there — the poll, the browser, the card link and the watch are all still
+ * only here, which is the point, and the machine detail screen sends its own
+ * add button to this same route for the same reason.
  */
 
 import * as React from 'react';
-import { Platform, RefreshControl } from 'react-native';
+import { Linking, Platform, RefreshControl } from 'react-native';
 import { Stack, router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -60,6 +69,7 @@ import {
     addAccountIdle,
     addAccountStatus,
     advanceAddAccount,
+    autoOpenLoginUrl,
     autoStartAddAccount,
     pendingAccountLogins,
     type AddAccountEvent,
@@ -67,6 +77,7 @@ import {
     type MachineAccount,
     type PendingAccountLogin,
 } from '@/sync/machineAccountsFlow';
+import { hostOf } from '@/components/tools/views/droverAccountLogin';
 
 /** How often a machine with a login in flight is asked again. */
 const watchPollMs = 4_000;
@@ -93,7 +104,7 @@ export default function AccountsScreen() {
      * by value; the cards are rebuilt only when it moves.
      */
     const loginKey = storage((state) => pendingAccountLogins(state.sessions)
-        .map((c) => `${c.machineId}|${c.sessionId}|${c.url ?? ''}`)
+        .map((c) => `${c.machineId}|${c.sessionId}|${c.url ?? ''}|${c.createdAt ?? ''}`)
         .join(','));
     const logins = React.useMemo<PendingAccountLogin[]>(
         () => pendingAccountLogins(storage.getState().sessions),
@@ -125,9 +136,18 @@ export default function AccountsScreen() {
         for (const id of machineIds ? machineIds.split(',') : []) void load(id);
     }, [machineIds, load]);
 
-    /** The card for a machine, or null. Only one with a real URL counts. */
+    /**
+     * The card for a machine, or null. Only one with a real URL counts, and the
+     * NEWEST of those wins: a retry mints a fresh URL and an abandoned login
+     * leaves its card behind, so taking the first would open a page whose login
+     * is already gone.
+     */
     const cardFor = React.useCallback(
-        (machineId: string) => logins.find((c) => c.machineId === machineId && c.url !== null) ?? null,
+        (machineId: string) => {
+            const mine = logins.filter((c) => c.machineId === machineId && c.url !== null);
+            if (mine.length === 0) return null;
+            return mine.reduce((best, c) => ((c.createdAt ?? 0) > (best.createdAt ?? 0) ? c : best));
+        },
         [logins],
     );
 
@@ -138,6 +158,36 @@ export default function AccountsScreen() {
             dispatch(id, { type: 'link', ready: cardFor(id) !== null });
         }
     }, [cardFor, machineIds, dispatch]);
+
+    /**
+     * His browser, opened for him (DROVE-212).
+     *
+     * Clay: "Happen when I did this I should've opened my browser". The link
+     * used to sit two taps away on a card in another thread, behind a button
+     * that raises the iOS share sheet, so from a phone Start login looked like a
+     * button that did nothing. The page now opens itself the moment the machine
+     * sends the link, and the row below it stays for a second go.
+     *
+     * `opened` is per machine and holds the URL, so one link opens once. A
+     * refused open is not announced: the row is right there, and a modal over a
+     * browser that is already coming up would be the worse noise.
+     */
+    const [opened, setOpened] = React.useState<Record<string, string>>({});
+    const openLogin = React.useCallback((machineId: string, url: string) => {
+        setOpened((prev) => (prev[machineId] === url ? prev : { ...prev, [machineId]: url }));
+        void Linking.openURL(url).catch(() => {});
+    }, []);
+
+    React.useEffect(() => {
+        for (const id of machineIds ? machineIds.split(',') : []) {
+            const url = autoOpenLoginUrl({
+                phase: phases[id] ?? addAccountIdle,
+                url: cardFor(id)?.url,
+                opened: opened[id] ?? null,
+            });
+            if (url) openLogin(id, url);
+        }
+    }, [machineIds, phases, cardFor, opened, openLogin]);
 
     // Poll only while something is actually in flight. An idle Accounts screen
     // costs one round trip per machine on open and nothing after.
@@ -156,25 +206,17 @@ export default function AccountsScreen() {
     }, [machineIds, load]);
 
     /**
-     * Start a login on that machine.
+     * Start a login on that machine. Nothing is asked first (DROVE-212).
      *
-     * The name is optional on purpose: left out, the account is called after
-     * the address it logs in as, so there is nothing to invent and nothing to
-     * remember it by but the address.
+     * No name is collected and none is sent. `drover account login` names the
+     * account after the address Claude Code reports once the login succeeds,
+     * which is the only name that is true without asking for one.
      */
-    const addAccount = React.useCallback(async (machineId: string, existing: string[], on: string) => {
-        const name = await Modal.prompt(
-            `Add a Claude account on ${on}`,
-            'It will be logged in and kept ON THAT MACHINE. Leave the name empty to call it after '
-            + 'the address you sign in as.',
-            { defaultValue: '', placeholder: 'Optional name', cancelText: 'Cancel', confirmText: 'Start login' },
-        );
-        if (name === null) return;
-        const requested = name.trim() || null;
+    const addAccount = React.useCallback(async (machineId: string, existing: string[]) => {
         dispatch(machineId, { type: 'start' });
         try {
-            await machineDroverAccountLogin(machineId, requested ?? undefined);
-            dispatch(machineId, { type: 'started', at: Date.now(), before: existing, requested });
+            await machineDroverAccountLogin(machineId);
+            dispatch(machineId, { type: 'started', at: Date.now(), before: existing });
         } catch (error) {
             // Named outright rather than swallowed: the login runs on a Mac
             // nobody is looking at, so a failure that only logs there is a
@@ -194,17 +236,13 @@ export default function AccountsScreen() {
      * first account ever read back would look like the one just added and the
      * screen would announce a success that never happened. Offline is a no for
      * the same honesty: the group already says the list cannot be changed, so
-     * asking for a name first would be a question in front of a refusal.
+     * starting a login there would be a spinner in front of a refusal.
      */
     const params = useLocalSearchParams<{ addMachineId?: string }>();
     const requested = typeof params.addMachineId === 'string' && params.addMachineId ? params.addMachineId : null;
     const autoStarted = React.useRef(false);
     const requestedState = requested ? loaded[requested] : undefined;
     const requestedOnline = !!machines.find((m) => m.id === requested)?.active;
-    const requestedName = React.useMemo(() => {
-        const machine = machines.find((m) => m.id === requested);
-        return machine ? machineName(machine) : (requested ?? '');
-    }, [machineIds, requested]);
     React.useEffect(() => {
         const before = autoStartAddAccount({
             requested,
@@ -214,8 +252,8 @@ export default function AccountsScreen() {
         });
         if (!before) return;
         autoStarted.current = true;
-        void addAccount(requested!, before, requestedName);
-    }, [requested, requestedOnline, requestedState, requestedName, addAccount]);
+        void addAccount(requested!, before);
+    }, [requested, requestedOnline, requestedState, addAccount]);
 
     const removeAccount = React.useCallback(async (machineId: string, account: MachineAccount) => {
         const ok = await Modal.confirm(
@@ -304,7 +342,7 @@ export default function AccountsScreen() {
                                     title={status.title}
                                     subtitle={status.detail || undefined}
                                     subtitleLines={0}
-                                    loading={status.watching && !status.hasLink}
+                                    loading={status.spinner}
                                     icon={<Ionicons
                                         name={phase.kind === 'added' ? 'checkmark-circle-outline'
                                             : phase.kind === 'failed' ? 'warning-outline' : 'time-outline'}
@@ -312,26 +350,54 @@ export default function AccountsScreen() {
                                         color={phase.kind === 'added' ? '#34C759'
                                             : phase.kind === 'failed' ? '#FF9500' : '#8E8E93'}
                                     />}
-                                    // Straight to the card holding the link. It is the existing
-                                    // account-login card (DROVE-61) and it is where the code is
-                                    // typed; drawing a second copy of it here would be a second
-                                    // thing to keep in step with the bus.
-                                    onPress={status.hasLink && card
-                                        ? () => router.push(`/session/${card.sessionId}` as never)
-                                        : phase.kind === 'added' || phase.kind === 'failed' || phase.kind === 'stoppedWatching'
-                                            ? () => dispatch(machine.id, { type: 'dismiss' })
-                                            : undefined}
-                                    detail={status.hasLink ? 'Open card' : undefined}
+                                    // A terminal state is tapped to clear it. While a link is
+                                    // live the two rows below are what to press, so this one is
+                                    // read, not pressed.
+                                    onPress={phase.kind === 'added' || phase.kind === 'failed' || phase.kind === 'stoppedWatching'
+                                        ? () => dispatch(machine.id, { type: 'dismiss' })
+                                        : undefined}
                                     showChevron={false}
                                 />
                             )}
 
+                            {/*
+                              * The link, on THIS screen (DROVE-212).
+                              *
+                              * It opens the browser directly rather than the share sheet the card
+                              * in the bridge thread raises: from a phone, Start login has to end at
+                              * a sign-in page. The sheet stays on that card for the times Clay
+                              * wants the link somewhere other than the default browser.
+                              *
+                              * The code still goes back on the card and nowhere else. That is the
+                              * DROVE-61 path, it is the only thing wired to the waiting login, and
+                              * a second code field here would be a second thing to keep in step.
+                              */}
+                            {status?.hasLink && card?.url && (
+                                <>
+                                    <Item
+                                        title="Open the sign-in page"
+                                        subtitle={hostOf(card.url)}
+                                        icon={<Ionicons name="open-outline" size={29} color="#007AFF" />}
+                                        onPress={() => openLogin(machine.id, card.url!)}
+                                        detail="Open"
+                                        showChevron={false}
+                                    />
+                                    <Item
+                                        title="Enter the code"
+                                        subtitle="Paste what that page gives you back"
+                                        icon={<Ionicons name="key-outline" size={29} color="#007AFF" />}
+                                        onPress={() => router.push(`/session/${card.sessionId}` as never)}
+                                    />
+                                </>
+                            )}
+
                             <Item
                                 title="Add a Claude account"
-                                subtitle="Signs in on this machine. You finish the login in a browser."
+                                subtitle="Opens the sign-in page in your browser. Named after the address you sign in as."
+                                subtitleLines={0}
                                 icon={<Ionicons name="add-circle-outline" size={29} color="#34C759" />}
                                 disabled={!online || addAccountBusy(phase)}
-                                onPress={() => void addAccount(machine.id, accounts.map((a) => a.name), machineName(machine))}
+                                onPress={() => void addAccount(machine.id, accounts.map((a) => a.name))}
                             />
                         </ItemGroup>
                     );
