@@ -3,7 +3,19 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { AcpSessionManager } from '@/agent/acp/AcpSessionManager';
-import { cursorToolName, mapCursorFrame, splitFrames, type CursorFrame } from './cursorStream';
+import {
+    cursorToolName,
+    mapCursorFrame,
+    splitFrames,
+    CursorFrameMapper,
+    readCursorUsage,
+    readCursorApiKeySource,
+    cursorUsageToSessionUsage,
+    addCursorUsage,
+    emptyCursorUsageTally,
+    type CursorFrame,
+} from './cursorStream';
+import type { AgentMessage } from '@/agent/core';
 import { parseCursorModels } from './cursorModels';
 
 /**
@@ -123,5 +135,156 @@ describe('cursor model list', () => {
 
     it('is empty rather than wrong when the CLI says nothing', () => {
         expect(parseCursorModels('')).toEqual([]);
+    });
+});
+
+// --- DROVE-253 -------------------------------------------------------------
+
+describe('--stream-partial-output', () => {
+    /**
+     * Byte-for-byte off a live run of
+     *   cursor-agent --print --output-format stream-json
+     *                --stream-partial-output --trust --force
+     *                --model composer-2.5 --resume <chat>
+     *                'Reply with exactly the three words: alpha beta gamma.'
+     */
+    const partial = readFileSync(
+        join(__dirname, '__fixtures__', 'cursor-stream-partial.jsonl'),
+        'utf-8',
+    );
+
+    function drive(text: string): AgentMessage[] {
+        const { frames } = splitFrames(text.endsWith('\n') ? text : `${text}\n`);
+        const mapper = new CursorFrameMapper();
+        return frames.flatMap((f) => mapper.map(f));
+    }
+
+    it('emits the deltas once and drops the repeated full text', () => {
+        const deltas = drive(partial)
+            .filter((m): m is Extract<AgentMessage, { type: 'model-output' }> => m.type === 'model-output')
+            .map((m) => m.textDelta);
+        expect(deltas).toEqual(['alpha', ' beta', ' gamma']);
+        expect(deltas.join('')).toBe('alpha beta gamma');
+    });
+
+    it('the stateless mapper drops NOTHING, which is right for a caller not '
+        + 'passing the flag', () => {
+        const { frames } = splitFrames(partial);
+        const deltas = frames.flatMap(mapCursorFrame)
+            .filter((m): m is Extract<AgentMessage, { type: 'model-output' }> => m.type === 'model-output')
+            .map((m) => m.textDelta);
+        expect(deltas).toEqual(['alpha', ' beta', ' gamma', 'alpha beta gamma']);
+    });
+
+    it('a tool call ends the run, so the segment after it is never mistaken '
+        + 'for a repeat of the segment before', () => {
+        const stream = [
+            '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"same"}]},"timestamp_ms":1}',
+            '{"type":"tool_call","subtype":"started","call_id":"c1","tool_call":{"readToolCall":{"args":{}}}}',
+            '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"same"}]}}',
+        ].join('\n');
+        const deltas = drive(stream)
+            .filter((m): m is Extract<AgentMessage, { type: 'model-output' }> => m.type === 'model-output')
+            .map((m) => m.textDelta);
+        expect(deltas).toEqual(['same', 'same']);
+    });
+
+    it('a repeated delta is kept, because a real delta carries timestamp_ms '
+        + 'and the trailing repeat does not', () => {
+        const stream = [
+            '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"ha"}]},"timestamp_ms":1}',
+            '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"ha"}]},"timestamp_ms":2}',
+            '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"haha"}]}}',
+        ].join('\n');
+        const deltas = drive(stream)
+            .filter((m): m is Extract<AgentMessage, { type: 'model-output' }> => m.type === 'model-output')
+            .map((m) => m.textDelta);
+        expect(deltas).toEqual(['ha', 'ha']);
+    });
+
+    it('the fixture WITHOUT the flag still yields all its text, because the '
+        + 'final segment there also carries no timestamp_ms and is the only '
+        + 'carrier of that text', () => {
+        const plain = readFileSync(join(__dirname, '__fixtures__', 'cursor-stream.jsonl'), 'utf-8');
+        const deltas = drive(plain)
+            .filter((m): m is Extract<AgentMessage, { type: 'model-output' }> => m.type === 'model-output')
+            .map((m) => m.textDelta);
+        expect(deltas.join('')).toContain('hello');
+        expect(deltas.length).toBe(2);
+    });
+});
+
+describe('usage off the result frame', () => {
+    it('reads the four counts', () => {
+        const frame = {
+            type: 'result',
+            usage: { inputTokens: 25516, outputTokens: 37, cacheReadTokens: 7616, cacheWriteTokens: 0 },
+        };
+        expect(readCursorUsage(frame)).toEqual({
+            inputTokens: 25516, outputTokens: 37, cacheReadTokens: 7616, cacheWriteTokens: 0,
+        });
+    });
+
+    it('is null on any frame that is not a result, and on a result with none', () => {
+        expect(readCursorUsage({ type: 'assistant' })).toBeNull();
+        expect(readCursorUsage({ type: 'result' })).toBeNull();
+        expect(readCursorUsage({ type: 'result', usage: undefined })).toBeNull();
+    });
+
+    it('does NOT subtract cacheRead from input: measured across two turns of '
+        + 'one chat, turn 2 read back 33152 cached tokens against turn 1 '
+        + 'input 25516 + cacheRead 7616 = 33132, so the two do not overlap', () => {
+        const u = readCursorUsage({
+            type: 'result',
+            usage: { inputTokens: 25516, outputTokens: 37, cacheReadTokens: 7616, cacheWriteTokens: 0 },
+        })!;
+        expect(cursorUsageToSessionUsage(u)).toEqual({
+            input_tokens: 25516,
+            output_tokens: 37,
+            cache_read_input_tokens: 7616,
+            cache_creation_input_tokens: 0,
+        });
+    });
+
+    it('sums across turns', () => {
+        let tally = emptyCursorUsageTally;
+        tally = addCursorUsage(tally, {
+            inputTokens: 25516, outputTokens: 37, cacheReadTokens: 7616, cacheWriteTokens: 0,
+        });
+        tally = addCursorUsage(tally, {
+            inputTokens: 60, outputTokens: 19, cacheReadTokens: 33152, cacheWriteTokens: 0,
+        });
+        expect(tally).toEqual({
+            turns: 2, inputTokens: 25576, outputTokens: 56, cacheReadTokens: 40768, cacheWriteTokens: 0,
+        });
+    });
+
+    it('the result frame emits token-count BESIDE the status, on a failed turn '
+        + 'too, because the tokens were spent either way', () => {
+        const ok = mapCursorFrame({
+            type: 'result', is_error: false,
+            usage: { inputTokens: 1, outputTokens: 2, cacheReadTokens: 3, cacheWriteTokens: 4 },
+        });
+        expect(ok.map((m) => m.type)).toEqual(['token-count', 'status']);
+        const bad = mapCursorFrame({
+            type: 'result', is_error: true, error: 'boom',
+            usage: { inputTokens: 1, outputTokens: 2, cacheReadTokens: 3, cacheWriteTokens: 4 },
+        });
+        expect(bad.map((m) => m.type)).toEqual(['token-count', 'status']);
+    });
+});
+
+describe('apiKeySource off the init frame', () => {
+    it('reads it, and only from a system/init frame', () => {
+        expect(readCursorApiKeySource({ type: 'system', subtype: 'init', apiKeySource: 'env' })).toBe('env');
+        expect(readCursorApiKeySource({ type: 'system', subtype: 'init' })).toBeNull();
+        expect(readCursorApiKeySource({ type: 'result', apiKeySource: 'env' })).toBeNull();
+    });
+
+    it('the real fixture is a machine login', () => {
+        const plain = readFileSync(join(__dirname, '__fixtures__', 'cursor-stream.jsonl'), 'utf-8');
+        const { frames } = splitFrames(plain);
+        const sources = frames.map(readCursorApiKeySource).filter(Boolean);
+        expect(sources).toEqual(['login']);
     });
 });

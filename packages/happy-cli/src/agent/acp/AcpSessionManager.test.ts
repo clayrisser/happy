@@ -321,6 +321,8 @@ describe('AcpSessionManager ignored messages', () => {
     const messages: AgentMessage[] = [
       { type: 'permission-request', id: 'p1', reason: 'ReadFile', payload: {} },
       { type: 'permission-response', id: 'p1', approved: true },
+      // A token-count with no `usage` block carries nothing to publish and is
+      // still ignored. One WITH a usage block is not; see below.
       { type: 'token-count', total: 1 },
       { type: 'fs-edit', description: 'edit' },
       { type: 'terminal-output', data: 'stdout' },
@@ -328,6 +330,45 @@ describe('AcpSessionManager ignored messages', () => {
 
     const envelopes = mapMany(mapper, messages);
     expect(envelopes).toHaveLength(0);
+  });
+});
+
+describe('AcpSessionManager token counts', () => {
+  it('carries a usage block out on a turn-less service envelope', () => {
+    const mapper = new AcpSessionManager();
+    mapper.startTurn();
+    const envelopes = mapper.mapMessage({
+      type: 'token-count',
+      usage: {
+        input_tokens: 25516,
+        output_tokens: 37,
+        cache_read_input_tokens: 7616,
+        cache_creation_input_tokens: 0,
+      },
+    });
+
+    expect(envelopes).toHaveLength(1);
+    expect(envelopes[0].ev).toEqual({ t: 'service', text: '' });
+    expect(envelopes[0].usage).toEqual({
+      input_tokens: 25516,
+      output_tokens: 37,
+      cache_read_input_tokens: 7616,
+    });
+    // NO turn id, deliberately: an app version without the usage-only-service
+    // filter renders any agent service envelope that HAS a turn as a chat row,
+    // which would be one blank bubble per turn.
+    expect(envelopes[0].turn).toBeUndefined();
+  });
+
+  it('normalises rather than trusting, because createEnvelope PARSES the '
+    + 'usage block and a half-filled one would throw mid-turn', () => {
+    const mapper = new AcpSessionManager();
+    const envelopes = mapper.mapMessage({
+      type: 'token-count',
+      usage: { input_tokens: 'lots', output_tokens: -4 },
+    });
+    expect(envelopes).toHaveLength(1);
+    expect(envelopes[0].usage).toEqual({ input_tokens: 0, output_tokens: 0 });
   });
 });
 

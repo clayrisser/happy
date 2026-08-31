@@ -16,18 +16,53 @@ const t = ((key: string) => key) as any;
  * DROVE-57's reopening: every Claude-specific control must be ABSENT on a
  * Cursor session, never present and inert. These assert the absence, because
  * the failure mode is a control that renders and does nothing.
+ *
+ * DROVE-253 changed the ANSWER for two of them without changing that rule.
+ * Effort and permission modes are now real for this harness, so the assertion
+ * is no longer "never" but "only when the session published one". A control
+ * still never renders on nothing.
  */
 describe('Cursor session controls', () => {
-    it('has no effort picker: Cursor spells effort inside the model id', () => {
+    it('has no effort picker until the session publishes its scale, because '
+        + 'Cursor spells effort inside the model id and the bracket override '
+        + 'its help advertises was measured to be rejected', () => {
         expect(getEffortLevelsForModel('cursor', 'cursor-grok-4.6-xhigh-fast')).toEqual([]);
         expect(getEffortLevelsForPicker('cursor', 'cursor-grok-4.6-xhigh-fast')).toEqual([]);
     });
 
-    it('has no permission picker, because one option hides it', () => {
+    it('lists the tiers the session published, so a pick is a tier that '
+        + 'really exists in --list-models', () => {
+        const metadata = {
+            thoughtLevels: [
+                { code: 'low', value: 'Low' },
+                { code: 'xhigh', value: 'Extra High' },
+            ],
+        } as any;
+        const levels = getEffortLevelsForModel('cursor', 'cursor-grok-4.6', metadata);
+        expect(levels.map((l) => l.key)).toEqual(['low', 'xhigh']);
+    });
+
+    it('has no permission picker until the session publishes its modes, '
+        + 'because one option hides it', () => {
         const modes = getAvailablePermissionModes('cursor', null, t);
         expect(modes).toHaveLength(1);
         expect(modes[0].key).toBe('bypassPermissions');
         expect(modes[0].description).toMatch(/--force/);
+    });
+
+    it('lists the modes the session published, which is how --mode plan and '
+        + '--mode ask reach the picker with no app release', () => {
+        const metadata = {
+            operatingModes: [
+                { code: 'bypassPermissions', value: 'Full access', description: 'Every tool call runs. --force' },
+                { code: 'plan', value: 'Plan', description: 'Read-only. --mode plan' },
+                { code: 'read-only', value: 'Read only', description: 'Read-only. --mode ask' },
+            ],
+        } as any;
+        const modes = getAvailablePermissionModes('cursor', metadata, t).map((m) => m.key);
+        expect(modes).toContain('plan');
+        expect(modes).toContain('read-only');
+        expect(modes.length).toBeGreaterThan(1);
     });
 
     it('never falls through to Claude permission modes', () => {

@@ -17,9 +17,20 @@
  *
  * `--force` is not a shortcut. In `--print` there is no interactive approval
  * to raise, so a turn without it stalls or refuses on the first shell command.
- * The session says so: metadata carries `dangerouslySkipPermissions: true` and
- * the app shows no permission-mode picker for this flavor, because there is no
- * mode to pick.
+ *
+ * MEASURED, and it is why the gate never answers `ask` (DROVE-253): a
+ * `beforeShellExecution` hook returning `{"permission":"ask"}` under
+ * `--print --force` does NOT reject and does not prompt. The tool call sat for
+ * ~20s and then RAN — `executionTime 20603ms` against `localExecutionTimeMs
+ * 495`, exit 0, stdout delivered. So `ask` is fail-OPEN with a twenty-second
+ * tax. A gate with nobody to ask must answer `deny`.
+ *
+ * `--force` is no longer the only mode, though. `--mode plan|ask`,
+ * `--auto-review` and `--sandbox` are real argv, so the app's permission
+ * picker maps onto something (see `cursorPermission.ts`). What cannot be done
+ * is reading the choice back: the init frame hardcodes
+ * `permissionMode:"default"` — literally, out of the bundle — under `--force`
+ * and under `--mode ask` alike.
  */
 
 import { spawn, type ChildProcessByStdio } from 'node:child_process';
@@ -30,7 +41,15 @@ import { promisify } from 'node:util';
 import type { AgentBackend, AgentMessage, AgentMessageHandler, StartSessionResult } from '@/agent/core';
 import { logger } from '@/ui/logger';
 import { resolveCursorBin } from './cursorBin';
-import { splitFrames, mapCursorFrame } from './cursorStream';
+import {
+    splitFrames,
+    CursorFrameMapper,
+    readCursorUsage,
+    readCursorApiKeySource,
+    type CursorUsage,
+} from './cursorStream';
+import { cursorTurnEnv, scrubbedCursorVars, type CursorOwnedCredential } from './cursorEnv';
+import { cursorPermissionArgs } from './cursorPermission';
 
 const execFileAsync = promisify(execFile);
 
@@ -40,11 +59,22 @@ export interface CursorBackendOptions {
     configDir: string;
     /** Cursor model id, e.g. `cursor-grok-4.6-xhigh-fast`. Null means the config default. */
     model?: string | null;
+    /** An app permission-mode code. See cursorPermission.ts for the mapping. */
+    permissionMode?: string | null;
     /** An existing chat id to attach to instead of minting a new one. */
     resumeChatId?: string | null;
+    /**
+     * A credential this SESSION owns, if any. Absent means the machine login,
+     * and an inherited `CURSOR_API_KEY` is scrubbed rather than honoured.
+     */
+    credential?: CursorOwnedCredential;
     /** Echo the agent's text to this sink so the tmux pane shows the conversation. */
     echo?: (text: string) => void;
     log?: (msg: string) => void;
+    /** `apiKeySource` off the init frame, once per turn. `login` is the quiet one. */
+    onApiKeySource?: (source: string) => void;
+    /** The `usage` block off the result frame, once per turn that produced one. */
+    onUsage?: (usage: CursorUsage) => void;
 }
 
 export class CursorBackend implements AgentBackend {
@@ -55,10 +85,13 @@ export class CursorBackend implements AgentBackend {
     private cancelled = false;
     /** The model in force for the NEXT turn, so a pick lands without a restart. */
     private model: string | null;
+    /** Likewise the permission mode. A running turn's mode is fixed at exec. */
+    private permissionMode: string | null;
 
     constructor(opts: CursorBackendOptions) {
         this.opts = opts;
         this.model = opts.model ?? null;
+        this.permissionMode = opts.permissionMode ?? null;
     }
 
     private log(msg: string) {
@@ -87,8 +120,23 @@ export class CursorBackend implements AgentBackend {
         this.log(`model for the next turn: ${model ?? 'the config default'}`);
     }
 
+    setPermissionMode(mode: string | null): void {
+        this.permissionMode = mode;
+        this.log(`permission mode for the next turn: ${mode ?? 'the default'}`);
+    }
+
+    /**
+     * The turn's environment, with the identity variables scrubbed unless this
+     * session owns one. See cursorEnv.ts for why that is not paranoia: an
+     * inherited key is EXCHANGED for tokens and persisted into the machine
+     * keychain, so it can overwrite the login the IDE uses.
+     */
     private env(): NodeJS.ProcessEnv {
-        return { ...process.env, CURSOR_CONFIG_DIR: this.opts.configDir };
+        const scrubbed = scrubbedCursorVars(this.opts.credential ?? {});
+        if (scrubbed.length > 0) {
+            this.log(`scrubbed from the turn environment: ${scrubbed.join(', ')}`);
+        }
+        return cursorTurnEnv(this.opts.configDir, this.opts.credential ?? {});
     }
 
     /**
@@ -122,12 +170,16 @@ export class CursorBackend implements AgentBackend {
         const args = [
             '--print',
             '--output-format', 'stream-json',
+            // Real text deltas instead of one lump per assistant run. The
+            // trailing repeat this turns on is dropped by CursorFrameMapper;
+            // see cursorStream.ts for the two signals that identify it.
+            '--stream-partial-output',
             // NOT optional. Without it a directory Cursor has not seen stops
             // the run dead with an interactive "Workspace Trust Required"
             // prompt on stderr and exit 1 — which from the phone reads as a
             // session that simply does nothing.
             '--trust',
-            '--force',
+            ...cursorPermissionArgs(this.permissionMode),
             '--resume', this.chatId,
         ];
         if (this.model) args.push('--model', this.model);
@@ -143,6 +195,10 @@ export class CursorBackend implements AgentBackend {
         let buffer = '';
         let stderr = '';
         let sawResult = false;
+        // One mapper per turn: the assistant-run accumulator it holds is only
+        // meaningful within a turn, and carrying it across would let the last
+        // frame of one turn suppress the first frame of the next.
+        const mapper = new CursorFrameMapper();
 
         child.stdout.setEncoding('utf-8');
         child.stdout.on('data', (chunk: string) => {
@@ -151,7 +207,11 @@ export class CursorBackend implements AgentBackend {
             buffer = rest;
             for (const frame of frames) {
                 if (frame.type === 'result') sawResult = true;
-                for (const msg of mapCursorFrame(frame)) {
+                const source = readCursorApiKeySource(frame);
+                if (source) this.opts.onApiKeySource?.(source);
+                const usage = readCursorUsage(frame);
+                if (usage) this.opts.onUsage?.(usage);
+                for (const msg of mapper.map(frame)) {
                     if (msg.type === 'model-output' && msg.textDelta && this.opts.echo) {
                         this.opts.echo(msg.textDelta);
                     }

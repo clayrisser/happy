@@ -10,14 +10,24 @@
  *
  * What is deliberately NOT here, because Cursor does not have it:
  *
- *   accounts / flip   the flip moves Claude logins. Cursor has its own auth
- *                     and nothing to switch between, so no `droverAccount` is
- *                     stamped and the app's flip action stays hidden.
- *   permission modes  `--print` has no interactive approval. The turn runs
- *                     with `--force` and the session says so.
+ *   accounts / flip   the flip moves Claude logins. Cursor keys its credential
+ *                     to the machine, not to a config dir, and publishes no
+ *                     quota or reset time anywhere, so there is nothing to
+ *                     switch between and nothing to decide with (DROVE-253).
+ *                     No `droverAccount` is stamped and the flip stays hidden.
+ *
+ * What IS here now, and was not (DROVE-253):
+ *
+ *   permission modes  `--mode plan|ask`, `--force` and `--auto-review` are
+ *                     real argv, so the picker maps onto something. The choice
+ *                     is the session's own record, never read back off the
+ *                     init frame, which reports "default" for all of them.
  *   effort            Cursor spells effort INSIDE the model id
- *                     (`cursor-grok-4.6-xhigh-fast`), so there is no second
- *                     axis to pick. The app shows no effort control.
+ *                     (`cursor-grok-4.6-xhigh-fast`), and the bracket override
+ *                     its help advertises was MEASURED to be rejected on this
+ *                     login. So the id is split into a family and a tier, the
+ *                     app picks each, and the tier is rejoined by lookup.
+ *   token counts      the `result` frame's `usage`, per turn and summed.
  *
  * The pane is a real half of the session, not a spinner: the agent's text is
  * echoed to stdout, and a line typed into the pane is a turn exactly like a
@@ -47,7 +57,20 @@ import { setupOfflineReconnection } from '@/utils/setupOfflineReconnection';
 import { MessageQueue2 } from '@/utils/MessageQueue2';
 import { CursorBackend } from './CursorBackend';
 import { prepareSessionCursorConfigDir } from './cursorConfig';
-import { listCursorModels } from './cursorModels';
+import {
+    listCursorModels,
+    buildCursorModelCatalog,
+    resolveCursorModelId,
+    splitCursorModelId,
+    type CursorModelCatalog,
+} from './cursorModels';
+import {
+    cursorPermissionCatalog,
+    cursorPermissionModes,
+    cursorModeSkipsPermissions,
+} from './cursorPermission';
+import { cursorApiKeySourceIsOwnLogin } from './cursorEnv';
+import { addCursorUsage, emptyCursorUsageTally, type CursorUsageTally } from './cursorStream';
 
 export interface RunCursorOptions {
     credentials: Credentials;
@@ -56,6 +79,14 @@ export interface RunCursorOptions {
     model?: string | null;
     /** An existing Cursor chat id to attach to. */
     resumeChatId?: string | null;
+    /** An app permission-mode code for the first turn. See cursorPermission.ts. */
+    permissionMode?: string | null;
+    /**
+     * True when `drover cursor --gate` registered the permission gate, so the
+     * `auto-review` mode has something to answer its prompts. Without a gate
+     * that mode is a twenty-second pause and then yes, so it is not offered.
+     */
+    gated?: boolean;
 }
 
 export async function runCursor(opts: RunCursorOptions): Promise<void> {
@@ -69,17 +100,32 @@ export async function runCursor(opts: RunCursorOptions): Promise<void> {
     }
     await api.getOrCreateMachine({ machineId: settings.machineId, metadata: initialMachineMetadata });
 
+    const permissionModes = cursorPermissionCatalog({ gated: opts.gated });
+    const initialMode = opts.permissionMode ?? cursorPermissionModes.bypassPermissions;
     const { state, metadata } = createSessionMetadata({
         flavor: 'cursor',
         machineId: settings.machineId,
         startedBy: opts.startedBy,
-        // Honest, not incidental: a `--print` turn has no approval prompt to
-        // raise, so every Cursor turn runs with --force and the phone must
-        // show that rather than an inert permission picker.
-        dangerouslySkipPermissions: true,
+        // Still honest, and now conditional: `--force` really does skip every
+        // approval, but it is no longer the only mode this harness can run in.
+        dangerouslySkipPermissions: cursorModeSkipsPermissions(initialMode),
     });
-    if (opts.model) {
-        (metadata as unknown as Record<string, unknown>).modelMode = opts.model;
+    const meta = metadata as unknown as Record<string, unknown>;
+    // The permission picker is published, not hardcoded in the app: `cursor`
+    // is not one of the flavors with a built-in mode table, and the app reads
+    // `operatingModes` for anything that is not. So a mode this build supports
+    // appears without an app release, and one it drops disappears the same way.
+    meta.operatingModes = permissionModes;
+    meta.currentOperatingModeCode = initialMode;
+    meta.permissionMode = initialMode;
+    const initialSplit = opts.model ? splitCursorModelId(opts.model) : null;
+    if (initialSplit) {
+        meta.modelMode = initialSplit.base;
+        meta.currentModelCode = initialSplit.base;
+        if (initialSplit.effort) {
+            meta.effortLevel = initialSplit.effort;
+            meta.currentThoughtLevelCode = initialSplit.effort;
+        }
     }
     // The pane is real, so the app renders the session as one that has a
     // terminal in front of it rather than a headless run.
@@ -120,22 +166,73 @@ export async function runCursor(opts: RunCursorOptions): Promise<void> {
         join(configuration.happyHomeDir, 'cursor-sessions', sessionTag),
     );
 
-    // The picker's list comes from the CLI, not from a table in the app, so it
+    // The pickers come from the CLI, not from a table in the app, so they
     // cannot drift from what `--model` accepts. Published after the session
     // exists because the call costs a round trip and a session that appears a
     // second later is worse than a picker that fills a second later.
-    void listCursorModels(configDir, process.cwd()).then((models) => {
-        if (models.length === 0) return;
-        session.updateMetadata((current) => ({ ...current, models }));
+    //
+    // The flat list is folded into families plus an effort axis first: sixty
+    // near-duplicate ids is not a picker, and the tier in the id is the only
+    // effort control cursor-agent actually honours (cursorModels.ts).
+    let catalog: CursorModelCatalog | null = null;
+    void listCursorModels(configDir, process.cwd()).then((flat) => {
+        if (flat.length === 0) return;
+        catalog = buildCursorModelCatalog(flat);
+        const built = catalog;
+        session.updateMetadata((current) => ({
+            ...current,
+            models: built.models,
+            ...(built.efforts.length > 0 ? { thoughtLevels: built.efforts } : {}),
+        }));
     });
+
+    let usageTally: CursorUsageTally = emptyCursorUsageTally;
 
     const backend = new CursorBackend({
         cwd: process.cwd(),
         configDir,
         model: opts.model ?? null,
+        permissionMode: initialMode,
         resumeChatId: opts.resumeChatId ?? null,
         echo: (text) => process.stdout.write(text),
         log: (msg) => logger.debug(`[cursor] ${msg}`),
+        // A turn that is NOT running as the machine's own login has to say so.
+        // An inherited key is scrubbed before the turn (cursorEnv.ts), so this
+        // firing at all means either the session owns a key or cursor-agent
+        // found one somewhere drover does not control — either way, visible.
+        onApiKeySource: (source) => {
+            if (cursorApiKeySourceIsOwnLogin(source)) return;
+            logger.debug(`[cursor] running under apiKeySource=${source}, not the machine login`);
+            session.updateMetadata((current) => ({
+                ...current,
+                cursorApiKeySource: source,
+            }));
+        },
+        // Cursor reports usage once, at turn end, and nothing finer. Enough for
+        // a turn and a session tally; not enough for a live clock, which is why
+        // liveStatus stays a Claude-only thing for this harness.
+        onUsage: (usage) => {
+            usageTally = addCursorUsage(usageTally, usage);
+            const tally = usageTally;
+            session.updateMetadata((current) => ({
+                ...current,
+                cursorUsage: {
+                    turn: {
+                        inputTokens: usage.inputTokens,
+                        outputTokens: usage.outputTokens,
+                        cacheReadTokens: usage.cacheReadTokens,
+                        cacheWriteTokens: usage.cacheWriteTokens,
+                    },
+                    session: {
+                        turns: tally.turns,
+                        inputTokens: tally.inputTokens,
+                        outputTokens: tally.outputTokens,
+                        cacheReadTokens: tally.cacheReadTokens,
+                        cacheWriteTokens: tally.cacheWriteTokens,
+                    },
+                },
+            }));
+        },
     });
 
     const sessionManager = new AcpSessionManager();
@@ -158,12 +255,40 @@ export async function runCursor(opts: RunCursorOptions): Promise<void> {
         messageQueue.push(message.content.text, {});
     });
 
-    // A model picked in the app arrives as a metadata update and takes effect
-    // on the NEXT turn. It cannot change the turn already running: a Cursor
-    // turn is one cursor-agent process and its model is fixed at exec.
+    // A model, effort or mode picked in the app arrives as a metadata update
+    // and takes effect on the NEXT turn. None of them can change the turn
+    // already running: a Cursor turn is one cursor-agent process and its argv
+    // is fixed at exec.
+    let appliedMode: string | null = initialMode;
     session.on('metadata', (updated: unknown) => {
-        const next = (updated as { modelMode?: string | null } | null)?.modelMode ?? null;
-        backend.setModel(next);
+        const next = updated as {
+            modelMode?: string | null;
+            effortLevel?: string | null;
+            permissionMode?: string | null;
+        } | null;
+        // Model and effort are one string to cursor-agent, so a change to
+        // either has to be resolved against the whole catalog. Before the
+        // catalog arrives the pick is passed through untouched, which is the
+        // old behaviour and still correct for a full id.
+        const family = next?.modelMode ?? null;
+        const effort = next?.effortLevel ?? null;
+        backend.setModel(catalog ? resolveCursorModelId(catalog, family, effort) : family);
+
+        const mode = next?.permissionMode ?? null;
+        backend.setPermissionMode(mode);
+        // The info screen's "skips permissions" line has to follow the mode,
+        // or a session sitting in Plan still reads as one that runs anything.
+        // Guarded on a real change because this writes metadata from inside a
+        // metadata handler, and an unguarded write is a loop.
+        if (mode !== appliedMode) {
+            appliedMode = mode;
+            const skips = cursorModeSkipsPermissions(mode);
+            session.updateMetadata((current) => (
+                current?.dangerouslySkipPermissions === skips
+                    ? current
+                    : { ...current, dangerouslySkipPermissions: skips }
+            ));
+        }
     });
 
     session.keepAlive(thinking, 'remote');

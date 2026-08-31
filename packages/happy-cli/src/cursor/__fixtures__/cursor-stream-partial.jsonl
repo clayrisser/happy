@@ -1,0 +1,11 @@
+{"type":"system","subtype":"init","apiKeySource":"login","cwd":"/private/tmp/claude-501/-Users-clayrisser-Projects-bitspur-cattle-drover/19c2f0a8-f803-4cb8-8bee-c68b6773e412/scratchpad/cursor-probe/work","session_id":"24b51cf3-2273-4fcb-8c8d-3cb71b47e88a","model":"Composer 2.5","permissionMode":"default"}
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Reply with exactly the three words: alpha beta gamma. Nothing else."}]},"session_id":"24b51cf3-2273-4fcb-8c8d-3cb71b47e88a"}
+{"type":"thinking","subtype":"delta","text":"The response will be","session_id":"24b51cf3-2273-4fcb-8c8d-3cb71b47e88a","timestamp_ms":1788217805654}
+{"type":"thinking","subtype":"delta","text":" exactly \"alpha beta","session_id":"24b51cf3-2273-4fcb-8c8d-3cb71b47e88a","timestamp_ms":1788217805656}
+{"type":"thinking","subtype":"delta","text":" gamma\".","session_id":"24b51cf3-2273-4fcb-8c8d-3cb71b47e88a","timestamp_ms":1788217805661}
+{"type":"thinking","subtype":"completed","session_id":"24b51cf3-2273-4fcb-8c8d-3cb71b47e88a","timestamp_ms":1788217805662}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"alpha"}]},"session_id":"24b51cf3-2273-4fcb-8c8d-3cb71b47e88a","timestamp_ms":1788217805664}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" beta"}]},"session_id":"24b51cf3-2273-4fcb-8c8d-3cb71b47e88a","timestamp_ms":1788217805667}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":" gamma"}]},"session_id":"24b51cf3-2273-4fcb-8c8d-3cb71b47e88a","timestamp_ms":1788217805670}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"alpha beta gamma"}]},"session_id":"24b51cf3-2273-4fcb-8c8d-3cb71b47e88a"}
+{"type":"result","subtype":"success","duration_ms":5074,"duration_api_ms":5074,"is_error":false,"result":"alpha beta gamma","session_id":"24b51cf3-2273-4fcb-8c8d-3cb71b47e88a","request_id":"5fb3c5aa-9d85-4d81-be4e-3619008f1aaf","usage":{"inputTokens":25516,"outputTokens":37,"cacheReadTokens":7616,"cacheWriteTokens":0}}
