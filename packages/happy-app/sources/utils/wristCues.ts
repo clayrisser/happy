@@ -136,6 +136,19 @@ export function parseWristCueSwift(source: string): {
 }
 
 /**
+ * Whether the wrist reaches this cue through a GATE (DROVE-222).
+ *
+ * Four of the five do: the watch reads the gate's kind and picks the pattern.
+ * `finished` is the odd one out, and not because it is unreachable — it is
+ * derived from a session that WAS running and is not any more, so the phone
+ * summons it with `demoFinishSession` instead. Two builders, because the wrist
+ * has two ways in, and this is the question that says which.
+ */
+export function wristCueIsGate(spec: WristCueSpec): boolean {
+    return spec.cue !== 'finished';
+}
+
+/**
  * A gate the phone publishes to make the WRIST play `spec` on demand
  * (DROVE-75), through the real path: it lands in a snapshot, WristCueDiff
  * sees a fresh gate of this kind, and WristBuzzer plays the pattern. No
@@ -144,13 +157,8 @@ export function parseWristCueSwift(source: string): {
  * The id is in the demo namespace with a stamp, so the watch's dedupe treats
  * every tap as a new arrival, and every refusal on the phone (droverWatchFeed
  * drops a `demo:` answer) and the Mac (droverBridge refuses one) applies if
- * the wrist answers it. `finished` is not a gate kind and cannot be summoned
- * this way; the caller checks `canBuzzWatch` first.
+ * the wrist answers it.
  */
-export function canBuzzWatch(spec: WristCueSpec): boolean {
-    return spec.cue !== 'finished';
-}
-
 export interface DemoBuzzGate {
     id: string;
     title: string;
@@ -170,6 +178,43 @@ export function demoBuzzGate(spec: WristCueSpec, now: number = Date.now()): Demo
         kind: spec.wire,
         createdAt: new Date(now).toISOString(),
         account: 'demo',
+    };
+}
+
+export interface DemoFinishSession {
+    id: string;
+    title: string;
+    active: boolean;
+    account: string;
+    state: string;
+}
+
+/**
+ * The session the phone stages so the WRIST plays `finished` (DROVE-222).
+ *
+ * `finished` is not a gate kind, so `demoBuzzGate` cannot summon it. On the
+ * watch it is a DIFF: WristCueDiff emits it for a session that was `active` in
+ * the previous snapshot and is not in the next one. So the phone publishes
+ * this session running, then publishes the same id stopped, and the wrist
+ * reaches the cue by the identical code a real session ending runs through.
+ *
+ * Demo-namespaced like the gate, for the same reason: droverWatchFeed refuses
+ * anything the wrist sends back about a `demo:` id. Note the cue id the watch
+ * composes is `finished:demo:...`, which does NOT start with the demo prefix,
+ * so `DroverDemo.isDemoId` on the watch does not catch it and the console line
+ * is missing its `[drover-demo]` mark. Cosmetic, and a Swift fix, so it is
+ * reported rather than made here (this lane ships OTA).
+ */
+export function demoFinishSession(active: boolean, now: number = Date.now()): DemoFinishSession {
+    return {
+        id: `demo:finish-${now}`,
+        title: 'Demo \u00b7 Session finished',
+        active,
+        account: 'demo',
+        // The two words the phone's own list resolves to for a session that is
+        // working and one that has stopped, so the wrist draws the demo the
+        // way it draws the real thing.
+        state: active ? 'thinking' : 'disconnected',
     };
 }
 

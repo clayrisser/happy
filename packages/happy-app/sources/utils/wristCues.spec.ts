@@ -81,7 +81,7 @@ describe('the wrist cue table', () => {
     });
 });
 
-import { canBuzzWatch, demoBuzzGate } from './wristCues';
+import { demoBuzzGate, demoFinishSession, wristCueIsGate } from './wristCues';
 
 describe('the demo buzz gate for the wrist', () => {
     it('is a fresh demo-namespaced gate of the cue\'s wire kind', () => {
@@ -99,8 +99,44 @@ describe('the demo buzz gate for the wrist', () => {
         expect(demoBuzzGate(spec, 1).id).not.toBe(demoBuzzGate(spec, 2).id);
     });
 
-    it('can summon every gate cue and not the session-finished one', () => {
-        expect(wristCues.filter(canBuzzWatch).map((c) => c.cue)).toEqual(['needsYou', 'question', 'permission', 'expiry']);
+    it('names the four cues the wrist reaches through a gate', () => {
+        expect(wristCues.filter(wristCueIsGate).map((c) => c.cue)).toEqual(['needsYou', 'question', 'permission', 'expiry']);
+    });
+
+    it('leaves the session-finished cue to the session builder', () => {
+        expect(wristCues.filter((c) => !wristCueIsGate(c)).map((c) => c.cue)).toEqual(['finished']);
+    });
+});
+
+/**
+ * The other way into the wrist (DROVE-222). `finished` is not a gate kind, so
+ * WristCueDiff only ever emits it for a session that WAS active and is not.
+ * Both halves therefore have to carry the same id, or the watch sees one
+ * session appear and a different one vanish and stays silent.
+ */
+describe('the demo session staged so the wrist plays "Session finished"', () => {
+    it('is one demo-namespaced id, running then stopped', () => {
+        const running = demoFinishSession(true, 1_700_000_000_000);
+        const stopped = demoFinishSession(false, 1_700_000_000_000);
+        expect(running.id).toBe(stopped.id);
+        expect(running.id.startsWith('demo:')).toBe(true);
+        expect(running.active).toBe(true);
+        expect(stopped.active).toBe(false);
+    });
+
+    it('says on the wrist that it is a demo, and which account', () => {
+        const session = demoFinishSession(true, 1);
+        expect(session.title).toBe('Demo \u00b7 Session finished');
+        expect(session.account).toBe('demo');
+    });
+
+    it('carries the phone\'s own words for working and stopped', () => {
+        expect(demoFinishSession(true, 1).state).toBe('thinking');
+        expect(demoFinishSession(false, 1).state).toBe('disconnected');
+    });
+
+    it('gets a new id per tap, so a second tap is a second stop', () => {
+        expect(demoFinishSession(true, 1).id).not.toBe(demoFinishSession(true, 2).id);
     });
 });
 

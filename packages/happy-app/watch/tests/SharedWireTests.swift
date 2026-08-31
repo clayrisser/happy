@@ -202,6 +202,7 @@ struct SharedWireTests {
         theDemoPlaysEveryCueLoudestFirst()
         aDemoGapOutlastsThePattern()
         thePhonesBuzzGateIsADemoAndStillBuzzes()
+        thePhonesStagedSessionEarnsTheQuietestCue()
         aFrontmostAppAlwaysPlaysItsOwnPattern()
         anAuthorizedClosedAppTapsButLosesThePattern()
         anUnaskedOrRefusedWristSaysWhyItIsSilent()
@@ -308,6 +309,55 @@ struct SharedWireTests {
         let cues = WristCueDiff.cues(from: .empty, to: snapshot, now: now)
         check(cues.map(\.cue) == [.needsYou], "the phone's buzz gate earns the cue it was sent for")
         check(cues.first.map { DroverDemo.isDemoId($0.id) } == true, "the cue it earns is a demo by id, for the log")
+    }
+
+    /// What the phone's "Session finished" row publishes (sources/utils/
+    /// wristCues.ts demoFinishSession, DROVE-222).
+    ///
+    /// That cue has no gate kind behind it, so the phone cannot summon it the
+    /// way it summons the other four. It stages the only thing that produces
+    /// it instead: one demo session RUNNING, then the same id STOPPED. This is
+    /// the cross-language check that the pair the phone sends is the pair this
+    /// diff reads — the simulator has no Taptic Engine, so it is as close to
+    /// the buzz as anything but a wrist gets.
+    static func thePhonesStagedSessionEarnsTheQuietestCue() {
+        let iso = ISO8601DateFormatter().string(from: Date())
+        func payload(_ active: Bool) -> String {
+            """
+            {"gates":[],"updatedAt":"\(iso)","connected":true,"accounts":["demo"],
+            "sessions":[{"id":"demo:finish-1756600000000","title":"Demo · Session finished",
+            "account":"demo","active":\(active),"state":"\(active ? "thinking" : "disconnected")"}]}
+            """
+        }
+        guard let running = try? DroverSnapshot.decoder.decode(DroverSnapshot.self, from: Data(payload(true).utf8)),
+              let stopped = try? DroverSnapshot.decoder.decode(DroverSnapshot.self, from: Data(payload(false).utf8)),
+              let staged = running.sessions.first else {
+            check(false, "the phone's staged demo session decodes")
+            return
+        }
+        check(DroverDemo.isDemoId(staged.id), "the staged session is a demo by id")
+        check(staged.active && stopped.sessions.first?.active == false, "the pair is one id, running then stopped")
+        let cues = WristCueDiff.cues(from: running, to: stopped)
+        check(cues.map(\.cue) == [.finished], "the staged stop earns the finished cue and nothing else")
+        check(
+            cues.first?.id == "finished:demo:finish-1756600000000",
+            "the finished cue is keyed on the staged session"
+        )
+
+        // The race the phone holds off (droverDemoBuzz's holdWithdraw): an
+        // empty snapshot landing between the two halves makes the session
+        // VANISH rather than stop, and a vanished session is not a cue at all.
+        let emptied = """
+        {"gates":[],"updatedAt":"\(iso)","connected":true,"sessions":[]}
+        """
+        guard let withdrawn = try? DroverSnapshot.decoder.decode(DroverSnapshot.self, from: Data(emptied.utf8)) else {
+            check(false, "the withdrawal snapshot decodes")
+            return
+        }
+        check(
+            WristCueDiff.cues(from: running, to: withdrawn).isEmpty,
+            "a session withdrawn rather than stopped buzzes nothing, which is why the phone holds the withdraw"
+        )
     }
 
     /// Absent, never null. WatchConnectivity payloads take property-list types

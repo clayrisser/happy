@@ -840,6 +840,18 @@ describe('startDroverWatchFeed', () => {
         expect(mocks.sendMessage).toHaveBeenNthCalledWith(2, 'sess2', '/flip');
     });
 
+    // The Playground stages a session on the wrist so "Session finished" can
+    // play by the real diff (DROVE-222). It is there for well under a second,
+    // but the wrist can act on anything it can see, and a demo must never
+    // reach the bus — the same refusal a demo GATE answer already gets.
+    it('drops a flip and a dictation aimed at the demo session', () => {
+        start();
+        mocks.onFlip!({ sessionId: 'demo:finish-1', account: 'work-2' });
+        mocks.onSay!({ sessionId: 'demo:finish-1', text: 'hello' });
+        expect(mocks.sendMessage).not.toHaveBeenCalled();
+        expect(mocks.interrupted).toEqual([]);
+    });
+
     it('republishes when only the subagent count moved', () => {
         mocks.sessions = { s1: session({ path: '/a', running: true, subagents: 1 }) };
         start();
