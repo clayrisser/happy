@@ -102,12 +102,43 @@ export function formatReceiptLine(ticket: string, receipt: ExpoPushReceipt | und
  * The send-side twin: one line per message with the ticket id, or the reason
  * Expo refused it outright (a malformed token, a project it does not know).
  */
-export function formatTicketLine(ticket: ExpoPushTicket): string {
+export function formatTicketLine(ticket: ExpoPushTicket, tokenId?: string): string {
     if (ticket.status === 'ok') {
-        return `[PUSH] ticket ${ticket.id} accepted`
+        return `[PUSH] ticket ${ticket.id} accepted${tokenId ? ` token=${tokenId}` : ''}`
     }
     const error = ticket.details?.error ?? 'error'
     return `[PUSH] ticket rejected ${error} ${ticket.message}`
+}
+
+/**
+ * A ticket and the device it was for, so a receipt fifteen seconds later can
+ * name, and retire, the token that failed (DROVE-85).
+ */
+export interface ReceiptSubject {
+    ticket: string
+    token?: string
+    tokenId?: string
+}
+
+/**
+ * Why a receipt means the DEVICE is gone, not the message.
+ *
+ * Measured on 2026-08-31 02:06: token cmtf550e8g…, registered once by an
+ * earlier build and never re-registered, drew `DeveloperError` with APNs'
+ * `BadDeviceToken` on both messages while the re-registered token drew ok on
+ * both. Expo files a stale APNs token under DeveloperError rather than
+ * DeviceNotRegistered, so both spellings are read. Every other error (a
+ * missing APNs key, a message too big, a rate limit) is about the send, and
+ * retiring the device for it would silence a phone that is fine.
+ */
+export function deadDeviceReason(receipt: ExpoPushReceipt | undefined): string | null {
+    if (!receipt || receipt.status !== 'error') return null
+    const error = receipt.details?.error
+    if (error === 'DeviceNotRegistered') return 'DeviceNotRegistered'
+    if (error === 'DeveloperError' && /BadDeviceToken/.test(receipt.message)) {
+        return 'DeveloperError BadDeviceToken'
+    }
+    return null
 }
 
 /**
@@ -236,6 +267,12 @@ export class PushNotificationClient {
     private lastWakeAt = 0
     private wakeTimer: NodeJS.Timeout | null = null
     private pendingWakeReason: string | null = null
+    /**
+     * Expo tokens a receipt has already condemned this run. Filtered out of
+     * every later token fetch so the next send skips them even if the
+     * server-side delete has not landed, or failed.
+     */
+    private readonly retiredTokens = new Set<string>()
 
     constructor(token: string, baseUrl: string = 'https://api.cluster-fluster.com') {
         this.token = token
@@ -269,7 +306,11 @@ export class PushNotificationClient {
                     logger.debug(`[PUSH] Token ${index + 1}: id=${token.id}, created=${new Date(token.createdAt).toISOString()}, updated=${new Date(token.updatedAt).toISOString()}`)
                 })
 
-                return response.data.tokens
+                return response.data.tokens.filter((token) => {
+                    if (!this.retiredTokens.has(token.token)) return true
+                    logger.debug(`[PUSH] token ${token.id} skipped, retired earlier this run`)
+                    return false
+                })
             } catch (error) {
                 logger.debug(`[PUSH] [ERROR] Failed to fetch push tokens (attempt ${attempt}/${maxAttempts}):`, error)
                 if (attempt < maxAttempts) {
@@ -298,8 +339,11 @@ export class PushNotificationClient {
      */
     async sendPushNotifications(
         messages: ExpoPushMessage[],
-        opts?: { retryWindowMs?: number }
+        opts?: { retryWindowMs?: number; tokens?: PushToken[] }
     ): Promise<{ sent: number; failed: number }> {
+        // Expo token -> device record id, so a ticket can be logged against
+        // the device it was for and a receipt can retire that device.
+        const tokenIds = new Map((opts?.tokens ?? []).map((token) => [token.token, token.id]))
         logger.debug(`Sending ${messages.length} push notifications`)
 
         // Filter out invalid push tokens
@@ -349,12 +393,19 @@ export class PushNotificationClient {
                     // and the receipt that says why a phone stayed silent is
                     // keyed by this id, so throwing it away here is throwing
                     // away the only measurement of delivery there is.
-                    for (const ticket of ticketChunk) {
-                        logger.debug(formatTicketLine(ticket))
-                    }
-                    this.scheduleReceiptCheck(
-                        ticketChunk.flatMap((ticket) => (ticket.status === 'ok' ? [ticket.id] : []))
-                    )
+                    // The nth ticket is for the nth message; every message
+                    // here addresses one token, so `to` is that token.
+                    const subjects: ReceiptSubject[] = []
+                    ticketChunk.forEach((ticket, index) => {
+                        const to = chunk[index]?.to
+                        const token = typeof to === 'string' ? to : undefined
+                        const tokenId = token ? tokenIds.get(token) : undefined
+                        logger.debug(formatTicketLine(ticket, tokenId))
+                        if (ticket.status === 'ok') {
+                            subjects.push({ ticket: ticket.id, token, tokenId })
+                        }
+                    })
+                    this.scheduleReceiptCheck(subjects)
                     
                     // Log any errors but don't throw
                     const errors = ticketChunk.filter(ticket => ticket.status === 'error')
@@ -409,26 +460,60 @@ export class PushNotificationClient {
      * a session fails. Exported for the tests, which drive it with fake
      * timers.
      */
-    scheduleReceiptCheck(ticketIds: string[], delayMs: number = RECEIPT_DELAY_MS): void {
-        if (ticketIds.length === 0) return
+    scheduleReceiptCheck(subjects: ReceiptSubject[], delayMs: number = RECEIPT_DELAY_MS): void {
+        if (subjects.length === 0) return
         const timer = setTimeout(() => {
-            void this.fetchReceipts(ticketIds)
+            void this.fetchReceipts(subjects)
         }, delayMs)
         timer.unref()
     }
 
-    private async fetchReceipts(ticketIds: string[]): Promise<void> {
-        for (const chunk of this.expo.chunkPushNotificationReceiptIds(ticketIds)) {
+    private async fetchReceipts(subjects: ReceiptSubject[]): Promise<void> {
+        const byTicket = new Map(subjects.map((subject) => [subject.ticket, subject]))
+        for (const chunk of this.expo.chunkPushNotificationReceiptIds([...byTicket.keys()])) {
             try {
                 const receipts = await this.expo.getPushNotificationReceiptsAsync(chunk)
                 for (const ticket of chunk) {
                     logger.debug(formatReceiptLine(ticket, receipts[ticket]))
+                    const reason = deadDeviceReason(receipts[ticket])
+                    const subject = byTicket.get(ticket)
+                    if (reason && subject?.token) {
+                        await this.retireToken(subject.token, subject.tokenId ?? subject.token, reason)
+                    }
                 }
             } catch (error) {
                 // The fetch failing is not a delivery verdict and must not
                 // read like one, so it is a different line from the two above.
                 logger.debug(`[PUSH] receipts unavailable for ${chunk.length} ticket(s): ${describePushError(error)}`)
             }
+        }
+    }
+
+    /**
+     * Forget a device APNs has disowned (DROVE-85).
+     *
+     * The record is deleted on the Happy server through the same
+     * `DELETE /v1/push-tokens/:token` the app itself uses to unregister, so
+     * the next fetch, from any process, no longer returns it. It is also
+     * remembered in-process, so a delete that fails or lags still cannot put
+     * the dead token back into the next send. Once per token: two messages
+     * to one dead device are one retirement, not two.
+     */
+    private async retireToken(token: string, tokenId: string, reason: string): Promise<void> {
+        if (this.retiredTokens.has(token)) return
+        this.retiredTokens.add(token)
+        try {
+            await axios.delete(`${this.baseUrl}/v1/push-tokens/${encodeURIComponent(token)}`, {
+                headers: {
+                    'Authorization': `Bearer ${this.token}`,
+                    'Content-Type': 'application/json',
+                    'X-Happy-Client': `cli-daemon/${configuration.currentCliVersion}`,
+                },
+                timeout: 15000,
+            })
+            logger.debug(`[PUSH] token ${tokenId} retired ${reason}`)
+        } catch (error) {
+            logger.debug(`[PUSH] token ${tokenId} retired ${reason} (in this process only; server delete failed: ${describePushError(error)})`)
         }
     }
 
@@ -477,7 +562,7 @@ export class PushNotificationClient {
 
                 // Send notifications
                 logger.debug(`[PUSH] Sending ${messages.length} push notifications...`)
-                const outcome = await this.sendPushNotifications(messages)
+                const outcome = await this.sendPushNotifications(messages, { tokens })
                 // `drover status` reads the success line as a verdict
                 // (DROVE-85), so it is only written when Expo actually took
                 // at least one message. It used to be logged unconditionally,
@@ -639,7 +724,7 @@ export class PushNotificationClient {
                 }
                 const outcome = await this.sendPushNotifications(
                     buildWakeMessages(tokens, reason),
-                    { retryWindowMs: 0 }
+                    { retryWindowMs: 0, tokens }
                 )
                 // A wake that dies at Expo is indistinguishable from no wake at
                 // all once you are looking at the watch, so the two cases have

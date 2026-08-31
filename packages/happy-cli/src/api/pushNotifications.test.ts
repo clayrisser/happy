@@ -8,6 +8,7 @@ import {
     RECEIPT_DELAY_MS,
     buildWakeMessages,
     describePushError,
+    deadDeviceReason,
     formatReceiptLine,
     getSessionNotificationBody,
     getSessionNotificationCopy,
@@ -166,7 +167,7 @@ describe('sendBackgroundWake', () => {
         const { client, sendPushNotifications } = makeClient();
         client.sendBackgroundWake('gate-raised');
         await vi.advanceTimersByTimeAsync(0);
-        expect(sendPushNotifications.mock.calls[0][1]).toEqual({ retryWindowMs: 0 });
+        expect(sendPushNotifications.mock.calls[0][1]).toMatchObject({ retryWindowMs: 0 });
     });
 
     it('sends nothing when no device is registered', async () => {
@@ -393,5 +394,112 @@ describe('sendToAllDevices', () => {
         client.sendToAllDevices('Needs you', 'body');
         await vi.waitFor(() => expect(lines).toContain('[PUSH] Push notifications reached NO device, 1 rejected by Expo'));
         expect(lines).not.toContain('[PUSH] Push notifications sent successfully');
+    });
+});
+
+describe('retiring dead tokens', () => {
+    // Measured 2026-08-31 02:06: token cmtf550e8g (never re-registered) drew
+    // BadDeviceToken on both messages, cmte2nvatv (re-registered 01:01Z) drew
+    // ok on both. The dead one must be retired, the live one must not, and
+    // the next send must not address the dead one again (DROVE-85).
+    const dead = { id: 'cmtf550e8gb7ozc0uj0lfxctk', token: 'ExponentPushToken[dead]', createdAt: 0, updatedAt: 0 };
+    const live = { id: 'cmte2nvatvumb060uboj2jhlf', token: 'ExponentPushToken[live]', createdAt: 0, updatedAt: 0 };
+    const badDeviceToken = {
+        status: 'error',
+        message: 'The Apple Push Notification service failed to send the notification (reason: BadDeviceToken, status code: 400).',
+        details: { error: 'DeveloperError' },
+    };
+
+    beforeEach(() => {
+        vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+        vi.restoreAllMocks();
+    });
+
+    function makeClient(receipts: Record<string, unknown>) {
+        const client = new PushNotificationClient('bearer', 'https://example.test');
+        const expo = (client as unknown as { expo: Expo }).expo;
+        vi.spyOn(axios, 'get').mockResolvedValue({ data: { tokens: [dead, live] } });
+        const del = vi.spyOn(axios, 'delete').mockResolvedValue({ data: { success: true } });
+        const send = vi.spyOn(expo, 'sendPushNotificationsAsync').mockImplementation(async (messages) =>
+            messages.map((message, index) => ({ status: 'ok' as const, id: `ticket-${message.to === dead.token ? 'dead' : 'live'}-${index}` }))
+        );
+        vi.spyOn(expo, 'getPushNotificationReceiptsAsync').mockResolvedValue(receipts as never);
+        const lines: string[] = [];
+        vi.spyOn(logger, 'debug').mockImplementation((message: string) => { lines.push(message); });
+        return { client, del, send, lines };
+    }
+
+    async function sendAndSettle(client: PushNotificationClient, send: { mock: { calls: unknown[][] } }, calls: number) {
+        client.sendToAllDevices('Needs you', 'body');
+        await vi.waitFor(() => expect(send.mock.calls.length).toBe(calls));
+        await vi.advanceTimersByTimeAsync(RECEIPT_DELAY_MS);
+    }
+
+    it('retires exactly the token APNs rejected and skips it on the next send', async () => {
+        const { client, del, send, lines } = makeClient({
+            'ticket-dead-0': badDeviceToken,
+            'ticket-live-1': { status: 'ok' },
+        });
+        await sendAndSettle(client, send, 1);
+
+        expect(lines).toContain(`[PUSH] ticket ticket-dead-0 accepted token=${dead.id}`);
+        expect(lines).toContain(`[PUSH] ticket ticket-live-1 accepted token=${live.id}`);
+        expect(del).toHaveBeenCalledTimes(1);
+        expect(del.mock.calls[0][0]).toBe('https://example.test/v1/push-tokens/ExponentPushToken%5Bdead%5D');
+        expect(lines).toContain(`[PUSH] token ${dead.id} retired DeveloperError BadDeviceToken`);
+        expect(lines.some((line) => line.includes(`token ${live.id} retired`))).toBe(false);
+
+        // The server still lists both (the mock never forgets), and the send
+        // must skip the dead one anyway.
+        await sendAndSettle(client, send, 2);
+        const second = send.mock.calls[1][0] as { to: string }[];
+        expect(second.map((message) => message.to)).toEqual([live.token]);
+        expect(lines).toContain(`[PUSH] token ${dead.id} skipped, retired earlier this run`);
+        expect(del).toHaveBeenCalledTimes(1);
+    });
+
+    it('retires on DeviceNotRegistered too, and only once for two messages', async () => {
+        const { client, del, send, lines } = makeClient({
+            'ticket-dead-0': { status: 'error', message: 'not registered', details: { error: 'DeviceNotRegistered' } },
+            'ticket-live-1': { status: 'ok' },
+        });
+        await sendAndSettle(client, send, 1);
+        expect(del).toHaveBeenCalledTimes(1);
+        expect(lines).toContain(`[PUSH] token ${dead.id} retired DeviceNotRegistered`);
+    });
+
+    it('leaves a device alone for an error that is about the send, not the device', async () => {
+        const { client, del, send } = makeClient({
+            'ticket-dead-0': { status: 'error', message: 'APNs key missing', details: { error: 'InvalidCredentials' } },
+            'ticket-live-1': { status: 'error', message: 'too big', details: { error: 'MessageTooBig' } },
+        });
+        await sendAndSettle(client, send, 1);
+        expect(del).not.toHaveBeenCalled();
+        await sendAndSettle(client, send, 2);
+        expect((send.mock.calls[1][0] as { to: string }[]).map((message) => message.to)).toEqual([dead.token, live.token]);
+    });
+
+    it('still skips the token in-process when the server delete fails', async () => {
+        const { client, del, send, lines } = makeClient({ 'ticket-dead-0': badDeviceToken, 'ticket-live-1': { status: 'ok' } });
+        del.mockRejectedValue(new Error('offline'));
+        await sendAndSettle(client, send, 1);
+        expect(lines.some((line) => line.startsWith(`[PUSH] token ${dead.id} retired DeveloperError BadDeviceToken (in this process only`))).toBe(true);
+        await sendAndSettle(client, send, 2);
+        expect((send.mock.calls[1][0] as { to: string }[]).map((message) => message.to)).toEqual([live.token]);
+    });
+});
+
+describe('deadDeviceReason', () => {
+    it('reads both spellings of a gone device and nothing else', () => {
+        expect(deadDeviceReason({ status: 'error', message: 'x', details: { error: 'DeviceNotRegistered' } })).toBe('DeviceNotRegistered');
+        expect(deadDeviceReason({ status: 'error', message: 'reason: BadDeviceToken', details: { error: 'DeveloperError' } })).toBe('DeveloperError BadDeviceToken');
+        expect(deadDeviceReason({ status: 'error', message: 'BadCollapseId', details: { error: 'DeveloperError' } })).toBeNull();
+        expect(deadDeviceReason({ status: 'error', message: 'x', details: { error: 'InvalidCredentials' } })).toBeNull();
+        expect(deadDeviceReason({ status: 'ok' })).toBeNull();
+        expect(deadDeviceReason(undefined)).toBeNull();
     });
 });
