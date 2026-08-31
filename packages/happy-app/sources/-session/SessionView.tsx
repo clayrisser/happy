@@ -1179,9 +1179,10 @@ export function SessionViewLoaded({
                 onReadAloudToggle={voiceComposer.onReadAloudToggle}
                 onTalkPressIn={voiceComposer.onTalkPressIn}
                 onTalkPressOut={voiceComposer.onTalkPressOut}
-                onTalkStop={voiceComposer.onTalkStop}
+                onTalkSlide={voiceComposer.onTalkSlide}
                 onTalkCancel={voiceComposer.onTalkCancel}
                 talkState={voiceComposer.talkState}
+                talkCancelArmed={voiceComposer.talkCancelArmed}
                 talk={voiceComposer.talk}
                 onAbort={isDisconnected || !rigCanAbort(session.metadata) ? undefined : handleAbort}
                 showAbortButton={rigCanAbort(session.metadata) && (

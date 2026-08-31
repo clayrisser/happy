@@ -1,6 +1,5 @@
 import * as React from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import { StyleSheet, Text, View } from 'react-native';
 import { StatusDot } from './StatusDot';
 import { MicWaveform } from './MicWaveform';
 import { Typography } from '@/constants/Typography';
@@ -8,20 +7,29 @@ import { t } from '@/text';
 import type { DictationCaptureState } from '@/voice/dictationCapture';
 
 /**
- * The indicator a live microphone cannot be without (DROVE-30, DROVE-74).
+ * The indicator a live microphone cannot be without (DROVE-30, DROVE-74,
+ * DROVE-105).
  *
  * A latched mic is a hot mic until something stops it, and the thing that
  * has to stop it most often is the person who forgot it was on. So this is
- * red, it pulses, it shows the level moving as you speak, it counts, and
- * under a latch it carries the Stop. Drawn for hold-to-talk as well, where
- * it says release to send, because one indicator that always means "you are
- * being recorded" is worth more than two that mean it sometimes. The words
- * themselves land in the composer underneath, revised in place, so the
- * banner does not repeat them.
+ * red, it pulses, it shows the level moving as you speak, and it counts.
+ * Drawn for hold-to-talk as well, where it says release to send, because one
+ * indicator that always means "you are being recorded" is worth more than
+ * two that mean it sometimes. The words themselves land in the composer
+ * underneath, revised in place, so the banner does not repeat them.
+ *
+ * It is an INDICATOR and not a control (DROVE-105): the Stop it used to
+ * carry did the same thing as a second tap on the mic and sent, which is now
+ * the one thing the latch must never do. The mic button is the only control.
+ *
+ * The one thing it does say back is which way a lift will go. With the
+ * finger slid off the button it turns graphite and says release to cancel,
+ * so the outcome is readable before it happens rather than after.
  */
 interface LiveMicBannerProps {
     talk: DictationCaptureState;
-    onStop: () => void;
+    /** The finger is down but off the button: this lift throws it away. */
+    cancelArmed?: boolean;
 }
 
 function formatElapsed(since: number, now: number): string {
@@ -32,8 +40,15 @@ function formatElapsed(since: number, now: number): string {
 }
 
 const red = '#FF3B30';
+/**
+ * Cancel is graphite, not a second red: red already means "recording" here,
+ * and a warning drawn in the colour of the thing it warns about says
+ * nothing. The whole banner changes, not a word in it, so it reads at a
+ * glance with a thumb over the button.
+ */
+const graphite = '#48484A';
 
-export const LiveMicBanner = React.memo(({ talk, onStop }: LiveMicBannerProps) => {
+export const LiveMicBanner = React.memo(({ talk, cancelArmed = false }: LiveMicBannerProps) => {
     const [now, setNow] = React.useState(() => Date.now());
     React.useEffect(() => {
         if (!talk.active) return;
@@ -45,38 +60,32 @@ export const LiveMicBanner = React.memo(({ talk, onStop }: LiveMicBannerProps) =
     if (!talk.active || talk.since === null) return null;
 
     const latched = talk.mode === 'latch';
+    const title = latched ? t('agentInput.dictate.latched') : t('agentInput.dictate.listening');
+    // What the next lift will do, in the same slot the send hint lives in.
+    const hint = cancelArmed
+        ? t('agentInput.dictate.releaseToCancel')
+        : latched
+            ? t('agentInput.dictate.tapToStop')
+            : t('agentInput.dictate.releaseToSend');
 
     return (
         <View
-            style={styles.banner}
+            style={[styles.banner, cancelArmed && styles.bannerCancel]}
             accessibilityRole="alert"
             accessibilityLiveRegion="polite"
-            accessibilityLabel={latched ? t('agentInput.dictate.latched') : t('agentInput.dictate.listening')}
+            accessibilityLabel={`${title}. ${hint}`}
         >
             <View style={styles.dot}>
                 <StatusDot color="#FFFFFF" isPulsing size={10} />
             </View>
             <View style={styles.words}>
                 <Text style={styles.title} numberOfLines={1}>
-                    {latched ? t('agentInput.dictate.latched') : t('agentInput.dictate.listening')}
+                    {title}
                 </Text>
                 <Text style={styles.elapsed}>{formatElapsed(talk.since, now)}</Text>
             </View>
             <MicWaveform active={talk.active} color="#FFFFFF" height={22} />
-            {latched ? (
-                <Pressable
-                    onPress={onStop}
-                    hitSlop={8}
-                    style={({ pressed }) => [styles.stop, pressed && { opacity: 0.7 }]}
-                    accessibilityRole="button"
-                    accessibilityLabel={t('agentInput.dictate.tapToStop')}
-                >
-                    <Ionicons name="stop" size={14} color={red} />
-                    <Text style={styles.stopText}>{t('agentInput.dictate.stop')}</Text>
-                </Pressable>
-            ) : (
-                <Text style={styles.hint}>{t('agentInput.dictate.releaseToSend')}</Text>
-            )}
+            <Text style={styles.hint} numberOfLines={1}>{hint}</Text>
         </View>
     );
 });
@@ -93,6 +102,9 @@ const styles = StyleSheet.create({
         borderRadius: 14,
         backgroundColor: red,
         gap: 8,
+    },
+    bannerCancel: {
+        backgroundColor: graphite,
     },
     dot: {
         width: 14,
@@ -111,20 +123,6 @@ const styles = StyleSheet.create({
         fontSize: 12,
         fontVariant: ['tabular-nums'],
         ...Typography.default(),
-    },
-    stop: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 4,
-        paddingVertical: 6,
-        paddingHorizontal: 10,
-        borderRadius: 10,
-        backgroundColor: '#FFFFFF',
-    },
-    stopText: {
-        color: red,
-        fontSize: 12,
-        ...Typography.default('semiBold'),
     },
     hint: {
         color: 'rgba(255,255,255,0.85)',

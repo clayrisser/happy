@@ -481,9 +481,12 @@ export const en: TranslationStructure = {
             listening: 'Listening…',
             latched: 'Mic on',
             releaseToSend: 'Release to send',
+            releaseToCancel: 'Release to cancel',
             tapToStop: 'Tap to stop',
             stop: 'Stop',
             failed: 'Dictation failed',
+            noSpeechModule: 'This build has no speech module, so it cannot transcribe.',
+            needsNewerBuild: ({ build }: { build: string }) => `Build ${build} cannot report what it hears, so the mic stays shut. Install the latest TestFlight.`,
         },
         permissionMode: {
             title: 'PERMISSION MODE',

@@ -465,9 +465,12 @@ export const it: TranslationStructure = {
             listening: 'In ascolto…',
             latched: 'Microfono attivo',
             releaseToSend: 'Rilascia per inviare',
+            releaseToCancel: 'Rilascia per annullare',
             tapToStop: 'Tocca per fermare',
             stop: 'Ferma',
             failed: 'Dettatura non riuscita',
+            noSpeechModule: 'Questa build non ha il modulo vocale, quindi non può trascrivere.',
+            needsNewerBuild: ({ build }: { build: string }) => `La build ${build} non può riferire ciò che sente, quindi il microfono resta chiuso. Installa l'ultimo TestFlight.`,
         },
         permissionMode: {
             title: 'MODALITÀ PERMESSI',

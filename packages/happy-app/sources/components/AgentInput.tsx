@@ -50,6 +50,7 @@ import {
 import { shouldUseExpoNativeSettingsMenu } from './glassInteractionPolicy';
 import { ComposerSessionPill } from './ComposerSessionPill';
 import { LiveMicBanner } from './LiveMicBanner';
+import { TalkButton } from './TalkButton';
 import type { MicButtonState } from '@/voice/micButton';
 import type { DictationCaptureState } from '@/voice/dictationCapture';
 import { ComposerSheetRow } from './ComposerSheetRow';
@@ -77,18 +78,22 @@ interface AgentInputProps {
     readAloudEnabled?: boolean;
     onReadAloudToggle?: () => void;
     /**
-     * Dictation (DROVE-30 mode A, DROVE-74). One button, two ergonomics:
-     * press and hold to talk, released to send; tap to latch the mic open,
-     * tap again to stop and send. Separate from `onMicPress`, which starts
-     * boss mode and on the compact composer already owns the send button.
+     * Dictation (DROVE-30 mode A, DROVE-74, DROVE-105). One button, three
+     * outcomes: press and hold, released ON the button, sends; a tap latches
+     * the mic open and the next tap stops it with the words left in the
+     * composer; sliding off the button before the lift cancels. Separate
+     * from `onMicPress`, which starts boss mode and on the compact composer
+     * already owns the send button.
      */
     onTalkPressIn?: () => void;
     onTalkPressOut?: () => void;
-    /** The live banner's Stop: ends a latched mic and sends. */
-    onTalkStop?: () => void;
+    /** The finger crossed the button's edge while still down (DROVE-105). */
+    onTalkSlide?: (inside: boolean) => void;
     onTalkCancel?: () => void;
     /** What the button draws. Absent when there is no button. */
     talkState?: MicButtonState;
+    /** The finger is off the button: the lift will cancel. */
+    talkCancelArmed?: boolean;
     /** What the live banner draws. */
     talk?: DictationCaptureState;
     permissionMode?: PermissionMode | null;
@@ -1993,7 +1998,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     {compactMobileComposer && props.talk?.active && (
                         <LiveMicBanner
                             talk={props.talk}
-                            onStop={() => props.onTalkStop?.()}
+                            cancelArmed={props.talkCancelArmed}
                         />
                     )}
                     {/* Input field */}
@@ -2078,42 +2083,20 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         )}
 
                         {props.onTalkPressIn && (
-                            <BubblePressable
-                                // Press-in opens the mic; the lift decides
-                                // (DROVE-74): inside the tap window it latches,
-                                // after it the words are sent. The haptics
-                                // come from the gesture reducer, one per
-                                // transition, so none is added here.
+                            // The gesture and the slide-off live in
+                            // TalkButton (DROVE-105); this row only says
+                            // where it sits and what it is drawn in.
+                            <TalkButton
+                                state={props.talkState ?? 'idle'}
                                 onPressIn={() => props.onTalkPressIn?.()}
                                 onPressOut={() => props.onTalkPressOut?.()}
-                                onLongPress={() => { }}
-                                delayLongPress={100000}
-                                hitSlop={10}
-                                scaleFeedback={props.talkState === 'idle'}
-                                style={[
-                                    styles.mobileIconButton,
-                                    props.talkState === 'held' && styles.talkButtonHeld,
-                                    props.talkState === 'latched' && styles.talkButtonLatched,
-                                ]}
-                                accessibilityRole="button"
-                                accessibilityState={{
-                                    busy: props.talkState === 'held',
-                                    selected: props.talkState === 'latched',
-                                }}
-                                accessibilityLabel={props.talkState === 'latched'
-                                    ? t('agentInput.dictate.tapToStop')
-                                    : t('agentInput.dictate.label')}
-                            >
-                                <Ionicons
-                                    name={props.talkState === 'idle' ? 'mic-outline' : 'mic'}
-                                    size={props.talkState === 'idle' ? 16 : 17}
-                                    color={props.talkState === 'held'
-                                        ? '#FFFFFF'
-                                        : props.talkState === 'latched'
-                                            ? TALK_RED
-                                            : theme.colors.text}
-                                />
-                            </BubblePressable>
+                                onSlide={(inside) => props.onTalkSlide?.(inside)}
+                                style={styles.mobileIconButton}
+                                heldStyle={styles.talkButtonHeld}
+                                latchedStyle={styles.talkButtonLatched}
+                                idleColor={theme.colors.text}
+                                activeColor={TALK_RED}
+                            />
                         )}
 
                         <Shaker ref={shakerRef}>

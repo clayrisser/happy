@@ -483,9 +483,12 @@ export const pl: TranslationStructure = {
             listening: 'Słucham…',
             latched: 'Mikrofon włączony',
             releaseToSend: 'Puść, aby wysłać',
+            releaseToCancel: 'Puść, aby anulować',
             tapToStop: 'Dotknij, aby zatrzymać',
             stop: 'Zatrzymaj',
             failed: 'Dyktowanie nie powiodło się',
+            noSpeechModule: 'Ta kompilacja nie ma modułu mowy, więc nie może transkrybować.',
+            needsNewerBuild: ({ build }: { build: string }) => `Kompilacja ${build} nie potrafi zgłosić tego, co słyszy, więc mikrofon pozostaje zamknięty. Zainstaluj najnowszy TestFlight.`,
         },
         permissionMode: {
             title: 'TRYB UPRAWNIEŃ',

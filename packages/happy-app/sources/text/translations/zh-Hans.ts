@@ -468,9 +468,12 @@ export const zhHans: TranslationStructure = {
             listening: '正在聆听…',
             latched: '麦克风已开启',
             releaseToSend: '松开发送',
+            releaseToCancel: '松开取消',
             tapToStop: '轻点停止',
             stop: '停止',
             failed: '听写失败',
+            noSpeechModule: '此版本没有语音模块，无法转写。',
+            needsNewerBuild: ({ build }: { build: string }) => `构建 ${build} 无法回报听到的内容，麦克风不会打开。请安装最新的 TestFlight。`,
         },
         permissionMode: {
             title: '权限模式',

@@ -73,12 +73,12 @@ describe('DictationCapture', () => {
             // A finger on the button is the timeout.
             expect(capture.current.idleAt).toBeNull();
 
-            capture.end();
+            capture.send();
             expect(capture.current.active).toBe(false);
             await flush();
             engine.settle('run the tests');
             await flush();
-            expect(commits).toEqual([{ text: 'run the tests', send: true, reason: 'gesture' }]);
+            expect(commits).toEqual([{ text: 'run the tests', send: true, reason: 'send' }]);
         });
 
         it('never stops itself however long it is held', async () => {
@@ -93,12 +93,12 @@ describe('DictationCapture', () => {
         it('sends nothing and says so when nothing was heard', async () => {
             capture.begin('hold');
             await flush();
-            capture.end();
+            capture.send();
             await flush();
             engine.settle('   ');
             await flush();
             expect(commits).toEqual([]);
-            expect(discards).toEqual(['gesture']);
+            expect(discards).toEqual(['send']);
         });
 
         it('reports a recogniser that will not start, and is idle again', async () => {
@@ -123,7 +123,7 @@ describe('DictationCapture', () => {
             expect(engine.starts).toBe(1);
         });
 
-        it('stays on until the second tap, which sends', async () => {
+        it('stays on until the second tap, which stops WITHOUT sending (DROVE-105)', async () => {
             capture.begin('latch');
             await flush();
             expect(capture.current.active).toBe(true);
@@ -133,11 +133,11 @@ describe('DictationCapture', () => {
             capture.tick();
             expect(capture.current.active).toBe(true);
 
-            capture.end();
+            capture.stop();
             await flush();
             engine.settle('open the file');
             await flush();
-            expect(commits).toEqual([{ text: 'open the file', send: true, reason: 'gesture' }]);
+            expect(commits).toEqual([{ text: 'open the file', send: false, reason: 'stop' }]);
         });
 
         it('stops itself after the idle timeout and does NOT send', async () => {
@@ -238,7 +238,7 @@ describe('DictationCapture', () => {
             expect(capture.current.active).toBe(false);
             expect(engine.cancels).toBe(1);
             // The lift that follows has nothing to do.
-            capture.end();
+            capture.send();
             expect(engine.stops).toBe(0);
         });
 
@@ -275,7 +275,7 @@ describe('DictationCapture', () => {
         it('drops a stop that settles after the capture was discarded', async () => {
             capture.begin('latch');
             await flush();
-            capture.end();
+            capture.stop();
             await flush();
             capture.discard();
             engine.settle('too late');
@@ -286,7 +286,7 @@ describe('DictationCapture', () => {
         it('refuses to start again while the last stop is still settling', async () => {
             capture.begin('latch');
             await flush();
-            capture.end();
+            capture.stop();
             await flush();
             expect(capture.current.settling).toBe(true);
             capture.begin('latch');
@@ -298,6 +298,185 @@ describe('DictationCapture', () => {
             capture.begin('latch');
             await flush();
             expect(engine.starts).toBe(2);
+        });
+    });
+    /**
+     * The gesture table from DROVE-105, at the capture's level rather than
+     * the button's: what each ending does with the words. The button decides
+     * WHICH of these runs (micButton.spec.ts); this decides what each one
+     * means.
+     */
+    describe('the gesture table: who sends and who does not', () => {
+        const heard = 'ship it on monday';
+
+        async function run(end: (c: DictationCapture) => void, mode: 'hold' | 'latch' = 'latch') {
+            capture.begin(mode);
+            await flush();
+            capture.partial(heard);
+            end(capture);
+            await flush();
+            engine.settle(heard);
+            await flush();
+        }
+
+        it('a lift on the button sends', async () => {
+            await run((c) => c.send(), 'hold');
+            expect(commits).toEqual([{ text: heard, send: true, reason: 'send' }]);
+            expect(discards).toEqual([]);
+        });
+
+        it('the tap off a latch keeps the words and sends nothing', async () => {
+            await run((c) => c.stop());
+            expect(commits).toEqual([{ text: heard, send: false, reason: 'stop' }]);
+            expect(discards).toEqual([]);
+        });
+
+        it('the slide-off cancel throws the words away and sends nothing', async () => {
+            await run((c) => c.cancel(), 'hold');
+            expect(commits).toEqual([]);
+            expect(discards).toEqual(['cancel']);
+            expect(engine.cancels).toBe(1);
+            // Nothing was ever transcribed: cancel does not stop, it drops.
+            expect(engine.stops).toBe(0);
+        });
+
+        it('the idle stop keeps the words, unsent', async () => {
+            capture.begin('latch');
+            await flush();
+            capture.partial(heard);
+            clock += DICTATION_LATCH_IDLE_MS + 1;
+            capture.tick(clock);
+            await flush();
+            engine.settle(heard);
+            await flush();
+            expect(commits).toEqual([{ text: heard, send: false, reason: 'idle' }]);
+        });
+
+        it('a speech cut from typing keeps the words, unsent', async () => {
+            capture.begin('latch');
+            await flush();
+            capture.partial(heard);
+            capture.interrupt('typed');
+            await flush();
+            engine.settle(heard);
+            await flush();
+            expect(commits).toEqual([{ text: heard, send: false, reason: 'typed' }]);
+        });
+
+        it('the recogniser ending on its own keeps the words, unsent', async () => {
+            capture.begin('latch');
+            await flush();
+            capture.partial(heard);
+            capture.recogniserEnded(heard);
+            await flush();
+            expect(commits).toEqual([{ text: heard, send: false, reason: 'recogniser' }]);
+        });
+
+        it('exactly one of the five ends sends', async () => {
+            const ends: ((c: DictationCapture) => void)[] = [
+                (c) => c.send(),
+                (c) => c.stop(),
+                (c) => c.cancel(),
+                (c) => c.tick(clock + DICTATION_LATCH_IDLE_MS + 1),
+                (c) => c.recogniserEnded(heard),
+            ];
+            const sent: boolean[] = [];
+            for (const end of ends) {
+                commits = [];
+                engine = new FakeRecogniser();
+                capture = new DictationCapture(engine, {
+                    onCommit: (text, send, reason) => commits.push({ text, send, reason }),
+                    onPartial: () => { },
+                    onDiscard: () => { },
+                    onError: () => { },
+                    onChange: () => { },
+                }, () => clock);
+                capture.begin('latch');
+                await flush();
+                capture.partial(heard);
+                end(capture);
+                await flush();
+                engine.settle(heard);
+                await flush();
+                sent.push(commits.some((c) => c.send));
+            }
+            expect(sent).toEqual([true, false, false, false, false]);
+        });
+    });
+
+    /**
+     * A pause must never cost the words already transcribed (DROVE-105).
+     * Apple's on-device recogniser finalises on its own after a silence, so
+     * the final string a later stop resolves with can be EMPTY while the
+     * partials are on screen. Discarding there is what read as "you cancel
+     * everything I said".
+     */
+    describe('a pause never discards what was already transcribed', () => {
+        it('keeps the words when a silence longer than the idle deadline stops the latch', async () => {
+            capture.begin('latch');
+            await flush();
+            capture.partial('deploy the build');
+            expect(partials).toEqual(['deploy the build']);
+
+            // Silence: no partial changes, the clock runs past the deadline.
+            clock += DICTATION_LATCH_IDLE_MS + 1;
+            capture.tick(clock);
+            expect(capture.current.active).toBe(false);
+            await flush();
+            // The recogniser finalised behind us, so its final string is empty.
+            engine.settle('');
+            await flush();
+
+            expect(discards).toEqual([]);
+            expect(commits).toEqual([
+                { text: 'deploy the build', send: false, reason: 'idle' },
+            ]);
+        });
+
+        it('the last partial stands in for an empty final on every ending', async () => {
+            for (const end of ['send', 'stop'] as const) {
+                commits = [];
+                discards = [];
+                engine = new FakeRecogniser();
+                capture = new DictationCapture(engine, {
+                    onCommit: (text, send, reason) => commits.push({ text, send, reason }),
+                    onPartial: () => { },
+                    onDiscard: (reason) => discards.push(reason),
+                    onError: () => { },
+                    onChange: () => { },
+                }, () => clock);
+                capture.begin('latch');
+                await flush();
+                capture.partial('half a sentence');
+                capture[end]();
+                await flush();
+                engine.settle('');
+                await flush();
+                expect(discards).toEqual([]);
+                expect(commits.map((c) => c.text)).toEqual(['half a sentence']);
+            }
+        });
+
+        it('the recogniser giving up with nothing keeps what it already reported', async () => {
+            capture.begin('latch');
+            await flush();
+            capture.partial('what I said before the pause');
+            capture.recogniserEnded('');
+            expect(discards).toEqual([]);
+            expect(commits).toEqual([
+                { text: 'what I said before the pause', send: false, reason: 'recogniser' },
+            ]);
+        });
+
+        it('still discards when nothing was ever heard', async () => {
+            capture.begin('latch');
+            await flush();
+            capture.stop();
+            await flush();
+            engine.settle('');
+            await flush();
+            expect(commits).toEqual([]);
+            expect(discards).toEqual(['stop']);
         });
     });
 });

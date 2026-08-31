@@ -467,9 +467,12 @@ export const ca: TranslationStructure = {
             listening: 'Escoltant…',
             latched: 'Micròfon actiu',
             releaseToSend: 'Deixa anar per enviar',
+            releaseToCancel: 'Deixa anar per cancel·lar',
             tapToStop: 'Toca per aturar',
             stop: 'Atura',
             failed: 'Error en dictar',
+            noSpeechModule: 'Aquesta compilació no té mòdul de veu, així que no pot transcriure.',
+            needsNewerBuild: ({ build }: { build: string }) => `La compilació ${build} no pot informar del que sent, així que el micròfon no s'obre. Instal·la l'últim TestFlight.`,
         },
         permissionMode: {
             title: 'MODE DE PERMISOS',

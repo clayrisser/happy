@@ -466,9 +466,12 @@ export const pt: TranslationStructure = {
             listening: 'Ouvindo…',
             latched: 'Microfone ligado',
             releaseToSend: 'Solte para enviar',
+            releaseToCancel: 'Solte para cancelar',
             tapToStop: 'Toque para parar',
             stop: 'Parar',
             failed: 'Falha no ditado',
+            noSpeechModule: 'Esta versão não tem módulo de voz, por isso não consegue transcrever.',
+            needsNewerBuild: ({ build }: { build: string }) => `A versão ${build} não consegue relatar o que ouve, por isso o micro não abre. Instale o TestFlight mais recente.`,
         },
         permissionMode: {
             title: 'MODO DE PERMISSÃO',
