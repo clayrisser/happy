@@ -16,7 +16,7 @@ import {
     STATUS_ROW_TAP_HEIGHT,
     STATUS_ROW_ROW_HEIGHT,
     STATUS_ROW_TEXT_LINE_HEIGHT,
-    COMPOSER_CARD_BOTTOM_PADDING,
+    COMPOSER_CONTROLS_BOTTOM_GAP,
     resolveComposerButtonFloor,
     resolveDockBottomOffset,
     resolveDockInset,
@@ -238,9 +238,11 @@ describe('status row clearance', () => {
 
     it('cannot reach the 44pt floor without buying the points from somewhere', () => {
         // The upward answer to Clay's "normal button sizes", worked out rather
-        // than asserted. The segments' ceiling is the composer card's own
-        // buttons: a touch area drawn over those would take presses off
-        // controls that are themselves at the floor.
+        // than asserted. The segments' ceiling is the composer's own buttons:
+        // a touch area drawn over those would take presses off controls that
+        // are themselves at the floor. DROVE-196 moved those buttons out of
+        // the card and the ceiling did not move, because the card's bottom
+        // padding became the row's bottom gap.
         expect(resolveComposerButtonFloor(safeAreaBottom)).toBe(44);
 
         const ceiling = resolveComposerButtonFloor(safeAreaBottom) - HOME_INDICATOR_KEEP_OUT;
@@ -367,13 +369,15 @@ describe('seeing the transcript through the glass (DROVE-180, inverting DROVE-16
         expect(dockHeight + dockBottomOffset).toBe(156);
     });
 
-    it('puts the strip band exactly at the composer card’s bottom edge', () => {
+    it('puts the strip band exactly at the composer’s bottom edge', () => {
         // The same landmarks STATUS_ROW_TAP_SLOP_TOP lists: 16pt to the status
-        // text's bottom, 20 more for the row's box, 36 to the card.
+        // text's bottom, 20 more for the row's box, 36 to the strip's top.
+        // Below the control row since DROVE-196, below the card before it, and
+        // the same 36 either way.
         expect(resolveStatusStripBandHeight(safeAreaBottom))
             .toBe(resolveStatusRowBottomGap(safeAreaBottom) + STATUS_ROW_ROW_HEIGHT);
         expect(resolveStatusStripBandHeight(safeAreaBottom))
-            .toBe(resolveComposerButtonFloor(safeAreaBottom) - COMPOSER_CARD_BOTTOM_PADDING);
+            .toBe(resolveComposerButtonFloor(safeAreaBottom) - COMPOSER_CONTROLS_BOTTOM_GAP);
     });
 
     it('never lets the clear band reach past the dock that was measured', () => {

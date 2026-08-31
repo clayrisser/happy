@@ -87,7 +87,7 @@ import {
     resolveMobileComposerActionGeometry,
     resolveMobileComposerActionRowGeometry,
     resolveMobileCollapsedComposerGeometry,
-    resolveMobileComposerHeight,
+    resolveMobileHomeComposerHeight,
     resolveMobileComposerMenuGeometry,
 } from './agentInputLayout';
 
@@ -1010,7 +1010,12 @@ export const HomeDock = React.memo(({
             + MOBILE_COMPOSER_METRICS.inputPaddingTop
             + MOBILE_COMPOSER_METRICS.inputPaddingBottom,
     );
-    const focusedComposerHeight = resolveMobileComposerHeight(
+    // Home's own resolver since DROVE-196. The chat composer's card lost its
+    // control row to the strip below it and its block height went 104 -> 102;
+    // Home's focused composer is still ONE card holding the field and the row,
+    // and there is no status strip under it for the row to be furniture in
+    // front of, so it keeps DROVE-153's arithmetic and its 104 exactly.
+    const focusedComposerHeight = resolveMobileHomeComposerHeight(
         focusedInputLayout.height,
         selectedImages.length > 0,
     );
