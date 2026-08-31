@@ -62,7 +62,12 @@ vi.mock('@/text', () => ({
 // The voice side owns the reader and the wrist speaker; the feed only hands
 // them facts off the wire (DROVE-92).
 vi.mock('@/voice/readAloudService', () => ({
-    readAloud: { interrupt: (reason: string) => mocks.interrupted.push(reason) },
+    readAloud: {
+        interrupt: (reason: string) => mocks.interrupted.push(reason),
+        // Sending stops the capture and leaves the narration running
+        // (DROVE-122), so the wrist goes through userSent like the composer.
+        userSent: () => mocks.interrupted.push('sent'),
+    },
 }));
 vi.mock('@/voice/watchSpeaker', () => ({
     setWatchRoute: (headphones: boolean) => mocks.watchRoute.push(headphones),

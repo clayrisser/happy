@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Message } from '@/sync/typesMessage';
 import { defaultMaxRateScale, ReadAloudReader, type ReadAloudOptions, type SpeakOptions, type SpeechEngine } from './readAloud';
+import { applyVisibleRange } from './readAloudSeek';
 
 /** An engine that lets a test decide when each utterance ends. */
 class FakeEngine implements SpeechEngine {
@@ -713,7 +714,17 @@ describe('the transcript as a playhead (DROVE-114)', () => {
         expect(reader.playhead?.messageId).toBe('m3');
     });
 
-    it('seeks backwards: scrolling up re-reads something already said', async () => {
+    /**
+     * This test used to assert that seeking back REPLAYED 'First sentence 1.'
+     * It was written from DROVE-114's "go up to something you already said,
+     * and you just wait till I scroll back down", read as a replay. Clay
+     * settled it in DROVE-126: "scroll back, it wouldn't read it again, I've
+     * already told you that." Waiting is the whole of it. So the assertion is
+     * inverted here on purpose rather than deleted, because the seek itself
+     * still works and still moves the playhead; what it may not do is say
+     * anything twice.
+     */
+    it('seeks backwards without replaying: it lands on the unread edge', async () => {
         seedThree(reader);
         await settle();
         reader.seekTo(3);
@@ -721,8 +732,36 @@ describe('the transcript as a playhead (DROVE-114)', () => {
 
         reader.seekTo(1);
         await settle();
-        expect(engine.spoken).toEqual(['First sentence 1.', 'Third sentence 1.', 'First sentence 1.']);
+        expect(engine.spoken).toEqual(['First sentence 1.', 'Third sentence 1.', 'First sentence 2.']);
         expect(reader.playhead?.messageId).toBe('m1');
+    });
+
+    /** And with the screen's own bound in place, a scroll back is silence. */
+    it('seeks backwards into fully read material and says nothing at all', async () => {
+        reader.onMessages('s1', [
+            agentText('m1', sentences('First', 2).join(' '), 1),
+            agentText('m2', sentences('Second', 2).join(' '), 2),
+        ]);
+        await settle();
+        engine.finishOne();
+        await settle();
+        expect(engine.spoken).toEqual(sentences('First', 2));
+
+        // Scrolled back onto m1, which is now the bottom of the screen too.
+        reader.setReadableThrough(1);
+        engine.finishOne();
+        await settle();
+        expect(reader.playhead).toBeNull();
+
+        reader.seekTo(1);
+        await settle();
+        expect(engine.spoken).toEqual(sentences('First', 2));
+        expect(reader.playhead).toBeNull();
+
+        // Back to the live edge and it picks up at the unread edge.
+        reader.setReadableThrough(null);
+        await settle();
+        expect(engine.spoken).toEqual([...sentences('First', 2), 'Second sentence 1.']);
     });
 
     it('a seek into the message being read does not restart it', async () => {
@@ -879,5 +918,117 @@ describe('the transcript as a playhead (DROVE-114)', () => {
         reader.interrupt('sent');
         expect(reader.playhead).toBeNull();
         expect(reader.readPosition).toBe(3);
+    });
+});
+
+/**
+ * A sentence that has been spoken is never spoken again (DROVE-126).
+ *
+ * Clay: "you keep repeating things when you're reading things back. You stop,
+ * then another message comes in and you read it back, and you end up reading
+ * the same message again."
+ *
+ * These drive the REAL viewport decision, applyVisibleRange, and not seekTo
+ * by hand, because the repeat came out of the two composing: reading kept
+ * running while the list sat still, so the position ended up off the top of
+ * the screen, and decideSeek answers that with the top row, which seekTo used
+ * to resolve to the first sentence of a message it had already read out.
+ */
+describe('a sentence is never spoken twice (DROVE-126)', () => {
+    let engine: FakeEngine;
+    let reader: ReadAloudReader;
+
+    /** What the chat list reports, in the shape ChatList actually sends. */
+    function viewport(oldest: number, newest: number, atLiveEdge: boolean): void {
+        applyVisibleRange(reader, { oldestCreatedAt: oldest, newestCreatedAt: newest, atLiveEdge });
+    }
+
+    function duplicatesIn(said: readonly string[]): string[] {
+        return said.filter((text, i) => said.indexOf(text) !== i);
+    }
+
+    beforeEach(() => {
+        engine = new FakeEngine();
+        reader = new ReadAloudReader(engine);
+        reader.setEnabled(true);
+        reader.focus('s1');
+    });
+
+    it('says each sentence exactly once across a stop and new content', async () => {
+        reader.onMessages('s1', [agentText('m1', sentences('First', 3).join(' '), 1)]);
+        await settle();
+        viewport(1, 1, true);
+        for (let i = 0; i < 3; i++) { engine.finishOne(); await settle(); }
+        expect(engine.spoken).toEqual(sentences('First', 3));
+
+        // Clay sends, and the answer lands. The list was not resting at the
+        // newest message, so it did not follow: the window still shows m1
+        // while reading has moved on to m2.
+        reader.userSent();
+        reader.onMessages('s1', [userText('u1', 2), agentText('m2', sentences('Second', 3).join(' '), 3)]);
+        await settle();
+        viewport(1, 1, false);
+        await settle();
+        for (let i = 0; i < 4; i++) { engine.finishOne(); await settle(); }
+
+        expect(duplicatesIn(engine.spoken)).toEqual([]);
+        expect(engine.spoken.filter((t) => t.startsWith('First'))).toEqual(sentences('First', 3));
+    });
+
+    /**
+     * The AC this was written against asked for a seek back to RE-READ, from
+     * DROVE-114. Clay overruled that while this was being built: "scroll
+     * back, it wouldn't read it again, I've already told you that." So the
+     * second case asserts the opposite of what was asked for, deliberately.
+     */
+    it('goes quiet on a scroll back and picks up the unread edge on the way down', async () => {
+        reader.onMessages('s1', [
+            agentText('m1', sentences('First', 2).join(' '), 1),
+            agentText('m2', sentences('Second', 2).join(' '), 2),
+        ]);
+        await settle();
+        viewport(1, 2, true);
+        engine.finishOne();
+        await settle();
+        expect(engine.spoken).toEqual(sentences('First', 2));
+
+        // Scrolled up onto m1, which it has already read out in full.
+        viewport(1, 1, false);
+        await settle();
+        engine.finishOne();
+        await settle();
+        expect(engine.spoken).toEqual(sentences('First', 2));
+        expect(reader.playhead).toBeNull();
+
+        // Every frame of a slow scroll reports the same window. Still silence,
+        // and no churn at the engine.
+        const stops = engine.stops;
+        viewport(1, 1, false);
+        viewport(1, 1, false);
+        await settle();
+        expect(engine.spoken).toEqual(sentences('First', 2));
+        expect(engine.stops).toBe(stops);
+
+        // Back down to the live edge and it resumes where it had not read.
+        viewport(1, 2, true);
+        await settle();
+        expect(engine.spoken).toEqual([...sentences('First', 2), 'Second sentence 1.']);
+        expect(duplicatesIn(engine.spoken)).toEqual([]);
+    });
+
+    it('does not re-read the tail of a reply that was cut by a new turn', async () => {
+        reader.onMessages('s1', [agentText('m1', sentences('Old', 4).join(' '), 1)]);
+        await settle();
+        reader.userSent();
+        reader.onMessages('s1', [userText('u1', 2), agentText('m2', sentences('New', 2).join(' '), 3)]);
+        await settle();
+        for (let i = 0; i < 4; i++) { engine.finishOne(); await settle(); }
+
+        // Scrolling back over the abandoned tail says nothing either: it was
+        // stepped over, and stepping back over it is not a reason to say it.
+        viewport(1, 1, false);
+        await settle();
+        expect(duplicatesIn(engine.spoken)).toEqual([]);
+        expect(engine.spoken.filter((t) => t === 'Old sentence 1.')).toHaveLength(1);
     });
 });

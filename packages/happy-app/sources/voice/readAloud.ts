@@ -63,6 +63,16 @@ import { stripToSpeakableProse } from './speakable';
  * with the message it came from, so a row can mark it without reaching in
  * here. The traffic is one way in each direction on purpose (see
  * readAloudSeek.ts for why that is what keeps it from oscillating).
+ *
+ * DROVE-126 added the invariant that holds all of that together, because
+ * DROVE-114 and DROVE-122 between them took away the thing that used to
+ * imply it:
+ *
+ *   A SENTENCE THAT HAS BEEN SPOKEN IS NEVER SPOKEN AGAIN.
+ *
+ * See `skipSpoken`. Scrolling back into what was already read is silence,
+ * not a replay, and reading picks up at the unread edge when the view comes
+ * forward again.
  */
 
 /** Why speech stopped. Carried for logs and for the tests to assert on. */
@@ -186,6 +196,12 @@ interface QueuedSentence {
     messageId: string;
     /** That message's createdAt: the one ordering the view and the queue share. */
     createdAt: number;
+    /**
+     * It has been handed to the synthesiser once. Never again (DROVE-126).
+     * On the sentence rather than in the cursor because the cursor moves
+     * backwards now, so it cannot be the record of what was said.
+     */
+    spoken: boolean;
 }
 
 interface HeldTail {
@@ -404,6 +420,11 @@ export class ReadAloudReader {
                 break;
             }
         }
+        // Land on the first thing not yet said rather than on the message's
+        // first sentence. Without this a scroll back would replay it, and a
+        // list that reports its top row every frame would keep dragging the
+        // cursor back into spoken text for pump to step over again.
+        next = this.skipSpoken(next);
         if (next === this.cursor) return;
         this.cursor = next;
         // Whatever is in the air belongs to the old position. Cut it without
@@ -535,7 +556,7 @@ export class ReadAloudReader {
         if (sentences.length === 0) return;
         this.abandonTurnsBefore(turn);
         for (const text of sentences) {
-            this.timeline.push({ text, words: countWords(text), turn, messageId, createdAt });
+            this.timeline.push({ text, words: countWords(text), turn, messageId, createdAt, spoken: false });
         }
     }
 
@@ -564,6 +585,33 @@ export class ReadAloudReader {
         }
         this.markerDue = true;
         if (staleSpeaking) this.cutCurrentUtterance();
+    }
+
+    /**
+     * The first position at or after `from` that has not been said.
+     *
+     * THE invariant, and it lives here alone rather than in each caller
+     * (DROVE-126): A SENTENCE THAT HAS BEEN SPOKEN IS NEVER SPOKEN AGAIN.
+     * Once said it is done, whatever the cursor does afterwards.
+     *
+     * The cursor cannot carry that on its own any more. Until DROVE-114 it
+     * could, because sentences were shifted off as they were said, so
+     * "behind the cursor" and "already said" were the same fact. Keeping the
+     * whole timeline split them apart, and the seek moves the cursor
+     * backwards over spoken material every time the reading position runs
+     * off the top of the screen, which DROVE-122 made routine by letting the
+     * voice carry on across a send. Hence a mark per sentence.
+     *
+     * Scrolling back is still not a replay: reading steps over what it has
+     * said and then stops at the bottom of the screen, which is above the
+     * unread edge, so the user gets silence until the view comes forward
+     * again. Scrolling forward still skips unread material, and skipped is
+     * not spoken, so it stays reachable rather than being burnt.
+     */
+    private skipSpoken(from: number): number {
+        let at = from;
+        while (at < this.timeline.length && this.timeline[at].spoken) at += 1;
+        return at;
     }
 
     /** Stop the utterance in flight without telling the interrupt listeners. */
@@ -702,6 +750,10 @@ export class ReadAloudReader {
     private pump(): void {
         if (this.speaking) return;
 
+        // Nothing already said is ever a candidate, so every measure below
+        // this line is about unread material only (DROVE-126).
+        this.cursor = this.skipSpoken(this.cursor);
+
         const threshold = this.maxBacklogSeconds();
         const backlog = this.backlogSeconds();
 
@@ -753,6 +805,7 @@ export class ReadAloudReader {
         this.speakingTurn = turn;
         this.started = true;
         if (at !== null) {
+            at.spoken = true;
             this.setPlayhead({
                 sentence: at.text,
                 messageId: at.messageId,
