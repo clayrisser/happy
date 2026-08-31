@@ -1,6 +1,8 @@
 import { ReadAloudReader } from './readAloud';
 import { speechEngine } from './speechEngine';
 import { createRoutedSpeechEngine } from './routedSpeechEngine';
+import { createCuedSpeechEngine } from './cuedSpeechEngine';
+import { audioCues } from './audioCueService';
 import { resolveSpeaker } from './speaker';
 import { cueWatchReplyStart, watchSpeechEngine } from './watchSpeaker';
 import { storage } from '@/sync/storage';
@@ -22,19 +24,36 @@ import { resolveStreamTalk } from '@/sync/settings';
  * Each sentence goes to one device (DROVE-92): this phone's synthesiser or
  * the watch's, picked per sentence by the speaker setting and which route
  * has headphones. The wrist gets its reply-start buzz either way.
+ *
+ * DROVE-112 wrapped that engine once more and gave the reader two hooks. The
+ * wrapper is how the cue mixer knows the voice has the audio route, which is
+ * what makes "a cue never plays over a spoken sentence" true rather than
+ * hoped for. `asideFor` gives the reader the one-line title of a tool call, a
+ * terminal call or an agent as it spawns, to say in its place in the
+ * transcript. And `skipMarker: ''` deletes the spoken "Skipping ahead." in
+ * favour of the earcon `onSkip` plays, which is what Clay asked for: "don't
+ * say skipping ahead, it should be like a ding or a beep or something".
  */
 export const readAloud = new ReadAloudReader(
-    createRoutedSpeechEngine({
-        phone: speechEngine,
-        watch: watchSpeechEngine,
-        pick: resolveSpeaker,
-        onReplyStart: () => cueWatchReplyStart(),
-    }),
+    createCuedSpeechEngine(
+        createRoutedSpeechEngine({
+            phone: speechEngine,
+            watch: watchSpeechEngine,
+            pick: resolveSpeaker,
+            onReplyStart: () => cueWatchReplyStart(),
+        }),
+        audioCues,
+    ),
     {
         maxBacklogSeconds: () => resolveStreamTalk(storage.getState().settings).maxBacklogSeconds,
         // Whether the agent is still generating. Without it the queue has to
         // infer that from how text arrives; with it, a finished reply can
         // never be cut short whatever the arrival stamps look like.
         turnStillRunning: (sessionId) => storage.getState().sessions[sessionId]?.thinking === true,
+        skipMarker: '',
+        onSkip: () => audioCues.skipped(),
+        asideFor: (message, sessionId) => audioCues.titleFor(message, sessionId),
     },
 );
+
+audioCues.attach(readAloud);
