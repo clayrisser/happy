@@ -5,7 +5,7 @@
  * collapses to `~`, and a detached or bare entry still gets a readable branch.
  */
 import { describe, expect, it } from 'vitest';
-import { buildWorktreeRows, collapseHome, describeBranch, type WorktreeSource } from './worktreeRows';
+import { buildWorktreeRows, collapseHome, describeBranch, resolveWorktreeOpen, type WorktreeSource } from './worktreeRows';
 
 const home = '/Users/clay';
 const worktrees: WorktreeSource[] = [
@@ -64,5 +64,29 @@ describe('collapseHome', () => {
         expect(collapseHome('/Users/clay', '/Users/clay/')).toBe('~');
         expect(collapseHome('/Users/clayton/x', '/Users/clay')).toBe('/Users/clayton/x');
         expect(collapseHome('/srv/x', null)).toBe('/srv/x');
+    });
+});
+
+describe('resolveWorktreeOpen', () => {
+    const row = (over: Partial<Parameters<typeof resolveWorktreeOpen>[0]>) => ({
+        path: '/Users/clay/.cache/drover-worktrees/DROVE-205',
+        bare: false,
+        liveSessionIds: [] as string[],
+        ...over,
+    });
+
+    it('goes to the session that already lives there rather than moving this one (DROVE-205)', () => {
+        expect(resolveWorktreeOpen(row({ liveSessionIds: ['newest', 'older'] })))
+            .toEqual({ type: 'session', sessionId: 'newest' });
+    });
+
+    it('starts a session in the worktree when none is running there', () => {
+        expect(resolveWorktreeOpen(row({})))
+            .toEqual({ type: 'spawn', directory: '/Users/clay/.cache/drover-worktrees/DROVE-205' });
+    });
+
+    it('does nothing for a bare checkout, which has no working tree to run in', () => {
+        expect(resolveWorktreeOpen(row({ bare: true }))).toEqual({ type: 'none' });
+        expect(resolveWorktreeOpen(row({ bare: true, liveSessionIds: ['x'] }))).toEqual({ type: 'none' });
     });
 });

@@ -54,7 +54,9 @@ import { getVoiceMessageCount, getVoiceOnboardingPromptLoadCount } from '@/sync/
 import { isRunningOnMac } from '@/utils/platform';
 import { useDeviceType, useHeaderHeight, useIsLandscape, useIsTablet } from '@/utils/responsive';
 import { resolveStatusBarGitBranch } from '@/utils/sessionStatusBar';
+import { sessionHeaderSheet, type SessionHeaderControl, type SessionHeaderSheet } from '@/utils/sessionHeaderRouting';
 import { WorktreeSheet } from '@/components/WorktreeSheet';
+import { SessionSettingsSheet } from '@/components/SessionSettingsSheet';
 import { FilesSidebar, SidebarMode } from '@/components/FilesSidebar';
 import { AllFilesDiffView } from '@/components/AllFilesDiffView';
 import { FileViewPanel } from '@/components/FileViewPanel';
@@ -380,16 +382,29 @@ export const SessionView = React.memo((props: { id: string }) => {
             isConnected,
         };
     }, [session, isDataReady, headerGitStatus?.branch]);
-    const openWorktreeSheet = React.useCallback(() => {
-        Modal.show({ component: WorktreeSheet, props: { sessionId } });
-    }, [sessionId]);
+    /**
+     * The header's two openers (DROVE-205). The pill is the session over its
+     * worktree, so it opens the worktrees; the avatar is the profile control,
+     * so it opens settings. Both are sheets (DROVE-147) and both close before
+     * they navigate (DROVE-183). Which is which is in sessionHeaderRouting.
+     */
+    const [headerSheet, setHeaderSheet] = React.useState<SessionHeaderSheet | null>(null);
+    const openHeaderSheet = React.useCallback((control: SessionHeaderControl) => {
+        setHeaderSheet(sessionHeaderSheet(control));
+    }, []);
+    const closeHeaderSheet = React.useCallback(() => setHeaderSheet(null), []);
+    const openWorktreeSheet = React.useCallback(() => openHeaderSheet('title'), [openHeaderSheet]);
+    const openSettingsSheet = React.useCallback(() => openHeaderSheet('avatar'), [openHeaderSheet]);
+    const navigateFromSettingsSheet = React.useCallback((route: string) => {
+        router.push(route as never);
+    }, [router]);
     const headerRight = session && deviceType === 'phone' && Platform.OS !== 'web'
         ? (
             <Pressable
-                onPress={() => router.push(`/session/${sessionId}/info`)}
+                onPress={openSettingsSheet}
                 hitSlop={10}
                 accessibilityRole="button"
-                accessibilityLabel="Session details"
+                accessibilityLabel="Settings"
                 // The whole glass capsule is the target, not just the 28pt
                 // avatar sitting in the middle of it (DROVE-133).
                 style={{
@@ -481,12 +496,11 @@ export const SessionView = React.memo((props: { id: string }) => {
                         title={headerProps.title}
                         folderName={headerProps.folderName}
                         branch={headerProps.branch}
-                        onBranchPress={session ? openWorktreeSheet : undefined}
                         isConnected={headerProps.isConnected}
                         backdropVisible={headerBackdropVisible}
                         extraPathSegment={fileViewPath ?? undefined}
                         rightSlot={(diffViewOpen || !!fileViewPath) ? headerRightSlot : headerRight}
-                        onTitlePress={session ? () => router.push(`/session/${sessionId}/info`) : undefined}
+                        onTitlePress={session ? openWorktreeSheet : undefined}
                         onBackPress={() => router.back()}
                     />
                     {/* Voice status bar below header - not on tablet (shown in sidebar) */}
@@ -495,6 +509,25 @@ export const SessionView = React.memo((props: { id: string }) => {
                     )}
                 </View>
             )}
+            {/* Both header sheets live here, outside the header's absolutely
+                positioned overlay, because ComposerSheet presents its own
+                screen-level Modal and has no business inheriting a zIndex. */}
+            {session ? (
+                <>
+                    <WorktreeSheet
+                        sessionId={sessionId}
+                        open={headerSheet === 'worktrees'}
+                        onClose={closeHeaderSheet}
+                    />
+                    <SessionSettingsSheet
+                        sessionId={sessionId}
+                        sessionName={headerProps.title}
+                        open={headerSheet === 'settings'}
+                        onClose={closeHeaderSheet}
+                        onNavigate={navigateFromSettingsSheet}
+                    />
+                </>
+            ) : null}
         </>
     );
 

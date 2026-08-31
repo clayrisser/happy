@@ -98,3 +98,28 @@ export function buildWorktreeRows(input: {
         };
     });
 }
+
+/**
+ * What tapping a worktree row does (DROVE-205).
+ *
+ * Clay moved the sheet onto the title pill, which made the question worth
+ * writing down rather than leaving in a callback: switching THIS session's
+ * cwd is not the same as opening the session that already lives over there,
+ * and the second is what the sessions list already does when you tap a row.
+ * So a worktree with a live session goes to that session, newest first, and
+ * this session is left exactly as it is. A worktree with none gets a new
+ * session started in it, which is what `cd <worktree> && drover` does on the
+ * Mac. A bare checkout has no working tree to run in, so it does nothing.
+ */
+export type WorktreeOpen =
+    | { type: 'session'; sessionId: string }
+    | { type: 'spawn'; directory: string }
+    | { type: 'none' };
+
+export function resolveWorktreeOpen(
+    row: Pick<WorktreeRow, 'path' | 'bare' | 'liveSessionIds'>,
+): WorktreeOpen {
+    if (row.bare) return { type: 'none' };
+    if (row.liveSessionIds.length > 0) return { type: 'session', sessionId: row.liveSessionIds[0] };
+    return { type: 'spawn', directory: row.path };
+}
