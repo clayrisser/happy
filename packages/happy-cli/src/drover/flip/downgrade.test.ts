@@ -48,7 +48,7 @@ function writeAccounts(accounts: { name: string; configDir: string }[]): void {
         mkdirSync(a.configDir, { recursive: true })
         writeFileSync(
             join(a.configDir, '.claude.json'),
-            JSON.stringify({ oauthAccount: { emailAddress: `${a.name}@example.com` } }),
+            JSON.stringify({ hasCompletedOnboarding: true, oauthAccount: { emailAddress: `${a.name}@example.com` } }),
         )
     }
 }

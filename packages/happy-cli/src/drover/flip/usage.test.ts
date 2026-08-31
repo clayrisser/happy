@@ -35,7 +35,7 @@ function writeAccounts(names: string[]): Record<string, string> {
         const configDir = join(root, name)
         dirs[name] = configDir
         mkdirSync(configDir, { recursive: true })
-        writeFileSync(join(configDir, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: `${name}@example.com` } }))
+        writeFileSync(join(configDir, '.claude.json'), JSON.stringify({ hasCompletedOnboarding: true, oauthAccount: { emailAddress: `${name}@example.com` } }))
         return { name, configDir }
     })
     writeFileSync(process.env.DROVER_ACCOUNTS!, JSON.stringify(registry))

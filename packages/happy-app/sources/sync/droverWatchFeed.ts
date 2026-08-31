@@ -178,7 +178,17 @@ export function collectAccountRows(
             // property-list types only and one NSNull fails the whole publish.
             ...(headroom === undefined ? {} : { headroom }),
             ...(used === null ? {} : { used }),
-            ...(account.loggedIn === false ? { loggedIn: false } : { loggedIn: true }),
+            // `loggedIn` on the WRIST means "work can go here", which is a
+            // coarser claim than the phone's and deliberately so: a watch row
+            // is a name and a bar, with no room for two different reasons and
+            // no way to act on either. So a never-run account (DROVE-246) sorts
+            // and reads exactly like a logged-out one — it is equally not
+            // somewhere the wrist should offer. The phone keeps both fields and
+            // names the fix; this stays one boolean so the Swift payload shape
+            // does not move.
+            ...(account.loggedIn === false || account.onboarded === false
+                ? { loggedIn: false }
+                : { loggedIn: true }),
             ...(until ? { backAt: new Date(until).toISOString() } : {}),
             ...(account.current ? { current: true } : {}),
             ...(expired ? { expired: true } : {}),

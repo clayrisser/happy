@@ -725,7 +725,16 @@ export function usageAccountBarGroup(
         account: account.name || null,
         // The sheet is the screen where the choice is made, so it is the
         // screen the move happens from (DROVE-160).
-        switchable: !!account.name && !account.current && account.loggedIn !== false,
+        // `onboarded === false` blocks a switch exactly as `loggedIn === false`
+        // does (DROVE-246): a config dir that has never been through Claude
+        // Code's first run opens on the theme picker, so tapping it moves the
+        // session nowhere and leaves a pane nobody can answer. Absent means
+        // fine, so an older machine behaves as it did before.
+        switchable:
+            !!account.name &&
+            !account.current &&
+            account.loggedIn !== false &&
+            account.onboarded !== false,
         rows,
     };
 }
@@ -860,6 +869,8 @@ export function resolveUsageStrip(input: UsageStripInput): UsageStrip {
         accounts.unshift({
             name: stamped?.name ?? '',
             loggedIn: true,
+            // The session is running here, so it demonstrably can (DROVE-246).
+            onboarded: true,
             headroom: null,
             back: null,
             family: null,

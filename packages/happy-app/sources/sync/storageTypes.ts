@@ -18,6 +18,8 @@ const DroverUsageSchema = z.object({
         name: z.string(),
         current: z.boolean().nullish(),
         loggedIn: z.boolean().nullish(),
+        /** First run settled for that config dir (DROVE-246). Absent = fine. */
+        onboarded: z.boolean().nullish(),
         fetchedAt: z.number().nullish(),
         headroom: z.number().nullish(),
         cooling: z.object({

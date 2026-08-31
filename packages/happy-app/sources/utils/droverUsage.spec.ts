@@ -128,9 +128,14 @@ describe('droverFamilyRows', () => {
 describe('droverOtherAccounts', () => {
     it('folds every account the session is not on, with the picker\'s own figures', () => {
         expect(droverOtherAccounts(usage, null)).toEqual([
-            { name: 'main', loggedIn: true, headroom: 0, back: sep3, family: null },
-            { name: 'bitspur.com', loggedIn: true, headroom: 0, back: sep3, family: 'Fable' },
-            { name: 'spare', loggedIn: false, headroom: null, back: null, family: null },
+            // `onboarded` rides beside `loggedIn` on every row (DROVE-246):
+            // a credential and a config dir that has been through Claude
+            // Code's first run are two different facts, and a row is only
+            // switchable when both hold. Absent from the snapshot reads as
+            // true, which is what these fixtures are saying.
+            { name: 'main', loggedIn: true, onboarded: true, headroom: 0, back: sep3, family: null },
+            { name: 'bitspur.com', loggedIn: true, onboarded: true, headroom: 0, back: sep3, family: 'Fable' },
+            { name: 'spare', loggedIn: false, onboarded: true, headroom: null, back: null, family: null },
         ]);
     });
 
