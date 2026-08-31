@@ -1,15 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Message } from '@/sync/typesMessage';
-import { ReadAloudReader, type SpeechEngine } from './readAloud';
+import { defaultMaxRateScale, ReadAloudReader, type ReadAloudOptions, type SpeakOptions, type SpeechEngine } from './readAloud';
 
 /** An engine that lets a test decide when each utterance ends. */
 class FakeEngine implements SpeechEngine {
     spoken: string[] = [];
+    /** The catch-up multiplier asked for per utterance (DROVE-108). */
+    rates: number[] = [];
     stops = 0;
     private resolvers: (() => void)[] = [];
 
-    speak(text: string): Promise<unknown> {
+    speak(text: string, options?: SpeakOptions): Promise<unknown> {
         this.spoken.push(text);
+        this.rates.push(options?.rateScale ?? 1);
         return new Promise<void>((resolve) => { this.resolvers.push(resolve); });
     }
 
@@ -34,6 +37,16 @@ async function settle(): Promise<void> {
 
 function agentText(id: string, text: string, createdAt = 1): Message {
     return { kind: 'agent-text', id, localId: null, createdAt, text } as Message;
+}
+
+/** What opens a new turn, as far as the reader can see (DROVE-108). */
+function userText(id: string, createdAt: number, text = 'and now this'): Message {
+    return { kind: 'user-text', id, localId: null, createdAt, text } as Message;
+}
+
+/** `count` sentences of three words each, numbered so order is checkable. */
+function sentences(prefix: string, count: number): string[] {
+    return Array.from({ length: count }, (_, i) => `${prefix} sentence ${i + 1}.`);
 }
 
 describe('ReadAloudReader', () => {
@@ -271,87 +284,248 @@ describe('ReadAloudReader', () => {
         });
     });
 
-    describe('skipping ahead (DROVE-97)', () => {
+    /**
+     * The cut, rewritten (DROVE-108).
+     *
+     * The tests here used to assert the DROVE-97 rule: a sentence that had
+     * been waiting longer than the threshold was dropped. That fires on
+     * every long reply, because speech is always slower than generation, so
+     * the rule and its tests are replaced rather than deleted. What is
+     * asserted now is the corrected rule: a finished turn is read to the
+     * end, a still-arriving one may be cut when too much unspoken audio has
+     * piled up, and a new turn abandons the old tail.
+     *
+     * 60 words a minute makes the arithmetic readable: one word is one
+     * second of audio, so a four-second threshold is four words of backlog.
+     */
+    describe('skipping ahead (DROVE-108)', () => {
         let clock: number;
-        let lagged: ReadAloudReader;
 
-        beforeEach(() => {
-            clock = 1_000_000;
-            lagged = new ReadAloudReader(engine, {
+        function streamed(overrides: ReadAloudOptions = {}): ReadAloudReader {
+            const made = new ReadAloudReader(engine, {
                 now: () => clock,
-                maxLagSeconds: () => 15,
+                wordsPerMinute: 60,
+                maxBacklogSeconds: () => 4,
+                arrivalWindowMs: 4000,
+                ...overrides,
             });
-            lagged.setEnabled(true);
-            lagged.focus('s1');
+            made.setEnabled(true);
+            made.focus('s1');
+            return made;
+        }
+
+        beforeEach(() => { clock = 1_000_000; });
+
+        it('reads a finished reply to the end, however far the voice falls behind', async () => {
+            const talk = streamed();
+            const said = sentences('Finished', 12);
+            // 36 words against a 4 s threshold: nine times over, and spoken
+            // three seconds a sentence, so the old rule cut this to pieces.
+            talk.onMessages('s1', [agentText('m1', said.join(' '))]);
+            await settle();
+            for (let i = 1; i < said.length; i++) {
+                clock += 3000;
+                engine.finishOne();
+                await settle();
+            }
+            expect(engine.spoken).toEqual(said);
+            expect(talk.skipCount).toBe(0);
+            expect(talk.pending).toBe(0);
         });
 
-        it('drops the backlog, says so, and resumes from the newest sentence', async () => {
-            lagged.onMessages('s1', [agentText('m1', 'One. Two. Three. Four.')]);
+        it('cuts a turn that is still arriving once the backlog passes the threshold', async () => {
+            const talk = streamed();
+            talk.onMessages('s1', [agentText('m1', 'Streaming sentence 1. Streaming sentence 2.')]);
             await settle();
-            expect(engine.spoken).toEqual(['One.']);
+            expect(engine.spoken).toEqual(['Streaming sentence 1.']);
 
-            // The first sentence took so long that the rest is now stale.
-            clock += 16_000;
+            // More of the same turn lands while the first sentence is still
+            // being read: there IS something newer to be current with.
+            clock += 3000;
+            talk.onMessages('s1', [agentText('m2', 'Streaming sentence 3. Streaming sentence 4.', 2)]);
             engine.finishOne();
             await settle();
-            expect(engine.spoken).toEqual(['One.', 'Skipping ahead.']);
-            expect(lagged.skipCount).toBe(1);
+            expect(engine.spoken).toEqual(['Streaming sentence 1.', 'Skipping ahead.']);
+            expect(talk.skipCount).toBe(1);
 
             engine.finishOne();
             await settle();
-            expect(engine.spoken).toEqual(['One.', 'Skipping ahead.', 'Four.']);
-            expect(lagged.pending).toBe(0);
+            expect(engine.spoken).toEqual(['Streaming sentence 1.', 'Skipping ahead.', 'Streaming sentence 4.']);
+            expect(talk.pending).toBe(0);
         });
 
-        it('keeps reading in order while the voice is within the threshold', async () => {
-            lagged.onMessages('s1', [agentText('m1', 'One. Two. Three.')]);
+        it('does not cut a big backlog once the turn has stopped arriving', async () => {
+            const talk = streamed();
+            talk.onMessages('s1', [agentText('m1', 'Streaming sentence 1. Streaming sentence 2.')]);
             await settle();
-            clock += 14_000;
+            clock += 3000;
+            talk.onMessages('s1', [agentText('m2', 'Streaming sentence 3. Streaming sentence 4.', 2)]);
+
+            // The turn ends here. Nothing arrives again, so what is left is
+            // the answer itself and every word of it is read.
+            clock += 5000;
             engine.finishOne();
             await settle();
-            clock += 14_000;
-            engine.finishOne();
-            await settle();
-            expect(engine.spoken).toEqual(['One.', 'Two.', 'Three.']);
-            expect(lagged.skipCount).toBe(0);
+            expect(engine.spoken).toEqual(['Streaming sentence 1.', 'Streaming sentence 2.']);
+            for (let i = 0; i < 2; i++) {
+                clock += 3000;
+                engine.finishOne();
+                await settle();
+            }
+            expect(engine.spoken).toEqual([
+                'Streaming sentence 1.', 'Streaming sentence 2.',
+                'Streaming sentence 3.', 'Streaming sentence 4.',
+            ]);
+            expect(talk.skipCount).toBe(0);
         });
 
-        it('speaks a lone stale sentence rather than skipping to nothing', async () => {
-            lagged.onMessages('s1', [agentText('m1', 'One. Two.')]);
+        it('reads out one big block that lands after a pause, rather than cutting it', async () => {
+            const talk = streamed();
+            talk.onMessages('s1', [agentText('m1', 'Streaming sentence 1. Streaming sentence 2.')]);
             await settle();
-            clock += 30_000;
+
+            // A tool call ran, then the whole final answer landed at once.
+            // Two batches, but not a stream: the gap is too long, and this
+            // block is the answer rather than something to be current with.
+            clock += 9000;
+            talk.onMessages('s1', [agentText('m2', sentences('Final', 8).join(' '), 2)]);
             engine.finishOne();
             await settle();
-            expect(engine.spoken).toEqual(['One.', 'Two.']);
-            expect(lagged.skipCount).toBe(0);
+            expect(engine.spoken).toEqual(['Streaming sentence 1.', 'Streaming sentence 2.']);
+            for (let i = 0; i < 8; i++) {
+                clock += 3000;
+                engine.finishOne();
+                await settle();
+            }
+            expect(engine.spoken).toEqual([
+                'Streaming sentence 1.', 'Streaming sentence 2.', ...sentences('Final', 8),
+            ]);
+            expect(talk.skipCount).toBe(0);
         });
 
-        it('measures lag per sentence, so text that keeps arriving keeps its place', async () => {
-            lagged.onMessages('s1', [agentText('m1', 'One. Two.')]);
+        it('never cuts once the session says it has stopped generating', async () => {
+            let generating = true;
+            const talk = streamed({ turnStillRunning: () => generating });
+            talk.onMessages('s1', [agentText('m1', 'Streaming sentence 1. Streaming sentence 2.')]);
             await settle();
-            clock += 20_000;
-            lagged.onMessages('s1', [agentText('m2', 'Three. Four.', 2)]);
+            clock += 3000;
+            talk.onMessages('s1', [agentText('m2', 'Streaming sentence 3. Streaming sentence 4.', 2)]);
+
+            // Same arrival pattern that cut two tests ago, but the agent has
+            // finished, so there is nothing newer and every word is read.
+            generating = false;
             engine.finishOne();
             await settle();
-            // "Two." is 20 s old with newer sentences behind it: cut to "Four.".
-            expect(engine.spoken).toEqual(['One.', 'Skipping ahead.']);
+            expect(engine.spoken).toEqual(['Streaming sentence 1.', 'Streaming sentence 2.']);
+            expect(talk.skipCount).toBe(0);
+        });
+
+        it('abandons the previous turn when a new one starts, and says so once', async () => {
+            const talk = streamed({ maxBacklogSeconds: () => 30 });
+            talk.onMessages('s1', [agentText('m1', sentences('Old', 4).join(' '))]);
+            await settle();
+            expect(engine.spoken).toEqual(['Old sentence 1.']);
+
+            clock += 2000;
+            talk.onMessages('s1', [userText('u1', 5), agentText('m2', 'New sentence 1. New sentence 2.', 6)]);
+            await settle();
+            // The old sentence was cut mid-word, not finished politely.
+            expect(engine.stops).toBe(1);
+            expect(engine.spoken).toEqual(['Old sentence 1.', 'Skipping ahead.']);
+
             engine.finishOne();
             await settle();
-            expect(engine.spoken).toEqual(['One.', 'Skipping ahead.', 'Four.']);
+            // More of the SAME new turn says the marker no second time.
+            clock += 1000;
+            talk.onMessages('s1', [agentText('m3', 'New sentence 3.', 7)]);
+            engine.finishOne();
+            await settle();
+            engine.finishOne();
+            await settle();
+            expect(engine.spoken).toEqual([
+                'Old sentence 1.', 'Skipping ahead.',
+                'New sentence 1.', 'New sentence 2.', 'New sentence 3.',
+            ]);
+            expect(engine.spoken).not.toContain('Old sentence 2.');
+            expect(talk.skipCount).toBe(1);
+        });
+
+        it('says nothing about skipping when the previous turn had already finished', async () => {
+            const talk = streamed({ maxBacklogSeconds: () => 30 });
+            talk.onMessages('s1', [agentText('m1', 'Old sentence 1.')]);
+            await settle();
+            engine.finishOne();
+            await settle();
+
+            clock += 2000;
+            talk.onMessages('s1', [userText('u1', 5), agentText('m2', 'New sentence 1.', 6)]);
+            await settle();
+            expect(engine.spoken).toEqual(['Old sentence 1.', 'New sentence 1.']);
+            expect(talk.skipCount).toBe(0);
+        });
+
+        it('speaks a lone sentence however far behind it is, having nothing to skip to', async () => {
+            const talk = streamed();
+            talk.onMessages('s1', [agentText('m1', 'Alone sentence 1.')]);
+            await settle();
+            clock += 3000;
+            const long = 'This one sentence runs on for quite a while and takes ages to say.';
+            talk.onMessages('s1', [agentText('m2', long, 2)]);
+            engine.finishOne();
+            await settle();
+            expect(engine.spoken).toEqual(['Alone sentence 1.', long]);
+            expect(talk.skipCount).toBe(0);
+        });
+
+        it('keeps reading in order while the backlog stays inside the threshold', async () => {
+            const talk = streamed();
+            talk.onMessages('s1', [agentText('m1', 'Short one. Short two.')]);
+            await settle();
+            clock += 1000;
+            talk.onMessages('s1', [agentText('m2', 'Short three.', 2)]);
+            engine.finishOne();
+            await settle();
+            engine.finishOne();
+            await settle();
+            expect(engine.spoken).toEqual(['Short one.', 'Short two.', 'Short three.']);
+            expect(talk.skipCount).toBe(0);
+        });
+
+        it('reads faster instead of cutting, and never past the ceiling', async () => {
+            const talk = streamed();
+            talk.onMessages('s1', [agentText('m1', sentences('Long', 6).join(' '))]);
+            await settle();
+            // 18 s of audio against a 4 s threshold: the catch-up is capped.
+            expect(engine.rates[0]).toBeCloseTo(defaultMaxRateScale, 5);
+            for (let i = 0; i < 5; i++) {
+                clock += 1000;
+                engine.finishOne();
+                await settle();
+            }
+            expect(engine.spoken).toEqual(sentences('Long', 6));
+            // With only the last sentence left there is nothing to catch up on.
+            expect(engine.rates[engine.rates.length - 1]).toBe(1);
+            expect(engine.rates.every((rate) => rate <= defaultMaxRateScale)).toBe(true);
+            expect(talk.skipCount).toBe(0);
         });
 
         it('reads the threshold live so a settings change applies to the next sentence', async () => {
             let threshold = 30;
-            const live = new ReadAloudReader(engine, { now: () => clock, maxLagSeconds: () => threshold });
-            live.setEnabled(true);
-            live.focus('s1');
-            live.onMessages('s1', [agentText('m1', 'One. Two. Three.')]);
+            const talk = streamed({ maxBacklogSeconds: () => threshold });
+            talk.onMessages('s1', [agentText('m1', sentences('Live', 4).join(' '))]);
             await settle();
-            clock += 20_000;
-            threshold = 10;
+            clock += 2000;
+            talk.onMessages('s1', [agentText('m2', 'Live sentence 5.', 2)]);
             engine.finishOne();
             await settle();
-            expect(engine.spoken).toEqual(['One.', 'Skipping ahead.']);
+            expect(engine.spoken).toEqual(['Live sentence 1.', 'Live sentence 2.']);
+
+            threshold = 5;
+            clock += 1000;
+            engine.finishOne();
+            await settle();
+            expect(engine.spoken).toEqual(['Live sentence 1.', 'Live sentence 2.', 'Skipping ahead.']);
+            expect(talk.skipCount).toBe(1);
         });
     });
 });

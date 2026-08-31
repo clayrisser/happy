@@ -1,8 +1,8 @@
 import * as Localization from 'expo-localization';
 import { isDroverSpeechAvailable, listVoices, speakUtterance, stopSpeaking, type SpeechVoice } from 'drover-speech';
 import { storage } from '@/sync/storage';
-import { resolveStreamTalk } from '@/sync/settings';
-import type { SpeechEngine } from './readAloud';
+import { resolveStreamTalk, streamTalkRateRange } from '@/sync/settings';
+import type { SpeakOptions, SpeechEngine } from './readAloud';
 import { pickVoice } from './voicePick';
 
 /**
@@ -16,6 +16,10 @@ import { pickVoice } from './voicePick';
  * The voice is picked here, in JS, by pickVoice over the installed list, so
  * the rule is the tested one; native applies the same rule only when JS
  * passes no identifier.
+ *
+ * DROVE-108: the queue may ask for a faster read when it is behind. That is
+ * a multiplier on the chosen rate, clamped back into the speed slider's own
+ * range, so catching up never sounds like a setting the user did not pick.
  */
 
 let voicesCache: SpeechVoice[] | null = null;
@@ -41,13 +45,14 @@ export function speechLanguage(): string {
 }
 
 export const speechEngine: SpeechEngine = {
-    async speak(text: string) {
+    async speak(text: string, options?: SpeakOptions) {
         const talk = resolveStreamTalk(storage.getState().settings);
         const language = speechLanguage();
         const voices = await installedVoices();
         const voice = pickVoice(voices, language, talk.voiceId);
+        const scaled = talk.rate * (options?.rateScale ?? 1);
         return speakUtterance(text, {
-            rate: talk.rate,
+            rate: Math.min(streamTalkRateRange.max, Math.max(streamTalkRateRange.min, scaled)),
             pitch: talk.pitch,
             voiceId: voice?.identifier ?? talk.voiceId,
             language,
