@@ -484,6 +484,21 @@ export type Metadata = {
    * inside the parent session's sidebar panel.
    */
   isSideChat?: boolean
+  /**
+   * This session IS the Cattle Drover bridge, not a conversation (DROVE-238).
+   *
+   * The bridge holds one Happy session per machine so every bus gate has
+   * somewhere to be mirrored to. It has no transcript, sends no keepalive and
+   * answers no message, so the app drew it as an inactive row titled "Cattle
+   * Drover — pending…" sitting among Clay's real sessions — and the Accounts
+   * screen used to send him INTO it to type his login code. That is the row he
+   * asked to be rid of: "these temporary sessions for login should not be
+   * picked up by the mobile app".
+   *
+   * So it is marked at the source rather than guessed at by the app. The gates
+   * it carries are unaffected; only the session list stops listing it.
+   */
+  droverBridge?: boolean
 };
 
 export type UsageLimitWindowStatus = 'allowed' | 'allowed_warning' | 'rejected'

@@ -43,8 +43,19 @@
 
 /** A pending login card, as the Accounts screen needs to see it. */
 export interface PendingAccountLogin {
-    /** The session holding the card — where a tap has to land to answer it. */
+    /** The session HOLDING the card. Never navigated to; an answer is
+     *  addressed to it (DROVE-238). */
     sessionId: string;
+    /** The key of the request inside that session's `agentState.requests`.
+     *  With `sessionId` it is the whole address `sessionAllow` needs, and it is
+     *  what lets the Accounts screen answer the card in place instead of
+     *  sending Clay into a thread to find it. */
+    requestId: string;
+    /** The mirrored request's arguments, verbatim. `DroverAccountLoginBody`
+     *  reads them itself — the URL, the heading, the reason and the cancel
+     *  label — so they are carried whole rather than unpicked here and
+     *  reassembled there. */
+    args: unknown;
     /** The machine the login is running on, from the holding session. */
     machineId: string;
     /** The authorize URL, when the card carries one. */
@@ -81,13 +92,18 @@ export function pendingAccountLogins(
         if (!machineId) continue;
         const requests = session?.agentState?.requests;
         if (!requests) continue;
-        for (const request of Object.values(requests)) {
+        // The KEY as well as the value (DROVE-238). It used to iterate
+        // `Object.values`, which threw away the one thing an answer needs: the
+        // request id. That is why the screen could only offer to navigate into
+        // the holding session — it knew a login was waiting and had no way to
+        // reply to it.
+        for (const [requestId, request] of Object.entries(requests)) {
             const row = request as { tool?: string; arguments?: unknown; createdAt?: unknown } | null;
             if (row?.tool !== 'DroverAccountLogin') continue;
             const args = row.arguments as { url?: unknown } | null;
             const url = typeof args?.url === 'string' && args.url.startsWith('https://') ? args.url : null;
             const createdAt = typeof row.createdAt === 'number' ? row.createdAt : null;
-            found.push({ sessionId, machineId, url, createdAt });
+            found.push({ sessionId, requestId, args: row.arguments, machineId, url, createdAt });
         }
     }
     return found;
@@ -338,9 +354,12 @@ export function addAccountStatus(phase: AddAccountPhase): AddAccountStatus | nul
         case 'waiting':
             if (phase.linkReady) {
                 return {
-                    title: 'Sign in, then bring the code back',
+                    // The code box is on THIS screen now (DROVE-238), so the
+                    // sentence stops pointing at a row that used to navigate
+                    // into the bridge thread to find one.
+                    title: 'Sign in, then paste the code below',
                     detail: 'The sign-in page is open in your browser. Sign in, then paste the code it '
-                        + 'gives you into Enter the code below.',
+                        + 'gives you into the box below and send it.',
                     watching: true,
                     hasLink: true,
                     spinner: false,

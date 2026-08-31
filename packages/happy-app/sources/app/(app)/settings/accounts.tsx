@@ -47,9 +47,10 @@
  */
 
 import * as React from 'react';
-import { Linking, Platform, RefreshControl } from 'react-native';
-import { Stack, router, useLocalSearchParams } from 'expo-router';
+import { Linking, Platform, RefreshControl, View } from 'react-native';
+import { Stack, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { StyleSheet } from 'react-native-unistyles';
 
 import { Item } from '@/components/Item';
 import { ItemGroup } from '@/components/ItemGroup';
@@ -57,7 +58,7 @@ import { ItemList } from '@/components/ItemList';
 import { MOBILE_GLASS_HEADER_HEIGHT } from '@/components/navigation/headerMetrics';
 import { Modal } from '@/modal';
 import { storage, useAllMachines } from '@/sync/storage';
-import { machineDroverAccountLogin } from '@/sync/ops';
+import { machineDroverAccountLogin, sessionAllow } from '@/sync/ops';
 import {
     machineDroverAccountRemove,
     machineDroverAccounts,
@@ -77,7 +78,7 @@ import {
     type MachineAccount,
     type PendingAccountLogin,
 } from '@/sync/machineAccountsFlow';
-import { hostOf } from '@/components/tools/views/droverAccountLogin';
+import { DroverAccountLoginBody } from '@/components/tools/views/DroverAccountLoginBody';
 
 /** How often a machine with a login in flight is asked again. */
 const watchPollMs = 4_000;
@@ -116,7 +117,7 @@ export default function AccountsScreen() {
      * by value; the cards are rebuilt only when it moves.
      */
     const loginKey = storage((state) => pendingAccountLogins(state.sessions)
-        .map((c) => `${c.machineId}|${c.sessionId}|${c.url ?? ''}|${c.createdAt ?? ''}`)
+        .map((c) => `${c.machineId}|${c.sessionId}|${c.requestId}|${c.url ?? ''}|${c.createdAt ?? ''}`)
         .join(','));
     const logins = React.useMemo<PendingAccountLogin[]>(
         () => pendingAccountLogins(storage.getState().sessions),
@@ -396,34 +397,45 @@ export default function AccountsScreen() {
                             )}
 
                             {/*
-                              * The link, on THIS screen (DROVE-212).
+                              * THE WHOLE LOGIN, ON THIS SCREEN (DROVE-238).
                               *
-                              * It opens the browser directly rather than the share sheet the card
-                              * in the bridge thread raises: from a phone, Start login has to end at
-                              * a sign-in page. The sheet stays on that card for the times Clay
-                              * wants the link somewhere other than the default browser.
+                              * DROVE-212 put the LINK here and left the code field on the mirrored
+                              * card, reasoning that "a second code field here would be a second
+                              * thing to keep in step". Clay finished the login and said what that
+                              * cost him: "Why did it make me enter the code in a question prompt
+                              * instead of in the same accounts page where we clicked the link. That
+                              * was very confusing." He tapped Enter the code, was pushed into a
+                              * thread titled "Cattle Drover — pending…", and the thread answered
+                              * "This session is inactive."
                               *
-                              * The code still goes back on the card and nowhere else. That is the
-                              * DROVE-61 path, it is the only thing wired to the waiting login, and
-                              * a second code field here would be a second thing to keep in step.
+                              * So the card's body is rendered here instead — the same component the
+                              * gate overlay, the gates screen and the transcript draw, with the same
+                              * answer call. There is no second field to keep in step because there
+                              * is no second field: DroverAccountLoginBody is the one implementation
+                              * and this is one more surface for it.
+                              *
+                              * The link row comes with it, share icon and all, which is why the
+                              * screen's own Open the sign-in page Item is gone. Two identical rows
+                              * one above the other was the alternative.
+                              *
+                              * The answer is addressed to the session HOLDING the card — the
+                              * bridge's, never one Clay can see — and it never navigates there.
                               */}
                             {status?.hasLink && card?.url && (
-                                <>
-                                    <Item
-                                        title="Open the sign-in page"
-                                        subtitle={hostOf(card.url)}
-                                        icon={<Ionicons name="open-outline" size={29} color="#007AFF" />}
-                                        onPress={() => openLogin(machine.id, card.url!)}
-                                        detail="Open"
-                                        showChevron={false}
+                                <View style={styles.loginCard}>
+                                    <DroverAccountLoginBody
+                                        args={card.args}
+                                        canInteract
+                                        onAnswer={(input) => sessionAllow(
+                                            card.sessionId,
+                                            card.requestId,
+                                            undefined,
+                                            undefined,
+                                            'approved',
+                                            input,
+                                        )}
                                     />
-                                    <Item
-                                        title="Enter the code"
-                                        subtitle="Paste what that page gives you back"
-                                        icon={<Ionicons name="key-outline" size={29} color="#007AFF" />}
-                                        onPress={() => router.push(`/session/${card.sessionId}` as never)}
-                                    />
-                                </>
+                                </View>
                             )}
 
                             <Item
@@ -453,3 +465,12 @@ export default function AccountsScreen() {
         </>
     );
 }
+
+// The login card sits INSIDE an ItemGroup, which supplies the surface and the
+// rounded corners; all this adds is the padding an Item would have given it.
+const styles = StyleSheet.create(() => ({
+    loginCard: {
+        paddingHorizontal: 16,
+        paddingVertical: 14,
+    },
+}));

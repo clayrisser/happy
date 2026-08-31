@@ -44,6 +44,7 @@ import {
     sameLoginAs,
     type DroverAccount,
 } from '@/drover/flip/accounts';
+import { refreshCredentialState } from '@/drover/flip/credential';
 import { usageSnapshot, type AccountUsageSnapshot } from '@/drover/flip/usage';
 import { logger } from '@/ui/logger';
 import type { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
@@ -116,8 +117,29 @@ export function readMachineAccounts(now = Date.now()): { capturedAt: number; acc
     return { capturedAt: snapshot.capturedAt, accounts };
 }
 
-export function listMachineAccounts(now = Date.now()): ListMachineAccountsResponse {
+/**
+ * The list the phone's Accounts screen renders — with `loggedIn` asked of
+ * Claude Code first (DROVE-238).
+ *
+ * `readMachineAccounts` is a pure read of files, and the file it judges a login
+ * by holds an ADDRESS. Clay's four phone-added accounts all had one and none of
+ * them could run: "it actually showed they added but when I tried to flip to
+ * them it actually got stuck on these screens." So before the list is built,
+ * every account is asked `claude auth status`, and an account Claude Code says
+ * no to comes back `loggedIn: false` — which is already the field that draws
+ * the orange row and its "no login yet", and already the field that makes a row
+ * unflippable in the composer's account sheet. Nothing new to render.
+ *
+ * It is awaited rather than fired and forgotten, because a list that told the
+ * truth one poll late is a list Clay taps in the meantime. Six accounts probe
+ * in parallel in about the time one takes.
+ *
+ * A probe that cannot run records nothing, so a machine without a reachable
+ * `claude` gets exactly the list it got before.
+ */
+export async function listMachineAccounts(now = Date.now()): Promise<ListMachineAccountsResponse> {
     try {
+        await refreshCredentialState();
         return { ok: true, ...readMachineAccounts(now) };
     } catch (error) {
         // A registry that will not parse is a real answer, not a crash: the
@@ -229,7 +251,7 @@ export function registerMachineAccountsHandlers(
         'drover-accounts',
         async () => {
             logger.debug('[API MACHINE] Received drover-accounts RPC request');
-            return listMachineAccounts();
+            return await listMachineAccounts();
         },
     );
 

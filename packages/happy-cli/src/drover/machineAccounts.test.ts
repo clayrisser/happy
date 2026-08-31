@@ -18,6 +18,12 @@ vi.mock('@/drover/flip/accounts', () => ({
     isAmbientSpelling: (dir: unknown) => dir === 'default' || dir === '~/.claude',
 }));
 
+// The credential probe spawns Claude Code, and this file is about the JOIN.
+// What the probe DOES to the list is pinned in flip/credential.test.ts.
+vi.mock('@/drover/flip/credential', () => ({
+    refreshCredentialState: async () => {},
+}));
+
 vi.mock('@/drover/flip/usage', () => ({
     usageSnapshot: (current: string | undefined, now: number) => ({
         capturedAt: now,
@@ -120,14 +126,14 @@ describe('readMachineAccounts', () => {
 });
 
 describe('listMachineAccounts', () => {
-    it('answers ok with the rows', () => {
+    it('answers ok with the rows', async () => {
         seedThreeAccounts();
-        const result = listMachineAccounts(1_000);
+        const result = await listMachineAccounts(1_000);
         expect(result.ok).toBe(true);
         if (result.ok) expect(result.accounts).toHaveLength(3);
     });
 
-    it('turns a broken registry into an error, never into an empty list', () => {
+    it('turns a broken registry into an error, never into an empty list', async () => {
         // "No accounts on this machine" is the one thing an unreadable
         // accounts.json must not say: the screen would offer to add a second
         // account to a Mac that already has five.
@@ -135,7 +141,7 @@ describe('listMachineAccounts', () => {
         Object.defineProperty(registry, 'map', {
             value: () => { throw new Error('accounts.json: unexpected token'); },
         });
-        const result = listMachineAccounts(1_000);
+        const result = await listMachineAccounts(1_000);
         expect(result.ok).toBe(false);
         if (!result.ok) expect(result.error).toContain('unexpected token');
     });

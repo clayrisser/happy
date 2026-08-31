@@ -777,6 +777,12 @@ export async function runDroverBridge(): Promise<void> {
         lifecycleStateSince: Date.now(),
         flavor: 'claude',
         summary: { text: 'Cattle Drover — pending gates from every local agent', updatedAt: Date.now() },
+        // Not a conversation, and the app must be told so rather than left to
+        // work it out (DROVE-238). Without this the bridge is one more row in
+        // the session list: never active, so always archived, and opening it
+        // says "This session is inactive." Clay found his login code field
+        // inside it, having started the login on the Accounts screen.
+        droverBridge: true,
     } as Metadata
 
     // One long-lived session per machine, re-attached on every restart. The
@@ -790,6 +796,14 @@ export async function runDroverBridge(): Promise<void> {
         state: { requests: {}, completedRequests: {} } as unknown as AgentState,
     })
     const client = api.sessionSyncClient(session)
+    // The flag onto the session that ALREADY exists (DROVE-238). The tag is
+    // stable by design, so `getOrCreateSession` hands back the record minted on
+    // the very first run with the metadata it had then — a new field set above
+    // would otherwise only ever reach a machine that had never bridged before.
+    // Idempotent, and one write per start.
+    if (!(session.metadata as { droverBridge?: boolean } | null)?.droverBridge) {
+        client.updateMetadata((meta) => ({ ...meta, droverBridge: true }))
+    }
     // The event itself, not just its id: answering a question needs the option
     // list to turn the label the app sends back into the id the bus wants.
     const mirrored = new Map<string, DroverEvent>()
