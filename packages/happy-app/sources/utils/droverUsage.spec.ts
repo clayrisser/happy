@@ -11,10 +11,13 @@ import { describe, expect, it } from 'vitest';
 import {
     currentDroverUsageAccount,
     droverAccountsUsage,
+    droverAccountWindows,
     droverFamilyRows,
     droverOtherAccounts,
+    droverWindowId,
     usageLimitsFromDroverUsage,
     type DroverUsageLike,
+    type DroverUsageRowLike,
 } from './droverUsage';
 import { getUsageLimitRows } from './sessionStatusBar';
 
@@ -134,6 +137,30 @@ describe('droverOtherAccounts', () => {
     it('is empty without a snapshot', () => {
         expect(droverOtherAccounts(null, 'jamrizzi')).toEqual([]);
         expect(droverOtherAccounts({ capturedAt: 1, accounts: [] }, null)).toEqual([]);
+    });
+});
+
+/**
+ * One spelling of a window's id (DROVE-131). The wrist's binding-limit row
+ * calls droverWindowId; the strip's bars go through droverAccountWindows. If
+ * the two ever name one window two ways it looks like two limits.
+ */
+describe('droverAccountWindows', () => {
+    it('names every kind of window with droverWindowId, scoped or not, known or not', () => {
+        const limits: DroverUsageRowLike[] = [
+            { kind: 'session', percent: 4, resetsAt: 1_500, scope: null, family: null },
+            { kind: 'weekly_all', percent: 23, resetsAt: sep5, scope: null, family: null },
+            { kind: 'weekly_scoped', percent: 39, resetsAt: sep5, scope: 'Fable', family: 'fable' },
+            { kind: 'session', percent: 10, resetsAt: 1_500, scope: 'Opus 5', family: null },
+            { kind: 'weekly_scoped', percent: 12, resetsAt: sep5, scope: null, family: 'sonnet' },
+            { kind: 'monthly_all', percent: 1, resetsAt: null, scope: null, family: null },
+        ];
+        const windows = droverAccountWindows({ name: 'jamrizzi', limits });
+        expect(windows.map((w) => w.id)).toEqual(limits.map(droverWindowId));
+        expect(windows.map((w) => w.id)).toEqual([
+            'five_hour', 'seven_day', 'seven_day_fable', 'five_hour_opus_5', 'seven_day_sonnet', 'monthly_all',
+        ]);
+        expect(windows.map((w) => w.family)).toEqual([null, null, 'Fable', 'Opus 5', 'Sonnet', null]);
     });
 });
 

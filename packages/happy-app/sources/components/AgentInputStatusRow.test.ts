@@ -110,6 +110,7 @@ vi.mock('@/text', async () => {
 
 import { AgentInputStatusRow, type StatusRowProps } from './AgentInputStatusRow';
 import { resolveUsageStrip } from './agentInputUsage';
+import { statusRowShrink } from './statusRowLayout';
 import { confirmDroverSwitch } from '@/utils/droverAccountSwitch';
 
 const originalConsoleError = console.error;
@@ -146,7 +147,7 @@ const paneUsage: DroverUsageLike = {
     ],
 };
 
-const online = { text: 'online', color: 'green', dotColor: 'green' };
+const online = { text: 'online', dotColor: 'green' };
 
 function mount(element: React.ReactElement) {
     let renderer: ReturnType<typeof create>;
@@ -373,6 +374,37 @@ describe('AgentInputStatusRow on an idle pane session', () => {
         const renderer = row({ showDetails: false });
         expect(renderer.root.findByType('AnimatedFade' as any).props.visible).toBe(false);
     });
+
+    it('drops the account\'s name in zen mode, and with it the folds the name paid for', () => {
+        vi.mocked(confirmDroverSwitch).mockClear();
+        const strip = paneStrip(true);
+        const renderer = row({
+            sessionId: 'busy',
+            hideAccount: true,
+            weekPercent: strip.weekPercent,
+            usageBarGroups: strip.usageBarGroups,
+            contextStatus: { percent: 42, detailText: '84k / 200k context', color: 'ok' },
+        });
+        // The window keeps its word with no account to head it, and the
+        // context percent stays printed, since nothing is taking its width.
+        expect(line(renderer)).toEqual(['Opus 5 1M', '·', '77% week', '·', '42% context']);
+        // The account is hidden, not forgotten: the sheet still opens on it
+        // and a switch still says which account it is leaving (DROVE-160).
+        const sheet = () => renderer.root.findByType('UsageAccountBarsSheet' as any);
+        expect(sheet().props.groups.map((g: any) => [g.account, g.active])).toEqual([
+            ['jamrizzi', true],
+            ['main', false],
+        ]);
+        act(() => {
+            sheet().props.onSwitchAccount('main');
+        });
+        expect(confirmDroverSwitch).toHaveBeenCalledWith({
+            sessionId: 'busy',
+            account: 'main',
+            from: 'jamrizzi',
+            always: true,
+        });
+    });
 });
 
 describe('AgentInputStatusRow while the session is working', () => {
@@ -449,10 +481,45 @@ describe('AgentInputStatusRow while the session is working', () => {
         try {
             const renderer = row({ sessionId: 'busy' });
             // The name is what the tree behind the fold carries in full; the
-            // clock and the token count are what Clay is watching.
-            expect(line(renderer)).toEqual(['1m 2s 251.2k', '1', '·', 'Opus 5 1M', '·', 'jamrizzi', '23%']);
+            // clock and the token count are what Clay is watching. 320 is
+            // still 6pt over with the name gone, so the model folds whole
+            // rather than the account being cut (statusRowLayout).
+            expect(line(renderer)).toEqual(['1m 2s 251.2k', '1', '·', 'jamrizzi', '23%']);
         } finally {
             screen.width = 390;
+            vi.useRealTimers();
+        }
+    });
+
+    it('caps a long MCP tool name at under half the row, so it cannot squeeze the model or the account', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(now + 1_000);
+        try {
+            sessions.mcp = {
+                metadata: {
+                    liveStatus: {
+                        at: now,
+                        turnStartedAt: now - 61_000,
+                        main: { startedAt: now - 61_000, tokens: 1_530_411 },
+                        tool: { id: 't1', name: 'mcp__chrome_devtools__take_screenshot', startedAt: now - 5_000 },
+                    },
+                },
+            };
+            const renderer = row({ sessionId: 'mcp' });
+            const live = renderer.root.findAllByType('Pressable' as any)
+                .find((node: any) => String(node.props.accessibilityLabel).startsWith('Main thread:'));
+            const style = live.props.style({ pressed: false });
+            // The last of the three that shrink, behind the account and the
+            // model, and never more than 45% of the row.
+            expect(style.flexShrink).toBe(statusRowShrink.live);
+            expect(style.maxWidth).toBe('45%');
+            const model = segment(renderer, 'Model').props.style({ pressed: false });
+            const account = renderer.root.findAllByType('Text' as any)
+                .find((node: any) => node.props.children === 'jamrizzi');
+            expect(model.flexShrink).toBe(statusRowShrink.model);
+            expect(account.props.style.flexShrink).toBe(statusRowShrink.account);
+            expect(statusRowShrink.live).toBeLessThan(statusRowShrink.model);
+        } finally {
             vi.useRealTimers();
         }
     });
@@ -731,6 +798,39 @@ describe('AgentInputStatusRow tasks', () => {
     it('shows no segment at all for a session that never kept a list', () => {
         const renderer = row({ sessionId: 'idle' });
         expect(line(renderer)).toEqual(['Opus 5 1M', '·', 'jamrizzi', '23%']);
+    });
+
+    it('counts against the width, so a working row with a list folds the name and then the model', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(now + 1_000);
+        try {
+            sessions.busyWithTasks = {
+                ...sessions.busy,
+                todos: [
+                    { content: 'Read the reducer', status: 'completed' },
+                    { content: 'Write the sheet', status: 'in_progress' },
+                    { content: 'Wire the wrist', status: 'pending' },
+                ],
+            };
+            // On the phone the badge is what the estimate was missing: with
+            // it counted the name goes, and the model goes whole after it,
+            // instead of the account and the model being cut to `jam…` and
+            // `Opus…` around a badge that held its width.
+            screen.width = 393;
+            expect(line(row({ sessionId: 'busyWithTasks' })))
+                .toEqual(['1m 2s 251.2k', '1', '·', '1/3 tasks', '·', 'jamrizzi', '23%']);
+            // Wider, only the name goes.
+            screen.width = 430;
+            expect(line(row({ sessionId: 'busyWithTasks' })))
+                .toEqual(['1m 2s 251.2k', '1', '·', '1/3 tasks', '·', 'Opus 5 1M', '·', 'jamrizzi', '23%']);
+            // Wider still, nothing does.
+            screen.width = 500;
+            expect(line(row({ sessionId: 'busyWithTasks' })))
+                .toEqual(['working', '1m 2s 251.2k', '1', '·', '1/3 tasks', '·', 'Opus 5 1M', '·', 'jamrizzi', '23%']);
+        } finally {
+            screen.width = 390;
+            vi.useRealTimers();
+        }
     });
 
     it('opening the quota closes the tasks sheet, since one piece of state holds both', () => {

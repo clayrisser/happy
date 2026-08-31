@@ -125,7 +125,7 @@ export default function RigPreviewScreen() {
                         availableEffortLevels={efforts}
                         onEffortLevelChange={setEffort}
                         metadata={rigMetadataFixture}
-                        connectionStatus={{ text: 'online', color: '#34C759', dotColor: '#34C759' }}
+                        connectionStatus={{ text: 'online', dotColor: '#34C759' }}
                         autocompletePrefixes={[]}
                         autocompleteSuggestions={async () => []}
                         showAbortButton

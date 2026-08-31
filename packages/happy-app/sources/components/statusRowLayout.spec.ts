@@ -8,10 +8,12 @@
  * watching the row go over.
  */
 import { describe, expect, it } from 'vitest';
+import { MOBILE_COMPOSER_LAYOUT, MOBILE_COMPOSER_METRICS } from './agentInputLayout';
 import {
     estimateStatusRowWidth,
     showsContextPercent,
     statusRowFits,
+    statusRowFolds,
     statusRowMetrics,
     statusRowQuotaText,
     statusRowShrink,
@@ -31,14 +33,26 @@ const workingRow = {
 
 /**
  * The same row once DROVE-155's main-thread readout lands: the tool, the turn
- * clock, the live token count, and the agent count beside them. This is the
- * widest the row ever gets, so it is the one the folds have to be measured
- * against.
+ * clock, the live token count, and the agent count beside them.
  */
-const mainThreadRow = { ...workingRow, live: 'Bash 1m 2s 251.2k', agentCount: 3 } as const;
+const mainThreadRow = {
+    ...workingRow,
+    live: 'Bash 1m 2s 251.2k',
+    liveWithoutName: '1m 2s 251.2k',
+    agentCount: 3,
+} as const;
 
 /** DROVE-155's own fold: the tool name goes and the numbers stay. */
 const foldedToolName = { ...mainThreadRow, live: '1m 2s 251.2k' } as const;
+
+/**
+ * And with a task list (DROVE-167). THIS is the widest the row gets: a working
+ * session that keeps a list, on the phone, with the model still on the row.
+ */
+const mainThreadRowWithTasks = { ...mainThreadRow, tasks: '1/3 tasks' } as const;
+
+/** The row DROVE-178 leaves, with the model back on the button row. */
+const { model: _model, ...mainThreadRowWithTasksNoModel } = mainThreadRowWithTasks;
 
 describe('the row at 375pt, the narrowest phone still supported', () => {
     it('draws the whole of it, with the model and the account both on', () => {
@@ -87,6 +101,69 @@ describe('the row once the main thread reports its own numbers (DROVE-155)', () 
 
     it('keeps the tool name at 393, where there is room for it', () => {
         expect(statusRowFits(mainThreadRow, 393)).toBe(true);
+        expect(statusRowFolds(mainThreadRow, 393)).toEqual({ toolName: false, model: false });
+    });
+
+    it('folds the name and nothing else at 375', () => {
+        expect(statusRowFolds(mainThreadRow, 375)).toEqual({ toolName: true, model: false });
+    });
+});
+
+/**
+ * The tasks segment, and the two folds that pay for it.
+ *
+ * The badge is 83pt with its separator, and until it was counted here the
+ * estimate said a working row with a list fit at 393 by 2pt while the row
+ * really needed 436. The tool name held, the account went to `jam…` and the
+ * model to `Opus…`, which is the one thing this file promises never happens.
+ */
+describe('the row with a task list on it (DROVE-167)', () => {
+    it('costs the badge, its chevron and a separator', () => {
+        expect(estimateStatusRowWidth(mainThreadRowWithTasks) - estimateStatusRowWidth(mainThreadRow))
+            .toBe(9 * statusRowMetrics.glyphWidth + statusRowMetrics.chevron + statusRowMetrics.separator);
+        expect(estimateStatusRowWidth(mainThreadRowWithTasks)).toBe(436);
+        expect(estimateStatusRowWidth({ ...mainThreadRowWithTasks, tasks: '10/12 tasks' })).toBe(448);
+    });
+
+    it('does not fit at 393 with the name folded, so the model folds too, and then it does', () => {
+        expect(statusRowFits(mainThreadRowWithTasks, 393)).toBe(false);
+        expect(statusRowFits({ ...mainThreadRowWithTasks, live: '1m 2s 251.2k' }, 393)).toBe(false);
+        expect(statusRowFolds(mainThreadRowWithTasks, 393)).toEqual({ toolName: true, model: true });
+        expect(statusRowFits({ ...mainThreadRowWithTasks, live: '1m 2s 251.2k', model: null }, 393)).toBe(true);
+    });
+
+    it('folds the same two at 375, and is over at 320 with both gone, where the shrinking starts', () => {
+        expect(statusRowFolds(mainThreadRowWithTasks, 375)).toEqual({ toolName: true, model: true });
+        expect(statusRowFits({ ...mainThreadRowWithTasks, live: '1m 2s 251.2k', model: null }, 375)).toBe(true);
+        expect(statusRowFolds(mainThreadRowWithTasks, 320)).toEqual({ toolName: true, model: true });
+        expect(statusRowFits({ ...mainThreadRowWithTasks, live: '1m 2s 251.2k', model: null }, 320)).toBe(false);
+    });
+
+    it('needs only the name folded once the model is off the row (DROVE-178), at 393 and at 375', () => {
+        expect(estimateStatusRowWidth(mainThreadRowWithTasksNoModel)).toBe(366);
+        for (const width of [393, 375]) {
+            expect(statusRowFits(mainThreadRowWithTasksNoModel, width), String(width)).toBe(false);
+            expect(statusRowFolds(mainThreadRowWithTasksNoModel, width), String(width))
+                .toEqual({ toolName: true, model: false });
+            expect(statusRowFits({ ...mainThreadRowWithTasksNoModel, live: '1m 2s 251.2k' }, width), String(width))
+                .toBe(true);
+        }
+        // 320 is over with the name gone and has no model to fold: it shrinks.
+        expect(statusRowFolds(mainThreadRowWithTasksNoModel, 320)).toEqual({ toolName: true, model: false });
+    });
+
+    it('keeps the model on an idle row with a list at 393 and 375, and folds it at 320', () => {
+        const idle = { tasks: '1/3 tasks', model: 'Opus 5 1M', quota: 'jamrizzi 23%', quotaExpands: true, contextGauge: true };
+        expect(estimateStatusRowWidth(idle)).toBe(285);
+        expect(statusRowFolds(idle, 393)).toEqual({ toolName: false, model: false });
+        expect(statusRowFolds(idle, 375)).toEqual({ toolName: false, model: false });
+        expect(statusRowFolds(idle, 320)).toEqual({ toolName: false, model: true });
+    });
+
+    it('folds nothing on a row that fits, and never a part that is not there', () => {
+        expect(statusRowFolds(mainThreadRowWithTasks, 500)).toEqual({ toolName: false, model: false });
+        expect(statusRowFolds({ ...mainThreadRowWithTasksNoModel, live: null, liveWithoutName: null }, 320))
+            .toEqual({ toolName: false, model: false });
     });
 });
 
@@ -170,5 +247,12 @@ describe('the estimate itself', () => {
 
     it('is nothing for a row with nothing on it', () => {
         expect(estimateStatusRowWidth({})).toBe(0);
+    });
+
+    it('takes the row\'s inset off the composer\'s metrics, the same expression the row draws with', () => {
+        expect(statusRowMetrics.paddingHorizontal)
+            .toBe(MOBILE_COMPOSER_METRICS.shellInset + MOBILE_COMPOSER_LAYOUT.addGlyphOffset);
+        expect(statusRowMetrics.paddingHorizontal).toBe(19);
+        expect(statusRowUsableWidth(393)).toBe(355);
     });
 });
