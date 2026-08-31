@@ -176,8 +176,6 @@ function row(overrides: Partial<StatusRowProps> = {}) {
         contextStatus: null,
         weekPercent: strip.weekPercent,
         usageBarGroups: strip.usageBarGroups,
-        modelName: 'Opus 5 1M',
-        onModelPress: () => {},
         showDetails: true,
         ...overrides,
     }));
@@ -231,9 +229,9 @@ sessions.agentsOnly = {
 };
 
 describe('AgentInputStatusRow on an idle pane session', () => {
-    it('is the model, then the account and its quota, with no word for the connection (DROVE-138)', () => {
+    it('is the account and its quota, with no word for the connection (DROVE-138, DROVE-178)', () => {
         const renderer = row();
-        expect(line(renderer)).toEqual(['Opus 5 1M', '·', 'jamrizzi', '23%']);
+        expect(line(renderer)).toEqual(['jamrizzi', '23%']);
         expect(line(renderer)).not.toContain('online');
         expect(renderer.root.findAllByType('AnimatedFade' as any)).toHaveLength(1);
     });
@@ -246,7 +244,7 @@ describe('AgentInputStatusRow on an idle pane session', () => {
             contextShown: true,
         });
         expect(line(row({ weekPercent: strip.weekPercent, usageBarGroups: strip.usageBarGroups })))
-            .toEqual(['Opus 5 1M', '·', '77% week']);
+            .toEqual(['77% week']);
     });
 
     it('carries the connection colour on the dot and has nothing left that truncates from the left', () => {
@@ -275,34 +273,17 @@ describe('AgentInputStatusRow on an idle pane session', () => {
         expect(onSessionInfoPress).toHaveBeenCalledTimes(1);
     });
 
-    it('opens the model picker on the first tap, never a menu of the three controls (DROVE-111)', () => {
-        const onModelPress = vi.fn();
-        const renderer = row({ onModelPress });
-        const model = segment(renderer, 'Model');
-        expect(model.props.accessibilityValue).toEqual({ text: 'Opus 5 1M' });
-        act(() => {
-            model.props.onPress();
-        });
-        expect(onModelPress).toHaveBeenCalledTimes(1);
-    });
-
-    it('anchors the model picker as the native menu on iOS, still one tap', () => {
-        const renderer = row({
-            nativeMenus: true,
-            modelGroup: { key: 'model', label: 'Model', options: [], onSelect: () => {} } as any,
-        });
-        const menu = renderer.root.findByType('NativeSettingsMenu' as any);
-        expect(menu.props.groups.map((group: any) => group.key)).toEqual(['model']);
-        expect(menu.props.accessibilityLabel).toBe('Model, Opus 5 1M');
-    });
-
-    it('spells the model out rather than cutting it, and cuts the account before the model (DROVE-138)', () => {
-        const renderer = row({ modelName: 'Gemini 3.1 Flash Lite' });
-        const texts = renderer.root.findAllByType('Text' as any);
-        const model = texts.find((node: any) => node.props.children === 'Gemini 3.1 Flash Lite');
-        const account = texts.find((node: any) => node.props.children === 'jamrizzi');
-        expect(model.props.ellipsizeMode).toBe('tail');
-        expect(account.props.style.flexShrink).toBeGreaterThan(model.props.style.flexShrink);
+    /**
+     * The model is NOT on this row (DROVE-178). It was here from DROVE-138
+     * until DROVE-153 freed the gap on the button row that Clay drew his
+     * arrow into; the three tests that lived here, for the one-tap picker,
+     * the native menu and the account shrinking before the name, moved to
+     * the capsule with it. What is asserted here is that the row is shorter.
+     */
+    it('does not draw the model any more, so the row is the clock, the account and the gauge', () => {
+        const renderer = row();
+        expect(segment(renderer, 'Model')).toBeUndefined();
+        expect(line(renderer).some((text) => /Opus|Fable|Sonnet/.test(text))).toBe(false);
     });
 
     it('opens the quota sheet from the week figure with every window for every account (DROVE-148)', () => {
@@ -333,7 +314,7 @@ describe('AgentInputStatusRow on an idle pane session', () => {
         // The track is drawn even for the account at zero.
         expect(rows[4].fraction).toBe(0);
         expect(rows[4].tone).toBe('critical');
-        expect(line(renderer)).toEqual(['Opus 5 1M', '·', 'jamrizzi', '77%']);
+        expect(line(renderer)).toEqual(['jamrizzi', '77%']);
         // And the sheet closes itself, which is what the backdrop and the
         // grabber both call.
         act(() => {
@@ -346,7 +327,7 @@ describe('AgentInputStatusRow on an idle pane session', () => {
         const renderer = row({ contextStatus: { percent: 42, detailText: '84k / 200k context', color: 'ok' } });
         // The ring fills with the same number the text was printing, so the
         // text is the cheapest thing on a full row to lose.
-        expect(line(renderer)).toEqual(['Opus 5 1M', '·', 'jamrizzi', '23%', '·']);
+        expect(line(renderer)).toEqual(['jamrizzi', '23%', '·']);
         expect(renderer.root.findAllByType('Svg' as any)).toHaveLength(1);
         // And the tap still prints the exact figure.
         act(() => {
@@ -367,7 +348,7 @@ describe('AgentInputStatusRow on an idle pane session', () => {
             usageBarGroups: strip.usageBarGroups,
             contextStatus: { percent: 42, detailText: '84k / 200k context', color: 'ok' },
         });
-        expect(line(renderer)).toEqual(['Opus 5 1M', '·', '77% week', '·', '42% context']);
+        expect(line(renderer)).toEqual(['77% week', '·', '42% context']);
     });
 
     it('fades with the rest of the composer detail while the chat is scrolled up', () => {
@@ -387,7 +368,7 @@ describe('AgentInputStatusRow on an idle pane session', () => {
         });
         // The window keeps its word with no account to head it, and the
         // context percent stays printed, since nothing is taking its width.
-        expect(line(renderer)).toEqual(['Opus 5 1M', '·', '77% week', '·', '42% context']);
+        expect(line(renderer)).toEqual(['77% week', '·', '42% context']);
         // The account is hidden, not forgotten: the sheet still opens on it
         // and a switch still says which account it is leaving (DROVE-160).
         const sheet = () => renderer.root.findByType('UsageAccountBarsSheet' as any);
@@ -415,7 +396,7 @@ describe('AgentInputStatusRow while the session is working', () => {
             const renderer = row({ sessionId: 'busy' });
             // The main thread first, then the agents as a bare count: the two
             // never share a number (DROVE-155).
-            expect(line(renderer)).toEqual(['working', '1m 2s 251.2k', '1', '·', 'Opus 5 1M', '·', 'jamrizzi', '23%']);
+            expect(line(renderer)).toEqual(['working', '1m 2s 251.2k', '1', '·', 'jamrizzi', '23%']);
             expect(renderer.root.findByType('StatusDot' as any).props.color).toBe('#007AFF');
         } finally {
             vi.useRealTimers();
@@ -451,7 +432,7 @@ describe('AgentInputStatusRow while the session is working', () => {
                 },
             };
             const renderer = row({ sessionId: 'tooling' });
-            expect(line(renderer)).toEqual(['Bash', '1m 2s 1.5M', '·', 'Opus 5 1M', '·', 'jamrizzi', '23%']);
+            expect(line(renderer)).toEqual(['Bash', '1m 2s 1.5M', '·', 'jamrizzi', '23%']);
         } finally {
             vi.useRealTimers();
         }
@@ -462,36 +443,37 @@ describe('AgentInputStatusRow while the session is working', () => {
         vi.setSystemTime(now + 1_000);
         try {
             const renderer = row({ sessionId: 'busy' });
-            // The tool name, the model and the account: three, and they give
-            // way in that order backwards (DROVE-138's statusRowShrink). The
-            // clock, the token count and the quota number are not among them.
+            // The tool name and the account: two now the model has gone back
+            // to the button row (DROVE-178), and they give way in that order
+            // backwards (statusRowShrink). The clock, the token count and the
+            // quota number are not among them.
             const shrinking = renderer.root.findAllByType('Text' as any)
                 .filter((node: any) => node.props.numberOfLines === 1);
             expect(shrinking.map((node: any) => node.props.children))
-                .toEqual(['working', 'Opus 5 1M', 'jamrizzi']);
+                .toEqual(['working', 'jamrizzi']);
         } finally {
             vi.useRealTimers();
         }
     });
 
-    it('folds the tool name away on a 320pt phone and keeps the numbers (DROVE-155)', () => {
+    it('needs no fold at all on a 320pt phone now the model has gone (DROVE-155, DROVE-178)', () => {
         vi.useFakeTimers();
         vi.setSystemTime(now + 1_000);
         screen.width = 320;
         try {
-            const renderer = row({ sessionId: 'busy' });
-            // The name is what the tree behind the fold carries in full; the
-            // clock and the token count are what Clay is watching. 320 is
-            // still 6pt over with the name gone, so the model folds whole
-            // rather than the account being cut (statusRowLayout).
-            expect(line(renderer)).toEqual(['1m 2s 251.2k', '1', '·', 'jamrizzi', '23%']);
+            // This used to fold the tool name AND then the model whole, and
+            // 320 was still 6pt over after both. With the model back on the
+            // button row the same row draws entire on the narrowest phone
+            // there is, which is the width DROVE-178 bought back.
+            expect(line(row({ sessionId: 'busy' })))
+                .toEqual(['working', '1m 2s 251.2k', '1', '·', 'jamrizzi', '23%']);
         } finally {
             screen.width = 390;
             vi.useRealTimers();
         }
     });
 
-    it('caps a long MCP tool name at under half the row, so it cannot squeeze the model or the account', () => {
+    it('caps a long MCP tool name at under half the row, so it cannot squeeze the account', () => {
         vi.useFakeTimers();
         vi.setSystemTime(now + 1_000);
         try {
@@ -509,16 +491,14 @@ describe('AgentInputStatusRow while the session is working', () => {
             const live = renderer.root.findAllByType('Pressable' as any)
                 .find((node: any) => String(node.props.accessibilityLabel).startsWith('Main thread:'));
             const style = live.props.style({ pressed: false });
-            // The last of the three that shrink, behind the account and the
-            // model, and never more than 45% of the row.
+            // The last of the two that shrink, behind the account, and never
+            // more than 45% of the row.
             expect(style.flexShrink).toBe(statusRowShrink.live);
             expect(style.maxWidth).toBe('45%');
-            const model = segment(renderer, 'Model').props.style({ pressed: false });
             const account = renderer.root.findAllByType('Text' as any)
                 .find((node: any) => node.props.children === 'jamrizzi');
-            expect(model.flexShrink).toBe(statusRowShrink.model);
             expect(account.props.style.flexShrink).toBe(statusRowShrink.account);
-            expect(statusRowShrink.live).toBeLessThan(statusRowShrink.model);
+            expect(statusRowShrink.live).toBeLessThan(statusRowShrink.account);
         } finally {
             vi.useRealTimers();
         }
@@ -639,7 +619,7 @@ describe('AgentInputStatusRow dot rule', () => {
             expect(dot.props.color).toBe('green');
             expect(dot.props.isPulsing).toBeUndefined();
             // The agents still say how many they are, and nothing else.
-            expect(line(renderer)).toEqual(['2', '·', 'Opus 5 1M', '·', 'jamrizzi', '23%']);
+            expect(line(renderer)).toEqual(['2', '·', 'jamrizzi', '23%']);
         } finally {
             vi.useRealTimers();
         }
@@ -665,13 +645,13 @@ describe('AgentInputStatusRow going idle', () => {
                 },
             };
             const renderer = row({ sessionId: 'turning' });
-            expect(line(renderer)).toEqual(['working', '1m 2s 251.2k', '·', 'Opus 5 1M', '·', 'jamrizzi', '23%']);
+            expect(line(renderer)).toEqual(['working', '1m 2s 251.2k', '·', 'jamrizzi', '23%']);
             // The CLI writes an explicit null the moment the turn ends.
             sessions.turning.metadata.liveStatus = null;
             act(() => {
                 vi.advanceTimersByTime(1_000);
             });
-            expect(line(renderer)).toEqual(['Opus 5 1M', '·', 'jamrizzi', '23%']);
+            expect(line(renderer)).toEqual(['jamrizzi', '23%']);
             expect(renderer.root.findByType('StatusDot' as any).props.color).toBe('green');
         } finally {
             vi.useRealTimers();
@@ -683,7 +663,7 @@ describe('AgentInputStatusRow going idle', () => {
         vi.setSystemTime(now + 200_000);
         try {
             const renderer = row({ sessionId: 'busy' });
-            expect(line(renderer)).toEqual(['Opus 5 1M', '·', 'jamrizzi', '23%']);
+            expect(line(renderer)).toEqual(['jamrizzi', '23%']);
             expect(renderer.root.findByType('StatusDot' as any).props.color).toBe('green');
         } finally {
             vi.useRealTimers();
@@ -738,11 +718,10 @@ describe('switching account from the quota sheet (DROVE-160)', () => {
 });
 
 describe('AgentInputStatusRow with nothing to show', () => {
-    it('renders nothing for a session with no connection, no model, no stream, no snapshot and no context', () => {
+    it('renders nothing for a session with no connection, no stream, no snapshot and no context', () => {
         const strip = resolveUsageStrip({ usageLimits: null, droverUsage: null, showRemaining: false, contextShown: false });
         const renderer = row({
             connectionStatus: undefined,
-            modelName: null,
             weekPercent: strip.weekPercent,
             usageBarGroups: strip.usageBarGroups,
         });
@@ -757,7 +736,6 @@ describe('AgentInputStatusRow with nothing to show', () => {
             contextShown: false,
         });
         const renderer = row({
-            modelName: null,
             weekPercent: strip.weekPercent,
             usageBarGroups: strip.usageBarGroups,
         });
@@ -785,7 +763,7 @@ describe('AgentInputStatusRow tasks', () => {
         const renderer = row({ sessionId: 'withTasks' });
         // DROVE-138 took `online` off the row (the dot's colour says it) and
         // put the model on, with the account heading the quota.
-        expect(line(renderer)).toEqual(['1/3 tasks', '·', 'Opus 5 1M', '·', 'jamrizzi', '23%']);
+        expect(line(renderer)).toEqual(['1/3 tasks', '·', 'jamrizzi', '23%']);
 
         const sheet = () => renderer.root.findByType('SessionTasksSheet' as any);
         expect(sheet().props.open).toBe(false);
@@ -797,10 +775,10 @@ describe('AgentInputStatusRow tasks', () => {
 
     it('shows no segment at all for a session that never kept a list', () => {
         const renderer = row({ sessionId: 'idle' });
-        expect(line(renderer)).toEqual(['Opus 5 1M', '·', 'jamrizzi', '23%']);
+        expect(line(renderer)).toEqual(['jamrizzi', '23%']);
     });
 
-    it('counts against the width, so a working row with a list folds the name and then the model', () => {
+    it('counts against the width, but with the model gone the name survives it too (DROVE-178)', () => {
         vi.useFakeTimers();
         vi.setSystemTime(now + 1_000);
         try {
@@ -812,21 +790,24 @@ describe('AgentInputStatusRow tasks', () => {
                     { content: 'Wire the wrist', status: 'pending' },
                 ],
             };
-            // On the phone the badge is what the estimate was missing: with
-            // it counted the name goes, and the model goes whole after it,
-            // instead of the account and the model being cut to `jam…` and
-            // `Opus…` around a badge that held its width.
-            screen.width = 393;
-            expect(line(row({ sessionId: 'busyWithTasks' })))
-                .toEqual(['1m 2s 251.2k', '1', '·', '1/3 tasks', '·', 'jamrizzi', '23%']);
-            // Wider, only the name goes.
-            screen.width = 430;
-            expect(line(row({ sessionId: 'busyWithTasks' })))
-                .toEqual(['1m 2s 251.2k', '1', '·', '1/3 tasks', '·', 'Opus 5 1M', '·', 'jamrizzi', '23%']);
-            // Wider still, nothing does.
-            screen.width = 500;
-            expect(line(row({ sessionId: 'busyWithTasks' })))
-                .toEqual(['working', '1m 2s 251.2k', '1', '·', '1/3 tasks', '·', 'Opus 5 1M', '·', 'jamrizzi', '23%']);
+            // The badge is what the estimate used to be missing (DROVE-167),
+            // and counting it cost the tool name AND the model whole at 393.
+            // The model is off the row now (DROVE-178), so the same working
+            // session with a list draws entire from 393 up.
+            for (const width of [393, 430, 500]) {
+                screen.width = width;
+                expect(line(row({ sessionId: 'busyWithTasks' })), String(width))
+                    .toEqual(['working', '1m 2s 251.2k', '1', '·', '1/3 tasks', '·', 'jamrizzi', '23%']);
+            }
+            // At 375 and below the tool name gives, and ONLY the tool name.
+            // That is the whole difference: the same two widths used to lose
+            // the model as well, and the account was being cut around a badge
+            // that held its width.
+            for (const width of [375, 320]) {
+                screen.width = width;
+                expect(line(row({ sessionId: 'busyWithTasks' })), String(width))
+                    .toEqual(['1m 2s 251.2k', '1', '·', '1/3 tasks', '·', 'jamrizzi', '23%']);
+            }
         } finally {
             screen.width = 390;
             vi.useRealTimers();

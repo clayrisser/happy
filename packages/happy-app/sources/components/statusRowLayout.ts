@@ -1,6 +1,6 @@
 /**
  * What fits on the one status line under the composer, and what folds when it
- * does not (DROVE-138).
+ * does not (DROVE-138, DROVE-178).
  *
  * Clay, about the strip: "shouldn't it show the active account as well, and
  * where it says online that should just be a little dot", and about the model:
@@ -53,11 +53,16 @@
  *   1. The tool name, DROVE-155's own fold, worth 30pt for `Bash`.
  *   2. The MODEL, whole. With a model still on the row a working session with
  *      a list is 51pt over at 393 even without the name, and the model is the
- *      one segment that can go whole and come back: it is on the row when the
- *      main thread is idle and it never truncates. DROVE-178 is taking the
- *      model back to the button row for good, at which point this fold has
- *      nothing left to fire on and the row with a list fits at 375 and 393
- *      once the name has folded.
+ *      one segment that can go whole and come back.
+ *
+ * AND DROVE-178 TOOK THE MODEL OFF THE ROW. It went back to the composer's
+ * session capsule, into the gap DROVE-153 opened, so the second fold has
+ * nothing left to fire on: `statusRowFolds` returns `model: false` for a row
+ * with no model and nothing else moves. Re-measured, the widest realistic row
+ * is 366 rather than 436, the working row is 70pt shorter, and a working
+ * session with a task list needs only the tool-name fold at 393 and 375. The
+ * model branch and `statusRowShrink.model` stay for a caller that passes one;
+ * the phone no longer does. The numbers are pinned in the spec.
  *
  * Pure, so the budget can be pinned at 393, 375 and 320 without a renderer.
  * AgentInputStatusRow.tsx draws it.
@@ -97,20 +102,23 @@ export const statusRowMetrics = {
 } as const;
 
 /**
- * The model's name truncates at the TAIL, and only after the account has.
+ * How the model's name truncated on this row, while it was on it.
  *
  * DROVE-83 cut it in the middle because it sat between a mode word and an
- * effort word and both ends carried meaning. On this row it is one segment on
- * its own, so the front of the name is the half worth keeping. At 375pt with
- * the whole row drawn it does not truncate at all, which was the point of
- * moving it here.
+ * effort word and both ends carried meaning. Here it was one segment on its
+ * own, so the front of the name was the half worth keeping. Kept for a caller
+ * that still passes a model; the phone's row does not (DROVE-178), and in the
+ * capsule the name scales rather than truncating at all.
  */
 export const STATUS_ROW_MODEL_TRUNCATION = {
     segment: 'model',
     ellipsizeMode: 'tail',
 } as const;
 
-/** Which segment gives way first when the row is over budget. */
+/**
+ * Which segment gives way first when the row is over budget. `model` is dead
+ * on the phone since DROVE-178 and kept for a caller that passes one.
+ */
 export const statusRowShrink = {
     /** Longest tail, still recognisable cut: the first to give. */
     account: 3,
