@@ -333,6 +333,20 @@ public final class DroverSpeechModule: Module {
             true
         }
 
+        /// Whether this binary sends the DOUBLE PRESS up as `next`
+        /// (DROVE-225).
+        ///
+        /// Its own stamp rather than a reuse of `handlesInterruptions`,
+        /// because the two ship in different builds: build 13 has the
+        /// interruption handling and explicitly DISABLES `nextTrackCommand`,
+        /// so on that binary a double press reaches nothing at all and no
+        /// amount of JS can hear it. A settings row reads this and says
+        /// "needs a newer build" rather than offering a gesture the phone in
+        /// his pocket cannot deliver.
+        Function("handlesMicCommand") { () -> Bool in
+            true
+        }
+
         Function("isSpeaking") { () -> Bool in
             self.synthesizer.isSpeaking
         }
@@ -550,24 +564,57 @@ public final class DroverSpeechModule: Module {
     // Lock screen
     //
 
-    /// Play/pause on the lock screen and on an AirPod squeeze (DROVE-189).
+    /// Play/pause and the microphone, from the lock screen and from an AirPod
+    /// squeeze (DROVE-189, DROVE-225).
     ///
-    /// Scope, deliberately small: PLAY, PAUSE and TOGGLE only. Next and
-    /// previous track are left disabled rather than wired to the sentence
-    /// seek, because a skip on the lock screen that jumped a sentence would
-    /// be a second way to move the playhead and DROVE-146 settled that there
-    /// is exactly one (a deliberate tap). Nothing here decides anything: the
-    /// command goes up as an event and JS pauses or resumes the READER, so
-    /// the queue and the buttons cannot disagree.
+    /// iOS counts the presses; nothing here has any timing in it. A SINGLE
+    /// press arrives as `togglePlayPauseCommand`, a DOUBLE as
+    /// `nextTrackCommand`, a TRIPLE as `previousTrackCommand`. Press-and-hold
+    /// arrives as nothing at all: MPRemoteCommandCenter has no held-button
+    /// command in any SDK, and on every AirPods model with a stem the hold is
+    /// claimed by Siri or the listening-mode switch before an app is
+    /// consulted. That is why push-to-talk from the headphones is a double
+    /// press and not a hold, and the argument is written out in full in
+    /// sources/voice/headphonePress.ts.
+    ///
+    /// NEXT TRACK IS THE MICROPHONE (DROVE-225), not a sentence skip. A skip
+    /// on the lock screen that jumped a sentence would be a second way to
+    /// move the playhead and DROVE-146 settled that there is exactly one, a
+    /// deliberate tap. The double press was therefore free, and it is the
+    /// only gesture the hardware has left once single press stays play/pause.
+    ///
+    /// PREVIOUS TRACK STAYS DISABLED, reserved for DROVE-73's audio menus.
+    /// Enabling a command with nothing behind it would claim the triple press
+    /// while doing nothing with it, which is worse than leaving it to Music.
+    ///
+    /// THE COST, written down rather than discovered: enabling a command IS
+    /// how it appears on the lock screen, so the now-playing card grows a
+    /// next-track arrow that opens the microphone. There is no way to have the
+    /// double press without it. MPRemoteCommandCenter has one switch per
+    /// command and it drives both the hardware press and the on-screen button,
+    /// and MPNowPlayingInfoCenter cannot relabel a glyph. A lock-screen button
+    /// that opens the mic is a fair thing to have on an eyes-free app; it is
+    /// simply wearing the wrong icon, and it is NOT a sentence skip, which
+    /// DROVE-146 settled has exactly one route (a deliberate tap).
+    ///
+    /// Nothing here decides anything. The command goes up as an event and JS
+    /// decides what it means, so the queue, the buttons and the microphone
+    /// cannot disagree about what a press did.
     private func wireRemoteCommands() {
         guard !remoteCommandsWired else { return }
         remoteCommandsWired = true
         let centre = MPRemoteCommandCenter.shared()
-        centre.nextTrackCommand.isEnabled = false
         centre.previousTrackCommand.isEnabled = false
+        // Both skip commands stay off. A double press falls through to
+        // skipForward when nextTrack is disabled, so leaving it enabled beside
+        // an enabled nextTrack is a second route for the same press to arrive
+        // by, under a different name.
+        centre.skipForwardCommand.isEnabled = false
+        centre.skipBackwardCommand.isEnabled = false
         centre.playCommand.isEnabled = true
         centre.pauseCommand.isEnabled = true
         centre.togglePlayPauseCommand.isEnabled = true
+        centre.nextTrackCommand.isEnabled = true
         centre.playCommand.addTarget { [weak self] _ in
             self?.sendEvent("onRemoteCommand", ["command": "play"])
             return .success
@@ -580,6 +627,10 @@ public final class DroverSpeechModule: Module {
             self?.sendEvent("onRemoteCommand", ["command": "toggle"])
             return .success
         }
+        centre.nextTrackCommand.addTarget { [weak self] _ in
+            self?.sendEvent("onRemoteCommand", ["command": "next"])
+            return .success
+        }
     }
 
     private func teardownRemoteCommands() {
@@ -589,6 +640,8 @@ public final class DroverSpeechModule: Module {
         centre.playCommand.removeTarget(nil)
         centre.pauseCommand.removeTarget(nil)
         centre.togglePlayPauseCommand.removeTarget(nil)
+        centre.nextTrackCommand.removeTarget(nil)
+        centre.nextTrackCommand.isEnabled = false
         clearNowPlaying()
     }
 

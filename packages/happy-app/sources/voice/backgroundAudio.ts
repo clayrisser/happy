@@ -6,6 +6,7 @@ import {
     holdAudioSession,
     speechInterruptionsHandled,
 } from 'drover-speech';
+import { isTransportCommand } from './headphonePress';
 
 /**
  * Read-aloud keeps talking with the phone in a pocket (DROVE-189).
@@ -144,6 +145,13 @@ export function startBackgroundAudio(reader: BackgroundReader): () => void {
      * from would be a surprise, and the button is one tap away.
      */
     const remote = addRemoteCommandListener((command) => {
+        // Only the TRANSPORT presses reach the reader (DROVE-225). Until this
+        // guard, every command that was not `play` fell through to the toggle
+        // below, so the double press that now opens the microphone would have
+        // turned read-aloud off on its way there. The mic's own subscription
+        // is in useVoiceComposer; the two read the same table and cannot
+        // disagree about which press is whose.
+        if (!isTransportCommand(command)) return;
         if (command === 'play') return;
         try {
             reader.interrupt('toggled-off');

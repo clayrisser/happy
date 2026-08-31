@@ -4,10 +4,12 @@ import * as Application from 'expo-application';
 import {
     addDictationEndedListener,
     addDictationPartialListener,
+    addRemoteCommandListener,
     cancelDictation,
     dictationReportsProgress,
     getDictationSupport,
     isDroverSpeechAvailable,
+    remoteMicCommandAvailable,
     startDictation,
     stopDictation,
 } from 'drover-speech';
@@ -28,6 +30,10 @@ import {
     type MicGestureEvent,
 } from './micButton';
 import { dictationBlock, unknownBuild } from './dictationCapability';
+import { headphoneAction } from './headphonePress';
+import { HeadphoneMic } from './headphoneMic';
+import { audioCues as cueService } from './audioCueService';
+import { cueDurationMs, cueSpec } from './audioCues';
 
 /**
  * The composer's half of modes A and B (DROVE-30), and the talk button's
@@ -434,6 +440,74 @@ export function useVoiceComposer(options: VoiceComposerOptions): VoiceComposerSt
     // No talk button during a call: the pill's mic IS the mic then, and a
     // second recogniser on the same audio session is the fight named above.
     const offersDictation = active && dictationEnabled && dictationSupported && !voiceCallActive;
+
+    /**
+     * Would a press open the mic, asked WITHOUT saying anything (DROVE-225).
+     *
+     * `canPress` is the on-screen check and it pops an alert on a refusal,
+     * which is right for a thumb on a button and wrong for a phone in a
+     * pocket: he cannot read it, and the alert would still be there when he
+     * next looks. The headphone path asks this instead and answers with a
+     * sound.
+     */
+    const micBlocked = React.useCallback(() => {
+        if (capture.current.settling) return true;
+        return dictationBlock({
+            moduleAvailable: isDroverSpeechAvailable(),
+            reportsProgress: dictationReportsProgress(),
+            build: Application.nativeBuildVersion,
+        }) !== null;
+    }, [capture]);
+
+    /**
+     * Push to talk from the headphones (DROVE-225).
+     *
+     * A DOUBLE press opens the mic and a double press closes it; the single
+     * press stays play/pause, which is what build 13 already does and what the
+     * hardware is labelled with. Press-and-hold is not on offer: there is no
+     * held-button command in MPRemoteCommandCenter at all and AirPods give the
+     * hold to Siri, so the gesture the name asks for cannot be delivered.
+     * headphonePress.ts carries the measurement and the arbitration with
+     * DROVE-73's audio menus; headphoneMic.ts carries the cue-then-open
+     * ordering.
+     *
+     * `onTalkTap` is the join, which means this is not a second capture. It is
+     * the same call DROVE-210 gave the composer's primary button, so a latch
+     * opened by ear is stopped by the capsule's button, and one opened by
+     * thumb is stopped by a double press.
+     *
+     * The owner is `transport` and nothing else yet: DROVE-73 has not shipped
+     * an audio menu, so no press has a second meaning to arbitrate with. When
+     * it does, it passes `menu` here while the menu is being read.
+     *
+     * Not subscribed at all on a binary that cannot send the double press.
+     * Build 13 disables `nextTrackCommand` outright, so the event never
+     * arrives however long we listen, and a live subscription would only
+     * suggest otherwise.
+     */
+    React.useEffect(() => {
+        if (!offersDictation) return;
+        if (!remoteMicCommandAvailable()) return;
+        const mic = new HeadphoneMic({
+            capturing: () => capture.current.active,
+            blocked: micBlocked,
+            ack: (id) => cueService.ack(id),
+            duration: (id) => cueDurationMs(cueSpec(id)),
+            tap: onTalkTap,
+            delay: (run, ms) => {
+                const timer = setTimeout(run, ms);
+                return () => clearTimeout(timer);
+            },
+        });
+        const remote = addRemoteCommandListener((command) => {
+            if (headphoneAction(command, 'transport') !== 'mic') return;
+            mic.press();
+        });
+        return () => {
+            remote.remove();
+            mic.dispose();
+        };
+    }, [offersDictation, capture, micBlocked, onTalkTap]);
 
     return {
         readAloudEnabled: offersReadAloud ? readAloudEnabled : undefined,
