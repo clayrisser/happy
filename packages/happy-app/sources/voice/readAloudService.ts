@@ -14,8 +14,10 @@ import { resolveStreamTalk } from '@/sync/settings';
  * and the session screen tells it which session is in focus and whether the
  * user has asked for it at all.
  *
- * The lag threshold is read from settings at every pump (DROVE-97), so the
- * slider applies to the next sentence rather than the next launch.
+ * The skip-ahead threshold is read from settings at every pump (DROVE-97,
+ * reworked in DROVE-108), so the slider applies to the next sentence rather
+ * than the next launch, and the session's own generating flag is read the
+ * same way: only a reply still being written may ever be cut short.
  *
  * Each sentence goes to one device (DROVE-92): this phone's synthesiser or
  * the watch's, picked per sentence by the speaker setting and which route
@@ -29,6 +31,10 @@ export const readAloud = new ReadAloudReader(
         onReplyStart: () => cueWatchReplyStart(),
     }),
     {
-        maxLagSeconds: () => resolveStreamTalk(storage.getState().settings).maxLagSeconds,
+        maxBacklogSeconds: () => resolveStreamTalk(storage.getState().settings).maxBacklogSeconds,
+        // Whether the agent is still generating. Without it the queue has to
+        // infer that from how text arrives; with it, a finished reply can
+        // never be cut short whatever the arrival stamps look like.
+        turnStillRunning: (sessionId) => storage.getState().sessions[sessionId]?.thinking === true,
     },
 );

@@ -10,7 +10,7 @@ import { ItemGroup } from '@/components/ItemGroup';
 import { useSetting, useSettingMutable } from '@/sync/storage';
 import {
     resolveStreamTalk,
-    streamTalkLagRange,
+    streamTalkBacklogRange,
     streamTalkPitchRange,
     streamTalkRateRange,
     type StreamTalk,
@@ -103,13 +103,13 @@ export const SpeakingVoiceSettings = React.memo(function SpeakingVoiceSettings()
     // so a drag does not push a sync per pixel.
     const [rate, setRate] = React.useState(talk.rate);
     const [pitch, setPitch] = React.useState(talk.pitch);
-    const [lag, setLag] = React.useState(talk.maxLagSeconds);
+    const [backlog, setBacklog] = React.useState(talk.maxBacklogSeconds);
 
     React.useEffect(() => {
         setRate(talk.rate);
         setPitch(talk.pitch);
-        setLag(talk.maxLagSeconds);
-    }, [talk.rate, talk.pitch, talk.maxLagSeconds]);
+        setBacklog(talk.maxBacklogSeconds);
+    }, [talk.rate, talk.pitch, talk.maxBacklogSeconds]);
 
     React.useEffect(() => {
         let cancelled = false;
@@ -242,14 +242,14 @@ export const SpeakingVoiceSettings = React.memo(function SpeakingVoiceSettings()
                     onCommit={(value) => commit({ pitch: value })}
                 />
                 <SliderRow
-                    label={t('settingsVoice.speaking.lag')}
-                    value={lag}
-                    display={t('settingsVoice.speaking.seconds', { seconds: Math.round(lag) })}
-                    min={streamTalkLagRange.min}
-                    max={streamTalkLagRange.max}
+                    label={t('settingsVoice.speaking.backlog')}
+                    value={backlog}
+                    display={t('settingsVoice.speaking.seconds', { seconds: Math.round(backlog) })}
+                    min={streamTalkBacklogRange.min}
+                    max={streamTalkBacklogRange.max}
                     step={1}
-                    onChange={setLag}
-                    onCommit={(value) => commit({ maxLagSeconds: Math.round(value) })}
+                    onChange={setBacklog}
+                    onCommit={(value) => commit({ maxBacklogSeconds: Math.round(value) })}
                 />
                 <Item
                     title={t('settingsVoice.speaking.preview')}

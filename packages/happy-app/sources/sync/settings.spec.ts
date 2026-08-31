@@ -217,7 +217,7 @@ describe('settings', () => {
                 userMessageBubbleColor: 'gray',
                 usageLimitShowRemaining: false,
                 codeWrap: { terminal: false, code: false },
-                streamTalk: { voiceId: null, rate: 0.52, pitch: 1.0, maxLagSeconds: 15 },
+                streamTalk: { voiceId: null, rate: 0.52, pitch: 1.0, maxBacklogSeconds: 15 },
                 speakReplies: { on: 'auto' },
                 droverAnnounceVisual: true,
                 droverAnnounceHaptic: true,
@@ -533,31 +533,31 @@ describe('codeWrap (DROVE-95)', () => {
         expect(settingsParse(settingsToSyncPayload(on)).codeWrap).toEqual({ terminal: false, code: true });
     });
 
-    describe('streamTalk (DROVE-97)', () => {
+    describe('streamTalk (DROVE-97, threshold reworked in DROVE-108)', () => {
         it('fills in every field from the defaults when nothing is set', () => {
             expect(resolveStreamTalk({ streamTalk: {} })).toEqual({
-                voiceId: null, rate: 0.52, pitch: 1.0, maxLagSeconds: 15,
+                voiceId: null, rate: 0.52, pitch: 1.0, maxBacklogSeconds: 15,
             });
             expect(resolveStreamTalk({ streamTalk: undefined as any })).toEqual(resolveStreamTalk(settingsDefaults));
         });
 
         it('keeps a chosen voice and clamps the sliders to their ranges', () => {
-            expect(resolveStreamTalk({ streamTalk: { voiceId: 'com.apple.voice.premium.en-US.Zoe', rate: 0.9, pitch: 0.1, maxLagSeconds: 45 } })).toEqual({
-                voiceId: 'com.apple.voice.premium.en-US.Zoe', rate: 0.6, pitch: 0.5, maxLagSeconds: 30,
+            expect(resolveStreamTalk({ streamTalk: { voiceId: 'com.apple.voice.premium.en-US.Zoe', rate: 0.9, pitch: 0.1, maxBacklogSeconds: 45 } })).toEqual({
+                voiceId: 'com.apple.voice.premium.en-US.Zoe', rate: 0.6, pitch: 0.5, maxBacklogSeconds: 30,
             });
-            expect(resolveStreamTalk({ streamTalk: { maxLagSeconds: 3 } }).maxLagSeconds).toBe(10);
+            expect(resolveStreamTalk({ streamTalk: { maxBacklogSeconds: 3 } }).maxBacklogSeconds).toBe(10);
             expect(resolveStreamTalk({ streamTalk: { voiceId: '' } }).voiceId).toBeNull();
         });
 
         it('survives a partial object synced from another app version', () => {
             const parsed = settingsParse({ streamTalk: { rate: 0.45 } });
             expect(parsed.streamTalk).toEqual({ rate: 0.45 });
-            expect(resolveStreamTalk(parsed)).toMatchObject({ rate: 0.45, pitch: 1.0, maxLagSeconds: 15 });
+            expect(resolveStreamTalk(parsed)).toMatchObject({ rate: 0.45, pitch: 1.0, maxBacklogSeconds: 15 });
         });
 
         it('patches one field and keeps the rest', () => {
-            const patched = updateStreamTalk({ streamTalk: { voiceId: 'x', rate: 0.5 } }, { maxLagSeconds: 20 });
-            expect(patched).toEqual({ streamTalk: { voiceId: 'x', rate: 0.5, pitch: 1.0, maxLagSeconds: 20 } });
+            const patched = updateStreamTalk({ streamTalk: { voiceId: 'x', rate: 0.5 } }, { maxBacklogSeconds: 20 });
+            expect(patched).toEqual({ streamTalk: { voiceId: 'x', rate: 0.5, pitch: 1.0, maxBacklogSeconds: 20 } });
         });
     });
 

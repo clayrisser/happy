@@ -29,8 +29,10 @@ export const CodeWrapSchema = z.object({
 export type CodeWrap = z.infer<typeof CodeWrapSchema>;
 
 // Stream-talk voice (DROVE-97): which installed voice reads replies aloud,
-// how fast and how high, and how far behind the text the voice may fall
-// before it skips ahead. One nested value, like codeWrap, so a partial
+// how fast and how high, and how much unspoken audio may pile up behind a
+// reply still being written before it skips ahead (DROVE-108, which replaced
+// a threshold on a sentence's AGE that fired on every long reply because
+// speech is always slower than generation). One nested value, like codeWrap, so a partial
 // object from another app version merges instead of failing the parse. The
 // voice identifier is per-device in practice (an iPad may not have the
 // iPhone's voice installed), so a missing voice falls back to the best
@@ -39,7 +41,7 @@ export const StreamTalkSchema = z.object({
     voiceId: z.string().nullable().optional(),
     rate: z.number().optional(),
     pitch: z.number().optional(),
-    maxLagSeconds: z.number().optional(),
+    maxBacklogSeconds: z.number().optional(),
 });
 export type StreamTalk = z.infer<typeof StreamTalkSchema>;
 
@@ -51,14 +53,18 @@ export type StreamTalk = z.infer<typeof StreamTalkSchema>;
 export const streamTalkRateRange = { min: 0.4, max: 0.6 } as const;
 /** AVSpeechUtterance.pitchMultiplier accepts 0.5 to 2.0. */
 export const streamTalkPitchRange = { min: 0.5, max: 2.0 } as const;
-/** Seconds the voice may lag the text before it drops the backlog. */
-export const streamTalkLagRange = { min: 10, max: 30 } as const;
+/**
+ * Seconds of UNSPOKEN AUDIO the voice may have queued behind a reply that is
+ * still being written before it drops the backlog. Not a delay, and it never
+ * applies to a finished reply, which is read to the end (DROVE-108).
+ */
+export const streamTalkBacklogRange = { min: 10, max: 30 } as const;
 
 export const streamTalkDefaults: Required<StreamTalk> = {
     voiceId: null,
     rate: 0.52,
     pitch: 1.0,
-    maxLagSeconds: 15,
+    maxBacklogSeconds: 15,
 };
 // The three feedback channels and how audio may answer (DROVE-72). Clay's
 // four ways of working (silent haptic, eyes-free audio, direct, hands-free
@@ -120,7 +126,7 @@ export const SettingsSchema = z.object({
     userMessageBubbleColor: z.string().describe('User message bubble color preset'),
     usageLimitShowRemaining: z.boolean().describe('Show plan rate limits as quota remaining instead of quota used'),
     codeWrap: CodeWrapSchema.describe('Soft-wrap monospace text in terminal cards and code blocks, toggled by double-tap'),
-    streamTalk: StreamTalkSchema.describe('Read-aloud voice: chosen voice identifier, rate, pitch and the lag threshold before skipping ahead'),
+    streamTalk: StreamTalkSchema.describe('Read-aloud voice: chosen voice identifier, rate, pitch and how much unspoken audio may pile up before skipping ahead'),
     speakReplies: SpeakRepliesSchema.describe('Which device speaks replies aloud: phone, watch, or auto (the one whose audio route has headphones, else the phone)'),
     droverAnnounceVisual: z.boolean().describe('Visual channel: the alert push and the gum client announce a Cattle Drover prompt'),
     droverAnnounceHaptic: z.boolean().describe('Haptic channel: the phone taps and the wrist buzzes when a Cattle Drover prompt arrives'),
@@ -349,7 +355,7 @@ export function resolveStreamTalk(settings: Pick<Settings, 'streamTalk'>): Requi
         voiceId: typeof raw.voiceId === 'string' && raw.voiceId.length > 0 ? raw.voiceId : null,
         rate: clamp(raw.rate, streamTalkDefaults.rate, streamTalkRateRange),
         pitch: clamp(raw.pitch, streamTalkDefaults.pitch, streamTalkPitchRange),
-        maxLagSeconds: clamp(raw.maxLagSeconds, streamTalkDefaults.maxLagSeconds, streamTalkLagRange),
+        maxBacklogSeconds: clamp(raw.maxBacklogSeconds, streamTalkDefaults.maxBacklogSeconds, streamTalkBacklogRange),
     };
 }
 
