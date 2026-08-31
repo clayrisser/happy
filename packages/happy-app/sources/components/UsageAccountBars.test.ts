@@ -72,6 +72,21 @@ import {
     type UsageBarRow,
 } from './agentInputUsage';
 import { UsageAccountBarRow, UsageAccountBars, usageBarFallbackWidth } from './UsageAccountBars';
+import { ComposerSheetContext, useComposerSheetExit } from './composerSheetNavigation';
+
+/**
+ * ComposerSheet's wiring without its animation, so the bars can be pressed in
+ * the place they are actually drawn (DROVE-183). The real shell would drag
+ * reanimated and gesture-handler in, and neither survives vitest.
+ */
+function SheetShell(props: { onClose: () => void; children: React.ReactNode }) {
+    const exit = useComposerSheetExit({ open: true, onClose: props.onClose });
+    return React.createElement(
+        'Shell',
+        { onClosed: exit.onClosed },
+        React.createElement(ComposerSheetContext.Provider, { value: exit.shell }, props.children),
+    );
+}
 
 const originalConsoleError = console.error;
 
@@ -382,5 +397,28 @@ describe('switching account from a block (DROVE-160)', () => {
             .map((node: any) => node.props.children)
             .filter((text: unknown) => text === 'Switch ›');
         expect(words).toEqual([]);
+    });
+
+    it('inside a sheet, closes it and confirms only once it has gone (DROVE-183)', () => {
+        // The confirm is a system alert and cannot present over the sheet's
+        // Modal while it is still sliding down, which is the same thing that
+        // bit the Add context picker (DROVE-158). Note the test above: OUTSIDE
+        // a sheet the very same block fires straight away.
+        const order: string[] = [];
+        let renderer: ReturnType<typeof create>;
+        act(() => {
+            renderer = create(React.createElement(SheetShell, {
+                onClose: () => order.push('close'),
+                children: React.createElement(UsageAccountBars, {
+                    width: 393,
+                    groups,
+                    onSwitchAccount: (account: string) => order.push(`switch:${account}`),
+                }),
+            }));
+        });
+        act(() => renderer!.root.findAllByType('Pressable' as any)[0].props.onPress());
+        expect(order).toEqual(['close']);
+        act(() => renderer!.root.findByType('Shell' as any).props.onClosed());
+        expect(order).toEqual(['close', 'switch:main']);
     });
 });

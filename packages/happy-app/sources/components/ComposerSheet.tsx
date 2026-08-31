@@ -28,6 +28,11 @@
  * Anything that expands out of the composer strip or the status row goes
  * through here. A caller that draws its own backdrop, its own card or its own
  * grabber is a bug, not a variant.
+ *
+ * And nothing inside it navigates on its own (DROVE-183). A row that pushes a
+ * screen, raises an alert or presents a picker hands the action to
+ * `useComposerSheetNavigate`; the sheet closes, waits for this Modal to be off
+ * the screen, and only then goes.
  */
 import * as React from 'react';
 import { Modal, Platform, Pressable, StyleSheet as RNStyleSheet, useWindowDimensions, View } from 'react-native';
@@ -44,6 +49,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useUnistyles } from 'react-native-unistyles';
 import { MobileGlassSurface } from './MobileGlass';
 import { composerSheetBody, composerSheetMaxHeight } from './composerSheetLayout';
+import { ComposerSheetContext, useComposerSheetExit } from './composerSheetNavigation';
 import { swipeDismisses } from './sessionGateDeck';
 
 /** @see composerSheetMaxHeight, which is where the number and its reasons live. */
@@ -74,6 +80,10 @@ export function ComposerSheet(props: {
      * out, and a picker launched inside that window either comes up behind it
      * or never comes up at all. Anything opening the camera, the photo library
      * or the document browser has to wait for this, not for `onClose`.
+     *
+     * A row that wants to NAVIGATE does not need this: it asks the shell
+     * through `useComposerSheetNavigate` and the sheet waits for it
+     * (DROVE-183). This stays for a sheet OWNER with its own tail work.
      */
     onClosed?: () => void;
 }) {
@@ -112,10 +122,19 @@ export function ComposerSheet(props: {
      */
     const frozen = React.useRef(false);
     const entered = React.useRef(false);
-    const onClosed = props.onClosed;
+    // Leaving the sheet is the shell's job, not each row's (DROVE-183). The
+    // exit banks whatever a row wanted to do, closes, and runs it from the
+    // SAME onClosed the pickers already wait for, so a push, an alert and a
+    // system picker all land after the Modal has gone rather than under it.
+    const exit = useComposerSheetExit({
+        open: props.open,
+        onClose,
+        onClosed: props.onClosed,
+    });
+    const onClosed = exit.onClosed;
     const unmount = React.useCallback(() => {
         setMounted(false);
-        onClosed?.();
+        onClosed();
     }, [onClosed]);
 
     React.useEffect(() => {
@@ -280,7 +299,9 @@ export function ComposerSheet(props: {
                                 showsVerticalScrollIndicator={body.scrolls}
                             >
                                 <View onLayout={handleContentLayout}>
-                                    {props.children}
+                                    <ComposerSheetContext.Provider value={exit.shell}>
+                                        {props.children}
+                                    </ComposerSheetContext.Provider>
                                 </View>
                             </Animated.ScrollView>
                             {/* The home indicator, not padding for its own sake. */}

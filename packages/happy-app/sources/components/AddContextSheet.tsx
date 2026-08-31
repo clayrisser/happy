@@ -5,6 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Typography } from '@/constants/Typography';
 import { BubblePressable } from './BubblePressable';
 import { ComposerSheet } from './ComposerSheet';
+import { useComposerSheetNavigate } from './composerSheetNavigation';
 import { t } from '@/text';
 
 /**
@@ -69,6 +70,46 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
 }));
 
+/**
+ * The tiles, INSIDE the sheet, which is what lets them use its exit.
+ *
+ * Closing first was right, but calling onSelect in the same tick was not: the
+ * sheet is a react-native Modal that stays mounted for the length of its slide
+ * down, and the camera, photo library and document browser are all system
+ * modals that cannot present while it is up. Clay got a tap that did nothing.
+ * DROVE-158 banked the tile in a ref here and fired it from `onClosed`;
+ * DROVE-183 made that the shell's rule, so this hands the action over and the
+ * banking, the reopen case and the timing are the sheet's problem again.
+ */
+function AddContextTiles(props: {
+    shown: typeof tiles;
+    onSelect: (source: AddContextSource) => void;
+}) {
+    const styles = stylesheet;
+    const { theme } = useUnistyles();
+    const leave = useComposerSheetNavigate();
+    const { onSelect } = props;
+    return (
+        <View style={styles.body}>
+            <Text style={styles.heading}>{t('imageUpload.addContextTitle')}</Text>
+            <View style={styles.row}>
+                {props.shown.map((tile) => (
+                    <BubblePressable
+                        key={tile.key}
+                        onPress={() => leave(() => onSelect(tile.key))}
+                        style={(p) => [styles.tile, { opacity: p.pressed ? 0.7 : 1 }]}
+                        accessibilityRole="button"
+                        accessibilityLabel={tile.label()}
+                    >
+                        <Ionicons name={tile.icon} size={24} color={theme.colors.text} />
+                        <Text style={styles.tileLabel} numberOfLines={1}>{tile.label()}</Text>
+                    </BubblePressable>
+                ))}
+            </View>
+        </View>
+    );
+}
+
 export function AddContextSheet(props: {
     open: boolean;
     onClose: () => void;
@@ -76,56 +117,14 @@ export function AddContextSheet(props: {
     /** A tile with nothing behind it is not drawn; see AgentInput. */
     available?: Record<AddContextSource, boolean>;
 }) {
-    const styles = stylesheet;
-    const { theme } = useUnistyles();
     const { onClose, onSelect } = props;
     const shown = tiles.filter((tile) => props.available?.[tile.key] !== false);
-    // The chosen tile, held until the sheet is off the screen.
-    //
-    // Closing first was right, but calling onSelect in the same tick was not:
-    // the sheet is a react-native Modal that stays mounted for the length of
-    // its slide down, and the camera, photo library and document browser are
-    // all system modals that cannot present while it is up. Clay got a tap
-    // that did nothing. So the tile is banked here and fired from onClosed,
-    // once the Modal has actually gone.
-    const pending = React.useRef<AddContextSource | null>(null);
-    const handlePress = React.useCallback((source: AddContextSource) => {
-        pending.current = source;
-        onClose();
-    }, [onClose]);
-    const handleClosed = React.useCallback(() => {
-        const source = pending.current;
-        pending.current = null;
-        if (source) onSelect(source);
-    }, [onSelect]);
-    // Reopening means he changed his mind before the slide finished; the tile
-    // he tapped a moment ago must not fire underneath the sheet he just opened.
-    React.useEffect(() => {
-        if (props.open) pending.current = null;
-    }, [props.open]);
     return (
         <ComposerSheet
             open={props.open && shown.length > 0}
             onClose={onClose}
-            onClosed={handleClosed}
         >
-            <View style={styles.body}>
-                <Text style={styles.heading}>{t('imageUpload.addContextTitle')}</Text>
-                <View style={styles.row}>
-                    {shown.map((tile) => (
-                        <BubblePressable
-                            key={tile.key}
-                            onPress={() => handlePress(tile.key)}
-                            style={(p) => [styles.tile, { opacity: p.pressed ? 0.7 : 1 }]}
-                            accessibilityRole="button"
-                            accessibilityLabel={tile.label()}
-                        >
-                            <Ionicons name={tile.icon} size={24} color={theme.colors.text} />
-                            <Text style={styles.tileLabel} numberOfLines={1}>{tile.label()}</Text>
-                        </BubblePressable>
-                    ))}
-                </View>
-            </View>
+            <AddContextTiles shown={shown} onSelect={onSelect} />
         </ComposerSheet>
     );
 }
