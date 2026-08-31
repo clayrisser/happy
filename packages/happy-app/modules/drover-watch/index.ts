@@ -233,6 +233,26 @@ const native = requireOptionalNativeModule<DroverWatchModuleType>('DroverWatch')
 
 export const isDroverWatchAvailable = () => native !== null;
 
+/**
+ * How many background wakes WatchConnectivity grants a phone per day
+ * (`remainingComplicationUserInfoTransfers` starts here each morning). Apple's
+ * figure, not ours; it is the denominator of the "wake budget 37/50 today"
+ * line and nothing else reads it.
+ */
+export const droverWatchWakesPerDay = 50;
+
+/**
+ * One line for the phone's session info screen and the feed's log, so the
+ * two agree on what a spent budget looks like (DROVE-86). Absent `wakes`
+ * (a native module that predates the key) is said as such rather than as 0,
+ * because 0 has a specific meaning: no complication on any face, or the day's
+ * budget spent, and in either case the wrist cannot be woken.
+ */
+export function describeDroverWakeBudget(status: DroverWatchStatus): string {
+    if (typeof status.wakes !== 'number') return 'wake budget unknown';
+    return `wake budget ${status.wakes}/${droverWatchWakesPerDay} today`;
+}
+
 export function getDroverWatchStatus(): DroverWatchStatus {
     if (!native) return { supported: false, paired: false, installed: false, reachable: false };
     try {

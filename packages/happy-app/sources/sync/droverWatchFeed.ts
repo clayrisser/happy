@@ -23,6 +23,7 @@ import {
     addDroverAnswerListener,
     addDroverFlipListener,
     addDroverRefreshListener,
+    describeDroverWakeBudget,
     getDroverWatchStatus,
     isDroverWatchAvailable,
     publishDroverSnapshot,
@@ -333,7 +334,21 @@ export function startDroverWatchFeed(): () => void {
         // reached it and the wrist is being looked at. Spending a background
         // launch on a screen someone is holding up is the one case where the
         // budget buys nothing.
-        if (wake && !status.reachable) void wakeDroverWatch(snapshot);
+        //
+        // A budget of exactly 0 is skipped and SAID: the native call would be
+        // downgraded to a plain transfer, which the application context above
+        // already covers, and the wrist would stay silent with nothing on
+        // record as to why (DROVE-86). The same line is what the session info
+        // screen shows, so Console and the screen agree.
+        if (wake && !status.reachable) {
+            if (status.wakes === 0) {
+                console.log(`[drover-watch] wake skipped: ${describeDroverWakeBudget(status)}, the wrist stays silent until it is opened`);
+                return;
+            }
+            void wakeDroverWatch(snapshot).then((spent) => {
+                if (!spent) console.log(`[drover-watch] wake not spent as a background launch (${describeDroverWakeBudget(status)})`);
+            });
+        }
     };
 
     const answers = addDroverAnswerListener((event) => {
