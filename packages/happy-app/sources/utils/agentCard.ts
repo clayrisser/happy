@@ -6,6 +6,17 @@
  *   totalDurationMs, totalTokens, totalToolUseCount, usage}`; on the SDK path
  * it is the bare content-block array or a string. All three shapes are read
  * here so the card never has to look at raw JSON.
+ *
+ * A FOURTH shape broke this (DROVE-110). An async agent's tool call ends the
+ * moment the agent is launched, with `{isAsync: true, status: 'async_launched',
+ * agentId, description, resolvedModel, prompt, outputFile, canReadOutputFile}`
+ * (measured on session 19c2f0a8, toolu_01ChtSUF4BxNmvYEeRcoKxxi). The old rule
+ * read anything but `completed` as a failure, so every background agent showed
+ * a red `Failed` while it was working. Absent or unrecognised now means
+ * RUNNING; failed is only for a result that says so. A run that has shown no
+ * sign of life for a while is described as quiet, in the same words and off the
+ * same threshold as DROVE-93's agent screen, so the card is never more
+ * confident than the screen behind it.
  */
 import { ToolCall } from '@/sync/typesMessage';
 
@@ -97,20 +108,72 @@ export function agentOutcome(result: unknown): AgentOutcome | null {
     return fallback.length > 0 ? { text: fallback } : null;
 }
 
+/** A status that means the agent stopped and reported. */
+const finishedStatuses = new Set(['completed', 'complete', 'success', 'succeeded', 'done', 'ok', 'finished']);
+
+/** A status that means the agent stopped and it went wrong. Only these fail. */
+const failedStatuses = new Set([
+    'failed', 'failure', 'error', 'errored', 'aborted', 'cancelled', 'canceled',
+    'killed', 'crashed', 'interrupted', 'timeout', 'timed_out', 'denied', 'rejected',
+]);
+
+/** A result that reports its own failure, whatever its status says. */
+function reportsFailure(result: unknown): boolean {
+    const record = asRecord(result);
+    if (!record) {
+        return false;
+    }
+    return record.is_error === true || record.isError === true || nonEmpty(record.error) !== undefined;
+}
+
 /**
- * Running while the call is open; failed when the call errored or the agent
- * itself reported anything but completed; finished otherwise.
+ * How alive the agent is (DROVE-110).
+ *
+ * Running while the call is open, and running again for anything we cannot
+ * read: no result, an unrecognised shape, a status the CLI invented after this
+ * was written. Failed only when the call itself errored or the result says it
+ * failed. An agent that is working must never be drawn as dead, because a
+ * false Failed invites redispatching work that is already running.
  */
 export function agentRunState(tool: Pick<ToolCall, 'state' | 'result'>): AgentRunState {
     if (tool.state === 'running') {
         return 'running';
     }
-    if (tool.state === 'error') {
+    if (tool.state === 'error' || reportsFailure(tool.result)) {
         return 'failed';
     }
-    const status = agentOutcome(tool.result)?.status;
-    if (status && status !== 'completed' && status !== 'success' && status !== 'done') {
-        return 'failed';
+    const outcome = agentOutcome(tool.result);
+    const status = outcome?.status?.trim().toLowerCase();
+    if (status) {
+        if (failedStatuses.has(status)) {
+            return 'failed';
+        }
+        // `async_launched` and anything else unknown: the tool call is over,
+        // the agent is not.
+        return finishedStatuses.has(status) ? 'finished' : 'running';
     }
-    return 'finished';
+    // No status at all: a report is a finish, silence is a run we cannot see.
+    return outcome && outcome.text.length > 0 ? 'finished' : 'running';
+}
+
+/**
+ * How long a running agent may go unwritten before we say so.
+ *
+ * Lives here rather than beside the agent screen so the card and the screen
+ * cannot drift apart; `sources/sync/subagentTranscript.ts` re-exports it under
+ * its old name.
+ */
+export const SUBAGENT_QUIET_MS = 90_000;
+
+/**
+ * The one quiet rule, shared by the card and the agent screen (DROVE-93,
+ * DROVE-110). `movedAt` is the last sign of life; undefined or 0 means we have
+ * never seen one, which is not the same as silence and says nothing.
+ */
+export function agentQuietFor(running: boolean, movedAt: number | undefined, now: number): number | undefined {
+    if (!running || !movedAt || movedAt <= 0) {
+        return undefined;
+    }
+    const quiet = now - movedAt;
+    return quiet > SUBAGENT_QUIET_MS ? quiet : undefined;
 }
