@@ -87,6 +87,27 @@ export interface LiveStatusRow {
     agentId?: string;
 }
 
+/**
+ * The MAIN thread's readout for the status row (DROVE-155).
+ *
+ * Clay: "Where is the live token counter for the main thread as it's
+ * thinking". The agent cards had a clock and a token count each and the main
+ * session had neither, so the only numbers under the composer were the
+ * agents'. This is the same pair of numbers, from the same two formatters
+ * TaskView calls, read off the main thread's own block instead of an agent's.
+ *
+ * Null while only background agents are out: a fan-out outlives the turn that
+ * launched it, and the main thread being quiet then is the truth.
+ */
+export interface LiveStatusMain {
+    /** What the main thread is blocked on: the tool's name, or `working`. */
+    label: string;
+    /** The turn's clock, ticking on this device. */
+    elapsed: string;
+    /** `251.2k`, absent until the turn has spent anything. */
+    tokens?: string;
+}
+
 export interface LiveStatusSummary {
     /**
      * The one line the header strip shows: the running tool and its argument,
@@ -100,16 +121,20 @@ export interface LiveStatusSummary {
     /** `2 agents · 1 workflow`, for the collapsed summary beside the chevron. */
     subtitle?: string;
     /**
-     * The one-line composer row's version (DROVE-82): a state word short
-     * enough to share a line with the branch and the quota, and the clock
-     * Clay is actually waiting on. `Bash`, `2 agents`, `drover-relaunch 3/5`,
-     * or `working` when nothing on disk names the work.
+     * The one-line composer row's main-thread segment (DROVE-82, DROVE-155):
+     * `Bash 1m 2s 251.2k`. Null when the main thread is not the thing running.
+     *
+     * This replaced a `compact` block whose label was the tool name OR the
+     * agent count OR the workflow, which is exactly how "3 agents 29s" came to
+     * sit on the row with the main thread's clock behind it. One segment is
+     * the main thread, the other is the count. They never share a number.
      */
-    compact: {
-        label: string;
-        /** The turn's timer, or the running thing's own when the CLI never saw the prompt. */
-        elapsed?: string;
-    };
+    main: LiveStatusMain | null;
+    /**
+     * Background agents plus workflows: the number beside the fold, and the
+     * only thing on the row that speaks for the agents.
+     */
+    sideCount: number;
 }
 
 function agentRow(agent: LiveStatusAgent, now: number): LiveStatusRow {
@@ -193,33 +218,49 @@ export function summarizeLiveStatus(status: LiveStatus, now: number): LiveStatus
         countPhrase(workflows.length, 'workflow', 'workflows'),
     ].filter((part): part is string => part !== null);
 
-    // Same precedence as the headline, minus the argument: the argument is
-    // what the tree is for, and the row has a branch name to fit beside it.
-    let compactLabel: string;
-    if (status.tool) {
-        compactLabel = status.tool.name;
-    } else if (workflows.length > 0) {
-        compactLabel = `${workflows[0].name} ${workflows[0].done}/${workflows[0].total}`;
-    } else if (agents.length > 0) {
-        compactLabel = countPhrase(agents.length, 'agent', 'agents')!;
-    } else {
-        compactLabel = 'working';
-    }
-    const compactStartedAt = status.turnStartedAt
-        ?? status.tool?.startedAt
-        ?? workflows[0]?.startedAt
-        ?? agents[0]?.startedAt;
-
     return {
         headline,
         ...(status.turnStartedAt ? { turnElapsed: formatElapsed(now - status.turnStartedAt) } : {}),
         rows,
         ...(parts.length > 0 ? { subtitle: parts.join(' · ') } : {}),
-        compact: {
-            label: compactLabel,
-            ...(compactStartedAt ? { elapsed: formatElapsed(now - compactStartedAt) } : {}),
-        },
+        main: mainReadout(status, now),
+        sideCount: agents.length + workflows.length,
     };
+}
+
+/**
+ * The main thread's own line, or null when the main thread is not what is
+ * running (DROVE-155).
+ *
+ * The label is the tool it is blocked on, because a tool call IS the main
+ * thread waiting, and `working` otherwise — the "Sketching… 17m 13s" state,
+ * where the model is composing and writes nothing to disk until it is done.
+ * The agent count and a workflow's progress are deliberately not options here;
+ * they belong to `sideCount` and to the tree behind the fold.
+ *
+ * The `main` block is what the CLI publishes for this (DROVE-155). An older
+ * CLI has none, so we infer: a running tool is the main thread by definition,
+ * and a snapshot with nothing else running must be about the main thread too.
+ * A snapshot that is only background agents stays null rather than guessing,
+ * which is the one case where the old CLI shows less than the new one.
+ */
+function mainReadout(status: LiveStatus, now: number): LiveStatusMain | null {
+    const label = status.tool ? status.tool.name : 'working';
+    const tokensOf = (tokens: unknown): { tokens?: string } => (
+        typeof tokens === 'number' && tokens > 0 ? { tokens: formatTokens(tokens) } : {}
+    );
+    if (status.main) {
+        return {
+            label,
+            elapsed: formatElapsed(now - status.main.startedAt),
+            ...tokensOf(status.main.tokens),
+        };
+    }
+    const sideRunning = (status.agents?.length ?? 0) + (status.workflows?.length ?? 0) > 0;
+    if (!status.tool && sideRunning) return null;
+    const startedAt = status.turnStartedAt ?? status.tool?.startedAt;
+    if (!startedAt) return null;
+    return { label, elapsed: formatElapsed(now - startedAt) };
 }
 
 /**
