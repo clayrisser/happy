@@ -51,6 +51,10 @@ describe('agent input compact mobile layout', () => {
             shellPaddingTop: 8,
             shellPaddingBottom: 8,
             bubbleInset: 9,
+            // The floor is its own number (DROVE-236): the three sides that
+            // hold text keep the square corner's 9, and the one that holds two
+            // circles keeps what a circle needs.
+            bubbleInsetBottom: 4,
             inputMinHeight: 44,
             inputMaxHeight: 120,
             inputFontSize: 16,
@@ -79,28 +83,37 @@ describe('agent input compact mobile layout', () => {
      * the bubble costs its own height and the air round it, and the transcript
      * pays. Written down here rather than discovered later.
      */
-    it('re-pins the empty composer at 148, and says where each point went', () => {
+    it('re-pins the empty composer at 143, and says where each point went', () => {
         const metrics = agentInputLayout.MOBILE_COMPOSER_METRICS;
 
-        // WAS  44 + 6 + 44 + 8    one-row bubble, gap, control row, clearance
-        // NOW  90 + 6 + 44 + 8    two-row bubble, and only the bubble moved
-        expect(agentInputLayout.MOBILE_COMPOSER_BASE_HEIGHT).toBe(148);
+        // DROVE-196  44 + 6 + 44 + 8   one-row bubble, gap, control row, clearance
+        // DROVE-214  90 + 6 + 44 + 8   two-row bubble, and only the bubble moved
+        // DROVE-236  85 + 6 + 44 + 8   the bubble's floor gives 5 back and the
+        //                              control row comes up by it
+        expect(agentInputLayout.MOBILE_COMPOSER_BASE_HEIGHT).toBe(143);
         expect(agentInputLayout.MOBILE_COMPOSER_BASE_HEIGHT).toBe(
             agentInputLayout.MOBILE_COMPOSER_BUBBLE_BASE_HEIGHT
             + metrics.controlGap
             + metrics.actionRowHeight
             + metrics.controlsBottomGap,
         );
+        // The chrome under the bubble did not move at all, which is what says
+        // the move came out of the bubble's floor and nothing else. The status
+        // row's tap arithmetic reads exactly these two numbers.
         expect(agentInputLayout.MOBILE_COMPOSER_CHROME_HEIGHT).toBe(58);
-        expect(agentInputLayout.MOBILE_COMPOSER_BASE_HEIGHT - 102).toBe(46);
+        expect(metrics.controlGap).toBe(6);
+        expect(metrics.controlsBottomGap).toBe(8);
+        expect(agentInputLayout.MOBILE_COMPOSER_BASE_HEIGHT - 102).toBe(41);
 
-        // The bubble is padding, one line, the gap, the button row, padding.
-        expect(agentInputLayout.MOBILE_COMPOSER_BUBBLE_BASE_HEIGHT).toBe(90);
+        // The bubble is padding, one line, the gap, the button row, and a
+        // shallower floor.
+        expect(agentInputLayout.MOBILE_COMPOSER_BUBBLE_BASE_HEIGHT).toBe(85);
         expect(agentInputLayout.MOBILE_COMPOSER_BUBBLE_BASE_HEIGHT).toBe(
-            metrics.bubbleInset * 2
+            metrics.bubbleInset
             + agentInputLayout.MOBILE_COMPOSER_TEXT_ROW_BASE_HEIGHT
             + metrics.controlGap
-            + agentInputLayout.MOBILE_COMPOSER_BUBBLE_ACTION_ROW_HEIGHT,
+            + agentInputLayout.MOBILE_COMPOSER_BUBBLE_ACTION_ROW_HEIGHT
+            + metrics.bubbleInsetBottom,
         );
         // The text row is the text and nothing else now. 44 was never about
         // text: it was the height a 36pt disc inset 4 needed.
@@ -157,11 +170,11 @@ describe('agent input compact mobile layout', () => {
 
         // `inputHeight` is the TEXT's measured height, so an empty composer is
         // one line box. Both ends of that convention are in one place now.
-        expect(resolveHeight(22)).toBe(148);
-        expect(resolveHeight(44)).toBe(170);
-        expect(resolveHeight(120)).toBe(246);
-        expect(resolveHeight(400)).toBe(246);
-        expect(resolveHeight(22, true)).toBe(226);
+        expect(resolveHeight(22)).toBe(143);
+        expect(resolveHeight(44)).toBe(165);
+        expect(resolveHeight(120)).toBe(241);
+        expect(resolveHeight(400)).toBe(241);
+        expect(resolveHeight(22, true)).toBe(221);
     });
 
     /**
@@ -180,7 +193,8 @@ describe('agent input compact mobile layout', () => {
                 .toBe(agentInputLayout.MOBILE_COMPOSER_CHROME_HEIGHT);
             // The bubble is its text row plus a fixed remainder.
             expect(bubble(inputHeight) - textRow(inputHeight))
-                .toBe(metrics.bubbleInset * 2
+                .toBe(metrics.bubbleInset
+                    + metrics.bubbleInsetBottom
                     + metrics.controlGap
                     + agentInputLayout.MOBILE_COMPOSER_BUBBLE_ACTION_ROW_HEIGHT);
         }

@@ -13,7 +13,7 @@ describe('resolveComposerPrimaryPress', () => {
     });
 
     it('a long-press opens the sheet whatever face the button wears', () => {
-        for (const action of ['send', 'stop', 'blocked', 'idle'] as const) {
+        for (const action of ['send', 'stop', 'blocked', 'idle', 'mic'] as const) {
             expect(resolveComposerPrimaryPress({ gesture: 'longPress', action, liveHasContent: true, canPress: true })).toBe('channels');
         }
     });
@@ -44,7 +44,7 @@ describe('resolveComposerPrimaryPress', () => {
      */
     it('never starts boss mode: the waveform is not this button any more', () => {
         const dispatches = new Set<string>();
-        for (const action of ['send', 'stop', 'blocked', 'idle'] as const) {
+        for (const action of ['send', 'stop', 'blocked', 'idle', 'mic'] as const) {
             for (const gesture of ['press', 'longPress'] as const) {
                 for (const liveHasContent of [true, false]) {
                     for (const canPress of [true, false]) {
@@ -54,7 +54,37 @@ describe('resolveComposerPrimaryPress', () => {
             }
         }
         expect(dispatches).not.toContain('boss');
-        expect([...dispatches].sort()).toEqual(['abort', 'channels', 'none', 'send']);
+        // `mic` joins in DROVE-236 and boss mode still does not. Dictation
+        // fills THIS composer with THIS message; a call is a session thing and
+        // is on the audio-out button.
+        expect([...dispatches].sort()).toEqual(['abort', 'channels', 'mic', 'none', 'send']);
+    });
+
+    /**
+     * DROVE-236. The mic face is checked BEFORE the live text, which is the
+     * only ordering that survives dictation: partials are live content, and a
+     * press mid-sentence must close the mic rather than send what has landed so
+     * far.
+     */
+    it('a tap on the mic face opens or closes the capture, never sends', () => {
+        expect(resolveComposerPrimaryPress({
+            gesture: 'press', action: 'mic', liveHasContent: false, canPress: true,
+        })).toBe('mic');
+        expect(resolveComposerPrimaryPress({
+            gesture: 'press', action: 'mic', liveHasContent: true, canPress: true,
+        })).toBe('mic');
+    });
+
+    it('keeps the channel sheet on the long press even while the mic is open', () => {
+        expect(resolveComposerPrimaryPress({
+            gesture: 'longPress', action: 'mic', liveHasContent: true, canPress: true,
+        })).toBe('channels');
+    });
+
+    it('a disabled mic face does nothing', () => {
+        expect(resolveComposerPrimaryPress({
+            gesture: 'press', action: 'mic', liveHasContent: false, canPress: false,
+        })).toBe('none');
     });
 
     /**

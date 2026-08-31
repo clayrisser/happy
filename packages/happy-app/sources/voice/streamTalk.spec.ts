@@ -1,106 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { flipStreamTalk, streamTalkButton, streamTalkIcon, streamTalkPauseToast } from './streamTalk';
+import { flipStreamTalk, streamTalkIcon, streamTalkPauseToast } from './streamTalk';
 import { applyLocalSettings, localSettingsDefaults, localSettingsParse } from '@/sync/localSettings';
 import { settingsDefaults } from '@/sync/settings';
 import { en } from '@/text/_default';
 
-describe('streamTalkButton', () => {
-    it('is hidden when the surface has no reader', () => {
-        const button = streamTalkButton(undefined);
-        expect(button.shown).toBe(false);
-        expect(button.on).toBe(false);
-    });
-
-    it('draws a filled speaker when stream-talk is on', () => {
-        const button = streamTalkButton(true);
-        expect(button).toEqual({
-            shown: true,
-            on: true,
-            paused: false,
-            icon: 'volume-high',
-            filled: true,
-            labelKey: 'agentInput.streamTalk.on',
-        });
-    });
-
-    it('draws a slashed speaker when stream-talk is off', () => {
-        const button = streamTalkButton(false);
-        expect(button).toEqual({
-            shown: true,
-            on: false,
-            paused: false,
-            icon: 'volume-mute-outline',
-            filled: false,
-            labelKey: 'agentInput.streamTalk.off',
-        });
-    });
-
-    it('uses the same icon rule the sheet and the settings row can share', () => {
+/**
+ * The button's own drawing moved to `components/composerAudioOut.spec.ts` when
+ * the speaker and the waveform became one control (DROVE-236). What is left
+ * here is read-aloud's half: the glyph pair, the tap's flip and the toasts.
+ */
+describe('the read-aloud half of the audio-out button', () => {
+    it('draws waves on and a slash off, which is the glyph both models read', () => {
         expect(streamTalkIcon(true)).toBe('volume-high');
         expect(streamTalkIcon(false)).toBe('volume-mute-outline');
-    });
-});
-
-/**
- * Three states on one control, on the two carriers it already had (DROVE-233).
- *
- * The GLYPH says whether read-aloud is on. The FILL says whether it is reading
- * right now, which is DROVE-215's rule that a colour names something happening.
- * No new hue is introduced, and that is the assertion worth pinning: paused is
- * drawn in exactly the colours off is drawn in, and told apart by its shape.
- */
-describe('the speaker button paused (DROVE-233)', () => {
-    it('keeps the ON glyph while paused, because paused is on', () => {
-        const button = streamTalkButton(true, true);
-        expect(button.on).toBe(true);
-        expect(button.paused).toBe(true);
-        expect(button.icon).toBe('volume-high');
-    });
-
-    it('takes the fill OFF while paused, because nothing is happening', () => {
-        // DROVE-215: colour on this row means something is happening right
-        // now. A paused reader is not happening, so the accent disc goes.
-        expect(streamTalkButton(true, true).filled).toBe(false);
-        expect(streamTalkButton(true, false).filled).toBe(true);
-    });
-
-    it('invents no hue: paused wears exactly what off wears', () => {
-        const paused = streamTalkButton(true, true);
-        const off = streamTalkButton(false);
-        expect(paused.filled).toBe(off.filled);
-    });
-
-    it('tells paused from off by the SHAPE, which is what shapes are for', () => {
-        expect(streamTalkButton(true, true).icon).not.toBe(streamTalkButton(false).icon);
-    });
-
-    it('narrows the fill rather than changing it: on and idle is drawn as it was', () => {
-        // The common case has to be untouched, or every session looks different
-        // for a feature most presses never reach.
-        expect(streamTalkButton(true, false).filled).toBe(true);
-        expect(streamTalkButton(true).filled).toBe(true);
-    });
-
-    it('never reports paused beside an off reader', () => {
-        const button = streamTalkButton(false, true);
-        expect(button.paused).toBe(false);
-        expect(button.filled).toBe(false);
-        expect(button.icon).toBe('volume-mute-outline');
-    });
-
-    it('is three distinct readings, not two and a half', () => {
-        const drawings = [
-            streamTalkButton(false),
-            streamTalkButton(true, true),
-            streamTalkButton(true, false),
-        ].map((b) => `${b.icon}/${b.filled}`);
-        expect(new Set(drawings).size).toBe(3);
-    });
-
-    it('reads each state out to a screen reader as its own line', () => {
-        expect(streamTalkButton(false).labelKey).toBe('agentInput.streamTalk.off');
-        expect(streamTalkButton(true, true).labelKey).toBe('agentInput.streamTalk.paused');
-        expect(streamTalkButton(true, false).labelKey).toBe('agentInput.streamTalk.on');
     });
 
     it('names the long press in its toast', () => {
@@ -111,6 +23,12 @@ describe('the speaker button paused (DROVE-233)', () => {
     it('has a string for both, in the default text', () => {
         expect(en.agentInput.streamTalk.paused.length).toBeGreaterThan(0);
         expect(en.agentInput.streamTalk.resumed.length).toBeGreaterThan(0);
+    });
+
+    it('has a string for the three the collapse added (DROVE-236)', () => {
+        expect(en.agentInput.audioOut.boss.length).toBeGreaterThan(0);
+        expect(en.agentInput.audioOut.micStart.length).toBeGreaterThan(0);
+        expect(en.agentInput.audioOut.micStop.length).toBeGreaterThan(0);
     });
 });
 

@@ -58,10 +58,49 @@ describe('the long press is pause and resume (DROVE-233)', () => {
         expect(transportEffect('long-press', 'paused')).toBe('resume');
     });
 
-    it('does nothing at all while read-aloud is off', () => {
-        // Starting is the tap's job. A long press that started reading would
-        // be a second way to start, with no position to hold.
-        expect(transportEffect('long-press', 'off')).toBe('nothing');
+    it('opens boss mode while read-aloud is off (DROVE-236)', () => {
+        // The cell used to be `nothing`. Clay collapsed the waveform and the
+        // speaker into one button and gave it this job. It still does not start
+        // READING: starting is the tap's job, and a long press that started
+        // reading would be a second way to start with no position to hold.
+        expect(transportEffect('long-press', 'off')).toBe('boss-mode');
+    });
+
+    it("is Clay's four-cell table, cell for cell (DROVE-236)", () => {
+        //     state     single press        long press
+        //     normal    reading mode on     boss mode
+        //     reading   back to normal      pause
+        expect(transportEffect('tap', 'off')).toBe('turn-on');
+        expect(transportEffect('long-press', 'off')).toBe('boss-mode');
+        expect(transportEffect('tap', 'reading')).toBe('turn-off');
+        expect(transportEffect('long-press', 'reading')).toBe('pause');
+        // The row his table does not write out, because paused IS reading with
+        // a place held: the tap turns it off like any other on-state, and the
+        // long press is the way back.
+        expect(transportEffect('tap', 'paused')).toBe('turn-off');
+        expect(transportEffect('long-press', 'paused')).toBe('resume');
+    });
+
+    it('is the ONLY gesture that can reach boss mode (DROVE-236)', () => {
+        // A squeeze in a pocket must not dial anybody. The remote gestures are
+        // untouched by the new cell.
+        for (const gesture of gestures) {
+            const reachesBoss = states.some((state) => transportEffect(gesture, state) === 'boss-mode');
+            expect(reachesBoss).toBe(gesture === 'long-press');
+        }
+    });
+
+    it('leaves exactly ONE pause gesture in the whole table (DROVE-233, DROVE-236)', () => {
+        // The collapse must not invent a second way to pause. Every cell that
+        // pauses is a press ON a reading state, and nothing else pauses.
+        for (const gesture of gestures) {
+            for (const state of states) {
+                if (transportEffect(gesture, state) === 'pause') {
+                    expect(state).toBe('reading');
+                }
+            }
+        }
+        expect(transportEffect('long-press', 'reading')).toBe('pause');
     });
 
     it('is a round trip: pause then resume and the state is back', () => {
@@ -115,7 +154,7 @@ describe('the table as a whole', () => {
     it('answers every gesture in every state', () => {
         for (const gesture of gestures) {
             for (const state of states) {
-                expect(['turn-on', 'turn-off', 'pause', 'resume', 'nothing'])
+                expect(['turn-on', 'turn-off', 'pause', 'resume', 'boss-mode', 'nothing'])
                     .toContain(transportEffect(gesture, state));
             }
         }

@@ -464,6 +464,11 @@ export const ca: TranslationStructure = {
             resumed: "Continuant la lectura des d'on s'havia quedat",
             headphonesOff: 'Auriculars desconnectats, ara per l\'altaveu',
         },
+        audioOut: {
+            boss: 'Trucada de veu en curs',
+            micStart: 'Dictar',
+            micStop: 'Atura el dictat',
+        },
         dictate: {
             label: 'Mantén premut per parlar, toca per fixar',
             settingsTitle: 'Botó de parlar',

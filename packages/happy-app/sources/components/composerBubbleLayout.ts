@@ -57,6 +57,9 @@ export type ComposerBubbleStyle = FlexStyle;
  * The padding is the discs' margin and the text's, and it is here rather than
  * on either of them because that is what a container's padding is for. Clay:
  * "margin as padding on the row".
+ *
+ * Not one number since DROVE-236: the floor is 4 and the other three sides are
+ * 9, because the floor is the only side with no text against it.
  */
 export function resolveComposerBubbleGeometry(): ComposerBubbleStyle {
     return {
@@ -64,6 +67,12 @@ export function resolveComposerBubbleGeometry(): ComposerBubbleStyle {
         alignItems: 'stretch',
         borderRadius: MOBILE_COMPOSER_METRICS.shellRadius,
         padding: MOBILE_COMPOSER_METRICS.bubbleInset,
+        // THE FLOOR IS SHALLOWER THAN THE OTHER THREE SIDES (DROVE-236). The
+        // three that hold text keep the square corner's 9; the one that holds
+        // two circles keeps what a circle needs, which is less, and the control
+        // row under the bubble comes up by the difference. The derivation and
+        // the clearance at each candidate are on `bubbleInsetBottom`.
+        paddingBottom: MOBILE_COMPOSER_METRICS.bubbleInsetBottom,
         gap: MOBILE_COMPOSER_METRICS.controlGap,
     };
 }

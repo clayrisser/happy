@@ -480,6 +480,11 @@ export const pl: TranslationStructure = {
             resumed: 'Czytam dalej od miejsca zatrzymania',
             headphonesOff: 'Słuchawki odłączone, teraz przez głośnik',
         },
+        audioOut: {
+            boss: 'Trwa rozmowa głosowa',
+            micStart: 'Dyktuj',
+            micStop: 'Zatrzymaj dyktowanie',
+        },
         dictate: {
             label: 'Przytrzymaj, aby mówić, dotknij, aby zablokować',
             settingsTitle: 'Przycisk mówienia',

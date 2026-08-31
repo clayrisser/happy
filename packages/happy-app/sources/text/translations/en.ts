@@ -478,6 +478,11 @@ export const en: TranslationStructure = {
             resumed: 'Reading on from where it stopped',
             headphonesOff: 'Headphones disconnected, now on speaker',
         },
+        audioOut: {
+            boss: 'Voice call in progress',
+            micStart: 'Dictate',
+            micStop: 'Stop dictating',
+        },
         dictate: {
             label: 'Hold to talk, tap to latch',
             settingsTitle: 'Talk button',

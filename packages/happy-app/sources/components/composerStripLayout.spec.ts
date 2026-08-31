@@ -66,7 +66,7 @@ describe('the layout does not move when a recording starts', () => {
         // The block is the bubble plus its furniture and nothing else. If the
         // banner is ever put back above the text field, this is the number
         // that grows. DROVE-214 put the `+` and send on a row inside the
-        // bubble, so the bubble is 90 rather than 44 and the block is 148; the
+        // bubble, so the bubble is 85 rather than 44 and the block is 143; the
         // decomposition around it did not change.
         expect(composerBlockHeight).toBe(
             MOBILE_COMPOSER_BUBBLE_BASE_HEIGHT
@@ -74,7 +74,7 @@ describe('the layout does not move when a recording starts', () => {
             + MOBILE_COMPOSER_METRICS.actionRowHeight
             + MOBILE_COMPOSER_METRICS.controlsBottomGap,
         );
-        expect(composerBlockHeight).toBe(148);
+        expect(composerBlockHeight).toBe(143);
     });
 
     it('opens the strip only when a silent session has a recording to show', () => {
@@ -123,9 +123,10 @@ describe('where the recording banner lives', () => {
         expect(resolveComposerStripHeight(true, true)).toBe(resolveComposerStripHeight(false, true));
 
         // And the bar is the bubble's own two rims, whatever is inside it.
-        // DROVE-214 made the bubble two rows and 46pt taller; the strip's box
-        // is unchanged, which is the guarantee this test exists for.
-        expect(MOBILE_COMPOSER_BASE_HEIGHT).toBe(148);
+        // DROVE-214 made the bubble two rows and 46pt taller and DROVE-236
+        // took 5 of that back off its floor; the strip's box is unchanged
+        // through both, which is the guarantee this test exists for.
+        expect(MOBILE_COMPOSER_BASE_HEIGHT).toBe(143);
     });
 
     it('leaves the bar tall enough to hold the dot, clock, level and glyph', () => {

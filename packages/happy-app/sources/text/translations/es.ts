@@ -464,6 +464,11 @@ export const es: TranslationStructure = {
             resumed: 'Continuando la lectura desde donde se quedó',
             headphonesOff: 'Auriculares desconectados, ahora por el altavoz',
         },
+        audioOut: {
+            boss: 'Llamada de voz en curso',
+            micStart: 'Dictar',
+            micStop: 'Detener el dictado',
+        },
         dictate: {
             label: 'Mantén pulsado para hablar, toca para fijar',
             settingsTitle: 'Botón de hablar',

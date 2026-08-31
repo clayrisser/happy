@@ -480,6 +480,11 @@ export const ru: TranslationStructure = {
             resumed: 'Читаю дальше с того места, где остановилось',
             headphonesOff: 'Наушники отключены, звук через динамик',
         },
+        audioOut: {
+            boss: 'Идёт голосовой вызов',
+            micStart: 'Диктовать',
+            micStop: 'Остановить диктовку',
+        },
         dictate: {
             label: 'Удерживайте, чтобы говорить, коснитесь, чтобы зафиксировать',
             settingsTitle: 'Кнопка речи',

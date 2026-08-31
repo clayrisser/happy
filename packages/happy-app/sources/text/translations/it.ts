@@ -462,6 +462,11 @@ export const it: TranslationStructure = {
             resumed: 'Riprendo la lettura da dove si era fermata',
             headphonesOff: 'Cuffie scollegate, ora dall\'altoparlante',
         },
+        audioOut: {
+            boss: 'Chiamata vocale in corso',
+            micStart: 'Detta',
+            micStop: 'Interrompi la dettatura',
+        },
         dictate: {
             label: 'Tieni premuto per parlare, tocca per bloccare',
             settingsTitle: 'Pulsante parla',

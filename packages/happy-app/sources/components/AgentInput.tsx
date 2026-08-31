@@ -36,7 +36,9 @@ import { BubblePressable } from './BubblePressable';
 import { resolveAgentInputPrimaryAction } from './agentInputPrimaryAction';
 import { resolveComposerPrimaryPress, type ComposerPrimaryGesture } from './composerPrimaryPress';
 import { ComposerToast } from './ComposerToast';
-import { flipStreamTalk, streamTalkButton, streamTalkPauseToast } from '@/voice/streamTalk';
+import { flipStreamTalk, streamTalkPauseToast } from '@/voice/streamTalk';
+import { audioOutButton } from './composerAudioOut';
+import type { TransportEffect } from '@/voice/readAloudTransport';
 import { NativeSettingsMenu, type NativeSettingsMenuGroup } from './NativeSettingsMenu';
 import { AgentInputStatusRow } from './AgentInputStatusRow';
 import { AddContextSheet, type AddContextSource } from './AddContextSheet';
@@ -104,6 +106,17 @@ interface AgentInputProps {
     onMicPress?: () => void;
     isMicActive?: boolean;
     /**
+     * A live ElevenLabs call is up or dialling (DROVE-236).
+     *
+     * Separate from `isMicActive`, and it has to be: `onMicPress` is withdrawn
+     * for the length of a call, because the header pill is the only stop
+     * control (SessionView). Before the collapse that simply removed the
+     * waveform; now the same control is also the speaker and cannot go
+     * anywhere, so it needs to be TOLD that a call is up rather than inferring
+     * it from a handler it no longer has.
+     */
+    bossModeActive?: boolean;
+    /**
      * Read-aloud (DROVE-30, mode B). Absent when the device has no speech
      * synthesiser at all, so the toggle is not offered where it cannot work.
      */
@@ -111,8 +124,16 @@ interface AgentInputProps {
     /** On and holding its place (DROVE-233). */
     readAloudPaused?: boolean;
     onReadAloudToggle?: () => void;
-    /** Long press: pause or carry on. Returns the state it ended in (DROVE-233). */
-    onReadAloudPauseToggle?: () => boolean | null;
+    /**
+     * The long press on the one audio-out button (DROVE-233, DROVE-236).
+     *
+     * It APPLIES the read-aloud half itself and returns what the transport
+     * table chose, so pause and resume never round-trip through this component
+     * and `boss-mode` arrives as a name for the composer to act on. One
+     * decider, in the voice layer, beside the headphone and lock-screen
+     * presses.
+     */
+    onAudioOutLongPress?: () => TransportEffect;
     /**
      * Dictation (DROVE-30 mode A, DROVE-74, DROVE-105). One button, three
      * outcomes: press and hold, released ON the button, sends; a tap latches
@@ -307,11 +328,18 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         // `paddingHorizontal` and a shorthand here loses to them however it is
         // ordered. That leak shipped for two tickets as a comment claiming
         // zero padding over a style that never wrote one.
+        //
+        // EACH ONE READS THE GEOMETRY OBJECT (DROVE-236). They used to restate
+        // `bubbleInset` four times, which was true while the four sides were
+        // one number and silently wrong the moment the floor became its own
+        // (DROVE-236's move). Restating a value in the renderer is the exact
+        // drift `composerBubbleLayout.spec.ts` exists to catch and cannot see,
+        // because it resolves the geometry and this is the stylesheet.
         ...COMPOSER_BUBBLE_GEOMETRY,
-        paddingTop: MOBILE_COMPOSER_METRICS.bubbleInset,
-        paddingBottom: MOBILE_COMPOSER_METRICS.bubbleInset,
-        paddingLeft: MOBILE_COMPOSER_METRICS.bubbleInset,
-        paddingRight: MOBILE_COMPOSER_METRICS.bubbleInset,
+        paddingTop: COMPOSER_BUBBLE_GEOMETRY.padding,
+        paddingBottom: COMPOSER_BUBBLE_GEOMETRY.paddingBottom,
+        paddingLeft: COMPOSER_BUBBLE_GEOMETRY.padding,
+        paddingRight: COMPOSER_BUBBLE_GEOMETRY.padding,
     },
     /**
      * The composer's first line, which carries the gutter and holds the
@@ -525,6 +553,15 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     // what a blue icon on nothing could never say at a glance.
     mobileIconButtonOn: {
         backgroundColor: theme.colors.radio.active,
+    },
+    // A LIVE CALL ON THE SAME DISC (DROVE-236). The waveform wore the recording
+    // red when a turn was live and it kept it through the collapse; this is
+    // `talkButtonHeld`'s surface on the audio-out button, so a live mic looks
+    // the same wherever it is drawn. Not a new hue: `recording` and `accent`
+    // are the two entries composerControlColour.ts already has, and both mean
+    // something is happening now, which is DROVE-215's whole rule.
+    mobileIconButtonCalling: {
+        backgroundColor: composerControlPalette(theme.dark).recording,
     },
     // A control whose sheet is showing reads as held down, the same step the
     // session controls use for an open picker.
@@ -868,25 +905,25 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     );
     /** The mic is open right now, latched by a tap or held under a finger. */
     const micLive = props.talkState === 'latched' || props.talkState === 'held';
+    /**
+     * The collapse is the PHONE's (DROVE-236). The desktop composer resolves
+     * its own send/mic below and has no talk button, so both of these are false
+     * there and its table is exactly what it was.
+     */
+    const canDictateHere = compactMobileComposer && !!props.onTalkTap;
     const primaryAction = resolveAgentInputPrimaryAction({
         hasComposerContent,
         isSendBlocked,
         isSendDisabled: props.isSendDisabled ?? false,
         showAbortButton: props.showAbortButton ?? false,
         canAbort: !!props.onAbort && !stopRequested,
+        captureOpen: compactMobileComposer && micLive,
+        canDictate: canDictateHere,
     });
     const shouldShowStopButton = primaryAction === 'stop';
     const canSendMessage = primaryAction === 'send';
-    /**
-     * The waveform, on the control row (DROVE-206).
-     *
-     * The condition is what `canVoice` used to be on the primary action, moved
-     * unchanged: only the phone's glass composer folds a voice turn into this
-     * row, and the desktop keeps its own send/mic resolution below. What
-     * changed is that it now decides whether a CONTROL is drawn rather than
-     * which face another control wears.
-     */
-    const showBossButton = compactMobileComposer && !!props.onMicPress;
+    /** The primary button is the microphone right now (DROVE-236). */
+    const primaryIsMic = primaryAction === 'mic';
     /**
      * The in-field send glyph: the accent once there is something to send, the
      * theme's neutral when there is not (DROVE-176). It no longer wears a
@@ -1303,6 +1340,16 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             case 'send':
                 handleSendPress();
                 return;
+            case 'mic':
+                // THE SAME CAPTURE, not a third one (DROVE-210, DROVE-236).
+                // `onTalkTap` is the join the control row's TalkButton and the
+                // headphone press already land on, so a latch opened on any of
+                // the three is closed by any of the three. It has been on this
+                // component since DROVE-210 with nowhere to be pressed from;
+                // this is the render site.
+                hapticsLight();
+                props.onTalkTap?.();
+                return;
             case 'none':
                 return;
         }
@@ -1314,6 +1361,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         handleSendPress,
         hasImages,
         primaryAction,
+        props.onTalkTap,
     ]);
     const handleMobilePrimaryPress = React.useCallback(() => dispatchPrimaryGesture('press'), [dispatchPrimaryGesture]);
     const handleMobilePrimaryLongPress = React.useCallback(() => dispatchPrimaryGesture('longPress'), [dispatchPrimaryGesture]);
@@ -1322,10 +1370,16 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     // composer, back as a one-tap shortcut to the same local key the channel
     // sheet row and Settings > Voice flip. A tick and a one-line toast, so the
     // change is felt as well as seen.
-    const streamTalk = streamTalkButton(
-        props.onReadAloudToggle ? props.readAloudEnabled : undefined,
-        props.readAloudPaused === true,
-    );
+    /**
+     * ONE AUDIO-OUT BUTTON where the waveform and the speaker used to be
+     * (DROVE-236). What it draws is `composerAudioOut.ts`; what a gesture on it
+     * MEANS is the transport table in the voice layer.
+     */
+    const audioOut = audioOutButton({
+        readAloudEnabled: props.onReadAloudToggle ? props.readAloudEnabled : undefined,
+        paused: props.readAloudPaused === true,
+        bossActive: props.bossModeActive === true,
+    });
     const [composerToast, setComposerToast] = React.useState<string | null>(null);
     const composerToastTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
     const showComposerToast = React.useCallback((text: string) => {
@@ -1343,7 +1397,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     // is the moment to say the gesture exists (DROVE-195). Until he has used
     // it once; after that the toast is the plain line again.
     const sentenceTapUsed = useLocalSetting('sentenceTapUsed');
-    const handleStreamTalkPress = React.useCallback(() => {
+    const handleAudioOutPress = React.useCallback(() => {
         if (!props.onReadAloudToggle) return;
         const flipped = flipStreamTalk(!!props.readAloudEnabled, sentenceTapUsed);
         hapticsLight();
@@ -1351,27 +1405,37 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         showComposerToast(t(flipped.toastKey));
     }, [props.onReadAloudToggle, props.readAloudEnabled, sentenceTapUsed, showComposerToast]);
     /**
-     * The long press pauses and resumes (DROVE-233).
+     * The long press: pause, resume, or boss mode (DROVE-233, DROVE-236).
      *
      * Clay: "if you long press the read back it goes into pause so when you
-     * resume it goes back to where it was reading". The TAP is untouched and
-     * still means on/off; this is a second gesture on the same control, which
-     * is the pattern the send button already uses (resolveComposerPrimaryPress).
+     * resume it goes back to where it was reading", and "long press for boss
+     * mode". The TAP is untouched and still means on/off; this is the second
+     * gesture on the same control, which is the pattern the send button already
+     * uses (resolveComposerPrimaryPress).
      *
      * The decision is `transportEffect`'s, over in the voice layer beside the
      * headphone and lock-screen presses, so the three surfaces cannot come to
-     * mean different things. Null back means the press meant nothing, which is
-     * only ever with read-aloud off, and the toast says so rather than leaving
-     * a long press feeling broken.
+     * mean different things. What comes back is the effect it chose, already
+     * applied where the voice layer could apply it.
      */
-    const handleStreamTalkLongPress = React.useCallback(() => {
-        if (!props.onReadAloudPauseToggle) return;
-        const paused = props.onReadAloudPauseToggle();
+    const handleAudioOutLongPress = React.useCallback(() => {
+        if (!props.onAudioOutLongPress) return;
+        const effect = props.onAudioOutLongPress();
+        // BOSS MODE IS THE COMPOSER'S HALF (DROVE-236). The table names it and
+        // the handler that owns the call performs it. Where there is no call to
+        // start the press is simply not answered, which is an embedded chat or
+        // one already in a call, both of which withdraw `onMicPress`. It does
+        // not fall back to a pause: read-aloud is off in that cell, so there is
+        // no place being held to pause.
+        if (effect === 'boss-mode') {
+            if (!props.onMicPress) return;
+            handleMicrophonePress();
+            return;
+        }
+        if (effect === 'nothing') return;
         hapticsLight();
-        showComposerToast(paused === null
-            ? t('agentInput.streamTalk.off')
-            : t(streamTalkPauseToast(paused)));
-    }, [props.onReadAloudPauseToggle, showComposerToast]);
+        showComposerToast(t(streamTalkPauseToast(effect === 'pause')));
+    }, [handleMicrophonePress, props.onAudioOutLongPress, props.onMicPress, showComposerToast]);
 
     const permissionSettingsGroups = React.useMemo<NativeSettingsMenuGroup[]>(() => {
         if (!props.onPermissionModeChange || availableModes.length === 0) {
@@ -2069,6 +2133,12 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     shouldShowStopButton ? styles.mobileStopButton
                         : isSendBlocked ? styles.sendButtonLocked
                             : styles.mobileInFieldDisc,
+                    // A LIVE CAPTURE FILLS THE DISC RED (DROVE-236), the same
+                    // surface the row's talk button wears when it is held, so
+                    // an open mic looks the same wherever it was opened from.
+                    // Off, the mic face is the resting disc: an offer, not a
+                    // state, so it carries no colour (DROVE-215).
+                    primaryIsMic && micLive && styles.talkButtonHeld,
                 ]}
             >
                 <BubblePressable
@@ -2089,7 +2159,11 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     // It is a send button (DROVE-206). Stop is the one face
                     // that is genuinely another action, and it only appears on
                     // an empty composer while the agent is working.
-                    accessibilityLabel={shouldShowStopButton ? 'Stop' : 'Send'}
+                    accessibilityLabel={shouldShowStopButton
+                        ? 'Stop'
+                        : primaryIsMic
+                            ? t(micLive ? 'agentInput.audioOut.micStop' : 'agentInput.audioOut.micStart')
+                            : 'Send'}
                     accessibilityState={{ disabled: !canPressSendButton }}
                 >
                     {isAborting ? (
@@ -2108,6 +2182,21 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                             name="lock-closed"
                             size={14}
                             color={theme.colors.textSecondary}
+                        />
+                    ) : primaryIsMic ? (
+                        // A MICROPHONE, AND NEVER A PLANE (DROVE-236). This is
+                        // the whole of what DROVE-206 bought and it is not
+                        // being spent: the paper plane means a press sends, so
+                        // it is drawn when and only when the action is send.
+                        // A mic on the disc says a press opens or closes the
+                        // mic, and it says so at every length of text, because
+                        // `captureOpen` outranks the composer's contents.
+                        <Ionicons
+                            name="mic"
+                            size={18}
+                            color={micLive
+                                ? '#FFFFFF'
+                                : micColour(composerPalette, 'idle')}
                         />
                     ) : (
                         // A PAPER PLANE, not an arrow (DROVE-214). Clay: "the
@@ -2726,86 +2815,59 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                             control, so it belongs with the other two, and the
                             row does not grow for it: a 44pt control on a 44pt
                             row. Each third is still its own 44pt target. */}
-                        {(showBossButton || streamTalk.shown || props.onTalkPressIn) ? (
+                        {(audioOut.shown || props.onTalkPressIn) ? (
                         <GlassChromeSurface
                             radius={MOBILE_COMPOSER_METRICS.actionSize / 2}
                             interactive
                             style={styles.mobileAudioCapsule}
                         >
-                        {showBossButton && (
+                        {audioOut.shown && (
                             <BubblePressable
-                                onPress={handleMicrophonePress}
-                                style={styles.mobileIconButton}
-                                accessibilityRole="button"
-                                accessibilityLabel="Voice"
-                                accessibilityState={{ selected: !!props.isMicActive }}
-                            >
-                                {/* Neutral at rest, DROVE-142's recording red
-                                    once the turn is live (DROVE-176). A live
-                                    voice turn is a live mic, which is the
-                                    entry the vocabulary already has, so this
-                                    needed no new colour and reads the same
-                                    helper the mic beside it does. */}
-                                {props.isMicActive ? (
-                                    <Ionicons
-                                        name="mic"
-                                        size={20}
-                                        color={micColour(composerPalette, 'latched')}
-                                    />
-                                ) : (
-                                    <Image
-                                        source={require('@/assets/images/icon-voice-white.png')}
-                                        style={{ width: 22, height: 22 }}
-                                        tintColor={micColour(composerPalette, 'idle')}
-                                    />
-                                )}
-                            </BubblePressable>
-                        )}
-                        {showBossButton && (streamTalk.shown || props.onTalkPressIn) ? (
-                            <View style={styles.mobileAudioDivider} />
-                        ) : null}
-                        {streamTalk.shown && (
-                            <BubblePressable
-                                onPress={handleStreamTalkPress}
-                                onLongPress={handleStreamTalkLongPress}
+                                onPress={handleAudioOutPress}
+                                onLongPress={handleAudioOutLongPress}
                                 style={[
                                     styles.mobileIconButton,
-                                    streamTalk.filled && styles.mobileIconButtonOn,
+                                    audioOut.fill === 'accent' && styles.mobileIconButtonOn,
+                                    audioOut.fill === 'recording' && styles.mobileIconButtonCalling,
                                 ]}
                                 accessibilityRole="button"
-                                accessibilityState={{ selected: streamTalk.on }}
-                                accessibilityLabel={t(streamTalk.labelKey)}
+                                accessibilityState={{ selected: audioOut.on }}
+                                accessibilityLabel={t(audioOut.labelKey)}
                             >
-                                {/* The speaker is the one control whose FILL
-                                    already carries the state (DROVE-118): on
-                                    is a solid accent disc, so the glyph on it
-                                    is the tint that reads against that disc,
-                                    not a colour of its own. Off it is the row's
-                                    foreground like everything else on it
-                                    (DROVE-176, DROVE-215).
+                                {/* ONE AUDIO-OUT BUTTON (DROVE-236). The
+                                    waveform and the speaker were two controls
+                                    for the two things this session can say out
+                                    loud, and Clay collapsed them: single press
+                                    is reading mode, long press is boss mode,
+                                    and in reading mode the long press is the
+                                    pause DROVE-233 built.
 
-                                    THREE STATES SINCE DROVE-233, on the two
-                                    carriers this button already had. The GLYPH
-                                    says whether read-aloud is on: slashed off,
-                                    waves on, paused included. The FILL says
-                                    whether it is reading right now, which is a
-                                    narrowing of what it meant — enabled before,
-                                    not-paused now — and is the first time it
-                                    obeys DROVE-215's rule that a colour names
-                                    something happening. No new hue: paused
-                                    wears the row's foreground on no disc,
-                                    exactly like off, and the shape tells them
-                                    apart. */}
+                                    FOUR THINGS ON TWO CARRIERS, NO HUE PER
+                                    STATE. The GLYPH says whether read-aloud is
+                                    on: slashed off, waves on, paused included,
+                                    which is DROVE-233's sentence unchanged. The
+                                    FILL says what is happening NOW and nothing
+                                    else: the accent disc while it is reading,
+                                    the recording disc while a call is up, no
+                                    disc at rest or paused. That is DROVE-215's
+                                    rule, and both hues are already in
+                                    composerControlColour.ts.
+
+                                    Normal and paused differ in the glyph,
+                                    paused and reading in the fill, normal and
+                                    reading in both. The reasoning in full,
+                                    with the state table, is in
+                                    composerAudioOut.ts. */}
                                 <Ionicons
-                                    name={streamTalk.icon}
+                                    name={audioOut.glyph}
                                     size={16}
-                                    color={streamTalk.filled
-                                        ? theme.colors.button.primary.tint
-                                        : composerPalette.foreground}
+                                    color={audioOut.fill === 'none'
+                                        ? composerPalette.foreground
+                                        : theme.colors.button.primary.tint}
                                 />
                             </BubblePressable>
                         )}
-                        {streamTalk.shown && props.onTalkPressIn ? (
+                        {audioOut.shown && props.onTalkPressIn ? (
                             <View style={styles.mobileAudioDivider} />
                         ) : null}
 

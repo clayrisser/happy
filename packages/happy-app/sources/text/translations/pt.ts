@@ -463,6 +463,11 @@ export const pt: TranslationStructure = {
             resumed: 'A continuar a leitura de onde parou',
             headphonesOff: 'Fones desconectados, agora no alto-falante',
         },
+        audioOut: {
+            boss: 'Chamada de voz em andamento',
+            micStart: 'Ditar',
+            micStop: 'Parar o ditado',
+        },
         dictate: {
             label: 'Segure para falar, toque para fixar',
             settingsTitle: 'Botão de falar',

@@ -465,6 +465,11 @@ export const zhHans: TranslationStructure = {
             resumed: '从停下的地方继续朗读',
             headphonesOff: '耳机已断开，改用扬声器播放',
         },
+        audioOut: {
+            boss: '语音通话进行中',
+            micStart: '语音输入',
+            micStop: '停止语音输入',
+        },
         dictate: {
             label: '按住说话，轻点锁定',
             settingsTitle: '说话按钮',

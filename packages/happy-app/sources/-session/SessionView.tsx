@@ -1280,7 +1280,8 @@ export function SessionViewLoaded({
                 readAloudEnabled={voiceComposer.readAloudEnabled}
                 onReadAloudToggle={voiceComposer.onReadAloudToggle}
                 readAloudPaused={voiceComposer.readAloudPaused}
-                onReadAloudPauseToggle={voiceComposer.onReadAloudPauseToggle}
+                onAudioOutLongPress={voiceComposer.onAudioOutLongPress}
+                bossModeActive={(embedded || isDisconnected) ? false : voiceSessionActive}
                 onTalkPressIn={voiceComposer.onTalkPressIn}
                 onTalkPressOut={voiceComposer.onTalkPressOut}
                 onTalkSlide={voiceComposer.onTalkSlide}
