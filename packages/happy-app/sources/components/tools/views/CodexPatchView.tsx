@@ -10,6 +10,7 @@ import { ToolDiffView } from '@/components/tools/ToolDiffView';
 import { getDiffStats, getPatchDiffStats } from '@/components/diff/calculateDiff';
 import { materializeUnifiedDiffPatch } from '@/utils/codexUnifiedDiff';
 import { t } from '@/text';
+import { DisclosureFooter, useInlineDisclosure } from '@/components/DisclosureFooter';
 
 interface CodexPatchViewProps {
     tool: ToolCall;
@@ -199,7 +200,7 @@ const CodexPatchFileView = React.memo(function CodexPatchFileView(props: {
 }) {
     const { file, change, metadata, permissionFooter } = props;
     const { theme } = useUnistyles();
-    const [expanded, setExpanded] = React.useState(false);
+    const { expanded, toggle, collapse, headerRef, footerRef } = useInlineDisclosure();
 
     const filePath = resolvePath(file, metadata);
     const diffInput = getPatchInput(change);
@@ -220,7 +221,9 @@ const CodexPatchFileView = React.memo(function CodexPatchFileView(props: {
         <ToolSectionView fullWidth>
             <View style={styles.editedFileGroup}>
                 <Pressable
-                    onPress={() => setExpanded((value) => !value)}
+                    ref={headerRef}
+                    collapsable={false}
+                    onPress={toggle}
                     style={({ pressed }) => [
                         styles.editToggle,
                         pressed && styles.editTogglePressed,
@@ -236,6 +239,7 @@ const CodexPatchFileView = React.memo(function CodexPatchFileView(props: {
                     />
                 </Pressable>
                 {expanded ? (
+                    <>
                     <View style={styles.patchContainer}>
                         <View style={styles.fileHeader}>
                             <View style={styles.fileHeaderMain}>
@@ -266,6 +270,15 @@ const CodexPatchFileView = React.memo(function CodexPatchFileView(props: {
                             </View>
                         ) : null}
                     </View>
+                    <DisclosureFooter
+                        label={t('toolGroup.editedFile')}
+                        onPress={collapse}
+                        innerRef={footerRef}
+                        iconSize={14}
+                        textStyle={styles.editToggleText}
+                        style={styles.editFooter}
+                    />
+                    </>
                 ) : null}
             </View>
         </ToolSectionView>
@@ -288,6 +301,11 @@ const styles = StyleSheet.create((theme) => ({
     },
     editTogglePressed: {
         opacity: 0.6,
+    },
+    // Lines up under the header it mirrors, outside the patch's bordered box.
+    editFooter: {
+        // Left only: the shared footer already keeps the indicator's lane clear.
+        paddingLeft: 14,
     },
     editToggleText: {
         flexShrink: 1,
