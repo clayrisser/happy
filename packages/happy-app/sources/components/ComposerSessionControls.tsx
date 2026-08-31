@@ -248,9 +248,15 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
     // capsule.
     const effortNeedsDivider = showEffort && showMode;
     const modelNeedsDivider = !!label.model && (showMode || showEffort);
+    // One interactive surface for all three segments, not one each
+    // (DROVE-169). UIGlassEffect follows the touch inside the effect view it
+    // is on, so the segment under the finger brightens and its neighbours in
+    // the capsule answer with it, which is how the system draws a grouped
+    // control.
     return (
         <GlassChromeSurface
             radius={COMPOSER_SESSION_CONTROL_SIZE / 2}
+            interactive
             style={styles.capsule}
         >
             {showMode ? (

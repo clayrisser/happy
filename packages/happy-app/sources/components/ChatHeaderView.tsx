@@ -297,6 +297,7 @@ export const ChatHeaderView: React.FC<ChatHeaderViewProps> = ({
                 as the surface. */}
             <GlassChromeSurface
                 radius={MOBILE_GLASS_CONTROL_RADIUS}
+                interactive={!!onTitlePress}
                 style={styles.mobileTitlePillGlass}
             >
                 {titleBody}
@@ -416,6 +417,7 @@ export const ChatHeaderView: React.FC<ChatHeaderViewProps> = ({
                             // was the thing that could not.
                             <GlassChromeSurface
                                 radius={MOBILE_GLASS_CONTROL_RADIUS}
+                                interactive
                                 style={styles.rightControlGlass}
                                 onLayout={(event) => setRightSlotWidth(event.nativeEvent.layout.width)}
                             >

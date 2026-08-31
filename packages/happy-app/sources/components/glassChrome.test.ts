@@ -3,7 +3,15 @@ import {
     CHROME_BACKDROP_EXTREMES,
     CHROME_CONTRAST_FLOOR,
     CHROME_GLASS_STYLE,
+    CHROME_GLASS_TINT,
+    CHROME_SEPARATION_FLOOR,
     CHROME_TARGET_MIN,
+    CHROME_TINT_MAX_ALPHA,
+    chromeGlassTint,
+    chromeGround,
+    chromeSurfaceSeparation,
+    colorAlpha,
+    compositeSurface,
     contrastRatio,
     controlTargetHeight,
     controlTargetWidth,
@@ -183,6 +191,57 @@ describe('legibility, measured rather than eyeballed', () => {
         for (const backdrop of CHROME_BACKDROP_EXTREMES) {
             expect(glyphContrast('#FFFFFF', backdrop, ['#007AFF']))
                 .toBeGreaterThanOrEqual(CHROME_CONTRAST_FLOOR);
+        }
+    });
+});
+
+describe('the composer has an edge against its own ground (DROVE-171)', () => {
+    it('clears the separation floor for its theme', () => {
+        expect(chromeSurfaceSeparation(true)).toBeGreaterThanOrEqual(CHROME_SEPARATION_FLOOR.dark);
+        expect(chromeSurfaceSeparation(false)).toBeGreaterThanOrEqual(CHROME_SEPARATION_FLOOR.light);
+    });
+
+    it('is a large improvement on the tint it replaces, which was 1.008:1 over black', () => {
+        // theme.colors.glass.tint on the dark theme: rgba(16, 16, 16, 0.08),
+        // a near-black wash over a #000000 chat. That is what Clay
+        // photographed and called "no contrast".
+        const wasDark = contrastRatio(
+            compositeSurface('#000000', ['rgba(16, 16, 16, 0.08)']),
+            parseColor('#000000'),
+        );
+        expect(wasDark).toBeLessThan(1.02);
+        expect(chromeSurfaceSeparation(true)).toBeGreaterThan(wasDark * 1.3);
+    });
+
+    it('lifts on dark and settles on light, because the ground moved', () => {
+        expect(chromeGlassTint(true)).toBe(CHROME_GLASS_TINT.dark);
+        expect(chromeGlassTint(false)).toBe(CHROME_GLASS_TINT.light);
+        const darkSurface = compositeSurface(chromeGround(true), [chromeGlassTint(true)]);
+        const lightSurface = compositeSurface(chromeGround(false), [chromeGlassTint(false)]);
+        expect(relativeLuminance(darkSurface))
+            .toBeGreaterThan(relativeLuminance(parseColor(chromeGround(true))));
+        expect(relativeLuminance(lightSurface))
+            .toBeLessThan(relativeLuminance(parseColor(chromeGround(false))));
+    });
+
+    it('stays a tint rather than becoming a fill, which is the other half of the ticket', () => {
+        expect(colorAlpha(chromeGlassTint(true))).toBeLessThan(CHROME_TINT_MAX_ALPHA);
+        expect(colorAlpha(chromeGlassTint(false))).toBeLessThan(CHROME_TINT_MAX_ALPHA);
+        // A fill that could carry a glyph against any backdrop is far more
+        // opaque than this. The gap is what keeps the backdrop visible.
+        expect(colorAlpha(chromeGlassTint(true)))
+            .toBeLessThan(minimumFillAlpha('#FFFFFF', '#1C1C1E'));
+    });
+
+    it('holds over a light code block because DROVE-168 never lets one get behind it', () => {
+        // The fade masks the transcript to nothing before the glass edge, so
+        // the ground is the page at every scroll position. A tint chosen to
+        // lift off black would wash out against a white block, and this is the
+        // clause that says it never has to.
+        expect(chromeGround(true)).toBe('#000000');
+        expect(chromeGround(false)).toBe('#F2F2F7');
+        for (const backdrop of CHROME_BACKDROP_EXTREMES) {
+            expect(() => compositeSurface(backdrop, [chromeGlassTint(true)])).not.toThrow();
         }
     });
 });

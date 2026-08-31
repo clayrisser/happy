@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
     DOCK_CONTENT_BOTTOM_PADDING,
-    DOCK_SCRIM_FADE_HEIGHT,
+    TRANSCRIPT_FADE_ALPHAS,
+    TRANSCRIPT_FADE_HEIGHT,
+    TRANSCRIPT_FADE_LOCATIONS,
+    TRANSCRIPT_FADE_MASK_COLORS,
+    resolveTranscriptBottomClearance,
+    resolveTranscriptMask,
+    transcriptFadeAlphaAbove,
     HOME_INDICATOR_KEEP_OUT,
     STATUS_ROW_BOTTOM_CLEARANCE,
     STATUS_ROW_TAP_SLOP_BOTTOM,
@@ -187,7 +193,7 @@ describe('resolveDockInset', () => {
 describe('resolveDockScrimHeight', () => {
     it('covers the dock, the gap under it, and the fade above it', () => {
         expect(resolveDockScrimHeight(withStatusRow, safeAreaBottom))
-            .toBe(withStatusRow + dockBottomOffset + DOCK_SCRIM_FADE_HEIGHT);
+            .toBe(withStatusRow + dockBottomOffset + TRANSCRIPT_FADE_HEIGHT);
     });
 
     it('paints nothing before the dock has been measured', () => {
@@ -286,5 +292,84 @@ describe('transparentOf', () => {
 
     it('falls back to transparent rather than guessing', () => {
         expect(transparentOf('rebeccapurple')).toBe('transparent');
+    });
+});
+
+describe('the transcript fade (DROVE-168)', () => {
+    const safeAreaBottom = 34;
+    const dockBottomOffset = resolveDockBottomOffset(safeAreaBottom, true);
+    const dockHeight = 148;
+
+    it('clears the tallest transcript line box, so no line is cut off mid-height', () => {
+        // MarkdownView paragraphs and list rows are 24pt; code is 20pt. A ramp
+        // shorter than a line makes a fade look like a clip.
+        expect(TRANSCRIPT_FADE_HEIGHT).toBeGreaterThan(24);
+    });
+
+    it('stays on the 8pt grid so it can be reasoned about against the dock metrics', () => {
+        expect(TRANSCRIPT_FADE_HEIGHT % 8).toBe(0);
+    });
+
+    it('takes the transcript to nothing exactly at the glass edge', () => {
+        expect(transcriptFadeAlphaAbove(0)).toBe(0);
+        expect(transcriptFadeAlphaAbove(-4)).toBe(0);
+    });
+
+    it('dissolves a line across its own height rather than clipping it', () => {
+        // A 24pt body line whose baseline sits on the glass edge: its cap
+        // height is still mostly there, its baseline is gone, and the whole
+        // fall happens inside the line. That is a fade. A ramp shorter than
+        // the line would put the same fall across a third of it, which is a
+        // clip, and is what "text collides with the glass edge" looks like.
+        expect(transcriptFadeAlphaAbove(24)).toBeGreaterThan(0.6);
+        expect(transcriptFadeAlphaAbove(24)).toBeLessThan(1);
+        expect(TRANSCRIPT_FADE_HEIGHT).toBeGreaterThan(24);
+    });
+
+    it('spends its collapse in the last quarter, next to the glass', () => {
+        expect(transcriptFadeAlphaAbove(TRANSCRIPT_FADE_HEIGHT * 0.25)).toBeLessThan(0.35);
+        expect(transcriptFadeAlphaAbove(TRANSCRIPT_FADE_HEIGHT * 0.5)).toBeCloseTo(0.62, 2);
+        expect(transcriptFadeAlphaAbove(TRANSCRIPT_FADE_HEIGHT)).toBe(1);
+        expect(transcriptFadeAlphaAbove(TRANSCRIPT_FADE_HEIGHT + 40)).toBe(1);
+    });
+
+    it('falls monotonically toward the glass', () => {
+        let previous = -1;
+        for (let d = 0; d <= TRANSCRIPT_FADE_HEIGHT; d += 1) {
+            const alpha = transcriptFadeAlphaAbove(d);
+            expect(alpha).toBeGreaterThanOrEqual(previous);
+            previous = alpha;
+        }
+    });
+
+    it('spells the mask colours from the same alphas the ramp is defined by', () => {
+        expect(TRANSCRIPT_FADE_MASK_COLORS).toHaveLength(TRANSCRIPT_FADE_ALPHAS.length);
+        TRANSCRIPT_FADE_ALPHAS.forEach((alpha, index) => {
+            expect(TRANSCRIPT_FADE_MASK_COLORS[index]).toBe(`rgba(0, 0, 0, ${alpha})`);
+        });
+        expect(TRANSCRIPT_FADE_LOCATIONS).toHaveLength(TRANSCRIPT_FADE_ALPHAS.length);
+    });
+
+    it('masks everything from the glass edge down, which is what DROVE-113 protected', () => {
+        const mask = resolveTranscriptMask(dockHeight, safeAreaBottom);
+        expect(mask.fadeHeight).toBe(TRANSCRIPT_FADE_HEIGHT);
+        // The dock and the gap under it, so no scroll position leaves anything
+        // legible underneath the composer.
+        expect(mask.clearHeight).toBe(dockHeight + dockBottomOffset);
+        expect(mask.clearHeight).toBe(resolveDockInset({
+            dockHeight,
+            safeAreaBottom,
+            floatingDock: true,
+        }));
+    });
+
+    it('draws no mask before the dock has been measured', () => {
+        expect(resolveTranscriptMask(0, safeAreaBottom)).toEqual({ fadeHeight: 0, clearHeight: 0 });
+    });
+
+    it('holds the newest line above the ramp rather than inside it', () => {
+        expect(resolveTranscriptBottomClearance()).toBe(TRANSCRIPT_FADE_HEIGHT);
+        // The whole cost of the fade, against the 8pt gap DROVE-113 kept.
+        expect(resolveTranscriptBottomClearance() - 8).toBe(24);
     });
 });

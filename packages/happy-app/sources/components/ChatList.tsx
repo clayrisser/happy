@@ -20,6 +20,7 @@ import { usesControlledSessionUi } from '@/sync/rig';
 import { buildAgentTurnCopyTextByMessageId } from '@/utils/agentTurnCopy';
 import { collectSubagentTaskMessageIds } from '@/utils/subagentTaskLinks';
 import { GlassChromeButton } from './GlassChromeControl';
+import { resolveTranscriptBottomClearance } from './agentDockLayout';
 import { CHROME_TARGET_MIN } from './glassChrome';
 
 const SCROLL_THRESHOLD = 300;
@@ -485,7 +486,19 @@ export const ChatListInternal = React.memo((props: {
                 // Inverted list: paddingTop renders at the visual bottom.
                 // The measured dock inset lets the newest message scroll above
                 // the floating composer instead of stopping underneath it.
-                contentContainerStyle={{ paddingTop: 8 + (props.bottomContentInset ?? 0) }}
+                //
+                // Over the dock inset the floating layout keeps the fade's own
+                // height rather than a flat 8pt gap (DROVE-168). The transcript
+                // now runs behind the composer and is masked to nothing over
+                // that band, so a newest line parked inside it would sit
+                // half-dissolved at rest. Costs 24pt of resting reading area,
+                // 32 in place of 8, and it is the price of the fade: every
+                // point of ramp is a point the list has to hold clear.
+                contentContainerStyle={{
+                    paddingTop: (props.bottomContentInset != null
+                        ? resolveTranscriptBottomClearance()
+                        : 8) + (props.bottomContentInset ?? 0),
+                }}
                 renderItem={renderItem}
                 onScroll={handleScroll}
                 scrollEventThrottle={16}

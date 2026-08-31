@@ -3,7 +3,7 @@ import * as React from 'react';
 import { LayoutChangeEvent, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import {
-    DOCK_SCRIM_FADE_HEIGHT,
+    TRANSCRIPT_FADE_HEIGHT,
     resolveDockBottomOffset,
     resolveDockInset,
     resolveDockScrimHeight,
@@ -85,11 +85,15 @@ export const AgentContentView: React.FC<AgentContentViewProps> = React.memo(({
                         {placeholder}
                     </ScrollView>
                 )}
-                {/* Opaque, not a scrim (DROVE-113): fades in over the top
-                    28pt and is the chat's own surface from there down. Sits
-                    below the dock's zIndex so the DROVE-88 gate overlay,
-                    a child of the dock at bottom: '100%', still paints over
-                    it and is not clipped. */}
+                {/* Android and web keep the painted backdrop (DROVE-113):
+                    fades in over the top TRANSCRIPT_FADE_HEIGHT and is the
+                    chat's own surface from there down. iOS masks the
+                    transcript instead (DROVE-168), because it is the only
+                    platform where the composer is real Liquid Glass and a
+                    slab behind it costs something. Same ramp length either
+                    way so the two cannot drift. Sits below the dock's zIndex
+                    so the DROVE-88 gate overlay, a child of the dock at
+                    bottom: '100%', still paints over it and is not clipped. */}
                 {dockScrimHeight > 0 && (
                     <View
                         pointerEvents="none"
@@ -107,7 +111,7 @@ export const AgentContentView: React.FC<AgentContentViewProps> = React.memo(({
                             locations={[0, 1]}
                             start={{ x: 0.5, y: 0 }}
                             end={{ x: 0.5, y: 1 }}
-                            style={{ height: DOCK_SCRIM_FADE_HEIGHT }}
+                            style={{ height: TRANSCRIPT_FADE_HEIGHT }}
                         />
                         <View style={{ flex: 1, backgroundColor: dockSurface }} />
                     </View>

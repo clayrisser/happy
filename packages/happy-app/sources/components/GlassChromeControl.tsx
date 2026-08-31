@@ -16,9 +16,12 @@ import { isRunningOnMac } from '@/utils/platform';
 import {
     CHROME_GLASS_STYLE,
     CHROME_TARGET_MIN,
+    chromeGlassTint,
     resolveGlassChromeMaterial,
     type GlassChromeMaterial,
 } from './glassChrome';
+import { getNativeGlassInteractivity } from './glassInteractionPolicy';
+import { GlassPressProvider, useNativeGlassPress } from './glassPress';
 
 /**
  * The session chrome's material, and the answer to the wall DROVE-133 hit
@@ -93,8 +96,19 @@ export interface GlassChromeSurfaceProps {
      * `UIGlassEffect.tintColor`, which is how the system draws a prominent
      * glass button; on the fallback it is the fill. Either way the control is
      * still the colour it was, because the colour is the message.
+     *
+     * Left out, the surface takes the measured chrome tint for its theme
+     * (DROVE-171) rather than no tint at all, which over a black chat drew a
+     * surface 1.008:1 from its own ground.
      */
     tintColor?: string;
+    /**
+     * Ask `UIGlassEffect` for its own press response (DROVE-169). Set it on
+     * anything a finger lands on, including a capsule holding several
+     * segments: the effect follows the touch inside itself, so one interactive
+     * capsule is how the system draws a grouped control, not one per segment.
+     */
+    interactive?: boolean;
     /** Corner radius, on the effect view as well as the frame. */
     radius: number;
     style?: StyleProp<ViewStyle>;
@@ -115,6 +129,7 @@ export interface GlassChromeSurfaceProps {
  */
 export function GlassChromeSurface({
     tintColor,
+    interactive = false,
     radius,
     style,
     children,
@@ -131,10 +146,13 @@ export function GlassChromeSurface({
                 onLayout={onLayout}
                 glassEffectStyle={CHROME_GLASS_STYLE}
                 colorScheme={theme.dark ? 'dark' : 'light'}
-                tintColor={tintColor}
+                tintColor={tintColor ?? chromeGlassTint(theme.dark)}
+                isInteractive={getNativeGlassInteractivity(interactive, isGlassEffectAPIAvailable())}
                 style={[{ borderRadius: radius, overflow: 'visible' }, style]}
             >
-                {children}
+                <GlassPressProvider value={interactive}>
+                    {children}
+                </GlassPressProvider>
             </GlassView>
         );
     }
@@ -197,21 +215,50 @@ export function GlassChromeButton({
         <GlassChromeSurface
             radius={cornerRadius}
             tintColor={tintColor}
+            interactive={!pressable.disabled}
             style={[{ width: frameWidth, height: size }, style]}
         >
-            <Pressable
-                {...pressable}
-                style={({ pressed }) => ({
-                    width: '100%',
-                    height: '100%',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    borderRadius: cornerRadius,
-                    opacity: pressed && !pressable.disabled ? 0.6 : 1,
-                })}
-            >
+            <GlassChromeButtonContent cornerRadius={cornerRadius} pressable={pressable}>
                 {children}
-            </Pressable>
+            </GlassChromeButtonContent>
         </GlassChromeSurface>
+    );
+}
+
+/**
+ * Split out only so it sits INSIDE the surface and can read whether the
+ * material is drawing the press (DROVE-169).
+ *
+ * On the material the `Pressable` still dispatches the tap and draws nothing:
+ * `UIGlassEffect.isInteractive` brightens and deforms the surface under the
+ * finger, and an `opacity: 0.6` layered on top of that is the custom fade the
+ * ticket is about. Off the material there is no platform response to suppress,
+ * so the fade stays and a device without Liquid Glass still shows a pressed
+ * state rather than nothing.
+ */
+function GlassChromeButtonContent({
+    cornerRadius,
+    pressable,
+    children,
+}: {
+    cornerRadius: number;
+    pressable: Omit<PressableProps, 'style' | 'children'>;
+    children?: React.ReactNode;
+}) {
+    const nativePress = useNativeGlassPress();
+    return (
+        <Pressable
+            {...pressable}
+            style={({ pressed }) => ({
+                width: '100%',
+                height: '100%',
+                alignItems: 'center',
+                justifyContent: 'center',
+                borderRadius: cornerRadius,
+                opacity: !nativePress && pressed && !pressable.disabled ? 0.6 : 1,
+            })}
+        >
+            {children}
+        </Pressable>
     );
 }
