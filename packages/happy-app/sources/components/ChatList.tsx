@@ -91,12 +91,21 @@ const ListFooter = React.memo((props: { sessionId: string }) => {
     )
 });
 
-const ChatListInternal = React.memo((props: {
+/**
+ * The list without the session-message subscription, so a screen that holds
+ * its own messages (a subagent's transcript, DROVE-93) draws them with the
+ * same cards, the same folding and the same scroll behaviour as the chat.
+ */
+export const ChatListInternal = React.memo((props: {
     metadata: Metadata | null,
     sessionId: string,
     messages: Message[],
     hasMoreOlder: boolean,
     isLoadingOlder: boolean,
+    /** Overrides "is the newest message still being worked on", which otherwise follows the session. */
+    live?: boolean,
+    /** The chat footer (thinking indicator, control state). Off for a list that is not the session's own. */
+    showFooter?: boolean,
     topContentInset?: number,
     bottomContentInset?: number,
     scrollButtonInset?: number,
@@ -183,7 +192,7 @@ const ChatListInternal = React.memo((props: {
     );
     // The newest message while the agent is still working — the only one that
     // can be mid-thought, so the only one that ticks.
-    const liveMessageId = session?.thinking === true ? props.messages[0]?.id ?? null : null;
+    const liveMessageId = (props.live ?? session?.thinking === true) ? props.messages[0]?.id ?? null : null;
 
     // Tracks which groups are explicitly collapsed. Groups start collapsed;
     // pending approval groups are the only ones we auto-expand.
@@ -477,7 +486,7 @@ const ChatListInternal = React.memo((props: {
                     scrollMetricsRef.current.contentHeight = height;
                     updateHeaderBackdropVisibility();
                 }}
-                ListHeaderComponent={<ListFooter sessionId={props.sessionId} />}
+                ListHeaderComponent={props.showFooter === false ? null : <ListFooter sessionId={props.sessionId} />}
                 ListFooterComponent={(
                     <ListHeader
                         isLoadingOlder={props.isLoadingOlder}

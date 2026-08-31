@@ -83,6 +83,8 @@ export interface LiveStatusRow {
     tokens?: string;
     /** The tool_use this row is about, so a tap can open its card. */
     toolId?: string;
+    /** Claude Code's agent id, so a tap can open the agent's own transcript (DROVE-93). */
+    agentId?: string;
 }
 
 export interface LiveStatusSummary {
@@ -120,6 +122,7 @@ function agentRow(agent: LiveStatusAgent, now: number): LiveStatusRow {
             ? { tokens: formatTokens(agent.tokens) }
             : {}),
         ...(agent.toolId ? { toolId: agent.toolId } : {}),
+        agentId: agent.id,
     };
 }
 

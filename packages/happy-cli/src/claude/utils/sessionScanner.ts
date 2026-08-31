@@ -7,6 +7,7 @@ import { logger } from "@/ui/logger";
 import { startFileWatcher } from "@/modules/watcher/startFileWatcher";
 import { getProjectPath } from "./path";
 import { createLiveStatusReader, LiveStatusPublisher, type LiveStatus } from "./liveStatus";
+import { createSubagentTranscriptReader, type SubagentTranscriptRequest, type SubagentTranscriptResponse } from "./subagentTranscript";
 
 /**
  * Known internal Claude Code event types that should be silently skipped.
@@ -495,8 +496,19 @@ export async function createSessionScanner(opts: {
         liveStatusTimer.unref?.();
     }
 
+    // DROVE-93: a subagent's transcript on demand. Lives on the scanner for
+    // the same reason the live status does: this is the thing that knows
+    // which project dir and which session id to read, flip included.
+    const subagentTranscripts = createSubagentTranscriptReader({
+        getProjectDir: () => projectDir,
+        getSessionId: () => currentSessionId,
+    });
+
     // Public interface
     return {
+        /** The agent's transcript rows appended since `since`. See subagentTranscript.ts. */
+        readSubagentTranscript: (request: SubagentTranscriptRequest): SubagentTranscriptResponse =>
+            subagentTranscripts.read(request),
         cleanup: async () => {
             clearInterval(intervalId);
             if (liveStatusTimer) {

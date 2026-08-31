@@ -988,6 +988,17 @@ export const ru: TranslationStructure = {
         agentFinished: ({ duration }: { duration: string }) => `Агент завершён · ${duration}`,
     },
 
+    subagent: {
+        running: 'Выполняется',
+        done: 'Готово',
+        failed: 'Ошибка',
+        quiet: ({ duration }: { duration: string }) => `нет вывода ${duration}`,
+        loading: 'Загрузка стенограммы…',
+        unavailable: 'Стенограмма недоступна',
+        result: 'Результат',
+        title: 'Агент',
+    },
+
     codex: {
         // Codex permission dialog buttons
         permissions: {

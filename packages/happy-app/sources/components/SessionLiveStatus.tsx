@@ -93,6 +93,24 @@ function LiveStatusTreeRow(props: { sessionId: string, row: LiveStatusRow }) {
         </View>
     );
 
+    // An agent row opens the agent's own transcript (DROVE-93): its prompt,
+    // its tool calls, its result. Not the Task card, which for a background
+    // agent holds the name and a check mark and nothing else.
+    if (row.agentId) {
+        const agentId = row.agentId;
+        return (
+            <Pressable
+                onPress={() => router.push({
+                    pathname: `/session/${props.sessionId}/agent/${agentId}`,
+                    params: { label: row.title },
+                })}
+                style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
+            >
+                {body}
+            </Pressable>
+        );
+    }
+
     // Only rows whose tool has actually reached the transcript are tappable. A
     // row with nowhere to go must not look like a button.
     if (!messageId) return body;

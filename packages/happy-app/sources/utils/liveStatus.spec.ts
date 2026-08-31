@@ -79,6 +79,7 @@ describe('summarizeLiveStatus', () => {
             {
                 kind: 'agent',
                 key: 'agent:a1',
+                agentId: 'a1',
                 title: 'Un-drop thinking',
                 elapsed: '4m 40s',
                 tokens: '274.6k',
@@ -87,6 +88,7 @@ describe('summarizeLiveStatus', () => {
             {
                 kind: 'agent',
                 key: 'agent:a2',
+                agentId: 'a2',
                 title: 'Sweep the backlog',
                 elapsed: '1m 4s',
             },

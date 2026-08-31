@@ -127,7 +127,7 @@ const defaultSeedBytes = 2 * 1024 * 1024
 /** Never carry more than this much of a partial line between reads. */
 const maxCarryBytes = 4 * 1024 * 1024
 
-interface Tail {
+export interface Tail {
     offset: number
     carry: string
 }
@@ -141,7 +141,7 @@ interface Tail {
  * account's config dir and Claude Code rewrites its tail, so offsets do not
  * survive the move (the same reason sessionScanner re-reads from the top).
  */
-function readNewLines(path: string, tail: Tail, seedBytes: number): string[] | null {
+export function readNewLines(path: string, tail: Tail, seedBytes: number): string[] | null {
     let fd: number
     try {
         fd = openSync(path, 'r')
@@ -192,7 +192,7 @@ function readNewLines(path: string, tail: Tail, seedBytes: number): string[] | n
     }
 }
 
-function parseTimestamp(value: unknown): number {
+export function parseTimestamp(value: unknown): number {
     if (typeof value === 'number' && Number.isFinite(value)) return value
     if (typeof value !== 'string') return 0
     const ms = Date.parse(value)
@@ -209,7 +209,7 @@ function parseTimestamp(value: unknown): number {
  * to be the "851.9k tokens" the TUI showed for a five-agent workflow. The
  * middle reading is the one that matches what he was looking at.
  */
-function countTokens(usage: Record<string, unknown> | null | undefined): number {
+export function countTokens(usage: Record<string, unknown> | null | undefined): number {
     if (!usage) return 0
     const n = (key: string): number => {
         const value = usage[key]
@@ -218,7 +218,7 @@ function countTokens(usage: Record<string, unknown> | null | undefined): number 
     return n('input_tokens') + n('output_tokens') + n('cache_creation_input_tokens')
 }
 
-function usageOf(record: Record<string, unknown>): Record<string, unknown> | null {
+export function usageOf(record: Record<string, unknown>): Record<string, unknown> | null {
     const message = record.message
     if (!message || typeof message !== 'object') return null
     const usage = (message as Record<string, unknown>).usage

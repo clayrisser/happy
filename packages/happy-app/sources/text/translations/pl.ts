@@ -1000,6 +1000,17 @@ export const pl: TranslationStructure = {
         agentFinished: ({ duration }: { duration: string }) => `Agent zakończył · ${duration}`,
     },
 
+    subagent: {
+        running: 'Działa',
+        done: 'Gotowe',
+        failed: 'Niepowodzenie',
+        quiet: ({ duration }: { duration: string }) => `cisza od ${duration}`,
+        loading: 'Wczytywanie transkrypcji…',
+        unavailable: 'Transkrypcja niedostępna',
+        result: 'Wynik',
+        title: 'Agent',
+    },
+
     codex: {
         // Codex permission dialog buttons
         permissions: {
