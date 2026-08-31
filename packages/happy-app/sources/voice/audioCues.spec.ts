@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parseWristCueSwift } from '@/utils/wristCues';
-import { ambientForGateKind, audioCues, cueDurationMs, cueSpec, type AudioCueId } from './audioCues';
+import { ambientForGateKind, audioCues, cueDurationMs, cueSpec, heartbeatCount, workingCueFor, type AudioCueId } from './audioCues';
 import { ambientCue, isWaitingCue, type CueSessionState } from './audioCueState';
 import { resolveAudioCues, audioCuesDefaults, muteAudioCue } from '@/sync/settings';
 
@@ -14,7 +14,7 @@ function wristSwift() {
 }
 
 function state(patch: Partial<CueSessionState> = {}): CueSessionState {
-    return { reading: true, working: false, pendingKinds: [], speaking: false, ...patch };
+    return { reading: true, working: false, pendingKinds: [], agents: 0, speaking: false, ...patch };
 }
 
 describe('the cue table', () => {
@@ -23,7 +23,7 @@ describe('the cue table', () => {
         // type system cannot make: the union and the table are edited together.
         const ids: AudioCueId[] = [
             'working', 'waitingPermission', 'waitingQuestion', 'waitingNeedsYou', 'waitingExpiry',
-            'agentStart', 'agentDone', 'agentFailed', 'toolRun', 'skipAhead',
+            'agentStart', 'agentDone', 'agentFailed', 'toolCall', 'reply', 'skipAhead',
         ];
         for (const id of ids) expect(cueSpec(id).id).toBe(id);
         expect(audioCues).toHaveLength(ids.length);
@@ -31,10 +31,9 @@ describe('the cue table', () => {
 
     it('tells working from waiting by rhythm, not pitch alone', () => {
         // A pocket and a noisy room flatten pitch, so the distinction has to
-        // survive with the tones thrown away. Working is one long beat;
-        // every waiting cue is short beats.
+        // survive with the tones thrown away. Working opens with one long
+        // beat, the marker (DROVE-182); every waiting cue is short beats.
         const working = cueSpec('working');
-        expect(working.beats).toHaveLength(1);
         expect(working.beats[0].ms).toBeGreaterThan(150);
         for (const cue of audioCues.filter((entry) => isWaitingCue(entry.id))) {
             for (const beat of cue.beats) expect(beat.ms).toBeLessThan(150);
@@ -87,8 +86,52 @@ describe('the cue table', () => {
         expect(cueSpec('waitingExpiry').rank).toBeGreaterThan(cueSpec('working').rank);
     });
 
-    it('keeps every cue short enough to be a cue', () => {
-        for (const cue of audioCues) expect(cueDurationMs(cue)).toBeLessThanOrEqual(600);
+    it('keeps every EVENT cue short enough to be a cue', () => {
+        for (const cue of audioCues.filter((entry) => entry.kind === 'event')) {
+            expect(cueDurationMs(cue)).toBeLessThanOrEqual(600);
+        }
+    });
+
+    it('keeps the counting heartbeat well inside its own cadence', () => {
+        // DROVE-182: the figure is a marker plus the thread count in Morse,
+        // and however many threads are running it has to leave clear silence
+        // inside the 6s working cadence or it stops being ambient.
+        for (const count of [1, 2, 4, 5, 9, 10, 15, 99]) {
+            const spec = cueSpec(workingCueFor(count));
+            expect(cueDurationMs(spec)).toBeLessThan(3_000);
+        }
+        // The numbers, stated: main alone is 1240ms and ten threads 2340ms.
+        expect(cueDurationMs(cueSpec(workingCueFor(1)))).toBe(1240);
+        expect(cueDurationMs(cueSpec(workingCueFor(10)))).toBe(2340);
+    });
+
+    it('says the thread count in Morse digits, most significant first', () => {
+        // Five symbols a digit is the whole reason for Morse over ticks: the
+        // rhythm is regular at any count, and counting eight ticks by ear is
+        // not a thing anyone can do.
+        const dits = (count: number) => cueSpec(workingCueFor(count)).beats
+            .filter((beat) => beat.hz > 0 && beat.hz !== 196)
+            .map((beat) => (beat.ms > 100 ? '-' : '.'))
+            .join('');
+        expect(dits(1)).toBe('.----');
+        expect(dits(4)).toBe('....-');
+        expect(dits(8)).toBe('---..');
+        expect(dits(10)).toBe('.---------');
+        expect(dits(12)).toBe('.----..---');
+    });
+
+    it('counts the main thread as one, so a lone session is not zero', () => {
+        // DROVE-182, corrected: "number of subagents including main". The
+        // status row counts agents only, and this is the ONE place the two
+        // differ, by exactly one and by a written rule.
+        expect(heartbeatCount(0)).toBe(1);
+        expect(heartbeatCount(8)).toBe(9);
+    });
+
+    it('keeps the ticks quieter than the marker thump', () => {
+        const beats = cueSpec(workingCueFor(3)).beats.filter((beat) => beat.hz > 0);
+        expect(beats[0].gain ?? 1).toBe(1);
+        for (const beat of beats.slice(1)) expect(beat.gain ?? 1).toBeLessThan(1);
     });
 
     it('counts the gaps between beats in the duration', () => {
@@ -114,7 +157,9 @@ describe('the ambient state machine', () => {
     });
 
     it('pulses while working with nothing pending', () => {
-        expect(ambientCue(state({ working: true }))).toBe('working');
+        // Main alone is 1, not 0 (DROVE-182).
+        expect(ambientCue(state({ working: true }))).toBe('working:1');
+        expect(ambientCue(state({ working: true, agents: 4 }))).toBe('working:5');
     });
 
     it('is silent when idle, because silence is the correct signal', () => {
@@ -137,14 +182,14 @@ describe('the ambient state machine', () => {
 
     it('goes silent the instant speech starts, and comes back when it ends', () => {
         const working = state({ working: true });
-        expect(ambientCue(working)).toBe('working');
+        expect(ambientCue(working)).toBe('working:1');
         expect(ambientCue({ ...working, speaking: true })).toBeNull();
-        expect(ambientCue(working)).toBe('working');
+        expect(ambientCue(working)).toBe('working:1');
     });
 
     it('is silent again once the gate is answered', () => {
         expect(ambientCue(state({ working: true, pendingKinds: ['question'] }))).toBe('waitingQuestion');
-        expect(ambientCue(state({ working: true, pendingKinds: [] }))).toBe('working');
+        expect(ambientCue(state({ working: true, pendingKinds: [] }))).toBe('working:1');
         expect(ambientCue(state({ working: false, pendingKinds: [] }))).toBeNull();
     });
 });
@@ -167,9 +212,9 @@ describe('the cue settings', () => {
     });
 
     it('silences one cue and un-silences it, leaving the rest alone', () => {
-        const muted = muteAudioCue({ audioCues: {} }, 'toolRun', true);
-        expect(resolveAudioCues(muted).muted).toEqual(['toolRun']);
+        const muted = muteAudioCue({ audioCues: {} }, 'toolCall', true);
+        expect(resolveAudioCues(muted).muted).toEqual(['toolCall']);
         expect(resolveAudioCues(muted).heartbeat).toBe(true);
-        expect(resolveAudioCues(muteAudioCue(muted, 'toolRun', false)).muted).toEqual([]);
+        expect(resolveAudioCues(muteAudioCue(muted, 'toolCall', false)).muted).toEqual([]);
     });
 });

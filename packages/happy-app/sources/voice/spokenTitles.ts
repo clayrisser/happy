@@ -25,13 +25,36 @@ import type { AudioCues } from '@/sync/settings';
  *    invariant (DROVE-126) and the skip-ahead cut for free: when the voice is
  *    behind, titles are stepped over with everything else.
  * 3. AGENTS ARE EXEMPT FROM THE FOLD. A run of thirty greps must not become
- *    thirty spoken lines, so at most `titlesPerRun` tool titles are said per
+ *    thirty spoken LINES, so at most `titlesPerRun` tool titles are said per
  *    RUN of consecutive tool calls and the rest of the run goes unnamed, the
  *    same way the transcript folds a run into one row (DROVE-84). An agent
  *    spawn is always named: it is the one Clay said he most wants to hear.
- * 4. A TOOL FINISHING IS NOT AN EVENT. One cue per call is exactly what makes
- *    a cue system unusable inside a minute. Only agents get a finish and a
- *    failure sound, because an agent is a thing you were waiting on.
+ *
+ *    The fold survives DROVE-174 and it matters more there than it did here.
+ *    Titles are SPEECH, and a cue may only sound in a gap between sentences;
+ *    a run that spoke thirty titles would leave no gaps at all and every tick
+ *    in the burst would go stale unheard. Three titles then quiet is what
+ *    gives the ticks somewhere to land.
+ * 4. A TOOL FINISHING IS NOT AN EVENT. Only agents get a finish and a failure
+ *    sound, because an agent is a thing you were waiting on. A tool finishing
+ *    would double the rate and say nothing the start did not.
+ *
+ * DROVE-174 overturned one of DROVE-112's calls and added a cue. Clay: "when
+ * in reading mode, every response and tool call should have a sound".
+ *
+ * 5. EVERY TOOL CALL TICKS. DROVE-112 folded the earcon to one per RUN;
+ *    `toolCall` now fires per CALL. A burst of twenty calls is twenty ticks,
+ *    which is the information — a lot is happening — and the tick is 28ms so
+ *    twenty of them rattle rather than queue up into ten seconds of ticking
+ *    after the burst is over. The mixer's 4-second staleness rule is what
+ *    holds that: a tick that could not be heard while it was still true is
+ *    dropped, not played late.
+ * 6. A REPLY HAS ITS OWN SOUND. `reply`, once per turn, on the FIRST prose
+ *    that turn produces. It is played BEFORE the first sentence rather than
+ *    over it, and by ordering rather than by delay: this runs from inside the
+ *    reader's own message walk, before that prose has been enqueued, so the
+ *    cue reaches the device first and the voice is never held for it. Nothing
+ *    is allowed to delay speech, so "before" has to be free.
  *
  * Pure apart from the small amount of memory a fold needs, and that memory is
  * a field of one object the service owns, so a test drives it directly.
@@ -109,13 +132,16 @@ export class SpokenTitleTracker {
     private seen = new Map<string, ToolCall['state']>();
     /** Tool titles already spoken inside the current run. */
     private spokenInRun = 0;
-    /** A run of tool calls is open: its earcon has been played. */
+    /** A run of tool calls is open. The TITLES fold to it; the ticks do not. */
     private inRun = false;
+    /** This turn's reply cue has been played. Once per turn (DROVE-174). */
+    private repliedInTurn = false;
 
     reset(): void {
         this.seen.clear();
         this.spokenInRun = 0;
         this.inRun = false;
+        this.repliedInTurn = false;
     }
 
     /** How many tool titles the current run has used. For the tests. */
@@ -129,17 +155,26 @@ export class SpokenTitleTracker {
      */
     observe(message: Message, settings: Required<AudioCues>): TitleDecision {
         if (message.kind === 'user-text') {
-            // A new turn ends whatever run was open.
+            // A new turn ends whatever run was open, and owes a reply cue.
             this.spokenInRun = 0;
             this.inRun = false;
+            this.repliedInTurn = false;
             return nothing;
         }
         if (message.kind === 'agent-text') {
             // Prose between two tool calls is what makes them two runs, which
-            // is the same rule the transcript folds by.
+            // is the same rule the transcript folds by. Thinking is not prose
+            // and does not end a run (DROVE-181).
             if (!message.isThinking && typeof message.text === 'string' && message.text.length > 0) {
                 this.spokenInRun = 0;
                 this.inRun = false;
+                // The reply cue, once per turn, on the first prose of it
+                // (DROVE-174). Fired here rather than on the sentence so it
+                // reaches the device before the sentence is even queued.
+                if (!this.repliedInTurn) {
+                    this.repliedInTurn = true;
+                    return { events: ['reply'], title: null };
+                }
             }
             return nothing;
         }
@@ -157,11 +192,14 @@ export class SpokenTitleTracker {
                 events.push('agentStart');
                 if (settings.speakTitles && settings.speakAgentTitles) title = spokenToolTitle(tool);
             } else {
+                // One tick per CALL (DROVE-174). The run still exists, and it
+                // still folds the spoken TITLES below; what it no longer does
+                // is swallow the sound of every call after the first.
                 if (!this.inRun) {
                     this.inRun = true;
                     this.spokenInRun = 0;
-                    events.push('toolRun');
                 }
+                events.push('toolCall');
                 if (settings.speakTitles && settings.speakToolTitles && this.spokenInRun < settings.titlesPerRun) {
                     this.spokenInRun += 1;
                     title = spokenToolTitle(tool);

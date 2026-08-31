@@ -136,6 +136,8 @@ export const AudioCuesSchema = z.object({
     speakTitles: z.boolean().optional(),
     speakAgentTitles: z.boolean().optional(),
     speakToolTitles: z.boolean().optional(),
+    speakThinking: z.boolean().optional(),
+    speakGates: z.boolean().optional(),
     titlesPerRun: z.number().optional(),
     toolCuesPerMinute: z.number().optional(),
     agentCuesPerMinute: z.number().optional(),
@@ -159,8 +161,19 @@ export const audioCueWaitingIntervalRange = { min: 1, max: 30 } as const;
  * Agent spawns are exempt, because that is the one Clay most wants to hear.
  */
 export const audioCueTitlesPerRunRange = { min: 0, max: 10 } as const;
-/** Cap on EARCONS per minute, per lane, with the excess dropped silently. */
-export const audioCueRateRange = { min: 1, max: 60 } as const;
+/**
+ * Cap on EARCONS per minute, per lane. ZERO MEANS NO CAP, and zero is the
+ * default (DROVE-174).
+ *
+ * DROVE-112 capped tool cues at 6 a minute and dropped the excess in silence,
+ * which is exactly what Clay then asked to be undone: "when in reading mode,
+ * every response and tool call should have a sound". A cap that silently eats
+ * what he asked to hear is worse than no cap, so it is now a visible setting
+ * that defaults to off. The rate is still bounded, by two things that do not
+ * lie about it: a cue is dropped if it cannot be heard within four seconds of
+ * the thing it is about, and it may only sound in a gap in the speech.
+ */
+export const audioCueRateRange = { min: 0, max: 240 } as const;
 
 export const audioCuesDefaults: Required<AudioCues> = {
     on: true,
@@ -172,9 +185,18 @@ export const audioCuesDefaults: Required<AudioCues> = {
     speakTitles: true,
     speakAgentTitles: true,
     speakToolTitles: true,
+    // Thinking is read by default (DROVE-181). It is what the model is doing
+    // for most of a long turn, and hearing it is the difference between a
+    // silent minute and knowing the answer is coming.
+    speakThinking: true,
+    // A gate waiting on him is read aloud by default (DROVE-188). This is the
+    // one cue that has to say WHAT is waiting: `git diff` and `rm -rf` are the
+    // same beep.
+    speakGates: true,
     titlesPerRun: 3,
-    toolCuesPerMinute: 6,
-    agentCuesPerMinute: 12,
+    // No cap, both lanes. See audioCueRateRange.
+    toolCuesPerMinute: 0,
+    agentCuesPerMinute: 0,
 };
 
 /**
@@ -190,6 +212,22 @@ export const audioCuesDefaults: Required<AudioCues> = {
  */
 export const asideRateScale = 1.22;
 export const asidePitchScale = 1.18;
+/**
+ * How the model THINKING sounds against the model answering (DROVE-181).
+ *
+ * The opposite direction from an aside, and deliberately. An aside is one line
+ * and can afford to be quick and bright; a thought is a paragraph, sometimes
+ * a minute of them, and reading a paragraph fast and high is exhausting.
+ * Lower and a shade slower reads as an undertone, which is what a thought is.
+ * Volume would have been the obvious axis and the native module still takes
+ * none per utterance, so pitch carries it, the way it carries the aside.
+ *
+ * Not a setting, for the same reason the aside's numbers are not: the point is
+ * that thinking never sounds like the answer, and a slider that can be dragged
+ * back to 1.0 would switch that distinction off without saying so.
+ */
+export const thinkingPitchScale = 0.85;
+export const thinkingRateScale = 0.96;
 /**
  * The absolute rate an aside may reach, above the speed slider's own maximum.
  * The slider bounds what the USER picks for prose; it should not stop a title
@@ -576,6 +614,8 @@ export function resolveAudioCues(settings: Pick<Settings, 'audioCues'>): Require
         speakTitles: raw.speakTitles ?? audioCuesDefaults.speakTitles,
         speakAgentTitles: raw.speakAgentTitles ?? audioCuesDefaults.speakAgentTitles,
         speakToolTitles: raw.speakToolTitles ?? audioCuesDefaults.speakToolTitles,
+        speakThinking: raw.speakThinking ?? audioCuesDefaults.speakThinking,
+        speakGates: raw.speakGates ?? audioCuesDefaults.speakGates,
         titlesPerRun: Math.round(clamp(raw.titlesPerRun, audioCuesDefaults.titlesPerRun, audioCueTitlesPerRunRange)),
         toolCuesPerMinute: Math.round(
             clamp(raw.toolCuesPerMinute, audioCuesDefaults.toolCuesPerMinute, audioCueRateRange),

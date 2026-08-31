@@ -235,10 +235,12 @@ function AgentTextBlock(props: {
   if (props.message.isThinking) {
     return (
       <ThinkingBlock
+        messageId={props.message.id}
         text={props.message.text}
         startedAt={props.message.createdAt}
         live={props.live === true}
         sessionId={props.sessionId}
+        onSentencePress={readFromSentence}
       />
     );
   }
@@ -277,16 +279,36 @@ function AgentTextBlock(props: {
   );
 }
 
+/**
+ * The folded reasoning row, and the reading mark inside it (DROVE-181).
+ *
+ * READING A THINKING BLOCK DOES NOT EXPAND IT. That was the open question on
+ * the ticket and this is the answer, with the reason: the block is collapsed
+ * by default, and expanding it under the voice would move every row below it
+ * while he is reading — sometimes for a minute of reasoning, sometimes with
+ * his thumb already on the screen. DROVE-146 settled that reading must not
+ * move the view, and an auto-expand is the view moving itself.
+ *
+ * So the mark lands in two places instead. The collapsed HEADER lights while
+ * any sentence of this block is being read, which is the visible answer to
+ * "what is it saying?" without a layout change; and if he opens the block the
+ * sentence itself is marked exactly as a reply's is, because the same
+ * `highlightSentence` goes through. Tapping a sentence inside an open block
+ * seeks to it, the same as anywhere else.
+ */
 function ThinkingBlock(props: {
+  messageId: string;
   text: string;
   startedAt: number;
   live: boolean;
   sessionId: string;
+  onSentencePress: (sentence: string) => void;
 }) {
   const { theme } = useUnistyles();
   const { expanded, toggle, collapse, headerRef, footerRef } = useInlineDisclosure();
   const thinking = React.useMemo(() => extractThinkingText(props.text), [props.text]);
   const elapsedSeconds = useElapsedTime(props.live ? props.startedAt : null);
+  const spokenSentence = useSpokenSentence(props.messageId);
   const label = props.live
     ? `${t('message.thinkingNow')} ${formatWorkDuration(elapsedSeconds * 1000)}`
     : t('message.thoughtProcess');
@@ -301,8 +323,17 @@ function ThinkingBlock(props: {
         hitSlop={tapSlopFor(disclosureHeaderHeight)}
         style={({ pressed }) => [styles.disclosureHeader, pressed && styles.disclosurePressed]}
       >
-        <Ionicons name="sparkles-outline" size={13} color={theme.colors.textSecondary} />
-        <Text style={styles.disclosureLabel} numberOfLines={1}>{label}</Text>
+        <Ionicons
+          name="sparkles-outline"
+          size={13}
+          color={spokenSentence !== null ? theme.colors.text : theme.colors.textSecondary}
+        />
+        <Text
+          style={[styles.disclosureLabel, spokenSentence !== null && styles.disclosureLabelReading]}
+          numberOfLines={1}
+        >
+          {label}
+        </Text>
         <Ionicons
           name={expanded ? 'chevron-down' : 'chevron-forward'}
           size={13}
@@ -312,7 +343,12 @@ function ThinkingBlock(props: {
       {expanded ? (
         <>
           <View style={styles.disclosureBody}>
-            <MarkdownView markdown={thinking} sessionId={props.sessionId} />
+            <MarkdownView
+              markdown={thinking}
+              sessionId={props.sessionId}
+              highlightSentence={spokenSentence}
+              onSentencePress={props.onSentencePress}
+            />
           </View>
           <DisclosureFooter
             label={label}
@@ -582,6 +618,16 @@ const styles = StyleSheet.create((theme) => ({
     fontSize: 13,
     lineHeight: 20,
     color: theme.colors.textSecondary,
+  },
+  /**
+   * The collapsed thinking row while its reasoning is being read (DROVE-181).
+   * Weight and colour rather than a background: the block stays the muted
+   * thing it is, and nothing about the row's size changes, so the list does
+   * not reflow under the voice.
+   */
+  disclosureLabelReading: {
+    color: theme.colors.text,
+    fontWeight: '600',
   },
   disclosureFooter: {
     // The container's margin already clears the indicator, as on the header.

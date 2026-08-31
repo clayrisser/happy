@@ -56,9 +56,12 @@ export function renderCueSamples(spec: AudioCueSpec, gain: number): Float32Array
         if (index > 0) cursor += Math.round((spec.gapMs / 1000) * cueSampleRate);
         const beat = spec.beats[index];
         const length = Math.round((beat.ms / 1000) * cueSampleRate);
+        // Per-beat loudness (DROVE-182): the heartbeat's agent ticks are
+        // quieter than its thump, and both live in one figure.
+        const beatLevel = level * Math.max(0, Math.min(1, beat.gain ?? 1));
         for (let i = 0; i < length && cursor + i < total; i++) {
             const fade = Math.min(1, Math.min(i, length - 1 - i) / envelope);
-            samples[cursor + i] = level * fade * Math.sin((2 * Math.PI * beat.hz * i) / cueSampleRate);
+            samples[cursor + i] = beatLevel * fade * Math.sin((2 * Math.PI * beat.hz * i) / cueSampleRate);
         }
         cursor += length;
     }

@@ -69,19 +69,34 @@ describe('SpokenTitleTracker', () => {
         config = { ...audioCuesDefaults };
     });
 
-    it('plays one cue when a RUN of tool calls starts, never one per call', () => {
-        const first = tracker.observe(toolCall('t1'), config);
-        const second = tracker.observe(toolCall('t2'), config);
-        const third = tracker.observe(toolCall('t3'), config);
-        expect(first.events).toEqual(['toolRun']);
-        expect(second.events).toEqual([]);
-        expect(third.events).toEqual([]);
+    it('ticks once per CALL, not once per run', () => {
+        // DROVE-174 overturns DROVE-112 here. Clay: "when in reading mode,
+        // every response and tool call should have a sound". Twenty calls is
+        // twenty ticks; the tick is 28ms so a burst rattles.
+        for (const id of ['t1', 't2', 't3']) {
+            expect(tracker.observe(toolCall(id), config).events).toEqual(['toolCall']);
+        }
+    });
+
+    it('still folds the TITLES per run, which is what leaves gaps for the ticks', () => {
+        config = { ...config, titlesPerRun: 1 };
+        const said = ['t1', 't2', 't3']
+            .map((id, i) => tracker.observe(toolCall(id, { description: `step ${i}` }), config).title);
+        expect(said).toEqual(['step 0', null, null]);
     });
 
     it('starts a new run after prose, the way the transcript folds them', () => {
-        expect(tracker.observe(toolCall('t1'), config).events).toEqual(['toolRun']);
-        tracker.observe(agentText('m1'), config);
-        expect(tracker.observe(toolCall('t2'), config).events).toEqual(['toolRun']);
+        expect(tracker.observe(toolCall('t1'), config).events).toEqual(['toolCall']);
+        // The prose also carries the turn's one reply cue (DROVE-174).
+        expect(tracker.observe(agentText('m1'), config).events).toEqual(['reply']);
+        expect(tracker.observe(toolCall('t2'), config).events).toEqual(['toolCall']);
+    });
+
+    it('sounds the reply cue once a turn, on the first prose of it', () => {
+        expect(tracker.observe(agentText('m1'), config).events).toEqual(['reply']);
+        expect(tracker.observe(agentText('m2'), config).events).toEqual([]);
+        tracker.observe(userText('u1'), config);
+        expect(tracker.observe(agentText('m3'), config).events).toEqual(['reply']);
     });
 
     it('says at most the run cap of tool titles and drops the rest silently', () => {
@@ -132,8 +147,9 @@ describe('SpokenTitleTracker', () => {
         expect(again.events).toEqual([]);
     });
 
-    it('says nothing for a message that is neither a tool call nor a boundary', () => {
-        expect(tracker.observe(agentText('m1'), config)).toEqual({ events: [], title: null });
+    it('says nothing for a boundary, and nothing for prose past the first', () => {
+        expect(tracker.observe(agentText('m1'), config)).toEqual({ events: ['reply'], title: null });
+        expect(tracker.observe(agentText('m2'), config)).toEqual({ events: [], title: null });
         expect(tracker.observe(userText('u1'), config)).toEqual({ events: [], title: null });
     });
 
@@ -160,8 +176,10 @@ describe('SpokenTitleTracker', () => {
     });
 
     it('closes a run at the start of a new turn', () => {
-        expect(tracker.observe(toolCall('t1'), config).events).toEqual(['toolRun']);
+        config = { ...config, titlesPerRun: 1 };
+        expect(tracker.observe(toolCall('t1', { description: 'one' }), config).title).toBe('one');
+        expect(tracker.observe(toolCall('t2', { description: 'two' }), config).title).toBeNull();
         tracker.observe(userText('u1'), config);
-        expect(tracker.observe(toolCall('t2'), config).events).toEqual(['toolRun']);
+        expect(tracker.observe(toolCall('t3', { description: 'three' }), config).title).toBe('three');
     });
 });

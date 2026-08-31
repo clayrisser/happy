@@ -1,4 +1,4 @@
-import { cueDurationMs, cueSpec, type AudioCueId } from './audioCues';
+import { cueDurationMs, cueSpec, isWorkingCue, type AudioCueId } from './audioCues';
 import { ambientCue, isWaitingCue, type CueSessionState } from './audioCueState';
 import type { AudioCues } from '@/sync/settings';
 
@@ -10,13 +10,29 @@ import type { AudioCues } from '@/sync/settings';
  * object. Everything that wants to be heard asks here, and here is where the
  * rules that make it bearable live:
  *
- *   SPEECH ALWAYS WINS. A cue never plays over a spoken sentence. It waits.
+ *   SPEECH ALWAYS WINS, AND IT WINS BEFORE IT STARTS (DROVE-174). Clay:
+ *     "Damn don't let the sound effects stop talking". DROVE-112's rule was
+ *     "nothing plays over speech", checked at the instant a cue STARTED, and
+ *     that is not the same rule: the reader is free to begin the next sentence
+ *     ten milliseconds later, so a 500ms cue landed on top of it anyway.
+ *
+ *     A cue may now only start in a GENUINE GAP — nothing at the synthesiser
+ *     AND nothing queued to be said. `speechPending` is the second half, and
+ *     the reader is the only thing that knows it. If no such gap opens before
+ *     the cue goes stale, THE CUE IS DROPPED. Never the speech, never a pause
+ *     in the speech, never a duck. That is the whole ordering: if the audio
+ *     path cannot mix a cue with the synthesiser, the cue loses.
+ *
+ *     The other half of the same bug was not in this file at all; see the note
+ *     on `keepAudioSessionActive` in cuePlayer.ts.
  *   STALE CUES ARE DROPPED, NOT PLAYED LATE. A cue is a claim about NOW; one
  *     that has been queued longer than `staleMs` is no longer true and playing
  *     it says something false rather than something late.
- *   RATE, NOT SOUND, IS THE HARD PART. This session runs dozens of tools a
- *     minute. Tool cues are folded to one per RUN by the caller and capped
- *     again here per minute, with the excess dropped in silence.
+ *   RATE IS A SETTING, NOT A SECRET (DROVE-174). This session runs dozens of
+ *     tools a minute and Clay wants to hear every one of them. The per-minute
+ *     caps are still here and are still enforced on ACCEPTANCE, but they are
+ *     settings now and they default to OFF, because a cap that silently drops
+ *     what he asked to hear is the behaviour this ticket exists to undo.
  *   AMBIENT YIELDS TO EVENTS. A heartbeat under an earcon is mush.
  *
  * Driven by `tick`, not by timers of its own. The owner calls it a few times a
@@ -37,6 +53,16 @@ export interface AudioCueMixerOptions {
     play: (id: AudioCueId, volume: number) => void;
     /** The live settings, read at every decision so a slider applies at once. */
     settings: () => Required<AudioCues>;
+    /**
+     * Is there anything the reader still has to SAY? (DROVE-174.)
+     *
+     * Speech in flight is `state.speaking`; this is the sentence that has not
+     * started yet. Without it a cue slips into the few milliseconds between
+     * two sentences, and on iOS a cue starting there did not merely overlap —
+     * expo-audio tore the audio session down behind it and the utterance
+     * stopped. Left out, the mixer behaves as DROVE-112 did.
+     */
+    speechPending?: () => boolean;
 }
 
 interface QueuedEvent {
@@ -44,9 +70,20 @@ interface QueuedEvent {
     at: number;
 }
 
-/** Which cap an event cue counts against. */
+/**
+ * Which cap an event cue counts against.
+ *
+ * The tool lane is the high-rate one; everything else is rare enough to share
+ * a lane. `reply` sits in the agent lane because a reply arriving is the same
+ * order of frequency as an agent spawning.
+ */
 function laneFor(id: AudioCueId): 'tool' | 'agent' {
-    return id === 'toolRun' ? 'tool' : 'agent';
+    return id === 'toolCall' ? 'tool' : 'agent';
+}
+
+/** A cap of zero means NO cap. The default, since DROVE-174. */
+function capped(cap: number, used: number): boolean {
+    return cap > 0 && used >= cap;
 }
 
 export class AudioCueMixer {
@@ -54,7 +91,15 @@ export class AudioCueMixer {
     private readonly playCue: (id: AudioCueId, volume: number) => void;
     private readonly settings: () => Required<AudioCues>;
 
-    private state: CueSessionState = { reading: false, working: false, pendingKinds: [], speaking: false };
+    private readonly speechPending: () => boolean;
+
+    private state: CueSessionState = {
+        reading: false,
+        working: false,
+        pendingKinds: [],
+        agents: 0,
+        speaking: false,
+    };
     private queue: QueuedEvent[] = [];
     /** When the sound currently in the air will be over. */
     private playingUntil = 0;
@@ -72,6 +117,7 @@ export class AudioCueMixer {
         this.now = options.now;
         this.playCue = options.play;
         this.settings = options.settings;
+        this.speechPending = options.speechPending ?? (() => false);
     }
 
     get dropped(): number {
@@ -120,7 +166,7 @@ export class AudioCueMixer {
         const cap = lane === 'tool' ? settings.toolCuesPerMinute : settings.agentCuesPerMinute;
         const at = this.now();
         this.trimStamps(lane, at);
-        if (this.stamps[lane].length >= cap) {
+        if (capped(cap, this.stamps[lane].length)) {
             this.droppedCount += 1;
             return;
         }
@@ -142,18 +188,25 @@ export class AudioCueMixer {
             this.queue = [];
             return;
         }
-        // Speech in flight, or a cue still sounding. Nothing else may start.
-        if (this.state.speaking || at < this.playingUntil) return;
+        // Staleness is decided FIRST, whatever is blocking. A cue that has
+        // waited four seconds has stopped being true, and it makes no
+        // difference whether it was speech or another cue that held it up: if
+        // it were dropped only once the way was clear, a long reply would end
+        // with the whole of a tool burst rattling out after the fact.
+        this.dropStale(at);
 
-        // Events first, and drop whatever has stopped being true while it
-        // waited rather than playing it late.
-        while (this.queue.length > 0) {
-            const next = this.queue[0];
-            this.queue.shift();
-            if (at - next.at > cueStaleMs) {
-                this.droppedCount += 1;
-                continue;
-            }
+        // Speech in flight, speech about to start, or a cue still sounding.
+        // Nothing else may start. The middle one is DROVE-174's whole fix: a
+        // gap between two sentences is not silence, it is the space a cue used
+        // to steal (see the header). The cue waits and may go stale; the
+        // sentence is never the thing that gives way.
+        if (this.state.speaking || at < this.playingUntil) return;
+        if (this.queue.length > 0 && this.speechPending()) return;
+
+        // Events first. Anything that stopped being true while it waited has
+        // already gone, above.
+        const next = this.queue.shift();
+        if (next !== undefined) {
             this.start(next.id, at);
             this.eventEndedAt = this.playingUntil;
             return;
@@ -165,10 +218,15 @@ export class AudioCueMixer {
             this.ambientId = null;
             return;
         }
+        // Every working variant is one settings row (DROVE-182), so a mute on
+        // 'working' silences the whole family however many agents are out.
         if (settings.muted.includes(pulse)) return;
+        if (isWorkingCue(pulse) && settings.muted.includes('working')) return;
         // A change of state pulses at once rather than waiting out the old
         // clock: going from working to waiting-on-Clay is exactly the moment
-        // the sound is supposed to tell him something.
+        // the sound is supposed to tell him something. An agent starting or
+        // finishing changes the working variant, so the NEXT beat carries the
+        // new count without waiting out the cadence (DROVE-182).
         if (pulse !== this.ambientId) {
             this.ambientId = pulse;
             this.ambientAt = Number.NEGATIVE_INFINITY;
@@ -195,6 +253,14 @@ export class AudioCueMixer {
         const spec = cueSpec(id);
         this.playingUntil = at + cueDurationMs(spec);
         this.playCue(id, Math.max(0, Math.min(1, this.settings().volume * spec.gain)));
+    }
+
+    /** Everything that waited too long, gone rather than played late. */
+    private dropStale(at: number): void {
+        while (this.queue.length > 0 && at - this.queue[0].at > cueStaleMs) {
+            this.queue.shift();
+            this.droppedCount += 1;
+        }
     }
 
     private trimStamps(lane: 'tool' | 'agent', at: number): void {

@@ -14,9 +14,11 @@ import { base64Encode, renderCueWav } from './cueTone';
  * going silent is the worst outcome this feature can have, and DROVE-146 is a
  * live example of how quietly that happens:
  *
- *   1. It never touches the audio SESSION. No setAudioModeAsync, no
- *      setIsAudioActiveAsync. The speech module owns the category and a cue
- *      that reconfigured it under a running utterance could stop the voice.
+ *   1. It never touches the audio SESSION, and — since DROVE-174 — it does not
+ *      let expo-audio touch it either. No setAudioModeAsync, no
+ *      setIsAudioActiveAsync, and every player built with
+ *      `keepAudioSessionActive: true`. See the note on that constant: the
+ *      library's own default was what stopped the voice.
  *   2. It never throws and never rejects. Everything is swallowed. A cue that
  *      cannot be made or cannot be played is a cue nobody hears, which is
  *      exactly what the volume slider at zero already means.
@@ -34,6 +36,33 @@ interface CuePlayerHandle {
 }
 
 type CreatePlayer = (uri: string) => CuePlayerHandle;
+
+/**
+ * THE FIX FOR "the sound effects stop the talking" (DROVE-174).
+ *
+ * `cuePlayer.ts` never called into the audio session, and that was true and
+ * beside the point: expo-audio does it for us. In AudioModule.swift every
+ * player is built with `keepAudioSessionActive` defaulting to FALSE, which
+ * wires `player.onPlaybackComplete = { self.deactivateSession() }`, and
+ * `deactivateSession` waits 100ms and then calls
+ *
+ *     AVAudioSession.sharedInstance().setActive(false, [.notifyOthersOnDeactivation])
+ *
+ * as long as no EXPO-AUDIO player is playing. It never asks whether
+ * AVSpeechSynthesizer is speaking, because it has no idea the synthesiser
+ * exists. `Function("pause")` does the same thing.
+ *
+ * So every cue armed a teardown of the shared session 100ms after it finished,
+ * and any utterance that started inside that window was cut or wedged. That is
+ * DROVE-146's bug exactly — an audio-session change under a running utterance
+ * — arriving from a library rather than from our own code, which is why the
+ * comment above swore it could not happen.
+ *
+ * `keepAudioSessionActive: true` deletes both call sites. The session then
+ * belongs to DroverSpeechModule alone, which is the only thing that should
+ * ever have owned it.
+ */
+const keepAudioSessionActive = true;
 
 interface Entry {
     handle: CuePlayerHandle | null;
@@ -63,7 +92,9 @@ function keyFor(id: AudioCueId, volume: number): string {
 function nativeModules(): { create: CreatePlayer; write: (uri: string, base64: string) => Promise<void>; cacheDir: string } | null {
     if (Platform.OS === 'web') return null;
     try {
-        const audio = require('expo-audio') as { createAudioPlayer: (source: { uri: string }) => CuePlayerHandle };
+        const audio = require('expo-audio') as {
+            createAudioPlayer: (source: { uri: string }, options?: { keepAudioSessionActive?: boolean }) => CuePlayerHandle;
+        };
         const fs = require('expo-file-system/legacy') as {
             writeAsStringAsync: (uri: string, contents: string, options: { encoding: string }) => Promise<void>;
             cacheDirectory: string | null;
@@ -71,7 +102,7 @@ function nativeModules(): { create: CreatePlayer; write: (uri: string, base64: s
         };
         if (!fs.cacheDirectory) return null;
         return {
-            create: (uri: string) => audio.createAudioPlayer({ uri }),
+            create: (uri: string) => audio.createAudioPlayer({ uri }, { keepAudioSessionActive }),
             write: (uri, base64) => fs.writeAsStringAsync(uri, base64, { encoding: fs.EncodingType.Base64 }),
             cacheDir: fs.cacheDirectory,
         };

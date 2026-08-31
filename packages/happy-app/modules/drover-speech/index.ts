@@ -71,6 +71,15 @@ type DroverSpeechModuleType = {
      * build stamp for `onAudioRouteChange` (DROVE-119).
      */
     watchesAudioRoute?: () => boolean;
+    /**
+     * Optional: builds up to 12 have neither. Its presence is the build stamp
+     * for `holdSession`, `onSpeechInterruption` and `onRemoteCommand`
+     * (DROVE-189). A bundle running on an older binary gets false and keeps
+     * the old behaviour rather than claiming a protection it does not have.
+     */
+    handlesInterruptions?: () => boolean;
+    /** Keep the audio session while nothing is speaking. See DROVE-189. */
+    holdSession?: (hold: boolean) => Promise<void>;
     dictationSupport: (localeTag: string | null) => Promise<DictationSupport>;
     startDictation: (localeTag: string | null) => Promise<boolean>;
     /** Resolves with the final transcript. */
@@ -89,6 +98,8 @@ type DroverSpeechModuleType = {
         (eventName: 'onDictationLevel', listener: (event: { level: number }) => void): EventSubscription;
         /** The output route moved: the new output port types, and why (DROVE-119). Build 13 and later. */
         (eventName: 'onAudioRouteChange', listener: (event: { outputs: string[]; reason: string }) => void): EventSubscription;
+        (eventName: 'onSpeechInterruption', listener: (event: { state: 'began' | 'ended'; resumed?: boolean }) => void): EventSubscription;
+        (eventName: 'onRemoteCommand', listener: (event: { command: 'play' | 'pause' | 'toggle' }) => void): EventSubscription;
     };
 };
 
@@ -206,6 +217,61 @@ export function addAudioRouteChangeListener(listener: (outputs: string[], reason
     if (!native) return { remove: () => {} };
     try {
         return native.addListener('onAudioRouteChange', (event) => listener(event.outputs, event.reason));
+    } catch {
+        return { remove: () => {} };
+    }
+}
+
+/**
+ * Whether this binary handles AVAudioSession interruptions and takes
+ * `holdSession` (DROVE-189).
+ *
+ * The same build stamp `audioRouteChangeReported` is. False means an
+ * interruption still leaves the reader dead and the session is still dropped
+ * on a drained queue, which is the state every build up to 12 is in; the
+ * caller keeps the old behaviour rather than calling into nothing.
+ */
+export function speechInterruptionsHandled(): boolean {
+    if (!native) return false;
+    return typeof native.handlesInterruptions === 'function';
+}
+
+/**
+ * Hold the audio session open while nothing is speaking, or let it go
+ * (DROVE-189).
+ *
+ * An app with the audio background mode stays alive only while its session is
+ * ACTIVE. Read-aloud released it on every drained queue, so backgrounding the
+ * app and waiting for the next reply meant iOS suspended the process and the
+ * reply arrived at an app that was not running. A no-op on a build without it.
+ */
+export async function holdAudioSession(hold: boolean): Promise<void> {
+    if (!native || typeof native.holdSession !== 'function') return;
+    try {
+        await native.holdSession(hold);
+    } catch {
+        // A session the OS would not give up is not worth taking the reader
+        // down for; the foreground behaviour is unchanged either way.
+    }
+}
+
+/** An interruption began or ended. Nothing arrives on an older build. */
+export function addSpeechInterruptionListener(
+    listener: (state: 'began' | 'ended', resumed: boolean) => void,
+) {
+    if (!native) return { remove: () => {} };
+    try {
+        return native.addListener('onSpeechInterruption', (event) => listener(event.state, event.resumed === true));
+    } catch {
+        return { remove: () => {} };
+    }
+}
+
+/** Lock-screen or AirPod play/pause. Nothing arrives on an older build. */
+export function addRemoteCommandListener(listener: (command: 'play' | 'pause' | 'toggle') => void) {
+    if (!native) return { remove: () => {} };
+    try {
+        return native.addListener('onRemoteCommand', (event) => listener(event.command));
     } catch {
         return { remove: () => {} };
     }
