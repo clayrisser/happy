@@ -34,6 +34,14 @@ struct SessionListView: View {
                     if let message = store.lastError {
                         BannerRow(text: message, symbol: "exclamationmark.triangle", tint: .red)
                     }
+                    // What is left, above the list of what is running
+                    // (DROVE-131). This screen is where a flip is decided, and
+                    // "which account has room" is the question the flip is an
+                    // answer to, so the glance belongs at the top of it rather
+                    // than behind a menu somewhere else.
+                    if let headroom = store.snapshot.currentAccount {
+                        HeadroomLink(account: headroom)
+                    }
                     ForEach(store.sessions) { session in
                         NavigationLink(value: session) {
                             SessionRow(session: session, flipping: store.flipping.contains(session.id))
@@ -188,8 +196,12 @@ struct SessionDetailView: View {
 
                 // Dictate a message to this session from its facts screen
                 // too (DROVE-92): the same control the transcript's bottom
-                // bar carries, so the mic is wherever the session is.
+                // bar carries, so the mic is wherever the session is. And
+                // since DROVE-130 the draft comes with it — the phrases
+                // accumulate on the store, not in either screen, so walking
+                // from the transcript to here mid-sentence does not lose it.
                 SayLink(session: session)
+                WristDraftBar(session: session)
 
                 Button {
                     store.flip(session)
@@ -300,19 +312,26 @@ private struct AccountLabel: View {
         }
     }
 
-    /// The phone's own words, character for character (DROVE-129).
+    /// The phone's own words, character for character (DROVE-129), naming the
+    /// window the figure is about (DROVE-131).
     ///
     /// `no login`, `Back 3:26 PM`, `51% left` and `not measured` are what
     /// agentInputUsage.ts prints in the composer popup and on the session info
     /// screen. The wrist said "not logged in", lower-cased the "back", and
-    /// showed nothing at all for an account nobody had measured — three
+    /// showed nothing at all for an account nobody had measured: three
     /// different sentences for three states the phone already had names for.
+    ///
+    /// The window rides on the end of the percentage, because a flip decided on
+    /// a bare figure cannot tell an account that is out for the next five hours
+    /// from one that is out for the rest of the week. An unmeasured account
+    /// still says so rather than going blank, which is DROVE-129's rule.
     private var detail: String? {
         if account.loggedIn == false { return "no login" }
         if let backAt = account.backAt, backAt > Date() {
             return "Back \(backAt.formatted(date: .omitted, time: .shortened))"
         }
-        if let headroom = account.headroom { return "\(headroom)% left" }
-        return "not measured"
+        guard let headroom = account.headroom else { return "not measured" }
+        if let limit = account.limit { return "\(headroom)% left · \(limit)" }
+        return "\(headroom)% left"
     }
 }

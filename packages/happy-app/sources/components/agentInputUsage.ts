@@ -30,9 +30,14 @@
 import {
     currentDroverAccountRow,
     droverAccountsUsage,
+    droverFamilyLabel,
+    droverFamilyRows,
+    droverOtherAccounts,
+    droverWindowId,
     usageLimitsFromDroverUsage,
     type DroverAccountUsageRow,
     type DroverOtherAccountRow,
+    type DroverUsageAccountLike,
     type DroverUsageLike,
 } from '@/utils/droverUsage';
 import {
@@ -375,6 +380,69 @@ export function usageAccountBarGroup(
         title: back && title ? `${title} · ${back}` : title,
         active: account.current,
         rows,
+    };
+}
+
+/**
+ * The one limit that is actually stopping you, for a surface with room for one
+ * (DROVE-131).
+ *
+ * The phone's popup shows Session, Week and every family week side by side and
+ * lets Clay rank them himself. A wrist has room for one figure, so the ranking
+ * has to be DECIDED rather than shown, and it is decided here so the wrist and
+ * the phone cannot disagree about which limit is the problem (DROVE-129).
+ *
+ * Most binding is the window with the most USED, which is the same window
+ * `headroom` is computed from: the CLI writes `100 - max(percent)`
+ * (happy-cli src/drover/flip/usage.ts), so `percentLeft` here and the
+ * `headroom` on the same account are two readings of one number and can never
+ * drift apart. The label is the popup's own word for the window, so a wrist
+ * saying "Fable week" and a phone row saying "Fable week" mean the same row.
+ */
+export type DroverBindingLimit = {
+    /** `five_hour`, `seven_day`, `seven_day_fable` — the strip's own ids. */
+    id: string;
+    /** "Session", "Week", "Fable week". */
+    label: string;
+    /** Percent LEFT on it, 0-100. */
+    percentLeft: number;
+    /** Epoch ms it resets; null when the cache never said. */
+    resetsAt: number | null;
+    tone: UsageBarTone;
+};
+
+export function droverBindingLimit(
+    account: DroverUsageAccountLike | null | undefined,
+): DroverBindingLimit | null {
+    const limits = Array.isArray(account?.limits) ? account.limits : [];
+    let worst: (typeof limits)[number] | null = null;
+    for (const row of limits) {
+        if (!row || typeof row.percent !== 'number' || !Number.isFinite(row.percent)) continue;
+        // Strictly greater, so a tie keeps the FIRST row: the cache lists
+        // session before week before the family windows, and the shorter
+        // window is the one that bites first at equal utilisation.
+        if (!worst || row.percent > worst.percent) worst = row;
+    }
+    if (!worst) return null;
+    const percentLeft = Math.round(Math.min(100, Math.max(0, 100 - worst.percent)));
+    const family = worst.scope || worst.family ? droverFamilyLabel(worst) : null;
+    // A kind neither the popup nor this knows is printed as itself rather than
+    // called "Week". `headroom` is computed over every row including the
+    // provider-internal ones, so one of those really can be the binding limit,
+    // and the wrist naming the wrong window is worse than an ugly word.
+    const label = family
+        ? t('agentInput.usagePopup.familyWeek', { family })
+        : worst.kind === 'session'
+            ? t('agentInput.usagePopup.session')
+            : worst.kind === 'weekly_all'
+                ? t('agentInput.usagePopup.week')
+                : worst.kind;
+    return {
+        id: droverWindowId(worst),
+        label,
+        percentLeft,
+        resetsAt: typeof worst.resetsAt === 'number' && Number.isFinite(worst.resetsAt) ? worst.resetsAt : null,
+        tone: usageBarTone(percentLeft),
     };
 }
 

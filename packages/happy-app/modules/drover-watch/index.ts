@@ -162,6 +162,37 @@ export interface DroverAccountRow {
     loggedIn?: boolean;
     /** ISO-8601; when a cooling account is back. Omitted when it is not out. */
     backAt?: string;
+    /**
+     * The account the work is on RIGHT NOW. Omitted, never false, on the
+     * others (DROVE-131).
+     *
+     * The wrist had no way to ask this: `sessions[].account` names the account
+     * each session runs on, and the picker's list is ordered by headroom, so
+     * neither says which one the registry itself calls current. The wrist
+     * needs it for the one glance that answers "can I still work".
+     */
+    current?: boolean;
+    /**
+     * WHICH limit the headroom figure is about — "Session", "Week", "Fable
+     * week" (DROVE-131).
+     *
+     * `headroom` has always been 100 minus the fullest row, so it has always
+     * been the MOST BINDING limit's remaining percentage; the wrist just never
+     * knew which window that was, and a bare "4% left" cannot be acted on
+     * without it. Decided by the phone (agentInputUsage's droverBindingLimit)
+     * rather than by the watch, which cannot import a TypeScript function
+     * (DROVE-129). Omitted when the account carries no limit rows.
+     */
+    limit?: string;
+    /** ISO-8601; when THAT limit resets. Omitted when the cache never said. */
+    resetsAt?: string;
+    /**
+     * The fill colour band for `headroom`, as the phone's bars compute it
+     * (usageBarTone). Sent rather than recomputed on the wrist so the two
+     * surfaces cannot disagree about what counts as nearly out (DROVE-129).
+     * A band a watch build has never heard of reads as `unknown` there.
+     */
+    tone?: 'ample' | 'low' | 'critical' | 'unknown';
 }
 
 /**

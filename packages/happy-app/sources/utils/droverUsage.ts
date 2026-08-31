@@ -78,6 +78,22 @@ export function droverFamilyWindowId(row: Pick<DroverUsageRowLike, 'kind' | 'sco
 }
 
 /**
+ * The window id for ANY usage row, scoped or not.
+ *
+ * `session` becomes `five_hour` and `weekly_all` becomes `seven_day`, the two
+ * ids the strip already knows; a scoped row keeps its family in the id. Pulled
+ * out of usageLimitsFromDroverUsage so the wrist's binding-limit row
+ * (DROVE-131) names a window with the same string the strip does, rather than
+ * a second spelling that would look like a different limit (DROVE-129).
+ */
+export function droverWindowId(row: Pick<DroverUsageRowLike, 'kind' | 'scope' | 'family'>): string {
+    if (row.scope || row.family) return droverFamilyWindowId(row);
+    if (row.kind === 'session') return 'five_hour';
+    if (row.kind === 'weekly_all') return 'seven_day';
+    return row.kind;
+}
+
+/**
  * The current account's rows in the shape agentState.usageLimits takes.
  *
  * `session` becomes `five_hour` and `weekly_all` becomes `seven_day`, the two

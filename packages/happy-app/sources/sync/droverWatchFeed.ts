@@ -23,6 +23,8 @@ import { isSessionArchived } from './sessionArchive';
 import { liveStatusSince, liveStatusWatchLine } from '@/utils/liveStatus';
 import { sessionDisplayTitle } from '@/utils/sessionTitle';
 import { currentDroverAccountRow } from '@/utils/droverUsage';
+import type { DroverUsageAccountLike } from '@/utils/droverUsage';
+import { droverBindingLimit } from '@/components/agentInputUsage';
 import { resolveSessionState } from './sessionState';
 import {
     addDroverAnswerListener,
@@ -120,12 +122,7 @@ export function collectAccountRows(
     if (!freshest) return [];
     const rows: DroverAccountRow[] = [];
     for (const entry of freshest.accounts) {
-        const account = entry as {
-            name?: unknown;
-            loggedIn?: unknown;
-            headroom?: unknown;
-            cooling?: { until?: unknown } | null;
-        };
+        const account = entry as DroverUsageAccountLike & { cooling?: { until?: unknown } | null };
         if (!account || typeof account.name !== 'string' || !account.name) continue;
         const headroom = typeof account.headroom === 'number' && Number.isFinite(account.headroom)
             ? Math.round(Math.min(100, Math.max(0, account.headroom)))
@@ -133,6 +130,11 @@ export function collectAccountRows(
         const until = account.cooling && typeof account.cooling.until === 'number'
             ? account.cooling.until
             : undefined;
+        // WHICH limit that headroom is about, decided by the phone's own
+        // ranking rather than re-derived on the wrist (DROVE-131, DROVE-129).
+        // Its percentLeft is the same number `headroom` is — both are 100
+        // minus the fullest row — so the bar and the label always agree.
+        const binding = droverBindingLimit(account);
         rows.push({
             name: account.name,
             // Omitted, never null: WatchConnectivity payloads take
@@ -140,6 +142,14 @@ export function collectAccountRows(
             ...(headroom === undefined ? {} : { headroom }),
             ...(account.loggedIn === false ? { loggedIn: false } : { loggedIn: true }),
             ...(until ? { backAt: new Date(until).toISOString() } : {}),
+            ...(account.current ? { current: true } : {}),
+            ...(binding
+                ? {
+                    limit: binding.label,
+                    tone: binding.tone,
+                    ...(binding.resetsAt ? { resetsAt: new Date(binding.resetsAt).toISOString() } : {}),
+                }
+                : {}),
         });
     }
     // Most headroom first, logged-out last: the wrist reads top down and the
@@ -267,7 +277,13 @@ function sameSessionSet(a: DroverSession[], b: DroverSession[]): boolean {
 
 function sameAccountRows(a: DroverAccountRow[], b: DroverAccountRow[]): boolean {
     if (a.length !== b.length) return false;
-    const key = (r: DroverAccountRow) => `${r.name}|${r.headroom ?? ''}|${r.loggedIn}|${r.backAt ?? ''}`;
+    // The binding limit and which account is current are in the key because
+    // the wrist SHOWS them (DROVE-131): the window can change from Session to
+    // Fable week, or the current account can move under a flip, with every
+    // headroom figure unchanged, and a publish keyed only on the numbers would
+    // leave the wrist naming yesterday's limit.
+    const key = (r: DroverAccountRow) =>
+        `${r.name}|${r.headroom ?? ''}|${r.loggedIn}|${r.backAt ?? ''}|${r.current === true}|${r.limit ?? ''}|${r.resetsAt ?? ''}|${r.tone ?? ''}`;
     return a.every((row, i) => key(row) === key(b[i]));
 }
 
