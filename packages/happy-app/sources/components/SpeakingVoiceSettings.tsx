@@ -1,6 +1,7 @@
 import React from 'react';
 import { Linking, Platform, Pressable, View } from 'react-native';
 import Slider from '@react-native-community/slider';
+import { useBackSwipeLock } from '@/hooks/useBackSwipeLock';
 import { Ionicons } from '@expo/vector-icons';
 import { useUnistyles } from 'react-native-unistyles';
 import { speakUtterance, stopSpeaking, type SpeechVoice } from 'drover-speech';
@@ -87,6 +88,9 @@ interface SliderRowProps {
 
 function SliderRow(props: SliderRowProps) {
     const { theme } = useUnistyles();
+    // UISlider is a native control on a pushed settings screen, so its drag
+    // races the same swipe-back the effort slider lost to (DROVE-216).
+    const backSwipe = useBackSwipeLock();
     return (
         <View style={{ paddingHorizontal: 16, paddingVertical: 10 }}>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
@@ -104,7 +108,11 @@ function SliderRow(props: SliderRowProps) {
                 maximumValue={props.max}
                 step={props.step}
                 onValueChange={props.onChange}
-                onSlidingComplete={props.onCommit}
+                onSlidingStart={backSwipe.begin}
+                onSlidingComplete={(value) => {
+                    backSwipe.end();
+                    props.onCommit(value);
+                }}
                 minimumTrackTintColor={theme.colors.button.primary.background}
                 maximumTrackTintColor={theme.colors.divider}
                 style={{ width: '100%', height: Platform.select({ ios: 32, default: 40 }) }}

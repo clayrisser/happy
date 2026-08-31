@@ -2,6 +2,7 @@ import * as React from 'react';
 import { StyleSheet as RNStyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Typography } from '@/constants/Typography';
+import { useBackSwipeLock } from '@/hooks/useBackSwipeLock';
 import { hapticsSelection } from './haptics';
 import { BubblePressable } from './BubblePressable';
 import { GlassChromeSurface } from './GlassChromeControl';
@@ -98,6 +99,10 @@ export function useEffortSlider(input: {
     const { scale, currentKey, onCommit } = input;
     const enabled = input.enabled !== false && scale.keys.length > 0;
     const { width: screenWidth } = useWindowDimensions();
+    // The screen's swipe-back, held for the drag (DROVE-216). Without it the
+    // navigator takes the horizontal pan and the whole chat slides sideways
+    // with the popover still up, which is what Clay photographed.
+    const backSwipe = useBackSwipeLock();
     const [state, setState] = React.useState<EffortSliderState>(effortSliderClosed);
     const [placement, setPlacement] = React.useState<EffortSliderPlacement | null>(null);
     const activeIndex = effortSliderIndex(scale, currentKey);
@@ -146,10 +151,11 @@ export function useEffortSlider(input: {
     }, [clearLatch]);
 
     const dismiss = React.useCallback(() => {
+        backSwipe.end();
         clearLatch();
         stateRef.current = effortSliderClosed;
         setState(effortSliderClosed);
-    }, [clearLatch]);
+    }, [backSwipe, clearLatch]);
 
     // The popover cannot outlive the scale it was drawn from: switching model
     // re-scales the line, and a thumb on a stop that no longer exists would be
@@ -161,6 +167,9 @@ export function useEffortSlider(input: {
 
     const onPressIn = React.useCallback((pageX: number) => {
         if (!enabled) return;
+        // Taken on touch-down, not on the first move: the pop recogniser
+        // decides the moment the finger travels, so anything later is too late.
+        backSwipe.begin();
         const next = effortSliderPlacement({
             screenWidth,
             anchorX: pageX,
@@ -173,15 +182,18 @@ export function useEffortSlider(input: {
             { type: 'press-in', x: pageX, index: activeIndex },
             next,
         ));
-    }, [activeIndex, apply, enabled, screenWidth]);
+    }, [activeIndex, apply, backSwipe, enabled, screenWidth]);
 
     const onMove = React.useCallback((pageX: number) => {
         apply(effortSliderReduce(stateRef.current, { type: 'move', x: pageX }, placementRef.current));
     }, [apply]);
 
     const onRelease = React.useCallback(() => {
+        // The drag is over at press-out even when the popover latches open, so
+        // the gesture goes back now rather than waiting out the latch.
+        backSwipe.end();
         apply(effortSliderReduce(stateRef.current, { type: 'press-out' }, placementRef.current));
-    }, [apply]);
+    }, [apply, backSwipe]);
 
     const tapStop = React.useCallback((index: number) => {
         apply(effortSliderReduce(stateRef.current, { type: 'tap-stop', index }, placementRef.current));

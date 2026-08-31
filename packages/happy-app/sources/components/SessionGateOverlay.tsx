@@ -23,6 +23,7 @@ import Animated, {
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { Typography } from '@/constants/Typography';
+import { useBackSwipeLock } from '@/hooks/useBackSwipeLock';
 import { useSessionGates, type DroverGateEntry } from '@/hooks/usePendingGates';
 import { sessionAllow, sessionDeny } from '@/sync/ops';
 import { layout } from './layout';
@@ -103,6 +104,9 @@ export function SessionGateOverlay({ sessionId }: { sessionId: string }) {
     );
     const [index, setIndex] = React.useState(0);
     const deck = React.useMemo(() => overlayDeck(entries, dismissed, index), [entries, dismissed, index]);
+    // The card deck is full-width and page one's left swipe starts at the
+    // screen edge, which is exactly where swipe-back is most eager (DROVE-216).
+    const backSwipe = useBackSwipeLock();
 
     // A tap on a gate push asked for one card by id (DROVE-94). Page to it
     // once this session lists it, putting it back if it had been swiped away,
@@ -254,6 +258,7 @@ export function SessionGateOverlay({ sessionId }: { sessionId: string }) {
                                     scrollEnabled={deck.count > 1}
                                     onMomentumScrollEnd={handlePageSettled}
                                     keyboardShouldPersistTaps="handled"
+                                    {...backSwipe.scrollProps}
                                 >
                                     {deck.cards.map((entry) => (
                                         <ScrollView

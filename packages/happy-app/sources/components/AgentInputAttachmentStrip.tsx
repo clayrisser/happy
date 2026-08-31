@@ -10,6 +10,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import type { AttachmentPreview } from '@/sync/attachmentTypes';
 import { thumbhashToDataUri } from '@/utils/thumbhash';
+import { useBackSwipeLock } from '@/hooks/useBackSwipeLock';
 
 const THUMB_SIZE = 64;
 const BORDER_RADIUS = 8;
@@ -21,6 +22,9 @@ interface AgentInputAttachmentStripProps {
 
 export function AgentInputAttachmentStrip({ images, onRemove }: AgentInputAttachmentStripProps) {
     const { theme } = useUnistyles();
+    // The strip sits in the composer on a pushed screen, so a swipe along it
+    // holds the screen's back gesture off (DROVE-216).
+    const backSwipe = useBackSwipeLock();
 
     if (images.length === 0) return null;
 
@@ -31,6 +35,7 @@ export function AgentInputAttachmentStrip({ images, onRemove }: AgentInputAttach
             style={styles.strip}
             contentContainerStyle={styles.stripContent}
             keyboardShouldPersistTaps="always"
+            {...backSwipe.scrollProps}
         >
             {images.map((img) => (
                 <AttachmentThumbnail
