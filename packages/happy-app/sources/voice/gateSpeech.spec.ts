@@ -213,3 +213,50 @@ describe('a gate in the reader', () => {
         expect(said).toEqual(['First.', 'Second.']);
     });
 });
+
+/**
+ * The prompt that used to make no sound at all (DROVE-198).
+ *
+ * Claude Code's own approval dialog reached the bus as `kind: "idle"` and
+ * nothing else — no options, no command, and `speakable()` skips idle on
+ * purpose, so the audio layer was as silent as the phone and the wrist. The
+ * dialog is published as a real question now, and this is what Clay hears.
+ */
+describe('a terminal approval is announced, options and all', () => {
+    /** The card the drover bridge builds from the four option Bash approval. */
+    function terminalApproval(): DroverGateEntry {
+        return {
+            ...gate({
+                id: 'ta',
+                kind: 'question',
+                title: 'Bash command',
+                preview: 'tmux capture-pane -p -t %1 | grep -v "^$" | tail -10 This command requires approval Do you want to proceed?',
+                options: [
+                    { label: 'Yes' },
+                    { label: "Yes, and don't ask again for tmux capture-pane commands in /Users/clayrisser/Projects/bitspur/cattle-drover" },
+                    { label: 'Yes, and switch to auto mode · auto mode handles these prompts for you' },
+                    { label: 'No' },
+                ],
+            }, { name: 'cattle-drover' }),
+            tool: 'AskUserQuestion',
+        } as unknown as DroverGateEntry;
+    }
+
+    it('is spoken at all, which the idle event it used to be never was', () => {
+        const tracker = new GateSpeechTracker();
+        const { say } = tracker.observe([terminalApproval()], 0);
+        expect(say).toHaveLength(1);
+        expect(say[0].text).toContain('tmux capture-pane');
+    });
+
+    it('says how many choices there are, because four is not allow and deny', () => {
+        // The whole of the ticket in one assertion: a Yes/No card would have
+        // discarded "don't ask again" and "switch to auto mode", and a voice
+        // line that said nothing about them would hide the same loss.
+        expect(gateSpeechLine(terminalApproval(), 'cattle-drover')).toContain('4 options');
+    });
+
+    it('names the session, because several are blocked at once', () => {
+        expect(gateSpeechLine(terminalApproval(), 'cattle-drover')).toContain('in cattle-drover');
+    });
+});

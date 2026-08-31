@@ -74,8 +74,9 @@ export function droverHooks(): Record<string, HookMatcher[]> {
 
     const question = adapter('claude-pretooluse.sh')
     const notification = adapter('claude-notification.sh')
+    const approval = adapter('claude-approval.sh')
     const lifecycle = adapter('claude-session.sh')
-    if (!question && !notification && !lifecycle) {
+    if (!question && !notification && !approval && !lifecycle) {
         logger.debug(`[drover] no adapters under ${droverDir()}/adapters — bus producers not registered`)
         return {}
     }
@@ -88,8 +89,24 @@ export function droverHooks(): Record<string, HookMatcher[]> {
 
     // Claude's own questions, fanned to every surface, first answer wins.
     if (question) add('PreToolUse', 'AskUserQuestion', question)
+    // Claude Code's OWN permission dialog (DROVE-198). This one is not a tool
+    // call and not a gate we raised: the harness draws it in the pane after
+    // every PreToolUse hook has returned, so nothing in the drover ever saw it
+    // and a four option Bash approval sat blocking Clay's session with the
+    // phone, the wrist and the audio cues all silent. `permission_prompt` is
+    // the only signal that escapes, and it carries the pane, which is enough
+    // for claude-approval.sh to read the dialog and publish it whole.
+    //
+    // ONE OWNER PER NOTIFICATION TYPE. The ding used to take both types; it
+    // keeps `idle_prompt` and hands `permission_prompt` over, because two
+    // adapters on one notification is two cards for one dialog, and a dialog
+    // takes one key. Nothing is lost when the approval adapter cannot read the
+    // pane: it runs claude-notification.sh itself and the ding happens anyway.
+    if (approval) add('Notification', 'permission_prompt', approval)
     // The idle ding: the session is waiting on a human.
-    if (notification) add('Notification', 'idle_prompt|permission_prompt', notification)
+    if (notification) {
+        add('Notification', approval ? 'idle_prompt' : 'idle_prompt|permission_prompt', notification)
+    }
     // Lifecycle, so `drover sessions` can see what is running and where. The
     // hook runs as a child of the session, so its TMUX_PANE is the session's
     // pane — an exact binding no other producer can supply.
