@@ -81,6 +81,22 @@ export const zhHans: TranslationStructure = {
     },
 
 
+    // The home page's all-time token counter (DROVE-241).
+    allTimeTokens: {
+        strip: ({ tokens }: { tokens: string }) => `累计 ${tokens}`,
+        title: '累计 Token',
+        total: ({ tokens }: { tokens: string }) => `所有会话共 ${tokens}`,
+        unattributed: '未归类',
+        empty: '还没有统计。',
+        footer: '在本设备连接期间统计。',
+        since: ({ when }: { when: string }) => `自 ${when} 起统计`,
+        accessibility: ({ tokens }: { tokens: string }) => `累计使用 ${tokens} 个 token`,
+        accessibilityHint: '轻按查看按模型分类，长按重置',
+        resetTitle: '重置 Token 计数？',
+        resetMessage: '累计数量和按模型的分类都会归零，且无法撤销。',
+        resetConfirm: '重置',
+        resetCancel: '保留',
+    },
     status: {
         connected: '已连接',
         connecting: '连接中',

@@ -430,6 +430,14 @@ export const MetadataSchema = z.object({
             turnMain: z.number(),
             session: z.number(),
             sessionMain: z.number(),
+            // `session` split by the model that spent it (DROVE-241), keyed by
+            // Claude Code's own model ids. Optional, because a CLI older than
+            // that ticket publishes the four numbers and no split, and because
+            // DROVE-220 means a session running now will not have it until it
+            // relaunches. Records that name no model are counted into
+            // `session` and left out of here, so the parts can be SHORT of
+            // the whole and must never be treated as equal to it.
+            sessionByModel: z.record(z.string(), z.number()).optional(),
         }).passthrough().optional(),
         tool: z.object({
             id: z.string(),

@@ -218,11 +218,16 @@ describe('summarizeLiveStatus main thread readout', () => {
     });
 });
 
-describe('the tally across main and every subagent (DROVE-184)', () => {
+describe('the tally across main and every subagent (DROVE-184, DROVE-241)', () => {
     /**
      * Clay: "where's my damn token counter showing tally of all tokens used
      * across main agent and all subagents". Nine agents at 200k each read as
      * 51.6k on the row, because the row's number was the MAIN transcript.
+     *
+     * Then: "why does my counter in my session keep resetting?" DROVE-184 put
+     * the TURN on the row, so the number went back to zero every time he
+     * spoke. DROVE-241 swapped it for the session and moved the turn into the
+     * sheet, which is why the row assertions below read `4.0M` and not `1.4M`.
      */
     const tallied: LiveStatus = {
         ...busy,
@@ -238,17 +243,51 @@ describe('the tally across main and every subagent (DROVE-184)', () => {
             sessionMain: '402.0k',
             // The fan-out's share, which is the session less the main thread.
             sessionAgents: '3.6M',
-            raw: { turn: 1_377_722, turnMain: 251_200, session: 4_012_000, sessionMain: 402_000 },
+            raw: {
+                turn: 1_377_722,
+                turnMain: 251_200,
+                session: 4_012_000,
+                sessionMain: 402_000,
+                // No split on this CLI. `{}`, never undefined, so a caller
+                // never has to ask twice whether the field is there.
+                sessionByModel: {},
+            },
         });
     });
 
-    it('puts the TALLY in the row\'s one token slot, not the main thread\'s share', () => {
+    it('carries the per-model split through untouched when the CLI publishes one (DROVE-241)', () => {
+        const split = { 'claude-opus-5': 3_000_000, 'claude-fable-5': 1_000_000 };
+        const withModels: LiveStatus = {
+            ...tallied,
+            tokens: { ...tallied.tokens!, sessionByModel: split },
+        };
+        expect(summarizeLiveStatus(withModels, now).tally!.raw.sessionByModel).toEqual(split);
+    });
+
+    it('puts the SESSION tally in the row\'s one token slot, not the turn and not main (DROVE-241)', () => {
         const main = summarizeLiveStatus(tallied, now).main!;
         // The slot is `main.tokens` and it is unchanged in shape, so the strip
         // gains no term and the width budget is untouched.
-        expect(main.tokens).toBe('1.4M');
+        expect(main.tokens).toBe('4.0M');
+        // The two numbers it is NOT. `1.4M` is the turn, which is what reset
+        // at every prompt; `251.2k` is the main thread's share of it.
+        expect(main.tokens).not.toBe('1.4M');
         expect(main.tokens).not.toBe('251.2k');
+        // Both are still reachable, in the sheet.
+        expect(summarizeLiveStatus(tallied, now).tally!.turn).toBe('1.4M');
         expect(summarizeLiveStatus(tallied, now).tally!.turnMain).toBe('251.2k');
+    });
+
+    it('does not move when a new prompt zeroes the turn (DROVE-241)', () => {
+        // THE COMPLAINT, as a test. Same session, a moment after Clay sends a
+        // message: the CLI zeroes `turn` and `turnMain` and leaves the session
+        // totals where they were. The row must not notice.
+        const afterPrompt: LiveStatus = {
+            ...tallied,
+            tokens: { turn: 0, turnMain: 0, session: 4_012_000, sessionMain: 402_000 },
+        };
+        expect(summarizeLiveStatus(afterPrompt, now).main!.tokens).toBe('4.0M');
+        expect(summarizeLiveStatus(tallied, now).main!.tokens).toBe('4.0M');
     });
 
     it('still shows the spend while the fan-out outlives the turn and main is quiet', () => {
@@ -263,6 +302,8 @@ describe('the tally across main and every subagent (DROVE-184)', () => {
         };
         const summary = summarizeLiveStatus(fanOut, now);
         expect(summary.main).toBeNull();
+        // The SESSION total here too (DROVE-241), which is the same number as
+        // the turn's only because this fan-out has run since the session began.
         expect(summary.sideTokens).toBe('1.8M');
     });
 
@@ -270,13 +311,20 @@ describe('the tally across main and every subagent (DROVE-184)', () => {
         expect(summarizeLiveStatus(tallied, now).sideTokens).toBeNull();
     });
 
-    it('says nothing rather than a zero when a turn has spent nothing yet', () => {
-        const quiet: LiveStatus = {
+    it('shows a session that has spent something even mid-prompt, and nothing when it has not (DROVE-241)', () => {
+        const base: LiveStatus = {
             at: now,
             agents: [{ id: 'a1', label: 'Just launched', startedAt: now - 1_000 }],
             tokens: { turn: 0, turnMain: 0, session: 900, sessionMain: 900 },
         };
-        expect(summarizeLiveStatus(quiet, now).sideTokens).toBeNull();
+        // The turn is zero because he has just sent a message. Under DROVE-184
+        // this drew nothing at all, which is the reset in its other clothes.
+        expect(summarizeLiveStatus(base, now).sideTokens).toBe('900');
+        const spentNothing: LiveStatus = {
+            ...base,
+            tokens: { turn: 0, turnMain: 0, session: 0, sessionMain: 0 },
+        };
+        expect(summarizeLiveStatus(spentNothing, now).sideTokens).toBeNull();
     });
 
     it('falls back to the main thread\'s own count on a CLI too old to publish a tally', () => {

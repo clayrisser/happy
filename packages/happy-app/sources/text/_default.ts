@@ -78,6 +78,23 @@ export const en = {
         status: 'Status',
     },
 
+    // The home page's all-time token counter (DROVE-241). Clay: "Just for
+    // fun on the home page keep track of all tokens ever used."
+    allTimeTokens: {
+        strip: ({ tokens }: { tokens: string }) => `${tokens} all time`,
+        title: 'Tokens all time',
+        total: ({ tokens }: { tokens: string }) => `${tokens} across every session`,
+        unattributed: 'Unattributed',
+        empty: 'Nothing counted yet.',
+        footer: 'Counted on this device, while it was connected.',
+        since: ({ when }: { when: string }) => `Counting since ${when}`,
+        accessibility: ({ tokens }: { tokens: string }) => `${tokens} tokens used all time`,
+        accessibilityHint: 'Press for a breakdown by model, press and hold to reset',
+        resetTitle: 'Reset the token counter?',
+        resetMessage: 'The all-time total and its breakdown by model go back to zero. This cannot be undone.',
+        resetConfirm: 'Reset',
+        resetCancel: 'Keep',
+    },
     status: {
         connected: 'connected',
         connecting: 'connecting',

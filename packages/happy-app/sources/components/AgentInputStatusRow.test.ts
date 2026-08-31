@@ -821,10 +821,43 @@ describe('the token tally on the strip (DROVE-184)', () => {
             // and the dot has to stay honest (DROVE-155). The number is there
             // anyway, which is the whole point: this is the state Clay was
             // looking at when he asked where it was.
-            expect(text.join(' ')).toContain('1.8M');
+            //
+            // `1.9M` is the SESSION (DROVE-241). `1.8M` is this fan-out's
+            // turn, which is the number that used to be here and the one that
+            // goes to zero the moment he speaks.
+            expect(text.join(' ')).toContain('1.9M');
+            expect(text.join(' ')).not.toContain('1.8M');
             expect(text).not.toContain('working');
             expect(renderer.root.findByType('StatusDot' as any).props.color)
                 .toBe(statusDotColors.connected);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('does not move when a new prompt zeroes the turn (DROVE-241)', () => {
+        // THE COMPLAINT, drawn. Clay: "why does my counter in my session keep
+        // resetting?" Same session, one moment apart: mid-turn, then the
+        // instant after he sends a message and the CLI zeroes `turn`. The
+        // strip's number is identical in both.
+        vi.useFakeTimers();
+        vi.setSystemTime(now + 1_000);
+        try {
+            const mid = line(row({ sessionId: 'tallied' })).join(' ');
+            sessions.talliedAfterPrompt = {
+                metadata: {
+                    liveStatus: {
+                        ...sessions.tallied.metadata.liveStatus,
+                        at: now,
+                        tokens: { turn: 0, turnMain: 0, session: 1_851_600, sessionMain: 51_600 },
+                    },
+                },
+            };
+            const after = line(row({ sessionId: 'talliedAfterPrompt' })).join(' ');
+            expect(mid).toContain('1.9M');
+            expect(after).toContain('1.9M');
+            // And never the empty centre the turn figure drew at that moment.
+            expect(after).not.toContain('0 ');
         } finally {
             vi.useRealTimers();
         }

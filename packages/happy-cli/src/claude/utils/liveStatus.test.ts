@@ -59,21 +59,35 @@ const assistantTextRecord = (at: number, text: string) => JSON.stringify({
     message: { role: 'assistant', content: [{ type: 'text', text }] },
 })
 
-/** An assistant record on the MAIN transcript, carrying the turn's usage. */
-const assistantUsageRecord = (at: number, usage: Record<string, number>) => JSON.stringify({
+/**
+ * An assistant record on the MAIN transcript, carrying the turn's usage.
+ *
+ * `model` is optional and sits beside `usage` on `message`, exactly where
+ * Claude Code writes it (DROVE-241). Left off, the record is what it always
+ * was, which is why the DROVE-184 tally tests below still read a `tokens`
+ * block with no split in it.
+ */
+const assistantUsageRecord = (at: number, usage: Record<string, number>, model?: string) => JSON.stringify({
     type: 'assistant',
     isSidechain: false,
     timestamp: iso(at),
     uuid: `au-${at}`,
-    message: { role: 'assistant', content: [{ type: 'text', text: 'thinking' }], usage },
+    message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'thinking' }],
+        usage,
+        ...(model ? { model } : {}),
+    },
 })
 
-const agentRecord = (at: number, usage?: Record<string, number>) => JSON.stringify({
+const agentRecord = (at: number, usage?: Record<string, number>, model?: string) => JSON.stringify({
     type: usage ? 'assistant' : 'user',
     isSidechain: true,
     timestamp: iso(at),
     uuid: `g-${at}-${Math.random()}`,
-    message: usage ? { role: 'assistant', content: [], usage } : { role: 'user', content: 'go' },
+    message: usage
+        ? { role: 'assistant', content: [], usage, ...(model ? { model } : {}) }
+        : { role: 'user', content: 'go' },
 })
 
 describe('describeToolArg', () => {
@@ -443,6 +457,75 @@ describe('createLiveStatusReader', () => {
             session: 502_600,
             sessionMain: 500_100,
         })
+    })
+
+    it('splits the session total by the model that spent it, main and agents in one map (DROVE-241)', () => {
+        const now = Date.now()
+        writeFileSync(transcript, [
+            promptRecord(now - 300_000, 'go'),
+            toolUseRecord(now - 280_000, 'toolu_agent_a', 'Agent', { description: 'Sweep' }),
+            toolResultRecord(now - 279_000, 'toolu_agent_a'),
+            assistantUsageRecord(now - 70_000, { input_tokens: 1000, output_tokens: 500 }, 'claude-opus-5'),
+            assistantUsageRecord(now - 60_000, { input_tokens: 200, output_tokens: 100 }, 'claude-fable-5'),
+            toolUseRecord(now - 50_000, 'toolu_bash', 'Bash', { description: 'Run the suite' }),
+            '',
+        ].join('\n'))
+        // A subagent on Sonnet, and a SECOND Opus record from inside it. The
+        // split is one map across main and agents, so Opus's two sources land
+        // in one bucket.
+        writeFileSync(join(subagents, 'agent-a1.meta.json'), JSON.stringify({ description: 'Sweep' }))
+        writeFileSync(join(subagents, 'agent-a1.jsonl'), [
+            agentRecord(now - 275_000),
+            agentRecord(now - 200_000, { input_tokens: 40, output_tokens: 60 }, 'claude-sonnet-5'),
+            agentRecord(now - 190_000, { input_tokens: 300, output_tokens: 200 }, 'claude-opus-5'),
+            // A PINNED id, which Claude Code writes alongside the bare ones:
+            // `claude-haiku-4-5-20251001` appears 86 times across a night of
+            // Clay's transcripts. It is its own bucket, verbatim.
+            agentRecord(now - 185_000, { input_tokens: 30, output_tokens: 20 }, 'claude-haiku-4-5-20251001'),
+            '',
+        ].join('\n'))
+        touch(join(subagents, 'agent-a1.jsonl'), now - 5_000)
+
+        const tokens = createLiveStatusReader({ projectDir, sessionId }).read(now)!.tokens!
+        expect(tokens.sessionByModel).toEqual({
+            'claude-opus-5': 2000,
+            'claude-fable-5': 300,
+            'claude-sonnet-5': 100,
+            'claude-haiku-4-5-20251001': 50,
+        })
+        // THE PARTS ARE THE WHOLE. Nothing is attributed twice and nothing
+        // attributed is missing from the total, which is the property that
+        // makes the breakdown worth drawing beside the number.
+        const parts = Object.values(tokens.sessionByModel!).reduce((sum, n) => sum + n, 0)
+        expect(parts).toBe(tokens.session)
+    })
+
+    it('counts an unattributed record into the total and out of the split (DROVE-241)', () => {
+        const now = Date.now()
+        writeFileSync(transcript, [
+            promptRecord(now - 300_000, 'go'),
+            assistantUsageRecord(now - 70_000, { input_tokens: 1000, output_tokens: 0 }, 'claude-opus-5'),
+            // Claude Code's own composed record. It names no model, so it has
+            // no bucket, but its spend is still spend.
+            assistantUsageRecord(now - 60_000, { input_tokens: 7, output_tokens: 0 }, '<synthetic>'),
+            // An older CLI's record, or a harness that writes no model at all.
+            assistantUsageRecord(now - 50_000, { input_tokens: 11, output_tokens: 0 }),
+            toolUseRecord(now - 40_000, 'toolu_bash', 'Bash', { description: 'Run the suite' }),
+            '',
+        ].join('\n'))
+        const tokens = createLiveStatusReader({ projectDir, sessionId }).read(now)!.tokens!
+        expect(tokens.session).toBe(1018)
+        expect(tokens.sessionByModel).toEqual({ 'claude-opus-5': 1000 })
+    })
+
+    it('publishes no split at all when nothing named a model (DROVE-241)', () => {
+        const now = Date.now()
+        writeFixture(now)
+        // Every fixture record predates the model field. The key is absent
+        // rather than `{}`, so an app on the old schema sees exactly what it
+        // saw before.
+        expect(createLiveStatusReader({ projectDir, sessionId }).read(now)!.tokens)
+            .toEqual({ turn: 3000, turnMain: 0, session: 3000, sessionMain: 0 })
     })
 
     it('leaves the main block out while only background agents are out (DROVE-155)', () => {

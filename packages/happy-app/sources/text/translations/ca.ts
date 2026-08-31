@@ -79,6 +79,22 @@ export const ca: TranslationStructure = {
     },
 
 
+    // The home page's all-time token counter (DROVE-241).
+    allTimeTokens: {
+        strip: ({ tokens }: { tokens: string }) => `${tokens} en total`,
+        title: 'Tokens en total',
+        total: ({ tokens }: { tokens: string }) => `${tokens} en totes les sessions`,
+        unattributed: 'Sense atribuir',
+        empty: 'Encara no hi ha res comptat.',
+        footer: 'Comptat en aquest dispositiu, mentre estava connectat.',
+        since: ({ when }: { when: string }) => `Comptant des de ${when}`,
+        accessibility: ({ tokens }: { tokens: string }) => `${tokens} tokens usats en total`,
+        accessibilityHint: 'Prem per veure el desglossament per model, mantén premut per reiniciar',
+        resetTitle: 'Voleu reiniciar el comptador de tokens?',
+        resetMessage: 'El total i el desglossament per model tornen a zero. Això no es pot desfer.',
+        resetConfirm: 'Reinicia',
+        resetCancel: 'Conserva',
+    },
     status: {
         connected: 'connectat',
         connecting: 'connectant',

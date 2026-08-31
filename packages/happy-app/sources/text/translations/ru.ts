@@ -419,6 +419,22 @@ export const ru: TranslationStructure = {
     },
 
 
+    // The home page's all-time token counter (DROVE-241).
+    allTimeTokens: {
+        strip: ({ tokens }: { tokens: string }) => `${tokens} за всё время`,
+        title: 'Токены за всё время',
+        total: ({ tokens }: { tokens: string }) => `${tokens} по всем сессиям`,
+        unattributed: 'Без модели',
+        empty: 'Пока ничего не подсчитано.',
+        footer: 'Подсчитано на этом устройстве, пока оно было на связи.',
+        since: ({ when }: { when: string }) => `Считаем с ${when}`,
+        accessibility: ({ tokens }: { tokens: string }) => `использовано ${tokens} токенов за всё время`,
+        accessibilityHint: 'Нажмите для разбивки по моделям, удерживайте, чтобы сбросить',
+        resetTitle: 'Сбросить счётчик токенов?',
+        resetMessage: 'Общее число и разбивка по моделям обнулятся. Отменить это нельзя.',
+        resetConfirm: 'Сбросить',
+        resetCancel: 'Оставить',
+    },
     status: {
         connected: 'подключено',
         connecting: 'подключение',

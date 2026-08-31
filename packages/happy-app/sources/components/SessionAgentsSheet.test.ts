@@ -267,7 +267,14 @@ describe('the session tally in the agents sheet (DROVE-184)', () => {
         session: '1.9M',
         sessionMain: '210.0k',
         sessionAgents: '1.6M',
-        raw: { turn: 312_000, turnMain: 51_600, session: 1_851_600, sessionMain: 210_000 },
+        raw: {
+            turn: 312_000,
+            turnMain: 51_600,
+            session: 1_851_600,
+            sessionMain: 210_000,
+            // No split from this CLI (DROVE-241). `{}`, never undefined.
+            sessionByModel: {},
+        },
     };
 
     it('spells out the session total, the split and the turn', () => {

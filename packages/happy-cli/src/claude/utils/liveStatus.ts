@@ -163,6 +163,25 @@ export interface LiveStatusTokens {
     session: number
     /** The main thread's share of `session`. */
     sessionMain: number
+    /**
+     * `session`, split by the model that spent it (DROVE-241).
+     *
+     * Clay wants the all-time counter on the home page to "breakdown when
+     * single pressing by model". The split is read HERE for the same reason
+     * the totals are: `message.model` sits on the very record `message.usage`
+     * does, so the same `countTokens` call that feeds `session` feeds this,
+     * and the parts cannot add up to something other than the whole.
+     *
+     * Keys are Claude Code's own model ids verbatim — `claude-opus-5`,
+     * `claude-fable-5`, `claude-sonnet-5` — never a family name. A model this
+     * build has never heard of still gets a bucket and the app still draws it;
+     * naming it prettily is the app's job and a fallback there is a cosmetic
+     * miss rather than lost spend.
+     *
+     * SESSION ONLY. There is no per-turn split, because nothing asks for one
+     * and every field here is republished up to once a second.
+     */
+    sessionByModel?: Record<string, number>
 }
 
 /**
@@ -299,6 +318,41 @@ export function usageOf(record: Record<string, unknown>): Record<string, unknown
     if (!message || typeof message !== 'object') return null
     const usage = (message as Record<string, unknown>).usage
     return usage && typeof usage === 'object' ? usage as Record<string, unknown> : null
+}
+
+/**
+ * Which model spent this record's tokens (DROVE-241), or null.
+ *
+ * `message.model`, beside `message.usage` on the same assistant record, so a
+ * record can never be counted into the total under one model and the split
+ * under another.
+ *
+ * `<synthetic>` is dropped. Claude Code writes it for assistant records IT
+ * composed rather than a model, an interrupt or a refusal filled in locally.
+ * Measured across a night of Clay's transcripts, 388 files: 95 `<synthetic>`
+ * records carrying ZERO tokens between them, against 35287 `claude-opus-5`,
+ * 5199 `claude-fable-5`, 368 `claude-sonnet-5` and 86
+ * `claude-haiku-4-5-20251001`. Every record with a `usage` block named a
+ * model; none was missing one. So a `<synthetic>` row in a by-model breakdown
+ * would be a permanent zero and a bug report waiting to happen. Its spend, if
+ * a build ever gives it any, still lands in `session`; only the attribution is
+ * withheld, which is the honest thing to do with a record that names no model.
+ *
+ * Note the DATED id in that list. Claude Code writes both bare ids
+ * (`claude-opus-5`) and pinned ones (`claude-haiku-4-5-20251001`), so the key
+ * space is wider than the four family names and nothing here may assume
+ * otherwise. The app names them with `shortModelName`, the same function the
+ * composer's model pill uses, which already reads a date suffix as a pin and
+ * drops it.
+ */
+export function modelOf(record: Record<string, unknown>): string | null {
+    const message = record.message
+    if (!message || typeof message !== 'object') return null
+    const model = (message as Record<string, unknown>).model
+    if (typeof model !== 'string') return null
+    const trimmed = model.trim()
+    if (trimmed.length === 0 || trimmed === '<synthetic>') return null
+    return trimmed
 }
 
 /** Trim an argument to something a phone header can hold. */
@@ -438,6 +492,20 @@ export function createLiveStatusReader(opts: {
     /** Both again for the whole session. No prompt resets these. */
     let sessionMainTokens = 0
     let sessionAgentTokens = 0
+    /**
+     * The session total split by model (DROVE-241), main and agents in ONE
+     * map. The by-model question is "what did Opus cost me", not "what did
+     * Opus cost me on the main thread", and keeping two maps would invite a
+     * surface to add them up and get it wrong.
+     */
+    let sessionByModel = new Map<string, number>()
+    /** One record's spend, filed under the model that spent it (DROVE-241). */
+    const bankModel = (record: Record<string, unknown>, spent: number): void => {
+        if (spent <= 0) return
+        const model = modelOf(record)
+        if (!model) return
+        sessionByModel.set(model, (sessionByModel.get(model) ?? 0) + spent)
+    }
     let lastRecordAt = 0
     let lastKind: RecordKind = 'other'
     let agents = new Map<string, AgentState>()
@@ -450,6 +518,7 @@ export function createLiveStatusReader(opts: {
         turnAgentTokens = 0
         sessionMainTokens = 0
         sessionAgentTokens = 0
+        sessionByModel = new Map()
         lastRecordAt = 0
         lastKind = 'other'
         agents = new Map()
@@ -500,6 +569,7 @@ export function createLiveStatusReader(opts: {
                 const spent = countTokens(usageOf(record))
                 turnTokens += spent
                 sessionMainTokens += spent
+                bankModel(record, spent)
             }
 
             const message = record.message
@@ -640,6 +710,7 @@ export function createLiveStatusReader(opts: {
                     state.tokens += spent
                     turnAgentTokens += spent
                     sessionAgentTokens += spent
+                    bankModel(record, spent)
                 }
             }
             out.push({
@@ -792,6 +863,9 @@ export function createLiveStatusReader(opts: {
                 turnMain: turnTokens,
                 session: sessionMainTokens + sessionAgentTokens,
                 sessionMain: sessionMainTokens,
+                ...(sessionByModel.size > 0
+                    ? { sessionByModel: Object.fromEntries(sessionByModel) }
+                    : {}),
             }
 
             return {

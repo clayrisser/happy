@@ -72,11 +72,44 @@ export function formatElapsed(ms: number): string {
     return `${seconds}s`;
 }
 
-/** `851.9k`, `1.5M`, `940` — the terminal's own shape again. */
+/**
+ * The tiers this scales through, largest first.
+ *
+ * `B` is new with DROVE-241 and it is not decoration: the strip's number is
+ * now the SESSION total, and the home page's is every session this phone has
+ * ever seen. At the 1.3M Clay's session reached in an evening, an all-time
+ * count crosses a billion inside a year, and `1234.5M` is a number nobody
+ * reads.
+ */
+const tokenTiers = [
+    { at: 1_000_000_000, suffix: 'B' },
+    { at: 1_000_000, suffix: 'M' },
+    { at: 1_000, suffix: 'k' },
+] as const;
+
+/**
+ * `851.9k`, `1.5M`, `940` — the terminal's own shape again.
+ *
+ * SIX CHARACTERS, ALWAYS, and that is a layout guarantee rather than a
+ * coincidence (DROVE-241). The strip's centre zone is this string, and what
+ * bounds the zone is the widest thing this can return: one decimal and a
+ * suffix, so `999.9k` and `100.0M` are the ceiling and a session that grows
+ * for a week never widens the line by a point.
+ *
+ * The promotion at `0.99995` is what makes that true. `999_999` is below a
+ * million and `(999.999).toFixed(1)` is `1000.0`, so the old form returned
+ * `1000.0k` — SEVEN characters, the one string that could push the centre
+ * zone past its budget, and it arrived in the narrow band right before the
+ * number Clay was watching for. It is a million in k's clothing, so it
+ * promotes to `1.0M` instead.
+ */
 export function formatTokens(tokens: number): string {
     if (!Number.isFinite(tokens) || tokens <= 0) return '0';
-    if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
-    if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1)}k`;
+    for (const tier of tokenTiers) {
+        if (tokens >= tier.at * 0.99995) {
+            return `${(tokens / tier.at).toFixed(1)}${tier.suffix}`;
+        }
+    }
     return String(Math.round(tokens));
 }
 
@@ -145,10 +178,21 @@ export interface LiveStatusMain {
     /** The turn's clock, ticking on this device. */
     elapsed: string;
     /**
-     * `251.2k` — the TALLY, main plus every subagent this turn (DROVE-184),
-     * not the main thread's share. It lives in this slot because the row must
-     * not grow a term; `tally.turnMain` is the main-only number, and the sheet
-     * behind the tap draws both.
+     * `1.4M` — the SESSION tally: main plus every subagent since this session
+     * was picked up, and not the turn (DROVE-241).
+     *
+     * DROVE-184 put the per-TURN tally here and the session total one tap
+     * away, which is a defensible reading of "tally" and the wrong one. Clay:
+     * "why does my counter in my session keep resetting?" It reset because a
+     * turn ends when he speaks. What he asked for was "tally of all tokens
+     * used across main agent and all subagents", and a number that returns to
+     * zero when he sends a message is not a tally of anything.
+     *
+     * So the two swapped. The session is on the row; the turn is in the sheet,
+     * which already spelled all four out. The slot is the same slot, so the
+     * strip gains no term and DROVE-223's width budget is untouched — and the
+     * new number is no wider than the old one, because `formatTokens` caps at
+     * six characters whatever it is given.
      */
     tokens?: string;
 }
@@ -169,18 +213,31 @@ export interface LiveStatusMain {
  * with it.
  */
 export interface LiveStatusTally {
-    /** Main plus every subagent since the last prompt. What the row draws. */
+    /** Main plus every subagent since the last prompt. The sheet's last term. */
     turn: string;
     /** The main thread's share of the turn, so main can be told from the fan-out. */
     turnMain: string;
-    /** Main plus every subagent for the whole session, finished agents included. */
+    /** Main plus every subagent for the whole session. What the ROW draws (DROVE-241). */
     session: string;
     /** The main thread's share of the session. */
     sessionMain: string;
     /** The subagents' share of the session, which is `session` less `sessionMain`. */
     sessionAgents: string;
     /** The numbers behind the strings, for anything that needs to compare them. */
-    raw: { turn: number; turnMain: number; session: number; sessionMain: number };
+    raw: {
+        turn: number;
+        turnMain: number;
+        session: number;
+        sessionMain: number;
+        /**
+         * `session` split by model id (DROVE-241), `{}` on a CLI too old to
+         * publish one. It is what the home page's all-time ledger banks, and
+         * it is deliberately raw: the parts can be SHORT of `session`, because
+         * a record that named no model is counted into the total and left out
+         * of the split, so nothing may treat the sum of these as the whole.
+         */
+        sessionByModel: Record<string, number>;
+    };
 }
 
 /** The published tally, or null on a CLI too old to publish one. */
@@ -192,6 +249,7 @@ export function liveStatusTally(status: LiveStatus): LiveStatusTally | null {
         turnMain: tokens.turnMain,
         session: tokens.session,
         sessionMain: tokens.sessionMain,
+        sessionByModel: tokens.sessionByModel ?? {},
     };
     return {
         turn: formatTokens(raw.turn),
@@ -508,8 +566,11 @@ export function summarizeLiveStatus(status: LiveStatus, now: number): LiveStatus
         sideCount,
         tally,
         // Only when the main thread is NOT carrying the number itself, so the
-        // row never shows the tally twice.
-        sideTokens: !main && sideCount > 0 && tally && tally.raw.turn > 0 ? tally.turn : null,
+        // row never shows the tally twice. The SESSION total, the same number
+        // `mainReadout` puts in the slot (DROVE-241): a fan-out that outlives
+        // its turn is exactly the case where a turn number reads as zero while
+        // nine agents burn.
+        sideTokens: !main && sideCount > 0 && tally && tally.raw.session > 0 ? tally.session : null,
     };
 }
 
@@ -538,13 +599,15 @@ export function summarizeLiveStatus(status: LiveStatus, now: number): LiveStatus
 export function liveStatusMain(status: LiveStatus, now: number, tally: LiveStatusTally | null): LiveStatusMain | null {
     const label = status.tool ? status.tool.name : LIVE_STATUS_WORKING_WORD;
     const working = !status.tool;
-    // THE ROW'S NUMBER IS THE TALLY (DROVE-184). It sits in the slot the
-    // main-only count used to hold, so the strip gains no term and the width
-    // budget is untouched — `tokens` is already a rank on
-    // STATUS_ROW_GIVE_WAY (DROVE-223) and this inherits it whole. Falls back
-    // to the main thread's own count on a CLI too old to publish a tally,
-    // which is the old behaviour exactly.
-    const rowTokens = tally ? tally.raw.turn : status.main?.tokens;
+    // THE ROW'S NUMBER IS THE SESSION TALLY (DROVE-241, over DROVE-184's
+    // turn). It sits in the slot the main-only count used to hold, so the
+    // strip gains no term and the width budget is untouched — `tokens` is
+    // already a rank on STATUS_ROW_GIVE_WAY (DROVE-223) and this inherits it
+    // whole. Falls back to the main thread's own count on a CLI too old to
+    // publish a tally, which is the old behaviour exactly; that fallback is a
+    // TURN number and it will still reset, which is a floor on what an old
+    // CLI can say rather than a second reading of the rule.
+    const rowTokens = tally ? tally.raw.session : status.main?.tokens;
     const tokensOf = (tokens: unknown): { tokens?: string } => (
         typeof tokens === 'number' && tokens > 0 ? { tokens: formatTokens(tokens) } : {}
     );
