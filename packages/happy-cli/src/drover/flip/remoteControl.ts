@@ -41,6 +41,11 @@ export interface BusSession {
     /** null means the session runs on the ambient login, which is `main`. */
     account?: string | null
     state?: string | null
+    /**
+     * Which agent the row is (DROVE-56/DROVE-57). Absent on a row from a bus
+     * older than the field, and every one of those is Claude Code.
+     */
+    harness?: string | null
 }
 
 export interface AtRiskSession {
@@ -60,8 +65,22 @@ const ambient = 'main'
 
 const accountOf = (s: BusSession): string => s.account ?? ambient
 
+/**
+ * Whose Remote Control a flip can actually break (DROVE-56).
+ *
+ * Remote Control is Claude Code's own device binding, held by the `claude`
+ * process against an accountUuid. An OpenCode or Cursor pane holds no such
+ * binding and no Claude login at all, so a flip cannot take anything from it —
+ * naming one in the warning is naming a session that will not go quiet, which
+ * teaches Clay to skim the list. `claude-code` and the absent case are the
+ * same answer, because a bus older than the field only ever had Claude rows.
+ */
+const bindsRemoteControl = (s: BusSession): boolean =>
+    (s.harness ?? 'claude-code') === 'claude-code'
+
 /** A session only loses Remote Control if it is actually running. */
-const isLive = (s: BusSession): boolean => (s.state ?? '').startsWith('live')
+const isLive = (s: BusSession): boolean =>
+    (s.state ?? '').startsWith('live') && bindsRemoteControl(s)
 
 function labelOf(s: BusSession): string {
     const title = (s.title ?? '').trim()

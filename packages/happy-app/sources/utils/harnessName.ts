@@ -22,6 +22,10 @@ const names: Record<string, string> = {
     openclaw: 'OpenClaw',
     agy: 'Antigravity',
     cursor: 'Cursor',
+    // DROVE-56. Two ways a session arrives with this flavor: `happy acp
+    // opencode`, whose runAcp already stamps it, and a `drover opencode` pane.
+    // Both are the same agent, so both read as one name here.
+    opencode: 'OpenCode',
 };
 
 /**

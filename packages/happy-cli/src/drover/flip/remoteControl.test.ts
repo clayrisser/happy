@@ -55,6 +55,32 @@ describe('which sessions a flip will knock off Remote Control', () => {
         expect(at.map((x) => x.id)).toEqual(['b'])
     })
 
+    // DROVE-56. An OpenCode or Cursor pane holds no Claude login and no Remote
+    // Control binding, so a flip takes nothing from it. Naming one in the
+    // warning teaches Clay to skim the list.
+    it('leaves out a harness that has no Claude binding to lose', () => {
+        const at = sessionsAtRisk({
+            sessions: [
+                s({ id: 'oc', account: null, title: 'opencode pane', harness: 'opencode' }),
+                s({ id: 'cur', account: null, title: 'cursor pane', harness: 'cursor' }),
+                s({ id: 'cc', account: null, title: 'claude pane', harness: 'claude-code' }),
+            ],
+            target: 'jamrizzi',
+            selfId: 'self',
+        })
+        expect(at.map((x) => x.id)).toEqual(['cc'])
+    })
+
+    it('still counts a row from a bus too old to stamp a harness', () => {
+        // Every session on that bus was Claude Code, so absent means claude.
+        const at = sessionsAtRisk({
+            sessions: [s({ id: 'old', account: null, title: 'pre-harness' })],
+            target: 'jamrizzi',
+            selfId: 'self',
+        })
+        expect(at.map((x) => x.id)).toEqual(['old'])
+    })
+
     it('leaves out sessions that are not running', () => {
         const at = sessionsAtRisk({
             sessions: [

@@ -8,6 +8,10 @@ describe('harnessName', () => {
         expect(harnessName('openclaw')).toBe('OpenClaw');
         expect(harnessName('agy')).toBe('Antigravity');
         expect(harnessName('cursor')).toBe('Cursor');
+        // Capitalised the way the project spells itself. The raw slug is
+        // lowercase and was rendering as "opencode" beside "Claude" and
+        // "Cursor" on the same screen (DROVE-56).
+        expect(harnessName('opencode')).toBe('OpenCode');
     });
 
     it('keeps both codex slugs, because both are on real sessions', () => {

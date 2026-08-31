@@ -52,7 +52,7 @@ vi.mock('./resolveHappySession', async () => {
 
 import { spawnHappyCLI } from '@/utils/spawnHappyCLI';
 
-import { buildResumeLaunch, formatResumeHelp, handleResumeCommand, parseResumeCommandArgs } from './handleResumeCommand';
+import { buildResumeLaunch, formatResumeHelp, handleResumeCommand, parseResumeCommandArgs, unsupportedResumeReason } from './handleResumeCommand';
 import { LocalResumeSessionError } from './localResumeStore';
 
 function createChildProcess(exitCode: number | null = 0) {
@@ -181,6 +181,22 @@ describe('buildResumeLaunch', () => {
                 happyToolsDir: '/tmp/happy/tools',
             },
         })).toThrow('Happy session session-3 uses unsupported flavor "gemini".');
+    });
+
+    // DROVE-56. "unsupported flavor" reads as a gap somebody forgot; for
+    // OpenCode the refusal is a measured impossibility and has to say so.
+    it('tells an OpenCode session WHY it cannot be reopened', () => {
+        const message = unsupportedResumeReason('session-4', 'opencode');
+        expect(message).toContain('OpenCode cannot reopen one');
+        expect(message).toContain('drover clone session-4 --to opencode');
+        expect(message).not.toContain('unsupported flavor');
+    });
+
+    it('keeps the plain sentence for a harness nothing has been measured on', () => {
+        expect(unsupportedResumeReason('session-5', 'cursor'))
+            .toBe('Happy session session-5 uses unsupported flavor "cursor".');
+        expect(unsupportedResumeReason('session-6', null))
+            .toBe('Happy session session-6 uses unsupported flavor "unknown".');
     });
 });
 

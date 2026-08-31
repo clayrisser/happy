@@ -21,7 +21,7 @@ import type { SpawnSessionResult } from '@/modules/common/registerCommonHandlers
 import { logger } from '@/ui/logger';
 import type { TmuxUtilities } from '@/utils/tmux';
 import type { DroverAccount } from '@/drover/flip/accounts';
-import { resolveResumeFlavor } from '@/resume/handleResumeCommand';
+import { resolveResumeFlavor, unsupportedResumeReason } from '@/resume/handleResumeCommand';
 
 import { buildSessionChildEnvironment, wrapTmuxCommandWithSessionEnvironmentSanitizer } from './sessionEnvironment';
 import { appendDaemonPermissionArgs } from './spawnModeArgs';
@@ -269,7 +269,10 @@ export function buildDaemonResumeLaunch(input: DaemonResumeInput): DaemonResumeL
     const flavor = resolveResumeFlavor(metadata);
 
     if (flavor !== 'claude' && flavor !== 'codex') {
-        throw new Error(`Happy session ${happySessionId} uses unsupported flavor "${metadata.flavor ?? 'unknown'}".`);
+        // Named in the harness's own terms, because for OpenCode this is a
+        // measured impossibility rather than a feature nobody wrote yet
+        // (DROVE-56). See unsupportedResumeReason.
+        throw new Error(unsupportedResumeReason(happySessionId, metadata.flavor));
     }
     const resumeId = flavor === 'codex' ? metadata.codexThreadId : metadata.claudeSessionId;
     if (!resumeId) {

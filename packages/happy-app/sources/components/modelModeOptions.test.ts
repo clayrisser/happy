@@ -15,6 +15,9 @@ import {
     getClaudeModelModes,
     getClaudePermissionModes,
     getGeminiPermissionModes,
+    getHardcodedModelModes,
+    getHardcodedPermissionModes,
+    harnessHasModeControls,
     getDefaultEffortKey,
     getDefaultModelKey,
     getEffortLevelsForModel,
@@ -420,6 +423,46 @@ describe('modelModeOptions', () => {
         ]);
         expect(filterPermissionModesForCli(modes, '1.2.1-beta.2')).toEqual(modes);
         expect(filterPermissionModesForCli(modes, undefined)).toEqual(modes);
+    });
+});
+
+// DROVE-56. The pane harnesses used to fall through to Claude's catalog, so an
+// OpenCode session drew Claude's five permission modes and four Claude models
+// and every tap did nothing. Absent, not inert.
+describe('harnesses with no mode controls', () => {
+    it('offers no permission modes and no models for opencode', () => {
+        expect(getHardcodedPermissionModes('opencode', translate)).toEqual([]);
+        expect(getHardcodedModelModes('opencode', translate)).toEqual([]);
+        expect(getAvailablePermissionModes('opencode', null, translate)).toEqual([]);
+        expect(getAvailableModels('opencode', null, translate)).toEqual([]);
+    });
+
+    it('offers none for cursor either, which has no inbox at all', () => {
+        expect(getAvailablePermissionModes('cursor', null, translate)).toEqual([]);
+        expect(getAvailableModels('cursor', null, translate)).toEqual([]);
+    });
+
+    it('still lets a harness that publishes its own catalog win', () => {
+        const metadata = {
+            operatingModes: [{ code: 'ask', value: 'Ask' }],
+            models: [{ code: 'anthropic/claude', value: 'Claude' }],
+        } as never;
+        expect(getAvailablePermissionModes('opencode', metadata, translate).map((m) => m.key)).toEqual(['ask']);
+        expect(getAvailableModels('opencode', metadata, translate).map((m) => m.key)).toEqual(['anthropic/claude']);
+    });
+
+    it('leaves every other harness alone', () => {
+        expect(harnessHasModeControls('claude')).toBe(true);
+        expect(harnessHasModeControls('codex')).toBe(true);
+        expect(harnessHasModeControls(null)).toBe(true);
+        expect(harnessHasModeControls(undefined)).toBe(true);
+        expect(getAvailablePermissionModes('claude', null, translate).length).toBeGreaterThan(0);
+        expect(getAvailableModels('claude', null, translate).length).toBeGreaterThan(0);
+    });
+
+    it('has no effort scale either, which was already true and stays true', () => {
+        expect(getEffortLevelsForModel('opencode', 'default')).toEqual([]);
+        expect(getEffortLevelsForPicker('opencode', 'default')).toEqual([]);
     });
 });
 
