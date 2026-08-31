@@ -3,7 +3,6 @@ import { Platform, Pressable, Text, View } from "react-native";
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Ionicons, Octicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import * as Clipboard from 'expo-clipboard';
 import { MarkdownView } from "./markdown/MarkdownView";
 import { t } from '@/text';
 import { Message, UserTextMessage, AgentTextMessage, ToolCallMessage } from "@/sync/typesMessage";
@@ -19,7 +18,9 @@ import { resolveUserMessageBubbleColor } from '@/utils/userMessageBubbleColor';
 import { LongPressCopyable } from './LongPressCopyable';
 import { extractThinkingText, isEmptyThinking } from '@/utils/thinkingText';
 import { useElapsedTime } from '@/hooks/useElapsedTime';
+import { useSpokenSentence } from '@/voice/readAloudPlayhead';
 import { formatWorkDuration } from '@/hooks/useGroupedMessages';
+import { agentLongPressCopyText } from '@/utils/agentTurnCopy';
 
 
 export const MessageView = React.memo((props: {
@@ -207,6 +208,11 @@ function AgentTextBlock(props: {
     sync.sendMessage(props.sessionId, option.title, { source: 'option' });
   }, [props.sessionId]);
 
+  // The sentence read-aloud is speaking out of THIS message, or null
+  // (DROVE-114). A primitive, so a row only re-renders when its own sentence
+  // changes, and read above the early return below because hooks are hooks.
+  const spokenSentence = useSpokenSentence(props.message.id);
+
   // The model's reasoning is folded, never dropped — one muted row that opens
   // to the whole of what the CLI sent.
   if (props.message.isThinking) {
@@ -220,10 +226,27 @@ function AgentTextBlock(props: {
     );
   }
 
+  // Hold to copy, and no glyph (DROVE-121). The copy button under every reply
+  // cost a line of the transcript for something the hold already does, and it
+  // is the same gesture user messages have had all along.
+  const copyText = agentLongPressCopyText(props.copyText, props.message.text);
+  const body = (
+    <MarkdownView
+      markdown={props.message.text}
+      onOptionPress={handleOptionPress}
+      sessionId={props.sessionId}
+      highlightSentence={spokenSentence}
+      externalCopyHandler={copyText !== null}
+    />
+  );
+
   return (
     <View style={styles.agentMessageContainer}>
-      <MarkdownView markdown={props.message.text} onOptionPress={handleOptionPress} sessionId={props.sessionId} />
-      {props.copyText ? <MessageCopyButton text={props.copyText} /> : null}
+      {copyText !== null ? (
+        <LongPressCopyable style={styles.agentCopyTarget} text={copyText}>
+          {body}
+        </LongPressCopyable>
+      ) : body}
     </View>
   );
 }
@@ -263,53 +286,6 @@ function ThinkingBlock(props: {
         </View>
       ) : null}
     </View>
-  );
-}
-
-// The glyph is deliberately small, so widen the touch target well past it.
-const COPY_HIT_SLOP = { top: 14, bottom: 14, left: 14, right: 20 };
-
-function MessageCopyButton(props: { text: string }) {
-  const { theme } = useUnistyles();
-  const [copied, setCopied] = React.useState(false);
-  const resetTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  React.useEffect(() => () => {
-    if (resetTimerRef.current) {
-      clearTimeout(resetTimerRef.current);
-    }
-  }, []);
-
-  const handleCopy = React.useCallback(async () => {
-    try {
-      await Clipboard.setStringAsync(props.text);
-      setCopied(true);
-      if (resetTimerRef.current) {
-        clearTimeout(resetTimerRef.current);
-      }
-      resetTimerRef.current = setTimeout(() => setCopied(false), 1500);
-    } catch (error) {
-      console.error('Failed to copy message:', error);
-    }
-  }, [props.text]);
-
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={copied ? t('common.copied') : t('common.copy')}
-      hitSlop={COPY_HIT_SLOP}
-      onPress={handleCopy}
-      style={({ pressed }) => [
-        styles.copyAction,
-        pressed && styles.copyActionPressed,
-      ]}
-    >
-      <Ionicons
-        name={copied ? 'checkmark' : 'copy-outline'}
-        size={16}
-        color={theme.colors.text}
-      />
-    </Pressable>
   );
 }
 
@@ -528,18 +504,10 @@ const styles = StyleSheet.create((theme) => ({
     borderRadius: 16,
     maxWidth: '100%',
   },
-  copyAction: {
-    // No width, so the box shrink-wraps the glyph and its left edge lands on the
-    // same x as the markdown text above it. hitSlop carries the touch target.
-    alignSelf: 'flex-start',
-    height: 20,
-    justifyContent: 'center',
-    // Sits fully below the last markdown block's trailing margin, clear of the
-    // reply text.
-    marginTop: 0,
-  },
-  copyActionPressed: {
-    opacity: 0.5,
+  // The whole reply is the hold target, and it adds no height of its own, so
+  // removing the copy glyph gave the line back rather than leaving a gap.
+  agentCopyTarget: {
+    width: '100%',
   },
   userCopyTarget: {
     alignItems: 'flex-end',

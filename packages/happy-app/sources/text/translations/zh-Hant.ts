@@ -459,6 +459,7 @@ export const zhHant: TranslationStructure = {
         streamTalk: {
             on: '正在朗讀回覆',
             off: '不朗讀回覆',
+            headphonesOff: '朗讀已關閉，耳機已中斷連線',
         },
         dictate: {
             label: '按住說話，輕點鎖定',
@@ -566,7 +567,6 @@ export const zhHant: TranslationStructure = {
             used: ({ percent }: { percent: number }) => `已用 ${percent}%`,
             back: ({ time }: { time: string }) => `${time} 恢復`,
             familyBack: ({ family, time }: { family: string; time: string }) => `${family} ${time} 恢復`,
-            otherAccounts: '其他帳戶',
             unmeasured: '未測量',
             noLogin: '未登入',
         },

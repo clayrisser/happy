@@ -31,6 +31,38 @@ import { stripToSpeakableProse } from './speakable';
  *
  * And rather than cut at the first opportunity, a voice that is behind reads
  * a little faster; a cut loses information, a faster read does not.
+ *
+ * DROVE-122 moved WHEN that last rule fires. Sending a message used to call
+ * interrupt('sent'), which stopped the voice dead at the moment the user's
+ * text landed. Nothing of the answer exists yet at that moment, so the phone
+ * went quiet for as long as the model took to start writing. `userSent()`
+ * replaces it: every capture still stops, because the dictation that produced
+ * the message is over, but reading carries on. The cut then happens where it
+ * already did, in `abandonTurnsBefore` off the back of `enqueue`, which is by
+ * construction the new turn's FIRST SPEAKABLE SENTENCE. One marker, as
+ * before. If the old reply drains first, the reader simply rests: there is
+ * nothing left to say and silence is then correct.
+ *
+ * Nothing new bounds how long that stale tail may run, on purpose. The
+ * backlog rules above already do it: past the threshold of unspoken audio the
+ * voice reads faster, and past twice it the tail is dropped outright (the
+ * numbers being too timid is DROVE-116, not a third rule). And the window is
+ * only ever as long as the model takes to produce one sentence.
+ *
+ * DROVE-114 turned the private cursor into a PLAYHEAD. The queue is no longer
+ * a queue that forgets what it said: every sentence stays in `timeline` and
+ * `cursor` is a position in it, so reading can be moved backwards as well as
+ * forwards. Two things drive that position from outside:
+ *
+ *   - `seekTo(createdAt)` moves the position, which is what a scroll does.
+ *   - `setReadableThrough(createdAt)` says how far down the screen reaches,
+ *     and reading stops there rather than running past what is visible. Null
+ *     means the view is at the live edge and there is no bound at all.
+ *
+ * And one thing is published outwards: `playhead`, the sentence at the engine
+ * with the message it came from, so a row can mark it without reaching in
+ * here. The traffic is one way in each direction on purpose (see
+ * readAloudSeek.ts for why that is what keeps it from oscillating).
  */
 
 /** Why speech stopped. Carried for logs and for the tests to assert on. */
@@ -41,7 +73,8 @@ export type ReadAloudInterruption =
     | 'left-session'
     | 'switched-session'
     | 'toggled-off'
-    | 'call-started';
+    | 'call-started'
+    | 'headphones-unplugged';
 
 /** Per-utterance knobs. Today only the catch-up rate (DROVE-108). */
 export interface SpeakOptions {
@@ -59,6 +92,24 @@ export interface SpeechEngine {
     /** Cut whatever is speaking now, and hand the audio session back. */
     stop(): Promise<unknown> | void;
 }
+
+/**
+ * The sentence at the engine right now (DROVE-114), or null when nothing of
+ * the transcript is being said. Published rather than reached for: the row
+ * that marks it never touches the queue.
+ */
+export interface ReadAloudPlayhead {
+    /** The sentence as it was handed to the synthesiser. */
+    sentence: string;
+    /** The message it was taken from, so one row can claim it. */
+    messageId: string;
+    /** That message's createdAt, which is the ordering the seek uses. */
+    createdAt: number;
+    /** Which turn it belongs to (DROVE-108). */
+    turn: number;
+}
+
+export type ReadAloudPlayheadListener = (playhead: ReadAloudPlayhead | null) => void;
 
 export interface ReadAloudOptions {
     /** Clock, injectable for the tests. */
@@ -131,11 +182,16 @@ interface QueuedSentence {
     words: number;
     /** Which turn this sentence belongs to; an older one is abandoned. */
     turn: number;
+    /** The message it came from, for the playhead and for the seek. */
+    messageId: string;
+    /** That message's createdAt: the one ordering the view and the queue share. */
+    createdAt: number;
 }
 
 interface HeldTail {
     text: string;
     turn: number;
+    createdAt: number;
 }
 
 /** Words in a sentence, for the audio-duration estimate. */
@@ -165,9 +221,17 @@ export class ReadAloudReader {
     private readonly maxRateScale: number;
     private readonly turnStillRunning: ((sessionId: string) => boolean) | null;
     private readonly interruptListeners = new Set<ReadAloudInterruptListener>();
+    private readonly playheadListeners = new Set<ReadAloudPlayheadListener>();
     private enabled = false;
     private focused: string | null = null;
-    private queue: QueuedSentence[] = [];
+    /**
+     * Every sentence this session has produced, in order, spoken or not. It is
+     * kept rather than shifted off because scrolling up has to be able to read
+     * something again (DROVE-114).
+     */
+    private timeline: QueuedSentence[] = [];
+    /** Where reading is. Everything before it has been said at least once. */
+    private cursor = 0;
     private speaking = false;
     /**
      * Bumped on every interruption. An utterance that settles under an old
@@ -210,6 +274,21 @@ export class ReadAloudReader {
      */
     private previousArrivalAt = Number.NEGATIVE_INFINITY;
     private lastArrivalAt = 0;
+    /** The sentence at the engine, published to whoever marks it. */
+    private playheadValue: ReadAloudPlayhead | null = null;
+    /**
+     * Where reading was when it last had something to say. The playhead goes
+     * null between utterances and while nothing is speaking at all, and a
+     * scroll arriving in that gap still has to know where the voice had got
+     * to, or it would treat an idle reader as being nowhere and re-read the
+     * screen every time the list twitched.
+     */
+    private lastPosition: number | null = null;
+    /**
+     * How far down the transcript the screen reaches, as a createdAt. Reading
+     * never runs past it. Null is the live edge: no bound at all.
+     */
+    private readableThrough: number | null = null;
 
     constructor(engine: SpeechEngine, options: ReadAloudOptions = {}) {
         this.engine = engine;
@@ -227,8 +306,9 @@ export class ReadAloudReader {
         return this.speaking;
     }
 
+    /** Sentences still to say from the position, spoken or not counted twice. */
     get pending(): number {
-        return this.queue.length;
+        return Math.max(0, this.timeline.length - this.cursor);
     }
 
     get skipCount(): number {
@@ -241,6 +321,25 @@ export class ReadAloudReader {
 
     get focusedSessionId(): string | null {
         return this.focused;
+    }
+
+    /** The sentence at the engine, or null. */
+    get playhead(): ReadAloudPlayhead | null {
+        return this.playheadValue;
+    }
+
+    /**
+     * Where reading IS, as a createdAt, whether or not a sentence is being
+     * said this instant. Null only before anything has ever been read.
+     */
+    get readPosition(): number | null {
+        return this.playheadValue?.createdAt ?? this.lastPosition;
+    }
+
+    /** Returns the unsubscribe. */
+    addPlayheadListener(listener: ReadAloudPlayheadListener): () => void {
+        this.playheadListeners.add(listener);
+        return () => { this.playheadListeners.delete(listener); };
     }
 
     setEnabled(enabled: boolean): void {
@@ -259,8 +358,13 @@ export class ReadAloudReader {
         this.queuedChunks.clear();
         this.latestCreatedAt = 0;
         this.turnOpenedAt = 0;
-        // Another session's arrival stamps say nothing about this one's.
+        // Another session's arrival stamps say nothing about this one's, and
+        // neither does its transcript: the playhead starts from nothing.
         this.arrivalTurn = -1;
+        this.timeline = [];
+        this.cursor = 0;
+        this.lastPosition = null;
+        this.readableThrough = null;
         this.interrupt(reason);
     }
 
@@ -275,6 +379,52 @@ export class ReadAloudReader {
     blur(sessionId: string, reason: ReadAloudInterruption = 'left-session'): void {
         if (this.focused !== sessionId) return;
         this.focus(null, reason);
+    }
+
+    /**
+     * Move reading to the first sentence at or after `createdAt` (DROVE-114).
+     *
+     * A createdAt rather than a message id because the view can be looking at
+     * a user message or a tool card, which have no sentences of their own:
+     * seeking to one means "start from the first thing sayable at or after
+     * here". Landing where the cursor already is does nothing at all, which is
+     * what makes a repeated seek safe.
+     */
+    seekTo(createdAt: number): void {
+        // Already reading inside that message. Moving would restart it from
+        // its first sentence, and since the list reports its top row on every
+        // scroll frame, that would stutter the same sentence forever. This is
+        // the reader's half of what keeps the two directions from chasing
+        // each other; the other half is decideSeek in readAloudSeek.ts.
+        if (this.readPosition === createdAt) return;
+        let next = this.timeline.length;
+        for (let i = 0; i < this.timeline.length; i++) {
+            if (this.timeline[i].createdAt >= createdAt) {
+                next = i;
+                break;
+            }
+        }
+        if (next === this.cursor) return;
+        this.cursor = next;
+        // Whatever is in the air belongs to the old position. Cut it without
+        // going through interrupt(): a scroll is not a reason to stop the mic.
+        this.cutCurrentUtterance();
+        this.markerDue = false;
+        this.pump();
+    }
+
+    /**
+     * How far down the screen reaches, as a createdAt; null for the live edge.
+     * Reading stops rather than running past it, and starts again by itself
+     * when the bound moves forward.
+     */
+    setReadableThrough(createdAt: number | null): void {
+        if (this.readableThrough === createdAt) return;
+        const widened = createdAt === null
+            || this.readableThrough === null
+            || createdAt > this.readableThrough;
+        this.readableThrough = createdAt;
+        if (widened) this.pump();
     }
 
     onMessages(sessionId: string, messages: Message[]): void {
@@ -306,12 +456,12 @@ export class ReadAloudReader {
             const { complete, pending } = chunkStreamed(prose, false);
             const already = this.queuedChunks.get(message.id) ?? 0;
             if (complete.length > already) {
-                this.enqueue(complete.slice(already), this.turn);
+                this.enqueue(complete.slice(already), this.turn, message.id, message.createdAt);
                 this.queuedChunks.set(message.id, complete.length);
                 added = true;
             }
             if (pending !== null) {
-                this.pendingTails.set(message.id, { text: pending, turn: this.turn });
+                this.pendingTails.set(message.id, { text: pending, turn: this.turn, createdAt: message.createdAt });
             } else {
                 this.pendingTails.delete(message.id);
             }
@@ -326,20 +476,45 @@ export class ReadAloudReader {
      * every capture that it is over too. Listeners hear about EVERY call,
      * including one made while nothing was speaking: a latched mic with
      * read-aloud off is still a mic that has to stop when the user types.
+     *
+     * The timeline itself survives: the user can still scroll back over what
+     * was already said and have it read again (DROVE-114). What ends is the
+     * reading, so the position goes to the end and the marking clears.
      */
     interrupt(reason: ReadAloudInterruption): void {
         this.generation += 1;
-        this.queue = [];
+        this.cursor = this.timeline.length;
         this.pendingTails.clear();
         this.clearHold();
         this.speaking = false;
         this.speakingTurn = null;
+        this.setPlayhead(null);
         // Nothing is owed to a queue the user threw away.
         this.markerDue = false;
         if (this.started) {
             this.started = false;
             void this.engine.stop();
         }
+        this.notifyInterrupted(reason);
+    }
+
+    /**
+     * The user sent a message (DROVE-122).
+     *
+     * Every capture stops, exactly as interrupt('sent') made it: the
+     * dictation that produced the message is over. Reading does NOT stop.
+     * At this instant the reply being asked for does not exist, so cutting
+     * here buys a silence as long as the model takes to start writing. The
+     * old reply keeps being read until the new turn's first speakable
+     * sentence arrives, and `abandonTurnsBefore` cuts it there with the one
+     * marker DROVE-108 established. If the old reply runs out first, the
+     * reader rests, which is the right kind of silence.
+     */
+    userSent(): void {
+        this.notifyInterrupted('sent');
+    }
+
+    private notifyInterrupted(reason: ReadAloudInterruption): void {
         for (const listener of this.interruptListeners) {
             try {
                 listener(reason);
@@ -356,11 +531,11 @@ export class ReadAloudReader {
         return () => { this.interruptListeners.delete(listener); };
     }
 
-    private enqueue(sentences: string[], turn: number): void {
+    private enqueue(sentences: string[], turn: number, messageId: string, createdAt: number): void {
         if (sentences.length === 0) return;
         this.abandonTurnsBefore(turn);
         for (const text of sentences) {
-            this.queue.push({ text, words: countWords(text), turn });
+            this.timeline.push({ text, words: countWords(text), turn, messageId, createdAt });
         }
     }
 
@@ -371,13 +546,19 @@ export class ReadAloudReader {
      * This cuts the utterance in flight WITHOUT going through interrupt():
      * the mic and the other captures hang off that, and a reply arriving is
      * not a reason to stop the user talking.
+     *
+     * Since DROVE-114 the older sentences are stepped OVER rather than thrown
+     * away: they are still in the transcript, so scrolling back to them still
+     * reads them.
      */
     private abandonTurnsBefore(turn: number): void {
-        const staleQueued = this.queue.some((sentence) => sentence.turn < turn);
+        const staleQueued = this.cursor < this.timeline.length && this.timeline[this.cursor].turn < turn;
         const staleSpeaking = this.speaking && this.speakingTurn !== null && this.speakingTurn < turn;
         if (!staleQueued && !staleSpeaking) return;
 
-        this.queue = this.queue.filter((sentence) => sentence.turn >= turn);
+        while (this.cursor < this.timeline.length && this.timeline[this.cursor].turn < turn) {
+            this.cursor += 1;
+        }
         for (const [id, tail] of [...this.pendingTails]) {
             if (tail.turn < turn) this.pendingTails.delete(id);
         }
@@ -390,6 +571,7 @@ export class ReadAloudReader {
         this.generation += 1;
         this.speaking = false;
         this.speakingTurn = null;
+        this.setPlayhead(null);
         if (this.started) {
             this.started = false;
             void this.engine.stop();
@@ -402,7 +584,7 @@ export class ReadAloudReader {
         for (const [id, tail] of [...this.pendingTails]) {
             if (!where(id)) continue;
             this.pendingTails.delete(id);
-            this.enqueue([tail.text], tail.turn);
+            this.enqueue([tail.text], tail.turn, id, tail.createdAt);
             this.queuedChunks.set(id, (this.queuedChunks.get(id) ?? 0) + 1);
             flushed = true;
         }
@@ -440,11 +622,29 @@ export class ReadAloudReader {
         return this.now() - this.previousArrivalAt <= this.arrivalWindowMs;
     }
 
-    /** Seconds of audio left to say, from word count and the speaking rate. */
+    /**
+     * Seconds of audio left to say, from word count and the speaking rate.
+     * Only what is on screen counts: material below the fold is not something
+     * the voice is behind on, it is something the user has not scrolled to.
+     */
     private backlogSeconds(): number {
         let words = 0;
-        for (const sentence of this.queue) words += sentence.words;
+        for (let i = this.cursor; i < this.timeline.length; i++) {
+            const sentence = this.timeline[i];
+            if (this.readableThrough !== null && sentence.createdAt > this.readableThrough) break;
+            words += sentence.words;
+        }
         return (words * 60) / this.wordsPerMinute;
+    }
+
+    /** How many unspoken sentences are readable under the current bound. */
+    private readableCount(): number {
+        let count = 0;
+        for (let i = this.cursor; i < this.timeline.length; i++) {
+            if (this.readableThrough !== null && this.timeline[i].createdAt > this.readableThrough) break;
+            count += 1;
+        }
+        return count;
     }
 
     /**
@@ -472,6 +672,33 @@ export class ReadAloudReader {
         this.holdTimer = null;
     }
 
+    private setPlayhead(next: ReadAloudPlayhead | null): void {
+        const same = next === null
+            ? this.playheadValue === null
+            : this.playheadValue !== null
+                && this.playheadValue.messageId === next.messageId
+                && this.playheadValue.sentence === next.sentence;
+        if (same) return;
+        this.playheadValue = next;
+        if (next !== null) this.lastPosition = next.createdAt;
+        for (const listener of this.playheadListeners) {
+            try {
+                listener(next);
+            } catch {
+                // A row failing to render must not stop the voice.
+            }
+        }
+    }
+
+    /** Drained or parked: let the audio session go and mark nothing. */
+    private rest(): void {
+        this.setPlayhead(null);
+        if (this.started) {
+            this.started = false;
+            void this.engine.stop();
+        }
+    }
+
     private pump(): void {
         if (this.speaking) return;
 
@@ -483,36 +710,56 @@ export class ReadAloudReader {
         // audio is waiting, and the turn is still being written so that
         // newer material actually exists. A finished turn fails the third
         // test however long it is, which is the whole point.
-        if (this.queue.length > 1 && backlog > threshold && this.stillArriving()) {
-            this.queue = [this.queue[this.queue.length - 1]];
+        //
+        // A bounded view is a fourth veto (DROVE-114): while the user is
+        // parked up in the history, new text arriving must not drag the
+        // reading position down to it.
+        if (this.readableThrough === null
+            && this.timeline.length - this.cursor > 1
+            && backlog > threshold
+            && this.stillArriving()) {
+            this.cursor = this.timeline.length - 1;
             this.markerDue = true;
         }
 
-        if (this.markerDue) {
+        if (this.markerDue && this.readableCount() > 0) {
             this.markerDue = false;
             this.skips += 1;
-            this.speakNow(this.skipMarker, this.queue[0]?.turn ?? this.turn, 1);
+            this.setPlayhead(null);
+            this.speakNow(this.skipMarker, this.timeline[this.cursor]?.turn ?? this.turn, 1, null);
             return;
         }
 
-        const next = this.queue.shift();
+        const next = this.timeline[this.cursor];
         if (next === undefined) {
             // Drained. Stopping here is not about cutting anything off, it is
             // about releasing the audio session so ducked music comes back up
             // instead of staying quiet until the next reply.
-            if (this.started) {
-                this.started = false;
-                void this.engine.stop();
-            }
+            this.rest();
             return;
         }
-        this.speakNow(next.text, next.turn, this.catchUpRate(backlog, threshold));
+        if (this.readableThrough !== null && next.createdAt > this.readableThrough) {
+            // Parked: the next thing to say is below the fold. It is not lost,
+            // it waits here until the view comes down to it (DROVE-114).
+            this.rest();
+            return;
+        }
+        this.cursor += 1;
+        this.speakNow(next.text, next.turn, this.catchUpRate(backlog, threshold), next);
     }
 
-    private speakNow(text: string, turn: number, rateScale: number): void {
+    private speakNow(text: string, turn: number, rateScale: number, at: QueuedSentence | null): void {
         this.speaking = true;
         this.speakingTurn = turn;
         this.started = true;
+        if (at !== null) {
+            this.setPlayhead({
+                sentence: at.text,
+                messageId: at.messageId,
+                createdAt: at.createdAt,
+                turn: at.turn,
+            });
+        }
         const generation = this.generation;
         void Promise.resolve()
             .then(() => this.engine.speak(text, { rateScale }))

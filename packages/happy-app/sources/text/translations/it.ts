@@ -457,6 +457,7 @@ export const it: TranslationStructure = {
         streamTalk: {
             on: 'Sto leggendo le risposte ad alta voce',
             off: 'Risposte non lette ad alta voce',
+            headphonesOff: 'Lettura ad alta voce disattivata, cuffie scollegate',
         },
         dictate: {
             label: 'Tieni premuto per parlare, tocca per bloccare',
@@ -510,7 +511,7 @@ export const it: TranslationStructure = {
             title: 'CANALI',
             label: 'Canali',
             audioTitle: 'AUDIO',
-            speakPrompts: 'Leggi le richieste quando arrivano',
+            speakPrompts: 'Leggi le richieste all\'arrivo',
             speakPromptsSubtitle: 'Una richiesta di Cattle Drover e le sue opzioni vengono lette ad alta voce all\'arrivo.',
             readReplies: 'Leggi le risposte ad alta voce',
             readRepliesSubtitle: 'Pronuncia ogni risposta appena arriva. Codice, diff e output degli strumenti vengono saltati.',
@@ -564,7 +565,6 @@ export const it: TranslationStructure = {
             used: ({ percent }: { percent: number }) => `${percent}% usato`,
             back: ({ time }: { time: string }) => `Torna ${time}`,
             familyBack: ({ family, time }: { family: string; time: string }) => `${family} torna ${time}`,
-            otherAccounts: 'Altri account',
             unmeasured: 'non misurato',
             noLogin: 'nessun accesso',
         },

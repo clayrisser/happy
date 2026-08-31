@@ -473,6 +473,7 @@ export const en: TranslationStructure = {
         streamTalk: {
             on: 'Reading replies aloud',
             off: 'Not reading replies aloud',
+            headphonesOff: 'Read aloud off, headphones disconnected',
         },
         dictate: {
             label: 'Hold to talk, tap to latch',
@@ -526,7 +527,7 @@ export const en: TranslationStructure = {
             title: 'CHANNELS',
             label: 'Channels',
             audioTitle: 'AUDIO',
-            speakPrompts: 'Speak prompts when they arrive',
+            speakPrompts: 'Speak prompts on arrival',
             speakPromptsSubtitle: 'A Cattle Drover prompt and its options read out the moment it lands.',
             readReplies: 'Read replies aloud',
             readRepliesSubtitle: 'Speaks each assistant reply as it arrives. Code, diffs and tool output are skipped.',
@@ -580,7 +581,6 @@ export const en: TranslationStructure = {
             used: ({ percent }: { percent: number }) => `${percent}% used`,
             back: ({ time }: { time: string }) => `Back ${time}`,
             familyBack: ({ family, time }: { family: string; time: string }) => `${family} back ${time}`,
-            otherAccounts: 'Other accounts',
             unmeasured: 'not measured',
             noLogin: 'no login',
         },

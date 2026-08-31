@@ -460,6 +460,7 @@ export const ja: TranslationStructure = {
         streamTalk: {
             on: '返信を読み上げます',
             off: '返信は読み上げません',
+            headphonesOff: '読み上げをオフにしました。イヤホンが外れました',
         },
         dictate: {
             label: '長押しで話す、タップで固定',
@@ -513,7 +514,7 @@ export const ja: TranslationStructure = {
             title: 'チャンネル',
             label: 'チャンネル',
             audioTitle: '音声',
-            speakPrompts: '確認を受け取ったら読み上げる',
+            speakPrompts: '確認の到着時に読み上げる',
             speakPromptsSubtitle: 'Cattle Drover の確認とその選択肢を、届いたときに読み上げます。',
             readReplies: '返信を読み上げる',
             readRepliesSubtitle: '届いた返信をそのつど読み上げます。コード、差分、ツール出力は読みません。',
@@ -567,7 +568,6 @@ export const ja: TranslationStructure = {
             used: ({ percent }: { percent: number }) => `使用 ${percent}%`,
             back: ({ time }: { time: string }) => `${time} に復帰`,
             familyBack: ({ family, time }: { family: string; time: string }) => `${family} は ${time} に復帰`,
-            otherAccounts: '他のアカウント',
             unmeasured: '未計測',
             noLogin: '未ログイン',
         },

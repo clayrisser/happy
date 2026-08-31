@@ -475,6 +475,7 @@ export const pl: TranslationStructure = {
         streamTalk: {
             on: 'Czytam odpowiedzi na głos',
             off: 'Nie czytam odpowiedzi',
+            headphonesOff: 'Czytanie na głos wyłączone, słuchawki odłączone',
         },
         dictate: {
             label: 'Przytrzymaj, aby mówić, dotknij, aby zablokować',
@@ -528,7 +529,7 @@ export const pl: TranslationStructure = {
             title: 'KANAŁY',
             label: 'Kanały',
             audioTitle: 'DŹWIĘK',
-            speakPrompts: 'Czytaj pytania, gdy nadejdą',
+            speakPrompts: 'Czytaj pytania po nadejściu',
             speakPromptsSubtitle: 'Pytanie Cattle Drover i jego opcje są czytane na głos, gdy nadejdzie.',
             readReplies: 'Czytaj odpowiedzi na głos',
             readRepliesSubtitle: 'Wypowiada każdą odpowiedź, gdy nadejdzie. Kod, diffy i wyniki narzędzi są pomijane.',
@@ -582,7 +583,6 @@ export const pl: TranslationStructure = {
             used: ({ percent }: { percent: number }) => `${percent}% użyto`,
             back: ({ time }: { time: string }) => `Wraca ${time}`,
             familyBack: ({ family, time }: { family: string; time: string }) => `${family} wraca ${time}`,
-            otherAccounts: 'Inne konta',
             unmeasured: 'nie zmierzono',
             noLogin: 'brak logowania',
         },

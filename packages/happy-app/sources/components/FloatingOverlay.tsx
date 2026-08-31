@@ -30,25 +30,35 @@ interface FloatingOverlayProps {
     maxHeight?: number;
     showScrollIndicator?: boolean;
     keyboardShouldPersistTaps?: boolean | 'always' | 'never' | 'handled';
+    /**
+     * Pinned above the scroll rather than scrolling with it (DROVE-117): the
+     * quota sheet's grabber has to stay under the finger that is dragging it.
+     */
+    header?: React.ReactNode;
 }
 
 export const FloatingOverlay = React.memo((props: FloatingOverlayProps) => {
     const styles = stylesheet;
     const { theme } = useUnistyles();
-    const { 
-        children, 
-        maxHeight = 240, 
-        showScrollIndicator = false, 
-        keyboardShouldPersistTaps = 'handled' 
+    const {
+        children,
+        header,
+        maxHeight = 240,
+        showScrollIndicator = false,
+        keyboardShouldPersistTaps = 'handled'
     } = props;
+    // A pinned header shares the box with the scroll, so the scroll gives way
+    // instead of holding its own maxHeight and pushing the header out.
+    const scrollStyle = header ? { flexShrink: 1 } : { maxHeight };
 
     // Keep the desktop popup exactly as it was before the native glass work.
     // In particular, web does not get the local blur halo or its entry motion.
     if (Platform.OS === 'web') {
         return (
             <Animated.View style={[styles.container, { maxHeight }]}>
+                {header}
                 <Animated.ScrollView
-                    style={{ maxHeight }}
+                    style={scrollStyle}
                     keyboardShouldPersistTaps={keyboardShouldPersistTaps}
                     showsVerticalScrollIndicator={showScrollIndicator}
                 >
@@ -69,8 +79,9 @@ export const FloatingOverlay = React.memo((props: FloatingOverlayProps) => {
                 tintColor={theme.colors.glass.overlayTint}
                 style={[styles.container, { maxHeight }]}
             >
+                {header}
                 <Animated.ScrollView
-                    style={{ maxHeight }}
+                    style={scrollStyle}
                     keyboardShouldPersistTaps={keyboardShouldPersistTaps}
                     showsVerticalScrollIndicator={showScrollIndicator}
                 >

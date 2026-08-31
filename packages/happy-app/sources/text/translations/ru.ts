@@ -475,6 +475,7 @@ export const ru: TranslationStructure = {
         streamTalk: {
             on: 'Читаю ответы вслух',
             off: 'Ответы не читаются вслух',
+            headphonesOff: 'Чтение вслух выключено, наушники отключены',
         },
         dictate: {
             label: 'Удерживайте, чтобы говорить, коснитесь, чтобы зафиксировать',
@@ -528,7 +529,7 @@ export const ru: TranslationStructure = {
             title: 'КАНАЛЫ',
             label: 'Каналы',
             audioTitle: 'ЗВУК',
-            speakPrompts: 'Читать запросы вслух при поступлении',
+            speakPrompts: 'Читать запросы при поступлении',
             speakPromptsSubtitle: 'Запрос Cattle Drover и его варианты зачитываются вслух, когда он приходит.',
             readReplies: 'Читать ответы вслух',
             readRepliesSubtitle: 'Произносит каждый ответ по мере поступления. Код, диффы и вывод инструментов пропускаются.',
@@ -582,7 +583,6 @@ export const ru: TranslationStructure = {
             used: ({ percent }: { percent: number }) => `Использовано ${percent}%`,
             back: ({ time }: { time: string }) => `Вернётся ${time}`,
             familyBack: ({ family, time }: { family: string; time: string }) => `${family} вернётся ${time}`,
-            otherAccounts: 'Другие аккаунты',
             unmeasured: 'не измерено',
             noLogin: 'нет входа',
         },

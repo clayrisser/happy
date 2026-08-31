@@ -82,6 +82,12 @@ public final class DroverSpeechModule: Module {
     /// times a second; JS wants at most twenty (DROVE-74).
     private var lastLevelSentAt: TimeInterval = 0
 
+    /// The AVAudioSession route-change observer, held so it can be removed
+    /// (DROVE-119). Registered for the whole life of the module, not only
+    /// while speech is running: JS keeps the last route it saw, and a change
+    /// that lands between two replies still has to be remembered.
+    private var routeObserver: NSObjectProtocol?
+
     /// The session as it was before dictation took it over, put back when
     /// dictation lets go. Nil while nobody is dictating.
     private var sessionBeforeDictation: (
@@ -102,15 +108,17 @@ public final class DroverSpeechModule: Module {
     public func definition() -> ModuleDefinition {
         Name("DroverSpeech")
 
-        Events("onDictationPartial", "onDictationEnded", "onDictationLevel")
+        Events("onDictationPartial", "onDictationEnded", "onDictationLevel", "onAudioRouteChange")
 
         OnCreate {
             self.synthesizer.delegate = self.speechDelegate
+            self.startWatchingAudioRoute()
         }
 
         OnDestroy {
             self.synthesizer.stopSpeaking(at: .immediate)
             self.teardownDictation()
+            self.stopWatchingAudioRoute()
         }
 
         /// Speak one utterance and resolve when it is over — finished or cut.
@@ -198,6 +206,15 @@ public final class DroverSpeechModule: Module {
         /// nothing here does.
         Function("audioRoute") { () -> [String] in
             AVAudioSession.sharedInstance().currentRoute.outputs.map { $0.portType.rawValue }
+        }
+
+        /// Whether this binary posts `onAudioRouteChange`. There is no way to
+        /// ask a module which events it declares, so JS asks for the function
+        /// that shipped in the same binary (DROVE-119). A build without it
+        /// gets no event, and the JS guard says so rather than claiming a
+        /// protection it does not have.
+        Function("watchesAudioRoute") { () -> Bool in
+            true
         }
 
         /// Whether this device can transcribe WITHOUT sending audio anywhere.
@@ -302,6 +319,55 @@ public final class DroverSpeechModule: Module {
 
     private static func primarySubtag(_ tag: String) -> String {
         normalizedTag(tag).split(separator: "-").first.map(String.init) ?? ""
+    }
+
+    /// The audio route changing, forwarded to JS (DROVE-119).
+    ///
+    /// Polling `audioRoute()` on a timer leaves up to a poll's worth of a
+    /// private reply playing out of the phone's speaker after an AirPod comes
+    /// out, which is exactly the thing the feature exists to stop. The
+    /// notification fires as the route moves, so JS can cut the utterance
+    /// mid-word. Nothing is decided here: the port names go up and the JS
+    /// side works out whether headphones just became the room.
+    private func startWatchingAudioRoute() {
+        guard routeObserver == nil else { return }
+        routeObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: AVAudioSession.sharedInstance(),
+            queue: nil
+        ) { [weak self] notification in
+            guard let self else { return }
+            let raw = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt ?? 0
+            let outputs = AVAudioSession.sharedInstance().currentRoute.outputs.map { $0.portType.rawValue }
+            self.sendEvent("onAudioRouteChange", [
+                "outputs": outputs,
+                "reason": Self.routeChangeReasonName(raw)
+            ])
+        }
+    }
+
+    private func stopWatchingAudioRoute() {
+        guard let routeObserver else { return }
+        NotificationCenter.default.removeObserver(routeObserver)
+        self.routeObserver = nil
+    }
+
+    /// AVAudioSession's reason code as a name JS can log. `oldDeviceUnavailable`
+    /// is the one that means "the headphones went away"; the guard does not
+    /// depend on it (the port names are enough and are the same on every
+    /// build), it is carried so a log line says what happened.
+    private static func routeChangeReasonName(_ raw: UInt) -> String {
+        switch AVAudioSession.RouteChangeReason(rawValue: raw) ?? .unknown {
+        case .newDeviceAvailable: return "newDeviceAvailable"
+        case .oldDeviceUnavailable: return "oldDeviceUnavailable"
+        case .categoryChange: return "categoryChange"
+        case .override: return "override"
+        case .wakeFromSleep: return "wakeFromSleep"
+        case .noSuitableRouteForCategory: return "noSuitableRouteForCategory"
+        case .routeConfigurationChange: return "routeConfigurationChange"
+        case .unknown: return "unknown"
+        @unknown default: return "unknown"
+        }
     }
 
     /// The same rule as pickVoice in sources/voice/voicePick.ts: the chosen

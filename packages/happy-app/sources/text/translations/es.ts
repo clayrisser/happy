@@ -459,6 +459,7 @@ export const es: TranslationStructure = {
         streamTalk: {
             on: 'Leyendo las respuestas en voz alta',
             off: 'No se leen las respuestas',
+            headphonesOff: 'Lectura en voz alta desactivada, auriculares desconectados',
         },
         dictate: {
             label: 'Mantén pulsado para hablar, toca para fijar',
@@ -512,7 +513,7 @@ export const es: TranslationStructure = {
             title: 'CANALES',
             label: 'Canales',
             audioTitle: 'AUDIO',
-            speakPrompts: 'Leer las peticiones cuando lleguen',
+            speakPrompts: 'Leer las peticiones al llegar',
             speakPromptsSubtitle: 'Una petición de Cattle Drover y sus opciones se leen en voz alta al llegar.',
             readReplies: 'Leer respuestas en voz alta',
             readRepliesSubtitle: 'Pronuncia cada respuesta a medida que llega. Se omiten el código, los diffs y la salida de herramientas.',
@@ -566,7 +567,6 @@ export const es: TranslationStructure = {
             used: ({ percent }: { percent: number }) => `${percent}% usado`,
             back: ({ time }: { time: string }) => `Vuelve ${time}`,
             familyBack: ({ family, time }: { family: string; time: string }) => `${family} vuelve ${time}`,
-            otherAccounts: 'Otras cuentas',
             unmeasured: 'sin medir',
             noLogin: 'sin sesión',
         },

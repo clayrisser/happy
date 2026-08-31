@@ -37,9 +37,7 @@ import { resolveComposerPrimaryPress, type ComposerPrimaryGesture } from './comp
 import { ComposerToast } from './ComposerToast';
 import { flipStreamTalk, streamTalkButton } from '@/voice/streamTalk';
 import { NativeSettingsMenu, type NativeSettingsMenuGroup } from './NativeSettingsMenu';
-import { AgentInputStatusRow, type StatusRowSheet } from './AgentInputStatusRow';
-import { SessionAgentsSheet } from './SessionAgentsSheet';
-import { UsageAccountBars } from './UsageAccountBars';
+import { AgentInputStatusRow } from './AgentInputStatusRow';
 import { resolveUsageStrip } from './agentInputUsage';
 import { ProviderIcon } from './ProviderIcon';
 import { isRigMetadata } from '@/sync/rig';
@@ -906,10 +904,14 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
      * three rows that opened the three pickers; Clay: "I don't like this
      * extra menu, then I have to click twice." The mode, the effort and the
      * model are three controls in the button row now and each opens its own
-     * picker on the first tap. 'agents' and 'usage' joined instead, because
-     * what used to unfold under the status row opens as a sheet.
+     * picker on the first tap.
+     *
+     * The status row's two expanders are deliberately NOT here. They open
+     * ComposerAnchoredSheet from the row itself (DROVE-117's mechanism), and
+     * that sheet's own click-away backdrop is what keeps them from stacking
+     * with these pickers.
      */
-    type ComposerPicker = 'channels' | 'permission' | 'model' | 'effort' | 'agents' | 'usage';
+    type ComposerPicker = 'channels' | 'permission' | 'model' | 'effort';
     const [openPicker, setOpenPicker] = React.useState<ComposerPicker | null>(null);
     const pickerOpeningRef = React.useRef<ComposerPicker | null>(null);
     const pickerKeyboardSubscriptionRef = React.useRef<ReturnType<typeof Keyboard.addListener> | null>(null);
@@ -1192,15 +1194,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         model: props.modelMode,
         effortLabel,
     }), [effortLabel, permissionShortLabel, props.modelMode]);
-    // The status row's two expanders (DROVE-111). They share the composer's
-    // one picker slot, which is what makes opening either of them close
-    // whatever else was showing.
-    const statusSheet: StatusRowSheet | null = openPicker === 'agents' || openPicker === 'usage'
-        ? openPicker
-        : null;
-    const handleOpenStatusSheet = React.useCallback((sheet: StatusRowSheet) => {
-        handlePickerPress(sheet);
-    }, [handlePickerPress]);
     // Where this effort sits on the scale the current model offers, for the
     // meter on the session control.
     const effortIndex = props.effortLevel
@@ -1651,11 +1644,21 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
 
                 <ComposerToast text={composerToast} />
 
-                {/* The session sheet and the channel sheet (DROVE-83), and on
-                    Android the permission, model and effort pickers a session
-                    row opens. On iOS those three are native menus anchored to
-                    the rows, so only the two sheets ever render here. */}
-                {compactMobileComposer && openPicker && (
+                {/* The channel sheet slides up on its own (DROVE-123), like
+                    the quota sheet, so it is out of the shared panel below. */}
+                <DroverChannelsSheet
+                    open={compactMobileComposer && openPicker === 'channels'}
+                    onClose={closePicker}
+                    horizontalInset={screenWidth > 700 ? 0 : 16}
+                />
+
+                {/* On Android, the permission, model and effort pickers the
+                    three session controls open (DROVE-111). On iOS those three
+                    are native menus anchored to the controls themselves, so
+                    nothing renders here at all. DROVE-83's intermediate
+                    session sheet is gone, and DROVE-123 took channels out to
+                    its own sheet. */}
+                {compactMobileComposer && openPicker && openPicker !== 'channels' && (
                     <>
                         <AnimatedClickAwayBackdrop
                             onPress={closePicker}
@@ -1666,33 +1669,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                             { paddingHorizontal: screenWidth > 700 ? 0 : 16 }
                         ]}>
                             <FloatingOverlay maxHeight={400} keyboardShouldPersistTaps="always">
-                                {openPicker === 'channels' ? (
-                                    <DroverChannelsSheet
-                                        sectionStyle={styles.overlaySection}
-                                        titleStyle={styles.overlaySectionTitle}
-                                    />
-                                ) : openPicker === 'agents' ? (
-                                    // The agent tree, in a sheet rather than
-                                    // unfolded under the status line
-                                    // (DROVE-111).
-                                    props.sessionId ? (
-                                        <SessionAgentsSheet
-                                            sessionId={props.sessionId}
-                                            sectionStyle={styles.overlaySection}
-                                            titleStyle={styles.overlaySectionTitle}
-                                        />
-                                    ) : null
-                                ) : openPicker === 'usage' ? (
-                                    // The shared host for the quota sheet.
-                                    // DROVE-117 owns what goes in it; this is
-                                    // today's bars, unchanged, moved out of
-                                    // the inline unfold.
-                                    // The groups carry their own headings, so
-                                    // the sheet adds none.
-                                    <View style={styles.overlaySection}>
-                                        <UsageAccountBars groups={usageBarGroups} />
-                                    </View>
-                                ) : openPicker === 'permission' ? (
+                                {openPicker === 'permission' ? (
                                     <View style={styles.overlaySection}>
                                         <Text style={styles.overlaySectionTitle}>
                                             {permissionTitle}
@@ -2200,17 +2177,15 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
 
                 {/* Every status fact on one line under the card (DROVE-82):
                     working state and timer, connection, quota. Clay, seeing it
-                    in place: "this is great, keep that shit down there." Both
-                    of its expanders open the composer's sheet rather than
-                    unfolding under it (DROVE-111). */}
+                    in place: "this is great, keep that shit down there." It
+                    owns its own two sheets (DROVE-117, DROVE-111), so nothing
+                    here has to route them. */}
                 <AgentInputStatusRow
                     sessionId={props.sessionId}
                     connectionStatus={props.connectionStatus}
                     contextStatus={contextStatus}
                     weekPercent={weekPercent}
-                    canOpenUsage={usageBarGroups.length > 0}
-                    openSheet={statusSheet}
-                    onOpenSheet={handleOpenStatusSheet}
+                    usageBarGroups={usageBarGroups}
                     onSessionInfoPress={props.onSessionInfoPress}
                     showDetails={props.showStatusDetails !== false}
                 />

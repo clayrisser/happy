@@ -8,6 +8,9 @@ import { t } from '@/text';
 import { useSession } from '@/sync/storage';
 import { isLiveStatusFresh, summarizeLiveStatus, type LiveStatusSummary } from '@/utils/liveStatus';
 import { AnimatedFade } from './AnimatedOverlay';
+import { UsageAccountBarsSheet } from './UsageAccountBarsSheet';
+import type { UsageBarGroup } from './agentInputUsage';
+import { SessionAgentsSheet } from './SessionAgentsSheet';
 import { StatusDot } from './StatusDot';
 import { useTickingNow } from './useTickingNow';
 
@@ -31,14 +34,12 @@ import { useTickingNow } from './useTickingNow';
  * connection opens session info, the quota opens a bar per account and per
  * window (DROVE-107), the gauge swaps to exact tokens.
  *
- * What DROVE-111 changed: the two folds that used to open UNDER the row now
- * open as the sheet the composer already uses for the session and the
- * channels (DROVE-83, DROVE-72). Clay, having asked for the quota popup to
- * slide up: "just like agents should show in a sheet, right?" An unfold has
- * to fit the furniture it hangs off, which is what squeezed the tree into
- * 180pt and the account bars into a strip; a sheet has room, scrolls, and
- * leaves the chat where it was. The composer holds one picker at a time, so
- * opening one of these closes the others rather than stacking them.
+ * Both folds that EXPAND open the same slide-up sheet (DROVE-117 for the
+ * quota, DROVE-111 for the tree). Clay: "just like agents should show in a
+ * sheet, right?" An unfold has to fit the furniture it hangs off, which is
+ * what squeezed the tree into 180pt and the account bars into a strip. One
+ * piece of state holds which is open, so opening one closes the other rather
+ * than stacking them.
  *
  * Renders nothing at all when there is nothing to say, so an empty session
  * does not gain a blank strip. Its own module so a test can mount it without
@@ -101,9 +102,6 @@ export type StatusRowConnection = {
     };
 };
 
-/** The two things on this row that expand, and they expand into a sheet. */
-export type StatusRowSheet = 'agents' | 'usage';
-
 export type StatusRowProps = {
     /** Absent on a preview with no session behind it; the working segment needs one. */
     sessionId?: string;
@@ -111,15 +109,12 @@ export type StatusRowProps = {
     contextStatus: { percent: number; detailText: string; color: string } | null;
     weekPercent: number | null;
     /**
-     * The week sheet has rows to draw: this account's session, week and family
-     * windows, then every other drover account under a second heading
-     * (DROVE-47, DROVE-107). The rows themselves belong to the sheet, which
-     * the composer owns; this row only says whether the figure is worth a tap.
+     * The week popup's bar rows: this account's session, week and family
+     * windows, then every other drover account folded under a second heading
+     * (DROVE-47). One thin row each, name and track and number on one line
+     * (DROVE-107).
      */
-    canOpenUsage?: boolean;
-    /** Which sheet the composer is showing, so the chevrons agree with it. */
-    openSheet?: StatusRowSheet | null;
-    onOpenSheet?: (sheet: StatusRowSheet) => void;
+    usageBarGroups: UsageBarGroup[];
     /** Opens the session info screen; the connection segment taps into it. */
     onSessionInfoPress?: () => void;
     /**
@@ -137,7 +132,7 @@ export type StatusRowProps = {
  * snapshot up to once a second while working and the composer must not
  * reconcile its whole tree on every tick.
  */
-export function useLiveStatusSummary(sessionId: string | undefined): LiveStatusSummary | null {
+function useLiveStatusSummary(sessionId: string | undefined): LiveStatusSummary | null {
     const session = useSession(sessionId ?? '');
     const live = sessionId ? session?.metadata?.liveStatus ?? null : null;
     const now = useTickingNow(!!live);
@@ -169,26 +164,31 @@ function CliCheck(props: { name: string; ok: boolean | null }) {
 
 export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: StatusRowProps) {
     const { theme } = useUnistyles();
+    // One value, not two flags: what makes opening the quota close the tree.
+    const [openSheet, setOpenSheet] = React.useState<'agents' | 'usage' | null>(null);
     const [showPreciseContext, setShowPreciseContext] = React.useState(false);
     const summary = useLiveStatusSummary(p.sessionId);
+    const closeSheet = React.useCallback(() => setOpenSheet(null), []);
 
     const hasUsage = p.weekPercent != null || p.contextStatus != null;
     if (!summary && !p.connectionStatus && !hasUsage) {
         return null;
     }
 
-    const canExpand = !!summary && summary.rows.length > 0 && !!p.onOpenSheet;
-    const canOpenUsage = !!p.canOpenUsage && !!p.onOpenSheet;
+    const canExpand = !!summary && summary.rows.length > 0;
+    const canOpenUsage = p.usageBarGroups.length > 0;
     const segments: React.ReactNode[] = [];
 
     if (summary) {
         segments.push(
             <Pressable
                 key="live"
-                onPress={canExpand ? () => p.onOpenSheet?.('agents') : undefined}
+                onPress={canExpand
+                    ? () => setOpenSheet((open) => (open === 'agents' ? null : 'agents'))
+                    : undefined}
                 hitSlop={{ top: 12, bottom: 14, left: 6, right: 6 }}
                 accessibilityRole={canExpand ? 'button' : undefined}
-                accessibilityState={canExpand ? { expanded: p.openSheet === 'agents' } : undefined}
+                accessibilityState={canExpand ? { expanded: openSheet === 'agents' } : undefined}
                 accessibilityLabel={`Working: ${summary.headline}`}
                 style={({ pressed }) => ({
                     flexDirection: 'row',
@@ -212,7 +212,7 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
                 </Text>
                 {canExpand ? (
                     <Ionicons
-                        name={p.openSheet === 'agents' ? 'chevron-down' : 'chevron-up'}
+                        name={openSheet === 'agents' ? 'chevron-down' : 'chevron-up'}
                         size={10}
                         color={theme.colors.textSecondary}
                     />
@@ -253,17 +253,17 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
                 {t('agentInput.context.percentWeek', { percent: Math.round(p.weekPercent) })}
             </Text>
         );
-        // The quota opens the composer's sheet rather than a native menu
-        // (DROVE-107) or an unfold under the row (DROVE-111). A UIMenu row is
-        // a string, so it can hold a sentence but never a bar; the sheet can
-        // draw the bars and has room to.
+        // The quota opens a sheet that slides up (DROVE-117), not a native
+        // menu: a UIMenu row is a string, so it can hold a sentence but never
+        // a bar. DROVE-107 unfolded the rows in place instead; a sheet gives
+        // the account list room to scroll and a known width to align in.
         segments.push(
             canOpenUsage ? (
                 <Pressable
                     key="week"
-                    onPress={() => p.onOpenSheet?.('usage')}
+                    onPress={() => setOpenSheet((open) => (open === 'usage' ? null : 'usage'))}
                     accessibilityRole="button"
-                    accessibilityState={{ expanded: p.openSheet === 'usage' }}
+                    accessibilityState={{ expanded: openSheet === 'usage' }}
                     hitSlop={{ top: 12, bottom: 14, left: 6, right: 6 }}
                     style={({ pressed }) => ({
                         flexDirection: 'row',
@@ -274,7 +274,7 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
                 >
                     {weekText}
                     <Ionicons
-                        name={p.openSheet === 'usage' ? 'chevron-down' : 'chevron-up'}
+                        name={openSheet === 'usage' ? 'chevron-down' : 'chevron-up'}
                         size={10}
                         color={theme.colors.textSecondary}
                     />
@@ -334,6 +334,21 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
                     </React.Fragment>
                 ))}
             </View>
+            {canOpenUsage ? (
+                <UsageAccountBarsSheet
+                    groups={p.usageBarGroups}
+                    open={openSheet === 'usage'}
+                    onClose={closeSheet}
+                />
+            ) : null}
+            {canExpand && p.sessionId ? (
+                <SessionAgentsSheet
+                    sessionId={p.sessionId}
+                    summary={summary}
+                    open={openSheet === 'agents'}
+                    onClose={closeSheet}
+                />
+            ) : null}
         </AnimatedFade>
     );
 });

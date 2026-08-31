@@ -7,6 +7,7 @@ import { PushPermissionNotice } from '@/components/PushPermissionNotice';
 import { AgentInput } from '@/components/AgentInput';
 import { readAloud } from '@/voice/readAloudService';
 import { useVoiceComposer } from '@/voice/useVoiceComposer';
+import { ReadAloudRouteToast } from '@/voice/ReadAloudRouteToast';
 import { resolveVisibleAgentGoalStatus } from '@/components/agentGoalStatus';
 import type { MultiTextInputHandle } from '@/components/MultiTextInput';
 import { layout } from '@/components/layout';
@@ -925,7 +926,11 @@ export function SessionViewLoaded({
     const handleSend = React.useCallback(() => {
         const liveMessage = composerHandleRef.current?.getMessage() ?? '';
         if (liveMessage.trim() || selectedImages.length > 0) {
-            readAloud.interrupt('sent');
+            // Stops the mic, not the narration (DROVE-122). The answer being
+            // asked for does not exist yet, so cutting here would be a silence
+            // as long as the model takes to start. The old reply is dropped
+            // when the new one has its first sentence to say.
+            readAloud.userSent();
             const attachments = selectedImages.length > 0 ? selectedImages : undefined;
             const communicationsToDismiss = [...pendingCommunications];
             composerHandleRef.current?.clearMessage();
@@ -1211,6 +1216,10 @@ export function SessionViewLoaded({
                 onSessionInfoPress={handleSessionInfoPress}
                 onActionAreaOffsetChange={usesFloatingMobileDock ? handleComposerCardOffsetChange : undefined}
             />
+            {/* Why read-aloud went quiet, when the route took it away
+                (DROVE-119). Absolute over the composer, so it costs the
+                chat no height. */}
+            <ReadAloudRouteToast />
         </View>
     );
 
