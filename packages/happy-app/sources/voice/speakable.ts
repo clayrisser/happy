@@ -228,6 +228,30 @@ function isSentenceBoundary(text: string, index: number): boolean {
     return true;
 }
 
+/** Whether the first non-space character at or after `index` is a lower-case letter. */
+function startsLowerCase(text: string, index: number): boolean {
+    let i = index;
+    while (i < text.length && /\s/.test(text[i])) i++;
+    if (i === index || i >= text.length) return false;
+    return /\p{Ll}/u.test(text[i]);
+}
+
+/**
+ * Whether `text` ends on a real sentence end (after any closing quote or
+ * bracket), by the same rules the splitter cuts on. False for "e.g." or an
+ * ellipsis at the edge, which is what a stream looks like mid-abbreviation.
+ */
+export function endsOnSentenceBoundary(text: string): boolean {
+    const trimmed = text.trimEnd();
+    let end = trimmed.length;
+    while (end > 0 && /["'”’)\]]/.test(trimmed[end - 1])) end--;
+    const index = end - 1;
+    if (index < 0) return false;
+    const char = trimmed[index];
+    if (char !== '.' && char !== '!' && char !== '?') return false;
+    return isSentenceBoundary(trimmed, index);
+}
+
 function pushUtterance(into: string[], candidate: string): void {
     const trimmed = candidate.trim();
     if (trimmed.length === 0) return;
@@ -273,6 +297,11 @@ export function splitIntoSentences(prose: string): string[] {
                 if (next !== undefined && !/[\s"'”’)\]]/.test(next)) continue;
                 let end = i + 1;
                 while (end < rest.length && /["'”’)\]]/.test(rest[end])) end++;
+                // Look-ahead (DROVE-97): a full stop followed by a lower-case
+                // word is an abbreviation the list above does not know, not
+                // the end of a sentence. Only for the dot: "what? no" is rare
+                // and an exclamation never abbreviates anything.
+                if (char === '.' && startsLowerCase(rest, end)) continue;
                 cut = end;
                 break;
             }
