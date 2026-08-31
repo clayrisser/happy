@@ -42,6 +42,8 @@ interface SessionCache {
     entries: InventoryEntry[] | null;
     lastRefresh: number;
     inFlight: Promise<void> | null;
+    /** The drover account the cached entries were read from (DROVE-237). */
+    account: string | null;
 }
 
 /**
@@ -53,10 +55,23 @@ const refreshIntervalMs = 2 * 60 * 1000;
 
 const caches = new Map<string, SessionCache>();
 
+/**
+ * Which account's tree the session is reading right now.
+ *
+ * Each account is its own `commands/` and `skills/`, and a flip (BASED-98)
+ * swaps them under a session whose id never changes. Measured 2026-08-31: a
+ * flip from `main` to `jamrizzi` took the inventory from 24 commands and 71
+ * skills to 17 and none. So the account is part of what the cache is keyed on,
+ * or a flip serves the account you left until the interval runs out.
+ */
+function accountFor(sessionId: string): string | null {
+    return storage.getState().sessions[sessionId]?.metadata?.droverAccount ?? null;
+}
+
 function cacheFor(sessionId: string): SessionCache {
     let cache = caches.get(sessionId);
     if (!cache) {
-        cache = { entries: null, lastRefresh: 0, inFlight: null };
+        cache = { entries: null, lastRefresh: 0, inFlight: null, account: accountFor(sessionId) };
         caches.set(sessionId, cache);
     }
     return cache;
@@ -72,6 +87,7 @@ function refresh(sessionId: string): Promise<void> {
     const cache = cacheFor(sessionId);
     if (cache.inFlight) return cache.inFlight;
 
+    const account = accountFor(sessionId);
     const run = (async () => {
         try {
             const response = await sessionInventoryRpc(sessionId);
@@ -87,16 +103,19 @@ function refresh(sessionId: string): Promise<void> {
                     commandFallback,
                 );
                 cache.lastRefresh = Date.now();
+                cache.account = account;
             } else {
                 // Nothing to enumerate — an older CLI, an offline session, a
                 // harness with no such handler. Hold the snapshot answer and
                 // try again after the interval rather than emptying the list.
                 cache.entries = null;
                 cache.lastRefresh = Date.now();
+                cache.account = account;
             }
         } catch {
             cache.entries = null;
             cache.lastRefresh = Date.now();
+            cache.account = account;
         } finally {
             cache.inFlight = null;
         }
@@ -108,6 +127,15 @@ function refresh(sessionId: string): Promise<void> {
 
 function entriesFor(sessionId: string): InventoryEntry[] {
     const cache = cacheFor(sessionId);
+    // A flip is not a timer. Drop what the old account answered the moment the
+    // session names a new one, rather than serving it out for the rest of the
+    // interval (DROVE-237).
+    const account = accountFor(sessionId);
+    if (cache.account !== account) {
+        cache.entries = null;
+        cache.lastRefresh = 0;
+        cache.account = account;
+    }
     if (Date.now() - cache.lastRefresh > refreshIntervalMs && !cache.inFlight) {
         void refresh(sessionId);
     }
@@ -126,6 +154,7 @@ function toItem(entry: InventoryEntry): CommandItem {
 /** Warm a session's inventory before the user types, e.g. when a composer mounts. */
 export function primeCommands(sessionId: string): void {
     const cache = cacheFor(sessionId);
+    if (cache.account !== accountFor(sessionId)) cache.entries = null;
     if (cache.entries === null && !cache.inFlight) void refresh(sessionId);
 }
 

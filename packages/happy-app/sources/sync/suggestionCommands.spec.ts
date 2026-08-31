@@ -119,4 +119,33 @@ describe('suggestionCommands', () => {
         expect((await searchCommands('typing-session', 'huly')).map((c) => c.command))
             .toEqual(['huly-ticket']);
     });
+    /**
+     * DROVE-237. A flip (BASED-98) swaps the account's commands/ and skills/
+     * under a session whose id never changes, so a cache keyed on the id alone
+     * serves the account you left. Measured on Clay's box the same evening:
+     * main had 24 commands and 71 skills, jamrizzi had 17 and none.
+     */
+    it('drops the old account\u2019s inventory the moment the session flips', async () => {
+        mockSessions['flipper'] = { metadata: { droverAccount: 'main' } } as Partial<Session>;
+        sessionInventory.mockImplementation(async () => ({
+            success: true,
+            inventory: {
+                commands: [],
+                skills: mockSessions['flipper']?.metadata?.droverAccount === 'main'
+                    ? [{ name: 'huly-ticket' }, { name: 'grug' }]
+                    : [],
+            },
+        }));
+
+        primeCommands('flipper');
+        await settle();
+        expect(getAllCommands('flipper').map((c) => c.command)).toContain('huly-ticket');
+
+        mockSessions['flipper'] = { metadata: { droverAccount: 'jamrizzi' } } as Partial<Session>;
+        // The read that follows the flip must not serve main's skills, and it
+        // must kick the refresh rather than wait out the two-minute interval.
+        expect(getAllCommands('flipper').map((c) => c.command)).not.toContain('huly-ticket');
+        await settle();
+        expect(getAllCommands('flipper').map((c) => c.command)).not.toContain('huly-ticket');
+    });
 });
