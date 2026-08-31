@@ -2053,7 +2053,15 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     return (
         <View style={[
             styles.container,
-            { paddingHorizontal: screenWidth > 700 ? 12 : 8 }
+            // The composer's outer gutter, and the status strip is inside it
+            // too: the strip's budget reads the same constant, so the row
+            // cannot be measured against width the phone never gave it
+            // (DROVE-223).
+            {
+                paddingHorizontal: screenWidth > 700
+                    ? MOBILE_COMPOSER_METRICS.shellGutterWide
+                    : MOBILE_COMPOSER_METRICS.shellGutter,
+            },
         ]}>
             <View style={[
                 styles.innerContainer,

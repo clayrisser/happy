@@ -52,6 +52,11 @@ describe('agent input compact mobile layout', () => {
         expect((agentInputLayout as Record<string, unknown>).MOBILE_COMPOSER_METRICS).toEqual({
             shellRadius: 30,
             shellInset: 10,
+            // AgentInput's OUTER padding, outside the shell inset (DROVE-223).
+            // The status strip sits inside it too, and its budget was
+            // measuring the row against the bare screen without it.
+            shellGutter: 8,
+            shellGutterWide: 12,
             shellPaddingTop: 8,
             shellPaddingBottom: 8,
             bubblePadding: 0,
