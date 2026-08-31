@@ -1,5 +1,5 @@
 import React, { useCallback } from 'react';
-import { View, Text, Animated, Platform } from 'react-native';
+import { View, Text, Animated, AppState, Platform } from 'react-native';
 import { Stack, useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Typography } from '@/constants/Typography';
@@ -31,6 +31,7 @@ import { cloneLineageRows } from '@/utils/droverClone';
 import { MOBILE_GLASS_HEADER_HEIGHT } from '@/components/navigation/headerMetrics';
 import { Switch } from '@/components/Switch';
 import { findSessionForAtRisk, isAtRiskListFresh, resolveRemoteControlState, supportsRemoteControlToggle } from '@/components/remoteControlToggle';
+import { describeDroverWakeBudget, getDroverWatchStatus, type DroverWatchStatus } from 'drover-watch';
 
 // Animated status dot component
 function StatusDot({ color, isPulsing, size = 8 }: { color: string; isPulsing?: boolean; size?: number }) {
@@ -69,6 +70,41 @@ function StatusDot({ color, isPulsing, size = 8 }: { color: string; isPulsing?: 
             }}
         />
     );
+}
+
+/**
+ * What the paired watch can do right now, re-read whenever the app comes back
+ * to the foreground, because the one number that matters here (the daily
+ * wake budget) moves while the phone is in a pocket (DROVE-86). Null where
+ * there is no WatchConnectivity at all (Android, web).
+ */
+function useDroverWatchStatus(): DroverWatchStatus | null {
+    const read = () => {
+        const status = getDroverWatchStatus();
+        return status.supported ? status : null;
+    };
+    const [status, setStatus] = React.useState<DroverWatchStatus | null>(read);
+    React.useEffect(() => {
+        const sub = AppState.addEventListener('change', (state) => {
+            if (state === 'active') setStatus(read());
+        });
+        return () => sub.remove();
+    }, []);
+    return status;
+}
+
+/**
+ * One line: pairing state, then the wake budget, which is the number that
+ * decides whether a wrist-down gate can buzz at all. 0 with a watch paired
+ * and the app installed almost always means the Drover complication is on no
+ * watch face, and that is worth reading off a screen rather than inferring
+ * from silence (DROVE-62, DROVE-86).
+ */
+function describeDroverWatch(status: DroverWatchStatus): string {
+    if (!status.paired) return 'No watch paired';
+    if (!status.installed) return 'Paired, Cattle Drover not installed on the watch';
+    const link = status.reachable ? 'Watch app open' : 'Watch app closed';
+    return `${link}, ${describeDroverWakeBudget(status)}`;
 }
 
 function formatSandboxMetadata(sandbox: unknown, homeDir?: string): string {
@@ -138,6 +174,7 @@ function SessionInfoContent({ session }: { session: Session }) {
     const devModeEnabled = __DEV__;
     const sessionName = getSessionName(session);
     const droverPolicySubtitle = droverPolicySummary(session.metadata?.droverPolicy);
+    const watchStatus = useDroverWatchStatus();
     const sessionStatus = useSessionStatus(session);
     const {
         canShowResume,
@@ -457,15 +494,29 @@ function SessionInfoContent({ session }: { session: Session }) {
                     only when the CLI has reported one, which it does whenever
                     the machine has a drover account registry — a session on a
                     machine without one has no policy to set. */}
-                {session.metadata?.droverPolicy && (
+                {(session.metadata?.droverPolicy || watchStatus) && (
                     <ItemGroup title="Cattle Drover">
-                        <Item
-                            title="Flip policy"
-                            subtitle={droverPolicySubtitle}
-                            subtitleLines={0}
-                            icon={<Ionicons name="swap-horizontal-outline" size={29} color="#FF9500" />}
-                            onPress={() => router.push(`/session/${session.id}/policy` as any)}
-                        />
+                        {session.metadata?.droverPolicy && (
+                            <Item
+                                title="Flip policy"
+                                subtitle={droverPolicySubtitle}
+                                subtitleLines={0}
+                                icon={<Ionicons name="swap-horizontal-outline" size={29} color="#FF9500" />}
+                                onPress={() => router.push(`/session/${session.id}/policy` as any)}
+                            />
+                        )}
+                        {/* The wrist, and whether it can be woken (DROVE-86).
+                            A wrist that cannot be woken looked identical to
+                            one that can until this line existed. */}
+                        {watchStatus && (
+                            <Item
+                                title="Watch"
+                                subtitle={describeDroverWatch(watchStatus)}
+                                subtitleLines={1}
+                                icon={<Ionicons name="watch-outline" size={29} color="#FF9500" />}
+                                showChevron={false}
+                            />
+                        )}
                     </ItemGroup>
                 )}
 

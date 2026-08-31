@@ -11,6 +11,8 @@ const mocks = vi.hoisted(() => ({
     woken: [] as DroverSnapshot[],
     /** The watch app is frontmost, so publish's own sendMessage reaches it. */
     reachable: true,
+    /** Background wakes left today; undefined is a native module without the key (DROVE-86). */
+    wakes: undefined as number | undefined,
     onAnswer: null as
         ((event: { id: string; allow: boolean; optionId?: string; text?: string }) => void) | null,
     onFlip: null as ((event: { sessionId: string; account?: string }) => void) | null,
@@ -43,7 +45,10 @@ vi.mock('drover-watch', () => ({
     isDroverWatchAvailable: () => true,
     getDroverWatchStatus: () => ({
         supported: true, activated: true, paired: true, installed: true, reachable: mocks.reachable,
+        ...(mocks.wakes === undefined ? {} : { wakes: mocks.wakes }),
     }),
+    describeDroverWakeBudget: (status: { wakes?: number }) =>
+        typeof status.wakes === 'number' ? `wake budget ${status.wakes}/50 today` : 'wake budget unknown',
     publishDroverSnapshot: (snapshot: DroverSnapshot) => {
         mocks.published.push(snapshot);
         return Promise.resolve(true);
@@ -134,6 +139,7 @@ beforeEach(() => {
     mocks.published = [];
     mocks.woken = [];
     mocks.reachable = true;
+    mocks.wakes = undefined;
     mocks.onAnswer = null;
     mocks.onFlip = null;
     mocks.onRefresh = null;
@@ -848,5 +854,48 @@ describe('waking the wrist', () => {
         mocks.onStorage!();
         expect(mocks.published).toHaveLength(2);
         expect(mocks.woken).toHaveLength(0);
+    });
+
+    // A budget of 0 means the wrist cannot be woken (no complication on a
+    // face, or the day's 50 spent). The native call would be downgraded to a
+    // plain transfer the application context already covers, so the feed
+    // skips it and says so, which is the only record of why the wrist stayed
+    // silent (DROVE-86).
+    it('skips the wake and logs the budget when no wakes are left today', () => {
+        const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+        try {
+            mocks.reachable = false;
+            mocks.wakes = 0;
+            mocks.sessions = { s1: session({ path: '/a' }) };
+            start();
+            mocks.sessions = {
+                s1: session({ path: '/a', requests: { r1: { tool: 'Bash', arguments: { command: 'ls' } } } }),
+            };
+            mocks.onStorage!();
+            expect(mocks.published).toHaveLength(2);
+            expect(mocks.woken).toHaveLength(0);
+            const lines = log.mock.calls.map((c) => String(c[0]));
+            expect(lines.some((l) => l.includes('wake skipped') && l.includes('wake budget 0/50 today'))).toBe(true);
+        } finally {
+            log.mockRestore();
+        }
+    });
+
+    it('still wakes while budget remains, and says nothing', () => {
+        const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+        try {
+            mocks.reachable = false;
+            mocks.wakes = 37;
+            mocks.sessions = { s1: session({ path: '/a' }) };
+            start();
+            mocks.sessions = {
+                s1: session({ path: '/a', requests: { r1: { tool: 'Bash', arguments: { command: 'ls' } } } }),
+            };
+            mocks.onStorage!();
+            expect(mocks.woken).toHaveLength(1);
+            expect(log.mock.calls.some((c) => String(c[0]).includes('wake skipped'))).toBe(false);
+        } finally {
+            log.mockRestore();
+        }
     });
 });

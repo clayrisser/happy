@@ -1,10 +1,13 @@
 import Foundation
 import SwiftUI
 import WatchConnectivity
+import WatchKit
 import WidgetKit
 
 /// Holds what the wrist knows and is the only thing that talks to the phone
-/// (BASED-98).
+/// (BASED-98). The session itself is activated and delegated by
+/// `WatchSessionBridge`, on launch, so a background launch with no scene
+/// still receives what it was launched for (DROVE-86); this store subscribes.
 ///
 /// The phone is the source of truth: it pushes a snapshot whenever the set of
 /// pending gates changes, and the watch echoes answers back. The wrist also
@@ -44,17 +47,24 @@ final class GateStore: NSObject, ObservableObject {
         buzzer.onRefusal = { [weak self] reason in
             Task { @MainActor in self?.buzzRefusal = reason }
         }
-        guard WCSession.isSupported() else {
+        // Activation belongs to the bridge, which the app delegate has
+        // normally already run on launch; calling it again is a no-op. It is
+        // still called here so a store built by anything else (a preview, a
+        // test) talks to a live session too (DROVE-86).
+        let bridge = WatchSessionBridge.shared
+        bridge.activate()
+        guard let session = bridge.session else {
             // No ask can ever be made here, so `refresh` must not sit on
             // `never`: freshness reads that as "still asking" and suppresses
             // the out-of-date warning it exists to give.
             refresh = .failed("This watch cannot talk to the phone")
             return
         }
-        let session = WCSession.default
-        session.delegate = self
-        session.activate()
         self.session = session
+        // Anything the bridge received before this store existed, which on a
+        // background launch is the very transfer that launched the process,
+        // is replayed through here first.
+        bridge.attach { [weak self] arrival in self?.receive(arrival) }
     }
 
     /// What the wall should say about the snapshot it is holding.
@@ -309,41 +319,36 @@ final class GateStore: NSObject, ObservableObject {
     }
 }
 
-extension GateStore: WCSessionDelegate {
-    nonisolated func session(
-        _ session: WCSession,
-        activationDidCompleteWith state: WCSessionActivationState,
-        error: Error?
-    ) {
-        let context = session.receivedApplicationContext
-        Task { @MainActor in
+extension GateStore {
+    /// Every WatchConnectivity callback, live or replayed, lands here on the
+    /// main actor (DROVE-86). The bridge owns the delegate; this store owns
+    /// what the arrival means.
+    private func receive(_ arrival: WatchSessionBridge.Arrival) {
+        droverLog.notice("wcsession handling \(arrival.name, privacy: .public) appState=\(WKApplication.shared().applicationState.rawValue, privacy: .public)")
+        switch arrival {
+        case let .activated(_, error):
+            let context = session?.receivedApplicationContext ?? [:]
             // Apply FIRST: apply() clears lastError, so setting the activation
             // error before it would post a banner and then wipe it in the same
             // turn, which is how a real error becomes an invisible one.
-            if !context.isEmpty { self.apply(context) }
-            if let error { self.lastError = error.localizedDescription }
+            if !context.isEmpty { apply(context) }
+            if let error { lastError = error.localizedDescription }
             // The context above is the LAST one iOS delivered, which on a
             // phone that has been asleep is exactly the stale snapshot Clay
             // keeps seeing. Ask for a current one (DROVE-22).
-            self.askPhoneForSnapshot()
+            askPhoneForSnapshot()
+        case let .applicationContext(context):
+            apply(context)
+        case let .message(message):
+            apply(message)
+        // A snapshot the phone sent as a background transfer, in practice the
+        // one it sent with `transferCurrentComplicationUserInfo`, which is the
+        // only documented phone-to-watch call that LAUNCHES this app in the
+        // background (DROVE-62). It is the same dictionary the application
+        // context carries, so it goes through the same apply and the buzz falls
+        // out of the diff rather than needing a second cue format on the wire.
+        case let .userInfo(userInfo):
+            apply(userInfo)
         }
-    }
-
-    nonisolated func session(_ session: WCSession, didReceiveApplicationContext context: [String: Any]) {
-        Task { @MainActor in self.apply(context) }
-    }
-
-    nonisolated func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
-        Task { @MainActor in self.apply(message) }
-    }
-
-    /// A snapshot the phone sent as a background transfer — in practice the
-    /// one it sent with `transferCurrentComplicationUserInfo`, which is the
-    /// only documented phone-to-watch call that LAUNCHES this app in the
-    /// background (DROVE-62). It is the same dictionary the application
-    /// context carries, so it goes through the same apply and the buzz falls
-    /// out of the diff rather than needing a second cue format on the wire.
-    nonisolated func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any]) {
-        Task { @MainActor in self.apply(userInfo) }
     }
 }
