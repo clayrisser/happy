@@ -1,11 +1,14 @@
 /**
- * The composer's session capsule, mounted (DROVE-153, DROVE-176, DROVE-178).
+ * The composer's session capsule, mounted (DROVE-153, DROVE-176, DROVE-178,
+ * DROVE-215).
  *
  * composerControlColour.spec.ts measures the colours and sessionPillLabel.spec.ts
  * pins the model's width budget. This is the render: that the three segments
  * come out in the order Clay asked for, that each opens its own picker on the
  * first tap and never a menu of the three (DROVE-111), and that the colour
- * each glyph is drawn in is the one the vocabulary says it should be.
+ * each glyph is drawn in is the one the rule says it should be. The colour
+ * half is the one that has to be a RENDER: the module can only say what it
+ * hands out, and the call site is where a tint gets put back.
  *
  * The model's three assertions moved here from AgentInputStatusRow.test.ts
  * when DROVE-178 moved the segment.
@@ -48,8 +51,12 @@ vi.mock('react-native-svg', () => ({
 
 vi.mock('@expo/vector-icons', () => ({ Ionicons: host('Ionicons') }));
 
+// The theme is a knob, not a constant: the colour rule has to be shown on the
+// light theme too, where "white" is #000000 (DROVE-215).
+const { themeState } = vi.hoisted(() => ({ themeState: { dark: true } }));
+
 vi.mock('react-native-unistyles', () => ({
-    useUnistyles: () => ({ theme: { dark: true, colors: { text: 'text', divider: 'divider', glass: {} } } }),
+    useUnistyles: () => ({ theme: { dark: themeState.dark, colors: { text: 'text', divider: 'divider', glass: {} } } }),
     StyleSheet: { create: (factory: any) => factory({ colors: { text: 'text', divider: 'divider', glass: {} } }) },
 }));
 
@@ -66,6 +73,14 @@ const { ComposerSessionControls } = await import('./ComposerSessionControls');
 const { COMPOSER_CONTROL_PALETTE } = await import('./composerControlColour');
 
 const palette = COMPOSER_CONTROL_PALETTE.dark;
+
+/** Last colour wins, the way RN flattens a style array. */
+function flatColour(style: any): string | undefined {
+    const parts = Array.isArray(style) ? style : [style];
+    let colour: string | undefined;
+    for (const part of parts) if (part && part.color !== undefined) colour = part.color;
+    return colour;
+}
 const group = { key: 'g', title: 'g', options: [] } as any;
 
 function mount(overrides: Record<string, unknown> = {}) {
@@ -143,83 +158,75 @@ describe('the session capsule', () => {
     });
 });
 
-/** The model's name is styled with an array now (DROVE-217), so flatten before reading it. */
-function modelColour(renderer: any): string | undefined {
-    const text = renderer.root.findAllByType('Text' as any)
-        .find((node: any) => node.props.children === 'Opus 5 1M');
-    const style = [text.props.style].flat(Infinity).filter(Boolean);
-    return style.reduce((colour: string | undefined, entry: any) => entry?.color ?? colour, undefined);
-}
-
-describe('the colour each glyph is drawn in (DROVE-176)', () => {
-    it('gives the open padlock the warning hue and the shut one the neutral', () => {
-        const open = mount({ modeKind: 'yolo' }).root.findByType('Ionicons' as any);
-        expect(open.props.name).toBe('lock-open-outline');
-        expect(open.props.color).toBe(palette.warning);
-        const shut = mount({ modeKind: 'default' }).root.findByType('Ionicons' as any);
-        expect(shut.props.name).toBe('lock-closed-outline');
-        expect(shut.props.color).toBe(palette.neutral);
+/**
+ * The RENDERED colour of every glyph in the capsule (DROVE-176, DROVE-215).
+ *
+ * This is where the rule is actually pinned. composerControlColour.spec.ts can
+ * say the module hands out the foreground; only a render can say the row does,
+ * because the row is where a tint would be put back.
+ */
+describe('the colour each glyph is drawn in (DROVE-176, DROVE-215)', () => {
+    it('draws the padlock, the shield and the eye in the row’s foreground, whatever the mode', () => {
+        // Clay: "I told you to do white for the color of all the icons." The
+        // mode is a value the session holds, not a thing it is doing, so it
+        // buys no colour. The SHAPE still separates them, which is the trade
+        // DROVE-141 made and DROVE-176 promised to keep good for.
+        const glyph = (modeKind: string) => mount({ modeKind }).root.findByType('Ionicons' as any).props;
+        expect(glyph('yolo').name).toBe('lock-open-outline');
+        expect(glyph('default').name).toBe('lock-closed-outline');
+        expect(glyph('safe-yolo').name).toBe('shield-checkmark-outline');
+        expect(glyph('read-only').name).toBe('eye-outline');
+        for (const mode of ['yolo', 'bypassPermissions', 'safe-yolo', 'read-only', 'plan', 'acceptEdits', 'default']) {
+            expect(glyph(mode).color, mode).toBe(palette.foreground);
+        }
     });
 
-    it('gives safe-yolo and read-only their own, neither of them the warning', () => {
-        const shield = mount({ modeKind: 'safe-yolo' }).root.findByType('Ionicons' as any);
-        expect(shield.props.color).toBe(palette.shield);
-        const eye = mount({ modeKind: 'read-only' }).root.findByType('Ionicons' as any);
-        expect(eye.props.color).toBe(palette.eye);
-    });
-
-    it('warms the needle up the scale, cool at the floor and the warning at the ceiling', () => {
+    it('draws the needle in the foreground at every level, so nothing is a ramp any more', () => {
         const needle = (index: number) => mount({ effortIndex: index }).root
             .findByType('Line' as any).props.stroke;
-        expect(needle(0)).toBe(palette.effort[0]);
-        expect(needle(5)).toBe(palette.warning);
-        expect(needle(2)).not.toBe(needle(4));
+        for (let level = 0; level < 6; level += 1) {
+            expect(needle(level), `level ${level}`).toBe(palette.foreground);
+        }
     });
 
-    it('leaves the model neutral, because a name is not a state', () => {
-        expect(modelColour(mount())).toBe('text');
-    });
-});
-
-/**
- * A pick the terminal has not confirmed yet (DROVE-217).
- *
- * The rule for WHEN is pinned in sync/agentModeRequests.spec.ts and the colour
- * in composerControlColour.spec.ts. These are the three the render has to show:
- * that all three segments take it, that it OVERRIDES the settled colour rather
- * than sitting beside it, and that a finger on the slider outranks it.
- */
-describe('a pick still on its way to the terminal (DROVE-217)', () => {
-    it('draws the padlock, the needle and the name in the pending colour, one rule for three controls', () => {
-        const renderer = mount({
-            modeKind: 'yolo',
-            effortIndex: 5,
-            pending: { permission: true, effort: true, model: true },
-        });
-        expect(renderer.root.findByType('Ionicons' as any).props.color).toBe(palette.pending);
-        expect(renderer.root.findByType('Line' as any).props.stroke).toBe(palette.pending);
-        expect(modelColour(renderer)).toBe(palette.pending);
+    it('leaves the model on the foreground too, because a name is not a state', () => {
+        // The style is an ARRAY since DROVE-217: the base style, then the
+        // pending colour when a pick is in flight. Flattened, so this keeps
+        // asserting the resting colour rather than the array's shape.
+        const text = mount().root.findAllByType('Text' as any)
+            .find((node: any) => node.props.children === 'Opus 5 1M');
+        expect(flatColour(text.props.style)).toBe('text');
     });
 
-    it('overrides the settled colour rather than sitting beside it: the open padlock is not the amber while it waits', () => {
-        const waiting = mount({ modeKind: 'yolo', pending: { permission: true } });
-        expect(waiting.root.findByType('Ionicons' as any).props.color).not.toBe(palette.warning);
-        const landed = mount({ modeKind: 'yolo', pending: { permission: false } });
-        expect(landed.root.findByType('Ionicons' as any).props.color).toBe(palette.warning);
+    it('does the same on the light theme, where the foreground is #000000 rather than white', () => {
+        // Same rule, other theme. The token is the row's FOREGROUND, so light
+        // gets the theme's own text colour instead of a literal white that
+        // would vanish on it.
+        themeState.dark = false;
+        try {
+            const light = COMPOSER_CONTROL_PALETTE.light;
+            expect(light.foreground).toBe('#000000');
+            for (const mode of ['yolo', 'safe-yolo', 'read-only', 'default']) {
+                expect(mount({ modeKind: mode }).root.findByType('Ionicons' as any).props.color, mode)
+                    .toBe(light.foreground);
+            }
+            for (let level = 0; level < 6; level += 1) {
+                expect(mount({ effortIndex: level }).root.findByType('Line' as any).props.stroke, `level ${level}`)
+                    .toBe(light.foreground);
+            }
+        } finally {
+            themeState.dark = true;
+        }
     });
 
-    it('leaves the other two alone: one control waiting is not the whole row waiting', () => {
-        const renderer = mount({ modeKind: 'yolo', effortIndex: 5, pending: { effort: true } });
-        expect(renderer.root.findByType('Ionicons' as any).props.color).toBe(palette.warning);
-        expect(renderer.root.findByType('Line' as any).props.stroke).toBe(palette.pending);
-        expect(modelColour(renderer)).toBe('text');
-    });
-
-    it('says so to VoiceOver, which colour never reaches', () => {
-        const renderer = mount({ nativeMenus: true, pending: { permission: true } });
-        const menus = renderer.root.findAllByType('NativeSettingsMenu' as any);
-        expect(menus[0].props.accessibilityLabel).toBe('Permission mode, Yolo, not confirmed by the terminal yet');
-        expect(menus[1].props.accessibilityLabel).toBe('Reasoning effort, High, 4 of 6');
+    it('draws the whole capsule in one colour, which is what Clay asked for', () => {
+        // The capsule the ticket was filed against had a purple shield and a
+        // pink needle a few points from three plain white glyphs. One assertion
+        // that the two capsules now speak the same vocabulary.
+        const renderer = mount({ modeKind: 'safe-yolo', effortIndex: 5 });
+        const shield = renderer.root.findByType('Ionicons' as any).props.color;
+        const stroke = renderer.root.findByType('Line' as any).props.stroke;
+        expect(new Set([shield, stroke, palette.foreground]).size).toBe(1);
     });
 });
 
@@ -272,27 +279,32 @@ describe('the effort segment when it is a slider', () => {
         const needle = (renderer: any) => renderer.root.findByType('Line' as any).props;
         // At rest the needle reads the session's own level, the fourth of six.
         const resting = needle(mount({ effortSlider: slider(), effortScale: scale }));
-        // Mid-drag it reads the THUMB, which is at the ceiling: hard right,
-        // and the warning amber the DROVE-176 ramp ends on.
+        // Mid-drag it reads the THUMB, which is at the ceiling: hard right.
+        // The ANGLE is the whole of it now (DROVE-215): the stroke is the
+        // foreground at either end, so the drag has to move the line to say
+        // anything, which is the reading the dial was chosen for (DROVE-101).
         const dragging = needle(mount({
             effortSlider: slider({ active: true, index: 5 }),
             effortScale: scale,
         }));
-        expect(dragging.stroke).toBe(palette.effort[2]);
         expect(dragging.x2).toBeGreaterThan(resting.x2);
-        expect(dragging.stroke).not.toBe(resting.stroke);
+        expect(dragging.stroke).toBe(palette.foreground);
+        expect(resting.stroke).toBe(palette.foreground);
     });
 
     it('lets a finger on the slider outrank a wait (DROVE-217): the thumb is not a request yet', () => {
         const needle = (renderer: any) => renderer.root.findByType('Line' as any).props.stroke;
         // Dragging over the top of a pick that is still in flight: the needle
-        // follows the thumb in the ramp's colour, because the drag is where
-        // Clay's finger is and the wait is about a value he has left behind.
+        // follows the thumb in the row's own foreground, because the drag is
+        // where Clay's finger is and the wait is about a value he has left
+        // behind. The ramp this used to check is gone (DROVE-215): a level is
+        // a value the control holds, not something it is doing, so it is not
+        // a colour any more and the needle's ANGLE carries it.
         expect(needle(mount({
             effortSlider: slider({ active: true, index: 5 }),
             effortScale: scale,
             pending: { effort: true },
-        }))).toBe(palette.effort[2]);
+        }))).toBe(palette.foreground);
         // Let go, and the wait is what is left to draw.
         expect(needle(mount({
             effortSlider: slider({ active: false, index: 5 }),

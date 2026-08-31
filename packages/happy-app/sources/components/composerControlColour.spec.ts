@@ -1,10 +1,15 @@
 /**
- * The composer's colour vocabulary, measured (DROVE-176).
+ * The composer's colour vocabulary, measured, and THE RULE, enforced
+ * (DROVE-176, DROVE-215).
  *
- * Two things a spec can hold about colour: that every glyph clears the floor
- * on the glass, on both themes, over both extremes of chat; and that no entry
- * has drifted into a meaning the app already spends a colour on. Whether the
- * result LOOKS right is Clay's call from the screenshots on the ticket.
+ * Three things a spec can hold about colour here. That every colour a glyph can
+ * be drawn in clears the floor on the glass, on both themes, over both extremes
+ * of chat. That no entry has drifted into a meaning the app already spends a
+ * colour on. And, since DROVE-215, that the rule holds: the default is the
+ * foreground, the palette has room for nothing but the foreground and the
+ * active signals, and there is no longer a function that turns a mode or a
+ * level into a hue. Whether the result LOOKS right is Clay's call from the
+ * screenshots on the ticket.
  */
 import { describe, expect, it } from 'vitest';
 import {
@@ -12,12 +17,10 @@ import {
     COMPOSER_FALLBACK_SURFACE,
     COMPOSER_PRIMARY_SURFACE,
     composerControlPalette,
-    composerGlyphLayers,
-    effortColour,
-    effortPosition,
-    micColour,
+    composerGlyphColour,
     pendingOrSettled,
-    permissionModeColour,
+    composerGlyphLayers,
+    micColour,
     primaryActionColour,
 } from './composerControlColour';
 import {
@@ -26,7 +29,7 @@ import {
     glyphContrast,
 } from './glassChrome';
 import { colorDistance } from '../utils/subagentTint';
-import { effortGaugeAngle, permissionModeGlyph } from './sessionControlGlyphs';
+import { permissionModeGlyph } from './sessionControlGlyphs';
 
 /**
  * What each theme already means by a colour, from where it is decided:
@@ -41,6 +44,13 @@ const reserved = {
 } as const;
 
 /**
+ * The theme's own text colour, from theme.ts. The foreground token is not a
+ * grey near it, it IS it, which is what makes "white" a true description of
+ * the row on the theme Clay runs.
+ */
+const themeText = { dark: '#ffffff', light: '#000000' } as const;
+
+/**
  * "Distinct" in the RMS sRGB distance subagentTint measures with. 0.12 here
  * is about 0.21 in plain Euclidean terms, which is over the 0.20 the syntax
  * palette holds its colours off the reading mark by.
@@ -52,30 +62,91 @@ const themes = [
     { name: 'light', dark: false },
 ] as const;
 
-/** Every colour a glyph can be drawn in, per theme, including the ramp's steps on the longest scale. */
+/** Every colour a glyph on the row can be drawn in, per theme. There are four. */
 function everyGlyphColour(dark: boolean): Array<[string, string]> {
     const palette = composerControlPalette(dark);
-    const entries: Array<[string, string]> = [
-        ['neutral', palette.neutral],
+    return [
+        ['foreground', palette.foreground],
         ['accent', palette.accent],
-        ['pending', palette.pending],
-        ['warning', palette.warning],
-        ['shield', palette.shield],
-        ['eye', palette.eye],
         ['recording', palette.recording],
+        ['pending', palette.pending],
     ];
-    for (let level = 0; level < 6; level += 1) {
-        entries.push([`effort ${level + 1} of 6`, effortColour(palette, level, 6)]);
-    }
-    for (let level = 0; level < 4; level += 1) {
-        entries.push([`effort ${level + 1} of 4`, effortColour(palette, level, 4)]);
-    }
-    return entries;
 }
+
+/** Every permission mode the app can be in, by the kind and by the key. */
+const everyMode = [
+    'yolo', 'bypassPermissions', 'full',
+    'safe-yolo', 'workspace', 'auto',
+    'read-only', 'read', 'read_only',
+    'plan', 'PLAN', 'acceptEdits', 'edits', 'default',
+];
 
 function worstContrast(glyph: string, layers: readonly string[]): number {
     return Math.min(...CHROME_BACKDROP_EXTREMES.map((backdrop) => glyphContrast(glyph, backdrop, layers)));
 }
+
+describe.each(themes)('the rule on the $name theme: the foreground unless it is active', ({ name, dark }) => {
+    const palette = composerControlPalette(dark);
+
+    it('hands out the foreground when no signal is named, which is what a new glyph gets for free', () => {
+        expect(composerGlyphColour(palette)).toBe(palette.foreground);
+        expect(composerGlyphColour(palette, null)).toBe(palette.foreground);
+        expect(composerGlyphColour(palette, undefined)).toBe(palette.foreground);
+    });
+
+    it('makes the foreground the theme’s own text colour, which is literally white on dark', () => {
+        expect(palette.foreground.toLowerCase()).toBe(themeText[name]);
+    });
+
+    it('has the foreground and one entry per active signal, and nothing else', () => {
+        // The type says this too; the assertion is here for the reader who
+        // finds a stray purple in the object and wants to know what broke.
+        expect(Object.keys(palette).sort()).toEqual(['accent', 'foreground', 'pending', 'recording']);
+    });
+
+    it('keeps the colour on the two things that ARE active: an open mic, and a send with something to send', () => {
+        expect(micColour(palette, 'held')).toBe(palette.recording);
+        expect(micColour(palette, 'latched')).toBe(palette.recording);
+        expect(primaryActionColour(palette, true)).toBe(palette.accent);
+    });
+
+    it('leaves the mic, the waveform and the send button on the foreground at rest', () => {
+        expect(micColour(palette, 'idle')).toBe(palette.foreground);
+        expect(primaryActionColour(palette, false)).toBe(palette.foreground);
+    });
+
+    it('holds a seat for DROVE-217’s pending without wiring it, already measured', () => {
+        // A named state the next lane passes to `composerGlyphColour`, rather
+        // than a hue it has to invent at a call site.
+        expect(composerGlyphColour(palette, 'pending')).toBe(palette.pending);
+        expect(palette.pending).not.toBe(palette.foreground);
+    });
+
+    it('leaves the shape carrying the mode alone, and it can: six modes, six silhouettes', () => {
+        // With the tint gone the glyph is the ONLY carrier, which is the trade
+        // DROVE-141 already made and DROVE-176 promised never to lean on.
+        const glyphs = ['yolo', 'safe-yolo', 'read-only', 'plan', 'acceptEdits', 'default']
+            .map((mode) => permissionModeGlyph(null, mode));
+        expect(new Set(glyphs).size).toBe(glyphs.length);
+        // And every alias of every mode lands on one of those six.
+        for (const mode of everyMode) {
+            expect(glyphs, mode).toContain(permissionModeGlyph(null, mode));
+        }
+    });
+});
+
+describe('the rule has no back door left in the module', () => {
+    it('exports nothing that turns a mode or a level into a colour', async () => {
+        // `permissionModeColour` and `effortColour` were the two functions that
+        // coloured a value. They are not rewritten to return the foreground,
+        // they are gone: a helper here means there is a live state to compute,
+        // so a call site that wants a tint has nothing to reach for.
+        const module = await import('./composerControlColour');
+        expect(Object.keys(module)).not.toContain('permissionModeColour');
+        expect(Object.keys(module)).not.toContain('effortColour');
+        expect(Object.keys(module)).not.toContain('effortPosition');
+    });
+});
 
 describe.each(themes)('legibility on the $name theme, measured', ({ dark }) => {
     it.each(everyGlyphColour(dark))('%s clears 3:1 on the glass over a white chat and a black one', (_name, colour) => {
@@ -91,7 +162,7 @@ describe.each(themes)('legibility on the $name theme, measured', ({ dark }) => {
         const palette = composerControlPalette(dark);
         const disc = dark ? COMPOSER_PRIMARY_SURFACE.dark : COMPOSER_PRIMARY_SURFACE.light;
         expect(worstContrast(palette.accent, [disc])).toBeGreaterThanOrEqual(CHROME_CONTRAST_FLOOR);
-        expect(worstContrast(palette.neutral, [disc])).toBeGreaterThanOrEqual(CHROME_CONTRAST_FLOOR);
+        expect(worstContrast(palette.foreground, [disc])).toBeGreaterThanOrEqual(CHROME_CONTRAST_FLOOR);
         expect(worstContrast(palette.recording, [disc])).toBeGreaterThanOrEqual(CHROME_CONTRAST_FLOOR);
     });
 });
@@ -100,7 +171,7 @@ describe('the numbers the light theme was chosen against', () => {
     // These are why light does not simply reuse the system colours. Stated so
     // nobody puts them back on the theory that the dark theme's values are
     // "the" values.
-    it('shows iOS blue and the banner red failing on the light glass', () => {
+    it('shows iOS blue, the banner red and the system orange failing on the light glass', () => {
         expect(worstContrast('#007AFF', composerGlyphLayers(false))).toBeLessThan(CHROME_CONTRAST_FLOOR);
         expect(worstContrast('#FF3B30', composerGlyphLayers(false))).toBeLessThan(CHROME_CONTRAST_FLOOR);
         expect(worstContrast('#FF9F0A', composerGlyphLayers(false))).toBeLessThan(CHROME_CONTRAST_FLOOR);
@@ -127,142 +198,31 @@ describe.each(themes)('the vocabulary on the $name theme does not collide', ({ n
     });
 
     it.each([
-        ['warning', 'reading'], ['warning', 'success'], ['warning', 'working'], ['warning', 'link'],
-        ['warning', 'red'], ['warning', 'recording'],
-        ['shield', 'reading'], ['shield', 'success'], ['shield', 'working'], ['shield', 'link'], ['shield', 'red'],
-        ['eye', 'reading'], ['eye', 'success'], ['eye', 'working'], ['eye', 'link'], ['eye', 'red'],
         ['accent', 'reading'], ['accent', 'success'], ['accent', 'link'], ['accent', 'red'],
         ['recording', 'reading'], ['recording', 'success'], ['recording', 'working'], ['recording', 'link'],
+        ['pending', 'reading'], ['pending', 'success'], ['pending', 'working'], ['pending', 'link'],
+        ['pending', 'red'], ['pending', 'recording'],
     ] as const)('holds %s off the reserved %s', (entry, meaning) => {
         expect(colorDistance(palette[entry], taken[meaning])).toBeGreaterThanOrEqual(DISTINCT);
     });
 
-    it('keeps the four mode colours apart from each other, and each off neutral', () => {
-        const modes = [palette.warning, palette.shield, palette.eye];
-        for (let i = 0; i < modes.length; i += 1) {
-            expect(colorDistance(modes[i], palette.neutral)).toBeGreaterThanOrEqual(DISTINCT);
-            for (let j = i + 1; j < modes.length; j += 1) {
-                expect(colorDistance(modes[i], modes[j])).toBeGreaterThanOrEqual(DISTINCT);
+    it('keeps every active signal off the foreground and off the others', () => {
+        const signals = ['accent', 'recording', 'pending'] as const;
+        for (let i = 0; i < signals.length; i += 1) {
+            expect(colorDistance(palette[signals[i]], palette.foreground), signals[i])
+                .toBeGreaterThanOrEqual(DISTINCT);
+            for (let j = i + 1; j < signals.length; j += 1) {
+                expect(colorDistance(palette[signals[i]], palette[signals[j]]), `${signals[i]} vs ${signals[j]}`)
+                    .toBeGreaterThanOrEqual(DISTINCT);
             }
-        }
-    });
-
-    it('keeps every step of the effort ramp off the reading mark, success, the working blue, the link and the reds', () => {
-        for (let level = 0; level < 6; level += 1) {
-            const step = effortColour(palette, level, 6);
-            for (const meaning of ['reading', 'success', 'working', 'link', 'red', 'recording'] as const) {
-                expect(colorDistance(step, taken[meaning]), `${level + 1} of 6 vs ${meaning}`).toBeGreaterThanOrEqual(DISTINCT);
-            }
-        }
-    });
-
-    it('keeps the ramp’s cool half off the shield and the eye, the two cool mode colours', () => {
-        for (let level = 0; level < 3; level += 1) {
-            const step = effortColour(palette, level, 6);
-            expect(colorDistance(step, palette.shield), `${level + 1} of 6 vs shield`).toBeGreaterThanOrEqual(DISTINCT);
-            expect(colorDistance(step, palette.eye), `${level + 1} of 6 vs eye`).toBeGreaterThanOrEqual(DISTINCT);
         }
     });
 });
 
-describe('the padlock', () => {
-    const palette = COMPOSER_CONTROL_PALETTE.dark;
-
-    it('is the warning colour open and neutral shut, which is the pair Clay switches between', () => {
-        expect(permissionModeColour(palette, 'yolo')).toBe(palette.warning);
-        expect(permissionModeColour(palette, 'bypassPermissions')).toBe(palette.warning);
-        expect(permissionModeColour(palette, null, 'default')).toBe(palette.neutral);
-        expect(permissionModeColour(palette, null, null)).toBe(palette.neutral);
-    });
-
-    it('gives the shield and the eye their own colours, neither of them the warning', () => {
-        expect(permissionModeColour(palette, 'safe-yolo')).toBe(palette.shield);
-        expect(permissionModeColour(palette, 'read-only')).toBe(palette.eye);
-        expect(permissionModeColour(palette, 'safe-yolo')).not.toBe(palette.warning);
-        expect(permissionModeColour(palette, 'read-only')).not.toBe(palette.warning);
-    });
-
-    it('leaves plan and edits neutral: a route drawn first is nothing to flag', () => {
-        expect(permissionModeColour(palette, null, 'plan')).toBe(palette.neutral);
-        expect(permissionModeColour(palette, null, 'acceptEdits')).toBe(palette.neutral);
-    });
-
-    it('reads the mode the same way the glyph does, so colour and shape cannot disagree', () => {
-        for (const [kind, key] of [['yolo', 'plan'], [null, 'PLAN'], ['safe-yolo', null], [null, 'read-only']] as const) {
-            const glyph = permissionModeGlyph(kind, key);
-            const colour = permissionModeColour(palette, kind, key);
-            if (glyph === 'lock-open-outline') expect(colour).toBe(palette.warning);
-            if (glyph === 'shield-checkmark-outline') expect(colour).toBe(palette.shield);
-            if (glyph === 'eye-outline') expect(colour).toBe(palette.eye);
-            if (glyph === 'lock-closed-outline' || glyph === 'map-outline') expect(colour).toBe(palette.neutral);
-        }
-    });
-
-    it('never makes colour the only carrier: every coloured mode still has its own silhouette', () => {
-        const coloured = ['yolo', 'safe-yolo', 'read-only', 'default'].map((mode) => permissionModeGlyph(null, mode));
-        expect(new Set(coloured).size).toBe(coloured.length);
-    });
-});
-
-describe('the effort ramp', () => {
-    const palette = COMPOSER_CONTROL_PALETTE.dark;
-
-    it('is the cool stop at the floor and the warning amber at the ceiling, whatever the scale’s length', () => {
-        for (const count of [4, 5, 6]) {
-            expect(effortColour(palette, 0, count)).toBe(palette.effort[0]);
-            expect(effortColour(palette, count - 1, count)).toBe(palette.effort[2]);
-            expect(effortColour(palette, count - 1, count)).toBe(palette.warning);
-        }
-    });
-
-    it('agrees with the needle about where a level is', () => {
-        // Same clamp, same interpolation: the colour and the angle are two
-        // readings of one position.
-        for (const count of [4, 6]) {
-            for (let level = -1; level <= count; level += 1) {
-                const angle = effortGaugeAngle(level, count);
-                const position = effortPosition(level, count);
-                expect(position).toBeCloseTo((angle + 130) / 260, 5);
-            }
-        }
-    });
-
-    it('warms monotonically: red rises and blue falls from the floor to the ceiling', () => {
-        let previousRed = -1;
-        let previousBlue = 256;
-        for (let level = 0; level < 6; level += 1) {
-            const colour = effortColour(palette, level, 6);
-            const red = parseInt(colour.slice(1, 3), 16);
-            const blue = parseInt(colour.slice(5, 7), 16);
-            expect(red).toBeGreaterThanOrEqual(previousRed);
-            expect(blue).toBeLessThanOrEqual(previousBlue);
-            previousRed = red;
-            previousBlue = blue;
-        }
-    });
-
-    it('is the mauve stop exactly at the midpoint, not the mean of the ends', () => {
-        expect(effortColour(palette, 2, 5)).toBe(palette.effort[1]);
-    });
-
-    it('points a one-level scale at the floor, which is also where the needle points', () => {
-        expect(effortPosition(0, 1)).toBe(0);
-        expect(effortColour(palette, 0, 1)).toBe(palette.effort[0]);
-    });
-});
-
-describe('the mic and the in-field primary', () => {
-    const palette = COMPOSER_CONTROL_PALETTE.light;
-
-    it('turns the mic the recording red once it is latched or held, and leaves it neutral at rest', () => {
-        expect(micColour(palette, 'idle')).toBe(palette.neutral);
-        expect(micColour(palette, 'latched')).toBe(palette.recording);
-        expect(micColour(palette, 'held')).toBe(palette.recording);
-    });
-
-    it('turns the primary the accent only once there is something to send', () => {
-        expect(primaryActionColour(palette, true)).toBe(palette.accent);
-        expect(primaryActionColour(palette, false)).toBe(palette.neutral);
+describe('the palette is the same object both themes read', () => {
+    it('is reachable by theme and by flag, and they agree', () => {
+        expect(composerControlPalette(true)).toBe(COMPOSER_CONTROL_PALETTE.dark);
+        expect(composerControlPalette(false)).toBe(COMPOSER_CONTROL_PALETTE.light);
     });
 });
 
@@ -279,49 +239,34 @@ describe('the mic and the in-field primary', () => {
  * at all — the test DROVE-206 set for a change to this file.
  */
 describe('a pick the pane has not confirmed yet', () => {
-    it('is the accent on both themes, deliberately the same colour and the same meaning', () => {
-        expect(COMPOSER_CONTROL_PALETTE.dark.pending).toBe(COMPOSER_CONTROL_PALETTE.dark.accent);
-        expect(COMPOSER_CONTROL_PALETTE.light.pending).toBe(COMPOSER_CONTROL_PALETTE.light.accent);
+    it('is an amber of its own on both themes, which is the yellow Clay asked for', () => {
+        // DROVE-217 first made pending the accent, reasoning that gold was
+        // unavailable: the amber was the open padlock and the top of the
+        // effort dial. DROVE-215 then deleted both of those hues, so the
+        // premise went and the amber is free. Clay asked for yellow twice.
+        expect(COMPOSER_CONTROL_PALETTE.dark.pending).not.toBe(COMPOSER_CONTROL_PALETTE.dark.accent);
+        expect(COMPOSER_CONTROL_PALETTE.dark.pending).not.toBe(COMPOSER_CONTROL_PALETTE.dark.foreground);
+        expect(COMPOSER_CONTROL_PALETTE.light.pending).not.toBe(COMPOSER_CONTROL_PALETTE.light.foreground);
     });
 
-    it('overrides whatever the control is set to, and hands it straight back when the pick lands', () => {
-        const palette = COMPOSER_CONTROL_PALETTE.dark;
-        // The padlock at yolo, the dial at its ceiling and the model's name:
-        // three different settled colours, one pending colour.
-        for (const settled of [palette.warning, palette.shield, palette.eye, palette.neutral, effortColour(palette, 5, 6)]) {
+    it('overrides the glyph colour, and hands it straight back when the pick lands', () => {
+        // One settled colour now, not five: DROVE-215 made every resting
+        // glyph the foreground, so pending is the only thing that can
+        // change one, and the glyph's own shape still carries the value.
+        for (const dark of [true, false]) {
+            const palette = composerControlPalette(dark);
+            const settled = composerGlyphColour(palette);
             expect(pendingOrSettled(palette, true, settled)).toBe(palette.pending);
             expect(pendingOrSettled(palette, false, settled)).toBe(settled);
         }
     });
 
     it('never has to be the only carrier: the glyph under it still has its own shape', () => {
-        // DROVE-141's rule, restated for the state DROVE-217 adds. The padlock
-        // keeps its silhouette, the needle keeps its angle and the model keeps
-        // its name while the colour is saying "not yet".
+        // DROVE-141's rule. With every resting glyph the same colour this
+        // matters more than it did, not less: shape is now the ONLY thing
+        // telling the permission modes apart.
         const shapes = ['yolo', 'safe-yolo', 'read-only', 'default'].map((mode) => permissionModeGlyph(null, mode));
         expect(new Set(shapes).size).toBe(shapes.length);
-        expect(effortGaugeAngle(0, 6)).not.toBe(effortGaugeAngle(5, 6));
     });
 });
 
-describe('why pending is not the yellow Clay asked for, measured', () => {
-    it('shows the amber already spoken for: it is the open padlock and the top of the dial', () => {
-        for (const dark of [true, false]) {
-            const palette = composerControlPalette(dark);
-            expect(permissionModeColour(palette, 'yolo')).toBe(palette.warning);
-            expect(effortColour(palette, 5, 6)).toBe(palette.warning);
-        }
-    });
-
-    it('shows the light theme has no gold left: every one that clears the glass lands on the reading mark', () => {
-        // A sweep of the golds a light glyph could plausibly be. The floor is
-        // 3:1 over the glass and the vocabulary's own separation is DISTINCT;
-        // no candidate clears both, which is the whole argument.
-        const golds = ['#8A6A00', '#7A5C00', '#9A7B00', '#6B5200', '#A38200', '#8F6B1A', '#CC9900', '#B8860B'];
-        for (const gold of golds) {
-            const legible = worstContrast(gold, composerGlyphLayers(false)) >= CHROME_CONTRAST_FLOOR;
-            const distinct = colorDistance(gold, reserved.light.reading) >= DISTINCT;
-            expect(legible && distinct, `${gold} clears the glass AND the reading mark`).toBe(false);
-        }
-    });
-});

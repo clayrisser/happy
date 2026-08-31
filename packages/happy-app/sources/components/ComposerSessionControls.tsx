@@ -19,9 +19,8 @@ import {
 } from './sessionControlGlyphs';
 import {
     composerControlPalette,
-    effortColour,
+    composerGlyphColour,
     pendingOrSettled,
-    permissionModeColour,
 } from './composerControlColour';
 import {
     COMPOSER_MODEL_SEGMENT,
@@ -373,14 +372,15 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                     open={openPicker === 'permission'}
                     onPress={canOpenMode ? onPress : undefined}
                 >
+                    {/* The foreground in every mode (DROVE-215). The mode is
+                        a value the session holds, not a thing it is doing, so
+                        under the rule it earns no colour, and the padlock,
+                        shield, eye and map already separate the modes on
+                        their own (DROVE-141). */}
                     <Ionicons
                         name={permissionModeGlyph(modeKind, modeKey)}
                         size={20}
-                        color={pendingOrSettled(
-                            palette,
-                            permissionPending,
-                            permissionModeColour(palette, modeKind, modeKey),
-                        )}
+                        color={pendingOrSettled(palette, permissionPending, composerGlyphColour(palette))}
                     />
                 </Control>
             ) : null}
@@ -417,15 +417,15 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                         onResponderTerminate={() => effortSlider.dismiss()}
                     >
                         {/* The needle follows the thumb while a drag runs, so
-                            the glyph and the line never say different things. */}
+                            the glyph and the line never say different things.
+                            The ANGLE follows it; the colour is the foreground
+                            at every level (DROVE-215), because a level is a
+                            value and the angle was always the reading the dial
+                            was chosen for (DROVE-101). */}
                         <EffortGauge
                             index={effortSlider.active ? effortSlider.index : effortIndex!}
                             count={effortCount}
-                            color={pendingOrSettled(palette, effortPending, effortColour(
-                                palette,
-                                effortSlider.active ? effortSlider.index : effortIndex!,
-                                effortCount,
-                            ))}
+                            color={pendingOrSettled(palette, effortPending, composerGlyphColour(palette))}
                             dim={theme.colors.divider}
                         />
                     </View>
@@ -442,7 +442,7 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                         <EffortGauge
                             index={effortIndex!}
                             count={effortCount}
-                            color={pendingOrSettled(palette, effortPending, effortColour(palette, effortIndex!, effortCount))}
+                            color={pendingOrSettled(palette, effortPending, composerGlyphColour(palette))}
                             dim={theme.colors.divider}
                         />
                     </Control>

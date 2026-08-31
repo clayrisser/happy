@@ -737,9 +737,11 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     // identically and work, so Android uses those instead of the native menu.
     const useNativeSettingsMenus = shouldUseExpoNativeSettingsMenu(Platform.OS, runningOnMac);
     /**
-     * The composer's colour vocabulary (DROVE-176). One place decides what
-     * each control's glyph means by its hue and every entry is measured on
-     * the glass; nothing here picks a colour of its own.
+     * The composer's colour vocabulary (DROVE-176, DROVE-215). One place
+     * decides what a control's glyph is drawn in, and the rule it decides by
+     * is that a glyph is the row's foreground unless something is happening
+     * right now. Every entry is measured on the glass; nothing here picks a
+     * colour of its own.
      */
     const composerPalette = composerControlPalette(theme.dark);
     const isSendBlocked = props.blockSend ?? false;
@@ -1851,6 +1853,12 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
      * It opens the Add context sheet (DROVE-128) rather than jumping into the
      * photo library. 36 drawn plus 6 a side is a 48pt target, over DROVE-153's
      * 44pt floor, which is the same bargain the send button strikes.
+     *
+     * IT KEEPS THE ACCENT through DROVE-215, which took the colour off the
+     * control row. This is not on that row: it is inside the field capsule,
+     * paired with the send button at the other rim, and DROVE-214 owns that
+     * pair. If it should go white too, that is a ruling on the field, not on
+     * the row, and it belongs in the same lane as the send glyph.
      */
     const mobileAddAction = (
         <View style={styles.mobileAddAnchor}>
@@ -2514,14 +2522,15 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                     already carries the state (DROVE-118): on
                                     is a solid accent disc, so the glyph on it
                                     is the tint that reads against that disc,
-                                    not a colour of its own. Off it is neutral
-                                    like the rest of the row (DROVE-176). */}
+                                    not a colour of its own. Off it is the row's
+                                    foreground like everything else on it
+                                    (DROVE-176, DROVE-215). */}
                                 <Ionicons
                                     name={streamTalk.icon}
                                     size={16}
                                     color={streamTalk.on
                                         ? theme.colors.button.primary.tint
-                                        : composerPalette.neutral}
+                                        : composerPalette.foreground}
                                 />
                             </BubblePressable>
                         )}
