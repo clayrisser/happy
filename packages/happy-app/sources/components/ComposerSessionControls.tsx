@@ -28,8 +28,7 @@ import {
     COMPOSER_SESSION_CONTROL_SIZE,
     type SessionPillLabel,
 } from './sessionPillLabel';
-import { EffortSliderPopover, type EffortSliderHandle } from './EffortSliderPopover';
-import type { EffortSliderScale } from './effortSlider';
+import type { EffortSliderHandle } from './EffortSliderPopover';
 
 /**
  * Permission mode, effort and model, folded into the composer's button row
@@ -60,12 +59,23 @@ import type { EffortSliderScale } from './effortSlider';
  * is drawn smaller before it is ever cut.
  *
  * AND EFFORT IS A SLIDER (DROVE-200). Its segment is the only one that does
- * not open a list: pressing it raises a horizontal line above the row and the
- * same touch drags along it, one stop per level, committing on release. The
- * dial in the segment is untouched — it is still DROVE-141's resting glyph
- * with DROVE-176's ramp on its needle — but while a drag is running the needle
- * follows the thumb, so the two never disagree. The whole rule set is in
- * effortSlider.ts; this file only hands it the touch.
+ * not open a list on a DRAG: pressing it raises a horizontal line above the
+ * row and the same touch drags along it, one stop per level, committing on
+ * release. The dial in the segment is untouched — it is still DROVE-141's
+ * resting glyph with DROVE-176's ramp on its needle — but while a drag is
+ * running the needle follows the thumb, so the two never disagree. The whole
+ * rule set is in effortSlider.ts; this file only hands it the touch.
+ *
+ * A TAP ON IT IS STILL THE PICKER, LIKE THE OTHER TWO (DROVE-229). A press
+ * that never moved reports a tap and the hook calls `onTap`, which the control
+ * row turns into `handlePickerPress('effort')` — the same full-width sheet the
+ * mode and the model open, with the same second tap, tap outside and back
+ * gesture. It used to LATCH the readout open instead, which is the one surface
+ * on the composer a second tap could not put away.
+ *
+ * THE READOUT IS NOT DRAWN HERE. It spans the composer's whole width, which is
+ * wider than this capsule, so the control row places it (DROVE-229). This file
+ * hands the hook the touch and reads its live index for the needle.
  *
  * COLOUR CARRIES THE STATE TOO (DROVE-176). The padlock is the warning amber
  * when open, the shield and the eye have their own hues, and the dial's needle
@@ -109,11 +119,10 @@ export interface ComposerSessionControlsProps {
     openPicker?: ComposerSessionPicker | null;
     /**
      * The effort slider (DROVE-200). Present on the phone, where effort is
-     * dragged rather than picked; absent on a surface that still lists it, and
-     * then the effort segment keeps its picker exactly as before.
+     * dragged as well as picked; absent on a surface that only lists it, and
+     * then the effort segment is an ordinary picker segment.
      */
     effortSlider?: EffortSliderHandle | null;
-    effortScale?: EffortSliderScale | null;
     /**
      * Which segments hold a pick the terminal has not confirmed yet
      * (DROVE-217). Absent means everything shown is what the session is
@@ -238,20 +247,6 @@ const styles = StyleSheet.create((theme) => ({
         height: 20,
         backgroundColor: theme.colors.glass.divider,
     },
-    /**
-     * What the effort popover hangs off. It takes the capsule's own flex so
-     * the row is laid out as it was, and it sets no size and no clip of its
-     * own, so nothing here constrains the glass inside it.
-     */
-    sliderAnchor: {
-        // A row, so the capsule inside it is laid out exactly as it was when
-        // it was the row's own child: same shrink, same min width, same
-        // intrinsic size. Nothing here fixes a size or clips.
-        flexDirection: 'row',
-        alignItems: 'center',
-        flexShrink: 1,
-        minWidth: 0,
-    },
 }));
 
 /** VoiceOver's two actions on an adjustable, since there is no drag there. */
@@ -333,7 +328,6 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
         modelGroup,
         openPicker,
         effortSlider,
-        effortScale,
         pending,
     } = props;
     const palette = composerControlPalette(theme.dark);
@@ -365,7 +359,7 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
     // answer with it, which is how the system draws a grouped control. The
     // model segment is inside the same surface, so it takes part rather than
     // needing a press animation of its own (DROVE-178).
-    const capsule = (
+    return (
         <GlassChromeSurface
             radius={COMPOSER_SESSION_CONTROL_SIZE / 2}
             interactive
@@ -401,8 +395,8 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                        for the whole gesture: `onResponderTerminationRequest`
                        returning false is what stops the chat's scroll view
                        taking it back the moment the finger moves. Page
-                       coordinates, since the popover is placed against the
-                       screen and not against this segment. */
+                       coordinates, because the drag is a DELTA between two of
+                       them and never an absolute position (effortSlider.ts). */
                     <View
                         style={[styles.control, effortSlider.active && styles.controlOpen]}
                         accessible
@@ -485,20 +479,5 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                 </Control>
             ) : null}
         </GlassChromeSurface>
-    );
-    if (!effortSlider || !effortScale) return capsule;
-    /**
-     * The popover is a SIBLING of the glass, never a child of it: the
-     * non-Liquid-Glass fallback surface clips to its own rounded bounds
-     * (GlassChromeControl), and a readout that vanishes on a device without
-     * the material is worse than no readout. The wrapper carries the capsule's
-     * own flex so the row lays out exactly as it did, and it clips nothing, so
-     * the glass still has room to grow under a press (DROVE-202).
-     */
-    return (
-        <View style={styles.sliderAnchor}>
-            {capsule}
-            <EffortSliderPopover handle={effortSlider} scale={effortScale} />
-        </View>
     );
 });

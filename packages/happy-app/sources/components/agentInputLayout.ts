@@ -637,6 +637,48 @@ export function resolveMobileComposerControlRowGeometry(): MobileComposerGeometr
 }
 
 /**
+ * The air between the control row and the effort readout above it.
+ *
+ * The readout is 44pt of glass and the capsule under it is another 44, so they
+ * need the same separation two stacked controls get anywhere else.
+ */
+export const MOBILE_COMPOSER_EFFORT_READOUT_GAP = MOBILE_COMPOSER_METRICS.controlGap;
+
+/**
+ * THE ONE PLACEMENT RULE, for every composer picker (DROVE-229).
+ *
+ * A picker is as wide as the composer, and the LAYOUT gives it that width. The
+ * sheets get it from ComposerSheet, which is `left: 0, right: 0` in a screen
+ * modal; this readout gets it from here. Neither is anchored to the control it
+ * came from and neither computes an x.
+ *
+ * Clay: "Allow me to actually size this and actually fully cover the width
+ * right when I click this. Or at least have it centered." Full width is the
+ * stronger of the two he offered, because it answers the anchoring question by
+ * deleting it, and because it is what he has already asked for three times of
+ * the sheets. So: full width, and the same gutter the bubble has, so the
+ * readout's rims line up with the card's.
+ *
+ * `left: 0, right: 0` is the rule in the only two properties that can state
+ * it. What is left is a `bottom`, which is vertical and is not a choice: the
+ * readout has to clear the row the finger is on, so it sits the row's own
+ * height plus the row's bottom margin plus a gap above the stack's floor.
+ * `paddingHorizontal` is the gutter, in normal flow, so the strip inside
+ * stretches to exactly the width the bubble above it has.
+ */
+export function resolveMobileComposerEffortLayerGeometry() {
+    return {
+        position: 'absolute' as const,
+        left: 0,
+        right: 0,
+        bottom: MOBILE_COMPOSER_METRICS.actionRowHeight
+            + MOBILE_COMPOSER_METRICS.controlsBottomGap
+            + MOBILE_COMPOSER_EFFORT_READOUT_GAP,
+        paddingHorizontal: MOBILE_COMPOSER_METRICS.shellInset,
+    };
+}
+
+/**
  * A composer control's disc.
  *
  * `icon` is a control on the session row, drawn at the full 44. `primary` and
