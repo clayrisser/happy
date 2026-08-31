@@ -1,5 +1,5 @@
 import { createId } from '@paralleldrive/cuid2';
-import { createEnvelope, type CreateEnvelopeOptions, type SessionEnvelope } from '@slopus/happy-wire';
+import { createEnvelope, type CreateEnvelopeOptions, type SessionEnvelope, type SessionUsage } from '@slopus/happy-wire';
 import type { AgentMessage } from '@/agent/core';
 
 function turnOptions(turnId: string | null, time: number): CreateEnvelopeOptions {
@@ -12,6 +12,36 @@ function buildToolTitle(toolName: string): string {
 
 function buildToolDescription(toolName: string): string {
   return `Running ${toolName}`;
+}
+
+/**
+ * The `usage` block off a `token-count` message, or null (DROVE-253).
+ *
+ * `createEnvelope` PARSES the envelope, and `sessionUsageSchema` requires
+ * `input_tokens` and `output_tokens` as non-negative ints. A producer that
+ * hands over a half-filled block would throw inside the mapper and take the
+ * turn down with it, so this normalises rather than trusting.
+ */
+function parseUsagePayload(payload: unknown): SessionUsage | null {
+  if (!payload || typeof payload !== 'object') {
+    return null;
+  }
+  const source = payload as Record<string, unknown>;
+  const num = (key: string): number => {
+    const v = source[key];
+    return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.trunc(v) : 0;
+  };
+  const usage: SessionUsage = {
+    input_tokens: num('input_tokens'),
+    output_tokens: num('output_tokens'),
+  };
+  for (const key of ['cache_creation_input_tokens', 'cache_read_input_tokens', 'context_window']) {
+    const v = num(key);
+    if (v > 0) {
+      (usage as Record<string, unknown>)[key] = v;
+    }
+  }
+  return usage;
 }
 
 function parseThinkingPayload(payload: unknown): { text: string; streaming: boolean } {
@@ -128,6 +158,19 @@ export class AcpSessionManager {
 
     if (msg.type === 'status') {
       return [];
+    }
+
+    if (msg.type === 'token-count') {
+      const usage = parseUsagePayload((msg as { usage?: unknown }).usage);
+      if (!usage) {
+        return [];
+      }
+      // Deliberately NO turn id, matching the Codex mapper: app versions
+      // without the usage-only-service filter render any agent `service`
+      // envelope that HAS a turn as a chat row, which would be one blank
+      // bubble per turn. Turn-less agent envelopes are dropped by those
+      // versions and read for their usage by the ones that have the filter.
+      return [createEnvelope('agent', { t: 'service', text: '' }, { usage, time: this.nextTime() })];
     }
 
     if (msg.type === 'model-output') {

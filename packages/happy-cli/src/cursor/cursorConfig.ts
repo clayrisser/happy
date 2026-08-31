@@ -16,9 +16,30 @@
  *
  * Seeded FRESH at every session start rather than kept, so a rotated login in
  * the real config is picked up instead of going stale in a copy.
+ *
+ * `cli-config.json` carries the model, the model parameters, the approval mode
+ * and the auth DISPLAY fields. It does not carry the credential: tokens live
+ * in the macOS keychain under fixed service names that are not keyed to this
+ * dir, so a session config dir moves settings and never moves identity. That
+ * is what cursorEnv.ts is for.
+ *
+ * AND `chats/` IS LINKED BACK OUT, which is not a nicety (DROVE-253). Read out
+ * of the bundle: the chats directory resolves from `CURSOR_CONFIG_DIR`, not
+ * from `CURSOR_DATA_DIR` — `chats = join(configDir(), "chats")` where
+ * `configDir()` is `CURSOR_CONFIG_DIR || XDG_CONFIG_HOME/cursor || ~/.cursor`,
+ * while only `projects/` follows `CURSOR_DATA_DIR`. Confirmed by running a
+ * turn under a scratch config dir and finding the chat written there instead
+ * of in `~/.cursor/chats`.
+ *
+ * So without the link every chat a drover session creates is born inside a
+ * per-session directory that the NEXT session start deletes. `--resume` across
+ * sessions could not work, a chat started from the phone would be invisible to
+ * the IDE and to `drover pick-cursor-chat`, and the abandoned copies would
+ * pile up under `~/.happy/cursor-sessions/` forever. Config is per session;
+ * the conversation is not.
  */
 
-import { copyFileSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, statSync, symlinkSync } from 'node:fs';
 import os from 'node:os';
 import { join } from 'node:path';
 
@@ -32,14 +53,32 @@ export function realCursorConfigDir(env: NodeJS.ProcessEnv = process.env): strin
 }
 
 /**
+ * Files that must NOT be seeded into a session config dir (DROVE-253).
+ *
+ * `hooks.json` used to be copied here, with a comment saying it was how a turn
+ * reached the drover bus. That was wrong, and the survey measured it three
+ * ways: a probe hook in `CURSOR_CONFIG_DIR/hooks.json` never fired, the same
+ * hook in `CURSOR_DATA_DIR/hooks.json` never fired, and only
+ * `<cwd>/.cursor/hooks.json` did. cursor-agent resolves hooks from
+ * `~/.cursor/hooks.json` and `<cwd>/.cursor/hooks.json` and from nowhere else;
+ * no environment variable moves them.
+ *
+ * So the copy was dead weight, and worse than dead weight: it read as though
+ * this dir scoped the gate to one session. It does not. Anything drover
+ * registers is MACHINE-WIDE and reaches the Cursor IDE too, which is exactly
+ * why `drover cursor` keeps `--gate` opt-in.
+ */
+const notSeeded = new Set(['hooks.json']);
+
+/**
  * Create this session's config dir and seed it.
  *
- * Only the top-level FILES are copied — `cli-config.json` (the login, the
- * default model, the model parameters), `mcp.json`, `hooks.json` (which is how
- * a turn still reaches the drover bus, so `drover sessions` sees it), and
- * whatever else the user keeps beside them. Directories are left behind on purpose: `chats/`,
- * `projects/` and `worktrees/` are state, not configuration, and copying a
- * chat store per session would be both slow and wrong.
+ * Only the top-level FILES are copied — `cli-config.json` (the login display
+ * fields, the default model, the model parameters), `mcp.json`, and whatever
+ * else the user keeps beside them, minus `notSeeded`. Directories are left
+ * behind on purpose: `chats/`, `projects/` and `worktrees/` are state, not
+ * configuration, and copying a chat store per session would be both slow and
+ * wrong.
  */
 export function prepareSessionCursorConfigDir(sessionDir: string, from: string = realCursorConfigDir()): string {
     rmSync(sessionDir, { recursive: true, force: true });
@@ -53,6 +92,7 @@ export function prepareSessionCursorConfigDir(sessionDir: string, from: string =
         return sessionDir;
     }
     for (const name of entries) {
+        if (notSeeded.has(name)) continue;
         const src = join(from, name);
         try {
             if (!statSync(src).isFile()) continue;
@@ -62,5 +102,21 @@ export function prepareSessionCursorConfigDir(sessionDir: string, from: string =
             // unreadable entry is not a reason to fail the session.
         }
     }
+    linkSharedChats(sessionDir, from);
     return sessionDir;
+}
+
+/**
+ * Point this session's `chats/` at the real one, so a conversation outlives
+ * the config dir it was started in. Best effort: a session that cannot link
+ * still runs, it just keeps its chats to itself, which is what it did before.
+ */
+function linkSharedChats(sessionDir: string, from: string): void {
+    try {
+        const shared = join(from, 'chats');
+        if (!existsSync(shared)) mkdirSync(shared, { recursive: true });
+        symlinkSync(shared, join(sessionDir, 'chats'), 'dir');
+    } catch {
+        // Already there, no permission, a filesystem with no symlinks.
+    }
 }

@@ -734,6 +734,21 @@ export function getEffortLevelsForModel(
     if (flavor === 'codex') {
         return getCodexEffortLevels(modelKey);
     }
+    // Cursor PUBLISHES its scale, the way it already publishes its models
+    // (DROVE-253). It has to: effort there is not a second argument but the
+    // tier spelled into the model id — `cursor-grok-4.6-xhigh` — and the
+    // bracket override cursor-agent's own help advertises was measured to be
+    // rejected outright. So the CLI splits the id, sends the tiers as
+    // `thoughtLevels`, and rejoins the pick by lookup. Read only for `cursor`
+    // rather than for every non-rig flavor, because the ACP path writes
+    // `thoughtLevels` too and growing an effort picker on those sessions is
+    // not this change's business.
+    if (flavor === 'cursor') {
+        return mapMetadataOptions(metadata?.thoughtLevels).map((option) => ({
+            key: option.key,
+            name: option.name,
+        }));
+    }
     return [];
 }
 

@@ -520,6 +520,12 @@ Conversation history is preserved on the server, but in-flight tool calls are in
       let startedBy: 'daemon' | 'terminal' | undefined = undefined;
       let model: string | null = null;
       let resumeChatId: string | null = null;
+      let permissionMode: string | null = null;
+      // Set by `drover cursor --gate`, which is what actually registers the
+      // hook. The runner cannot check for itself: hooks live in
+      // ~/.cursor/hooks.json and belong to the whole machine, so their
+      // presence says nothing about whether THIS session put them there.
+      let gated = false;
       for (let i = 1; i < args.length; i++) {
         if (args[i] === '--started-by') {
           startedBy = args[++i] as 'daemon' | 'terminal';
@@ -527,13 +533,17 @@ Conversation history is preserved on the server, but in-flight tool calls are in
           model = args[++i] ?? null;
         } else if (args[i] === '--resume') {
           resumeChatId = args[++i] ?? null;
+        } else if (args[i] === '--permission-mode') {
+          permissionMode = args[++i] ?? null;
+        } else if (args[i] === '--gated') {
+          gated = true;
         }
       }
 
       const { credentials } = await authAndSetupMachineIfNeeded();
       await ensureDaemonRunning()
 
-      await runCursor({ credentials, startedBy, model, resumeChatId });
+      await runCursor({ credentials, startedBy, model, resumeChatId, permissionMode, gated });
     } catch (error) {
       console.error(chalk.red('Error:'), error instanceof Error ? error.message : 'Unknown error')
       if (process.env.DEBUG) {
