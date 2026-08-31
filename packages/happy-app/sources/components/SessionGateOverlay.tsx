@@ -24,7 +24,8 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { Typography } from '@/constants/Typography';
 import { useSessionGates, type DroverGateEntry } from '@/hooks/usePendingGates';
-import { sessionAllow, sessionDeny } from '@/sync/ops';
+import { sessionAllow, sessionDeny, sessionDismissGate } from '@/sync/ops';
+import { answerWithDeadline, gateAnswerTrouble } from '@/components/gateAnswerTimeout';
 import { layout } from './layout';
 import { describePendingGates, type PendingGatesKind } from './pendingGatesSummary';
 import { sessionGateAction, sessionGateReadOnlyHint } from './sessionGateAction';
@@ -294,6 +295,8 @@ const SessionGateCard = React.memo(({ entry }: { entry: DroverGateEntry }) => {
     // are looking at would reach an agent that never asked anything.
     const { gate, sessionId, requestId } = entry;
     const [busy, setBusy] = React.useState<'allow' | 'deny' | null>(null);
+    /** Why the buttons came back, when an answer went unacknowledged (DROVE-218). */
+    const [trouble, setTrouble] = React.useState<string | null>(null);
 
     const cards = React.useMemo(() => questionCards(entry.args), [entry.args]);
     const questions = React.useMemo(() => toInlineQuestions(cards), [cards]);
@@ -325,18 +328,21 @@ const SessionGateCard = React.memo(({ entry }: { entry: DroverGateEntry }) => {
     const decide = React.useCallback(async (allow: boolean) => {
         if (busy) return;
         setBusy(allow ? 'allow' : 'deny');
-        try {
-            if (allow) {
-                await sessionAllow(sessionId, requestId);
-            } else {
-                await sessionDeny(sessionId, requestId);
-            }
-        } catch (error) {
-            console.error('Failed to answer gate in place:', error);
-        } finally {
-            setBusy(null);
-        }
+        setTrouble(null);
+        // Bounded, and it decides nothing on the way out. See gateAnswerTimeout.
+        const outcome = await answerWithDeadline(
+            () => (allow ? sessionAllow(sessionId, requestId) : sessionDeny(sessionId, requestId)),
+        );
+        setBusy(null);
+        setTrouble(gateAnswerTrouble(outcome));
     }, [busy, requestId, sessionId]);
+
+    /** Withdraw the prompt, never approve it. See sessionDismissGate (DROVE-218). */
+    const dismiss = React.useCallback(() => {
+        sessionDismissGate(sessionId, requestId).catch((error) => {
+            console.warn('Dismiss did not reach the bus:', error);
+        });
+    }, [requestId, sessionId]);
 
     if (action === 'todo') {
         // A to-do with no title is not renderable; droverTodoCard says so by
@@ -389,6 +395,14 @@ const SessionGateCard = React.memo(({ entry }: { entry: DroverGateEntry }) => {
                         {busy === 'allow'
                             ? <ActivityIndicator size="small" color={theme.colors.button.primary.tint} />
                             : <Text style={styles.allowText}>Allow</Text>}
+                    </TouchableOpacity>
+                </View>
+            )}
+            {!!trouble && (
+                <View style={styles.troubleRow}>
+                    <Text style={styles.troubleText}>{trouble}</Text>
+                    <TouchableOpacity onPress={dismiss} activeOpacity={0.7} accessibilityRole="button">
+                        <Text style={styles.troubleAction}>Dismiss</Text>
                     </TouchableOpacity>
                 </View>
             )}
@@ -529,6 +543,23 @@ const styles = StyleSheet.create((theme) => ({
         fontSize: 12,
         color: theme.colors.textSecondary,
         marginBottom: 12,
+    },
+    troubleRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        marginBottom: 12,
+    },
+    troubleText: {
+        ...Typography.default(),
+        flex: 1,
+        fontSize: 12,
+        color: theme.colors.textSecondary,
+    },
+    troubleAction: {
+        ...Typography.default('semiBold'),
+        fontSize: 12,
+        color: theme.colors.box.warning.text,
     },
     actions: {
         flexDirection: 'row',

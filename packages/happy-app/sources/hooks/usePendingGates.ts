@@ -1,4 +1,7 @@
+import * as React from 'react';
+
 import { storage } from '@/sync/storage';
+import { withdrawnGates } from '@/sync/droverWithdrawn';
 import { useDeepEqual } from '@/sync/storeSelectors';
 import {
     collectGateEntries,
@@ -20,7 +23,20 @@ import {
  * actually pending, which is exactly when this hook matters.
  */
 export function usePendingGates(): DroverGateEntry[] {
+    useWithdrawnGates();
     return storage(useDeepEqual((state) => sortGateEntries(collectGateEntries(state.sessions))));
+}
+
+/**
+ * Re-read the collectors when Clay withdraws a card (DROVE-218).
+ *
+ * collectGateEntries filters the withdrawn set out itself, so every surface
+ * agrees — but the store has not changed, so nothing would re-run the selector
+ * and the card would sit there until the next unrelated update. This is the
+ * subscription that makes the tap immediate.
+ */
+export function useWithdrawnGates(): ReadonlySet<string> {
+    return React.useSyncExternalStore(withdrawnGates.subscribe, withdrawnGates.get, withdrawnGates.get);
 }
 
 /**
@@ -32,6 +48,7 @@ export function usePendingGates(): DroverGateEntry[] {
  * spins render against read.
  */
 export function useSessionGates(sessionId: string): DroverGateEntry[] {
+    useWithdrawnGates();
     return storage(useDeepEqual((state) => gatesForSession(state.sessions ?? {}, sessionId)));
 }
 
@@ -42,6 +59,7 @@ export function useSessionGates(sessionId: string): DroverGateEntry[] {
  * Deep-equal for the same reason the two above are.
  */
 export function useGateForQuestion(question: string): DroverGateEntry | null {
+    useWithdrawnGates();
     return storage(useDeepEqual((state) => gateForQuestion(state.sessions ?? {}, question)));
 }
 
@@ -57,5 +75,6 @@ export type { DroverGateEntry };
  * the inbox screen itself reads.
  */
 export function useInboxCounts(): { prompts: number; todos: number; total: number } {
+    useWithdrawnGates();
     return storage(useDeepEqual((state) => inboxCounts(collectGateEntries(state.sessions))));
 }

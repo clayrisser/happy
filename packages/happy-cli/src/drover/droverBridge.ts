@@ -616,6 +616,138 @@ async function resolveOnBus(id: string, body: Record<string, unknown>): Promise<
     }
 }
 
+/**
+ * WITHDRAW a prompt. Never an answer (DROVE-218).
+ *
+ * `POST /v1/events/:id/cancel` calls terminate(ev, "canceled", by, "cancel"),
+ * and cancel is the one terminal transition that leaves `resolution` NULL. So
+ * nothing downstream can read a dismissal as a decision: the producer's
+ * `/wait` returns a canceled event with no action to apply, and lib's gate
+ * writes its DENY body for a gate that ended without a resolution. That null
+ * is the whole safety property — DROVE-203 is a gate that resolved `allow`
+ * with nobody there, and this path cannot produce that shape at all, because
+ * it never touches /resolve.
+ */
+async function cancelOnBus(id: string, by: string): Promise<number> {
+    try {
+        const res = await fetch(`${DROVER_URL}/v1/events/${id}/cancel`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ by }),
+        })
+        return res.status
+    } catch (err) {
+        logger.debug('[drover] cancel failed', err)
+        return 0
+    }
+}
+
+/**
+ * How many answered cards the bridge session carries, and why there is a cap
+ * at all (DROVE-218).
+ *
+ * `completedRequests` is the receipt drawer behind the inbox, and it used to
+ * grow for the life of the session — one entry per gate, forever. The whole
+ * agentState is re-encrypted and re-sent on EVERY update, so the frame grew
+ * with it. Measured on Clay's machine at 18:20 on 2026-08-31: 1006 completed
+ * entries, 747,852 bytes of plaintext, 999,276 bytes encrypted. The next card
+ * pushed the frame past the socket's limit, and an oversized frame does not
+ * come back as an error — it CLOSES the socket (DROVE-211). The update is then
+ * retried, closes the socket again, and the session's state is frozen for good:
+ * 994 backoff retries over 32 minutes, and two gates the bus had CANCELED at
+ * 17:49:24 and 17:50:05 still on the phone at 18:08 because the delete that
+ * retired them could never commit.
+ *
+ * So the cap is not tidiness. It is the difference between a bridge that can
+ * write and one that cannot. Sixty is well past what the receipts list shows
+ * and two orders of magnitude short of the frame limit.
+ */
+const MAX_COMPLETED = 60
+
+/**
+ * The newest `MAX_COMPLETED` receipts, oldest dropped.
+ *
+ * Sorted by `completedAt`, with an entry that never stamped one treated as
+ * oldest: a missing timestamp must not win a place over a card that has one.
+ */
+export function trimCompleted<T extends { completedAt?: number }>(
+    completed: Record<string, T>,
+    max: number = MAX_COMPLETED,
+): Record<string, T> {
+    const ids = Object.keys(completed)
+    if (ids.length <= max) return completed
+    const keep = ids
+        .sort((a, b) => (completed[b].completedAt ?? 0) - (completed[a].completedAt ?? 0))
+        .slice(0, max)
+    const out: Record<string, T> = {}
+    for (const id of keep) out[id] = completed[id]
+    return out
+}
+
+/** Only the two maps the card bookkeeping touches; the rest of AgentState rides along. */
+type CardState = {
+    requests?: Record<string, Record<string, unknown>> | null
+    completedRequests?: Record<string, Record<string, unknown>> | null
+} & Record<string, unknown>
+
+/**
+ * One card retired, whatever ended it.
+ *
+ * Resolved, canceled and expired all land here and all leave the same shape.
+ * That is the point: a cancel carries a NULL resolution, and a retirement path
+ * written around reading the answer off the event skips exactly the events
+ * Clay's two stuck cards were (DROVE-218). Unchanged state back when the
+ * session is not showing the card, so a duplicate terminal frame writes
+ * nothing.
+ */
+export function retireCard(state: CardState, ev: DroverEvent, now: number = Date.now()): CardState {
+    const requests = { ...(state.requests ?? {}) }
+    const card = requests[ev.id]
+    if (!card) return state
+    delete requests[ev.id]
+    const reason = completedReasonFor(ev)
+    return {
+        ...state,
+        requests,
+        completedRequests: trimCompleted({
+            ...(state.completedRequests ?? {}),
+            [ev.id]: {
+                ...card,
+                completedAt: now,
+                status: completedStatusFor(ev),
+                ...(reason ? { reason } : {}),
+            },
+        }),
+    }
+}
+
+/**
+ * The session's cards REPLACED by the bus's pending set (DROVE-218).
+ *
+ * Anything the session holds that is not in `live` is removed. Not updated,
+ * not skipped because some in-memory map still remembers mirroring it —
+ * removed. That is what "authoritative" means in the bus's own header, and
+ * applying its snapshot any other way leaves a card that can outlive its
+ * event.
+ */
+export function applyPendingSnapshot(
+    state: CardState,
+    live: ReadonlySet<string>,
+    now: number = Date.now(),
+): CardState {
+    const requests = { ...(state.requests ?? {}) }
+    const completedRequests = { ...(state.completedRequests ?? {}) }
+    let dropped = 0
+    for (const [id, card] of Object.entries(requests)) {
+        if (live.has(id)) continue
+        delete requests[id]
+        completedRequests[id] = { ...card, completedAt: now, status: 'canceled', reason: 'gone from the bus' }
+        dropped++
+    }
+    if (!dropped) return state
+    return { ...state, requests, completedRequests: trimCompleted(completedRequests) }
+}
+
 export async function runDroverBridge(): Promise<void> {
     const credentials = await readCredentials()
     if (!credentials) {
@@ -695,6 +827,42 @@ export async function runDroverBridge(): Promise<void> {
         }
     )
 
+    /**
+     * Clay withdrawing a stuck card himself, from the phone (DROVE-218).
+     *
+     * "get the ability for me to get things unstuck like prompts stuck" — a
+     * card he can clear without waiting for anyone to diagnose it. It goes to
+     * /cancel and NEVER to /resolve, so it cannot carry an action, cannot be
+     * read as an approval, and leaves `resolution` null however the producer
+     * reads the event afterwards. If the gate really is still pending, the
+     * honest outcome is that it goes away and the producer learns its gate
+     * went away; the alternative — a dismissal that quietly allowed something —
+     * is DROVE-203, and this path has no way to express it.
+     *
+     * The card is retired locally whatever the bus says. A 404 means the event
+     * is already gone, a 409 means another surface ended it first, and both are
+     * reasons the card should not still be on the screen.
+     */
+    client.rpcHandlerManager.registerHandler<{ id: string }, { canceled: boolean; status: number }>(
+        'drover-dismiss',
+        async (message) => {
+            if (isDroverDemoId(message.id)) {
+                logger.debug(`[drover-demo] refused dismiss for demo card ${message.id}`)
+                return { canceled: false, status: 0 }
+            }
+            const status = await cancelOnBus(message.id, 'happy')
+            logger.debug(`[drover] app dismissed ${message.id} (bus ${status})`)
+            removeCard({
+                id: message.id,
+                kind: mirrored.get(message.id)?.kind ?? 'permission',
+                state: 'canceled',
+                title: mirrored.get(message.id)?.title ?? '',
+                resolution: null,
+            })
+            return { canceled: status === 200, status }
+        }
+    )
+
     const addCard = (ev: DroverEvent) => {
         if (mirrored.has(ev.id)) return
         mirrored.set(ev.id, ev)
@@ -760,28 +928,14 @@ export async function runDroverBridge(): Promise<void> {
     // Not gated on `mirrored`: a bridge restart empties that map while the
     // session on the phone still holds every card it was shown, and a card the
     // bridge refuses to retire is a prompt that sits on the screen forever.
+    //
+    // Every terminal state retires the same way — resolved, canceled, expired.
+    // A cancel carries a NULL resolution, so anything shaped around reading an
+    // answer off the event skips it, and both of the cards Clay was still being
+    // shown twenty minutes after the bus killed them were cancels (DROVE-218).
     const removeCard = (ev: DroverEvent) => {
         mirrored.delete(ev.id)
-        client.updateAgentState((s) => {
-            const requests = { ...(s.requests ?? {}) }
-            const card = requests[ev.id]
-            if (!card) return s
-            delete requests[ev.id]
-            const reason = completedReasonFor(ev)
-            return {
-                ...s,
-                requests,
-                completedRequests: {
-                    ...(s.completedRequests ?? {}),
-                    [ev.id]: {
-                        ...card,
-                        completedAt: Date.now(),
-                        status: completedStatusFor(ev),
-                        ...(reason ? { reason } : {}),
-                    },
-                },
-            }
-        })
+        client.updateAgentState((s) => retireCard(s as CardState, ev) as AgentState)
         // A wake and no alert, deliberately. The wrist has to hear that the
         // gate went away; buzzing someone to say a question is gone is worse
         // than silence.
@@ -790,39 +944,49 @@ export async function runDroverBridge(): Promise<void> {
     }
 
     /**
-     * Retire cards the bus has no pending event for.
+     * THE authoritative pending set, applied as an authority (DROVE-218).
      *
-     * The bridge's session outlives the bridge process, so anything that
-     * resolved while the service was down came back to a phone still showing
-     * it, with no broadcast left to dismiss it. Both sources are consulted: the
-     * bus's own pending list, and what the replay has already re-mirrored, so
-     * an event created between the two is never mistaken for a dead one.
+     * The bus writes one `snapshot` frame as the first thing on every
+     * /v1/stream connection, and its header says why in as many words: a
+     * surface that was offline when a terminal frame went out otherwise has no
+     * way to learn its card is dead. Happy had no handler for that frame at
+     * all. Its stand-in was a `reconcile()` that listed pending events over a
+     * SECOND request and then skipped any card still in `mirrored` — and
+     * `mirrored` is only ever cleared by removeCard, so a card whose terminal
+     * frame was missed stayed in the map and reconcile refused to retire it,
+     * for the life of the process. A merge guarded by the very memory a missed
+     * frame corrupts is not a reconciliation.
+     *
+     * So this REPLACES. Anything the session holds that is not in the snapshot
+     * is gone — no second request, no memory to consult, no way for a card to
+     * outlive its event. `mirrored` is rebuilt from the frame for the same
+     * reason: it is a cache of the bus's set, not a record of what this process
+     * happens to remember.
+     *
+     * There is no race with `created`. The snapshot is written before any live
+     * frame on the same stream, in order, so an event raised a millisecond
+     * later arrives after it and is added, never mistaken for a dead one.
      */
-    const reconcile = async () => {
-        let live: Set<string>
-        try {
-            const res = await fetch(`${DROVER_URL}/v1/events?state=pending`)
-            if (!res.ok) return
-            const body = (await res.json()) as { events?: DroverEvent[] }
-            live = new Set((body.events ?? []).map((e) => e.id))
-        } catch (err) {
-            logger.debug('[drover] could not list pending events to reconcile', err)
-            return
+    const applySnapshot = (pending: DroverEvent[]) => {
+        const live = new Map(pending.map((ev) => [ev.id, ev]))
+        for (const id of [...mirrored.keys()]) {
+            if (!live.has(id)) mirrored.delete(id)
         }
         client.updateAgentState((s) => {
-            const requests = { ...(s.requests ?? {}) }
-            const completedRequests = { ...(s.completedRequests ?? {}) }
-            let dropped = 0
-            for (const [id, card] of Object.entries(requests)) {
-                if (live.has(id) || mirrored.has(id)) continue
-                delete requests[id]
-                completedRequests[id] = { ...card, completedAt: Date.now(), status: 'canceled', reason: 'gone from the bus' }
-                dropped++
+            const next = applyPendingSnapshot(s as CardState, new Set(live.keys()))
+            if (next !== s) {
+                const before = Object.keys(s.requests ?? {}).length
+                const after = Object.keys(next.requests ?? {}).length
+                logger.debug(`[drover] snapshot retired ${before - after} card(s) the bus no longer has`)
             }
-            if (!dropped) return s
-            logger.debug(`[drover] retired ${dropped} card(s) the bus no longer has`)
-            return { ...s, requests, completedRequests }
+            return next as AgentState
         })
+        // Then the other half: anything pending the session is NOT showing.
+        // addCard is a no-op for one already mirrored, so a snapshot that
+        // agrees with the session costs nothing.
+        for (const ev of live.values()) {
+            if (ev.kind === 'permission' || ev.kind === 'question' || ev.kind === 'todo') addCard(ev)
+        }
     }
 
     // Bus stream: replay of pending events on connect, then live. Reconnect
@@ -832,7 +996,6 @@ export async function runDroverBridge(): Promise<void> {
             const res = await fetch(`${DROVER_URL}/v1/stream`, { headers: { Accept: 'text/event-stream' } })
             if (!res.ok || !res.body) throw new Error(`stream ${res.status}`)
             logger.debug(`[drover] connected to bus at ${DROVER_URL}`)
-            await reconcile()
             const reader = res.body.getReader()
             const decoder = new TextDecoder()
             let buf = ''
@@ -858,6 +1021,15 @@ export async function runDroverBridge(): Promise<void> {
                         // machine's channels without polling the bus they
                         // cannot reach; the app reads it out of the store it
                         // already subscribes to.
+                        // THE authoritative pending set, first frame on every
+                        // connection (DROVE-218). Applied before any `created`
+                        // frame the bus replays behind it, so the session ends
+                        // this instant holding exactly what the bus holds.
+                        if (eventType === 'snapshot') {
+                            const frame = ev as unknown as { pending?: DroverEvent[] }
+                            applySnapshot(Array.isArray(frame.pending) ? frame.pending : [])
+                            continue
+                        }
                         if (eventType === 'settings') {
                             const frame = ev as unknown as { at?: number; defaults?: Record<string, unknown> }
                             if (frame.defaults) {

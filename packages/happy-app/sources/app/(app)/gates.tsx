@@ -1,6 +1,7 @@
 import * as React from 'react';
 import {
     ActivityIndicator,
+    Alert,
     type LayoutChangeEvent,
     Platform,
     Pressable,
@@ -26,7 +27,8 @@ import { collectSessionTasks, sessionTasksSectionLabel, type SessionTasksCard } 
 import { SessionTasksList } from '@/components/SessionTasksList';
 import { ageLabel, splitInbox } from '@/sync/droverGates';
 import { isDroverDemoId } from '@/sync/droverDemo';
-import { sessionAllow, sessionDeny } from '@/sync/ops';
+import { sessionAllow, sessionDeny, sessionDismissGate } from '@/sync/ops';
+import { answerWithDeadline, gateAnswerTrouble } from '@/components/gateAnswerTimeout';
 import {
     hasAnswerableOptions,
     providerAnswersFor,
@@ -256,6 +258,12 @@ export const GateCard = React.memo(({ entry, focused }: { entry: DroverGateEntry
     // session route for an id that exists nowhere.
     const demo = isDroverDemoId(sessionId);
     const [busy, setBusy] = React.useState<'allow' | 'deny' | null>(null);
+    /**
+     * Why the buttons came back (DROVE-218). Null while nothing has gone
+     * wrong. Cleared the moment another answer is attempted, so a stale line
+     * never sits under a fresh press.
+     */
+    const [trouble, setTrouble] = React.useState<string | null>(null);
 
     const cards = React.useMemo(() => questionCards(entry.args), [entry.args]);
     const questions = React.useMemo(() => toInlineQuestions(cards), [cards]);
@@ -281,13 +289,12 @@ export const GateCard = React.memo(({ entry, focused }: { entry: DroverGateEntry
     const close = React.useCallback(async (optionId: 'done' | 'drop') => {
         if (busy) return;
         setBusy(optionId === 'done' ? 'allow' : 'deny');
-        try {
-            await sessionAllow(sessionId, requestId, undefined, undefined, 'approved', { optionId });
-        } catch (error) {
-            console.error('Failed to close a to-do:', error);
-        } finally {
-            setBusy(null);
-        }
+        setTrouble(null);
+        const outcome = await answerWithDeadline(
+            () => sessionAllow(sessionId, requestId, undefined, undefined, 'approved', { optionId }),
+        );
+        setBusy(null);
+        setTrouble(gateAnswerTrouble(outcome));
     }, [busy, requestId, sessionId]);
 
     const submitAnswer = React.useCallback(async (answers: InlineQuestionAnswers) => {
@@ -307,27 +314,59 @@ export const GateCard = React.memo(({ entry, focused }: { entry: DroverGateEntry
     const decide = React.useCallback(async (allow: boolean) => {
         if (busy) return;
         setBusy(allow ? 'allow' : 'deny');
-        try {
-            if (allow) {
-                await sessionAllow(sessionId, requestId);
-            } else {
-                await sessionDeny(sessionId, requestId);
-            }
-        } catch (error) {
-            console.error('Failed to answer gate:', error);
-        } finally {
-            setBusy(null);
-        }
+        setTrouble(null);
+        // The deadline restores the buttons and says why. It never picks a
+        // side: nothing is sent on a timeout, so this cannot become DROVE-203
+        // (a gate that resolved `allow` with nobody there) wearing a nicer name.
+        const outcome = await answerWithDeadline(
+            () => (allow ? sessionAllow(sessionId, requestId) : sessionDeny(sessionId, requestId)),
+        );
+        setBusy(null);
+        setTrouble(gateAnswerTrouble(outcome));
     }, [busy, requestId, sessionId]);
+
+    /**
+     * Clay clearing a stuck card himself (DROVE-218).
+     *
+     * Long-press the card. The confirm names it a withdrawal in as many words,
+     * because the one thing this must never be mistaken for is an approval:
+     * sessionDismissGate goes to the bus's /cancel, which leaves `resolution`
+     * null, and there is no branch from it to /resolve. The card drops locally
+     * whatever the bus answers, which is the whole point — the condition it
+     * exists for is a bridge that cannot answer at all.
+     */
+    const dismiss = React.useCallback(() => {
+        Alert.alert(
+            'Dismiss this prompt?',
+            'It is withdrawn, not approved. Nothing is allowed and nothing is denied — the agent is told the prompt went away.',
+            [
+                { text: 'Keep it', style: 'cancel' },
+                {
+                    text: 'Dismiss',
+                    style: 'destructive',
+                    onPress: () => {
+                        // Not awaited and deliberately not guarded: the local
+                        // drop happens inside sessionDismissGate before the RPC,
+                        // so the card goes even if the bridge never answers.
+                        sessionDismissGate(sessionId, requestId).catch((error) => {
+                            console.warn('Dismiss did not reach the bus:', error);
+                        });
+                    },
+                },
+            ],
+        );
+    }, [requestId, sessionId]);
 
     return (
         <View style={[styles.card, focused && styles.cardFocused]}>
             <Pressable
                 onPress={demo ? undefined : () => navigateToSession(sessionId)}
+                onLongPress={demo ? undefined : dismiss}
                 disabled={demo}
                 style={styles.cardHeader}
                 accessibilityRole="button"
                 accessibilityLabel={`Open the session asking: ${gate.title}`}
+                accessibilityHint="Press and hold to dismiss this prompt without answering it"
             >
                 <View style={styles.cardHeaderText}>
                     <View style={styles.cardTitleRow}>
@@ -426,6 +465,20 @@ export const GateCard = React.memo(({ entry, focused }: { entry: DroverGateEntry
                             </TouchableOpacity>
                         </View>
                     )}
+                </View>
+            )}
+
+            {/* A spinner that never ends is worse than a visible failure: he
+                waits instead of retrying (DROVE-218). This is the line that
+                says the answer was not acknowledged, with the way out beside
+                it. Nothing here decided anything. */}
+            {!!trouble && (
+                <View style={styles.troubleRow}>
+                    <Ionicons name="alert-circle-outline" size={14} color={theme.colors.box.warning.text} />
+                    <Text style={styles.troubleText}>{trouble}</Text>
+                    <TouchableOpacity onPress={dismiss} activeOpacity={0.7} accessibilityRole="button">
+                        <Text style={styles.troubleAction}>Dismiss</Text>
+                    </TouchableOpacity>
                 </View>
             )}
         </View>
@@ -616,6 +669,24 @@ const styles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         gap: 8,
         marginBottom: 12,
+    },
+    troubleRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        paddingHorizontal: 14,
+        paddingBottom: 12,
+    },
+    troubleText: {
+        ...Typography.default(),
+        flex: 1,
+        fontSize: 12,
+        color: theme.colors.textSecondary,
+    },
+    troubleAction: {
+        ...Typography.default('semiBold'),
+        fontSize: 12,
+        color: theme.colors.box.warning.text,
     },
     action: {
         flex: 1,

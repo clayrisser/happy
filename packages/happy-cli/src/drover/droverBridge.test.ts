@@ -9,6 +9,9 @@ import {
     gatePushData,
     pushMetadata,
     requestForEvent,
+    applyPendingSnapshot,
+    retireCard,
+    trimCompleted,
     type DroverEvent,
 } from './droverBridge'
 import type { Metadata } from '@/api/types'
@@ -503,5 +506,130 @@ describe('delivery channels (DROVE-72)', () => {
             .toEqual({ action: 'option', optionId: 'closed', by: 'phone', channel: 'audio' })
         expect(busResolutionFor(question, { id: 'ev-1', approved: true, updatedInput: { optionId: 'closed' } }))
             .toEqual({ action: 'option', optionId: 'closed', by: 'phone', channel: 'visual' })
+    })
+})
+
+/**
+ * The card that outlives its event (DROVE-218).
+ *
+ * Clay was looking at two Run Bash prompts the bus had CANCELED twenty minutes
+ * earlier — `by: producer, via: cancel`, 17:49:24 and 17:50:05 — while
+ * `/v1/status` said `pending: 0`. The bus had done its half twice over: one
+ * terminal frame each, and a `snapshot` of the authoritative pending set on
+ * every connect. Happy had no handler for the snapshot at all, and its
+ * stand-in skipped any card still in an in-memory `mirrored` map, which is the
+ * one thing a missed terminal frame leaves behind.
+ */
+describe('the snapshot is the authority, not a merge', () => {
+    const held = {
+        requests: {
+            'gone-1': { tool: 'Bash', arguments: { command: 'rm -rf x' } },
+            'gone-2': { tool: 'Bash', arguments: { command: 'rm -rf y' } },
+            'still-here': { tool: 'Bash', arguments: { command: 'ls' } },
+        },
+        completedRequests: {},
+    }
+
+    it('REMOVES what the snapshot does not list, rather than leaving it updated', () => {
+        const next = applyPendingSnapshot(held, new Set(['still-here']), 1000)
+        expect(Object.keys(next.requests ?? {})).toEqual(['still-here'])
+    })
+
+    it('files what it removed as canceled, so the receipts say where the card went', () => {
+        const next = applyPendingSnapshot(held, new Set(['still-here']), 1000)
+        expect(next.completedRequests?.['gone-1']).toMatchObject({
+            status: 'canceled',
+            reason: 'gone from the bus',
+            completedAt: 1000,
+        })
+    })
+
+    it('retires a card the app never saw a terminal frame for, which is the whole point', () => {
+        // No memory of these ids anywhere: the process that mirrored them is
+        // gone, or its stream was down when the cancels went out.
+        const next = applyPendingSnapshot(held, new Set(), 1000)
+        expect(next.requests).toEqual({})
+    })
+
+    it('leaves the state alone when the session already agrees with the bus', () => {
+        const agreed = { requests: { a: { tool: 'Bash' } }, completedRequests: {} }
+        expect(applyPendingSnapshot(agreed, new Set(['a']))).toBe(agreed)
+    })
+
+    it('drops everything when the bus holds nothing pending', () => {
+        const next = applyPendingSnapshot(held, new Set(), 1000)
+        expect(Object.keys(next.completedRequests ?? {})).toHaveLength(3)
+    })
+})
+
+/**
+ * A cancel is terminal too, and it carries a NULL resolution — which is the
+ * likely reason a resolution-shaped handler walked past both of Clay's cards.
+ */
+describe('a canceled event retires exactly like a resolved one', () => {
+    const state = { requests: { 'ev-2': { tool: 'Bash' } }, completedRequests: {} }
+
+    it('retires a cancel with no resolution at all', () => {
+        const next = retireCard(state, { ...permission, state: 'canceled', resolution: null }, 7)
+        expect(next.requests).toEqual({})
+        expect(next.completedRequests?.['ev-2']).toMatchObject({ status: 'canceled', completedAt: 7 })
+    })
+
+    it('retires an expiry the same way', () => {
+        const next = retireCard(state, { ...permission, state: 'expired' }, 7)
+        expect(next.requests).toEqual({})
+        expect(next.completedRequests?.['ev-2']).toMatchObject({ status: 'canceled' })
+    })
+
+    it('retires a resolve, and keeps who answered', () => {
+        const next = retireCard(
+            state,
+            { ...permission, state: 'resolved', resolution: { action: 'allow', by: 'tmux-gum' } },
+            7,
+        )
+        expect(next.requests).toEqual({})
+        expect(next.completedRequests?.['ev-2']).toMatchObject({ status: 'approved', reason: 'by tmux-gum' })
+    })
+
+    it('writes nothing for a card the session is not showing, so a repeat frame is free', () => {
+        const empty = { requests: {}, completedRequests: {} }
+        expect(retireCard(empty, { ...permission, state: 'canceled' })).toBe(empty)
+    })
+})
+
+/**
+ * Why the receipts are capped (DROVE-218).
+ *
+ * Measured on Clay's machine: 1006 completed entries, 999,276 bytes encrypted,
+ * one card short of the socket's frame limit. An oversized frame does not come
+ * back as an error, it closes the socket, so the update retries and closes it
+ * again — 994 retries over 32 minutes, and the two `canceled` retirements in
+ * the queue behind it never committed. An unbounded receipts list is a session
+ * that eventually cannot write at all.
+ */
+describe('the receipts list is bounded', () => {
+    const many = Object.fromEntries(
+        Array.from({ length: 200 }, (_, i) => [`c${i}`, { completedAt: i }]),
+    )
+
+    it('keeps the newest and drops the rest', () => {
+        const kept = trimCompleted(many, 3)
+        expect(Object.keys(kept).sort()).toEqual(['c197', 'c198', 'c199'])
+    })
+
+    it('returns the same object when nothing has to go', () => {
+        const few = { a: { completedAt: 1 } }
+        expect(trimCompleted(few, 3)).toBe(few)
+    })
+
+    it('treats an entry with no completedAt as the oldest, never evicting a stamped one for it', () => {
+        const mixed = { old: {}, newer: { completedAt: 5 } }
+        expect(Object.keys(trimCompleted(mixed, 1))).toEqual(['newer'])
+    })
+
+    it('caps what a retirement writes back, so the state cannot grow past the frame limit', () => {
+        const state = { requests: { 'ev-2': { tool: 'Bash' } }, completedRequests: many }
+        const next = retireCard(state, { ...permission, state: 'canceled' })
+        expect(Object.keys(next.completedRequests ?? {}).length).toBeLessThanOrEqual(60)
     })
 })
