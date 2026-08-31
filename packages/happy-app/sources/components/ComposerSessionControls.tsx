@@ -8,7 +8,6 @@ import { BubblePressable } from './BubblePressable';
 import { GlassChromeSurface } from './GlassChromeControl';
 import { shouldDrawPressedFallback } from './glassInteractionPolicy';
 import { useNativeGlassPress } from './glassPress';
-import { NativeSettingsMenu, type NativeSettingsMenuGroup } from './NativeSettingsMenu';
 import {
     effortAccessibility,
     effortGaugeAngle,
@@ -66,6 +65,16 @@ import type { EffortSliderHandle } from './EffortSliderPopover';
  * running the needle follows the thumb, so the two never disagree. The whole
  * rule set is in effortSlider.ts; this file only hands it the touch.
  *
+ * AND ALL THREE ARE SHEETS (DROVE-242). Mode and model were iOS native menus
+ * here until Clay, with one of them open: "Shouldn't these show in sheets like
+ * the effort does". They were left as menus deliberately, on the grounds that
+ * they were system-owned, and that is exactly what was wrong with them: a
+ * menu UIKit places and UIKit dismisses is outside composerPicker.ts's
+ * placement rule and outside its dismissal state machine, so a second tap on
+ * the control could not close it because the control never saw the tap. This
+ * file no longer knows what platform it is on. Every segment is a press that
+ * reports its picker, and the sheet is what draws it.
+ *
  * A TAP ON IT IS STILL THE PICKER, LIKE THE OTHER TWO (DROVE-229). A press
  * that never moved reports a tap and the hook calls `onTap`, which the control
  * row turns into `handlePickerPress('effort')` — the same full-width sheet the
@@ -105,16 +114,19 @@ export interface ComposerSessionControlsProps {
     /** Where the effort sits on the scale this model offers, and how long that scale is. */
     effortIndex?: number | null;
     effortCount?: number;
-    /** Opens a picker directly. Absent means that one is not settable here. */
+    /** Opens a picker directly. Absent means none of the three is settable here. */
     onPress?: (picker: ComposerSessionPicker) => void;
     /**
-     * iOS anchors its pickers as native menus on the control itself rather
-     * than opening an overlay, so a group here replaces the press.
+     * Which of the three the session will actually take a pick for
+     * (DROVE-242).
+     *
+     * It used to be read off the native menu groups that were handed in, which
+     * carried availability by accident of also carrying the rows. The rows are
+     * the sheet's now, so this says the one thing the capsule needs: a segment
+     * with no handler behind it is drawn and does not press. Absent, or absent
+     * for one field, means that field opens.
      */
-    nativeMenus?: boolean;
-    modeGroups?: NativeSettingsMenuGroup[];
-    effortGroup?: NativeSettingsMenuGroup | null;
-    modelGroup?: NativeSettingsMenuGroup | null;
+    canOpen?: { permission?: boolean; effort?: boolean; model?: boolean };
     /** Which picker is open, so the pressed control reads as open. */
     openPicker?: ComposerSessionPicker | null;
     /**
@@ -259,39 +271,18 @@ function Control(props: {
     picker: ComposerSessionPicker;
     accessibilityLabel: string;
     accessibilityValue?: string;
-    group?: NativeSettingsMenuGroup | null;
-    groups?: NativeSettingsMenuGroup[];
-    nativeMenus?: boolean;
     open: boolean;
     onPress?: (picker: ComposerSessionPicker) => void;
     /** The 44pt square by default; the model segment sizes to its name. */
     wide?: boolean;
     children: React.ReactNode;
 }) {
-    const groups = props.groups ?? (props.group ? [props.group] : []);
     const segmentStyle = props.wide ? styles.modelSegment : styles.control;
     // Inside the capsule's own material, so the press is drawn by
     // UIGlassEffect and this segment must not fade on top of it (DROVE-202).
     // A dimming glyph in a frame that does not move is the "scaling up inside"
     // Clay was looking at, one segment at a time.
     const nativePress = useNativeGlassPress();
-    if (props.nativeMenus && groups.length > 0) {
-        return (
-            <NativeSettingsMenu
-                // The native host takes one string, so the state rides in the
-                // label there rather than being dropped (DROVE-141).
-                accessibilityLabel={props.accessibilityValue
-                    ? `${props.accessibilityLabel}, ${props.accessibilityValue}`
-                    : props.accessibilityLabel}
-                groups={groups}
-                style={props.wide
-                    ? { height: COMPOSER_SESSION_CONTROL_SIZE, flexShrink: 1, minWidth: 0 }
-                    : { width: COMPOSER_SESSION_CONTROL_SIZE, height: COMPOSER_SESSION_CONTROL_SIZE }}
-            >
-                <View style={[segmentStyle, props.open && styles.controlOpen]}>{props.children}</View>
-            </NativeSettingsMenu>
-        );
-    }
     return (
         <BubblePressable
             onPress={props.onPress ? () => props.onPress?.(props.picker) : undefined}
@@ -322,10 +313,7 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
         effortIndex,
         effortCount = 0,
         onPress,
-        nativeMenus,
-        modeGroups,
-        effortGroup,
-        modelGroup,
+        canOpen,
         openPicker,
         effortSlider,
         pending,
@@ -340,9 +328,9 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
     const showMode = !!label.mode;
     const showEffort = !!label.effort && effortCount > 0 && effortIndex != null && effortIndex >= 0;
     const showModel = !!label.model;
-    const canOpenMode = (modeGroups?.length ?? 0) > 0;
-    const canOpenEffort = !!effortGroup;
-    const canOpenModel = !!modelGroup;
+    const canOpenMode = canOpen?.permission !== false;
+    const canOpenEffort = canOpen?.effort !== false;
+    const canOpenModel = canOpen?.model !== false;
     if (!showMode && !showEffort && !showModel) {
         return null;
     }
@@ -370,8 +358,6 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                     picker="permission"
                     accessibilityLabel={mode.label}
                     accessibilityValue={unconfirmedAccessibilityValue(mode.value, permissionPending)}
-                    groups={modeGroups}
-                    nativeMenus={nativeMenus}
                     open={openPicker === 'permission'}
                     onPress={canOpenMode ? onPress : undefined}
                 >
@@ -439,8 +425,6 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                         picker="effort"
                         accessibilityLabel={effort.label}
                         accessibilityValue={unconfirmedAccessibilityValue(effort.value, effortPending)}
-                        group={effortGroup}
-                        nativeMenus={nativeMenus}
                         open={openPicker === 'effort'}
                         onPress={canOpenEffort ? onPress : undefined}
                     >
@@ -459,8 +443,6 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                     picker="model"
                     accessibilityLabel="Model"
                     accessibilityValue={unconfirmedAccessibilityValue(label.model!, modelPending)}
-                    group={modelGroup}
-                    nativeMenus={nativeMenus}
                     open={openPicker === 'model'}
                     onPress={canOpenModel ? onPress : undefined}
                     wide

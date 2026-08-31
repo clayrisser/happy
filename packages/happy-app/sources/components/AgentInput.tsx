@@ -22,7 +22,7 @@ import { GitStatusBadge, useHasMeaningfulGitStatus } from './GitStatusBadge';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useLocalSetting, useSetting } from '@/sync/storage';
 import { hackMode, hackModes } from '@/sync/modeHacks';
-import { getPermissionModeMenuLabel, getPermissionModeShortLabel } from '@/utils/permissionModeLabels';
+import { getPermissionModeShortLabel } from '@/utils/permissionModeLabels';
 import type { UsageLimitsLike } from '@/utils/sessionStatusBar';
 import type { DroverUsageLike } from '@/utils/droverUsage';
 import { Theme } from '@/theme';
@@ -39,7 +39,6 @@ import { ComposerToast } from './ComposerToast';
 import { flipStreamTalk, streamTalkPauseToast } from '@/voice/streamTalk';
 import { audioOutButton } from './composerAudioOut';
 import type { TransportEffect } from '@/voice/readAloudTransport';
-import { NativeSettingsMenu, type NativeSettingsMenuGroup } from './NativeSettingsMenu';
 import { AgentInputStatusRow } from './AgentInputStatusRow';
 import { AddContextSheet, type AddContextSource } from './AddContextSheet';
 import { resolveUsageStrip } from './agentInputUsage';
@@ -60,7 +59,6 @@ import {
     COMPOSER_BUBBLE_TEXT_ROW_GEOMETRY,
 } from './composerBubbleLayout';
 import { COMPOSER_STRIP_BOX } from './composerStripLayout';
-import { shouldUseExpoNativeSettingsMenu } from './glassInteractionPolicy';
 import { LiveMicBanner } from './LiveMicBanner';
 import { TalkButton } from './TalkButton';
 import { talkButtonWiring } from './talkButtonWiring';
@@ -78,6 +76,7 @@ import {
     composerPickerDismiss,
     composerPickerKeyboardGone,
     composerPickerPress,
+    composerPickerSheetOpen,
     type ComposerPickerKind,
     type ComposerPickerState,
     type ComposerPickerStep,
@@ -781,14 +780,10 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     // existing composer affordances rather than inheriting it.
     const runningOnMac = isRunningOnMac();
     const compactMobileComposer = Platform.OS !== 'web' && !runningOnMac && screenWidth <= 700;
-    // iOS only. On Android the settings/model/effort triggers are React Native
-    // subtrees hosted inside a Jetpack Compose DropdownMenu, and expo-modules-core
-    // pins such a child to `Modifier.size(view.width, view.height)` sampled once at
-    // composition with no layout listener (ExpoComposeAndroidView) — composed before
-    // React Native measures it, the trigger stays 0x0 and the control is invisible
-    // while still occupying its slot. The composer's own popup pickers below render
-    // identically and work, so Android uses those instead of the native menu.
-    const useNativeSettingsMenus = shouldUseExpoNativeSettingsMenu(Platform.OS, runningOnMac);
+    // `useNativeSettingsMenus` was here and is gone (DROVE-242). It sent iOS to
+    // a SwiftUI menu for the mode and the model while every other platform used
+    // the sheets below. There is no native menu on the composer now, so nothing
+    // asks the platform; `openSheet` is the whole of the surface question.
     /**
      * The composer's colour vocabulary (DROVE-176, DROVE-215). One place
      * decides what a control's glyph is drawn in, and the rule it decides by
@@ -1437,73 +1432,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         showComposerToast(t(streamTalkPauseToast(effect === 'pause')));
     }, [handleMicrophonePress, props.onAudioOutLongPress, props.onMicPress, showComposerToast]);
 
-    const permissionSettingsGroups = React.useMemo<NativeSettingsMenuGroup[]>(() => {
-        if (!props.onPermissionModeChange || availableModes.length === 0) {
-            return [];
-        }
-        return [{
-            key: 'permission',
-            label: isCodex
-                ? t('agentInput.codexPermissionMode.title')
-                : isGemini
-                    ? t('agentInput.geminiPermissionMode.title')
-                    : t('agentInput.permissionMode.title'),
-            systemImage: 'shield',
-            options: availableModes.map((mode) => ({
-                key: mode.key,
-                label: withSandboxSuffix(getPermissionModeMenuLabel(mode), mode.key),
-                disabled: mode.disabled,
-            })),
-            selectedKey: permissionModeKey,
-            onSelect: (key) => {
-                const mode = availableModes.find((candidate) => candidate.key === key);
-                if (mode) handleSettingsSelect(mode);
-            },
-        }];
-    }, [availableModes, handleSettingsSelect, isCodex, isGemini, permissionModeKey, props.onPermissionModeChange, withSandboxSuffix]);
-
-    const modelSettingsGroups = React.useMemo<NativeSettingsMenuGroup[]>(() => {
-        const groups: NativeSettingsMenuGroup[] = [];
-        if (availableModels.length > 0 && props.onModelModeChange) {
-            groups.push({
-                key: 'model',
-                label: props.modelMode?.name ?? t('agentInput.model.title'),
-                title: t('agentInput.model.title'),
-                systemImage: 'cube',
-                options: availableModels.map((model) => ({ key: model.key, label: model.name, disabled: model.disabled })),
-                selectedKey: props.modelMode?.key,
-                onSelect: (key) => {
-                    const model = availableModels.find((candidate) => candidate.key === key);
-                    if (!model) return;
-                    hapticsLight();
-                    props.onModelModeChange?.(model);
-                },
-            });
-        }
-        if (availableEffortLevels.length > 0 && props.onEffortLevelChange) {
-            groups.push({
-                key: 'effort',
-                label: props.effortLevel?.name ?? t('agentInput.effort.title'),
-                title: t('agentInput.effort.title'),
-                systemImage: 'bolt',
-                options: availableEffortLevels.map((level) => ({ key: level.key, label: level.name, disabled: level.disabled })),
-                selectedKey: props.effortLevel?.key,
-                onSelect: (key) => {
-                    const level = availableEffortLevels.find((candidate) => candidate.key === key);
-                    // A disabled row says why the level is out of reach; it is
-                    // not a pick (DROVE-101).
-                    if (!level || level.disabled) return;
-                    hapticsLight();
-                    props.onEffortLevelChange?.(level);
-                },
-            });
-        }
-        return groups;
-    }, [availableEffortLevels, availableModels, props.effortLevel?.key, props.modelMode?.key, props.onEffortLevelChange, props.onModelModeChange]);
-
-    const modelSettingsGroup = modelSettingsGroups.find((group) => group.key === 'model');
-    const effortSettingsGroup = modelSettingsGroups.find((group) => group.key === 'effort');
-
     const permissionTitle = isCodex
         ? t('agentInput.codexPermissionMode.title')
         : isGemini
@@ -1637,34 +1565,26 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     {props.zenMode && <View style={{ flex: 1 }} />}
                     {!props.zenMode && <View style={styles.actionButtonsLeft}>
                         {props.onPermissionModeChange && (
-                            useNativeSettingsMenus ? (
-                                <NativeSettingsMenu
-                                    accessibilityLabel={t('settings.title')}
-                                    groups={[...permissionSettingsGroups, ...modelSettingsGroups]}
-                                    style={{ width: 40, height: 40 }}
-                                >
-                                    <View style={{ width: 40, height: 40, alignItems: 'center', justifyContent: 'center' }}>
-                                        <Octicons name="gear" size={16} color={theme.colors.button.secondary.tint} />
-                                    </View>
-                                </NativeSettingsMenu>
-                            ) : (
-                                <Pressable
-                                    onPress={handleSettingsPress}
-                                    hitSlop={{ top: 5, bottom: 10, left: 0, right: 0 }}
-                                    style={(p) => ({
-                                        flexDirection: 'row',
-                                        alignItems: 'center',
-                                        borderRadius: Platform.select({ default: 16, android: 20 }),
-                                        paddingHorizontal: 8,
-                                        paddingVertical: 6,
-                                        justifyContent: 'center',
-                                        height: 32,
-                                        opacity: p.pressed ? 0.7 : 1,
-                                    })}
-                                >
-                                    <Octicons name="gear" size={16} color={theme.colors.button.secondary.tint} />
-                                </Pressable>
-                            )
+                            /* The gear opens the settings sheet, on every
+                               platform (DROVE-242). iOS anchored a SwiftUI
+                               menu here instead, which is the same split the
+                               capsule had on the phone. */
+                            <Pressable
+                                onPress={handleSettingsPress}
+                                hitSlop={{ top: 5, bottom: 10, left: 0, right: 0 }}
+                                style={(p) => ({
+                                    flexDirection: 'row',
+                                    alignItems: 'center',
+                                    borderRadius: Platform.select({ default: 16, android: 20 }),
+                                    paddingHorizontal: 8,
+                                    paddingVertical: 6,
+                                    justifyContent: 'center',
+                                    height: 32,
+                                    opacity: p.pressed ? 0.7 : 1,
+                                })}
+                            >
+                                <Octicons name="gear" size={16} color={theme.colors.button.secondary.tint} />
+                            </Pressable>
                         )}
 
                         {props.agentType && props.onAgentClick && (
@@ -1812,6 +1732,17 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         </View>
     );
 
+    /*
+     * A PICKER ROW IS A RADIO, TO VOICEOVER AS WELL (DROVE-242).
+     *
+     * The mark is a dot in a ring, which is the same mark all four composer
+     * sheets use and is why they read as one thing. Sighted, that says which
+     * choice is current. It is a plain `View`, so it said nothing at all to
+     * VoiceOver, where a SwiftUI `Menu` marked its selected row for free.
+     * Converting mode and model to sheets would have quietly dropped that, so
+     * the role and the checked state are on every row here instead. The effort
+     * rows DROVE-229 wrote get them too, since half a fix is a new split.
+     */
     const renderDesktopPickerOption = (
         key: string,
         selected: boolean,
@@ -1824,6 +1755,10 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             key={key}
             onPress={disabled ? undefined : onPress}
             disabled={disabled}
+            accessibilityRole="radio"
+            accessibilityLabel={label}
+            accessibilityHint={description ?? undefined}
+            accessibilityState={{ checked: selected, disabled: !!disabled }}
             style={({ pressed }) => ({
                 flexDirection: 'row',
                 alignItems: 'flex-start',
@@ -1872,11 +1807,24 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         </Pressable>
     );
 
+    /*
+     * WHICH SHEET IS UP, from the picker and the width alone (DROVE-242).
+     *
+     * Three booleans used to work this out inline, and each carried its own
+     * platform test, which is how iOS ended up with two of the five pickers on
+     * a surface neither the placement rule nor the dismissal state machine
+     * reached. The rule is `composerPickerSheetOpen` in composerPicker.ts now,
+     * beside the state machine it belongs to, and it is specced there.
+     */
+    const openSheet = composerPickerSheetOpen({
+        open: openPicker,
+        compact: compactMobileComposer,
+        hasEffortLevels: availableEffortLevels.length > 0 && !!props.onEffortLevelChange,
+    });
     // The desktop picker is on the same sheet as the phone's (DROVE-147).
     // It used to be its own floating card anchored above the composer, which
     // is the shape Clay has now asked three times to stop seeing.
-    const desktopPickerOpen = !useNativeSettingsMenus && !compactMobileComposer
-        && openPicker === 'permission';
+    const desktopPickerOpen = openSheet === 'settings';
     const desktopSettingsOverlay = (
         <ComposerSheet
             open={desktopPickerOpen}
@@ -1974,24 +1922,17 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         </ComposerSheet>
     );
 
-    // Channels and Add context have sheets of their own; what is left of the
-    // picker is the three session controls, and it slides up on the same shell.
     /*
-     * A SHEET WITH NOTHING IN IT DOES NOT OPEN (DROVE-229). Each branch below
-     * has a condition of its own — a model list, an effort list — and the
-     * shell did not, so a control whose rows are unavailable slid up an empty
-     * card. It was dismissible, so it was never the bug Clay reported, but
-     * "no picker can be left open with no way out" is easier to hold if a
-     * picker with no content is never open in the first place.
+     * Channels and Add context have sheets of their own; what is left of the
+     * picker is the three session controls, and all three slide up on this one
+     * (DROVE-242). Mode and model reach it on iOS for the first time here: the
+     * rows below were already written and Android already drew them, but on the
+     * phone Clay holds, a native menu was intercepting the press.
+     *
+     * A SHEET WITH NOTHING IN IT DOES NOT OPEN (DROVE-229), which is the
+     * `hasEffortLevels` half of the call above.
      */
-    const mobilePickerHasRows = openPicker === 'permission'
-        // The model branch draws its own "configure in the CLI" line when the
-        // list is empty, so it always has something to say.
-        || openPicker === 'model'
-        || (openPicker === 'effort' && availableEffortLevels.length > 0 && !!props.onEffortLevelChange);
-    const mobilePickerOpen = compactMobileComposer && !!openPicker
-        && openPicker !== 'channels' && openPicker !== 'attach'
-        && mobilePickerHasRows;
+    const mobilePickerOpen = openSheet === 'list';
 
 
     /** Whether the `+` is there to be drawn, which is what the field's leading padding turns on. */
@@ -2283,13 +2224,13 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 {/* The channel sheet slides up on its own (DROVE-123), like
                     the quota sheet, so it is out of the shared panel below. */}
                 <DroverChannelsSheet
-                    open={compactMobileComposer && openPicker === 'channels'}
+                    open={openSheet === 'channels'}
                     onClose={closePicker}
                 />
 
                 {/* Camera, Photos, Files (DROVE-128), on the same shell. */}
                 <AddContextSheet
-                    open={compactMobileComposer && openPicker === 'attach'}
+                    open={openSheet === 'attach'}
                     onClose={closePicker}
                     onSelect={handleAddContextSelect}
                     available={addContextAvailable}
@@ -2321,6 +2262,13 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                                     key={mode.key}
                                                     disabled={!props.onPermissionModeChange || mode.disabled}
                                                     onPress={() => handleSettingsSelect(mode)}
+                                                    accessibilityRole="radio"
+                                                    accessibilityLabel={withSandboxSuffix(mode.name, mode.key)}
+                                                    accessibilityHint={mode.description ?? undefined}
+                                                    accessibilityState={{
+                                                        checked: isSelected,
+                                                        disabled: !props.onPermissionModeChange || !!mode.disabled,
+                                                    }}
                                                     style={({ pressed }) => ({
                                                         flexDirection: 'row',
                                                         alignItems: 'flex-start',
@@ -2402,6 +2350,13 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                                             hapticsLight();
                                                             props.onModelModeChange?.(model);
                                                             closePicker();
+                                                        }}
+                                                        accessibilityRole="radio"
+                                                        accessibilityLabel={model.name}
+                                                        accessibilityHint={model.description ?? undefined}
+                                                        accessibilityState={{
+                                                            checked: isSelected,
+                                                            disabled: !props.onModelModeChange || !!model.disabled,
                                                         }}
                                                         style={({ pressed }) => ({
                                                             flexDirection: 'row',
@@ -2508,6 +2463,10 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                                                     props.onEffortKeyChange?.(null);
                                                                     closePicker();
                                                                 }}
+                                                                accessibilityRole="radio"
+                                                                accessibilityLabel="Auto"
+                                                                accessibilityHint="Let the agent choose"
+                                                                accessibilityState={{ checked: isSelected }}
                                                                 style={({ pressed }) => ({
                                                                     flexDirection: 'row',
                                                                     alignItems: 'flex-start',
@@ -2575,6 +2534,10 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                                                     props.onEffortLevelChange?.(level);
                                                                     closePicker();
                                                                 }}
+                                                                accessibilityRole="radio"
+                                                                accessibilityLabel={level.name}
+                                                                accessibilityHint={level.description ?? undefined}
+                                                                accessibilityState={{ checked: isSelected, disabled: isDisabled }}
                                                                 style={({ pressed }) => ({
                                                                     flexDirection: 'row',
                                                                     alignItems: 'flex-start',
@@ -2780,11 +2743,12 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                 effortIndex={effortIndex}
                                 effortCount={effortScale.keys.length}
                                 onPress={handleSessionControlPress}
-                                nativeMenus={useNativeSettingsMenus}
-                                modeGroups={permissionSettingsGroups}
-                                effortGroup={effortSliderOn ? null : effortSettingsGroup}
+                                canOpen={{
+                                    permission: !!props.onPermissionModeChange && availableModes.length > 0,
+                                    effort: availableEffortLevels.length > 0 && !!props.onEffortLevelChange,
+                                    model: availableModels.length > 0 && !!props.onModelModeChange,
+                                }}
                                 effortSlider={effortSliderOn ? effortSlider : null}
-                                modelGroup={modelSettingsGroup}
                                 openPicker={engagedPicker === 'permission' || engagedPicker === 'effort'
                                     || engagedPicker === 'model'
                                     ? engagedPicker

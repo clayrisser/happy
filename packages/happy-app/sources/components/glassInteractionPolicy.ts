@@ -30,10 +30,20 @@ export function getNativeGlassInteractivity(
     return interactive && glassApiAvailable;
 }
 
-/** Expo owns menu presentation on native iOS; Mac, web, and Android keep their platform routes. */
-export function shouldUseExpoNativeSettingsMenu(platform: string, runningOnMac: boolean): boolean {
-    return platform === 'ios' && !runningOnMac;
-}
+/*
+ * `shouldUseExpoNativeSettingsMenu` lived here and is gone (DROVE-242).
+ *
+ * It sent iPhone and iPad to a SwiftUI menu for the composer's mode and model
+ * while every other platform used the sheets. Clay, with one of those menus
+ * open: "Shouldn't these show in sheets like the effort does". The composer has
+ * no native menu left, so there is no platform left to ask. Which sheet a
+ * picker opens on is `composerPickerSheetOpen` in composerPicker.ts, decided
+ * from the picker and the composer's width and nothing else.
+ *
+ * This is a NARROWER removal than it looks: `NativeSettingsMenu` itself is
+ * untouched and still what the home dock, the view menu and the session row
+ * use. What went is the composer's split between a menu and a sheet.
+ */
 
 /**
  * Whether a glass surface may draw outside its resting frame (DROVE-202).

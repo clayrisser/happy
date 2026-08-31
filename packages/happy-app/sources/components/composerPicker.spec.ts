@@ -4,6 +4,7 @@ import {
     composerPickerDismiss,
     composerPickerKeyboardGone,
     composerPickerPress,
+    composerPickerSheetOpen,
     type ComposerPickerKind,
     type ComposerPickerState,
 } from './composerPicker';
@@ -195,5 +196,64 @@ describe('every other dismissal route lands in the same place', () => {
             expect(tapTyping(state, up!).state).toEqual(composerPickerClosed);
             expect(composerPickerDismiss().state).toEqual(composerPickerClosed);
         }
+    });
+});
+
+/**
+ * "Shouldn't these show in sheets like the effort does" (DROVE-242).
+ *
+ * The state machine above already named mode and model as pickers; what it did
+ * not decide was what DREW them, and on iOS that was a native menu placed and
+ * dismissed by UIKit. These assertions are the other half: whatever is open,
+ * a SHEET is what draws it, and no platform is consulted to find that out.
+ */
+describe('every picker opens as a sheet, on every platform (DROVE-242)', () => {
+    const pickers: ComposerPickerKind[] = ['channels', 'attach', 'permission', 'model', 'effort'];
+
+    it('leaves no picker to the system: each of the five names a sheet', () => {
+        for (const picker of pickers) {
+            expect(composerPickerSheetOpen({ open: picker, compact: true, hasEffortLevels: true }), picker)
+                .not.toBeNull();
+        }
+    });
+
+    it('draws mode and model on the same list sheet effort uses', () => {
+        // The whole ticket in one assertion. Three fields, one surface, so the
+        // second tap, the tap outside and the back gesture are one set of
+        // rules rather than one set and a menu.
+        for (const picker of ['permission', 'model', 'effort'] as ComposerPickerKind[]) {
+            expect(composerPickerSheetOpen({ open: picker, compact: true, hasEffortLevels: true }), picker)
+                .toBe('list');
+        }
+    });
+
+    it('keeps channels and Add context on their own sheets', () => {
+        expect(composerPickerSheetOpen({ open: 'channels', compact: true, hasEffortLevels: true })).toBe('channels');
+        expect(composerPickerSheetOpen({ open: 'attach', compact: true, hasEffortLevels: true })).toBe('attach');
+    });
+
+    it('draws nothing when nothing is open', () => {
+        expect(composerPickerSheetOpen({ open: null, compact: true, hasEffortLevels: true })).toBeNull();
+        expect(composerPickerSheetOpen({ open: null, compact: false, hasEffortLevels: true })).toBeNull();
+    });
+
+    it('does not open an empty effort sheet (DROVE-229)', () => {
+        expect(composerPickerSheetOpen({ open: 'effort', compact: true, hasEffortLevels: false })).toBeNull();
+        // Mode and model always have something to say, so they open regardless.
+        expect(composerPickerSheetOpen({ open: 'permission', compact: true, hasEffortLevels: false })).toBe('list');
+        expect(composerPickerSheetOpen({ open: 'model', compact: true, hasEffortLevels: false })).toBe('list');
+    });
+
+    it('sends the wide composer to the gear sheet, which lists all three at once', () => {
+        // A tablet, a Mac and the web have no capsule to press. The gear opens
+        // 'permission' and its sheet carries mode, model and effort together.
+        for (const picker of ['permission', 'model', 'effort'] as ComposerPickerKind[]) {
+            expect(composerPickerSheetOpen({ open: picker, compact: false, hasEffortLevels: true }), picker)
+                .toBe('settings');
+        }
+        // Channels and Add context are phone controls; there is no wide sheet
+        // for them to land on.
+        expect(composerPickerSheetOpen({ open: 'channels', compact: false, hasEffortLevels: true })).toBeNull();
+        expect(composerPickerSheetOpen({ open: 'attach', compact: false, hasEffortLevels: true })).toBeNull();
     });
 });

@@ -16,11 +16,11 @@ describe('native GlassView interaction policy (DROVE-169)', () => {
         expect(glassPolicy.getNativeGlassInteractivity(false, false)).toBe(false);
     });
 
-    it('uses Expo-native settings menus across iPhone and iPad but not Mac, web, or Android', () => {
-        expect(glassPolicy.shouldUseExpoNativeSettingsMenu('ios', false)).toBe(true);
-        expect(glassPolicy.shouldUseExpoNativeSettingsMenu('ios', true)).toBe(false);
-        expect(glassPolicy.shouldUseExpoNativeSettingsMenu('web', false)).toBe(false);
-        expect(glassPolicy.shouldUseExpoNativeSettingsMenu('android', false)).toBe(false);
+    it('has no menu-versus-sheet gate left to ask (DROVE-242)', () => {
+        // The composer's mode and model were SwiftUI menus on iOS and sheets
+        // everywhere else, and this module held the split. They are sheets on
+        // every platform now, so the question is not asked here or anywhere.
+        expect('shouldUseExpoNativeSettingsMenu' in glassPolicy).toBe(false);
     });
 });
 

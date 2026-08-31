@@ -63,7 +63,6 @@ vi.mock('react-native-unistyles', () => ({
 vi.mock('@/constants/Typography', () => ({ Typography: { default: () => ({}) } }));
 vi.mock('./BubblePressable', () => ({ BubblePressable: host('BubblePressable') }));
 vi.mock('./GlassChromeControl', () => ({ GlassChromeSurface: host('GlassChromeSurface') }));
-vi.mock('./NativeSettingsMenu', () => ({ NativeSettingsMenu: host('NativeSettingsMenu') }));
 // The capsule imports the handle's TYPE from here and nothing else since
 // DROVE-229 moved the readout out to the control row, but the module still
 // reaches haptics and the store, which reach expo-modules-core.
@@ -81,8 +80,6 @@ function flatColour(style: any): string | undefined {
     for (const part of parts) if (part && part.color !== undefined) colour = part.color;
     return colour;
 }
-const group = { key: 'g', title: 'g', options: [] } as any;
-
 function mount(overrides: Record<string, unknown> = {}) {
     let renderer: any;
     act(() => {
@@ -92,9 +89,6 @@ function mount(overrides: Record<string, unknown> = {}) {
             effortIndex: 3,
             effortCount: 6,
             onPress: () => {},
-            modeGroups: [group],
-            effortGroup: group,
-            modelGroup: group,
             ...overrides,
         } as any));
     });
@@ -141,11 +135,61 @@ describe('the session capsule', () => {
         expect(opened).toEqual(['model']);
     });
 
-    it('anchors the model picker as the native menu on iOS, still one tap', () => {
-        const renderer = mount({ nativeMenus: true });
-        const menus = renderer.root.findAllByType('NativeSettingsMenu' as any);
-        expect(menus.map((menu: any) => menu.props.accessibilityLabel))
-            .toEqual(['Permission mode, Yolo', 'Reasoning effort, High, 4 of 6', 'Model, Opus 5 1M']);
+    it('opens all three as sheets, and anchors nothing as a native menu (DROVE-242)', () => {
+        // Clay, with the mode menu open: "Shouldn't these show in sheets like
+        // the effort does". Mode and model were SwiftUI menus here on iOS, so
+        // a press never reached `onPress` and composerPicker.ts never knew
+        // they were up, which is why a second tap on the control could not
+        // close them. Every segment reports its picker now, and the file has
+        // no platform test left to make it do otherwise.
+        const opened: string[] = [];
+        const renderer = mount({ onPress: (picker: string) => opened.push(picker) });
+        for (const label of ['Permission mode', 'Reasoning effort', 'Model']) {
+            act(() => {
+                press(renderer, label).props.onPress();
+            });
+        }
+        expect(opened).toEqual(['permission', 'effort', 'model']);
+        expect(renderer.root.findAllByType('NativeSettingsMenu' as any)).toEqual([]);
+    });
+
+    it('keeps the pressed control reading as open while its sheet is up', () => {
+        // The one thing the native menu could not do: the control had no idea
+        // it was open, because UIKit owned the presentation. `openPicker` is
+        // the same state the sheet is drawn from, so both halves agree.
+        for (const [picker, label] of [['permission', 'Permission mode'], ['model', 'Model']] as const) {
+            const renderer = mount({ openPicker: picker });
+            expect(press(renderer, label).props.accessibilityState?.expanded, picker).toBe(true);
+        }
+    });
+
+    it('reads a mode or a model pick as pending until the pane confirms it (DROVE-217)', () => {
+        // The sheet writes through the same `onPermissionModeChange` and
+        // `onModelModeChange` the native menu called, so the wait is unchanged
+        // by DROVE-242. But the wait is the half Clay sees, and mode and model
+        // lag exactly as effort does, so it is pinned for all three here rather
+        // than for effort alone.
+        const glyph = (pending: any) => mount({ pending }).root.findByType('Ionicons' as any).props.color;
+        expect(glyph({ permission: true })).toBe(palette.pending);
+        expect(glyph(null)).toBe(palette.foreground);
+        const name = (pending: any) => flatColour(mount({ pending }).root.findAllByType('Text' as any)
+            .find((node: any) => node.props.children === 'Opus 5 1M').props.style);
+        expect(name({ model: true })).toBe(palette.pending);
+        expect(name(null)).toBe('text');
+        // And VoiceOver is told, since the colour reaches nobody there.
+        const renderer = mount({ pending: { permission: true, model: true } });
+        expect(press(renderer, 'Permission mode').props.accessibilityValue.text)
+            .toBe('Yolo, not confirmed by the terminal yet');
+        expect(press(renderer, 'Model').props.accessibilityValue.text)
+            .toBe('Opus 5 1M, not confirmed by the terminal yet');
+    });
+
+    it('does not press a field this session will not take a pick for', () => {
+        // A segment with no handler behind it is drawn and inert, which is how
+        // a rig that fixes its model still shows which one it is running.
+        const renderer = mount({ canOpen: { permission: true, effort: true, model: false } });
+        expect(press(renderer, 'Model').props.onPress).toBeUndefined();
+        expect(press(renderer, 'Permission mode').props.onPress).toBeTypeOf('function');
     });
 
     it('draws the capsule without the model when the session has no name for one', () => {
