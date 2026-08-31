@@ -5,7 +5,9 @@ import Svg, { Circle } from 'react-native-svg';
 import { useUnistyles } from 'react-native-unistyles';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
-import { useSession } from '@/sync/storage';
+import { router } from 'expo-router';
+import { useMachine, useSession } from '@/sync/storage';
+import { addAccountEntry } from '@/sync/machineAccountsFlow';
 import { confirmDroverSwitch } from '@/utils/droverAccountSwitch';
 import {
     isLiveStatusFresh,
@@ -327,6 +329,28 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
         setOpenSheet(null);
         confirmDroverSwitch({ sessionId, account, from: currentAccount, always: true });
     }, [currentAccount, sessionId]);
+
+    // The add row at the end of the sheet (DROVE-208). This is the only place
+    // that knows the session, so it is the only place that can name the
+    // machine: an account is a login on one machine, and a session runs on
+    // exactly one, so the row targets that machine and does not ask. The tap
+    // goes to Settings -> Accounts with the machine already chosen, which is
+    // DROVE-165's flow reached from here rather than a second copy of it,
+    // and it is also the answer for wanting a DIFFERENT machine, since that
+    // screen lists them all. No credential passes through any of this: the
+    // machine runs `claude auth login` and Clay finishes it in a browser.
+    const session = useSession(sessionId ?? '');
+    const machineId = sessionId ? session?.metadata?.machineId ?? null : null;
+    const machine = useMachine(machineId ?? '');
+    const machineLabel = machine?.metadata?.displayName || machine?.metadata?.host || null;
+    const addAccount = React.useMemo(() => {
+        const entry = addAccountEntry({ machineId, machineName: machineLabel });
+        if (!entry) return null;
+        return {
+            machineName: entry.machineName,
+            onPress: () => router.push(entry.href as never),
+        };
+    }, [machineId, machineLabel]);
 
     const canExpand = !!summary && summary.rows.length > 0;
     const canOpenUsage = p.usageBarGroups.length > 0;
@@ -688,6 +712,7 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
                     open={openSheet === 'usage'}
                     onClose={closeSheet}
                     onSwitchAccount={sessionId ? onSwitchAccount : undefined}
+                    addAccount={addAccount}
                 />
             ) : null}
             {canExpand && p.sessionId ? (

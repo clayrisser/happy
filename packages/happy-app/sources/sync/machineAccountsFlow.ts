@@ -311,3 +311,96 @@ export function accountSubtitle(account: MachineAccount): string {
     if (account.ambient) parts.push('this Mac’s main login');
     return parts.join(' · ');
 }
+
+/* ------------------------------------------------------------------------- *
+ * Getting INTO this flow from the quota sheet (DROVE-208).
+ *
+ * Clay, with the quota sheet open on five accounts: "Where is the button for
+ * me to add an account." DROVE-165 built adding one, but only on Settings →
+ * Accounts, and the sheet is where he actually compares accounts and notices
+ * one is missing. A list of accounts with no way to add one is a dead end.
+ *
+ * The row does NOT run a second copy of the flow. It cannot: the first step is
+ * a system prompt, and DROVE-183 says a sheet closes before it raises one, so
+ * by the time the prompt could appear the sheet that would show "waiting for
+ * the sign-in link" is gone. Everything after the prompt lives on the Accounts
+ * screen and has to stay there: the poll, the card link, and the watch that
+ * says it stopped watching rather than that it failed. So the row closes the
+ * sheet and lands on that screen with the machine already chosen, which is
+ * one flow reached from two places rather than two flows.
+ *
+ * WHICH MACHINE, without asking. An account belongs to a machine (Clay's own
+ * constraint, at the top of this file). A quota sheet is scoped to a session
+ * and a session runs on exactly one machine, so the machine is known and
+ * asking would be a tap spent on a question with one answer. Wanting a
+ * different one is served by where the tap already goes: Settings → Accounts
+ * lists every machine, so a picker inside a quota sheet would be a third way
+ * to say the same thing.
+ * ------------------------------------------------------------------------- */
+
+/** The query param naming the machine to start on. */
+export const addAccountMachineParam = 'addMachineId';
+
+/** Settings → Accounts, already aimed at one machine. */
+export function addAccountHref(machineId: string): string {
+    return `/settings/accounts?${addAccountMachineParam}=${encodeURIComponent(machineId)}`;
+}
+
+/** What the quota sheet's add row needs to draw itself and to go somewhere. */
+export interface AddAccountEntry {
+    machineId: string;
+    /** Named on the row, because a target that is only implied is a guess. */
+    machineName: string;
+    href: string;
+}
+
+/**
+ * The add row for a session, or null.
+ *
+ * Null when the session has no machine stamped on it. There is then nothing
+ * true to put on the row: an add row that cannot say where it is adding is the
+ * flat-pool lie DROVE-165 refused, and Settings → Accounts is still there.
+ */
+export function addAccountEntry(input: {
+    machineId: string | null | undefined;
+    /** The machine's display name or host, when the store has one. */
+    machineName?: string | null;
+}): AddAccountEntry | null {
+    const machineId = input.machineId?.trim();
+    if (!machineId) return null;
+    return {
+        machineId,
+        // The same fallback the Accounts screen uses, so one machine is not
+        // called two things on two screens.
+        machineName: input.machineName?.trim() || machineId.substring(0, 8),
+        href: addAccountHref(machineId),
+    };
+}
+
+/**
+ * May the Accounts screen start that login by ITSELF, and with what `before`?
+ *
+ * Returns the account names to treat as "already there", or null for not yet.
+ *
+ * The wait matters. `before` is the whole basis of "a new name appeared, so
+ * the login worked": start on an empty list and the first account ever read
+ * back looks like the one just added, and the screen would announce a success
+ * Clay never had. So the list has to have been read first, and read OK.
+ *
+ * Offline is also a no. That machine cannot run `claude auth login`, and the
+ * screen already says so under its group; prompting for a name first would be
+ * a question asked before the refusal.
+ */
+export function autoStartAddAccount(input: {
+    /** The machine named in the route, or null when we came here plainly. */
+    requested: string | null;
+    /** Already fired once. This never fires twice for one arrival. */
+    started: boolean;
+    online: boolean;
+    /** That machine's accounts once read, null while it is still being read. */
+    accounts: string[] | null;
+}): string[] | null {
+    if (!input.requested || input.started || !input.online) return null;
+    if (input.accounts === null) return null;
+    return [...input.accounts];
+}

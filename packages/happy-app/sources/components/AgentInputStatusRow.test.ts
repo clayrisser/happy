@@ -22,12 +22,15 @@ import type { LiveStatus } from '@/utils/liveStatus';
 
 // vi.mock factories are hoisted above every import, so what they close over
 // has to be hoisted too.
-const { host, sessions, screen } = vi.hoisted(() => ({
+const { host, sessions, machines, pushed, screen } = vi.hoisted(() => ({
     host: (name: string) => (props: any) => React.createElement(name, props, props.children),
     sessions: {} as Record<string, {
-        metadata: { liveStatus?: LiveStatus | null };
+        metadata: { liveStatus?: LiveStatus | null; machineId?: string };
         todos?: { content: string; status: 'pending' | 'in_progress' | 'completed' }[];
     }>,
+    // The machines the sessions above run on, for the add row (DROVE-208).
+    machines: {} as Record<string, { metadata?: { displayName?: string; host?: string } }>,
+    pushed: [] as string[],
     // Wider than the fold threshold by default; the narrow-phone spec moves it.
     screen: { width: 390 },
 }));
@@ -45,7 +48,10 @@ vi.mock('react-native-svg', () => ({ default: host('Svg'), Circle: host('Circle'
 
 vi.mock('@expo/vector-icons', () => ({ Ionicons: host('Ionicons'), Octicons: host('Octicons') }));
 
-vi.mock('expo-router', () => ({ useRouter: () => ({ push: () => {} }) }));
+vi.mock('expo-router', () => ({
+    useRouter: () => ({ push: () => {} }),
+    router: { push: (href: string) => { pushed.push(href); } },
+}));
 
 vi.mock('react-native-unistyles', () => ({
     useUnistyles: () => ({
@@ -92,6 +98,7 @@ vi.mock('./SessionTasksSheet', () => ({ SessionTasksSheet: host('SessionTasksShe
 // what the tree rows use to find a tool's transcript card; there are none.
 vi.mock('@/sync/storage', () => ({
     useSession: (id: string) => sessions[id] ?? null,
+    useMachine: (id: string) => machines[id] ?? null,
     storage: (selector: (state: any) => unknown) => selector({ sessionMessages: {} }),
 }));
 
@@ -226,6 +233,14 @@ sessions.agentsOnly = {
         },
     },
 };
+
+/**
+ * A session with a machine stamped on it, and that machine's name (DROVE-208).
+ * `busy` above deliberately has none, which is the no-add-row case.
+ */
+sessions.onDrogon = { metadata: { liveStatus: null, machineId: 'm-drogon' } };
+sessions.onUnnamedMachine = { metadata: { liveStatus: null, machineId: 'm-unnamed-01' } };
+machines['m-drogon'] = { metadata: { displayName: 'drogon', host: 'drogon.local' } };
 
 describe('AgentInputStatusRow on an idle pane session', () => {
     it('is the account and its quota, with no word for the connection (DROVE-138, DROVE-178)', () => {
@@ -925,5 +940,65 @@ describe('AgentInputStatusRow tasks', () => {
         act(() => week!.props.onPress());
         expect(renderer.root.findByType('SessionTasksSheet' as any).props.open).toBe(false);
         expect(renderer.root.findByType('UsageAccountBarsSheet' as any).props.open).toBe(true);
+    });
+});
+
+/**
+ * The add row's target (DROVE-208).
+ *
+ * The sheet draws the row; only this component knows the session, so only this
+ * component can say which machine. An account is a login on a machine and a
+ * session runs on exactly one, so the answer is the session's machine and
+ * there is nothing to ask. What is pinned here is that it is THAT machine and
+ * not a guess, and that a session with no machine gets no row.
+ */
+describe('adding an account from the quota sheet (DROVE-208)', () => {
+    const strip = () => paneStrip(true);
+
+    it('targets the machine the session runs on, and names it', () => {
+        pushed.length = 0;
+        const bars = strip();
+        const renderer = row({
+            sessionId: 'onDrogon',
+            weekPercent: bars.weekPercent,
+            usageBarGroups: bars.usageBarGroups,
+        });
+        const add = renderer.root.findByType('UsageAccountBarsSheet' as any).props.addAccount;
+        expect(add.machineName).toBe('drogon');
+        act(() => add.onPress());
+        expect(pushed).toEqual(['/settings/accounts?addMachineId=m-drogon']);
+    });
+
+    it('falls back to the machine id when the store has no name for it yet', () => {
+        const bars = strip();
+        const renderer = row({
+            sessionId: 'onUnnamedMachine',
+            weekPercent: bars.weekPercent,
+            usageBarGroups: bars.usageBarGroups,
+        });
+        expect(renderer.root.findByType('UsageAccountBarsSheet' as any).props.addAccount.machineName)
+            .toBe('m-unname');
+    });
+
+    it('offers no add row on a session with no machine stamped on it', () => {
+        // Nothing true to put on it: an add row that cannot say where it is
+        // adding is the flat pool DROVE-165 refused.
+        const bars = strip();
+        const renderer = row({
+            sessionId: 'busy',
+            weekPercent: bars.weekPercent,
+            usageBarGroups: bars.usageBarGroups,
+        });
+        expect(renderer.root.findByType('UsageAccountBarsSheet' as any).props.addAccount).toBeNull();
+    });
+
+    it('offers no add row on a preview with no session at all', () => {
+        const bars = strip();
+        const renderer = row({
+            sessionId: undefined,
+            weekPercent: bars.weekPercent,
+            usageBarGroups: bars.usageBarGroups,
+        });
+        expect(renderer.root.findByType('UsageAccountBarsSheet' as any).props.addAccount).toBeNull();
     });
 });

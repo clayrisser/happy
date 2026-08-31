@@ -28,11 +28,18 @@
  * or the token it buys. The states are in sync/machineAccountsFlow.ts and each
  * one moves on something genuinely observed; a watch that runs out says it
  * stopped watching, never that the login failed.
+ *
+ * DROVE-208 gave this screen a second way in. The quota sheet under the
+ * composer is where Clay compares accounts and notices one missing, so its
+ * list ends in an add row; that row lands here with `addMachineId` set and the
+ * login starts on that machine by itself. Nothing about the flow is duplicated
+ * over there. The prompt, the poll, the card link and the watch are all still
+ * only here, which is the point.
  */
 
 import * as React from 'react';
 import { Platform, RefreshControl } from 'react-native';
-import { Stack, router } from 'expo-router';
+import { Stack, router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 
 import { Item } from '@/components/Item';
@@ -53,6 +60,7 @@ import {
     addAccountIdle,
     addAccountStatus,
     advanceAddAccount,
+    autoStartAddAccount,
     pendingAccountLogins,
     type AddAccountEvent,
     type AddAccountPhase,
@@ -154,10 +162,10 @@ export default function AccountsScreen() {
      * the address it logs in as, so there is nothing to invent and nothing to
      * remember it by but the address.
      */
-    const addAccount = React.useCallback(async (machineId: string, existing: string[]) => {
+    const addAccount = React.useCallback(async (machineId: string, existing: string[], on: string) => {
         const name = await Modal.prompt(
-            'Add a Claude account',
-            'It will be logged in and kept ON THIS MACHINE. Leave the name empty to call it after '
+            `Add a Claude account on ${on}`,
+            'It will be logged in and kept ON THAT MACHINE. Leave the name empty to call it after '
             + 'the address you sign in as.',
             { defaultValue: '', placeholder: 'Optional name', cancelText: 'Cancel', confirmText: 'Start login' },
         );
@@ -177,6 +185,37 @@ export default function AccountsScreen() {
             });
         }
     }, [dispatch]);
+
+    /**
+     * Arrived from the quota sheet's add row, for ONE machine (DROVE-208).
+     *
+     * It waits for that machine's list, because `before` is the whole basis of
+     * "a new name appeared, so the login worked". Fired on an empty list, the
+     * first account ever read back would look like the one just added and the
+     * screen would announce a success that never happened. Offline is a no for
+     * the same honesty: the group already says the list cannot be changed, so
+     * asking for a name first would be a question in front of a refusal.
+     */
+    const params = useLocalSearchParams<{ addMachineId?: string }>();
+    const requested = typeof params.addMachineId === 'string' && params.addMachineId ? params.addMachineId : null;
+    const autoStarted = React.useRef(false);
+    const requestedState = requested ? loaded[requested] : undefined;
+    const requestedOnline = !!machines.find((m) => m.id === requested)?.active;
+    const requestedName = React.useMemo(() => {
+        const machine = machines.find((m) => m.id === requested);
+        return machine ? machineName(machine) : (requested ?? '');
+    }, [machineIds, requested]);
+    React.useEffect(() => {
+        const before = autoStartAddAccount({
+            requested,
+            started: autoStarted.current,
+            online: requestedOnline,
+            accounts: requestedState?.result?.ok ? requestedState.result.accounts.map((a) => a.name) : null,
+        });
+        if (!before) return;
+        autoStarted.current = true;
+        void addAccount(requested!, before, requestedName);
+    }, [requested, requestedOnline, requestedState, requestedName, addAccount]);
 
     const removeAccount = React.useCallback(async (machineId: string, account: MachineAccount) => {
         const ok = await Modal.confirm(
@@ -292,7 +331,7 @@ export default function AccountsScreen() {
                                 subtitle="Signs in on this machine. You finish the login in a browser."
                                 icon={<Ionicons name="add-circle-outline" size={29} color="#34C759" />}
                                 disabled={!online || addAccountBusy(phase)}
-                                onPress={() => void addAccount(machine.id, accounts.map((a) => a.name))}
+                                onPress={() => void addAccount(machine.id, accounts.map((a) => a.name), machineName(machine))}
                             />
                         </ItemGroup>
                     );
