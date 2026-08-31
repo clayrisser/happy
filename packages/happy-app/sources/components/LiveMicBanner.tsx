@@ -67,6 +67,13 @@ import {
  * on a 20pt budget instead of 38, hence the smaller dot, clock and level
  * strip here. None of DROVE-142's signalling was dropped to fit: the colour,
  * the mark and the trailing glyph are all still on the bar.
+ *
+ * ABSOLUTE WAS HALF OF IT (DROVE-221). Adding no height is not the same as
+ * the band not changing height, and the band did: the wrapper that opened for
+ * this banner asked for 24pt over a status row that was 20, so the composer
+ * still went up 4pt the moment Clay spoke. The band is one constant now
+ * (`COMPOSER_STRIP_BOX`) and the bar fills it, which is the same 20pt of red
+ * in the same pixels it already occupied.
  */
 interface LiveMicBannerProps {
     talk: DictationCaptureState;

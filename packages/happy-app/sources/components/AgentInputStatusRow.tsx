@@ -17,7 +17,7 @@ import {
 } from '@/utils/liveStatus';
 import { STATUS_ROW_TAP_SLOP_BOTTOM, STATUS_ROW_TAP_SLOP_TOP } from './agentDockLayout';
 import { MOBILE_COMPOSER_LAYOUT, MOBILE_COMPOSER_METRICS } from './agentInputLayout';
-import { COMPOSER_STRIP_MIN_HEIGHT, COMPOSER_STRIP_PADDING_TOP } from './composerStripLayout';
+import { COMPOSER_STRIP_BOX } from './composerStripLayout';
 import { AnimatedFade } from './AnimatedOverlay';
 import { UsageAccountBarsSheet } from './UsageAccountBarsSheet';
 import type { UsageBarGroup } from './agentInputUsage';
@@ -653,9 +653,12 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
                 paddingHorizontal: MOBILE_COMPOSER_LAYOUT.textInset,
                 // The strip's box, shared with the recording banner that sits
                 // over it (DROVE-157), so the two cannot drift and a mic
-                // cannot resize the dock.
-                paddingTop: COMPOSER_STRIP_PADDING_TOP,
-                minHeight: COMPOSER_STRIP_MIN_HEIGHT,
+                // cannot resize the dock. It is now ONE object rather than two
+                // constants spelled out at each end (DROVE-221): the row wrote
+                // `minHeight: 18` over its own 6pt of padding and the banner's
+                // wrapper wrote `minHeight: 24`, and a 4pt jump lived in the
+                // difference.
+                ...COMPOSER_STRIP_BOX,
             }}>
                 {dotColor ? (
                     <Pressable
