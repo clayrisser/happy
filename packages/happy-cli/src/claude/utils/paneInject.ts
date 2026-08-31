@@ -22,6 +22,13 @@
  * keystroke that lands on an open permission dialog picks whatever option is
  * highlighted. So `paneIsIdle` below gates it, and the caller HOLDS the
  * command until the prompt opens rather than sending it anyway.
+ *
+ * The Escape is gated on the same bus read now (DROVE-80), because it was the
+ * one keystroke going in blind: Escape on an open permission dialog is DENY,
+ * so Stop from the phone over a gate refused the tool call instead of stopping
+ * the turn. It cannot hold the way a `/model` does — a human pressed Stop and
+ * is owed an outcome — so `interruptPane` WITHDRAWS the gate on the bus and
+ * types nothing at all.
  */
 
 import { execFile } from 'node:child_process'
@@ -124,12 +131,64 @@ async function registryStatus(
     return (onThisPane ?? matches[0]).status ?? null
 }
 
+/** One prompt as `GET /v1/events?state=pending` lists it. */
+interface PendingBusEvent {
+    id?: string
+    kind?: string
+    origin?: { sessionId?: string | null }
+}
+
+/**
+ * The kinds that are a DIALOG ON SCREEN holding the keyboard.
+ *
+ * The bus carries five, and only these two are being waited on by something
+ * that will read the next keystroke as its answer. `todo`, `idle` and `expiry`
+ * are notices: a to-do sits pending for days by design (DROVE-53), so treating
+ * one as an open dialog would leave Stop with nothing it could do all day, and
+ * withdrawing one would throw away a record nobody had acted on.
+ */
+const gateKinds = new Set(['permission', 'question'])
+
+/**
+ * What the drover bus is holding for this session right now.
+ *
+ * A pending event means something on screen is WAITING for an answer — a gum
+ * popup, a permission prompt — and a keystroke aimed at the conversation would
+ * land on that dialog instead and pick whatever is highlighted.
+ *
+ * `known:false` is the bus not saying: down, slow, or answering with an error.
+ * That is not "nothing is pending", and the two callers must not read it as
+ * one, so it is a third answer rather than an empty list.
+ */
+async function busPendingFor(
+    busUrl: string,
+    ids: Set<string>,
+): Promise<{ known: boolean; events: PendingBusEvent[] }> {
+    // Nothing to match against. No adapter in the tree raises a prompt without
+    // stamping the session it came from, so an id-less session has no prompt of
+    // its own on the bus to find.
+    if (ids.size === 0) return { known: true, events: [] }
+    const ac = new AbortController()
+    const timer = setTimeout(() => ac.abort(), busTimeoutMs)
+    try {
+        const res = await fetch(`${busUrl}/v1/events?state=pending`, { signal: ac.signal })
+        if (!res.ok) return { known: false, events: [] }
+        const body = (await res.json()) as { events?: PendingBusEvent[] }
+        const mine = (body.events ?? []).filter((e) => {
+            const id = e?.origin?.sessionId
+            return typeof id === 'string' && ids.has(id)
+        })
+        return { known: true, events: mine }
+    } catch (e) {
+        logger.debug('[paneInject] bus did not answer:', e)
+        return { known: false, events: [] }
+    } finally {
+        clearTimeout(timer)
+    }
+}
+
 /**
  * Is the drover bus holding a question or a permission for this session?
- *
- * If it is, something on screen is WAITING for an answer — a gum popup, a
- * permission prompt — and a keystroke aimed at the conversation would land on
- * that dialog instead and pick whatever is highlighted.
  *
  * Any failure answers yes. A bus that is down, slow, or replying with an error
  * tells us nothing about what is on screen, and the cost of guessing wrong in
@@ -137,20 +196,38 @@ async function registryStatus(
  * approves a tool call nobody read.
  */
 async function busHasPendingFor(busUrl: string, ids: Set<string>): Promise<boolean> {
-    if (ids.size === 0) return false
+    const pending = await busPendingFor(busUrl, ids)
+    return !pending.known || pending.events.length > 0
+}
+
+/**
+ * Withdraw a prompt from every surface: `POST /v1/events/<id>/cancel`.
+ *
+ * A cancel, never a resolve. Stop is a human saying "stop", which is not an
+ * answer to the question on screen, and picking one for him is the whole of
+ * DROVE-80. Withdrawn, the producers take their no-answer arm — the popup in
+ * adapters/claude-pretooluse.sh dismisses on `canceled` and Claude Code asks
+ * again in its own dialog, lib/drover-gate.sh fails closed — and every other
+ * surface drops the card.
+ */
+async function cancelOnBus(busUrl: string, id: string): Promise<boolean> {
     const ac = new AbortController()
     const timer = setTimeout(() => ac.abort(), busTimeoutMs)
     try {
-        const res = await fetch(`${busUrl}/v1/events?state=pending`, { signal: ac.signal })
-        if (!res.ok) return true
-        const body = (await res.json()) as { events?: Array<{ origin?: { sessionId?: string | null } }> }
-        return (body.events ?? []).some((e) => {
-            const id = e?.origin?.sessionId
-            return typeof id === 'string' && ids.has(id)
+        const res = await fetch(`${busUrl}/v1/events/${id}/cancel`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ by: 'happy-stop' }),
+            signal: ac.signal,
         })
+        // 409 is the prompt having ended between the list and this POST —
+        // another surface got there first, which is the outcome anyway.
+        if (res.ok || res.status === 409) return true
+        logger.debug(`[paneInject] bus refused to withdraw ${id}: ${res.status}`)
+        return false
     } catch (e) {
-        logger.debug('[paneInject] bus did not answer — treating the pane as busy:', e)
-        return true
+        logger.debug(`[paneInject] withdrawing ${id} failed:`, e)
+        return false
     } finally {
         clearTimeout(timer)
     }
@@ -181,6 +258,18 @@ export interface PaneGate {
 }
 
 /**
+ * The ids a pending bus event may carry for this session: Claude's own, and
+ * the drover's when the caller knows it. Both checks read the same set.
+ */
+function sessionIdsOf(gate: PaneGate): Set<string> {
+    return new Set(
+        [gate.claudeSessionId, gate.sessionId].filter(
+            (v): v is string => typeof v === 'string' && v.length > 0,
+        ),
+    )
+}
+
+/**
  * Is it safe to press Enter in this pane right now?
  *
  * True only when ALL THREE hold:
@@ -201,8 +290,7 @@ export async function paneIsIdle(gate: PaneGate): Promise<boolean> {
         logger.debug(`[paneInject] gate: registry says ${status ?? 'nothing'} for ${gate.claudeSessionId ?? '(no session id)'} — not idle`)
         return false
     }
-    const ids = new Set([gate.claudeSessionId, gate.sessionId].filter((v): v is string => typeof v === 'string' && v.length > 0))
-    if (await busHasPendingFor(gate.busUrl || defaultBusUrl(), ids)) {
+    if (await busHasPendingFor(gate.busUrl || defaultBusUrl(), sessionIdsOf(gate))) {
         logger.debug('[paneInject] gate: a bus event is pending for this session — not idle')
         return false
     }
@@ -214,7 +302,7 @@ export async function paneIsIdle(gate: PaneGate): Promise<boolean> {
 }
 
 /** What an in-place interrupt attempt came to. */
-export type PaneInterruptOutcome = 'cancelled' | 'idle' | 'unavailable'
+export type PaneInterruptOutcome = 'cancelled' | 'gate-cancelled' | 'idle' | 'unavailable' | 'unknown'
 
 /**
  * Cancel the active turn of the Claude running in `pane` without killing it —
@@ -223,18 +311,38 @@ export type PaneInterruptOutcome = 'cancelled' | 'idle' | 'unavailable'
  * takes the whole TUI down along with the scrollback, a half-typed line and
  * any open plan or permission prompt, so a phone Stop reaches for this first.
  *
+ * THE BUS IS ASKED BEFORE THE KEYBOARD IS TOUCHED (DROVE-80). Escape is a
+ * keystroke and a pane is a keyboard: with a permission dialog open — the gum
+ * popup, or Claude Code's own — Escape ANSWERS it, and Escape on a permission
+ * dialog is deny. So a Stop pressed while a gate was up did not stop the turn,
+ * it refused the tool call, silently, and the session carried on having been
+ * told no. `paneIsIdle` has always made this check for the Enter behind
+ * `/model`; this makes the same one for Stop and pulls a different lever when
+ * it fires — the gate is WITHDRAWN on the bus, so no surface is answered on
+ * the human's behalf.
+ *
  * Outcomes:
- *   'cancelled'   — Escape went in; the turn is stopping, the TUI stands.
- *   'idle'        — Claude's own registry says it is sitting at its prompt.
- *                   There is no turn to cancel, and Escape at an idle prompt
- *                   CLEARS whatever the human has half-typed, so nothing is
- *                   sent. The caller must not read this as "fall back to a kill".
- *   'unavailable' — the pane is gone, is back at a shell, or tmux refused.
+ *   'cancelled'      — Escape went in; the turn is stopping, the TUI stands.
+ *   'gate-cancelled' — a prompt was open, so it was withdrawn through the bus
+ *                      and NOTHING was typed. The producer takes its no-answer
+ *                      arm and every other surface drops the card.
+ *   'idle'           — Claude's own registry says it is sitting at its prompt.
+ *                      There is no turn to cancel, and Escape at an idle prompt
+ *                      CLEARS whatever the human has half-typed, so nothing is
+ *                      sent. The caller must not read this as "fall back to a
+ *                      kill".
+ *   'unavailable'    — the pane is gone, is back at a shell, or tmux refused.
+ *   'unknown'        — the bus could not say whether a prompt is open, or said
+ *                      one is and then would not withdraw it. Nothing is typed
+ *                      and nothing is guessed: a keystroke sent blind is the
+ *                      defect above. The caller SAYS so on the phone; there is
+ *                      no second path behind this one (DROVE-48).
  *
  * An UNKNOWN registry status still gets the Escape: Stop is surfaced on the
  * phone exactly while a turn is running, so mid-turn is the overwhelmingly
  * likely state, and an older Claude with no registry record must still be
- * stoppable.
+ * stoppable. That is the registry, not the bus — the bus not answering is
+ * `unknown` above, because the registry cannot see a dialog and the bus can.
  *
  * One Escape, never two. A second one inside Claude Code's double-tap window
  * opens the rewind picker, which is a different button entirely.
@@ -243,6 +351,25 @@ export async function interruptPane(gate: PaneGate): Promise<PaneInterruptOutcom
     if (!(await paneRunningClaude(gate.pane))) {
         logger.debug(`[paneInject] interrupt: ${gate.pane} is not running Claude`)
         return 'unavailable'
+    }
+    const busUrl = gate.busUrl || defaultBusUrl()
+    const pending = await busPendingFor(busUrl, sessionIdsOf(gate))
+    if (!pending.known) {
+        logger.debug('[paneInject] interrupt: the bus did not say whether a prompt is open — nothing sent')
+        return 'unknown'
+    }
+    const gates = pending.events.filter((e) => gateKinds.has(String(e.kind)))
+    if (gates.length > 0) {
+        let withdrawn = 0
+        for (const ev of gates) {
+            if (typeof ev.id !== 'string' || ev.id.length === 0) continue
+            if (await cancelOnBus(busUrl, ev.id)) withdrawn++
+        }
+        logger.debug(
+            `[paneInject] interrupt: ${gates.length} prompt(s) open for this session, `
+            + `withdrew ${withdrawn} through the bus — no keystroke sent`,
+        )
+        return withdrawn > 0 ? 'gate-cancelled' : 'unknown'
     }
     const status = await registryStatus(gate.configDir, gate.claudeSessionId, gate.pane)
     if (status === 'idle') {

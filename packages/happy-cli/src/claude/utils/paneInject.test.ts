@@ -104,8 +104,12 @@ describe('the idle gate decides whether Enter is pressed', () => {
     let originalPath: string | undefined
     let bus: Server
     let busUrl: string
-    let pendingEvents: Array<{ origin?: { sessionId?: string | null } }> = []
+    let pendingEvents: Array<{ id?: string; kind?: string; origin?: { sessionId?: string | null } }> = []
     let busStatus = 200
+    /** What the bus answers a withdrawal with. 200 is the real one. */
+    let cancelStatus = 200
+    /** Every request the code under test made, in order. */
+    let busCalls: string[] = []
 
     async function tmuxArgv(): Promise<string[]> {
         try {
@@ -146,7 +150,18 @@ describe('the idle gate decides whether Enter is pressed', () => {
         configDir = await mkdtemp(join(tmpdir(), 'happy-fake-claude-'))
         await mkdir(join(configDir, 'sessions'), { recursive: true })
 
-        bus = createServer((_req, res) => {
+        // The two routes this module speaks: the pending list, and the
+        // withdrawal Stop posts when that list has something for the session.
+        bus = createServer((req, res) => {
+            const path = (req.url ?? '/').split('?')[0]
+            busCalls.push(`${req.method} ${req.url}`)
+            const cancel = path.match(/^\/v1\/events\/([^/]+)\/cancel$/)
+            if (cancel && req.method === 'POST') {
+                req.resume()
+                res.writeHead(cancelStatus, { 'Content-Type': 'application/json' })
+                res.end(JSON.stringify({ id: cancel[1], state: 'canceled' }))
+                return
+            }
             res.writeHead(busStatus, { 'Content-Type': 'application/json' })
             res.end(JSON.stringify({ events: pendingEvents }))
         })
@@ -169,6 +184,8 @@ describe('the idle gate decides whether Enter is pressed', () => {
         delete process.env.FAKE_PANE_CMD
         pendingEvents = []
         busStatus = 200
+        cancelStatus = 200
+        busCalls = []
         await setRegistryStatus('idle')
     })
 
@@ -284,6 +301,98 @@ describe('the idle gate decides whether Enter is pressed', () => {
 
             expect(await interruptPane(gate())).toBe('unavailable')
             expect((await tmuxArgv()).some((line) => line.startsWith('send-keys'))).toBe(false)
+        })
+
+        /**
+         * DROVE-80. Escape lands on whatever dialog is up, and Escape on a
+         * permission dialog is DENY — so a Stop pressed while a gate was
+         * pending did not stop the turn, it refused the tool call. The bus
+         * knows the gate is there; these pin that it is asked first and that
+         * the keyboard is left alone when it says yes.
+         */
+        describe('with a prompt open, Stop goes to the bus and not to the keyboard', () => {
+            const eventId = 'f3b0b7c2-2b1e-4d84-9d0a-9d1a1a3b6c77'
+
+            it('withdraws the pending gate and types NOTHING into the pane', async () => {
+                await setRegistryStatus('busy')
+                pendingEvents = [{ id: eventId, kind: 'permission', origin: { sessionId: claudeSessionId } }]
+
+                expect(await interruptPane(gate())).toBe('gate-cancelled')
+
+                // The whole point: no keystroke reached tmux, so nothing
+                // answered the dialog on the human's behalf.
+                const argv = await tmuxArgv()
+                expect(argv.some((line) => line.startsWith('send-keys'))).toBe(false)
+                expect(busCalls).toContain(`POST /v1/events/${eventId}/cancel`)
+            })
+
+            it('withdraws every prompt the session is holding, not just the first', async () => {
+                const second = 'a1c9f0de-31b6-4a05-9d2d-1f1a2b3c4d5e'
+                pendingEvents = [
+                    { id: eventId, kind: 'permission', origin: { sessionId: claudeSessionId } },
+                    { id: second, kind: 'question', origin: { sessionId: claudeSessionId } },
+                ]
+
+                expect(await interruptPane(gate())).toBe('gate-cancelled')
+                expect(busCalls).toContain(`POST /v1/events/${eventId}/cancel`)
+                expect(busCalls).toContain(`POST /v1/events/${second}/cancel`)
+            })
+
+            it('leaves another session\'s prompt alone and sends the Escape as before', async () => {
+                await setRegistryStatus('busy')
+                pendingEvents = [{ id: eventId, kind: 'permission', origin: { sessionId: 'someone-else' } }]
+
+                expect(await interruptPane(gate())).toBe('cancelled')
+                expect(await tmuxArgv()).toContain(`send-keys -t ${gatePane} Escape`)
+                expect(busCalls.some((c) => c.includes('/cancel'))).toBe(false)
+            })
+
+            it('is not fooled by a to-do, which is a notice and not a dialog', async () => {
+                // A to-do sits pending for days by design (DROVE-53). Reading
+                // one as an open dialog would leave Stop unable to stop
+                // anything, and withdrawing it would delete a record nobody
+                // had acted on.
+                await setRegistryStatus('busy')
+                pendingEvents = [{ id: eventId, kind: 'todo', origin: { sessionId: claudeSessionId } }]
+
+                expect(await interruptPane(gate())).toBe('cancelled')
+                expect(await tmuxArgv()).toContain(`send-keys -t ${gatePane} Escape`)
+                expect(busCalls.some((c) => c.includes('/cancel'))).toBe(false)
+            })
+
+            it('sends nothing when the bus cannot say whether a prompt is open', async () => {
+                await setRegistryStatus('busy')
+
+                // Nothing listening on this port: the fetch rejects, and a
+                // keystroke sent blind is the defect this ticket closed.
+                expect(await interruptPane({ ...gate(), busUrl: 'http://127.0.0.1:1' })).toBe('unknown')
+                expect((await tmuxArgv()).some((line) => line.startsWith('send-keys'))).toBe(false)
+            })
+
+            it('sends nothing when the bus answers the pending list with an error', async () => {
+                await setRegistryStatus('busy')
+                busStatus = 500
+
+                expect(await interruptPane(gate())).toBe('unknown')
+                expect((await tmuxArgv()).some((line) => line.startsWith('send-keys'))).toBe(false)
+            })
+
+            it('sends nothing when the bus refuses to withdraw the prompt it named', async () => {
+                await setRegistryStatus('busy')
+                pendingEvents = [{ id: eventId, kind: 'permission', origin: { sessionId: claudeSessionId } }]
+                cancelStatus = 500
+
+                expect(await interruptPane(gate())).toBe('unknown')
+                expect((await tmuxArgv()).some((line) => line.startsWith('send-keys'))).toBe(false)
+            })
+
+            it('takes a 409 as done: another surface ended the prompt first', async () => {
+                pendingEvents = [{ id: eventId, kind: 'permission', origin: { sessionId: claudeSessionId } }]
+                cancelStatus = 409
+
+                expect(await interruptPane(gate())).toBe('gate-cancelled')
+                expect((await tmuxArgv()).some((line) => line.startsWith('send-keys'))).toBe(false)
+            })
         })
     })
 })
