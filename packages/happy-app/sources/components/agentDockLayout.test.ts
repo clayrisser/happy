@@ -6,6 +6,9 @@ import {
     STATUS_ROW_BOTTOM_CLEARANCE,
     STATUS_ROW_TAP_SLOP_BOTTOM,
     STATUS_ROW_TAP_SLOP_TOP,
+    STATUS_ROW_TAP_HEIGHT,
+    STATUS_ROW_TEXT_LINE_HEIGHT,
+    resolveComposerButtonFloor,
     resolveDockBottomOffset,
     resolveDockInset,
     resolveDockScrimHeight,
@@ -217,12 +220,27 @@ describe('status row clearance', () => {
     });
 
     it('keeps the touch height worth having', () => {
-        // 12 above, the 14pt line itself, 3 below. Down from 40pt, still about
-        // three times the height of the text. This is the cost DROVE-144 pays
-        // for the 18pt; if the segments turn out fiddly, raise the slop and
-        // the gap follows it rather than drifting apart.
-        const touchHeight = STATUS_ROW_TAP_SLOP_TOP + 14 + STATUS_ROW_TAP_SLOP_BOTTOM;
-        expect(touchHeight).toBe(29);
+        // 14 above, the 14pt line itself, 3 below. DROVE-144 left this at 29
+        // and DROVE-153 took the two points that were free above it.
+        expect(STATUS_ROW_TAP_HEIGHT).toBe(31);
+        expect(STATUS_ROW_TAP_HEIGHT)
+            .toBe(STATUS_ROW_TAP_SLOP_TOP + STATUS_ROW_TEXT_LINE_HEIGHT + STATUS_ROW_TAP_SLOP_BOTTOM);
+    });
+
+    it('cannot reach the 44pt floor without buying the points from somewhere', () => {
+        // The upward answer to Clay's "normal button sizes", worked out rather
+        // than asserted. The segments' ceiling is the composer card's own
+        // buttons: a touch area drawn over those would take presses off
+        // controls that are themselves at the floor.
+        expect(resolveComposerButtonFloor(safeAreaBottom)).toBe(44);
+
+        const ceiling = resolveComposerButtonFloor(safeAreaBottom) - HOME_INDICATOR_KEEP_OUT;
+        expect(ceiling).toBe(STATUS_ROW_TAP_HEIGHT);
+        expect(ceiling).toBeLessThan(44);
+
+        // And what the other side of the trade would cost: 44 - 31 points, out
+        // of the 18 DROVE-144 reclaimed.
+        expect(44 - ceiling).toBe(13);
     });
 
     it('does not jam the row on the bezel of a phone with a home button', () => {

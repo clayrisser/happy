@@ -8,6 +8,7 @@ import { t } from '@/text';
 import { useSession } from '@/sync/storage';
 import { isLiveStatusFresh, summarizeLiveStatus, type LiveStatusSummary } from '@/utils/liveStatus';
 import { STATUS_ROW_TAP_SLOP_BOTTOM, STATUS_ROW_TAP_SLOP_TOP } from './agentDockLayout';
+import { MOBILE_COMPOSER_LAYOUT, MOBILE_COMPOSER_METRICS } from './agentInputLayout';
 import { AnimatedFade } from './AnimatedOverlay';
 import { UsageAccountBarsSheet } from './UsageAccountBarsSheet';
 import type { UsageBarGroup } from './agentInputUsage';
@@ -60,12 +61,24 @@ const workingColor = '#007AFF';
  * on the indicator's top edge. Change it and change
  * STATUS_ROW_TAP_SLOP_BOTTOM with it: the gap under the row is derived from
  * it, and agentDockLayout.test.ts asserts the two agree.
+ *
+ * The box is 30pt tall, not 44, and DROVE-153 works out why in
+ * agentDockLayout's note on STATUS_ROW_TAP_SLOP_TOP: with the home indicator
+ * below and the composer's own 44pt buttons above, there are 30 points between
+ * them and the last 14 cost chat height whichever end they are taken from.
+ * These segments are status TEXT rather than chrome buttons, and every chrome
+ * button on the screen is drawn at 44 or larger now, so the trade went to the
+ * space Clay asked for three times.
+ *
+ * The horizontal reach goes up instead, since it is free. A segment is 60 to
+ * 110pt wide, so widening it 4pt a side buys more real hittability than the two
+ * vertical points that were available.
  */
 const segmentHitSlop = {
     top: STATUS_ROW_TAP_SLOP_TOP,
     bottom: STATUS_ROW_TAP_SLOP_BOTTOM,
-    left: 6,
-    right: 6,
+    left: 10,
+    right: 10,
 } as const;
 
 // Grayscale ring that fills and darkens with context usage. Reads at a
@@ -331,9 +344,13 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
             <View style={{
                 flexDirection: 'row',
                 alignItems: 'center',
-                // 18 = 10pt shell inset + 8pt action inset: lines the row up
-                // with the composer card's controls.
-                paddingHorizontal: 18,
+                // 19 = 10pt shell inset + 9pt action inset: lines the row up
+                // with the composer card's controls. The action inset moved
+                // from 8 to 9 when the row's buttons went 42 -> 44 (DROVE-153),
+                // because it is half the difference between the button and its
+                // 26pt glyph.
+                paddingHorizontal: MOBILE_COMPOSER_METRICS.shellInset
+                    + MOBILE_COMPOSER_LAYOUT.addGlyphOffset,
                 paddingTop: 6,
                 minHeight: 18,
             }}>

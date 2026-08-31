@@ -63,8 +63,70 @@ export const HOME_INDICATOR_KEEP_OUT = 13;
  */
 export const STATUS_ROW_TAP_SLOP_BOTTOM = 3;
 
-/** Unchanged by DROVE-144. Kept here so the whole touch box reads in one place. */
-export const STATUS_ROW_TAP_SLOP_TOP = 12;
+/**
+ * How far a segment reaches ABOVE its text.
+ *
+ * DROVE-153 raised this from 12 to 14, which is every point there was, and the
+ * arithmetic is worth keeping because it is the answer to "can the 44pt target
+ * be won back upward" and the answer is no. Measured from the screen edge up
+ * on Clay's handset:
+ *
+ *   0..13   the home indicator. Nothing tappable (HOME_INDICATOR_KEEP_OUT).
+ *   13      the segments' tap floor, exactly on the indicator's top edge.
+ *   16      the status text's bottom (STATUS_ROW_BOTTOM_CLEARANCE).
+ *   30      the status text's top: 11pt type in a 14pt line box.
+ *   36      the composer card's bottom edge, over the row's 6pt paddingTop.
+ *   44      the card's own buttons start, 8pt inside it (shellPaddingBottom).
+ *
+ * So a segment can reach 44 before it is drawing its touch area over buttons
+ * that are themselves 44pt tall. 44 - 13 is a 31pt box, and 14 above the text
+ * is every point of it. Reaching a 44pt box needs to top out at 57, which is
+ * 13pt inside those buttons.
+ *
+ * Every other route costs the same 13pt. Taking it below costs it out of
+ * DROVE-144's 18pt reclaim, because STATUS_ROW_BOTTOM_CLEARANCE is derived from
+ * STATUS_ROW_TAP_SLOP_BOTTOM point for point. Moving the row above the composer
+ * costs 20. There is no slack anywhere in the stack: a 44pt box for this row is
+ * 13pt of chat, whichever end it is taken from.
+ *
+ * SO IT IS 31, NOT 44, AND THAT IS A CHOICE. Clay asked for the bottom space
+ * three times and these segments are status TEXT, not the chrome buttons he
+ * photographed; every one of those is drawn at 44 or larger now. To take the
+ * other side of the trade, raise STATUS_ROW_TAP_SLOP_BOTTOM from 3 to 16: the
+ * gap below the row goes 16 -> 29 and the segments become 44pt tall.
+ */
+export const STATUS_ROW_TAP_SLOP_TOP = 14;
+
+/**
+ * The 11pt status text's line box. Not a style, a measurement: the touch box's
+ * height is derived from it, so the derivation cannot silently drift.
+ */
+export const STATUS_ROW_TEXT_LINE_HEIGHT = 14;
+
+/** What a status row segment actually answers a touch on, top to bottom. */
+export const STATUS_ROW_TAP_HEIGHT = STATUS_ROW_TAP_SLOP_TOP
+    + STATUS_ROW_TEXT_LINE_HEIGHT
+    + STATUS_ROW_TAP_SLOP_BOTTOM;
+
+/** The row's own box: its 6pt top padding over the text's line. Mirrors AgentInputStatusRow. */
+export const STATUS_ROW_ROW_HEIGHT = 6 + STATUS_ROW_TEXT_LINE_HEIGHT;
+
+/**
+ * What the composer card keeps under its own button row. Mirrors
+ * `MOBILE_COMPOSER_METRICS.shellPaddingBottom`, and it is the last inert band
+ * between the status row and a control that must not lose presses to it.
+ */
+export const COMPOSER_CARD_BOTTOM_PADDING = 8;
+
+/**
+ * How far above the screen edge the composer's own buttons start, which is the
+ * ceiling on how far a status row segment may reach up.
+ */
+export function resolveComposerButtonFloor(safeAreaBottom: number): number {
+    return resolveStatusRowBottomGap(safeAreaBottom)
+        + STATUS_ROW_ROW_HEIGHT
+        + COMPOSER_CARD_BOTTOM_PADDING;
+}
 
 /**
  * The gap we want under the status row on a phone that HAS a home indicator:

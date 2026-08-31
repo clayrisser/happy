@@ -87,13 +87,21 @@ describe('buildSessionPillLabel', () => {
 });
 
 describe('the model name on the button row at 393pt', () => {
-    // add(42) + mode(38) + effort(38) + speaker(42) + mic(42) + primary(42)
-    // + the primary's 8pt margin + seven 6pt gaps, inside 8pt of container
-    // padding and 10pt of shell inset a side.
+    // add(44) + mode(44) + effort(44) + speaker(44) + mic(44) + two 8pt gaps,
+    // inside 8pt of container padding and 10pt of shell inset a side. The
+    // primary is not here: DROVE-153 moved it inside the input capsule, and
+    // the five gaps that separated seven discs became two, because the mode,
+    // effort and model now share one capsule and the speaker and mic another.
     it('leaves the name the screen minus every button and every gap', () => {
         expect(resolveComposerModelTextBudget(393))
-            .toBe(393 - 16 - 20 - 42 - 76 - 126 - 8 - 42);
-        expect(resolveComposerModelTextBudget(393)).toBe(63);
+            .toBe(393 - 16 - 20 - 44 - 88 - 88 - 16);
+        expect(resolveComposerModelTextBudget(393)).toBe(121);
+    });
+
+    // The grouping is what pays for the bigger controls. Seven 38-to-42pt discs
+    // left the name 63pt; five 44pt segments in two capsules leave it 121.
+    it('gives the name more room than the row of separate discs did', () => {
+        expect(resolveComposerModelTextBudget(393)).toBeGreaterThan(63);
     });
 
     it('holds the names Clay actually runs', () => {
