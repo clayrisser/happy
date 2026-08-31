@@ -362,6 +362,18 @@ class Sync {
     }
 
 
+    /**
+     * Load a session's messages without a screen showing it (DROVE-91).
+     *
+     * The wrist opening a session's transcript is the caller: it needs the
+     * rows and nothing else, so this is `onSessionVisible` minus the parts
+     * that belong to a screen on the phone, the git status and the voice
+     * assistant's focus.
+     */
+    loadSessionMessages = (sessionId: string) => {
+        this.getMessagesSync(sessionId).invalidate();
+    }
+
     onSessionVisible = (sessionId: string) => {
         this.getMessagesSync(sessionId).invalidate();
 

@@ -35,6 +35,10 @@ final class GateStore: NSObject, ObservableObject {
     /// Why the wrist did not buzz, when it did not. Nil is the normal case.
     @Published private(set) var buzzRefusal: String?
 
+    /// The session whose transcript is on screen, told to the phone so it
+    /// feeds that one (DROVE-91). Nil between transcript screens.
+    @Published private(set) var openedSessionId: String?
+
     private var session: WCSession?
     /// When the ask in flight was made. Used to drop the reply of an ask that
     /// has already been superseded, so a slow first answer cannot overwrite the
@@ -179,6 +183,37 @@ final class GateStore: NSObject, ObservableObject {
         return snapshot.accounts.map { DroverAccount(name: $0, headroom: nil, loggedIn: nil, backAt: nil) }
     }
 
+    /// The rows the phone last sent for `sessionId`, or nil when what it last
+    /// sent was another session's (DROVE-91). The wrist never draws one
+    /// session's conversation under another's title.
+    func transcript(for sessionId: String) -> DroverTranscript? {
+        guard let transcript = snapshot.transcript, transcript.sessionId == sessionId else { return nil }
+        return transcript
+    }
+
+    /// The gate a transcript row stands for, while the phone still lists it.
+    func gate(withId id: String?) -> DroverGate? {
+        guard let id else { return nil }
+        return snapshot.gates.first { $0.id == id }
+    }
+
+    /// Tell the phone which session's transcript is on screen, or that none
+    /// is (DROVE-91). The phone builds rows for that session alone and sends
+    /// them by `sendMessage` while this watch is reachable.
+    ///
+    /// `sendMessage` only, never queued: an "opened" delivered twenty minutes
+    /// late names a screen that closed nineteen minutes ago. Sent again on
+    /// every foreground, because reachability comes and goes with it and the
+    /// phone sends every row afresh on an open.
+    func watchTranscript(of sessionId: String?) {
+        openedSessionId = sessionId
+        guard let session, session.activationState == .activated else { return }
+        guard let payload = try? JSONEncoder().encode(DroverOpened(sessionId: sessionId)),
+              let dict = try? JSONSerialization.jsonObject(with: payload) as? [String: Any] else { return }
+        droverLog.notice("transcript opened session=\(sessionId ?? "none", privacy: .public) reachable=\(session.isReachable, privacy: .public)")
+        session.sendMessage(dict, replyHandler: nil, errorHandler: nil)
+    }
+
     /// Answer a gate. `optionId` is a pick, `text` is typed or dictated; a
     /// question takes exactly one of them and a permission takes neither.
     ///
@@ -302,7 +337,13 @@ final class GateStore: NSObject, ObservableObject {
         // the same arrival reaching us twice (once as the wake that launched
         // this process, once as the application context) is one tap.
         buzzer.buzz(WristCueDiff.cues(from: snapshot, to: decoded))
-        snapshot = decoded
+        // A snapshot with no transcript is a phone that has none to send (an
+        // older JS, or the background republish, which builds no rows), not
+        // a phone saying the conversation is gone. Keep what the deltas built
+        // (DROVE-91).
+        var next = decoded
+        if next.transcript == nil { next.transcript = snapshot.transcript }
+        snapshot = next
         // The phone spoke, however it reached us. Whether the snapshot it sent
         // is any newer is `isStale`'s question, not this one.
         refresh = .answered
@@ -315,6 +356,34 @@ final class GateStore: NSObject, ObservableObject {
         let live = Set(decoded.gates.map(\.id))
         answering.formIntersection(live)
         WidgetCenter.shared.reloadAllTimelines()
+        return true
+    }
+
+    /// A transcript delta by `sendMessage` (DROVE-91): the rows that changed
+    /// and the id list of the whole window. Merged into what the wrist holds
+    /// and persisted with the snapshot, so a watch relaunched with the phone
+    /// out of reach still shows the last conversation it saw.
+    ///
+    /// The phone spoke, so the snapshot's stamp moves with the delta's: a
+    /// wrist reading a live reply is not looking at an out-of-date list.
+    @discardableResult
+    fileprivate func applyTranscriptDelta(_ message: [String: Any]) -> Bool {
+        guard let data = try? JSONSerialization.data(withJSONObject: message),
+              let delta = try? DroverSnapshot.decoder.decode(DroverTranscriptDelta.self, from: data),
+              delta.isTranscript else { return false }
+        let merged = DroverTranscript.applying(delta, to: snapshot.transcript)
+        snapshot.transcript = merged.transcript
+        snapshot.updatedAt = max(snapshot.updatedAt, delta.updatedAt)
+        refresh = .answered
+        snapshot.save()
+        if !merged.missing.isEmpty {
+            // Rows the phone thinks this wrist has and it does not: a delta
+            // sent before this screen opened, or one that was lost. The
+            // snapshot carries the full transcript, so ask for one, with a
+            // floor so a run of such deltas is one ask.
+            droverLog.notice("transcript delta missing \(merged.missing.count, privacy: .public) rows, asking for a snapshot")
+            askPhoneForSnapshot(notMoreOftenThan: 5)
+        }
         return true
     }
 }
@@ -340,7 +409,15 @@ extension GateStore {
         case let .applicationContext(context):
             apply(context)
         case let .message(message):
-            apply(message)
+            // A transcript delta rides the same channel as a snapshot and is
+            // told apart by `kind`, which a snapshot never carries at the top
+            // (DROVE-91). Buffered and replayed by the bridge exactly as a
+            // snapshot is.
+            if message["kind"] as? String == DroverTranscriptDelta.kindValue {
+                applyTranscriptDelta(message)
+            } else {
+                apply(message)
+            }
         // A snapshot the phone sent as a background transfer, in practice the
         // one it sent with `transferCurrentComplicationUserInfo`, which is the
         // only documented phone-to-watch call that LAUNCHES this app in the

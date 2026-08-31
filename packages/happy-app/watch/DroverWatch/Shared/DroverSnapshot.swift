@@ -190,6 +190,95 @@ struct DroverAccount: Codable, Identifiable, Equatable, Hashable {
     let backAt: Date?
 }
 
+/// One row of the open session's transcript, as the phone folded it
+/// (DROVE-91).
+///
+/// The phone does the folding: a run of tool calls is already one `tools`
+/// row reading `Ran 4 shell commands`, and `text` is already cut to 500
+/// characters with a "more on the phone" tail. The wrist draws, it does not
+/// decide. `kind` is a String for the same reason `DroverGate.kind` is: a
+/// kind this build has never heard of must cost one row, not the snapshot.
+struct DroverTranscriptRow: Codable, Identifiable, Equatable, Hashable {
+    let id: String
+    let kind: String
+    let text: String
+    /// Still being written. Optional so a phone that omits it (false) decodes.
+    let streaming: Bool?
+    let at: Date
+    /// The gate in `DroverSnapshot.gates` this row stands for, while it is
+    /// still pending. Nil once it is answered, and on every other kind.
+    let gateId: String?
+
+    enum Kind: String {
+        case user
+        case assistant
+        case tools
+        case gate
+        case unknown
+    }
+
+    var classification: Kind { Kind(rawValue: kind) ?? .unknown }
+    var isStreaming: Bool { streaming == true }
+}
+
+/// The last rows of the session the wrist said it was looking at (DROVE-91).
+/// Oldest first, newest at the bottom.
+struct DroverTranscript: Codable, Equatable {
+    let sessionId: String
+    var rows: [DroverTranscriptRow]
+    /// The turn is running: the wrist draws a streaming row under the last one.
+    var streaming: Bool
+}
+
+/// What the phone sends by `sendMessage` for a transcript change while this
+/// watch is reachable, instead of the whole snapshot (DROVE-91). Told apart
+/// from a snapshot by `kind`, which a snapshot never carries at the top.
+struct DroverTranscriptDelta: Codable, Equatable {
+    /// Always "transcript".
+    let kind: String
+    let sessionId: String
+    let streaming: Bool
+    /// The whole window, in order. Rows not in `rows` are ones the wrist was
+    /// already sent; a row it turns out not to have is a reason to ask for a
+    /// snapshot, which carries the full transcript.
+    let ids: [String]
+    /// Only the rows that changed since the last delta.
+    let rows: [DroverTranscriptRow]
+    let updatedAt: Date
+
+    static let kindValue = "transcript"
+
+    var isTranscript: Bool { kind == Self.kindValue }
+}
+
+extension DroverTranscript {
+    /// Apply a delta to what the wrist holds, or to nothing.
+    ///
+    /// Returns the merged transcript and the ids the delta names that the
+    /// wrist has no row for. The caller asks the phone for a snapshot when
+    /// that list is not empty; the rows it does have are drawn meanwhile,
+    /// which beats a blank screen while a delta and its predecessor race.
+    static func applying(
+        _ delta: DroverTranscriptDelta,
+        to current: DroverTranscript?
+    ) -> (transcript: DroverTranscript, missing: [String]) {
+        var known: [String: DroverTranscriptRow] = [:]
+        if let current, current.sessionId == delta.sessionId {
+            for row in current.rows { known[row.id] = row }
+        }
+        for row in delta.rows { known[row.id] = row }
+        var rows: [DroverTranscriptRow] = []
+        var missing: [String] = []
+        for id in delta.ids {
+            if let row = known[id] { rows.append(row) } else { missing.append(id) }
+        }
+        return (
+            DroverTranscript(sessionId: delta.sessionId, rows: rows, streaming: delta.streaming),
+            missing
+        )
+    }
+}
+
 struct DroverSnapshot: Codable, Equatable {
     var gates: [DroverGate]
     /// Stamped by the phone at publish. The wrist's only liveness signal — see
@@ -216,6 +305,10 @@ struct DroverSnapshot: Codable, Equatable {
     /// The same accounts with their headroom. Absent from a phone that predates
     /// DROVE-28's picker, which is why the views fall back to `accounts`.
     var accountRows: [DroverAccount] = []
+    /// The open session's last rows, when the wrist has said which session
+    /// (DROVE-91). Absent from a phone that predates the key, and from the
+    /// background republish, which the store treats as "keep what you have".
+    var transcript: DroverTranscript? = nil
 
     static let empty = DroverSnapshot(gates: [], updatedAt: .distantPast, connected: false)
 
@@ -327,6 +420,7 @@ extension DroverSnapshot {
         sessions = try container.decodeIfPresent([DroverSession].self, forKey: .sessions) ?? []
         accounts = try container.decodeIfPresent([String].self, forKey: .accounts) ?? []
         accountRows = try container.decodeIfPresent([DroverAccount].self, forKey: .accountRows) ?? []
+        transcript = try container.decodeIfPresent(DroverTranscript.self, forKey: .transcript)
     }
 }
 
@@ -388,5 +482,19 @@ struct DroverFlip: Codable {
         self.kind = "flip"
         self.sessionId = sessionId
         self.account = account
+    }
+}
+
+/// The wrist saying which session it has open, so the phone feeds that one's
+/// transcript and no other's (DROVE-91). Same channel as an answer and a flip,
+/// told apart by `kind`. `sessionId` nil means it left the transcript.
+struct DroverOpened: Codable {
+    /// Always "opened".
+    let kind: String
+    let sessionId: String?
+
+    init(sessionId: String?) {
+        self.kind = "opened"
+        self.sessionId = sessionId
     }
 }

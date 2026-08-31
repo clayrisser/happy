@@ -12,6 +12,10 @@ import SwiftUI
 /// value-based now, so there is one mechanism rather than two that disagree.
 enum DroverRoute: Hashable {
     case sessions
+    /// The session's facts and its flip buttons, off the transcript's
+    /// toolbar (DROVE-91). A tap on a session row opens the conversation;
+    /// this is the rest of what the row used to open.
+    case detail(DroverSession)
 }
 
 /// The wall: every gate waiting on a human, newest first (BASED-98).
@@ -89,10 +93,14 @@ struct GateListView: View {
             .navigationDestination(for: DroverRoute.self) { route in
                 switch route {
                 case .sessions: SessionListView()
+                case let .detail(session): SessionDetailView(session: session)
                 }
             }
+            // A session row opens the CONVERSATION (DROVE-91): the transcript
+            // is what Clay raises his wrist for, and the flip and the facts
+            // are one more tap from there.
             .navigationDestination(for: DroverSession.self) { session in
-                SessionDetailView(session: session)
+                TranscriptView(session: session)
             }
             // Raising a wrist is the moment the answer has to be current, and
             // activation only fires on the first launch — a watch app resumed
@@ -209,7 +217,7 @@ private struct EmptyStateView: View {
 /// The phone was asked and brought back nothing newer. Shown above the gates
 /// rather than instead of them: the list is probably still right, it just
 /// cannot be relied on.
-private struct StaleRow: View {
+struct StaleRow: View {
     let updatedAt: Date
     /// What WatchConnectivity said, where it said anything.
     let reason: String?
