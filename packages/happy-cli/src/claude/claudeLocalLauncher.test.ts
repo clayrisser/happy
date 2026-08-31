@@ -250,6 +250,10 @@ describe('claudeLocalLauncher', () => {
             sessionId: 'claude-session-1',
             path: '/tmp/project',
             client: {
+                // DROVE-232: the launcher reads the session picks to carry them onto
+                // the child's argv, on every spawn rather than only for a pane.
+                getMetadata: () => ({}),
+                updateMetadata: vi.fn(),
                 sendClaudeSessionMessage: vi.fn(),
                 sendClaudeSessionMessageFromLocalTranscript: vi.fn(async () => {}),
                 closeClaudeSessionTurn: vi.fn(),
@@ -321,6 +325,10 @@ describe('claudeLocalLauncher', () => {
             sessionId: 'claude-session-paneless',
             path: '/tmp/project',
             client: {
+                // DROVE-232: the launcher reads the session picks to carry them onto
+                // the child's argv, on every spawn rather than only for a pane.
+                getMetadata: () => ({}),
+                updateMetadata: vi.fn(),
                 sendClaudeSessionMessage: vi.fn(),
                 sendClaudeSessionMessageFromLocalTranscript: vi.fn(async () => {}),
                 closeClaudeSessionTurn: vi.fn(),
@@ -387,6 +395,10 @@ describe('claudeLocalLauncher', () => {
             sessionId: 'claude-session-1',
             path: '/tmp/project',
             client: {
+                // DROVE-232: the launcher reads the session picks to carry them onto
+                // the child's argv, on every spawn rather than only for a pane.
+                getMetadata: () => ({}),
+                updateMetadata: vi.fn(),
                 sendClaudeSessionMessage: vi.fn(),
                 sendClaudeSessionMessageFromLocalTranscript: vi.fn(async () => {}),
                 closeClaudeSessionTurn: vi.fn(),
@@ -468,6 +480,10 @@ describe('claudeLocalLauncher', () => {
             sessionId: 'claude-session-115',
             path: '/tmp/project',
             client: {
+                // DROVE-232: the launcher reads the session picks to carry them onto
+                // the child's argv, on every spawn rather than only for a pane.
+                getMetadata: () => ({}),
+                updateMetadata: vi.fn(),
                 sendClaudeSessionMessage: vi.fn(),
                 sendClaudeSessionMessageFromLocalTranscript: vi.fn(async () => {}),
                 sendClaudeAgentStop,
@@ -536,6 +552,10 @@ describe('claudeLocalLauncher', () => {
             sessionId: 'claude-session-3',
             path: '/tmp/project',
             client: {
+                // DROVE-232: the launcher reads the session picks to carry them onto
+                // the child's argv, on every spawn rather than only for a pane.
+                getMetadata: () => ({}),
+                updateMetadata: vi.fn(),
                 sendClaudeSessionMessage: vi.fn(),
                 sendClaudeSessionMessageFromLocalTranscript: vi.fn(async () => {}),
                 closeClaudeSessionTurn: vi.fn(),
@@ -1090,6 +1110,68 @@ describe('claudeLocalLauncher in a tmux pane', () => {
                 mockCapturePane.mockResolvedValue(null);
                 mockInjectIntoPane.mockResolvedValue(true);
                 runs[0].run.resolve();
+                await launcher;
+            });
+
+            /**
+             * DROVE-232. Clay: "And damn it did flip but it reset my effort."
+             *
+             * A relaunch is the one case where the request beats the pane, and
+             * the mirror above cannot tell it apart from Clay typing `/effort`
+             * at his own keyboard -- so left alone it wrote the new process's
+             * default straight over `effortLevel: max` and the pick was gone,
+             * not merely unapplied. Everything in this test is one relaunch:
+             * the child dies, the replacement comes up on a default, and the
+             * request has to survive that and be put back.
+             */
+            it('puts the picks back on a child that relaunched onto a default, instead of mirroring the default over them', async () => {
+                let scannerOptions: ScannerOptions | undefined;
+                mockCreateSessionScanner.mockImplementation(async (opts: ScannerOptions) => {
+                    scannerOptions = opts;
+                    return { onNewSession: vi.fn(), cleanup: vi.fn(async () => {}) };
+                });
+                const spawns: any[] = [];
+                const second = createDeferred<void>();
+                mockClaudeLocal.mockImplementation(async (opts: any) => {
+                    spawns.push(opts);
+                    if (spawns.length === 1) throw new Error('the child went away');
+                    await second.promise;
+                });
+                const { session, readMetadata } = paneSession({
+                    effortLevel: 'max',
+                    modelMode: 'claude-opus-5',
+                    paneEffort: 'max',
+                    paneModel: 'claude-opus-5',
+                });
+                mockInjectIntoPane.mockResolvedValue(true);
+
+                const launcher = claudeLocalLauncher(session as any);
+                await vi.waitFor(() => expect(spawns).toHaveLength(2));
+
+                // The replacement is told to come up on them, which is what
+                // beats the first turn.
+                expect(spawns[1].claudeArgs).toEqual(['--model', 'claude-opus-5', '--effort', 'max']);
+                // The old pane's readings describe a process that is gone, and
+                // the phone is told a re-apply is in flight so it draws the
+                // controls as pending rather than as settled on a default.
+                expect(readMetadata().paneEffort).toBeNull();
+                expect(typeof readMetadata().modeReapplyAt).toBe('number');
+
+                // ...and the argv did not take, the way an account without the
+                // model would not take it. The pane reports the default.
+                await vi.waitFor(() => expect(scannerOptions?.onRunObserved).toBeTypeOf('function'));
+                scannerOptions!.onRunObserved!({ model: 'claude-opus-5', effort: 'high' });
+
+                await vi.waitFor(() => expect(mockInjectIntoPane).toHaveBeenCalledWith(
+                    expect.anything(),
+                    '/effort max',
+                    expect.anything(),
+                ), { timeout: 5000 });
+                // The request is still the request. This is the assertion the
+                // whole ticket is about.
+                expect(readMetadata().effortLevel).toBe('max');
+
+                second.resolve();
                 await launcher;
             });
 

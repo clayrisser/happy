@@ -50,6 +50,34 @@ export interface RelaunchRequest {
     happySessionId?: string
 }
 
+/**
+ * Is THIS process the replacement the wrapper spawned for THIS session
+ * (DROVE-232)?
+ *
+ * `DROVER_RELAUNCH_HANDOVER` is set only on a handover -- bin/drover.mjs
+ * deletes it otherwise -- so it is the one honest answer to "did a Claude Code
+ * just die and get replaced under this pane". The launcher asks because a
+ * replacement child boots on the config dir's model and effort rather than on
+ * the session's, and the picks have to be carried back onto it. A flip reaches
+ * the same question one level down, where the launcher can see the respawn
+ * happen; this is how the DROVE-220 path, which crosses a process boundary,
+ * gets there too, from the same place.
+ *
+ * IT IS SCOPED TO THE SESSION, and it has to be. Nothing ever unsets the
+ * variable, so it is inherited by the child Claude Code and by everything that
+ * child spawns -- a nested `drover` in a subagent, a `pnpm vitest` in a shell
+ * tool -- and an unscoped read makes every one of them believe it relaunched.
+ * `findHappySessionForClaudeSession` already reads it exactly this way, waiving
+ * its live check for the one named session and no other.
+ */
+export function relaunchIsHandover(
+    happySessionId: string | null | undefined,
+    env: NodeJS.ProcessEnv = process.env,
+): boolean {
+    const released = env[handoverSessionEnv]
+    return typeof released === 'string' && released.length > 0 && released === happySessionId
+}
+
 /** Is there a wrapper above us that will bring the session back? */
 export function relaunchIsSupervised(env: NodeJS.ProcessEnv = process.env): boolean {
     const path = env[relaunchFileEnv]

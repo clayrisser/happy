@@ -364,6 +364,21 @@ export const MetadataSchema = z.object({
      */
     panePermissionMode: z.string().nullish(),
     /**
+     * When the CLI last relaunched this session and started re-applying the
+     * three picks to a fresh Claude Code (DROVE-232).
+     *
+     * A relaunch -- a flip onto another account, or DROVE-220 picking up a
+     * rebuilt CLI -- brings up a process whose model and effort come from a
+     * config dir rather than from the session. The CLI carries the picks onto
+     * its argv and re-applies through the pane whatever did not land, and it
+     * clears the three pane fields above on its way out because they describe a
+     * process that no longer exists. This is what lets DROVE-217 draw the
+     * controls amber for that gap rather than showing the new default and then
+     * changing under Clay. Bounded by the same give-up window as any other
+     * wait, so a CLI that dies mid-relaunch cannot leave a control amber.
+     */
+    modeReapplyAt: z.number().nullish(),
+    /**
      * Whether Claude Code's Remote Control is on for this pane RIGHT NOW
      * (DROVE-63). Same split as the pair above: `remoteControl` is the request,
      * this is the truth, and the toggle shows THIS so it cannot lie about a tap
