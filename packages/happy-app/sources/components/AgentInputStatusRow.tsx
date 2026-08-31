@@ -7,6 +7,7 @@ import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 import { useSession } from '@/sync/storage';
 import { isLiveStatusFresh, summarizeLiveStatus, type LiveStatusSummary } from '@/utils/liveStatus';
+import { STATUS_ROW_TAP_SLOP_BOTTOM, STATUS_ROW_TAP_SLOP_TOP } from './agentDockLayout';
 import { AnimatedFade } from './AnimatedOverlay';
 import { UsageAccountBarsSheet } from './UsageAccountBarsSheet';
 import type { UsageBarGroup } from './agentInputUsage';
@@ -48,6 +49,24 @@ import { useTickingNow } from './useTickingNow';
 
 /** The working colour, the same blue the thinking dot and the old strip used. */
 const workingColor = '#007AFF';
+
+/**
+ * Touch area around each segment's 11pt text.
+ *
+ * The bottom number is load-bearing (DROVE-144): the dock now sits 16pt above
+ * the screen edge instead of 34, so a segment reaching 14pt below its text
+ * would land inside the home indicator, where it is hard to hit and where a
+ * drifting touch becomes the system swipe. At 3 the touch area stops exactly
+ * on the indicator's top edge. Change it and change
+ * STATUS_ROW_TAP_SLOP_BOTTOM with it: the gap under the row is derived from
+ * it, and agentDockLayout.test.ts asserts the two agree.
+ */
+const segmentHitSlop = {
+    top: STATUS_ROW_TAP_SLOP_TOP,
+    bottom: STATUS_ROW_TAP_SLOP_BOTTOM,
+    left: 6,
+    right: 6,
+} as const;
 
 // Grayscale ring that fills and darkens with context usage. Reads at a
 // glance without colour, sized to sit beside the 11pt status text.
@@ -186,7 +205,7 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
                 onPress={canExpand
                     ? () => setOpenSheet((open) => (open === 'agents' ? null : 'agents'))
                     : undefined}
-                hitSlop={{ top: 12, bottom: 14, left: 6, right: 6 }}
+                hitSlop={segmentHitSlop}
                 accessibilityRole={canExpand ? 'button' : undefined}
                 accessibilityState={canExpand ? { expanded: openSheet === 'agents' } : undefined}
                 accessibilityLabel={`Working: ${summary.headline}`}
@@ -228,7 +247,7 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
                 key="connection"
                 onPress={p.onSessionInfoPress}
                 disabled={!p.onSessionInfoPress}
-                hitSlop={{ top: 12, bottom: 14, left: 6, right: 6 }}
+                hitSlop={segmentHitSlop}
                 style={{ flexDirection: 'row', alignItems: 'center' }}
             >
                 <Text style={{ fontSize: 11, color: connection.color, ...Typography.default() }}>
@@ -264,7 +283,7 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
                     onPress={() => setOpenSheet((open) => (open === 'usage' ? null : 'usage'))}
                     accessibilityRole="button"
                     accessibilityState={{ expanded: openSheet === 'usage' }}
-                    hitSlop={{ top: 12, bottom: 14, left: 6, right: 6 }}
+                    hitSlop={segmentHitSlop}
                     style={({ pressed }) => ({
                         flexDirection: 'row',
                         alignItems: 'center',
@@ -289,7 +308,7 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
             <Pressable
                 key="context"
                 onPress={() => setShowPreciseContext((current) => !current)}
-                hitSlop={{ top: 12, bottom: 14, left: 6, right: 14 }}
+                hitSlop={{ ...segmentHitSlop, right: 14 }}
                 style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}
             >
                 <Text style={{ fontSize: 11, color: context.color, ...Typography.default() }}>
