@@ -23,6 +23,7 @@ import { configuration } from '@/configuration'
 import { projectPath } from '@/projectPath'
 import { logger } from '@/ui/logger'
 import { getOrCreateBridgeSession } from './bridgeSession'
+import { createOriginRegistry } from './originSession'
 import packageJson from '../../package.json'
 
 const DROVER_URL = process.env.DROVER_URL || 'http://127.0.0.1:7970'
@@ -444,6 +445,42 @@ export function pushMetadata(metadata: Metadata | null, ev: DroverEvent): Metada
     return { ...(metadata ?? ({} as Metadata)), summary: { text, updatedAt: Date.now() } }
 }
 
+/** The push kind a bus event sends as. The push TITLE is picked off this. */
+export function pushKindFor(ev: DroverEvent): 'question' | 'todo' | 'permission' {
+    return ev.kind === 'question' ? 'question' : ev.kind === 'todo' ? 'todo' : 'permission'
+}
+
+/**
+ * What a gate push carries, so a tap can land on the gate (DROVE-94).
+ *
+ * `sessionId` is the happy session that RAISED the gate, when the registry
+ * knows it, and absent otherwise. It used to be the bridge session, the one
+ * thread every gate on the machine is mirrored into, so a tap opened that
+ * mirror and not the agent that stopped. With no raising session the app
+ * routes the tap to the inbox with the gate focused, which is why the key is
+ * left off rather than filled with the bridge's id: a wrong session is worse
+ * than no session.
+ *
+ * `gateId` is the bus event id, which is also the request id the card is
+ * filed under on the phone. `kind` is the bus kind, so the phone can tell a
+ * to-do from a prompt before the store has caught up.
+ */
+export function gatePushData(
+    ev: DroverEvent,
+    tool: string,
+    raisingSessionId: string | null,
+): Record<string, string> {
+    return {
+        ...(raisingSessionId ? { sessionId: raisingSessionId } : {}),
+        gateId: ev.id,
+        kind: pushKindFor(ev),
+        requestId: ev.id,
+        tool,
+        type: 'permission_request',
+        provider: 'claude',
+    }
+}
+
 async function resolveOnBus(id: string, body: Record<string, unknown>): Promise<number> {
     try {
         const res = await fetch(`${DROVER_URL}/v1/events/${id}/resolve`, {
@@ -503,6 +540,9 @@ export async function runDroverBridge(): Promise<void> {
     // The event itself, not just its id: answering a question needs the option
     // list to turn the label the app sends back into the id the bus wants.
     const mirrored = new Map<string, DroverEvent>()
+    // Claude session uuid -> the happy session the phone shows it as, for the
+    // push a gate sends (DROVE-94). See originSession.ts for where it reads.
+    const originRegistry = createOriginRegistry()
 
     // App answer -> bus resolve. A 409 means another surface won first; the
     // resolved broadcast below cleans the card up, nothing else to do.
@@ -534,23 +574,27 @@ export async function runDroverBridge(): Promise<void> {
             ...s,
             requests: { ...(s.requests ?? {}), [ev.id]: card },
         }))
-        api.push().sendSessionNotification({
-            // A question is not a permission request, and a to-do is neither.
-            // The push TITLE is picked off this ("Clarification needed" /
-            // "Needs you" / "Permission request"), which on a lock screen is
-            // most of what you get to read.
-            kind: ev.kind === 'question' ? 'question' : ev.kind === 'todo' ? 'todo' : 'permission',
-            // The body is the session summary, and the bridge holds ONE session
-            // for the whole machine, so every push read the same fixed line and
-            // said nothing about what was being asked or by which agent.
-            metadata: pushMetadata(client.getMetadata(), ev),
-            data: {
-                sessionId: client.sessionId,
-                requestId: ev.id,
-                tool: card.tool,
-                type: 'permission_request',
-                provider: 'claude',
-            },
+        // The push waits on one registry read so it can name the session that
+        // RAISED the gate (DROVE-94); the card above does not, so the phone's
+        // list is current whether or not the registry answers. The wake below
+        // does not wait either: the wrist reads the gate off the snapshot, not
+        // off the push.
+        void originRegistry.happySessionIdFor(ev.origin?.sessionId).then((raising) => {
+            if (ev.origin?.sessionId && !raising) {
+                logger.debug(`[drover] no happy session for origin ${ev.origin.sessionId}; push routes to the inbox`)
+            }
+            api.push().sendSessionNotification({
+                // A question is not a permission request, and a to-do is neither.
+                // The push TITLE is picked off this ("Clarification needed" /
+                // "Needs you" / "Permission request"), which on a lock screen is
+                // most of what you get to read.
+                kind: pushKindFor(ev),
+                // The body is the session summary, and the bridge holds ONE session
+                // for the whole machine, so every push read the same fixed line and
+                // said nothing about what was being asked or by which agent.
+                metadata: pushMetadata(client.getMetadata(), ev),
+                data: gatePushData(ev, card.tool, raising),
+            })
         })
         // The alert buzzes the phone; this wakes the app's JS so the WRIST
         // learns about the gate while the app is suspended. Throttling,

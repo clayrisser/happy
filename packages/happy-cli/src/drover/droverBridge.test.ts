@@ -4,6 +4,7 @@ import {
     busResolutionFor,
     completedReasonFor,
     completedStatusFor,
+    gatePushData,
     pushMetadata,
     requestForEvent,
     type DroverEvent,
@@ -422,5 +423,38 @@ describe('the account-login card', () => {
             approved: true,
             updatedInput: { optionId: 'cancel' },
         })).toEqual({ action: 'option', optionId: 'cancel', by: 'happy' })
+    })
+})
+
+describe('the push data', () => {
+    // DROVE-94. The push carried the bridge session, the one thread every
+    // gate on the machine is mirrored into, so a tap opened that mirror and
+    // not the agent that stopped.
+    const raised: DroverEvent = {
+        ...permission,
+        origin: { harness: 'claude-code', sessionId: 'e495e6e8-43f6-4699-a984-ff19f5ab4551', cwd: '/Users/clay/Projects/thing' },
+    }
+
+    it('names the RAISING session when the registry knows it, plus the gate and its kind', () => {
+        expect(gatePushData(raised, 'Bash', 'happy-a')).toEqual({
+            sessionId: 'happy-a',
+            gateId: 'ev-2',
+            kind: 'permission',
+            requestId: 'ev-2',
+            tool: 'Bash',
+            type: 'permission_request',
+            provider: 'claude',
+        })
+    })
+
+    it('leaves sessionId off entirely when the origin is unknown, so the tap goes to the inbox', () => {
+        const data = gatePushData(raised, 'Bash', null)
+        expect(data).not.toHaveProperty('sessionId')
+        expect(data).toMatchObject({ gateId: 'ev-2', kind: 'permission' })
+    })
+
+    it('stamps the bus kind, not the card tool: a to-do is a to-do and a question a question', () => {
+        expect(gatePushData(todo, 'DroverTodo', null).kind).toBe('todo')
+        expect(gatePushData(question, 'AskUserQuestion', 'happy-a').kind).toBe('question')
     })
 })
