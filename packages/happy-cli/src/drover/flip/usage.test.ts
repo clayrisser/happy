@@ -96,9 +96,9 @@ describe('the usage snapshot', () => {
         expect(jam.cooling).toBeNull()
         expect(jam.fetchedAt).toBe(1_700_000_000_000)
         expect(jam.limits).toEqual([
-            { kind: 'session', percent: 49, resetsAt: Date.parse('2026-08-30T20:20:00.211Z'), scope: null, family: null },
-            { kind: 'weekly_all', percent: 23, resetsAt: Date.parse('2026-09-05T19:00:00.211Z'), scope: null, family: null },
-            { kind: 'weekly_scoped', percent: 39, resetsAt: Date.parse('2026-09-05T19:00:00.211Z'), scope: 'Fable', family: 'fable' },
+            { kind: 'session', percent: 49, resetsAt: Date.parse('2026-08-30T20:20:00.211Z'), scope: null, family: null, usable: true },
+            { kind: 'weekly_all', percent: 23, resetsAt: Date.parse('2026-09-05T19:00:00.211Z'), scope: null, family: null, usable: true },
+            { kind: 'weekly_scoped', percent: 39, resetsAt: Date.parse('2026-09-05T19:00:00.211Z'), scope: 'Fable', family: 'fable', usable: true },
         ])
 
         const main = snap.accounts[0]
@@ -192,7 +192,9 @@ describe('the usage snapshot', () => {
             { kind: 'session', percent: false, resets_at: '2026-08-30T21:00:00+00:00', scope: null },
         ] as unknown as CacheRow[])
         const { usageSnapshot } = await usageModule()
-        const [main, spare] = usageSnapshot('main').accounts
+        // Inside the window those rows describe: this test is about parsing a
+        // percent, not about a reading whose window has since reset (DROVE-204).
+        const [main, spare] = usageSnapshot('main', Date.parse('2026-08-30T18:00:00Z')).accounts
         expect(main.limits).toHaveLength(1)
         expect(main.headroom).toBe(100)
         expect(spare.limits).toEqual([])
@@ -222,6 +224,7 @@ describe('the usage reporter', () => {
         const published: DroverUsage[] = []
         const { UsageReporter } = await usageModule()
         const reporter = new UsageReporter({
+            sweep: null,
             current: () => 'main',
             publish: (u) => published.push(u),
             now: () => clock,
@@ -259,7 +262,7 @@ describe('the usage reporter', () => {
         let where = 'main'
         const published: DroverUsage[] = []
         const { UsageReporter } = await usageModule()
-        const reporter = new UsageReporter({ current: () => where, publish: (u) => published.push(u) })
+        const reporter = new UsageReporter({ sweep: null, current: () => where, publish: (u) => published.push(u) })
         reporter.tick()
         where = 'jamrizzi'
         expect(reporter.tick()).toBe(true)
@@ -282,6 +285,7 @@ describe('the usage reporter', () => {
         const published: DroverUsage[] = []
         const { UsageReporter } = await usageModule()
         const reporter = new UsageReporter({
+            sweep: null,
             current: () => 'bitspur.com',
             family: () => family,
             publish: (u) => published.push(u),
@@ -299,7 +303,7 @@ describe('the usage reporter', () => {
         let clock = Date.parse('2026-08-30T18:00:00Z')
         const published: DroverUsage[] = []
         const { UsageReporter } = await usageModule()
-        const reporter = new UsageReporter({ current: () => 'main', publish: (u) => published.push(u), now: () => clock })
+        const reporter = new UsageReporter({ sweep: null, current: () => 'main', publish: (u) => published.push(u), now: () => clock })
         reporter.tick()
         clock += 4 * 60_000
         expect(reporter.tick()).toBe(false)
@@ -312,9 +316,9 @@ describe('the usage reporter', () => {
         const dirs = writeAccounts(['main'])
         const published: DroverUsage[] = []
         const { UsageReporter } = await usageModule()
-        const reporter = new UsageReporter({ current: () => 'main', publish: (u) => published.push(u), settleMs: 20 })
+        const reporter = new UsageReporter({ sweep: null, current: () => 'main', publish: (u) => published.push(u), settleMs: 20 })
         reporter.tick()
-        writeCache(dirs.main, [{ kind: 'session', percent: 77, resets_at: '2026-08-30T21:00:00+00:00', scope: null }])
+        writeCache(dirs.main, [{ kind: 'session', percent: 77, resets_at: '2099-01-01T00:00:00+00:00', scope: null }])
         touchLater(join(dirs.main, '.claude.json'), 5)
         for (let i = 0; i < 25; i++) reporter.refresh()
         await new Promise((r) => setTimeout(r, 80))
@@ -392,12 +396,12 @@ describe('headroomOf', () => {
     it('is the fullest applying window, and DROVE-187 can ask it directly', async () => {
         const { headroomOf } = await usageModule()
         const { modelDemand, unknownModel, anyModel } = await import('./accounts')
-        expect(headroomOf(rows, modelDemand('opus'))).toBe(42)
-        expect(headroomOf(rows, modelDemand('fable'))).toBe(0)
-        expect(headroomOf(rows, unknownModel)).toBe(0)
+        expect(headroomOf(rows, modelDemand('opus'), 0)).toBe(42)
+        expect(headroomOf(rows, modelDemand('fable'), 0)).toBe(0)
+        expect(headroomOf(rows, unknownModel, 0)).toBe(0)
         // "is there ANY model left here", the last look before parking: only
         // the unscoped windows count.
-        expect(headroomOf(rows, anyModel)).toBe(42)
+        expect(headroomOf(rows, anyModel, 0)).toBe(42)
     })
 
     it('clamps a cache that overshoots and says nothing with no rows', async () => {
@@ -411,5 +415,97 @@ describe('headroomOf', () => {
         const { modelDemand } = await import('./accounts')
         const odd = [{ kind: 'weekly_scoped', percent: 100, resetsAt: null, scope: 'surface:web', family: null }]
         expect(headroomOf(odd, modelDemand('opus'))).toBe(0)
+    })
+})
+
+/**
+ * A reading older than the window it describes is UNKNOWN, never good news
+ * (DROVE-204).
+ *
+ * Clay's sheet, on five accounts he knew were spent: four marked `stale`,
+ * several reading 99% session left. The 99% was real arithmetic on a real row
+ * — a `session` row at 1% whose five-hour window had reset three hours
+ * earlier. The number described a window that no longer existed.
+ *
+ * So the rule is not about age, it is about the row's own reset. And it has to
+ * bite HEADROOM, not just the label, because headroom is what the flip and
+ * DROVE-187's downgrade choose on: "nobody looked" must come out as null, and
+ * every reader treats null as not available.
+ */
+describe('an expired window', () => {
+    const capturedAt = Date.parse('2026-08-31T18:00:00Z')
+    // Session reset two hours before anyone looked; the week is still open.
+    const expiredSession = {
+        kind: 'session', percent: 1, resetsAt: Date.parse('2026-08-31T16:00:00Z'), scope: null, family: null,
+    }
+    const openWeek = {
+        kind: 'weekly_all', percent: 58, resetsAt: Date.parse('2026-09-05T19:00:00Z'), scope: null, family: null,
+    }
+
+    it('is unusable, and a window still open is not', async () => {
+        const { rowUsable } = await usageModule()
+        expect(rowUsable(expiredSession, capturedAt)).toBe(false)
+        expect(rowUsable(openWeek, capturedAt)).toBe(true)
+        // No reset on the row says nothing either way, and says it the same
+        // one-way readUsageExhaustion reads the same field.
+        expect(rowUsable({ resetsAt: null }, capturedAt)).toBe(true)
+    })
+
+    it('makes headroom UNKNOWN rather than the fullest window that survived', async () => {
+        const { headroomOf } = await usageModule()
+        // 42 is what the open week alone would say, and saying it would send a
+        // flip onto an account whose session window nobody has measured.
+        expect(headroomOf([expiredSession, openWeek], undefined, capturedAt)).toBeNull()
+        expect(headroomOf([openWeek], undefined, capturedAt)).toBe(42)
+    })
+
+    it('stops counting once the model in use is not in that window', async () => {
+        const { headroomOf } = await usageModule()
+        const { modelDemand } = await import('./accounts')
+        const expiredFable = {
+            kind: 'weekly_scoped',
+            percent: 100,
+            resetsAt: Date.parse('2026-08-31T16:00:00Z'),
+            scope: 'Fable',
+            family: 'fable',
+        }
+        // An Opus session is not in Fable's week, so an expired Fable row is
+        // not a hole in what we know about Opus (DROVE-173's rule, unchanged).
+        expect(headroomOf([openWeek, expiredFable], modelDemand('opus'), capturedAt)).toBe(42)
+        expect(headroomOf([openWeek, expiredFable], modelDemand('fable'), capturedAt)).toBeNull()
+    })
+
+    it('marks the row on the wire and empties the account headroom in a snapshot', async () => {
+        const dirs = writeAccounts(['risserproperties'])
+        writeCache(dirs.risserproperties, [
+            { kind: 'session', percent: 1, resets_at: '2026-08-31T16:00:00+00:00', scope: null },
+            { kind: 'weekly_all', percent: 58, resets_at: '2026-09-05T19:00:00+00:00', scope: null },
+        ])
+        const { usageSnapshot } = await usageModule()
+        const account = usageSnapshot('risserproperties', capturedAt).accounts[0]
+        expect(account.limits.map((r) => r.usable)).toEqual([false, true])
+        // The row is still SENT. A limit missing from the one screen Clay is
+        // looking at is the older bug; the app draws it with no bar instead.
+        expect(account.limits).toHaveLength(2)
+        expect(account.headroom).toBeNull()
+    })
+
+    it('leaves a reading that is merely old alone', async () => {
+        const dirs = writeAccounts(['jamrizzi'])
+        writeCache(
+            dirs.jamrizzi,
+            [
+                { kind: 'session', percent: 1, resets_at: '2026-08-31T21:00:00+00:00', scope: null },
+                { kind: 'weekly_all', percent: 58, resets_at: '2026-09-05T19:00:00+00:00', scope: null },
+            ],
+            capturedAt - 3 * 60 * 60_000,
+        )
+        const { usageSnapshot } = await usageModule()
+        const account = usageSnapshot('jamrizzi', capturedAt).accounts[0]
+        // Three hours old and every window still open: the figure is a floor
+        // rather than a fiction, so it keeps its number and the sheet keeps
+        // saying `stale` over it (DROVE-173).
+        expect(account.limits.every((r) => r.usable)).toBe(true)
+        expect(account.headroom).toBe(42)
     })
 })

@@ -26,6 +26,16 @@ export type DroverUsageRowLike = {
     scope?: string | null;
     /** That scope reduced to a family ("fable"); null when unscoped or unreadable. */
     family?: string | null;
+    /**
+     * Does this row still describe a window that EXISTS? (DROVE-204)
+     *
+     * The CLI's verdict, made against the real clock at the moment it read the
+     * cache. False means the window this counted has already reset, so the
+     * percent describes something that was thrown away: no bar, no number.
+     * Absent from a snapshot an older CLI wrote, and absent reads as usable —
+     * which is what that CLI meant.
+     */
+    usable?: boolean | null;
 };
 
 export type DroverUsageAccountLike = {
@@ -115,6 +125,37 @@ function rows(account: Pick<DroverUsageAccountLike, 'limits'> | null | undefined
 }
 
 /**
+ * Is this row's number about a window that still exists? (DROVE-204)
+ *
+ * The CLI says so on the wire, because it had the real clock when it read the
+ * cache. Without that field — an older CLI — the same question is asked of the
+ * snapshot's own `capturedAt`, which is the only clock this side can compare
+ * against honestly (see droverAccountStale for why not the phone's).
+ *
+ * This is the rule behind "99% session left" on an account that was refusing
+ * turns: the row was real, its five-hour window had reset three hours before
+ * the snapshot, and nothing had been back to look.
+ */
+export function droverRowUsable(
+    row: Pick<DroverUsageRowLike, 'resetsAt' | 'usable'>,
+    capturedAt: number,
+): boolean {
+    if (typeof row.usable === 'boolean') return row.usable;
+    const resets = row.resetsAt;
+    if (typeof resets !== 'number' || !Number.isFinite(resets)) return true;
+    if (!Number.isFinite(capturedAt)) return true;
+    return resets > capturedAt;
+}
+
+/** Does this account carry a reading whose window has already reset? */
+export function droverAccountExpired(
+    account: Pick<DroverUsageAccountLike, 'limits'> | null | undefined,
+    capturedAt: number,
+): boolean {
+    return rows(account).some((row) => !droverRowUsable(row, capturedAt));
+}
+
+/**
  * The account the session is on. The `current` flag is what the CLI says at
  * the moment of the snapshot; `droverAccount` is the older stamp and is only
  * the fallback for a snapshot that marked nothing.
@@ -174,12 +215,19 @@ export function usageLimitsFromDroverUsage(
 ): UsageLimitsLike {
     const account = currentDroverUsageAccount(usage, droverAccount);
     if (!usage || !account) return null;
-    const windows = droverAccountWindows(account).map((w) => ({
-        id: w.id,
-        ...(w.family ? { label: w.family } : {}),
-        utilization: w.utilization,
-        resetsAt: w.resetsAt,
-    }));
+    // A window that had already reset is DROPPED here rather than passed on
+    // with its number (DROVE-204). This feeds the one figure on the composer
+    // strip, which has no room to explain itself; a strip with no week figure
+    // reads as "not known", a strip saying 99% on a window that reset three
+    // hours ago reads as a promise.
+    const windows = droverAccountWindows(account, usage.capturedAt)
+        .filter((w) => w.usable)
+        .map((w) => ({
+            id: w.id,
+            ...(w.family ? { label: w.family } : {}),
+            utilization: w.utilization,
+            resetsAt: w.resetsAt,
+        }));
     return { capturedAt: usage.capturedAt, windows };
 }
 
@@ -191,6 +239,12 @@ export type DroverUsageWindow = {
     /** Percent USED, the wire's direction. */
     utilization: number;
     resetsAt: number | null;
+    /**
+     * False when this window had already reset when the snapshot was taken
+     * (DROVE-204). The row is still drawn, and drawn with no bar and no
+     * number: the utilization above describes a window that no longer exists.
+     */
+    usable: boolean;
 };
 
 /**
@@ -201,7 +255,10 @@ export type DroverUsageWindow = {
  * mapping that used to serve the current account alone has to work on any of
  * them. A row this cannot place is still passed through under its own kind.
  */
-export function droverAccountWindows(account: DroverUsageAccountLike | null | undefined): DroverUsageWindow[] {
+export function droverAccountWindows(
+    account: DroverUsageAccountLike | null | undefined,
+    capturedAt = Number.NaN,
+): DroverUsageWindow[] {
     return rows(account).map((row) => ({
         // The one spelling of a window's id (DROVE-131): the wrist's binding
         // row and the strip's bars name a window with this same string.
@@ -209,6 +266,7 @@ export function droverAccountWindows(account: DroverUsageAccountLike | null | un
         family: row.scope || row.family ? droverFamilyLabel(row) : null,
         utilization: row.percent,
         resetsAt: row.resetsAt ?? null,
+        usable: droverRowUsable(row, capturedAt),
     }));
 }
 
@@ -242,6 +300,12 @@ export type DroverOtherAccountRow = {
     loggedIn: boolean;
     /** The reading is old enough to say so rather than show as current (DROVE-173). */
     stale?: boolean;
+    /**
+     * At least one of this account's windows had already reset (DROVE-204), so
+     * there is no headroom figure and the heading has to say WHY there is none
+     * — "not measured" would be a different, milder claim.
+     */
+    expired?: boolean;
     /** Percent left, the picker's own number; null when never measured. */
     headroom: number | null;
     /** When it is back, when it is out right now. */
@@ -280,6 +344,7 @@ function toAccountRow(a: DroverUsageAccountLike, capturedAt = Number.NaN): Drove
         name: a.name,
         loggedIn: a.loggedIn !== false,
         ...(droverAccountStale(a, capturedAt) ? { stale: true } : {}),
+        ...(droverAccountExpired(a, capturedAt) ? { expired: true } : {}),
         headroom: typeof a.headroom === 'number' && Number.isFinite(a.headroom)
             ? Math.round(Math.min(100, Math.max(0, a.headroom)))
             : null,
@@ -315,7 +380,7 @@ export function droverAccountsUsage(usage: DroverUsageLike, droverAccount?: stri
     return ordered.map((a) => ({
         ...toAccountRow(a, usage.capturedAt),
         current: a === current,
-        windows: droverAccountWindows(a),
+        windows: droverAccountWindows(a, usage.capturedAt),
     }));
 }
 

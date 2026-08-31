@@ -16,6 +16,7 @@ import {
     droverAccountStale,
     droverOtherAccounts,
     droverRowApplies,
+    droverRowUsable,
     droverStaleAfterMs,
     droverWindowId,
     usageLimitsFromDroverUsage,
@@ -176,9 +177,9 @@ describe('droverAccountsUsage', () => {
             .toEqual([['jamrizzi', true], ['main', false], ['bitspur.com', false], ['spare', false]]);
         // main's windows, the ones the quota sheet had no way to reach before.
         expect(accounts[1].windows).toEqual([
-            { id: 'five_hour', family: null, utilization: 4, resetsAt: 1_500 },
-            { id: 'seven_day', family: null, utilization: 100, resetsAt: sep3 },
-            { id: 'seven_day_fable', family: 'Fable', utilization: 100, resetsAt: sep3 },
+            { id: 'five_hour', family: null, utilization: 4, resetsAt: 1_500, usable: true },
+            { id: 'seven_day', family: null, utilization: 100, resetsAt: sep3, usable: true },
+            { id: 'seven_day_fable', family: 'Fable', utilization: 100, resetsAt: sep3, usable: true },
         ]);
         // An account with nothing measured is a row with no windows, not a
         // missing row.
@@ -267,5 +268,79 @@ describe('droverAccountStale', () => {
         expect(droverAccountStale({ fetchedAt: null, limits: [] }, captured)).toBe(false);
         expect(droverAccountStale(null, captured)).toBe(false);
         expect(droverAccountStale({ fetchedAt: 1, limits: [] }, Number.NaN)).toBe(false);
+    });
+});
+
+/**
+ * A reading older than the window it describes is UNKNOWN (DROVE-204).
+ *
+ * Clay's screenshot: four of five accounts marked `stale`, several reading 99%
+ * session left, on accounts he knew were exhausted. The 99% was a real row —
+ * a `session` window at 1% whose five hours had ended before the snapshot was
+ * taken. The label was right and not enough; a bar and a percentage beside the
+ * word `stale` still reads as data.
+ */
+describe('droverRowUsable', () => {
+    const captured = 10_000;
+
+    it('takes the CLI at its word when the wire carries one', () => {
+        // The CLI had the real clock when it read the cache; the phone has
+        // only capturedAt. So the field wins wherever it exists.
+        expect(droverRowUsable({ resetsAt: captured + 1, usable: false }, captured)).toBe(false);
+        expect(droverRowUsable({ resetsAt: captured - 1, usable: true }, captured)).toBe(true);
+    });
+
+    it('falls back to the row\'s own reset for a snapshot from an older CLI', () => {
+        expect(droverRowUsable({ resetsAt: captured - 1 }, captured)).toBe(false);
+        expect(droverRowUsable({ resetsAt: captured + 1 }, captured)).toBe(true);
+        // No reset says nothing either way, and a snapshot with no clock in it
+        // must not turn every row into a hole.
+        expect(droverRowUsable({ resetsAt: null }, captured)).toBe(true);
+        expect(droverRowUsable({ resetsAt: 1 }, Number.NaN)).toBe(true);
+    });
+});
+
+describe('an account carrying an expired window', () => {
+    const captured = 10_000;
+    const expired: DroverUsageLike = {
+        capturedAt: captured,
+        modelFamily: null,
+        accounts: [{
+            name: 'risserproperties',
+            current: true,
+            loggedIn: true,
+            fetchedAt: captured - 41 * 60 * 60_000,
+            headroom: null,
+            cooling: null,
+            limits: [
+                // The measured shape: a session window that reset hours ago,
+                // and a week that has not.
+                { kind: 'session', percent: 1, resetsAt: captured - 1, scope: null, family: null, usable: false },
+                { kind: 'weekly_all', percent: 58, resetsAt: captured + 1, scope: null, family: null, usable: true },
+            ],
+        }],
+    };
+
+    it('is marked expired, on top of stale', () => {
+        const [row] = droverAccountsUsage(expired);
+        expect(row.expired).toBe(true);
+        expect(row.stale).toBe(true);
+    });
+
+    it('keeps the window as a row and marks it unusable, rather than dropping it', () => {
+        // A limit missing from the one screen Clay is looking at is the older
+        // bug. The row stays; it loses its figures.
+        const [row] = droverAccountsUsage(expired);
+        expect(row.windows.map((w) => [w.id, w.usable])).toEqual([
+            ['five_hour', false],
+            ['seven_day', true],
+        ]);
+    });
+
+    it('withholds the expired window from the composer strip entirely', () => {
+        // The strip has room for one figure and no room to explain itself, so
+        // an expired window is not passed on with its number.
+        const limits = usageLimitsFromDroverUsage(expired);
+        expect(getUsageLimitRows(limits).map((r) => r.id)).toEqual(['seven_day']);
     });
 });

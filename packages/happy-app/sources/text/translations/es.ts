@@ -575,6 +575,14 @@ export const es: TranslationStructure = {
             unmeasured: 'sin medir',
             noLogin: 'sin sesión',
             stale: 'stale',
+            /**
+             * A window whose own reset has already passed (DROVE-204). The row
+             * keeps its slot and loses its bar and its number, because the
+             * honest answer is that nobody knows what is in that window now.
+             */
+            windowReset: 'window reset',
+            /** Said on the account heading when no figure survives that rule. */
+            headroomUnknown: 'headroom unknown',
             barsShow: ({ direction }: { direction: string }) => `Bars show ${direction}`,
             zoneNote: ({ zone }: { zone: string }) => `Times in ${zone}`,
             forModel: ({ family }: { family: string }) => `headroom for ${family}`,

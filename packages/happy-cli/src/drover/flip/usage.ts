@@ -39,6 +39,7 @@ import {
     type UsageLimitRow,
 } from './accounts'
 import { familyOfDisplayName } from './limits'
+import { sweepUsage } from './refresh'
 
 /**
  * One usage row, reduced to what a phone can render.
@@ -62,6 +63,42 @@ export interface UsageRowSnapshot {
     resetsAt: number | null
     scope: string | null
     family: string | null
+    /**
+     * Does this row still describe a window that EXISTS? (DROVE-204)
+     *
+     * False once the window it measures has already reset, at which point the
+     * percent is not merely stale, it is meaningless: the thing it counted was
+     * emptied and refilled by an unknown amount while nobody was looking. So
+     * the app draws no bar and no number for such a row, and headroom for the
+     * account is UNKNOWN rather than generous.
+     *
+     * Carried explicitly rather than left to be re-derived on the phone. The
+     * app has only the snapshot's `capturedAt` to compare against; the CLI has
+     * the real clock and the row. Optional because a snapshot from an older
+     * CLI does not carry it, and absent is read as usable — which is exactly
+     * what that CLI meant.
+     */
+    usable?: boolean
+}
+
+/**
+ * Is this reading still about a window that exists? (DROVE-204)
+ *
+ * A row carries the moment its own window resets. Once that moment has passed
+ * the number in front of it describes a window that has since been thrown away
+ * — Clay's sheet said "99% session left" off a five-hour window that had reset
+ * three hours earlier, on accounts that were refusing turns.
+ *
+ * `resets_at` is the evidence rather than the age, because it is exact. A
+ * fifteen-minute-old reading of a window that ended fourteen minutes ago is
+ * useless; a two-hour-old reading of a week is not. A row with no parseable
+ * reset says nothing either way and is left usable, the same one-way reading
+ * readUsageExhaustion takes of the same field.
+ */
+export function rowUsable(row: Pick<UsageRowSnapshot, 'resetsAt'>, now: number): boolean {
+    const resets = row.resetsAt
+    if (typeof resets !== 'number' || !Number.isFinite(resets)) return true
+    return resets > now
 }
 
 export interface AccountUsageSnapshot {
@@ -134,12 +171,34 @@ export function rowApplies(row: UsageRowSnapshot, demand: ModelDemand): boolean 
  * question (DROVE-187): one function, so the sheet's number and the decision
  * the flip makes on it cannot disagree.
  */
-export function headroomOf(rows: UsageRowSnapshot[], demand: ModelDemand = unknownModel): number | null {
+export function headroomOf(
+    rows: UsageRowSnapshot[],
+    demand: ModelDemand = unknownModel,
+    now?: number,
+): number | null {
     const applies = rows.filter((r) => rowApplies(r, demand))
     if (!applies.length) return null
+    // UNKNOWN BEATS OPTIMISM (DROVE-204). One window whose reading has expired
+    // is enough to make the whole number unsafe, because that window could be
+    // the one that is full — and headroom is what a flip and DROVE-187's
+    // downgrade choose on. "Nobody looked" must never come out as "there is
+    // room here"; it comes out as null, and every reader treats null as not
+    // available.
+    const unusable = applies.some((r) => !usableRow(r, now))
+    if (unusable) return null
     // Clamped to the scale the way the table clamps it, so a cache that says
     // 120% reads as 0 left in both places.
     return Math.min(100, Math.max(0, 100 - Math.max(...applies.map((r) => r.percent))))
+}
+
+/**
+ * The row's own verdict when the snapshot carries one, recomputed against
+ * `now` when it does not. Keeps headroomOf callable with bare rows in a test
+ * and with wire rows in production without two rules.
+ */
+function usableRow(row: UsageRowSnapshot, now?: number): boolean {
+    if (typeof row.usable === 'boolean') return row.usable
+    return rowUsable(row, now ?? Date.now())
 }
 
 /**
@@ -150,7 +209,7 @@ export function headroomOf(rows: UsageRowSnapshot[], demand: ModelDemand = unkno
  * round and read null as 0, so on a malformed cache the app's headroom could
  * differ from the table's. Same rule, same number, in both places.
  */
-function rowSnapshot(row: UsageLimitRow): UsageRowSnapshot | null {
+function rowSnapshot(row: UsageLimitRow, now: number): UsageRowSnapshot | null {
     const raw = row?.percent
     // jq's `//` treats false like null, so the shell drops both.
     if (raw === undefined || raw === null || raw === false) return null
@@ -164,12 +223,14 @@ function rowSnapshot(row: UsageLimitRow): UsageRowSnapshot | null {
     const scopeName = scope?.surface != null
         ? `surface:${String(scope.surface)}`
         : typeof display === 'string' && display ? display : null
+    const resetsAt = Number.isFinite(resets) ? resets : null
     return {
         kind: String(row?.kind ?? 'usage'),
         percent,
-        resetsAt: Number.isFinite(resets) ? resets : null,
+        resetsAt,
         scope: scopeName,
         family: scope?.surface == null ? familyOfDisplayName(display) ?? null : null,
+        usable: rowUsable({ resetsAt }, now),
     }
 }
 
@@ -206,7 +267,9 @@ function accountSnapshot(
     demand: ModelDemand,
 ): AccountUsageSnapshot {
     const cache = readUsageCache(a)
-    const limits = (cache?.rows ?? []).map(rowSnapshot).filter((r): r is UsageRowSnapshot => r !== null)
+    const limits = (cache?.rows ?? [])
+        .map((row) => rowSnapshot(row, now))
+        .filter((r): r is UsageRowSnapshot => r !== null)
     const cooling = coolingState(a, ledger, now)
     const family = cooling.until > 0 ? coolingFamilyOf(limits, ledger, a.name, now) : undefined
     return {
@@ -215,9 +278,10 @@ function accountSnapshot(
         loggedIn: isLoggedIn(a),
         fetchedAt: cache?.fetchedAt ?? null,
         // 100 minus the fullest row that APPLIES to the model this session is
-        // running (DROVE-173). With no model known that is every row, which is
-        // exactly what it was before.
-        headroom: headroomOf(limits, demand),
+        // running (DROVE-173), and null when any of those rows has expired
+        // (DROVE-204). With no model known that is every row, which is exactly
+        // what it was before.
+        headroom: headroomOf(limits, demand, now),
         cooling: cooling.until > 0
             ? { until: cooling.until, reason: cooling.reason, ...(family ? { family } : {}) }
             : null,
@@ -263,6 +327,23 @@ const pollMs = 30_000
  * stat pass, not one per line.
  */
 const settleMs = 1_500
+/**
+ * How often the reporter goes and LOOKS, rather than reading what is on disk
+ * (DROVE-204).
+ *
+ * Ten minutes, and the arithmetic is the whole justification. A sweep costs
+ * one `claude -p /usage` per account that needs one — about five seconds of a
+ * background process, no tokens, no model call — and it skips any account
+ * refreshed in the last five minutes, which is Claude Code's own rewrite
+ * floor. Five accounts is therefore at most twenty-five seconds of subprocess
+ * per ten minutes, and in the steady state far less, because an account only
+ * qualifies once its reading has expired or passed the half-hour mark.
+ *
+ * Ten minutes also puts a ceiling on how wrong the flip can be: every account's
+ * reading is at most that old when the picker reads it, against the 41 hours
+ * measured on risserproperties before this existed.
+ */
+const sweepMs = 10 * 60_000
 
 export interface UsageReporterOptions {
     /** The account this session is on, asked fresh each time — a flip moves it. */
@@ -279,6 +360,13 @@ export interface UsageReporterOptions {
     now?: () => number
     pollMs?: number
     settleMs?: number
+    /**
+     * Go and look at accounts nobody has looked at (DROVE-204). Overridden in
+     * tests, and set to null to turn the sweep off entirely — a session under
+     * test must not spawn five Claude Codes.
+     */
+    sweep?: ((now: number) => Promise<string[]>) | null
+    sweepMs?: number
 }
 
 /**
@@ -297,10 +385,14 @@ export class UsageReporter {
     private readonly now: () => number
     private readonly pollEvery: number
     private readonly settle: number
+    private readonly sweeper: ((now: number) => Promise<string[]>) | null
+    private readonly sweepEvery: number
 
     private stamp = ''
     private signature = ''
     private publishedAt = 0
+    private sweptAt = 0
+    private sweeping = false
     private settleTimer: NodeJS.Timeout | null = null
     private pollTimer: NodeJS.Timeout | null = null
     private stopped = false
@@ -312,6 +404,16 @@ export class UsageReporter {
         this.now = opts.now ?? Date.now
         this.pollEvery = opts.pollMs ?? pollMs
         this.settle = opts.settleMs ?? settleMs
+        // DROVER_USAGE_REFRESH=0 turns the going-and-looking off and leaves
+        // the reading-what-is-on-disk on. One switch, because the sweep spawns
+        // processes on Clay's laptop and a feature that spawns processes needs
+        // an off.
+        this.sweeper = opts.sweep === undefined
+            ? (process.env.DROVER_USAGE_REFRESH === '0'
+                ? null
+                : (now: number) => sweepUsage({ now: () => now }))
+            : opts.sweep
+        this.sweepEvery = opts.sweepMs ?? sweepMs
     }
 
     start(): void {
@@ -349,6 +451,7 @@ export class UsageReporter {
         if (this.stopped) return false
         try {
             const now = this.now()
+            this.maybeSweep(now)
             const stale = now - this.publishedAt >= refreshIntervalMs
             const stamp = this.stampOf()
             if (stamp === this.stamp && !stale) return false
@@ -366,6 +469,34 @@ export class UsageReporter {
             logger.debug('[flip] usage snapshot failed (ignored)', err)
             return false
         }
+    }
+
+    /**
+     * Start a sweep if one is due, and never wait for it (DROVE-204).
+     *
+     * `tick` is synchronous on purpose — a flip calls it and then relaunches —
+     * so the sweep cannot be awaited here. It is fired and forgotten; when it
+     * lands, the account config files have moved and the very next poll sees
+     * new mtimes and publishes. One at a time, because five Claude Code
+     * startups on top of each other is a stall Clay would feel.
+     */
+    private maybeSweep(now: number): void {
+        if (!this.sweeper || this.sweeping) return
+        if (this.sweptAt !== 0 && now - this.sweptAt < this.sweepEvery) return
+        this.sweeping = true
+        this.sweptAt = now
+        void this.sweeper(now)
+            .then((names) => {
+                if (names.length) logger.debug('[flip] refreshed usage for ' + names.join(', '))
+                // Look again straight away: the sweep is the one thing that
+                // MOVED a cache file, so waiting a full poll to notice would
+                // leave the phone on the numbers we just replaced.
+                if (!this.stopped) this.tick()
+            })
+            .catch((err) => logger.debug('[flip] usage sweep failed (ignored)', err))
+            .finally(() => {
+                this.sweeping = false
+            })
     }
 
     /** What could have changed the answer, cheaply: file mtimes and who we are. */

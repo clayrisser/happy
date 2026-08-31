@@ -284,9 +284,19 @@ export function sameLoginAs(a: DroverAccount, accounts: DroverAccount[] = readAc
 //
 // There is no quota API to call here and nothing in the drover talks to
 // Anthropic. But Claude Code caches its OWN usage response in each account's
-// `.claude.json` under `cachedUsageUtilization`, and refreshes it as every
-// session starts. That is a real per-account signal sitting on disk, so it is
-// read rather than guessed at.
+// `.claude.json` under `cachedUsageUtilization`. That is a real per-account
+// signal sitting on disk, so it is read rather than guessed at.
+//
+// WHAT REFRESHES IT — corrected 2026-08-31 (DROVE-204). This used to say
+// "refreshes it as every session starts", which is not true of 2.1.251, and
+// believing it is how an account came to carry a 41-hour-old reading while the
+// sheet showed 11% headroom on a login that was refusing turns. Measured, not
+// assumed: `claude doctor`, `claude -p '<prompt>'` and a full interactive
+// session with a turn in it all leave the cache exactly as they found it. Only
+// asking for the usage display writes it, and the cheapest way to ask is
+// `claude -p '/usage'` — zero tokens, no model call, about five seconds. So
+// nothing refreshes this on its own, and flip/refresh.ts is what goes and
+// looks.
 
 export interface UsageExhaustion {
     /** Epoch ms the last of the maxed-out limits resets. */

@@ -32,6 +32,7 @@ import {
     droverAccountsUsage,
     droverFamilyLabel,
     droverRowApplies,
+    droverRowUsable,
     droverWindowId,
     usageLimitsFromDroverUsage,
     type DroverAccountUsageRow,
@@ -339,7 +340,10 @@ export function usageAccountBarRow(a: DroverOtherAccountRow, showRemaining: bool
             name: a.name,
             percentLeft: null,
             percentText: null,
-            trailing: back || t('agentInput.usagePopup.unmeasured'),
+            trailing: back
+                || (a.expired
+                    ? t('agentInput.usagePopup.windowReset')
+                    : t('agentInput.usagePopup.unmeasured')),
         });
     }
     const percent = showRemaining ? a.headroom : 100 - a.headroom;
@@ -385,6 +389,11 @@ export function usageMeasures(accounts: DroverAccountUsageRow[]): UsageMeasure[]
 export function usageAccountGroupTitle(a: DroverOtherAccountRow, showRemaining: boolean): string {
     if (!a.name) return '';
     if (!a.loggedIn) return `${a.name} · ${t('agentInput.usagePopup.noLogin')}`;
+    // Two different nothings, and saying the wrong one is the bug (DROVE-204).
+    // "not measured" means nobody ever asked. This means somebody asked, and
+    // the answer has since expired — the account may be wide open or entirely
+    // spent, and the heading must not imply either.
+    if (a.headroom == null && a.expired) return `${a.name} · ${t('agentInput.usagePopup.headroomUnknown')}`;
     if (a.headroom == null) return `${a.name} · ${t('agentInput.usagePopup.unmeasured')}`;
     return droverAccountHeadroomLabel(a, showRemaining);
 }
@@ -404,16 +413,23 @@ export function usageAccountBarGroup(
     showRemaining: boolean,
     override?: UsageLimitsLike,
 ): UsageBarGroup {
-    const byId = new Map<string, { utilization: number | null; resetsAt: number | null }>();
+    const byId = new Map<string, { utilization: number | null; resetsAt: number | null; usable: boolean }>();
     for (const window of account.windows) {
-        byId.set(window.id, { utilization: window.utilization, resetsAt: window.resetsAt });
+        byId.set(window.id, { utilization: window.utilization, resetsAt: window.resetsAt, usable: window.usable });
     }
+    // The SDK stream is live by definition, so its windows are always usable.
     for (const row of getUsageLimitRows(override ?? null)) {
-        byId.set(row.id, { utilization: row.utilization, resetsAt: row.resetsAt });
+        byId.set(row.id, { utilization: row.utilization, resetsAt: row.resetsAt, usable: true });
     }
     const rows = measures.map((measure) => {
         const window = byId.get(measure.id);
-        const utilization = window?.utilization ?? null;
+        // A window that had already reset when this was captured keeps its row
+        // and loses its figures (DROVE-204). DROVE-173's `stale` label was the
+        // right instinct and not enough: a bar and a percentage next to the
+        // word `stale` still reads as data. The trailing text is the reason
+        // there is nothing to read.
+        const expired = window != null && !window.usable;
+        const utilization = expired ? null : window?.utilization ?? null;
         // `utilization` is percent USED on the wire; the track fills with what
         // is left of it either way, only the printed number follows the setting.
         const percent = utilization == null ? null : getUsageLimitDisplayPercentage(utilization, showRemaining);
@@ -422,9 +438,11 @@ export function usageAccountBarGroup(
             name: measure.label,
             percentLeft: utilization == null ? null : 100 - utilization,
             percentText: percent == null ? null : `${Math.round(percent)}%`,
-            trailing: window?.resetsAt != null
-                ? t('agentInput.usagePopup.resets', { time: formatUsageLimitResetTime(window.resetsAt) })
-                : '',
+            trailing: expired
+                ? t('agentInput.usagePopup.windowReset')
+                : window?.resetsAt != null
+                    ? t('agentInput.usagePopup.resets', { time: formatUsageLimitResetTime(window.resetsAt) })
+                    : '',
             disabled: !account.loggedIn,
             showRemaining,
         });
@@ -486,12 +504,20 @@ export type DroverBindingLimit = {
 export function droverBindingLimit(
     account: DroverUsageAccountLike | null | undefined,
     modelFamily?: string | null,
+    capturedAt = Number.NaN,
 ): DroverBindingLimit | null {
     const limits = Array.isArray(account?.limits) ? account.limits : [];
     let worst: (typeof limits)[number] | null = null;
     for (const row of limits) {
         if (!row || typeof row.percent !== 'number' || !Number.isFinite(row.percent)) continue;
         if (!droverRowApplies(row, modelFamily)) continue;
+        // One expired window and there IS no binding limit (DROVE-204). The
+        // wrist shows a single figure, so it cannot qualify one; and the
+        // window nobody has measured is exactly the one that could be full.
+        // Same rule the CLI's headroomOf takes, because this number and that
+        // one are two readings of the same rows and must never disagree
+        // (DROVE-129).
+        if (!droverRowUsable(row, capturedAt)) return null;
         // Strictly greater, so a tie keeps the FIRST row: the cache lists
         // session before week before the family windows, and the shorter
         // window is the one that bites first at equal utilisation.
