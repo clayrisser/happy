@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { AudioCueMixer, cueStaleMs, quietAfterEventMs } from './audioCueMixer';
+import { AudioCueMixer, cueStaleMs } from './audioCueMixer';
 import { cueDurationMs, cueSpec } from './audioCues';
 import { audioCuesDefaults, type AudioCues } from '@/sync/settings';
 
@@ -145,15 +145,22 @@ describe('AudioCueMixer', () => {
         expect(played).toEqual(['agentStart', 'agentDone']);
     });
 
-    it('keeps the heartbeat out of the way just after an event', () => {
+    it('keeps the heartbeat out from UNDER an earcon, and no longer than that', () => {
+        // AMBIENT YIELDS TO EVENTS, in the form that survived DROVE-197: the
+        // beat never starts while an earcon is still sounding, and it starts
+        // as soon as one is over. It used to stay clear for a further 700ms
+        // as a courtesy, which was affordable when a tool cue was one per RUN
+        // and six a minute; per-call earcons turned that courtesy into a
+        // permanent gag, and the beat had nowhere left to land.
         working();
         mixer.event('toolCall');
         run(250);
         expect(played).toEqual(['toolCall']);
-        now += quietAfterEventMs - 100;
+        // Still inside the earcon's own length: nothing over the top of it.
+        now += cueDurationMs(cueSpec('toolCall')) - 1;
         mixer.tick();
         expect(played).toEqual(['toolCall']);
-        now += 200;
+        now += 2;
         mixer.tick();
         expect(played).toEqual(['toolCall', pulse()]);
     });

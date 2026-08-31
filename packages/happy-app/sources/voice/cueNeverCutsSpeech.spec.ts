@@ -107,10 +107,12 @@ describe('a cue never cuts, pauses or delays speech', () => {
         expect(played).toEqual([]);
 
         // Now the reply is finished and there is nothing queued. The cue plays.
+        // The heartbeat is filtered out: it is ambient, it keeps its own
+        // cadence, and this test is about the earcon (DROVE-197).
         await finishSentence();
         mixer.setSpeaking(false);
         tick(100);
-        expect(played).toEqual(['toolCall']);
+        expect(played.filter((id) => id === 'toolCall')).toEqual(['toolCall']);
         // And the voice said everything it had, in order, uncut.
         expect(spoken).toEqual(['One.', 'Two.']);
     });
