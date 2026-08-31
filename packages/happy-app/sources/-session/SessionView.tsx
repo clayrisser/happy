@@ -1101,9 +1101,14 @@ export function SessionViewLoaded({
     }, []);
     const voiceComposer = useVoiceComposer({
         sessionId,
-        // An embedded side chat and a disconnected session are both surfaces
-        // that must stay silent (DROVE-30).
-        active: !embedded && !isDisconnected,
+        // An embedded side chat must stay silent (DROVE-30). A DISCONNECTED
+        // session must not: `isDisconnected` flips true for a second or two on
+        // every daemon reconnect and foreground resync, and having it here
+        // turned each of those into `interrupt('toggled-off')`, which is a
+        // real stop. It goes in as its own fact instead, and the gate in
+        // readAloudGate.ts decides what it costs (DROVE-179).
+        active: !embedded,
+        sessionDisconnected: isDisconnected,
         voiceCallActive: realtimeStatus === 'connected' || realtimeStatus === 'connecting',
         getComposerText,
         setComposerText,

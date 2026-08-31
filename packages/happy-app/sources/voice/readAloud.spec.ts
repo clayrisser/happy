@@ -123,12 +123,14 @@ describe('ReadAloudReader', () => {
         expect(engine.spoken).toEqual([]);
     });
 
+    // The reason is one the gate calls a real stop (DROVE-179). `typed` used
+    // to be spelled here and no longer stops anything, which is the point.
     it('cuts speech and drops the rest of the queue when interrupted', async () => {
         reader.onMessages('s1', [agentText('m1', 'One. Two. Three.')]);
         await settle();
         expect(engine.spoken).toEqual(['One.']);
 
-        reader.interrupt('typed');
+        reader.interrupt('call-started');
         await settle();
         expect(engine.stops).toBe(1);
         expect(reader.pending).toBe(0);
@@ -154,12 +156,17 @@ describe('ReadAloudReader', () => {
         expect(engine.spoken).toEqual(['One.']);
     });
 
-    it('stops when the session is left entirely', async () => {
+    // DROVE-179 inverted this one. The screen going away is not the session
+    // going away: he opened the agent screen, or a sheet, or the transport
+    // blipped, and in every one of them the reply he asked for is still the
+    // reply he wants read.
+    it('keeps reading when the session screen goes away', async () => {
         reader.onMessages('s1', [agentText('m1', 'One. Two.')]);
         await settle();
         reader.focus(null, 'left-session');
         await settle();
-        expect(engine.stops).toBe(1);
+        expect(engine.stops).toBe(0);
+        expect(reader.focusedSessionId).toBe('s1');
     });
 
     it('lets a second chat unmount without taking the voice away', async () => {
@@ -171,10 +178,12 @@ describe('ReadAloudReader', () => {
         expect(reader.focusedSessionId).toBe('s1');
         expect(engine.stops).toBe(0);
 
+        // And the chat itself unmounting keeps both the session and the
+        // sentence in flight (DROVE-179).
         reader.blur('s1');
         await settle();
-        expect(reader.focusedSessionId).toBeNull();
-        expect(engine.stops).toBe(1);
+        expect(reader.focusedSessionId).toBe('s1');
+        expect(engine.stops).toBe(0);
     });
 
     it('does not re-read a message that is redelivered unchanged', async () => {
@@ -277,7 +286,7 @@ describe('ReadAloudReader', () => {
             held.setEnabled(true);
             held.focus('s1');
             held.onMessages('s1', [agentText('m1', 'Almost there')]);
-            held.interrupt('typed');
+            held.interrupt('call-started');
             vi.advanceTimersByTime(1000);
             await settle();
             expect(engine.spoken).toEqual([]);
@@ -963,7 +972,7 @@ describe('the transcript as a playhead (DROVE-114, DROVE-146)', () => {
         await settle();
         expect(reader.playhead).not.toBeNull();
 
-        reader.interrupt('typed');
+        reader.interrupt('call-started');
         expect(reader.playhead).toBeNull();
         expect(reader.pending).toBe(0);
     });
@@ -971,7 +980,7 @@ describe('the transcript as a playhead (DROVE-114, DROVE-146)', () => {
     it('an interrupted transcript can still be tapped into and re-read', async () => {
         seedThree(reader);
         await settle();
-        reader.interrupt('typed');
+        reader.interrupt('call-started');
         await settle();
 
         reader.seekTo(2);
@@ -1009,7 +1018,7 @@ describe('the transcript as a playhead (DROVE-114, DROVE-146)', () => {
 
         reader.seekTo(3);
         await settle();
-        reader.interrupt('sent');
+        reader.interrupt('call-started');
         expect(reader.playhead).toBeNull();
         expect(reader.readPosition).toBe(3);
     });
