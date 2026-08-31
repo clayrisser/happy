@@ -497,6 +497,16 @@ describe('resolvePaneModelKey', () => {
     it('does not keep a bracket pick that belongs to a different model', () => {
         expect(resolvePaneModelKey('claude-sonnet-5', 'claude-opus-5[1m]')).toBe('claude-sonnet-5');
     });
+
+    it('refuses a pane value that is a sentence rather than a model (DROVE-191)', () => {
+        // An older CLI parsed "Set model to Sonnet 5 and saved as your default
+        // for new sessions" to the end of the line and put the whole clause in
+        // `paneModel`, where includePaneModel turned it into a disabled menu
+        // row and it won the pill. Fixed in the CLI, but an open session keeps
+        // the CLI it launched with (DROVE-172), so the reader refuses it too.
+        expect(resolvePaneModelKey('Sonnet 5 and saved as your default for new sessions', 'claude-opus-5[1m]')).toBeNull();
+        expect(resolvePaneModelKey('Opus 5', null)).toBeNull();
+    });
 });
 
 describe('includePaneModel', () => {

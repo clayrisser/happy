@@ -124,8 +124,14 @@ export function paneUltracodeActive(capture: string): boolean {
 }
 
 export type PaneCommandOutcome =
-    /** Claude Code said it did it. `value` is the level or model it named. */
-    | { state: 'applied'; value: string | null }
+    /**
+     * Claude Code said it did it. `value` is the level or model it named,
+     * which for a model is a DISPLAY NAME ("Sonnet 5") rather than the id the
+     * command was given. `kept` marks the one shape that is not a change:
+     * "Kept model as X" is what the pane prints when the switch did not
+     * happen, so the value names the OLD model.
+     */
+    | { state: 'applied'; value: string | null; kept?: boolean }
     /** The confirmation is up and wants an Enter. */
     | { state: 'confirm' }
     /** Claude Code refused, in these words. */
@@ -151,6 +157,21 @@ const refusals: RegExp[] = [
 const appliedEffort = /Set effort level to ([A-Za-z]+)/
 const appliedModel = /Set model to ([^\n(]+)/
 const keptModel = /Kept model as ([^\n(]+)/
+
+/**
+ * The tail Claude Code adds when the pick landed at an IDLE prompt (DROVE-191).
+ *
+ * At an idle prompt `/model sonnet` prints
+ *
+ *     Set model to Sonnet 5 and saved as your default for new sessions
+ *
+ * because a pick made there is also written to the machine's global default,
+ * where a mid-turn pick is session-only. The effort regex beside this one is
+ * `([A-Za-z]+)` and stops on its own; the model one runs to the end of the
+ * line and swallowed the whole clause, so `paneModel` held an English sentence
+ * for a turn and the app rendered it as a menu row and a pill.
+ */
+const savedDefaultClause = / and saved as [^\n]*/
 
 /**
  * Read one capture and say what became of the command.
@@ -200,10 +221,17 @@ export function paneCommandOutcome(
         const hit = fresh(appliedEffort)
         if (hit) return { state: 'applied', value: hit[1] }
     } else {
-        const hit = fresh(appliedModel) ?? fresh(keptModel)
-        if (hit) return { state: 'applied', value: hit[1].trim() }
+        const set = fresh(appliedModel)
+        if (set) return { state: 'applied', value: modelWord(set[1]) }
+        const kept = fresh(keptModel)
+        if (kept) return { state: 'applied', value: modelWord(kept[1]), kept: true }
     }
     return { state: 'pending' }
+}
+
+/** The model Claude Code named, without the "and saved as ..." tail. */
+function modelWord(captured: string): string {
+    return captured.replace(savedDefaultClause, '').trim()
 }
 
 /** `/effort ultracode` -> `effort`, `/model claude-opus-5` -> `model`. */

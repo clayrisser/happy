@@ -794,6 +794,16 @@ export function resolvePaneModelKey(
     if (!paneModel) {
         return null;
     }
+    // A model id never has a space in it, and something that does is not a
+    // model — it is a CLI writing down the pane's English (DROVE-191). Claude
+    // Code answers `/model` with "Set model to Sonnet 5 and saved as your
+    // default for new sessions", and a CLI that took that whole clause put it
+    // in `paneModel`, where it became a disabled menu row and won the pill.
+    // Fixed at the source, but an open session keeps the CLI it launched with
+    // (DROVE-172), so the reader refuses it too.
+    if (/\s/.test(paneModel)) {
+        return null;
+    }
     if (selectedKey && selectedKey.startsWith(`${paneModel}[`) && selectedKey.endsWith(']')) {
         return selectedKey;
     }
