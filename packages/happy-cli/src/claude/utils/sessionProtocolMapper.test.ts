@@ -11,6 +11,8 @@ import {
     readClaudeActivity,
     type ClaudeActivity,
     type ClaudeSessionProtocolState,
+    toolCallEndResult,
+    toolResultCharacterCap,
 } from './sessionProtocolMapper';
 
 describe('mapClaudeLogMessageToSessionEnvelopes', () => {
@@ -173,7 +175,7 @@ describe('mapClaudeLogMessageToSessionEnvelopes', () => {
         expect(ended.envelopes).toEqual(
             expect.arrayContaining([
                 expect.objectContaining({
-                    ev: { t: 'tool-call-end', call: 'tool-1' },
+                    ev: expect.objectContaining({ t: 'tool-call-end', call: 'tool-1', result: 'ok', isError: false }),
                 }),
             ]),
         );
@@ -322,7 +324,7 @@ describe('mapClaudeLogMessageToSessionEnvelopes', () => {
                 ev: { t: 'stop' },
             }),
             expect.objectContaining({
-                ev: { t: 'tool-call-end', call: 'tool-agent-stop' },
+                ev: expect.objectContaining({ t: 'tool-call-end', call: 'tool-agent-stop' }),
             }),
         ]));
     });
@@ -838,5 +840,68 @@ describe('mapQueuedPromptToSessionEnvelopes (DROVE-41)', () => {
             state,
         );
         expect(again.envelopes[0].id).not.toBe(queued.envelopes[0].id);
+    });
+    it('carries the tool result on tool-call-end, structured toolUseResult first (DROVE-95)', () => {
+        // The exact record from session 19c2f0a8 (Bash "File the push-tap
+        // routing ticket", 01:37:56Z): content is a plain string and
+        // toolUseResult is Claude's structured Bash result.
+        const started = mapClaudeLogMessageToSessionEnvelopes({
+            type: 'assistant',
+            uuid: 'a-95',
+            message: {
+                role: 'assistant',
+                content: [
+                    { type: 'tool_use', id: 'toolu_0173G9EJxTKJCchyHz71xYs8', name: 'Bash', input: { command: 'sh huly-ticket.sh' } },
+                ],
+            },
+        } as any, { currentTurnId: null });
+        const stdout = 'DROVE-94 https://projects.corp.bitspur.com/tracker/DROVE-94';
+        const ended = mapClaudeLogMessageToSessionEnvelopes({
+            type: 'user',
+            uuid: 'u-95',
+            message: {
+                role: 'user',
+                content: [
+                    { tool_use_id: 'toolu_0173G9EJxTKJCchyHz71xYs8', type: 'tool_result', content: stdout, is_error: false },
+                ],
+            },
+            toolUseResult: { stdout, stderr: '', interrupted: false, isImage: false, noOutputExpected: false },
+        } as any, { currentTurnId: started.currentTurnId });
+
+        const end = ended.envelopes.find((e) => e.ev.t === 'tool-call-end');
+        expect(end?.ev).toEqual({
+            t: 'tool-call-end',
+            call: 'toolu_0173G9EJxTKJCchyHz71xYs8',
+            result: { stdout, stderr: '', interrupted: false, isImage: false, noOutputExpected: false },
+            isError: false,
+        });
+    });
+
+    it('falls back to the tool_result content blocks and keeps is_error (DROVE-95)', () => {
+        const started = mapClaudeLogMessageToSessionEnvelopes({
+            type: 'assistant',
+            uuid: 'a-96',
+            message: { role: 'assistant', content: [{ type: 'tool_use', id: 'tool-96', name: 'Bash', input: { command: 'false' } }] },
+        } as any, { currentTurnId: null });
+        const ended = mapClaudeLogMessageToSessionEnvelopes({
+            type: 'user',
+            uuid: 'u-96',
+            message: {
+                role: 'user',
+                content: [
+                    { tool_use_id: 'tool-96', type: 'tool_result', content: [{ type: 'text', text: 'boom' }], is_error: true },
+                ],
+            },
+        } as any, { currentTurnId: started.currentTurnId });
+        const end = ended.envelopes.find((e) => e.ev.t === 'tool-call-end');
+        expect(end?.ev).toEqual({ t: 'tool-call-end', call: 'tool-96', result: [{ type: 'text', text: 'boom' }], isError: true });
+    });
+
+    it('bounds an oversized result to its head and a note (DROVE-95)', () => {
+        const huge = 'x'.repeat(toolResultCharacterCap + 1);
+        const out = toolCallEndResult({ type: 'user' } as any, { content: huge, is_error: false });
+        expect(typeof out.result).toBe('string');
+        expect((out.result as string).length).toBeLessThan(70 * 1024);
+        expect(out.result as string).toContain('[result truncated:');
     });
 });

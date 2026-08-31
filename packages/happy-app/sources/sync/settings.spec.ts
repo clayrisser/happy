@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { SettingsSchema, settingsParse, applySettings, settingsDefaults, settingsToSyncPayload, type Settings } from './settings';
+import { SettingsSchema, settingsParse, applySettings, settingsDefaults, settingsToSyncPayload, isCodeWrapOn, toggleCodeWrap, type Settings } from './settings';
 
 describe('settings', () => {
     describe('settingsParse', () => {
@@ -199,6 +199,7 @@ describe('settings', () => {
                 showHarnessIconInSessionHeader: true,
                 userMessageBubbleColor: 'gray',
                 usageLimitShowRemaining: false,
+                codeWrap: { terminal: false, code: false },
                 hideInactiveSessions: true,
                 sortSessionsByActivity: true,
                 expResumeSession: true,
@@ -471,5 +472,41 @@ describe('settings', () => {
             expect(merged.experiments).toBe(true);
             expect(merged.dismissedCLIWarnings).toEqual(pendingChanges.dismissedCLIWarnings);
         });
+    });
+});
+
+describe('codeWrap (DROVE-95)', () => {
+    it('defaults both kinds off', () => {
+        expect(settingsDefaults.codeWrap).toEqual({ terminal: false, code: false });
+        expect(isCodeWrapOn(settingsDefaults, 'terminal')).toBe(false);
+        expect(isCodeWrapOn(settingsDefaults, 'code')).toBe(false);
+    });
+
+    it('toggles one kind and leaves the other alone', () => {
+        const once = applySettings(settingsDefaults, toggleCodeWrap(settingsDefaults, 'terminal'));
+        expect(once.codeWrap).toEqual({ terminal: true, code: false });
+        expect(isCodeWrapOn(once, 'terminal')).toBe(true);
+        expect(isCodeWrapOn(once, 'code')).toBe(false);
+
+        const twice = applySettings(once, toggleCodeWrap(once, 'terminal'));
+        expect(twice.codeWrap).toEqual({ terminal: false, code: false });
+
+        const code = applySettings(once, toggleCodeWrap(once, 'code'));
+        expect(code.codeWrap).toEqual({ terminal: true, code: true });
+    });
+
+    it('survives a partial or missing object from another app version', () => {
+        expect(settingsParse({ codeWrap: { code: true } }).codeWrap).toEqual({ code: true });
+        expect(isCodeWrapOn({ codeWrap: { code: true } }, 'terminal')).toBe(false);
+        expect(isCodeWrapOn({ codeWrap: { code: true } }, 'code')).toBe(true);
+        expect(toggleCodeWrap({ codeWrap: undefined as any }, 'code')).toEqual({ codeWrap: { code: true } });
+        // A wrong type falls back to the default rather than poisoning the rest.
+        expect(settingsParse({ codeWrap: 'yes', viewInline: true }).codeWrap).toEqual(settingsDefaults.codeWrap);
+    });
+
+    it('persists through the sync payload', () => {
+        const on = applySettings(settingsDefaults, toggleCodeWrap(settingsDefaults, 'code'));
+        expect(settingsToSyncPayload(on).codeWrap).toEqual({ terminal: false, code: true });
+        expect(settingsParse(settingsToSyncPayload(on)).codeWrap).toEqual({ terminal: false, code: true });
     });
 });

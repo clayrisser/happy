@@ -933,6 +933,7 @@ function mapClaudeLogMessageToSessionEnvelopesInternal(
                 envelopes.push(createEnvelope('agent', {
                     t: 'tool-call-end',
                     call: block.tool_use_id,
+                    ...toolCallEndResult(message, block),
                 }, { turn: turnId, subagent }));
                 continue;
             }
@@ -952,4 +953,53 @@ function mapClaudeLogMessageToSessionEnvelopesInternal(
         currentTurnId: state.currentTurnId,
         envelopes,
     };
+}
+
+/**
+ * The result a tool-call-end carries (DROVE-95).
+ *
+ * Until now the envelope named the call and nothing else, so the app marked
+ * every Claude tool completed with no output: a Bash whose stdout was right
+ * there in the terminal read "[Command completed with no output]" on the
+ * phone. Measured on session 19c2f0a8, tool_use toolu_0173G9EJ…: the
+ * transcript record had `content: "DROVE-94 https://…"` (a plain string,
+ * is_error false) and `toolUseResult: {stdout: "DROVE-94 https://…",
+ * stderr: "", interrupted: false, isImage: false, noOutputExpected: false}`,
+ * and neither left the CLI.
+ *
+ * Claude's structured `toolUseResult` wins when the record has one (Bash:
+ * {stdout, stderr, …}; Read: {type, file}); otherwise the tool_result content
+ * as written, a string or an array of content blocks. The app folds either.
+ */
+export const toolResultCharacterCap = 2 * 1024 * 1024;
+
+export function toolCallEndResult(
+    message: RawJSONLines,
+    block: { content?: unknown; is_error?: unknown },
+): { result?: unknown; isError: boolean } {
+    const isError = block.is_error === true;
+    const structured = (message as { toolUseResult?: unknown }).toolUseResult;
+    const raw = structured !== undefined && structured !== null ? structured : block.content;
+    if (raw === undefined || raw === null) {
+        return { isError };
+    }
+    return { result: boundToolResult(raw), isError };
+}
+
+/**
+ * A result past the cap is replaced by its head and a note. Transcript lines
+ * here run to 245 MB (drover's export.js measured that) and one message must
+ * never be that; a Read of an image, ~600 KB of base64, passes whole.
+ */
+function boundToolResult(result: unknown): unknown {
+    let serialized: string;
+    try {
+        serialized = typeof result === 'string' ? result : JSON.stringify(result) ?? String(result);
+    } catch {
+        return String(result);
+    }
+    if (serialized.length <= toolResultCharacterCap) {
+        return result;
+    }
+    return `${serialized.slice(0, 64 * 1024)}\n… [result truncated: ${serialized.length} characters]`;
 }
