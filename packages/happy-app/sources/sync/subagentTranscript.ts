@@ -16,7 +16,7 @@
  * socket module pulls in react-native, which vitest cannot parse).
  */
 
-import { agentQuietFor, SUBAGENT_QUIET_MS } from '@/utils/agentCard';
+import { agentQuietFor, agentRunStateOf, SUBAGENT_QUIET_MS, type AgentRunState } from '@/utils/agentCard';
 
 import { createReducer, reducer, type ReducerState } from './reducer/reducer';
 import type { Message } from './typesMessage';
@@ -161,6 +161,14 @@ export { SUBAGENT_QUIET_MS };
 
 export interface SubagentHeadline {
     state: SubagentState;
+    /**
+     * The same word the inline Agent card uses for the same agent, off the
+     * same function (DROVE-115). The card reads the CLI's terminal
+     * tool-call-end and this screen reads the CLI's subagentTranscript RPC,
+     * and both are the CLI reading one task-notification, so the two surfaces
+     * cannot disagree unless this translation does.
+     */
+    runState: AgentRunState;
     /** Elapsed while running; the run's total once it has stopped. */
     elapsedMs: number;
     /** Set while running and the transcript has not moved for a while. */
@@ -187,6 +195,7 @@ export function describeSubagent(
     const quietMs = agentQuietFor(state === 'running', movedAt, now);
     return {
         state,
+        runState: agentRunStateOf(state),
         elapsedMs,
         ...(quietMs !== undefined ? { quietMs } : {}),
         tokens: transcript.tokens,

@@ -7,6 +7,13 @@
  * it is the bare content-block array or a string. All three shapes are read
  * here so the card never has to look at raw JSON.
  *
+ * The launch receipt is now followed by a real one (DROVE-115): the CLI sends
+ * a SECOND `tool-call-end` on the same call when the agent's
+ * `<task-notification>` reaches the parent transcript, carrying the agent id
+ * and its terminal status in that same shape. So everything below reads one
+ * result and one result only, and the agent screen behind the card reads the
+ * same notification through the same CLI.
+ *
  * A FOURTH shape broke this (DROVE-110). An async agent's tool call ends the
  * moment the agent is launched, with `{isAsync: true, status: 'async_launched',
  * agentId, description, resolvedModel, prompt, outputFile, canReadOutputFile}`
@@ -108,6 +115,20 @@ export function agentOutcome(result: unknown): AgentOutcome | null {
     return fallback.length > 0 ? { text: fallback } : null;
 }
 
+/**
+ * The exact receipt an async Agent's tool call ends with, before the agent has
+ * done anything at all.
+ *
+ * Named here because two places have to agree on it: this file, which must not
+ * read it as an outcome, and the reducer, which must let the REAL result land
+ * on a call this receipt already closed (DROVE-115). Matched on the status
+ * word rather than `isAsync`, because the terminal result carries `isAsync`
+ * too and a second receipt is exactly what it is not.
+ */
+export function isAsyncAgentLaunch(result: unknown): boolean {
+    return asRecord(result)?.status === 'async_launched';
+}
+
 /** A status that means the agent stopped and reported. */
 const finishedStatuses = new Set(['completed', 'complete', 'success', 'succeeded', 'done', 'ok', 'finished']);
 
@@ -127,6 +148,37 @@ function reportsFailure(result: unknown): boolean {
 }
 
 /**
+ * The one place a stop status becomes a state. Null for a status nobody here
+ * recognises, which is not the same as a failure: the CLI may invent a word
+ * after this ships, and an agent that is working must never be drawn dead.
+ */
+export function agentStateFromStatus(status: string | null | undefined): AgentRunState | null {
+    const word = typeof status === 'string' ? status.trim().toLowerCase() : '';
+    if (!word) {
+        return null;
+    }
+    if (failedStatuses.has(word)) {
+        return 'failed';
+    }
+    return finishedStatuses.has(word) ? 'finished' : null;
+}
+
+/**
+ * The CLI's subagent vocabulary in the card's words (DROVE-93 -> DROVE-115).
+ *
+ * `subagentTranscript` speaks running/done/failed and the card speaks
+ * running/finished/failed. One translation, in the file that owns the card's
+ * state, so the agent screen and the card cannot end up saying different
+ * things about the same agent.
+ */
+export function agentRunStateOf(state: 'running' | 'done' | 'failed' | null | undefined): AgentRunState {
+    if (state === 'done') {
+        return 'finished';
+    }
+    return state === 'failed' ? 'failed' : 'running';
+}
+
+/**
  * How alive the agent is (DROVE-110).
  *
  * Running while the call is open, and running again for anything we cannot
@@ -143,14 +195,11 @@ export function agentRunState(tool: Pick<ToolCall, 'state' | 'result'>): AgentRu
         return 'failed';
     }
     const outcome = agentOutcome(tool.result);
-    const status = outcome?.status?.trim().toLowerCase();
-    if (status) {
-        if (failedStatuses.has(status)) {
-            return 'failed';
-        }
+    const status = outcome?.status;
+    if (status && status.trim().length > 0) {
         // `async_launched` and anything else unknown: the tool call is over,
-        // the agent is not.
-        return finishedStatuses.has(status) ? 'finished' : 'running';
+        // the agent is not. The CLI sends the real result later (DROVE-115).
+        return agentStateFromStatus(status) ?? 'running';
     }
     // No status at all: a report is a finish, silence is a run we cannot see.
     return outcome && outcome.text.length > 0 ? 'finished' : 'running';

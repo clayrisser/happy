@@ -21,6 +21,7 @@ import { stageAttachments, withAttachmentNote } from "./utils/stageAttachments";
 import type { QueueItem } from "@/utils/MessageQueue2";
 import type { EnhancedMode } from "./loop";
 import { InFlightTracker, describeInFlight } from "@/drover/flip/inflight";
+import { AgentLaunchIndex, agentStopResult } from "./utils/agentNotification";
 // The flip itself lives in @/drover/flip/apply because BOTH launchers carry
 // one out now (BASED-127). It used to be defined here, which is precisely why
 // a flip requested in remote mode queued and never happened.
@@ -79,6 +80,12 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
         transcript: () => transcriptPathFor(session),
         onIdle: () => takeDeferredSwitch?.(),
     });
+
+    // DROVE-115: which Agent tool call each background agent belongs to, so
+    // the terminal tool-call-end below can be addressed to the card that has
+    // been drawing "Running" since the launch receipt. Fed off the same
+    // message stream inflight reads.
+    const agentLaunches = new AgentLaunchIndex();
 
     // Create scanner. It reads the account the session is on NOW, which after
     // an earlier flip is not the one this process was started on: the launcher
@@ -184,6 +191,28 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
             ...metadata,
             liveStatus,
         })),
+        // DROVE-115: an async agent's tool call ended the instant it launched,
+        // so its card had no way to learn the agent had finished and sat on
+        // "Running, quiet for 40m" for as long as the session lived. This is
+        // the completion, sent as the terminal result for that same call.
+        onAgentNotification: (notification) => {
+            if (!notification.terminal) return;
+            const launch = agentLaunches.get(notification.agentId);
+            const call = notification.toolUseId ?? launch?.toolUseId;
+            if (!call) {
+                // Nothing to address it to. The agent screen still reads the
+                // truth off the transcript, so the card is the only thing left
+                // stale — the same place DROVE-110 left it, not worse.
+                logger.debug(`[local]: agent ${notification.agentId} reported ${notification.status} but no tool call is known for it`);
+                return;
+            }
+            session.client.sendClaudeAgentStop({
+                call,
+                ...agentStopResult(notification, launch),
+                ...(notification.at ? { at: notification.at } : {}),
+            });
+            agentLaunches.forget(notification.agentId);
+        },
         onMessage: (message) => {
             // Cattle Drover (BASED-98): local mode has no typed rate-limit
             // channel — the SDK's rate_limit_event only exists on the remote
@@ -196,6 +225,9 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
             // BASED-135: the same stream carries "Async agent launched
             // successfully" and, sometimes, the notification that ends it.
             inflight.note(message);
+            // DROVE-115: the launch record is where the agent id and its Agent
+            // tool call are named in the same place.
+            agentLaunches.note(message);
             // Block SDK summary messages - we generate our own
             if (message.type !== 'summary') {
                 scannerMessageChain = scannerMessageChain.then(async () => {

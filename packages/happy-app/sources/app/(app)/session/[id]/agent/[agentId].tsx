@@ -16,6 +16,7 @@ import {
 } from '@/sync/subagentTranscript';
 import { fetchSubagentTranscript } from '@/sync/subagentTranscriptRpc';
 import { t } from '@/text';
+import { type AgentRunState } from '@/utils/agentCard';
 import { formatElapsed, formatTokens } from '@/utils/liveStatus';
 import { type SubagentTintPalette, subagentThemeName, subagentTintPaletteFor } from '@/utils/subagentTint';
 
@@ -147,8 +148,13 @@ const SubagentRail = React.memo((props: { palette: SubagentTintPalette }) => {
     );
 });
 
-function stateWord(state: 'running' | 'done' | 'failed'): string {
-    if (state === 'done') return t('subagent.done');
+/**
+ * Off the card's own vocabulary (DROVE-115), so this screen and the inline
+ * Agent card say the same word about the same agent. The strings stay this
+ * screen's — they are already translated into all ten languages.
+ */
+function stateWord(state: AgentRunState): string {
+    if (state === 'finished') return t('subagent.done');
     if (state === 'failed') return t('subagent.failed');
     return t('subagent.running');
 }
@@ -229,7 +235,7 @@ export default React.memo(() => {
         now,
     );
     const title = agent?.label ?? label ?? t('subagent.title');
-    const subtitleParts = [stateWord(headline.state), formatElapsed(headline.elapsedMs)];
+    const subtitleParts = [stateWord(headline.runState), formatElapsed(headline.elapsedMs)];
     if (headline.tokens > 0) subtitleParts.push(formatTokens(headline.tokens));
     if (headline.quietMs !== undefined) subtitleParts.push(t('subagent.quiet', { duration: formatElapsed(headline.quietMs) }));
     const subtitle = subtitleParts.join(' · ');

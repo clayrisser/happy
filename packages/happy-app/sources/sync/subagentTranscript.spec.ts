@@ -105,7 +105,7 @@ describe('describeSubagent', () => {
 
     it('ticks off the phone clock while running', () => {
         const h = describeSubagent({ state: 'running', updatedAt: 61_000 }, transcript, 91_000);
-        expect(h).toEqual({ state: 'running', elapsedMs: 90_000, tokens: 310_800 });
+        expect(h).toEqual({ state: 'running', runState: 'running', elapsedMs: 90_000, tokens: 310_800 });
     });
 
     it('says so when a running agent has gone quiet', () => {
@@ -116,7 +116,7 @@ describe('describeSubagent', () => {
 
     it('freezes the clock at the parent notification once done', () => {
         const h = describeSubagent({ state: 'done', updatedAt: 61_000, endedAt: 70_000 }, transcript, 999_000);
-        expect(h).toEqual({ state: 'done', elapsedMs: 69_000, tokens: 310_800 });
+        expect(h).toEqual({ state: 'done', runState: 'finished', elapsedMs: 69_000, tokens: 310_800 });
     });
 
     it('falls back to the newest row when the parent never said', () => {
@@ -126,6 +126,6 @@ describe('describeSubagent', () => {
     });
 
     it('is running with nothing known yet', () => {
-        expect(describeSubagent(null, { tokens: 0 }, 5)).toEqual({ state: 'running', elapsedMs: 0, tokens: 0 });
+        expect(describeSubagent(null, { tokens: 0 }, 5)).toEqual({ state: 'running', runState: 'running', elapsedMs: 0, tokens: 0 });
     });
 });
