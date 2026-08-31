@@ -1,7 +1,14 @@
 import * as Localization from 'expo-localization';
 import { isDroverSpeechAvailable, listVoices, speakUtterance, stopSpeaking, type SpeechVoice } from 'drover-speech';
 import { storage } from '@/sync/storage';
-import { resolveStreamTalk, streamTalkRateRange } from '@/sync/settings';
+import {
+    asidePitchScale,
+    asideRateCeiling,
+    asideRateScale,
+    resolveStreamTalk,
+    streamTalkPitchRange,
+    streamTalkRateRange,
+} from '@/sync/settings';
 import type { SpeakOptions, SpeechEngine } from './readAloud';
 import { pickVoice } from './voicePick';
 
@@ -50,10 +57,20 @@ export const speechEngine: SpeechEngine = {
         const language = speechLanguage();
         const voices = await installedVoices();
         const voice = pickVoice(voices, language, talk.voiceId);
-        const scaled = talk.rate * (options?.rateScale ?? 1);
+        const aside = options?.aside === true;
+        const scaled = talk.rate * (options?.rateScale ?? 1) * (aside ? asideRateScale : 1);
+        // An aside is the title of a tool call, not the reply (DROVE-112), and
+        // it has to sound like one. Its ceiling is the engine's rather than the
+        // speed slider's: the slider bounds what the user picked for PROSE, and
+        // a footnote read at exactly the same speed as the answer is the thing
+        // this is trying not to be. Pitch carries the rest of the difference,
+        // because the native module takes no per-utterance volume.
+        const ceiling = aside ? asideRateCeiling : streamTalkRateRange.max;
         return speakUtterance(text, {
-            rate: Math.min(streamTalkRateRange.max, Math.max(streamTalkRateRange.min, scaled)),
-            pitch: talk.pitch,
+            rate: Math.min(ceiling, Math.max(streamTalkRateRange.min, scaled)),
+            pitch: aside
+                ? Math.min(streamTalkPitchRange.max, talk.pitch * asidePitchScale)
+                : talk.pitch,
             voiceId: voice?.identifier ?? talk.voiceId,
             language,
         });

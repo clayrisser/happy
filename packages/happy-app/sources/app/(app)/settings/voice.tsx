@@ -19,6 +19,7 @@ import { trackPaywallButtonClicked } from '@/track';
 import { getVoiceExperimentStatus, getVoiceUpsellVariantLabel } from '@/realtime/voiceExperiment';
 import { getVoiceLocalCounters, resetVoiceLocalCounters } from '@/sync/persistence';
 import { SpeakingVoiceSettings } from '@/components/SpeakingVoiceSettings';
+import { AudioCueSettings } from '@/components/AudioCueSettings';
 import { canReadAloud } from '@/voice/speechEngine';
 import { resolveSpeakReplies, speakerChoices, type SpeakerChoice } from '@/sync/settings';
 
@@ -206,6 +207,11 @@ export default React.memo(function VoiceSettingsScreen() {
             {/* Which voice reads, and how (DROVE-97). Native speech only: the
                 web engine has no voice list to pick from. */}
             {canReadAloud() && Platform.OS !== 'web' ? <SpeakingVoiceSettings /> : null}
+
+            {/* The eyes-free cue vocabulary (DROVE-112): the ambient heartbeat,
+                the earcons, and the spoken titles of tool calls and agents.
+                Native speech only, for the same reason as the block above. */}
+            {canReadAloud() && Platform.OS !== 'web' ? <AudioCueSettings /> : null}
 
             {/* Which device speaks (DROVE-92). iOS only: the watch is the
                 other device, and there is none anywhere else. */}

@@ -72,6 +72,20 @@ import { stripToSpeakableProse } from './speakable';
  * See `skipSpoken`. Nothing the queue does by itself repeats. A double tap
  * is not the queue doing something by itself: it is a request to read from
  * there, so it clears the marks from that point and reads on.
+ *
+ * DROVE-112 added a second KIND of thing to say and took one away, and both
+ * are hooks rather than logic, because none of the policy belongs here:
+ *
+ *   - `asideFor` offers every message to the caller and takes back a one-line
+ *     title for a tool call, a terminal call or an agent spawning. It becomes
+ *     a sentence in the timeline at that message's createdAt, which is the
+ *     only way to be sure it is said in its place rather than after the reply
+ *     has moved past it, and which gets it the spoken-once invariant and the
+ *     skip-ahead cut for nothing. `SpeakOptions.aside` tells the engine to
+ *     read it faster and higher so it does not sound like the reply.
+ *   - `onSkip` fires on every cut, and `skipMarker` may now be empty. Clay:
+ *     "don't say skipping ahead, it should be like a ding or a beep or
+ *     something". So the app passes no words and plays an earcon instead.
  */
 
 /** Why speech stopped. Carried for logs and for the tests to assert on. */
@@ -85,7 +99,7 @@ export type ReadAloudInterruption =
     | 'call-started'
     | 'headphones-unplugged';
 
-/** Per-utterance knobs. Today only the catch-up rate (DROVE-108). */
+/** Per-utterance knobs: the catch-up rate (DROVE-108) and asides (DROVE-112). */
 export interface SpeakOptions {
     /**
      * Multiplier on the configured speaking rate, 1 at rest. Bounded by the
@@ -93,6 +107,14 @@ export interface SpeakOptions {
      * whatever the platform and the speed slider allow.
      */
     rateScale?: number;
+    /**
+     * This is not the reply, it is a one-line ASIDE: the title of a tool call,
+     * a terminal call or an agent as it spawns (DROVE-112). The engine reads it
+     * faster and higher so a tool call never sounds like Claude talking. The
+     * reader knows nothing else about it; where the text comes from is
+     * `asideFor`'s business.
+     */
+    aside?: boolean;
 }
 
 export interface SpeechEngine {
@@ -158,6 +180,30 @@ export interface ReadAloudOptions {
     turnStillRunning?: (sessionId: string) => boolean;
     /** The most the catch-up may speed the voice up. */
     maxRateScale?: number;
+    /**
+     * The one line to say for a message that is not prose: the title of a tool
+     * call, a terminal call or an agent spawning (DROVE-112). Null for a
+     * message that has nothing to announce, which is almost all of them.
+     *
+     * Injected rather than derived here because WHAT is worth saying, and how
+     * often, is a policy with its own settings and its own fold, and none of
+     * that belongs in a queue. What the queue gives it is the thing it could
+     * not get anywhere else: a place in the timeline at the message's own
+     * createdAt, so the title is spoken among the sentences around it rather
+     * than after the reply has moved past it, and the spoken-once invariant
+     * and the skip-ahead cut apply to it exactly as they do to prose.
+     *
+     * It is called at most once per message per delivery, from inside the
+     * ordered walk, and it may keep state; `sessionId` is passed so it can
+     * drop that state when focus moves.
+     */
+    asideFor?: (message: Message, sessionId: string) => string | null;
+    /**
+     * The backlog was dropped. Fires once per cut, before anything is said,
+     * so the audio cue system can play the skip earcon that replaced the
+     * spoken marker (DROVE-112).
+     */
+    onSkip?: () => void;
 }
 
 /**
@@ -166,6 +212,18 @@ export interface ReadAloudOptions {
  * the reply keeps growing.
  */
 export const defaultMaxBacklogSeconds = 15;
+/**
+ * What a cut says.
+ *
+ * Empty means say nothing, which is what the app passes now: Clay, on the
+ * spoken marker, "don't say skipping ahead, it should be like a ding or a beep
+ * or something". The earcon costs 120ms to say what a second of speech was
+ * saying, and it says it in the middle of catching up, which is exactly when
+ * the extra second hurts most. `onSkip` fires either way, so the sound and the
+ * words are one decision rather than two things that could both happen. The
+ * default keeps the words, so a caller that wires up no cue is not left with a
+ * silent skip, which would be worse than a wordy one (DROVE-108, DROVE-112).
+ */
 export const defaultSkipMarker = 'Skipping ahead.';
 /** Ordinary read-aloud prose lands near this; the estimate needs no better. */
 export const defaultWordsPerMinute = 150;
@@ -202,6 +260,11 @@ interface QueuedSentence {
      * what was said. A double tap clears it from that point (DROVE-146).
      */
     spoken: boolean;
+    /**
+     * A title rather than prose (DROVE-112). It rides the timeline like any
+     * other sentence, and differs only in how the engine reads it.
+     */
+    aside: boolean;
 }
 
 interface HeldTail {
@@ -236,6 +299,8 @@ export class ReadAloudReader {
     private readonly arrivalWindowMs: number;
     private readonly maxRateScale: number;
     private readonly turnStillRunning: ((sessionId: string) => boolean) | null;
+    private readonly asideFor: ((message: Message, sessionId: string) => string | null) | null;
+    private readonly onSkip: (() => void) | null;
     private readonly interruptListeners = new Set<ReadAloudInterruptListener>();
     private readonly playheadListeners = new Set<ReadAloudPlayheadListener>();
     private enabled = false;
@@ -317,6 +382,8 @@ export class ReadAloudReader {
         this.arrivalWindowMs = options.arrivalWindowMs ?? defaultArrivalWindowMs;
         this.maxRateScale = options.maxRateScale ?? defaultMaxRateScale;
         this.turnStillRunning = options.turnStillRunning ?? null;
+        this.asideFor = options.asideFor ?? null;
+        this.onSkip = options.onSkip ?? null;
     }
 
     get isSpeaking(): boolean {
@@ -481,6 +548,30 @@ export class ReadAloudReader {
                 this.turnOpenedAt = message.createdAt;
             }
 
+            // The title of a tool call, a terminal call or an agent spawning
+            // (DROVE-112). Every message is offered, prose included, because
+            // the policy on the other side folds runs and has to see where one
+            // ends; almost all of them are worth nothing and answer null.
+            if (this.asideFor !== null) {
+                const aside = this.asideFor(message, sessionId);
+                // Offered every time but enqueued once. The policy is asked
+                // again on a redelivery because it has its own reasons to look
+                // (a tool call that has finished since), and the mark that
+                // stops the title being said twice belongs here, in the queue,
+                // beside the one that stops a reply being re-read: the spoken
+                // flag cannot do it, because a second enqueue is a second
+                // sentence and has never been spoken (DROVE-126).
+                const asideKey = `aside:${message.id}`;
+                if (aside !== null && aside.length > 0 && !this.queuedChunks.has(asideKey)) {
+                    this.queuedChunks.set(asideKey, 1);
+                    // A held tail is over the moment something else lands, and
+                    // it has to be said BEFORE the title or the two cross.
+                    if (this.flushTails((id) => id !== message.id)) added = true;
+                    this.enqueue([aside], this.turn, message.id, message.createdAt, true);
+                    added = true;
+                }
+            }
+
             if (message.kind !== 'agent-text' || message.isThinking) continue;
             if (typeof message.text !== 'string' || message.text.length === 0) continue;
 
@@ -570,11 +661,11 @@ export class ReadAloudReader {
         return () => { this.interruptListeners.delete(listener); };
     }
 
-    private enqueue(sentences: string[], turn: number, messageId: string, createdAt: number): void {
+    private enqueue(sentences: string[], turn: number, messageId: string, createdAt: number, aside = false): void {
         if (sentences.length === 0) return;
         this.abandonTurnsBefore(turn);
         for (const text of sentences) {
-            this.timeline.push({ text, words: countWords(text), turn, messageId, createdAt, spoken: false });
+            this.timeline.push({ text, words: countWords(text), turn, messageId, createdAt, spoken: false, aside });
         }
     }
 
@@ -777,9 +868,16 @@ export class ReadAloudReader {
         if (this.markerDue && this.cursor < this.timeline.length) {
             this.markerDue = false;
             this.skips += 1;
-            this.setPlayhead(null);
-            this.speakNow(this.skipMarker, this.timeline[this.cursor]?.turn ?? this.turn, 1, null);
-            return;
+            // The sound of a cut, before anything is said. An earcon replaces
+            // the words entirely when the app wires one up (DROVE-112); with
+            // no marker left to speak, reading falls through to the next
+            // sentence rather than resting, or the jump would be silent.
+            this.onSkip?.();
+            if (this.skipMarker.length > 0) {
+                this.setPlayhead(null);
+                this.speakNow(this.skipMarker, this.timeline[this.cursor]?.turn ?? this.turn, 1, null);
+                return;
+            }
         }
 
         const next = this.timeline[this.cursor];
@@ -809,7 +907,7 @@ export class ReadAloudReader {
         }
         const generation = this.generation;
         void Promise.resolve()
-            .then(() => this.engine.speak(text, { rateScale }))
+            .then(() => this.engine.speak(text, { rateScale, aside: at?.aside === true }))
             .catch(() => {
                 // One utterance failing must not wedge every later one. The
                 // reply keeps being read from the next sentence on.
