@@ -63,6 +63,45 @@ describe('titleFor / previewFor', () => {
         expect(preview).toHaveLength(241);
         expect(preview.endsWith('…')).toBe(true);
     });
+
+    // DROVE-212, off Clay's own screenshot: a card headed "Run
+    // DroverAccountLogin" whose body was the string `{"url":"https://…"}`.
+    // Neither is something a person can act on, and the URL was not tappable
+    // because it was not a link, it was a serialised object printed as text.
+    it('names an account login by the account, and previews its link', () => {
+        const args = {
+            url: 'https://claude.com/cai/oauth/authorize?code=true&state=x',
+            header: 'Log in to Claude for ~/.claude-accounts/account-1',
+            reason: 'Open this in a browser, sign in, then send back the code.',
+            cancelLabel: 'Cancel the login',
+        };
+        expect(titleFor('DroverAccountLogin', args))
+            .toBe('Log in to Claude for ~/.claude-accounts/account-1');
+        expect(previewFor('DroverAccountLogin', args)).toBe(args.url);
+        // And only for that tool. WebFetch carries a url as well, and calling
+        // one "Log in to Claude" would be this fix pointing the other way.
+        expect(titleFor('WebFetch', { url: args.url })).toBe('Run WebFetch');
+    });
+});
+
+describe('an account login is a question, not a permission (DROVE-212)', () => {
+    it('gets kind question, so nothing offers it Allow and Deny', () => {
+        const [entry] = collectGateEntries({
+            s1: session({
+                requests: {
+                    r: {
+                        tool: 'DroverAccountLogin',
+                        createdAt: 0,
+                        arguments: {
+                            url: 'https://claude.com/cai/oauth/authorize?code=true',
+                            header: 'Log in to Claude',
+                        },
+                    },
+                },
+            }),
+        });
+        expect(entry.gate.kind).toBe('question');
+    });
 });
 
 describe('collectGateEntries', () => {

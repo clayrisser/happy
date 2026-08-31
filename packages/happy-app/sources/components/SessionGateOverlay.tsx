@@ -30,6 +30,7 @@ import { answerWithDeadline, gateAnswerTrouble } from '@/components/gateAnswerTi
 import { layout } from './layout';
 import { describePendingGates, type PendingGatesKind } from './pendingGatesSummary';
 import { sessionGateAction, sessionGateReadOnlyHint } from './sessionGateAction';
+import { DroverAccountLoginBody } from './tools/views/DroverAccountLoginBody';
 import {
     focusIndex,
     gateOverlayDismissals,
@@ -319,6 +320,11 @@ const SessionGateCard = React.memo(({ entry }: { entry: DroverGateEntry }) => {
         await sessionAllow(sessionId, requestId, undefined, undefined, 'approved', { optionId });
     }, [requestId, sessionId]);
 
+    /** The code, or a cancel, from the account-login card (DROVE-212). */
+    const sendLoginAnswer = React.useCallback(async (input: Record<string, unknown>) => {
+        await sessionAllow(sessionId, requestId, undefined, undefined, 'approved', input);
+    }, [requestId, sessionId]);
+
     const submitAnswer = React.useCallback(async (answers: InlineQuestionAnswers) => {
         await sessionAllow(
             sessionId,
@@ -357,6 +363,22 @@ const SessionGateCard = React.memo(({ entry }: { entry: DroverGateEntry }) => {
         return (
             <View style={[styles.card, styles.todoCard]}>
                 <DroverTodoBody card={todo} canInteract={true} onClose={closeTodo} chip={false} />
+            </View>
+        );
+    }
+
+    if (action === 'account-login') {
+        // The link and the code field, not Allow and Deny (DROVE-212). The
+        // body returns null on a card with no usable https link, and drawing
+        // two buttons over nothing would answer a login this screen could not
+        // describe.
+        return (
+            <View style={styles.card}>
+                <DroverAccountLoginBody
+                    args={entry.args}
+                    canInteract={true}
+                    onAnswer={sendLoginAnswer}
+                />
             </View>
         );
     }

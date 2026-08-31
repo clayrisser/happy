@@ -7,8 +7,14 @@
  */
 
 import { hasAnswerableOptions, questionCards } from './tools/views/askUserQuestionAnswers';
+import { accountLoginCard } from './tools/views/droverAccountLogin';
 
-export type SessionGateAction = 'todo' | 'answer-question' | 'allow-deny' | 'read-only';
+export type SessionGateAction =
+    | 'todo'
+    | 'account-login'
+    | 'answer-question'
+    | 'allow-deny'
+    | 'read-only';
 
 /**
  * A to-do offers its own buttons; a question offers its own options; a
@@ -29,6 +35,20 @@ export type SessionGateAction = 'todo' | 'answer-question' | 'allow-deny' | 'rea
  */
 export function sessionGateAction(kind: string, args: unknown, tool?: string): SessionGateAction {
     if (kind === 'todo' || tool === 'DroverTodo') return 'todo';
+    // An account login is never Allow / Deny, and this is measured, not
+    // theoretical (DROVE-212). The mirrored card carries `{ url, header,
+    // reason, cancelLabel }` and no `questions[]`, so it fell straight through
+    // to 'allow-deny' and Clay got Deny and Allow under a body that was the
+    // literal JSON of that object. He pressed Allow and nothing happened,
+    // because a bare allow carries no code and the login on the Mac was
+    // waiting for one.
+    //
+    // The TOOL NAME is what decides it, never the shape of the arguments.
+    // `WebFetch` carries a `url` too, and a permission to fetch a page that
+    // offered a sign-in link and a code field instead of Allow and Deny would
+    // be the same bug pointing the other way. The card is still read, because
+    // one without a usable https link has nothing to draw.
+    if (tool === 'DroverAccountLogin' && accountLoginCard(args)) return 'account-login';
     if (kind !== 'question') return 'allow-deny';
     return hasAnswerableOptions(questionCards(args)) ? 'answer-question' : 'read-only';
 }

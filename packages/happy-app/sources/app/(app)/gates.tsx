@@ -29,6 +29,8 @@ import { ageLabel, splitInbox } from '@/sync/droverGates';
 import { isDroverDemoId } from '@/sync/droverDemo';
 import { sessionAllow, sessionDeny, sessionDismissGate } from '@/sync/ops';
 import { answerWithDeadline, gateAnswerTrouble } from '@/components/gateAnswerTimeout';
+import { DroverAccountLoginBody } from '@/components/tools/views/DroverAccountLoginBody';
+import { accountLoginCard } from '@/components/tools/views/droverAccountLogin';
 import {
     hasAnswerableOptions,
     providerAnswersFor,
@@ -268,6 +270,16 @@ export const GateCard = React.memo(({ entry, focused }: { entry: DroverGateEntry
     const cards = React.useMemo(() => questionCards(entry.args), [entry.args]);
     const questions = React.useMemo(() => toInlineQuestions(cards), [cards]);
     const answerable = gate.kind === 'question' && hasAnswerableOptions(cards);
+    /**
+     * An account login, which is a link and a code and never Allow / Deny
+     * (DROVE-212). Its card carries no `questions[]`, so `answerable` is false
+     * for it and it used to land in the generic branch below: Deny and Allow
+     * under a body that was the raw JSON of its own arguments.
+     */
+    const login = React.useMemo(
+        () => (entry.tool === 'DroverAccountLogin' ? accountLoginCard(entry.args) : null),
+        [entry.args, entry.tool],
+    );
     // Recomputed on every render rather than ticked on a timer: this list is
     // re-rendered by the store whenever anything on the bus changes, and a
     // per-card interval to move "3m" to "4m" would keep the screen awake for
@@ -296,6 +308,15 @@ export const GateCard = React.memo(({ entry, focused }: { entry: DroverGateEntry
         setBusy(null);
         setTrouble(gateAnswerTrouble(outcome));
     }, [busy, requestId, sessionId]);
+
+    /** The code, or a cancel, from the account-login card (DROVE-212). */
+    const sendLoginAnswer = React.useCallback(async (input: Record<string, unknown>) => {
+        setTrouble(null);
+        const outcome = await answerWithDeadline(
+            () => sessionAllow(sessionId, requestId, undefined, undefined, 'approved', input),
+        );
+        setTrouble(gateAnswerTrouble(outcome));
+    }, [requestId, sessionId]);
 
     const submitAnswer = React.useCallback(async (answers: InlineQuestionAnswers) => {
         await sessionAllow(
@@ -393,7 +414,15 @@ export const GateCard = React.memo(({ entry, focused }: { entry: DroverGateEntry
                 <Ionicons name="chevron-forward" size={16} color={theme.colors.textSecondary} />
             </Pressable>
 
-            {answerable ? (
+            {login ? (
+                <View style={styles.cardBody}>
+                    <DroverAccountLoginBody
+                        args={entry.args}
+                        canInteract={true}
+                        onAnswer={sendLoginAnswer}
+                    />
+                </View>
+            ) : answerable ? (
                 <View style={styles.cardBody}>
                     <InlineQuestionForm
                         questions={questions}

@@ -186,6 +186,41 @@ describe('advanceAddAccount', () => {
             type: 'accounts', at: 1_000 + addAccountLinkWaitMs, names: [...before, 'added@example.com'],
         })).toEqual({ kind: 'added', name: 'added@example.com' });
     });
+
+    // DROVE-212, the second time. The deadlines used to ride on `accounts`,
+    // which is dispatched only when a `drover-accounts` read comes back OK. A
+    // phone that is backgrounded or reconnecting reads nothing, so the clock
+    // stopped and the spinner had no upper bound at all. Time alone has to be
+    // enough to end it.
+    it('says no link came back on time alone, with no account list at all', () => {
+        const late = advanceAddAccount(waiting(), {
+            type: 'tick', at: 1_000 + addAccountLinkWaitMs,
+        });
+        expect(late).toEqual(waiting({ linkLate: true }));
+        expect(addAccountBusy(late)).toBe(true);
+    });
+
+    it('does not call a tick late one millisecond early', () => {
+        const phase = waiting();
+        expect(advanceAddAccount(phase, { type: 'tick', at: 1_000 + addAccountLinkWaitMs - 1 }))
+            .toBe(phase);
+    });
+
+    it('stops watching on time alone', () => {
+        expect(advanceAddAccount(waiting(), { type: 'tick', at: 1_000 + addAccountWatchMs }))
+            .toEqual({ kind: 'stoppedWatching' });
+    });
+
+    it('never calls a tick late once the link is already there', () => {
+        const ready = waiting({ linkReady: true });
+        expect(advanceAddAccount(ready, { type: 'tick', at: 1_000 + addAccountLinkWaitMs }))
+            .toBe(ready);
+    });
+
+    it('ignores a tick outside the wait', () => {
+        const added = { kind: 'added' as const, name: 'added@example.com' };
+        expect(advanceAddAccount(added, { type: 'tick', at: 9_000_000 })).toBe(added);
+    });
 });
 
 describe('autoOpenLoginUrl (DROVE-212)', () => {
