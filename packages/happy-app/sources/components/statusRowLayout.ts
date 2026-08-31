@@ -237,13 +237,20 @@ export const STATUS_ROW_MODEL_TRUNCATION = {
  * before the account and before the centre's figure, which are the two things
  * DROVE-223 protected hardest.
  *
- * `toolName` is BACK to holding a word in the thinking state (DROVE-244), and
- * that word does not fold where the rank says. DROVE-223's rule — the state
- * word is the last thing on the row to give way — is enforced in
- * `statusStripFolds` by moving this step to the end of the order while the
- * slot holds the word rather than a tool's name. Two words, one slot, opposite
- * orders, which is exactly what 223 wrote down and 231 was able to drop only
- * while the slot could hold nothing but a tool.
+ * `toolName` HOLDS A TOOL AND NOTHING ELSE, and the reorder DROVE-244 needed
+ * for a state word is gone with the word (DROVE-250). Clay: "I told you NOT to
+ * put this word thinking here. The dot covers it. We have precious space
+ * here." So the slot is empty with no tool in flight, this step folds at its
+ * written rank at all times, and there is one order again rather than one
+ * order and an exception. DROVE-223's rule that the state word goes last is
+ * kept the way DROVE-231 kept it: by construction, because the strip has no
+ * state word for anything to rank.
+ *
+ * AND THE ORDER NOW RUNS FURTHER BEFORE IT STOPS (DROVE-250). It used to halt
+ * when each zone was inside its share, and a zone that is exactly its share
+ * touches the next one. `statusStripFolds` measures against the share less a
+ * 16pt floor instead, so more of this list fires on a crowded line. Nothing on
+ * the list moved to pay for that; the steps simply get further down it.
  */
 export const STATUS_ROW_GIVE_WAY = [
     'contextPercent',

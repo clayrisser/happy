@@ -43,9 +43,74 @@
  * `maxWidth: '45%'` is exactly the class of thing this module exists to
  * prevent, so every width here is either a measured estimate or a flex.
  *
+ * AND NOTHING KEPT THE ZONES APART (DROVE-250).
+ *
+ * Clay, on a strip reading `● Bash 15m 23s ˄  17.1M  jam@codejam.ninja 78% ˄`:
+ * "Do u see the issue here? They overlap".
+ *
+ * Measured, they were not overlapping. At 393 the tally and the account were
+ * 10pt apart and the other seam was 52pt wide, and that asymmetry is what the
+ * eye reads as a collision: one boundary five times the other, on a line whose
+ * whole premise is three even zones. Calling it an overlap is the right report
+ * of it. The layout had no opinion about either seam, because the question it
+ * asked was `left <= share`, and a zone that is EXACTLY its share ends where
+ * the next one begins. A three-column layout whose fit test is satisfied by
+ * two columns touching has no rule that they must not.
+ *
+ * THE FLOOR IS 16pt, `statusRowMetrics.separator`, which is the strip's own
+ * number rather than a new one. That is the separation the row already spends
+ * to say two things are different: two tappable clusters inside ONE zone are
+ * held apart by the middot and its 6pt margins, 16pt in all. Two ZONES are
+ * more different than two clusters in one zone, so the boundary between them
+ * cannot be tighter than the boundary inside them. Below that the eye groups
+ * across the seam and the three zones read as one run, which is what the
+ * photograph shows. Between zones the 16 is all whitespace rather than
+ * 6 + glyph + 6, so it reads at least as separated as the same number does
+ * inside a zone.
+ *
+ * It also has to survive the ESTIMATE. `glyphWidth` is an average advance and
+ * the note on it says it runs about 3% lean against Plex; on a 150pt zone that
+ * is ~5pt, and the error lands on the boundary. 16 absorbs it and still leaves
+ * ~11pt clear, comfortably more than the 6pt middot margin that is the widest
+ * clear run inside any zone. 8 would leave 3, which is the gap between two
+ * items in one cluster, and would not be a floor at all.
+ *
+ * A CENTRE FOLD RELIEVES BOTH SIDES, which the zone-aware loop used to refuse.
+ * A step was only taken while the zone it lives in was over, and the centre is
+ * never over: `formatTokens` bounds it at six characters (DROVE-241). But each
+ * side's share is HALF OF WHAT THE CENTRE LEAVES, so 6pt off the centre hands
+ * 3pt to each side. Refusing the centre's steps while a side was over was the
+ * second way the order could stop short of the floor.
+ *
+ * AND THE WORD IN THE LABEL SLOT IS GONE AGAIN (DROVE-250, correcting
+ * DROVE-244). Clay, striking it out in red: "I told you NOT to put this word
+ * thinking here. The dot covers it. We have precious space here." DROVE-231
+ * took `working` off on that instruction and DROVE-244 put `thinking` back,
+ * reading the objection as being about which word. It was about the SLOT. The
+ * blinking blue dot already says the main thread is going, and 44pt of a 146pt
+ * share is not a price this line can pay to restate it.
+ *
+ * So the slot holds a TOOL's name and nothing else. A tool name is a fact the
+ * dot cannot carry — it says WHICH thing, not that something. With no tool in
+ * flight the slot is empty and the clock, the thinking count and the workers
+ * stand on their own. The word survives where it costs nothing: the sheet's
+ * headline, the wrist's line, and the strip's accessibility label, which still
+ * reads `Main thread: thinking 4m 20s`.
+ *
+ * That hands 44pt back to the exact line that was overlapping, so the floor is
+ * mostly paid for before it is spent: in the thinking state the count and the
+ * tally now survive at 320, which DROVE-244 could not manage at any width
+ * below 375.
+ *
  * Pure. Nothing renders; AgentInputStatusRow.tsx draws what this resolves.
  */
-import { findFrame, resolveFlexFrames, type FlexFrame, type FlexNode } from './flexFrames';
+import {
+    findFrame,
+    measureFlexWidth,
+    resolveFlexFrames,
+    type FlexFrame,
+    type FlexNode,
+} from './flexFrames';
 import {
     estimateStatusRowTextWidth,
     statusRowMetrics,
@@ -75,6 +140,17 @@ export const statusStripMetrics = {
     workersGlyph: statusRowMetrics.agentsGlyph - 3,
     /** The context ring on its own: ContextGaugeIcon's `size`. */
     gauge: statusRowMetrics.gauge - 5,
+    /**
+     * THE FLOOR BETWEEN TWO ADJACENT ZONES (DROVE-250), in points.
+     *
+     * The row's own separator, which is the widest separation the strip
+     * already spends: two tappable clusters inside one zone are held apart by
+     * the middot and its 6pt margins. Two zones cannot be closer together than
+     * two clusters inside one of them, or the seam stops reading as a seam.
+     * Derived rather than written down again, so the thing it argues against
+     * and the floor it sets cannot drift apart.
+     */
+    zoneGap: statusRowMetrics.separator,
 } as const;
 
 /** What the strip has to say, before anything folds. */
@@ -82,27 +158,30 @@ export interface StatusStripContent {
     /** The dot is drawn. It is the only thing on the strip that never folds. */
     dot?: boolean;
     /**
-     * WHAT the main thread is doing: the tool it is blocked on, or the word
-     * `thinking` when none is in flight (DROVE-244).
+     * The TOOL the main thread is blocked on, and never a state word
+     * (DROVE-250, correcting DROVE-244).
      *
-     * It held only a tool's name between DROVE-231 and DROVE-244. Clay: "Don't
-     * show text working" — the dot beside it blinks blue and said the session
-     * was working, so a word repeating that earned nothing and went. `thinking`
-     * is not that word. The dot says the session is working; this says what it
-     * is working ON, and with no tool in flight the slot used to go blank and
-     * hold the last thing it knew.
+     * Clay has now refused a word in this slot twice: "Don't show text
+     * working" for DROVE-231, then "I told you NOT to put this word thinking
+     * here. The dot covers it. We have precious space here." for this. The
+     * objection is to the slot, not to the word in it. A tool name earns the
+     * room because the dot cannot say WHICH thing is running; a state word
+     * only repeats the blinking blue dot beside it.
+     *
+     * With no tool in flight this is null and the slot is not drawn. What the
+     * main thread is doing is still said in the accessibility label, on the
+     * sheet's headline and on the wrist, where it costs no width.
      */
     toolName?: string | null;
     /**
-     * The slot above holds the STATE WORD, not a tool's name (DROVE-244).
+     * `3.4k` — what THIS thinking has cost (DROVE-244, and the half of it Clay
+     * asked for by name: "when it's thinking instead of bashing on the main
+     * thread show the thinking token count").
      *
-     * The two are the same slot and they give way in opposite orders — a tool
-     * name folds early, the state word folds last of anything on the strip
-     * (DROVE-223) — so the fold has to be told which one it is looking at
-     * rather than comparing the string to a constant.
+     * A number, not a word. It appears only while no tool is running, which is
+     * the same condition that empties `toolName`, so the two are never on the
+     * line together.
      */
-    stateWord?: boolean;
-    /** `3.4k` — what this thinking has cost, beside the word (DROVE-244). */
     thinkingTokens?: string | null;
     /** The turn's clock, `4m 20s`. */
     elapsed?: string | null;
@@ -129,6 +208,19 @@ export interface StatusStripContent {
     contextGauge?: boolean;
     /** The context percent, when the line has room for the text. */
     contextPercent?: string | null;
+    /**
+     * That percent is the PRECISE reading, put there by a tap on the ring
+     * (DROVE-155, DROVE-231, exempted in DROVE-250).
+     *
+     * The give-way order decides what to drop when nobody has asked. Here
+     * somebody has, so the `contextPercent` step does not fire: folding it
+     * would make the tap do nothing, which is the one outcome a tap must not
+     * have. `84.0k of 200.0k context, compacts near 184.0k` is 44 characters
+     * and no phone has a zone that wide, so for as long as it is up the sides
+     * give way around it and the floor is not claimed. It is one more tap from
+     * being put back, which is what makes that acceptable.
+     */
+    contextPrecise?: boolean;
 }
 
 /** Which zone each fact lives in, so a fold can be asked whether it helps. */
@@ -166,6 +258,26 @@ export const noStatusStripFolds: StatusStripFolds = {
     tokens: false,
 };
 
+/**
+ * The content as a comparable SHAPE: what is on the strip, and nothing about
+ * how it got there.
+ *
+ * A fact that was never supplied and a fact a fold has just taken are the same
+ * strip, so `undefined` and `null` have to compare equal here. They did not
+ * while this was a bare `JSON.stringify` — `{}` against `{"a":null}` — so a
+ * fold on an absent fact reported itself as having changed something and was
+ * taken. It cost nothing while zone-awareness kept the centre's steps from
+ * firing at all; once DROVE-250 let them fire, every crowded row came back
+ * claiming it had folded a context percent that was never on it.
+ */
+function shapeOf(content: StatusStripContent): string {
+    return JSON.stringify(
+        Object.entries(content)
+            .filter(([, value]) => value !== null && value !== undefined)
+            .sort(([a], [b]) => a.localeCompare(b)),
+    );
+}
+
 /** The content with a set of folds applied; what actually gets drawn. */
 export function statusStripDrawn(
     content: StatusStripContent,
@@ -200,14 +312,13 @@ function leaf(name: string, width: number): FlexNode {
 }
 
 /**
- * The LIVE cluster: what the main thread is doing, what it is costing, and how
- * much is out.
+ * The LIVE cluster: which tool is running, what it is costing, and how much is
+ * out.
  *
- * The label slot holds a TOOL's name, or the word `thinking` when no tool is
- * in flight (DROVE-244). It holds neither at once, and it never holds the old
- * `working` word: the dot blinks blue and says the session is working, which
- * is the whole point of DROVE-231's dot table, so a word that only repeated
- * the dot went and a word that says WHAT came back.
+ * The label slot holds a TOOL's name or nothing (DROVE-250). No state word has
+ * survived here: `working` went in DROVE-231 and `thinking` went in DROVE-250,
+ * both because the dot beside them already blinks blue and the line is too
+ * tight to say it twice.
  */
 function liveCluster(content: StatusStripContent): FlexNode | null {
     const m = statusStripMetrics;
@@ -265,10 +376,23 @@ export function statusStripQuotaText(content: StatusStripContent): string | null
     return content.quotaWindow ?? content.quotaPercent ?? null;
 }
 
-function rightCluster(content: StatusStripContent): FlexNode | null {
+/**
+ * The right zone, with the account already held to its cap (DROVE-250).
+ *
+ * The cap is a `maxWidth` in the renderer, so the model has to carry it too or
+ * it measures a name that is never drawn at that width and reports a zone
+ * overflowing when the screen shows it fitting. That disagreement is what let
+ * the geometry claim a collision the folds could do nothing about: the account
+ * is the one thing here that truncates rather than dropping, so a zone width
+ * that ignores the truncation can never come back under budget.
+ */
+function rightCluster(content: StatusStripContent, screenWidth: number): FlexNode | null {
     const m = statusStripMetrics;
     const children: FlexNode[] = [];
-    if (content.account) children.push(leaf('account', text(content.account)));
+    if (content.account) {
+        const cap = statusStripAccountCap(content, screenWidth);
+        children.push(leaf('account', Math.min(text(content.account), cap ?? Infinity)));
+    }
     const quota = statusStripQuotaText(content);
     if (quota) children.push(leaf('quota', text(quota)));
     if (children.length === 0) return null;
@@ -296,7 +420,7 @@ export function statusStripNode(content: StatusStripContent, screenWidth: number
         left.push(row('leftClusters', m.clusterGap, clusters));
     }
     const centre = centreCluster(content);
-    const right = rightCluster(content);
+    const right = rightCluster(content, screenWidth);
     return {
         name: 'strip',
         style: {
@@ -326,6 +450,41 @@ export function statusStripNode(content: StatusStripContent, screenWidth: number
     };
 }
 
+/**
+ * What the line gives each side, and what each side may actually SPEND
+ * (DROVE-250).
+ *
+ * `share` is the geometry: half of what the centre leaves, which is where the
+ * flex pass puts the boundary. `budget` is the share less the clear space the
+ * zone owes on its inner edge, and it is what the give-way order spends. The
+ * two were the same number until DROVE-250, which is why a zone could be
+ * exactly its share, pass the fit test, and touch the zone beside it.
+ *
+ * Measured off the CENTRE alone, never off the whole strip, so the account's
+ * cap can be derived from it without the strip having to resolve a tree that
+ * the cap is an input to.
+ */
+function zoneBudget(content: StatusStripContent, screenWidth: number): {
+    usable: number;
+    centre: number;
+    share: number;
+    gap: number;
+    budget: number;
+} {
+    const m = statusStripMetrics;
+    const usable = statusRowUsableWidth(screenWidth);
+    const centreNode = centreCluster(content);
+    const centre = centreNode ? measureFlexWidth(centreNode, usable) : 0;
+    const share = (usable - centre) / 2;
+    // ONE BOUNDARY COSTS `zoneGap`. With a centre on the line there are two of
+    // them and the centre pays for neither, because the centre does not shrink
+    // — it is its content, on the middle — so each side owes a whole gap. With
+    // no centre the two sides face each other across a single boundary and
+    // split it.
+    const gap = centre > 0 ? m.zoneGap : m.zoneGap / 2;
+    return { usable, centre, share, gap, budget: share - gap };
+}
+
 /** The natural width of each zone's content, before anything is given away. */
 export function statusStripZoneWidths(content: StatusStripContent, screenWidth: number): {
     left: number;
@@ -333,61 +492,55 @@ export function statusStripZoneWidths(content: StatusStripContent, screenWidth: 
     right: number;
     /** What each SIDE zone may take: half of what the centre leaves. */
     share: number;
+    /** The clear space a side zone owes on its inner edge (DROVE-250). */
+    gap: number;
+    /** `share` less that gap: what the give-way order actually spends. */
+    budget: number;
     usable: number;
 } {
     const frame = resolveFlexFrames(statusStripNode(content, screenWidth), statusRowUsableWidth(screenWidth));
-    const usable = statusRowUsableWidth(screenWidth);
     const leftContent = findFrame(frame, 'leftContent');
-    const centre = findFrame(frame, 'centre');
     const right = findFrame(frame, 'quota');
-    const centreWidth = centre ? centre.width : 0;
+    const { usable, centre, share, gap, budget } = zoneBudget(content, screenWidth);
     return {
         left: leftContent ? leftContent.width : 0,
-        centre: centreWidth,
+        centre,
         right: right ? right.width : 0,
-        share: (usable - centreWidth) / 2,
+        share,
+        gap,
+        budget,
         usable,
     };
 }
 
 /**
- * The order this strip actually gives way in, with DROVE-223's ONE exception
- * applied (DROVE-244).
- *
- * `toolName` is a slot, not a fact. While it holds a tool's name it is cheap:
- * the tool is also a row in the sheet one tap away, and DROVE-155 ruled the
- * name folds early. While it holds the STATE WORD it is the most expensive
- * thing on the line, because it is the only place the strip says what the
- * session is doing at all — take it and the remaining `3.4k 4m 20s` describes
- * nothing. So the step moves to the very end and everything else, the centre's
- * own figure included, gives way ahead of it.
- *
- * The order is REORDERED rather than a second list, so there is still one
- * `STATUS_ROW_GIVE_WAY` and every pair of ranks it fixes still holds between
- * the steps around it. That is what stopped DROVE-223's rule from drifting the
- * last time the strip grew a fact.
- */
-export function statusStripOrderFor(
-    content: StatusStripContent,
-    order: readonly StatusRowGiveWay[],
-): StatusRowGiveWay[] {
-    if (!content.stateWord) return [...order];
-    return [...order.filter((what) => what !== 'toolName'), 'toolName'];
-}
-
-/**
  * WHICH FOLDS THIS STRIP NEEDS, taken in `STATUS_ROW_GIVE_WAY`'s order.
  *
- * ZONE-AWARE, which the old row's loop had no reason to be. A step only fires
- * if the zone it lives in is over its share: folding the account cannot make
- * the left zone fit, and taking it anyway would cut a name to relieve a
- * pressure it is nowhere near. That is how the order survives the three-zone
- * layout intact rather than being re-derived per zone.
+ * ZONE-AWARE, which the old row's loop had no reason to be. A SIDE zone's step
+ * only fires while that zone is over: folding the account cannot make the left
+ * zone fit, and taking it anyway would cut a name to relieve a pressure it is
+ * nowhere near. That is how the order survives the three-zone layout intact
+ * rather than being re-derived per zone.
+ *
+ * A CENTRE step is the exception, and it is not a loophole (DROVE-250). Each
+ * side's share is half of what the centre leaves, so 6pt off the centre hands
+ * 3pt to each side: a centre fold relieves every zone on the line, not only
+ * its own. The old test asked whether the CENTRE was over, and the centre is
+ * never over — `formatTokens` bounds it at six characters (DROVE-241) — so the
+ * one step that can widen a starved side was the one step that could never
+ * fire. It is still last on the order, so it only ever runs when everything
+ * cheaper has already gone.
+ *
+ * IT RUNS UNTIL THE GAP IS SATISFIED, not until the zones merely fit
+ * (DROVE-250). `budget` is the share less the 16pt floor, and that is what
+ * each side is measured against. Stopping at the share is what let the tally
+ * and the account meet on Clay's line with the order still holding folds in
+ * reserve.
  *
  * `account` is on the order but is not a step here. It truncates at the tail
- * rather than dropping, which is a flex weight in the renderer
- * (`statusRowShrink.account`), and it stays the first thing on the strip to
- * give way as TEXT.
+ * rather than dropping, which is a flex weight and a measured `maxWidth` in
+ * the renderer (`statusRowShrink.account`, `statusStripAccountCap`), and it
+ * stays the first thing on the strip to give way as TEXT.
  */
 export function statusStripFolds(
     content: StatusStripContent,
@@ -395,28 +548,31 @@ export function statusStripFolds(
     order: readonly StatusRowGiveWay[],
 ): StatusStripFolds {
     const folds: StatusStripFolds = { ...noStatusStripFolds };
-    const steps = statusStripOrderFor(content, order);
     const fits = () => {
         const widths = statusStripZoneWidths(statusStripDrawn(content, folds), screenWidth);
         return {
-            left: widths.left <= widths.share,
-            right: widths.right <= widths.share,
+            left: widths.left <= widths.budget,
+            right: widths.right <= widths.budget,
             centre: widths.centre <= widths.usable,
         };
     };
     let state = fits();
     if (state.left && state.right && state.centre) return folds;
-    for (const what of steps) {
+    for (const what of order) {
         if (what === 'account') continue;
+        // A reveal the reader asked for is not the layout's to take back.
+        if (what === 'contextPercent' && content.contextPrecise) continue;
         const zone = statusStripZoneOf[what];
-        if (state[zone]) continue;
+        // A centre step is worth taking whatever is over, because the centre
+        // funds both sides. A side step is worth taking only for its own zone.
+        if (zone !== 'centre' && state[zone]) continue;
         const key = what as keyof StatusStripFolds;
         if (folds[key]) continue;
         const next = { ...folds, [key]: true };
         const drawn = statusStripDrawn(content, next);
         // A fold that changes nothing is not taken: it would report a fact as
         // dropped when it was never on the strip.
-        if (JSON.stringify(drawn) === JSON.stringify(statusStripDrawn(content, folds))) continue;
+        if (shapeOf(drawn) === shapeOf(statusStripDrawn(content, folds))) continue;
         folds[key] = true;
         state = fits();
         if (state.left && state.right && state.centre) return folds;
@@ -445,17 +601,28 @@ export function resolveStatusStrip(
 /**
  * The most the ACCOUNT may take before it truncates, in points.
  *
- * What the right zone's share leaves once the percentage and the chevron have
+ * What the right zone's BUDGET leaves once the percentage and the chevron have
  * theirs. A number rather than a fraction, for DROVE-223's reason: `45%` of
  * the whole row was a cap no layout function could see, and it cut the most
  * important word on the line while a third of the row sat empty.
+ *
+ * The budget and not the share (DROVE-250). A cap that spends the whole share
+ * is a cap that lets the name end exactly where the tally begins, which is the
+ * photograph. Spending the budget instead leaves the 16pt floor standing, and
+ * the account is the right thing to take it out of: DROVE-223 ranks it above
+ * the tally and the clock, it is the longest term on the line, and the sheet
+ * one tap behind it names the account in full.
+ *
+ * It cuts at the TAIL, so an email keeps its head: `jam@codejam.ninja` becomes
+ * `jam@code…` and not `…jam.ninja`. The local part and the `@` are what say
+ * which account this is; the domain is the same on every account Clay owns.
  */
 export function statusStripAccountCap(content: StatusStripContent, screenWidth: number): number | null {
     if (!content.account) return null;
     const m = statusStripMetrics;
-    const widths = statusStripZoneWidths(content, screenWidth);
+    const { budget } = zoneBudget(content, screenWidth);
     const quota = statusStripQuotaText(content);
     const others = text(quota) + (quota ? m.gap : 0)
         + (content.quotaExpands ? m.chevron + m.gap : 0);
-    return Math.max(0, widths.share - others);
+    return Math.max(0, budget - others);
 }

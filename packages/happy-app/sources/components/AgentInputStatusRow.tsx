@@ -614,25 +614,28 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
     /**
      * WHAT THE STRIP WANTS TO SAY, before the line decides what it can afford.
      *
-     * The label slot names the running TOOL, or says `thinking` when the main
-     * thread is working with none in flight (DROVE-244). Clay: "When it's
-     * thinking instead of bashing on the main thread show the thinking token
-     * count." The old `working` word is still gone and stays gone — the dot is
-     * blinking blue at that moment and a word repeating it earned nothing —
-     * but a blank slot was not the answer either: it held the last thing it
-     * knew through the one state where Clay most wants to know something is
-     * happening.
+     * THE LABEL SLOT IS A TOOL NAME OR NOTHING (DROVE-250). Clay, striking the
+     * word out in red: "I told you NOT to put this word thinking here. The dot
+     * covers it. We have precious space here." DROVE-231 took `working` off on
+     * the same instruction and DROVE-244 read the objection as being about
+     * which word rather than about the slot. It is the slot. `main.working` is
+     * exactly the no-tool case, so the label is drawn only when it is false.
+     *
+     * The word is not lost, only unpriced: `accessibilityLabelFor` still reads
+     * `Main thread: thinking 4m 20s`, the agents sheet headlines with it, and
+     * the wrist line carries it. None of those are 44pt of a 146pt share.
      *
      * TWO TOKEN FIGURES, AND THEY NEVER TRADE PLACES (DROVE-241). The centre
      * is the session's spend and means the same thing at every moment; the
-     * left one is what THIS thinking has cost and exists only while the word
-     * beside it does. Different zones, different scopes, and the centre is
-     * untouched by any of this.
+     * left one is what THIS thinking has cost. It is the half of DROVE-244
+     * Clay asked for by name — "show the thinking token count" — so it stays,
+     * and it stands on its own now that the word beside it is gone. It is
+     * absent while a tool runs, which is why the screenshot that opened
+     * DROVE-250 has no thinking figure on it: `Bash` was in flight.
      */
     const content: StatusStripContent = {
         dot: hasDot,
-        toolName: mainWorking ? main!.label : null,
-        stateWord: mainWorking && main!.working,
+        toolName: mainWorking && !main!.working ? main!.label : null,
         thinkingTokens: main?.thinkingTokens ?? null,
         elapsed: main?.elapsed ?? null,
         tokens: main?.tokens ?? sideTokens,
@@ -645,6 +648,9 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
         quotaExpands: canOpenUsage,
         contextGauge: !!context,
         contextPercent: showContextPercentText ? contextPercentText : null,
+        // A tap on the ring asked for the long reading, so the give-way order
+        // may not fold it back off (DROVE-250).
+        contextPrecise: showPreciseContext,
     };
     // The zones, the folds and the geometry, all from the one flexbox tree
     // (DROVE-214's resolver, DROVE-231's zones). Nothing here is an offset.
@@ -716,18 +722,17 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
             })}
         >
             {drawn.toolName ? (
-                /* A TOOL's name may be cut mid-string; the STATE WORD may not
-                   (DROVE-223, DROVE-244). `mcp__chrome_devtools__take_scr…` is
-                   still recognisable and `think…` is not, and the word does
-                   not need cutting anyway: it folds whole, last of anything on
-                   the strip, and the layout has already found a line it fits
-                   on by the time this draws. */
+                /* Only ever a TOOL's name now (DROVE-250), and a tool name may
+                   be cut mid-string: `mcp__chrome_devtools__take_scr…` is
+                   still recognisable. It is rank 3 on the give-way order, so
+                   by the time a cut is needed the fold has usually taken the
+                   whole name already. */
                 <Text
-                    numberOfLines={drawn.stateWord ? undefined : 1}
+                    numberOfLines={1}
                     style={{
                         fontSize: 11,
                         color: theme.colors.text,
-                        flexShrink: drawn.stateWord ? 0 : 1,
+                        flexShrink: 1,
                         ...Typography.default(),
                     }}
                 >

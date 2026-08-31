@@ -14,15 +14,19 @@
  */
 import { describe, expect, it } from 'vitest';
 import { findFrame, resolveFlexFrames } from './flexFrames';
-import { STATUS_ROW_GIVE_WAY, statusRowUsableWidth } from './statusRowLayout';
+import {
+    STATUS_ROW_GIVE_WAY,
+    STATUS_ROW_MODEL_TRUNCATION,
+    statusRowUsableWidth,
+} from './statusRowLayout';
 import {
     resolveStatusStrip,
     noStatusStripFolds,
     statusStripAccountCap,
     statusStripDrawn,
     statusStripFolds,
+    statusStripMetrics,
     statusStripNode,
-    statusStripOrderFor,
     statusStripQuotaText,
     statusStripZoneOf,
     statusStripZoneWidths,
@@ -145,12 +149,18 @@ describe('the give-way order, zone by zone', () => {
         expect(statusStripZoneWidths(drawn, 393).left).toBe(128);
     });
 
-    it('folds the same two at 375, which is the same row 18pt narrower', () => {
+    it('folds the tasks badge as well at 375, which is the floor being paid for', () => {
+        // DROVE-231 folded the same two here as at 393 and kept the badge, on
+        // a 137pt share. The share has not moved; what it may SPEND has
+        // (DROVE-250). 128pt of left zone against a 121pt budget is 7pt over,
+        // and the badge is the next rank down. 393 is untouched — see above —
+        // which is the width Clay photographed.
         const { folds } = drawnAt(busy, 375);
         expect(folds.toolName).toBe(true);
         expect(folds.elapsed).toBe(true);
-        expect(folds.tasks).toBe(false);
-        expect(statusStripZoneWidths(drawnAt(busy, 375).drawn, 375).left).toBe(128);
+        expect(folds.tasks).toBe(true);
+        expect(statusStripZoneWidths(busy, 375).budget).toBe(121);
+        expect(statusStripZoneWidths(drawnAt(busy, 375).drawn, 375).left).toBe(45);
     });
 
     it('gives up the tasks badge too at 320, and nothing more', () => {
@@ -228,14 +238,22 @@ describe('the give-way order, zone by zone', () => {
 });
 
 describe('the account truncates, and the cap is measured off this row', () => {
-    it('caps the account at what the right zone leaves', () => {
+    it('caps the account at what the right zone BUDGET leaves', () => {
         // Not a fraction of the whole line. DROVE-223's `45%` was a cap no
         // layout function could see, and it cut the most important word on the
         // strip while a third of the row sat empty.
+        //
+        // And not the share either (DROVE-250). A cap that spends the whole
+        // share lets the name end exactly where the tally begins, which is the
+        // photograph. The 16pt floor comes off first, so the cap is 16 less
+        // than DROVE-223 measured and the gap it buys is guaranteed.
         const cap = statusStripAccountCap(busy, 393)!;
         const widths = statusStripZoneWidths(busy, 393);
-        expect(cap).toBeLessThan(widths.share);
-        expect(cap).toBe(146 - (12 + 3) - (10 + 3));
+        expect(widths.gap).toBe(16);
+        expect(widths.budget).toBe(146 - 16);
+        expect(cap).toBeLessThan(widths.budget);
+        expect(cap).toBe(130 - (12 + 3) - (10 + 3));
+        expect(cap).toBe(102);
     });
 
     it('has no cap when there is no account to cut', () => {
@@ -328,20 +346,22 @@ describe('the centre holds a session total, at every width (DROVE-241)', () => {
         // row a fact it kept before. The give-way order is unchanged at all
         // three widths: the tool name and the clock at 393 and 375, the tasks
         // badge as well at 320.
+        //
+        // DROVE-250 revised the second half of that. The centre still costs
+        // the sides nothing it did not cost before, but the 16pt zone floor
+        // does, and on the widest total the badge is what pays it at 393 and
+        // 375 as well as at 320. The criterion that survives whole is the one
+        // about the CENTRE: the tally is never the thing that gives way, and
+        // it is on the line at every width below.
         const widest = { ...busy, tokens: '999.9k' };
-        for (const width of [375, 393]) {
+        for (const width of [320, 375, 393]) {
             expect(drawnAt(widest, width).folds, String(width)).toEqual({
                 ...noStatusStripFolds,
                 toolName: true,
                 elapsed: true,
+                tasks: true,
             });
         }
-        expect(drawnAt(widest, 320).folds).toEqual({
-            ...noStatusStripFolds,
-            toolName: true,
-            elapsed: true,
-            tasks: true,
-        });
         // And the number itself is never the thing that gives way: it is last
         // on STATUS_ROW_GIVE_WAY and the centre fits at every width.
         for (const width of [320, 375, 393]) {
@@ -362,89 +382,85 @@ describe('the centre holds a session total, at every width (DROVE-241)', () => {
 });
 
 /**
- * THE STRIP WHILE THE MAIN THREAD IS THINKING (DROVE-244).
+ * THE STRIP WHILE THE MAIN THREAD IS THINKING (DROVE-244, corrected by
+ * DROVE-250).
  *
- * The label slot holds a word rather than a tool's name, and the numbers on
- * the line come from two different scopes. Both of those are things a width
- * budget can get wrong quietly, so they are measured here rather than argued.
+ * DROVE-244 put the word `thinking` in the label slot and measured what it
+ * cost: 44pt of a 146pt share, paid for with the clock, the badge and — at
+ * 320 — the count Clay had actually asked for. Clay struck the word out in
+ * red: "I told you NOT to put this word thinking here. The dot covers it. We
+ * have precious space here."
+ *
+ * So the word is gone and the NUMBER stays, which is the half of 244 he asked
+ * for by name. What is measured here is that the state now costs the line
+ * almost nothing: the same row that lost three facts to the word loses one to
+ * the 16pt zone floor, and the count survives at every width.
  */
-describe('the thinking state (DROVE-244)', () => {
-    /** Clay's worst row, thinking: `● thinking 4m 20s 3.4k 👥6 ˄ · 1/3 tasks ˄ · 51.6k ◔ · jamrizzi 8% ˄`. */
+describe('the thinking state, with no word in it (DROVE-250 over DROVE-244)', () => {
+    /** Clay's row while thinking: `● 4m 20s 3.4k 👥6 ˄ · 1/3 tasks ˄ · 51.6k ◔ · jamrizzi 8% ˄`. */
     const thinking: StatusStripContent = {
         ...busy,
-        toolName: 'thinking',
-        stateWord: true,
+        toolName: null,
         thinkingTokens: '3.4k',
     };
 
-    it('is the widest the left zone ever gets, and the word is why', () => {
-        // 245 against a 146 share at 393. The word costs 44 of it, so
-        // SOMETHING established has to move in this state whatever the order
-        // says — there is no arrangement where nothing gives.
-        expect(statusStripZoneWidths(thinking, 393).left).toBe(245);
+    it('draws no state word, because the content model has no slot for one', () => {
+        // `toolName` is the only label there is and the caller passes null for
+        // it whenever no tool is in flight. Two words have now been refused
+        // here — `working` in DROVE-231, `thinking` in DROVE-250 — and both
+        // for the same reason: the dot beside them already blinks blue.
+        for (const width of [320, 375, 393]) {
+            expect(drawnAt(thinking, width).drawn.toolName, String(width)).toBeNull();
+        }
+        const frame = resolveFlexFrames(statusStripNode(thinking, 393), statusRowUsableWidth(393));
+        expect(findFrame(frame, 'toolName')).toBeUndefined();
+    });
+
+    it('hands 44pt back to the left zone, which is what the word was costing', () => {
+        // DROVE-244 pinned this row at 245pt with the word on it. Without it
+        // the same row is 194, exactly what `busy` wants, because `3.4k` and
+        // `Bash` happen to estimate the same.
+        expect(statusStripZoneWidths(thinking, 393).left).toBe(194);
         expect(statusStripZoneWidths(busy, 393).left).toBe(194);
     });
 
-    it('keeps the word at every width, ahead of everything else on the line', () => {
+    it('keeps the count Clay asked for at EVERY width, 320 included', () => {
+        // The one thing DROVE-244 could not do. "When it's thinking instead of
+        // bashing on the main thread show the thinking token count" — and at
+        // 320 the word ate it. With the word gone it survives under a floor
+        // that is stricter than the one 244 was measured against.
         for (const width of [320, 375, 393]) {
-            const { drawn } = drawnAt(thinking, width);
-            expect(drawn.toolName, String(width)).toBe('thinking');
-            expect(drawn.dot, String(width)).toBe(true);
-            expect(drawn.workers, String(width)).toBe(6);
+            expect(drawnAt(thinking, width).drawn.thinkingTokens, String(width)).toBe('3.4k');
         }
     });
 
-    it('keeps the count at 375 and 393, and gives it up only at 320', () => {
-        // What Clay asked for survives on the two phones he actually uses. At
-        // 320 the badge has already gone and the line is still over, so the
-        // count is the next thing and the word is what stays.
-        expect(drawnAt(thinking, 393).drawn.thinkingTokens).toBe('3.4k');
-        expect(drawnAt(thinking, 375).drawn.thinkingTokens).toBe('3.4k');
-        expect(drawnAt(thinking, 320).drawn.thinkingTokens).toBeNull();
-    });
-
-    it('never truncates the line: every width fits once the folds are taken', () => {
+    it('folds the clock and the badge, and nothing else, at every width', () => {
         for (const width of [320, 375, 393]) {
-            const { drawn } = drawnAt(thinking, width);
-            const widths = statusStripZoneWidths(drawn, width);
-            expect(widths.left, String(width)).toBeLessThanOrEqual(widths.share);
-            expect(widths.right, String(width)).toBeLessThanOrEqual(widths.share);
-            expect(widths.centre, String(width)).toBeLessThanOrEqual(widths.usable);
+            expect(drawnAt(thinking, width).folds, String(width)).toEqual({
+                ...noStatusStripFolds,
+                elapsed: true,
+                tasks: true,
+            });
         }
     });
 
-    it('keeps the account and the tally at every width, whatever the left zone costs', () => {
-        // Zone-aware, and this is the state that tests it hardest: the left
-        // zone is over by 99pt at 393 and the right zone is nowhere near its
-        // share. Nothing about the word may cut the account.
+    it('keeps the account, the tally, the workers and the dot at every width', () => {
         for (const width of [320, 375, 393]) {
             const { drawn } = drawnAt(thinking, width);
             expect(drawn.account, String(width)).toBe('jamrizzi');
             expect(drawn.quotaPercent, String(width)).toBe('8%');
             expect(drawn.tokens, String(width)).toBe('51.6k');
+            expect(drawn.workers, String(width)).toBe(6);
+            expect(drawn.dot, String(width)).toBe(true);
         }
     });
 
-    it('folds the state word LAST, behind the centre figure and the account', () => {
-        // DROVE-223's rule, kept by reordering the one list rather than by a
-        // second one. A tool name goes third; the same slot holding the word
-        // goes after everything.
-        const order = statusStripOrderFor(thinking, STATUS_ROW_GIVE_WAY);
-        expect(order[order.length - 1]).toBe('toolName');
-        expect(order.indexOf('tokens')).toBeLessThan(order.indexOf('toolName'));
-        expect(order.indexOf('account')).toBeLessThan(order.indexOf('toolName'));
-        // A tool's name is untouched: same list, same ranks.
-        expect(statusStripOrderFor(busy, STATUS_ROW_GIVE_WAY)).toEqual([...STATUS_ROW_GIVE_WAY]);
-    });
-
-    it('draws the count third, after the word and the clock', () => {
-        // The shape Claude Code's own status line uses —
-        // `Actualizing… (20s · ↓ 424 tokens)` — and the shape the strip's tool
-        // state already has in `Bash 2m 58s`. Verb, clock, tokens, in both.
+    it('draws the count after the clock, which is the shape both readouts use', () => {
+        // Claude Code's own status line is `Actualizing… (20s · ↓ 424 tokens)`
+        // and the strip's tool state is `Bash 2m 58s`. Clock then tokens, in
+        // both; the verb is what DROVE-250 took out of the strip's copy.
         const frame = resolveFlexFrames(statusStripNode(thinking, 393), statusRowUsableWidth(393));
-        const at = (name: string) => findFrame(frame, name)!.x;
-        expect(at('toolName')).toBeLessThan(at('elapsed'));
-        expect(at('elapsed')).toBeLessThan(at('thinkingTokens'));
+        expect(findFrame(frame, 'elapsed').x).toBeLessThan(findFrame(frame, 'thinkingTokens').x);
     });
 
     it('has no thinking count on the line while a tool is running', () => {
@@ -452,5 +468,230 @@ describe('the thinking state (DROVE-244)', () => {
         // thinking state, and the layout must not reserve room for one.
         expect(statusStripZoneWidths(busy, 393).left)
             .toBe(statusStripZoneWidths({ ...busy, thinkingTokens: null }, 393).left);
+    });
+});
+
+/**
+ * THE ZONES DO NOT TOUCH (DROVE-250).
+ *
+ * Clay, on `● Bash 15m 23s ˄  17.1M  jam@codejam.ninja 78% ˄`: "Do u see the
+ * issue here? They overlap".
+ *
+ * Measured, the tally and the account were not overlapping: they were 10pt
+ * apart with 52pt of empty line on the other side of the centre. That reads as
+ * a collision because the eye compares the two seams, and the layout had no
+ * opinion about either — its fit test was `left <= share`, and a zone that is
+ * exactly its share ends where the next one begins.
+ *
+ * So the floor is 16pt, `statusRowMetrics.separator`, and everything below is
+ * that number surviving contact with the widest row the strip can be handed.
+ * The geometry comes out of `resolveFlexFrames` placing the real tree, never
+ * out of the sums that produced it — the gaps below are frame coordinates
+ * subtracted from each other.
+ */
+describe('the 16pt floor between adjacent zones (DROVE-250)', () => {
+    /**
+     * THE WORST REALISTIC ROW, which is not the fixture.
+     *
+     * A long email, the widest total `formatTokens` can produce, a tool name,
+     * a two-digit task badge, a two-digit agent count, and the ring. Everything
+     * on it is something Clay has actually had on the line.
+     */
+    const worst: StatusStripContent = {
+        dot: true,
+        toolName: 'Bash',
+        elapsed: '15m 23s',
+        tokens: '999.9M',
+        workers: 14,
+        liveExpands: true,
+        tasks: '3/12 tasks',
+        account: 'clayrisser@gmail.com',
+        quotaPercent: '78%',
+        quotaExpands: true,
+        contextGauge: true,
+    };
+
+    /** The row Clay photographed, with the ring his phone was drawing. */
+    const photographed: StatusStripContent = {
+        dot: true,
+        toolName: 'Bash',
+        elapsed: '15m 23s',
+        tokens: '17.1M',
+        liveExpands: true,
+        account: 'jam@codejam.ninja',
+        quotaPercent: '78%',
+        quotaExpands: true,
+        contextGauge: true,
+    };
+
+    /** The clear space either side of the centre, straight off the frames. */
+    function gaps(content: StatusStripContent, width: number) {
+        const { frame } = drawnAt(content, width);
+        const left = findFrame(frame, 'leftContent');
+        const centre = findFrame(frame, 'centre');
+        const right = findFrame(frame, 'quota');
+        return {
+            left: centre.x - (left.x + left.width),
+            right: right.x - (centre.x + centre.width),
+        };
+    }
+
+    it('is the row separator, so no seam between zones is tighter than one inside a zone', () => {
+        // The widest separation the strip already spends is the middot and its
+        // 6pt margins, which is what holds two tappable clusters apart INSIDE
+        // one zone. Two zones cannot be closer than that. Derived, not
+        // written down again.
+        expect(statusStripMetrics.zoneGap).toBe(statusStripMetrics.clusterGap);
+        expect(statusStripMetrics.zoneGap).toBe(16);
+        // And it is wider than any clear run inside a zone: 3pt between two
+        // items, 5pt after the dot, 6pt either side of the middot.
+        expect(statusStripMetrics.zoneGap).toBeGreaterThan(statusStripMetrics.gap);
+        expect(statusStripMetrics.zoneGap).toBeGreaterThan(statusStripMetrics.dotGap);
+    });
+
+    it('takes the floor off the share, and the give-way order spends what is left', () => {
+        for (const width of [320, 375, 393]) {
+            const w = statusStripZoneWidths(worst, width);
+            expect(w.gap, String(width)).toBe(16);
+            expect(w.budget, String(width)).toBe(w.share - 16);
+        }
+        // The share itself is untouched, because it is a fact about where the
+        // flex pass puts the boundary rather than a policy (DROVE-231,
+        // DROVE-241).
+        expect(statusStripZoneWidths(busy, 393).share).toBe(146);
+    });
+
+    it('holds 16pt or more between every pair of zones, at 320, 375 and 393', () => {
+        // THE ACCEPTANCE CRITERION, measured off the resolved frames.
+        for (const content of [worst, photographed, busy, idle]) {
+            for (const width of [320, 375, 393]) {
+                const gap = gaps(content, width);
+                expect(gap.left, `left ${width}`).toBeGreaterThanOrEqual(16);
+                expect(gap.right, `right ${width}`).toBeGreaterThanOrEqual(16);
+            }
+        }
+    });
+
+    it('measures the worst row at 320, 375 and 393, and writes the numbers down', () => {
+        // usable, centre, share, budget, left after folds, right after folds.
+        const rows = [320, 375, 393].map((width) => {
+            const { drawn } = drawnAt(worst, width);
+            const w = statusStripZoneWidths(drawn, width);
+            return [w.usable, w.centre, w.share, w.budget, w.left, w.right];
+        });
+        expect(rows).toEqual([
+            [266, 53, 106.5, 90.5, 51, 90.5],
+            [321, 53, 134, 118, 51, 118],
+            [339, 53, 143, 127, 51, 127],
+        ]);
+        // The right zone lands exactly on its budget at all three, because the
+        // account truncates INTO it; the gap it leaves is the floor itself.
+        for (const width of [320, 375, 393]) {
+            expect(gaps(worst, width).right, String(width)).toBe(16);
+        }
+        // And the left zone has room to spare once the order has run.
+        expect([320, 375, 393].map((width) => gaps(worst, width).left)).toEqual([55.5, 83, 92]);
+    });
+
+    it('gives way in DROVE-223s order and stops there: the name, the clock, the badge', () => {
+        for (const width of [320, 375, 393]) {
+            expect(drawnAt(worst, width).folds, String(width)).toEqual({
+                ...noStatusStripFolds,
+                toolName: true,
+                elapsed: true,
+                tasks: true,
+            });
+        }
+        // Nothing later on the list moves: the tally is last and it is on the
+        // line, and the account gives way as TEXT rather than dropping.
+        for (const width of [320, 375, 393]) {
+            const { drawn } = drawnAt(worst, width);
+            expect(drawn.tokens, String(width)).toBe('999.9M');
+            expect(drawn.account, String(width)).toBe('clayrisser@gmail.com');
+            expect(drawn.quotaPercent, String(width)).toBe('78%');
+        }
+    });
+
+    it('keeps a two-digit worker count at every width, because it is on no fold list', () => {
+        // Clay: "with 14 agents running it is one of the most useful facts on
+        // that line". It is not a step in `statusStripFolds` and
+        // `statusStripDrawn` never nulls it, so nothing on the strip can take
+        // it — a count missing from a real row is a snapshot reporting no
+        // agents, not a fold.
+        for (const width of [320, 375, 393]) {
+            expect(drawnAt(worst, width).drawn.workers, String(width)).toBe(14);
+            expect(findFrame(drawnAt(worst, width).frame, 'workersCount').width, String(width)).toBe(12);
+        }
+        expect(Object.keys(noStatusStripFolds)).not.toContain('workers');
+    });
+
+    it('cuts the account at the TAIL, so an email keeps the part that names it', () => {
+        // `jam@codejam.ninja` becomes `jam@code…`, never `…jam.ninja`. The
+        // local part and the `@` say which account this is; the domain is the
+        // same on every account Clay owns. The cap leaves room for them at the
+        // narrowest width the strip supports.
+        expect(STATUS_ROW_MODEL_TRUNCATION.ellipsizeMode).toBe('tail');
+        const caps = [320, 375, 393]
+            .map((width) => statusStripAccountCap(drawnAt(photographed, width).drawn, width));
+        expect(caps).toEqual([59.5, 87, 96]);
+        // `jam@` is four characters, 24pt, and it survives the tightest cap.
+        expect(Math.min(...caps as number[])).toBeGreaterThan(4 * 6);
+    });
+
+    it('truncates the account rather than dropping any other zones fact', () => {
+        // DROVE-223 ranks `account` above `tokens` and `elapsed`, and this is
+        // the right zone's only give-way: `quotaWindow` does nothing while an
+        // account heads the quota, and the percentage never shrinks.
+        const { drawn } = drawnAt(photographed, 393);
+        expect(drawn.tokens).toBe('17.1M');
+        expect(drawn.elapsed).toBe('15m 23s');
+        expect(drawn.toolName).toBe('Bash');
+        expect(drawn.account).toBe('jam@codejam.ninja');
+        // The zone still lands inside its budget, because the model carries
+        // the cap the renderer draws with.
+        const w = statusStripZoneWidths(drawn, 393);
+        expect(w.right).toBeLessThanOrEqual(w.budget);
+    });
+
+    it('lets a CENTRE fold relieve a starved side, because the centre funds both', () => {
+        // Each side's share is half of what the centre leaves, so 6pt off the
+        // centre hands 3pt to each side. The old loop only took a step while
+        // the step's OWN zone was over, and the centre is never over — which
+        // made the one step that can widen a starved side the one step that
+        // could never fire.
+        const wide = statusStripZoneWidths({ ...busy, tokens: '999.9k' }, 393);
+        const narrow = statusStripZoneWidths({ ...busy, tokens: null }, 393);
+        expect(narrow.budget - wide.budget).toBe((wide.centre - narrow.centre) / 2);
+        expect(statusStripZoneOf.tokens).toBe('centre');
+        // And it is still LAST, so it only runs once everything cheaper has.
+        expect(STATUS_ROW_GIVE_WAY[STATUS_ROW_GIVE_WAY.length - 1]).toBe('tokens');
+    });
+
+    it('does not fold a reveal the reader asked for', () => {
+        // A tap on the ring puts `84.0k of 200.0k context, compacts near
+        // 184.0k` in the centre, which no phone has a zone wide enough for.
+        // Folding it back would make the tap do nothing, so the step is
+        // skipped and the sides give way around it instead.
+        const tapped: StatusStripContent = {
+            ...busy,
+            contextPercent: '84.0k of 200.0k context, compacts near 184.0k',
+            contextPrecise: true,
+        };
+        expect(drawnAt(tapped, 393).drawn.contextPercent)
+            .toBe('84.0k of 200.0k context, compacts near 184.0k');
+        // Without the tap the same string is the cheapest thing on the line
+        // and rank 1 takes it.
+        expect(drawnAt({ ...tapped, contextPrecise: false }, 393).drawn.contextPercent).toBeNull();
+    });
+
+    it('shares ONE gap when there is no centre to sit between the sides', () => {
+        // One boundary costs 16pt whoever pays it. With a centre there are two
+        // and the centre pays for neither, because it does not shrink; with no
+        // centre the two sides face each other across a single boundary and
+        // split it.
+        const noCentre = statusStripZoneWidths({ ...idle, contextGauge: false }, 393);
+        expect(noCentre.centre).toBe(0);
+        expect(noCentre.gap).toBe(8);
+        expect(noCentre.share * 2 - noCentre.gap * 2).toBe(statusRowUsableWidth(393) - 16);
     });
 });
