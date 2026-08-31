@@ -16,7 +16,7 @@
 import { storage } from './storage';
 import { sync } from './sync';
 import { sessionAllow, sessionDeny } from './ops';
-import { collectGateEntries, collectGates, questionTextFor } from './droverGates';
+import { collectGateEntries, collectGates } from './droverGates';
 import { newGateEntries, togglesFromSettings, wakeDeserved } from './droverChannels';
 import { demoLog, isDroverDemoId } from './droverDemo';
 import { isSessionArchived } from './sessionArchive';

@@ -1007,10 +1007,9 @@ export function SessionViewLoaded({
 
     const connectionStatus = React.useMemo(() => ({
         text: sessionStatus.statusText,
-        color: sessionStatus.statusColor,
         dotColor: sessionStatus.statusDotColor,
         isPulsing: sessionStatus.isPulsing,
-    }), [sessionStatus.statusText, sessionStatus.statusColor, sessionStatus.statusDotColor, sessionStatus.isPulsing]);
+    }), [sessionStatus.statusText, sessionStatus.statusDotColor, sessionStatus.isPulsing]);
 
     const usageData = React.useMemo(() => {
         const source = sessionUsage ?? session.latestUsage;

@@ -40,12 +40,29 @@
  * above leave at 375, so the tool NAME gives way. That fold used to fire under
  * a 360pt constant; with a model and an account on the row the width it should
  * fire at depends on how long this tool, this model and this account happen to
- * be, so the row asks `statusRowFits` with its real content instead. A
+ * be, so the row asks `statusRowFolds` with its real content instead. A
  * constant could only ever have been right for one row.
  *
- * Pure, so the budget can be pinned at 375 and 320 without a renderer.
+ * THE TASKS SEGMENT COUNTS TOO. DROVE-167 put `1/3 tasks ˄` on the row, 83pt
+ * with its separator, and the estimate did not know it was there: a working
+ * session with a list came out at 353 against 355 usable on a 393pt phone, so
+ * the tool name stayed while the row really needed 436, and the account and
+ * the model were cut to `jam…` and `Opus…` instead. Two folds pay for it, in
+ * this order, and only as far as the width needs:
+ *
+ *   1. The tool name, DROVE-155's own fold, worth 30pt for `Bash`.
+ *   2. The MODEL, whole. With a model still on the row a working session with
+ *      a list is 51pt over at 393 even without the name, and the model is the
+ *      one segment that can go whole and come back: it is on the row when the
+ *      main thread is idle and it never truncates. DROVE-178 is taking the
+ *      model back to the button row for good, at which point this fold has
+ *      nothing left to fire on and the row with a list fits at 375 and 393
+ *      once the name has folded.
+ *
+ * Pure, so the budget can be pinned at 393, 375 and 320 without a renderer.
  * AgentInputStatusRow.tsx draws it.
  */
+import { MOBILE_COMPOSER_LAYOUT, MOBILE_COMPOSER_METRICS } from './agentInputLayout';
 
 /**
  * Everything on the row that is not text, in points.
@@ -64,8 +81,12 @@ export const statusRowMetrics = {
      * phone; the estimate only ever errs toward "does not fit".
      */
     glyphWidth: 6,
-    /** 10pt shell inset + 9pt action inset, matching the row's own style (DROVE-153). */
-    paddingHorizontal: 19,
+    /**
+     * The row's own inset: the shell inset plus the action inset, read off the
+     * composer's metrics rather than written down again, so the row and this
+     * estimate cannot disagree about where the row's edges are (DROVE-153).
+     */
+    paddingHorizontal: MOBILE_COMPOSER_METRICS.shellInset + MOBILE_COMPOSER_LAYOUT.addGlyphOffset,
     dot: 7,
     dotMarginRight: 5,
     separator: 16,
@@ -108,6 +129,17 @@ export interface StatusRowParts {
     agentCount?: number;
     /** The live segment opens the agent tree, so it carries a chevron. */
     liveExpands?: boolean;
+    /**
+     * The live segment with its tool name folded away, `1m 2s 251.2k` for
+     * `Bash 1m 2s 251.2k` (DROVE-155). Only `statusRowFolds` reads it, to
+     * ask whether the name alone saves the row.
+     */
+    liveWithoutName?: string | null;
+    /**
+     * The task badge, `1/3 tasks` (DROVE-167). Always carries a chevron,
+     * because the segment is the way to the list.
+     */
+    tasks?: string | null;
     /**
      * The connection IN WORDS. Nothing passes this any more (DROVE-138 folded
      * it into the dot), and it stays on the model so the spec can put it back
@@ -184,6 +216,7 @@ export function estimateStatusRowWidth(parts: StatusRowParts): number {
         if (parts.liveExpands) live += m.chevron;
         segments.push(live);
     }
+    if (parts.tasks) segments.push(estimateStatusRowTextWidth(parts.tasks) + m.chevron);
     if (parts.connection) segments.push(estimateStatusRowTextWidth(parts.connection));
     if (parts.model) segments.push(estimateStatusRowTextWidth(parts.model));
     if (parts.quota) {
@@ -201,4 +234,28 @@ export function estimateStatusRowWidth(parts: StatusRowParts): number {
 /** True when the row draws whole at this width, with nothing cut. */
 export function statusRowFits(parts: StatusRowParts, screenWidth: number): boolean {
     return estimateStatusRowWidth(parts) <= statusRowUsableWidth(screenWidth);
+}
+
+export interface StatusRowFolds {
+    /** The tool name goes and the numbers beside it stay (DROVE-155). */
+    toolName: boolean;
+    /** The model goes whole, because the name alone did not save the row. */
+    model: boolean;
+}
+
+/**
+ * Which folds the row needs at this width, in the order they fire.
+ *
+ * Nothing folds on a row that fits. Over budget, the tool name goes first;
+ * if the row is still over with the name gone, the model goes too. Neither
+ * fold fires on a part that is not on the row, so a row with no model (the
+ * row DROVE-178 leaves) can only ever lose the name. Below the width both
+ * folds hold, the row shrinks in `statusRowShrink`'s order instead.
+ */
+export function statusRowFolds(parts: StatusRowParts, screenWidth: number): StatusRowFolds {
+    if (statusRowFits(parts, screenWidth)) return { toolName: false, model: false };
+    const canFoldName = !!parts.live && parts.liveWithoutName != null && parts.liveWithoutName !== parts.live;
+    const nameless = canFoldName ? { ...parts, live: parts.liveWithoutName } : parts;
+    if (statusRowFits(nameless, screenWidth)) return { toolName: true, model: false };
+    return { toolName: canFoldName, model: !!parts.model };
 }

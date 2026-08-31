@@ -31,8 +31,6 @@ import {
     currentDroverAccountRow,
     droverAccountsUsage,
     droverFamilyLabel,
-    droverFamilyRows,
-    droverOtherAccounts,
     droverWindowId,
     usageLimitsFromDroverUsage,
     type DroverAccountUsageRow,
