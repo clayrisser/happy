@@ -529,7 +529,7 @@ export const ru: TranslationStructure = {
             title: 'КАНАЛЫ',
             label: 'Каналы',
             audioTitle: 'ЗВУК',
-            speakPrompts: 'Читать запросы вслух при поступлении',
+            speakPrompts: 'Читать запросы при поступлении',
             speakPromptsSubtitle: 'Запрос Cattle Drover и его варианты зачитываются вслух, когда он приходит.',
             readReplies: 'Читать ответы вслух',
             readRepliesSubtitle: 'Произносит каждый ответ по мере поступления. Код, диффы и вывод инструментов пропускаются.',

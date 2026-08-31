@@ -4,6 +4,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Ionicons } from '@expo/vector-icons';
 import { Typography } from '@/constants/Typography';
 import { BubblePressable } from './BubblePressable';
+import { sheetTitleLines } from './droverChannelsSheetLayout';
 
 /**
  * One row of a composer sheet (DROVE-83): a title on the left and, on the
@@ -12,6 +13,13 @@ import { BubblePressable } from './BubblePressable';
  *
  * The session sheet uses the picker shape for permission mode, model and
  * effort; the channels sheet uses the switch shape for audio.
+ *
+ * A TOGGLE'S TITLE WRAPS (DROVE-123). It used to be one line, which cut
+ * `Speak prompts when they arrive` to `Speak prompts when th...` on a 393pt
+ * phone. That label is now shorter, and this is the net under it: a switch
+ * row has the height for two lines, so a label that grows in translation
+ * wraps instead of being sliced mid word. A picker row keeps its one line,
+ * because its value and chevron sit on that line beside it.
  */
 export type ComposerSheetRowProps = {
     title: string;
@@ -69,7 +77,7 @@ export const ComposerSheetRow = React.memo(function ComposerSheetRow(props: Comp
         return (
             <View style={styles.row} accessibilityRole="switch" accessibilityState={{ checked: props.value }}>
                 {icon}
-                <Text style={styles.title} numberOfLines={1}>{props.title}</Text>
+                <Text style={styles.title} numberOfLines={sheetTitleLines}>{props.title}</Text>
                 <Switch
                     value={props.value}
                     onValueChange={props.onValueChange}
