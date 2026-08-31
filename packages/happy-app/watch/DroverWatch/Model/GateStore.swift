@@ -34,6 +34,10 @@ final class GateStore: NSObject, ObservableObject {
     @Published private(set) var refresh: DroverRefresh = .never
     /// Why the wrist did not buzz, when it did not. Nil is the normal case.
     @Published private(set) var buzzRefusal: String?
+    /// Whether a CLOSED app can be tapped on this wrist (DROVE-124). The
+    /// frontmost route always works and is not in question; this is the one
+    /// that silently was not, and the Playground says so out loud.
+    @Published private(set) var backgroundDelivery: WristDelivery = .silent(.notAsked)
 
     /// The session whose transcript is on screen, told to the phone so it
     /// feeds that one (DROVE-91). Nil between transcript screens.
@@ -58,6 +62,14 @@ final class GateStore: NSObject, ObservableObject {
         super.init()
         buzzer.onRefusal = { [weak self] reason in
             Task { @MainActor in self?.buzzRefusal = reason }
+        }
+        buzzer.onDeliveryChanged = { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                self.backgroundDelivery = WristReach.delivery(
+                    frontmost: false, permission: self.buzzer.permission
+                )
+            }
         }
         speaker.onUtteranceEnded = { [weak self] id, finished in
             self?.reportSpoken(id: id, finished: finished)
@@ -157,9 +169,20 @@ final class GateStore: NSObject, ObservableObject {
     }
 
     /// Ask for the permission the background buzz needs, from the foreground,
-    /// which is the only place watchOS will show the prompt (DROVE-62).
+    /// which is the only place watchOS will show the prompt (DROVE-62). A
+    /// wrist that has already answered is not asked again, only re-read.
     func prepareBuzzer() {
         buzzer.requestAuthorization()
+    }
+
+    /// Re-read whether a closed app can buzz, without prompting (DROVE-124).
+    ///
+    /// Called from `applicationDidFinishLaunching`, the one point every launch
+    /// reaches — including the background wake, where the answer matters most
+    /// and where nothing used to look. Alerts turned off in the Watch app
+    /// months after the prompt was granted are found here rather than never.
+    func refreshBuzzPermission() {
+        buzzer.refreshPermission()
     }
 
     /// Play one cue's pattern from the Playground (DROVE-75). Local to this

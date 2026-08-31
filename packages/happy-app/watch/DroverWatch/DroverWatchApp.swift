@@ -45,6 +45,12 @@ final class DroverWatchAppDelegate: NSObject, WKApplicationDelegate {
         // and replays anything the bridge has already been handed.
         _ = store
         WatchNotificationRouter.shared.install(store: store)
+        // Whether a CLOSED app can buzz is only worth knowing on the launches
+        // where it is closed, and this is the only callback all of them make
+        // (DROVE-124). It does not prompt — watchOS refuses to prompt from a
+        // background launch anyway — it just reads, so the wrist knows it is
+        // muted before the arrival it cannot announce.
+        store.refreshBuzzPermission()
     }
 }
 

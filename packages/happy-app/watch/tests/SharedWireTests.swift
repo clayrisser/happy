@@ -199,6 +199,12 @@ struct SharedWireTests {
         theDemoPlaysEveryCueLoudestFirst()
         aDemoGapOutlastsThePattern()
         thePhonesBuzzGateIsADemoAndStillBuzzes()
+        aFrontmostAppAlwaysPlaysItsOwnPattern()
+        anAuthorizedClosedAppTapsButLosesThePattern()
+        anUnaskedOrRefusedWristSaysWhyItIsSilent()
+        aQuietOnlyAuthorizationIsSilenceNotSuccess()
+        everySilenceSaysWhatToDoAboutIt()
+        aRefusalNamesTheCueThatWasLost()
 
         if failures.isEmpty {
             print("\nall wire checks passed")
@@ -953,5 +959,80 @@ struct SharedWireTests {
         check(WristCue.needsYou.breaksThroughFocus, "a needs-you request interrupts a Focus")
         check(WristCue.permission.breaksThroughFocus, "a permission gate interrupts a Focus")
         check(!WristCue.finished.breaksThroughFocus, "a finished session waits for you")
+    }
+
+    // MARK: DROVE-124, what the wrist can actually deliver
+
+    /// The pattern goes straight to the Taptic Engine and no notification is
+    /// involved, so alerts being off must NOT mute it. Getting the order of
+    /// these two checks wrong would silence the one route that always works.
+    static func aFrontmostAppAlwaysPlaysItsOwnPattern() {
+        for permission in WristAlertPermission.allCases {
+            let delivery = WristReach.delivery(frontmost: true, permission: permission)
+            check(delivery == .pattern, "frontmost plays the pattern even when alerts are \(permission.rawValue)")
+            check(delivery.keepsPattern, "frontmost keeps the per-cue pattern with alerts \(permission.rawValue)")
+        }
+    }
+
+    /// The background route taps, and that is all it does: watchOS picks the
+    /// haptic, so the five patterns collapse to one. Anything in the app that
+    /// implies otherwise is a claim it cannot deliver.
+    static func anAuthorizedClosedAppTapsButLosesThePattern() {
+        let delivery = WristReach.delivery(frontmost: false, permission: .allowed)
+        check(delivery == .systemAlert, "a closed app with alerts on posts a notification")
+        check(delivery.buzzes, "the notification route does tap the wrist")
+        check(!delivery.keepsPattern, "the notification route loses the per-cue pattern")
+        check(delivery.silence == nil, "a wrist that taps has no silence to explain")
+    }
+
+    /// The failure this ticket exists for: `add` succeeds and the alert is
+    /// dropped at delivery, so silence has to be a state the app knows it is
+    /// in rather than an absence it cannot see.
+    static func anUnaskedOrRefusedWristSaysWhyItIsSilent() {
+        check(
+            WristReach.delivery(frontmost: false, permission: .notDetermined) == .silent(.notAsked),
+            "a wrist that never allowed alerts is silent, and knows it"
+        )
+        check(
+            WristReach.delivery(frontmost: false, permission: .denied) == .silent(.denied),
+            "a wrist with alerts refused is silent, and knows it"
+        )
+        check(
+            !WristReach.delivery(frontmost: false, permission: .denied).buzzes,
+            "a refused wrist does not claim to buzz"
+        )
+    }
+
+    /// Provisional is an AUTHORIZATION that delivers quietly: into Notification
+    /// Center, no sound, no haptic. A `status != .denied` check reads it as
+    /// fine and the wrist stays silent anyway, which is the same invisible
+    /// failure one layer down.
+    static func aQuietOnlyAuthorizationIsSilenceNotSuccess() {
+        let delivery = WristReach.delivery(frontmost: false, permission: .provisional)
+        check(delivery == .silent(.quietOnly), "quiet delivery is silence, not a buzz")
+        check(!delivery.buzzes, "provisional authorization does not tap the wrist")
+    }
+
+    /// A reason with nothing to do about it is a mystery with extra words.
+    static func everySilenceSaysWhatToDoAboutIt() {
+        for silence in WristSilence.allCases {
+            let reason = silence.reason
+            check(!reason.isEmpty, "\(silence.rawValue) has a reason")
+            check(reason.contains("cannot buzz"), "\(silence.rawValue) says the wrist cannot buzz")
+            let actionable = reason.contains("Watch app") || reason.contains("Open Drover")
+            check(actionable, "\(silence.rawValue) says what to do about it")
+        }
+    }
+
+    /// "The wrist is muted" and "your permission question never reached you"
+    /// are different news, so the cue is named when there is one.
+    static func aRefusalNamesTheCueThatWasLost() {
+        let named = WristReach.refusal(for: .denied, cue: .question)
+        check(named.hasPrefix(WristCue.question.headline), "a refusal leads with the cue that was lost")
+        check(named.contains(WristSilence.denied.reason), "a refusal still carries the fix")
+        check(
+            WristReach.refusal(for: .denied, cue: nil) == WristSilence.denied.reason,
+            "with no cue to name, the refusal is the reason alone"
+        )
     }
 }

@@ -13,7 +13,7 @@
  */
 
 import * as React from 'react';
-import { Platform, Text, View } from 'react-native';
+import { AppState, Platform, Text, View } from 'react-native';
 import { Stack, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { StyleSheet } from 'react-native-unistyles';
@@ -27,13 +27,19 @@ import { layout } from '@/components/layout';
 import { MOBILE_GLASS_HEADER_HEIGHT } from '@/components/navigation/headerMetrics';
 import { Typography } from '@/constants/Typography';
 import { hapticsConfirm, playPhoneTaptic, playWristCue } from '@/components/haptics';
-import { canBuzzWatch, wristCueDurationMs, wristCues, type WristCueSpec } from '@/utils/wristCues';
+import {
+    canBuzzWatch,
+    describeWristFidelity,
+    wristCueDurationMs,
+    wristCues,
+    type WristCueSpec,
+} from '@/utils/wristCues';
 import { phoneTaptics } from '@/utils/phoneTaptics';
 import { channelReadout, findDroverSettings, readoutIsEmpty } from '@/utils/channelReadout';
 import { useAllMachines, useAllSessions } from '@/sync/storage';
 import { buzzDroverWatch, type DemoBuzzOutcome } from '@/sync/droverDemoBuzz';
 import { machineDroverPolicy, type DroverPolicyResponse } from '@/sync/droverPolicy';
-import { isDroverWatchAvailable } from 'drover-watch';
+import { getDroverWatchStatus, isDroverWatchAvailable } from 'drover-watch';
 import type { DroverGateEntry } from '@/sync/droverGates';
 import {
     DEMO_SESSION_ID,
@@ -198,6 +204,25 @@ function WatchSection() {
     const alive = React.useRef(true);
     React.useEffect(() => () => { alive.current = false; }, []);
 
+    // What the wrist will ACTUALLY feel, read rather than assumed (DROVE-124).
+    // It swings on whether the watch app happens to be on screen this second,
+    // so it is read on mount, whenever the phone comes back to the foreground,
+    // and after every buzz. A stale verdict here would be the same confident
+    // wrong answer this row exists to stop giving.
+    const readStatus = React.useCallback(() => {
+        if (!isDroverWatchAvailable()) return null;
+        const status = getDroverWatchStatus();
+        return status.supported ? status : null;
+    }, []);
+    const [status, setStatus] = React.useState(readStatus);
+    React.useEffect(() => {
+        const sub = AppState.addEventListener('change', (state) => {
+            if (state === 'active') setStatus(readStatus());
+        });
+        return () => sub.remove();
+    }, [readStatus]);
+    const fidelity = describeWristFidelity(status);
+
     const buzz = React.useCallback(async (spec: WristCueSpec) => {
         if (busy) return;
         setBusy(spec.cue);
@@ -205,8 +230,9 @@ function WatchSection() {
         if (!alive.current) return;
         setLast({ cue: spec.cue, outcome });
         setArmWake(!outcome.ok && outcome.why.includes('spend one background wake'));
+        setStatus(readStatus());
         setBusy(null);
-    }, [busy, armWake]);
+    }, [busy, armWake, readStatus]);
 
     const line = (spec: WristCueSpec): string => {
         if (last?.cue !== spec.cue) return `${spec.beats.length} ${spec.beats.length === 1 ? 'beat' : 'beats'} on the wrist`;
@@ -218,9 +244,22 @@ function WatchSection() {
         <ItemGroup
             title="Watch"
             footer={available
-                ? 'Each row puts one demo gate on the wall for a few seconds so the wrist plays the real pattern. The card is a demo: answering it sends nothing. "Session finished" is not a gate and plays when a session stops.'
+                ? 'Each row puts one demo gate on the wall for a few seconds, by the same path a real gate takes. The card is a demo: answering it sends nothing. "Session finished" is not a gate and plays when a session stops.'
                 : 'No watch module on this build; nothing here can reach a wrist.'}
         >
+            {available ? (
+                <Item
+                    title={fidelity.headline}
+                    subtitle={fidelity.detail}
+                    subtitleLines={0}
+                    icon={<Ionicons
+                        name={fidelity.fidelity === 'pattern' ? 'watch' : 'watch-outline'}
+                        size={29}
+                        color={fidelity.fidelity === 'pattern' ? '#34C759' : '#FF9500'}
+                    />}
+                    showChevron={false}
+                />
+            ) : null}
             {wristCues.filter(canBuzzWatch).map((spec) => (
                 <Item
                     key={spec.cue}

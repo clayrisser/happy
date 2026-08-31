@@ -2,7 +2,13 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-import { parseWristCueSwift, wristBeatGap, wristCueDurationMs, wristCues } from './wristCues';
+import {
+    describeWristFidelity,
+    parseWristCueSwift,
+    wristBeatGap,
+    wristCueDurationMs,
+    wristCues,
+} from './wristCues';
 
 /**
  * The phone's copy of the wrist vocabulary is pinned to the Swift that
@@ -95,5 +101,49 @@ describe('the demo buzz gate for the wrist', () => {
 
     it('can summon every gate cue and not the session-finished one', () => {
         expect(wristCues.filter(canBuzzWatch).map((c) => c.cue)).toEqual(['needsYou', 'question', 'permission', 'expiry']);
+    });
+});
+
+/**
+ * The claim the app is allowed to make about a CLOSED watch app (DROVE-124).
+ * Every row on the demo screen used to promise "the real pattern", which is
+ * only ever true while the watch app is on screen.
+ */
+describe('what the wrist will actually feel', () => {
+    const closed = { paired: true, installed: true, reachable: false, wakes: 40 };
+
+    it('says nothing reaches a wrist when there is no wrist', () => {
+        expect(describeWristFidelity(null).fidelity).toBe('none');
+        expect(describeWristFidelity({ ...closed, paired: false }).fidelity).toBe('none');
+        expect(describeWristFidelity({ ...closed, installed: false }).fidelity).toBe('none');
+    });
+
+    it('promises the real pattern only while the watch app is open', () => {
+        expect(describeWristFidelity({ ...closed, reachable: true }).fidelity).toBe('pattern');
+        expect(describeWristFidelity(closed).fidelity).toBe('systemTap');
+    });
+
+    it('does not claim a per-kind pattern the closed app cannot play', () => {
+        expect(describeWristFidelity(closed).detail).toContain('watchOS');
+        expect(describeWristFidelity(closed).detail).toContain('on screen');
+    });
+
+    it('names the complication when the wake budget is zero', () => {
+        const dead = describeWristFidelity({ ...closed, wakes: 0 });
+        expect(dead.fidelity).toBe('silent');
+        expect(dead.detail).toContain('complication');
+    });
+
+    it('assumes a wake is possible on a build that cannot count them', () => {
+        const noBudget = { paired: true, installed: true, reachable: false };
+        expect(describeWristFidelity(noBudget).fidelity).toBe('systemTap');
+    });
+
+    it('gives every verdict something to read and something to do', () => {
+        for (const status of [null, closed, { ...closed, reachable: true }, { ...closed, wakes: 0 }]) {
+            const verdict = describeWristFidelity(status);
+            expect(verdict.headline.length).toBeGreaterThan(0);
+            expect(verdict.detail.length).toBeGreaterThan(0);
+        }
     });
 });
