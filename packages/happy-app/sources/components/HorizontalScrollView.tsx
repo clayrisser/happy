@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { Platform, ScrollView, ScrollViewProps } from 'react-native';
+import { useBackSwipeLock } from '@/hooks/useBackSwipeLock';
 
 // Horizontal wheel scroll for tables/code blocks inside the inverted chat list.
 //
@@ -73,15 +74,34 @@ export function HorizontalScrollView(props: Props) {
     const {
         showsHorizontalScrollIndicator = true,
         nestedScrollEnabled = true,
+        onTouchStart,
+        onTouchEnd,
+        onTouchCancel,
         ...rest
     } = props;
     const ref = useHorizontalWheelScroll();
+    // Every code block and table in the chat is one of these, on a pushed
+    // screen, so the swipe-back holds off for the touch (DROVE-216). A caller's
+    // own touch handlers still run; the lock is added to them, not instead.
+    const backSwipe = useBackSwipeLock();
     return (
         <ScrollView
             ref={ref}
             horizontal
             showsHorizontalScrollIndicator={showsHorizontalScrollIndicator}
             nestedScrollEnabled={nestedScrollEnabled}
+            onTouchStart={(event) => {
+                backSwipe.begin();
+                onTouchStart?.(event);
+            }}
+            onTouchEnd={(event) => {
+                backSwipe.end();
+                onTouchEnd?.(event);
+            }}
+            onTouchCancel={(event) => {
+                backSwipe.end();
+                onTouchCancel?.(event);
+            }}
             {...rest}
         />
     );

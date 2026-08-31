@@ -9,6 +9,7 @@ import { sync } from '@/sync/sync';
 import { Modal } from '@/modal';
 import type { Session } from '@/sync/storageTypes';
 import { SessionViewLoaded } from '@/-session/SessionView';
+import { useBackSwipeLock } from '@/hooks/useBackSwipeLock';
 
 /**
  * Right-sidebar "side chat" panel (controlled).
@@ -106,12 +107,15 @@ const SideChatTabs = React.memo(function SideChatTabs({
     onSelect: (id: string) => void;
     onClose: (id: string) => void;
 }) {
+    // The tab strip scrolls sideways inside a pushed session screen (DROVE-216).
+    const backSwipe = useBackSwipeLock();
     return (
         <View style={styles.tabsRow}>
             <ScrollView
                 horizontal
                 showsHorizontalScrollIndicator={false}
                 contentContainerStyle={styles.tabsScroll}
+                {...backSwipe.scrollProps}
             >
                 {sessions.map((session, index) => (
                     <SideChatTab

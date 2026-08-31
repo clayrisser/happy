@@ -5,6 +5,7 @@ import { Metadata } from '@/sync/storageTypes';
 import { CommandView } from '@/components/CommandView';
 import { useSetting } from '@/sync/storage';
 import { isCodeWrapOn } from '@/sync/settings';
+import { useBackSwipeLock } from '@/hooks/useBackSwipeLock';
 import { readBashResult } from './bashResult';
 
 interface BashViewFullProps {
@@ -22,6 +23,9 @@ export const BashViewFull = React.memo<BashViewFullProps>(({ tool, metadata }) =
     // which lives in CommandView, hands it back to the ScrollView.
     const codeScroll = useSetting('codeScroll');
     const wrap = isCodeWrapOn({ codeScroll }, 'terminal');
+    // The unwrapped terminal card is a horizontal scroller on a pushed
+    // screen, so it holds the swipe-back for the touch (DROVE-216).
+    const backSwipe = useBackSwipeLock();
 
     const card = (
         <View style={wrap ? styles.wrappedCommand : styles.commandWrapper}>
@@ -43,6 +47,7 @@ export const BashViewFull = React.memo<BashViewFullProps>(({ tool, metadata }) =
                         horizontal
                         showsHorizontalScrollIndicator={true}
                         contentContainerStyle={styles.scrollContent}
+                        {...backSwipe.scrollProps}
                     >
                         {card}
                     </ScrollView>

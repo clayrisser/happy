@@ -3,6 +3,7 @@ import { View, ScrollView, Pressable } from 'react-native';
 import { Text } from '@/components/StyledText';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { UsageDataPoint } from '@/sync/apiUsage';
+import { useBackSwipeLock } from '@/hooks/useBackSwipeLock';
 
 interface UsageChartProps {
     data: UsageDataPoint[];
@@ -64,7 +65,9 @@ export const UsageChart: React.FC<UsageChartProps> = ({
     onBarPress
 }) => {
     const { theme } = useUnistyles();
-    
+    // The bar strip scrolls sideways on a pushed settings screen (DROVE-216).
+    const backSwipe = useBackSwipeLock();
+
     if (!data || data.length === 0) {
         return (
             <View style={styles.emptyState}>
@@ -122,6 +125,7 @@ export const UsageChart: React.FC<UsageChartProps> = ({
                 horizontal 
                 showsHorizontalScrollIndicator={false}
                 bounces={false}
+                {...backSwipe.scrollProps}
             >
                 <View style={[styles.chartContainer, { height }]}>
                     {displayData.map((point, index) => {
