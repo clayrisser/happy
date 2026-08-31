@@ -97,6 +97,17 @@ export interface LiveStatusSummary {
     rows: LiveStatusRow[];
     /** `2 agents · 1 workflow`, for the collapsed summary beside the chevron. */
     subtitle?: string;
+    /**
+     * The one-line composer row's version (DROVE-82): a state word short
+     * enough to share a line with the branch and the quota, and the clock
+     * Clay is actually waiting on. `Bash`, `2 agents`, `drover-relaunch 3/5`,
+     * or `working` when nothing on disk names the work.
+     */
+    compact: {
+        label: string;
+        /** The turn's timer, or the running thing's own when the CLI never saw the prompt. */
+        elapsed?: string;
+    };
 }
 
 function agentRow(agent: LiveStatusAgent, now: number): LiveStatusRow {
@@ -179,11 +190,32 @@ export function summarizeLiveStatus(status: LiveStatus, now: number): LiveStatus
         countPhrase(workflows.length, 'workflow', 'workflows'),
     ].filter((part): part is string => part !== null);
 
+    // Same precedence as the headline, minus the argument: the argument is
+    // what the tree is for, and the row has a branch name to fit beside it.
+    let compactLabel: string;
+    if (status.tool) {
+        compactLabel = status.tool.name;
+    } else if (workflows.length > 0) {
+        compactLabel = `${workflows[0].name} ${workflows[0].done}/${workflows[0].total}`;
+    } else if (agents.length > 0) {
+        compactLabel = countPhrase(agents.length, 'agent', 'agents')!;
+    } else {
+        compactLabel = 'working';
+    }
+    const compactStartedAt = status.turnStartedAt
+        ?? status.tool?.startedAt
+        ?? workflows[0]?.startedAt
+        ?? agents[0]?.startedAt;
+
     return {
         headline,
         ...(status.turnStartedAt ? { turnElapsed: formatElapsed(now - status.turnStartedAt) } : {}),
         rows,
         ...(parts.length > 0 ? { subtitle: parts.join(' · ') } : {}),
+        compact: {
+            label: compactLabel,
+            ...(compactStartedAt ? { elapsed: formatElapsed(now - compactStartedAt) } : {}),
+        },
     };
 }
 

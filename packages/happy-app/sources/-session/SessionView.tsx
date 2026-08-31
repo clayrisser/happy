@@ -23,7 +23,6 @@ import {
 import { getSuggestions } from '@/components/autocomplete/suggestions';
 import { ChatHeaderView } from '@/components/ChatHeaderView';
 import { ChatList } from '@/components/ChatList';
-import { SessionLiveStatus } from '@/components/SessionLiveStatus';
 import { Deferred } from '@/components/Deferred';
 import { EmptyMessages } from '@/components/EmptyMessages';
 import { Avatar } from '@/components/Avatar';
@@ -925,6 +924,12 @@ export function SessionViewLoaded({
         router.push(`/session/${sessionId}/files`);
     }, [router, sessionId]);
 
+    // The status row's connection and branch segments open the same screen
+    // the header title does (DROVE-82).
+    const handleSessionInfoPress = React.useCallback(() => {
+        router.push(`/session/${sessionId}/info`);
+    }, [router, sessionId]);
+
     const handleAutocompleteSuggestions = React.useCallback((query: string) => (
         getSuggestions(sessionId, query)
     ), [sessionId]);
@@ -1126,12 +1131,10 @@ export function SessionViewLoaded({
 
     const composer = (
         <View onLayout={usesFloatingMobileDock ? handleComposerLayout : undefined}>
-            {/* What the session is DOING, above the composer rather than in
-                the header (DROVE-54): it is the one place that never scrolls
-                away and never hides behind the keyboard, which is where Clay
-                is looking when he wants to know whether anything is still
-                running. Renders nothing at all while the session is idle. */}
-            <SessionLiveStatus sessionId={sessionId} />
+            {/* What the session is DOING lives in the composer's own status
+                row now (DROVE-82), under the input with the connection, the
+                branch and the quota, so nothing status-shaped sits above the
+                composer and the chat keeps the height. */}
             <ChatComposer
                 composerHandleRef={composerHandleRef}
                 placeholder={t('session.inputPlaceholder')}
@@ -1183,6 +1186,7 @@ export function SessionViewLoaded({
                 sessionStatusUsageLimits={session.agentState?.usageLimits ?? null}
                 sessionStatusDroverUsage={session.metadata?.droverUsage ?? null}
                 sessionStatusDroverAccount={session.metadata?.droverAccount ?? null}
+                onSessionInfoPress={handleSessionInfoPress}
                 onActionAreaOffsetChange={usesFloatingMobileDock ? handleComposerCardOffsetChange : undefined}
             />
         </View>

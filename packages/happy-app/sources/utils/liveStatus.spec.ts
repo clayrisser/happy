@@ -124,6 +124,19 @@ describe('summarizeLiveStatus', () => {
         expect(summary.rows).toEqual([]);
     });
 
+    it('folds to a state word and the turn clock for the one-line composer row (DROVE-82)', () => {
+        expect(summarizeLiveStatus(busy, now).compact).toEqual({ label: 'Bash', elapsed: '17m 13s' });
+        expect(summarizeLiveStatus({ ...busy, tool: undefined }, now).compact.label).toBe('drover-relaunch 3/5');
+        expect(summarizeLiveStatus({ ...busy, tool: undefined, workflows: [] }, now).compact.label).toBe('2 agents');
+        expect(summarizeLiveStatus({ at: now, turnStartedAt: now - 1_033_000 }, now).compact)
+            .toEqual({ label: 'working', elapsed: '17m 13s' });
+    });
+
+    it('falls back to the running thing\'s own clock when the CLI never saw the prompt', () => {
+        expect(summarizeLiveStatus({ ...busy, turnStartedAt: undefined }, now).compact.elapsed).toBe('1m 5s');
+        expect(summarizeLiveStatus({ at: now }, now).compact).toEqual({ label: 'working' });
+    });
+
     it('keeps every row key stable across ticks so the tree does not remount each second', () => {
         const first = summarizeLiveStatus(busy, now).rows.map((r) => r.key);
         const later = summarizeLiveStatus(busy, now + 4_000).rows.map((r) => r.key);

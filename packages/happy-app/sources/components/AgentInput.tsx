@@ -12,7 +12,6 @@ import { PermissionMode, ModelMode } from './PermissionModeSelector';
 import { EffortLevel } from './modelModeOptions';
 import { hapticsLight, hapticsError } from './haptics';
 import { Shaker, ShakeInstance } from './Shaker';
-import { StatusDot } from './StatusDot';
 import { useActiveWord } from './autocomplete/useActiveWord';
 import { useActiveSuggestions } from './autocomplete/useActiveSuggestions';
 import { AgentInputAutocomplete } from './AgentInputAutocomplete';
@@ -26,7 +25,6 @@ import { hackMode, hackModes } from '@/sync/modeHacks';
 import { getPermissionModeMenuLabel, getPermissionModeShortLabel } from '@/utils/permissionModeLabels';
 import type { UsageLimitsLike } from '@/utils/sessionStatusBar';
 import type { DroverUsageLike } from '@/utils/droverUsage';
-import { compactCount } from '@/utils/rigGitLineChanges';
 import { Theme } from '@/theme';
 import { t } from '@/text';
 import { Metadata } from '@/sync/storageTypes';
@@ -36,7 +34,7 @@ import { AnimatedClickAwayBackdrop, AnimatedFade } from './AnimatedOverlay';
 import { BubblePressable } from './BubblePressable';
 import { resolveAgentInputPrimaryAction } from './agentInputPrimaryAction';
 import { NativeSettingsMenu, type NativeSettingsMenuGroup } from './NativeSettingsMenu';
-import { AgentInputUsageRow } from './AgentInputUsageRow';
+import { AgentInputStatusRow } from './AgentInputStatusRow';
 import { resolveUsageStrip } from './agentInputUsage';
 import { ProviderIcon } from './ProviderIcon';
 import { isRigMetadata } from '@/sync/rig';
@@ -133,6 +131,8 @@ interface AgentInputProps {
      */
     sessionStatusDroverUsage?: DroverUsageLike;
     sessionStatusDroverAccount?: string | null;
+    /** Opens session info; the status row's connection and branch segments tap into it (DROVE-82). */
+    onSessionInfoPress?: () => void;
     onFileViewerPress?: () => void;
     agentType?: 'claude' | 'codex' | 'gemini' | 'openclaw' | 'agy';
     onAgentClick?: () => void;
@@ -525,127 +525,6 @@ const getContextStatus = (contextSize: number, alwaysShow: boolean = false, them
 // the input's keystroke-derived state (hasText / inputState) flips. Their
 // props are derived from session metadata, not from the textarea content,
 // so memo skips re-render on typing entirely.
-
-type StatusRowProps = {
-    connectionStatus?: AgentInputProps['connectionStatus'];
-    gitBranch: string | null;
-    gitChanges: { insertions: number; deletions: number; approximate: boolean } | null;
-};
-
-const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: StatusRowProps) {
-    const { theme } = useUnistyles();
-    if (!p.connectionStatus && !p.gitBranch) {
-        return null;
-    }
-    return (
-        <View style={{
-            flexDirection: 'row',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            paddingHorizontal: 16,
-            paddingBottom: 4,
-            minHeight: 20,
-        }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, gap: 11 }}>
-                {p.connectionStatus && (
-                    <>
-                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                            <StatusDot
-                                color={p.connectionStatus.dotColor}
-                                isPulsing={p.connectionStatus.isPulsing}
-                                size={6}
-                                // Optically centers the dot against the 11pt text baseline.
-                                style={{ marginTop: 1 }}
-                            />
-                            <Text style={{
-                                fontSize: 11,
-                                color: p.connectionStatus.color,
-                                ...Typography.default()
-                            }}>
-                                {p.connectionStatus.text}
-                            </Text>
-                        </View>
-                        {p.connectionStatus.cliStatus && (
-                            <>
-                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                                    <Text style={{
-                                        fontSize: 11,
-                                        color: p.connectionStatus.cliStatus.claude ? theme.colors.success : theme.colors.textDestructive,
-                                        ...Typography.default()
-                                    }}>
-                                        {p.connectionStatus.cliStatus.claude ? '✓' : '✗'}
-                                    </Text>
-                                    <Text style={{
-                                        fontSize: 11,
-                                        color: p.connectionStatus.cliStatus.claude ? theme.colors.success : theme.colors.textDestructive,
-                                        ...Typography.default()
-                                    }}>
-                                        claude
-                                    </Text>
-                                </View>
-                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                                    <Text style={{
-                                        fontSize: 11,
-                                        color: p.connectionStatus.cliStatus.codex ? theme.colors.success : theme.colors.textDestructive,
-                                        ...Typography.default()
-                                    }}>
-                                        {p.connectionStatus.cliStatus.codex ? '✓' : '✗'}
-                                    </Text>
-                                    <Text style={{
-                                        fontSize: 11,
-                                        color: p.connectionStatus.cliStatus.codex ? theme.colors.success : theme.colors.textDestructive,
-                                        ...Typography.default()
-                                    }}>
-                                        codex
-                                    </Text>
-                                </View>
-                                {p.connectionStatus.cliStatus.gemini !== undefined && (
-                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                                        <Text style={{
-                                            fontSize: 11,
-                                            color: p.connectionStatus.cliStatus.gemini ? theme.colors.success : theme.colors.textDestructive,
-                                            ...Typography.default()
-                                        }}>
-                                            {p.connectionStatus.cliStatus.gemini ? '✓' : '✗'}
-                                        </Text>
-                                        <Text style={{
-                                            fontSize: 11,
-                                            color: p.connectionStatus.cliStatus.gemini ? theme.colors.success : theme.colors.textDestructive,
-                                            ...Typography.default()
-                                        }}>
-                                            gemini
-                                        </Text>
-                                    </View>
-                                )}
-                            </>
-                        )}
-                    </>
-                )}
-            </View>
-            {p.gitBranch && (
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, flexShrink: 1 }}>
-                    <Octicons name="git-branch" size={11} color={theme.colors.textSecondary} />
-                    <Text style={{ fontSize: 11, color: theme.colors.textSecondary, flexShrink: 1, ...Typography.default() }} numberOfLines={1}>
-                        {p.gitBranch}
-                    </Text>
-                    {p.gitChanges?.approximate && (
-                        <Text style={{ fontSize: 11, color: theme.colors.textSecondary, ...Typography.default() }}>≈</Text>
-                    )}
-                    {p.gitChanges && p.gitChanges.insertions > 0 && (
-                        <Text style={{ fontSize: 11, fontWeight: '600', color: theme.colors.gitAddedText, ...Typography.default() }}>
-                            +{compactCount(p.gitChanges.insertions)}
-                        </Text>
-                    )}
-                    {p.gitChanges && p.gitChanges.deletions > 0 && (
-                        <Text style={{ fontSize: 11, fontWeight: '600', color: theme.colors.gitRemovedText, ...Typography.default() }}>
-                            -{compactCount(p.gitChanges.deletions)}
-                        </Text>
-                    )}
-                </View>
-            )}
-        </View>
-    );
-});
 
 type ContextChipsProps = {
     machineName?: string | null;
@@ -1962,12 +1841,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 )}
 
                 <AnimatedFade visible={props.showStatusDetails !== false}>
-                    <AgentInputStatusRow
-                        connectionStatus={props.connectionStatus}
-                        gitBranch={props.sessionStatusGitBranch ?? null}
-                        gitChanges={props.sessionStatusGitChanges ?? null}
-                    />
-
                     <AgentInputContextChips
                         machineName={props.machineName}
                         onMachineClick={props.onMachineClick}
@@ -2314,13 +2187,21 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     </View>
                 </Shaker>
 
-                <AnimatedFade visible={props.showStatusDetails !== false}>
-                    <AgentInputUsageRow
-                        contextStatus={contextStatus}
-                        weekPercent={weekPercent}
-                        usageMenuGroups={usageMenuGroups}
-                    />
-                </AnimatedFade>
+                {/* Every status fact on one line under the card (DROVE-82):
+                    working state and timer, connection, branch, quota. The
+                    strip above the composer and the row between it and the
+                    input are gone, which is the chat's height back. */}
+                <AgentInputStatusRow
+                    sessionId={props.sessionId}
+                    connectionStatus={props.connectionStatus}
+                    gitBranch={props.sessionStatusGitBranch ?? null}
+                    gitChanges={props.sessionStatusGitChanges ?? null}
+                    contextStatus={contextStatus}
+                    weekPercent={weekPercent}
+                    usageMenuGroups={usageMenuGroups}
+                    onSessionInfoPress={props.onSessionInfoPress}
+                    showDetails={props.showStatusDetails !== false}
+                />
             </View>
         </View>
     );
