@@ -38,14 +38,26 @@ export type LiveStatusTokens = NonNullable<LiveStatus['tokens']>;
 export const LIVE_STATUS_STALE_MS = 120_000;
 
 /**
- * What the main thread is called when no tool names it.
+ * What the main thread is called when no tool names it: THINKING (DROVE-244).
  *
- * One constant rather than three literals, because the status strip now has to
- * RECOGNISE it: the working word is the last thing on the row to give way
- * (DROVE-223), so the row has to be able to tell it apart from a tool's name,
- * and a second spelling of it here would quietly turn that rule off.
+ * It used to be `working`, and DROVE-231 then took that word off the strip
+ * altogether — Clay: "Don't show text working" — because the blue dot beside
+ * it already said the session was working and the word repeated it.
+ *
+ * `thinking` is a different word doing a different job. Clay: "When it's
+ * thinking instead of bashing on the main thread show the thinking token
+ * count." The strip names the running TOOL in this slot, so while a tool runs
+ * it says what the session is doing; with no tool in flight it went blank and
+ * held the last thing it knew. The dot says the session is working, so this
+ * word says WHAT — a tool by name, or thinking. It is the same slot, not a new
+ * term on a line DROVE-223 fought to fit.
+ *
+ * One constant rather than four literals, because the strip has to RECOGNISE
+ * it: this word is the last thing on the row to give way (DROVE-223), so the
+ * fold order has to tell it apart from a tool's name, and a second spelling
+ * here would quietly turn that rule off.
  */
-export const LIVE_STATUS_WORKING_WORD = 'working';
+export const LIVE_STATUS_THINKING_WORD = 'thinking';
 
 export function isLiveStatusFresh(status: LiveStatus | null | undefined, now: number): boolean {
     if (!status) return false;
@@ -163,16 +175,25 @@ export interface LiveStatusRow {
  * launched it, and the main thread being quiet then is the truth.
  */
 export interface LiveStatusMain {
-    /** What the main thread is blocked on: the tool's name, or `working`. */
+    /** What the main thread is blocked on: the tool's name, or `thinking`. */
     label: string;
     /**
-     * True when the label is the WORKING WORD rather than a tool's name
-     * (DROVE-223).
+     * True when the label is the STATE WORD rather than a tool's name
+     * (DROVE-223, DROVE-244).
      *
      * The two look the same on the row and give way in opposite orders: a tool
      * name folds first of the text on the strip, the working word folds last
      * of anything on it. The strip reads this rather than comparing the label
      * to a string, so the rule cannot drift from what `liveStatusMain` decided.
+     * name folds first of the text on the strip, the state word folds last of
+     * anything on it. The strip reads this rather than comparing the label to
+     * a string, so the rule cannot drift from what `mainReadout` decided.
+     *
+     * This is also the whole test for "is it thinking": the main thread is
+     * working (there is a `main` block at all) and no tool is in flight. That
+     * costs no CLI change and no new field on the wire, so the WORD works on a
+     * session running today — which matters, because DROVE-220 means a running
+     * session never picks up a new CLI. Only the NUMBER below needs one.
      */
     working: boolean;
     /** The turn's clock, ticking on this device. */
@@ -195,6 +216,22 @@ export interface LiveStatusMain {
      * six characters whatever it is given.
      */
     tokens?: string;
+    /**
+     * `3.4k` — what THIS thinking is costing (DROVE-244), and present only
+     * while `working` is true.
+     *
+     * TWO NUMBERS, TWO SCOPES, AND THEY MUST NOT BE CONFUSED (DROVE-241). The
+     * centre of the strip is the SESSION's spend and means the same thing at
+     * every moment of the session; this one is the main thread's thinking this
+     * turn and describes the activity the word beside it names. So they sit in
+     * different zones, the centre one never changes meaning, and this one is
+     * simply absent whenever a tool is running.
+     *
+     * A SHARE of `tokens`, never an addition to it: extended thinking is
+     * billed inside output tokens, so this spend is already inside the centre
+     * figure. Nothing anywhere adds the two.
+     */
+    thinkingTokens?: string;
 }
 
 /**
@@ -223,6 +260,12 @@ export interface LiveStatusTally {
     sessionMain: string;
     /** The subagents' share of the session, which is `session` less `sessionMain`. */
     sessionAgents: string;
+    /**
+     * The main thread's THINKING share of the turn (DROVE-244), 0 on a CLI too
+     * old to publish it and on a model doing no extended thinking. A share of
+     * `turnMain`, already inside every figure above.
+     */
+    turnThinking: number;
     /** The numbers behind the strings, for anything that needs to compare them. */
     raw: {
         turn: number;
@@ -257,6 +300,10 @@ export function liveStatusTally(status: LiveStatus): LiveStatusTally | null {
         session: formatTokens(raw.session),
         sessionMain: formatTokens(raw.sessionMain),
         sessionAgents: formatTokens(Math.max(0, raw.session - raw.sessionMain)),
+        // Clamped to the turn's own main figure: a thinking share larger than
+        // the total it is a share of is a malformed snapshot, and drawing it
+        // would put a bigger number beside the word than the one in the centre.
+        turnThinking: Math.max(0, Math.min(tokens.turnThinking ?? 0, raw.turnMain)),
         raw,
     };
 }
@@ -545,7 +592,7 @@ export function summarizeLiveStatus(status: LiveStatus, now: number): LiveStatus
         // reply, which writes nothing until it is done. This is the
         // "Sketching… 17m 13s" state, and saying "working" is the honest
         // version of it.
-        headline = LIVE_STATUS_WORKING_WORD;
+        headline = LIVE_STATUS_THINKING_WORD;
     }
 
     const parts = [
@@ -597,7 +644,11 @@ export function summarizeLiveStatus(status: LiveStatus, now: number): LiveStatus
  * which is the one case where the old CLI shows less than the new one.
  */
 export function liveStatusMain(status: LiveStatus, now: number, tally: LiveStatusTally | null): LiveStatusMain | null {
-    const label = status.tool ? status.tool.name : LIVE_STATUS_WORKING_WORD;
+    // The label is the tool while one runs, and otherwise the word for what
+    // the main thread is actually doing (DROVE-244). It is no longer
+    // `working`: the blinking blue dot already says that, which is why
+    // DROVE-231 took the word off the line.
+    const label = status.tool ? status.tool.name : LIVE_STATUS_THINKING_WORD;
     const working = !status.tool;
     // THE ROW'S NUMBER IS THE SESSION TALLY (DROVE-241, over DROVE-184's
     // turn). It sits in the slot the main-only count used to hold, so the
@@ -611,19 +662,41 @@ export function liveStatusMain(status: LiveStatus, now: number, tally: LiveStatu
     const tokensOf = (tokens: unknown): { tokens?: string } => (
         typeof tokens === 'number' && tokens > 0 ? { tokens: formatTokens(tokens) } : {}
     );
+    /**
+     * What this thinking is costing (DROVE-244), and ONLY while thinking.
+     *
+     * Three ways it is absent, and all three draw the same nothing: a tool is
+     * running, so the label is that tool and the number would be describing
+     * something else; the CLI is too old to publish the figure (DROVE-220 — a
+     * session running right now will not have picked up the new one); or the
+     * model did no extended thinking this turn, which is honestly zero and a
+     * `0` on the strip is furniture.
+     */
+    const thinkingOf = (): { thinkingTokens?: string } => (
+        working && tally && tally.turnThinking > 0
+            ? { thinkingTokens: formatTokens(tally.turnThinking) }
+            : {}
+    );
     if (status.main) {
         return {
             label,
             working,
             elapsed: formatElapsed(now - status.main.startedAt),
             ...tokensOf(rowTokens),
+            ...thinkingOf(),
         };
     }
     const sideRunning = (status.agents?.length ?? 0) + (status.workflows?.length ?? 0) > 0;
     if (!status.tool && sideRunning) return null;
     const startedAt = status.turnStartedAt ?? status.tool?.startedAt;
     if (!startedAt) return null;
-    return { label, working, elapsed: formatElapsed(now - startedAt), ...tokensOf(rowTokens) };
+    return {
+        label,
+        working,
+        elapsed: formatElapsed(now - startedAt),
+        ...tokensOf(rowTokens),
+        ...thinkingOf(),
+    };
 }
 
 /**
@@ -653,7 +726,7 @@ export function liveStatusWatchLine(status: LiveStatus | null | undefined, now: 
     const agents = live.agents ?? [];
     const agentPhrase = countPhrase(agents.length, 'agent', 'agents');
     if (agentPhrase) parts.push(agentPhrase);
-    if (parts.length === 0) parts.push(LIVE_STATUS_WORKING_WORD);
+    if (parts.length === 0) parts.push(LIVE_STATUS_THINKING_WORD);
     return parts.join(' · ');
 }
 

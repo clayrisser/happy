@@ -275,6 +275,11 @@ describe('the session tally in the agents sheet (DROVE-184)', () => {
             // No split from this CLI (DROVE-241). `{}`, never undefined.
             sessionByModel: {},
         },
+        // The main thread's thinking share of the turn (DROVE-244). The sheet
+        // does not draw it — it belongs beside the word on the strip, not in
+        // the session breakdown — but it is always a number, 0 on a CLI too
+        // old to publish one.
+        turnThinking: 0,
     };
 
     it('spells out the session total, the split and the turn', () => {

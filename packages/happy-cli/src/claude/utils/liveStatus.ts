@@ -182,6 +182,26 @@ export interface LiveStatusTokens {
      * and every field here is republished up to once a second.
      */
     sessionByModel?: Record<string, number>
+    /**
+     * What the MAIN thread spent THINKING since the last prompt (DROVE-244).
+     *
+     * A subset of `turnMain`, never an addition to it: extended thinking is
+     * billed inside `output_tokens`, so this spend is already inside every
+     * total above and the strip must never add the two. It is here so the
+     * phone can say what the current thinking burst is costing without
+     * deriving a second number from anything.
+     *
+     * MAIN ONLY, and per TURN, because it exists to sit beside the word
+     * `thinking` on the status strip and that word is about the main thread's
+     * current activity. The turn is the closest scope on disk to "this burst"
+     * and it is the same scope as the clock drawn next to it (`main.startedAt`
+     * is the turn's start), so the two numbers on that line agree about what
+     * they are measuring.
+     *
+     * Absent from an older CLI, and 0 on a model that is not doing extended
+     * thinking. Both mean the same thing to the strip: draw no number.
+     */
+    turnThinking?: number
 }
 
 /**
@@ -311,6 +331,48 @@ export function countTokens(usage: Record<string, unknown> | null | undefined): 
         return typeof value === 'number' && Number.isFinite(value) ? value : 0
     }
     return n('input_tokens') + n('output_tokens') + n('cache_creation_input_tokens')
+}
+
+/**
+ * The THINKING tokens in one record's usage, or 0 when nothing reports any
+ * (DROVE-244).
+ *
+ * Clay: "When it's thinking instead of bashing on the main thread show the
+ * thinking token count." Extended thinking is billed inside `output_tokens`,
+ * so `countTokens` above already has this spend in its total and nothing here
+ * adds to any figure — this only says how much of it was thinking.
+ *
+ * `usage.output_tokens_details.thinking_tokens` is a REAL field the API
+ * returns and Claude Code writes into the transcript verbatim. Measured across
+ * this machine's 102 transcripts: absent on every record before 2026-08-11,
+ * present on 99% of them from 2026-08-13 on (31,425 records carry it), and
+ * non-zero on roughly a third of those. So it is on the wire today and no
+ * estimate is needed — but it is NOT universal, which is why absence and zero
+ * are the same answer here and the strip draws nothing for either. A model
+ * that is not doing extended thinking honestly spent no thinking tokens, and a
+ * `0` on that line would be furniture.
+ *
+ * IT IS NOT THE NUMBER THE TUI PRINTS LIVE, and it cannot be. Claude Code's
+ * own status line reads `Actualizing... (20s . 424 tokens)`, counting up off
+ * the streaming response as it arrives; this reader never sees that stream. It
+ * has two inputs — the transcript on disk, and fd 3, which carries only
+ * `fetch-start`/`fetch-end` with a hostname and a timestamp (claudeLocal.ts)
+ * and no counts at all. So the figure here lands when the assistant record
+ * does, at the END of each request rather than during it.
+ *
+ * What that costs, exactly: through the FIRST thinking burst of a turn the
+ * number is 0 and the strip draws the word alone, and from the second burst on
+ * it carries the turn's thinking so far. Every other figure on the strip is
+ * built the same way off the same records (DROVE-184), so this one moves when
+ * they move and cannot disagree with them. A live count would mean reading
+ * Claude Code's response body, which is a different and much larger change.
+ */
+export function thinkingTokensOf(usage: Record<string, unknown> | null | undefined): number {
+    if (!usage) return 0
+    const details = usage.output_tokens_details
+    if (!details || typeof details !== 'object') return 0
+    const value = (details as Record<string, unknown>).thinking_tokens
+    return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0
 }
 
 export function usageOf(record: Record<string, unknown>): Record<string, unknown> | null {
@@ -489,6 +551,8 @@ export function createLiveStatusReader(opts: {
     let turnTokens = 0
     /** The same for every subagent that has written since that prompt (DROVE-184). */
     let turnAgentTokens = 0
+    /** The main thread's THINKING share of `turnTokens` (DROVE-244). */
+    let turnThinkingTokens = 0
     /** Both again for the whole session. No prompt resets these. */
     let sessionMainTokens = 0
     let sessionAgentTokens = 0
@@ -516,6 +580,7 @@ export function createLiveStatusReader(opts: {
         turnStartedAt = 0
         turnTokens = 0
         turnAgentTokens = 0
+        turnThinkingTokens = 0
         sessionMainTokens = 0
         sessionAgentTokens = 0
         sessionByModel = new Map()
@@ -560,16 +625,28 @@ export function createLiveStatusReader(opts: {
                 // reading that matches the clock beside it. The session totals
                 // below are the ones that never go back down.
                 turnAgentTokens = 0
+                // And the thinking share with it (DROVE-244). It is a share of
+                // `turnTokens`, so it has to start over at the same moment or
+                // it would claim a previous turn's reasoning belongs to this
+                // one's clock.
+                turnThinkingTokens = 0
             }
             // The same three fields, through the same countTokens, that give an
             // agent card its "251.2k tokens" (DROVE-155) — the difference is
             // only which transcript they are read from. Sidechain records were
             // dropped above, so this is the main thread and nothing else.
             if (record.type === 'assistant') {
-                const spent = countTokens(usageOf(record))
+                const usage = usageOf(record)
+                const spent = countTokens(usage)
                 turnTokens += spent
                 sessionMainTokens += spent
                 bankModel(record, spent)
+                // The SAME record, the same read, one field further in
+                // (DROVE-244). Folded here rather than anywhere else so the
+                // thinking count cannot drift from the total it is a share of:
+                // there is one pass over the transcript and both numbers come
+                // off it together.
+                turnThinkingTokens += thinkingTokensOf(usage)
             }
 
             const message = record.message
@@ -866,6 +943,10 @@ export function createLiveStatusReader(opts: {
                 ...(sessionByModel.size > 0
                     ? { sessionByModel: Object.fromEntries(sessionByModel) }
                     : {}),
+                // Omitted at zero rather than sent as 0 (DROVE-244), so an
+                // absent field and a model that did no thinking read the same
+                // on the phone, which is what they mean.
+                ...(turnThinkingTokens > 0 ? { turnThinking: turnThinkingTokens } : {}),
             }
 
             return {

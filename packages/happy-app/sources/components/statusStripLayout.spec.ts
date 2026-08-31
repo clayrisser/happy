@@ -13,7 +13,7 @@
  * a Bash call four minutes in, six workers out, a task list, `jamrizzi` at 8%.
  */
 import { describe, expect, it } from 'vitest';
-import { findFrame } from './flexFrames';
+import { findFrame, resolveFlexFrames } from './flexFrames';
 import { STATUS_ROW_GIVE_WAY, statusRowUsableWidth } from './statusRowLayout';
 import {
     resolveStatusStrip,
@@ -22,12 +22,12 @@ import {
     statusStripDrawn,
     statusStripFolds,
     statusStripNode,
+    statusStripOrderFor,
     statusStripQuotaText,
     statusStripZoneOf,
     statusStripZoneWidths,
     type StatusStripContent,
 } from './statusStripLayout';
-import { resolveFlexFrames } from './flexFrames';
 import { formatTokens } from '@/utils/liveStatus';
 
 /** Clay's own row: `● Bash 4m 20s 👥6 ˄ · 1/3 tasks ˄ · 51.6k ◔ · jamrizzi 8% ˄`. */
@@ -138,6 +138,7 @@ describe('the give-way order, zone by zone', () => {
             toolName: true,
             elapsed: true,
             tasks: false,
+            thinkingTokens: false,
             tokens: false,
         });
         expect(drawn.tasks).toBe('1/3 tasks');
@@ -186,6 +187,7 @@ describe('the give-way order, zone by zone', () => {
             toolName: false,
             elapsed: false,
             tasks: false,
+            thinkingTokens: false,
             tokens: false,
         });
     });
@@ -356,5 +358,99 @@ describe('the centre holds a session total, at every width (DROVE-241)', () => {
         expect(centreOf('999.9k', 320)).toBe(53);
         expect(formatTokens(999_999)).toBe('1.0M');
         expect(formatTokens(999_999)).not.toBe('1000.0k');
+    });
+});
+
+/**
+ * THE STRIP WHILE THE MAIN THREAD IS THINKING (DROVE-244).
+ *
+ * The label slot holds a word rather than a tool's name, and the numbers on
+ * the line come from two different scopes. Both of those are things a width
+ * budget can get wrong quietly, so they are measured here rather than argued.
+ */
+describe('the thinking state (DROVE-244)', () => {
+    /** Clay's worst row, thinking: `● thinking 4m 20s 3.4k 👥6 ˄ · 1/3 tasks ˄ · 51.6k ◔ · jamrizzi 8% ˄`. */
+    const thinking: StatusStripContent = {
+        ...busy,
+        toolName: 'thinking',
+        stateWord: true,
+        thinkingTokens: '3.4k',
+    };
+
+    it('is the widest the left zone ever gets, and the word is why', () => {
+        // 245 against a 146 share at 393. The word costs 44 of it, so
+        // SOMETHING established has to move in this state whatever the order
+        // says — there is no arrangement where nothing gives.
+        expect(statusStripZoneWidths(thinking, 393).left).toBe(245);
+        expect(statusStripZoneWidths(busy, 393).left).toBe(194);
+    });
+
+    it('keeps the word at every width, ahead of everything else on the line', () => {
+        for (const width of [320, 375, 393]) {
+            const { drawn } = drawnAt(thinking, width);
+            expect(drawn.toolName, String(width)).toBe('thinking');
+            expect(drawn.dot, String(width)).toBe(true);
+            expect(drawn.workers, String(width)).toBe(6);
+        }
+    });
+
+    it('keeps the count at 375 and 393, and gives it up only at 320', () => {
+        // What Clay asked for survives on the two phones he actually uses. At
+        // 320 the badge has already gone and the line is still over, so the
+        // count is the next thing and the word is what stays.
+        expect(drawnAt(thinking, 393).drawn.thinkingTokens).toBe('3.4k');
+        expect(drawnAt(thinking, 375).drawn.thinkingTokens).toBe('3.4k');
+        expect(drawnAt(thinking, 320).drawn.thinkingTokens).toBeNull();
+    });
+
+    it('never truncates the line: every width fits once the folds are taken', () => {
+        for (const width of [320, 375, 393]) {
+            const { drawn } = drawnAt(thinking, width);
+            const widths = statusStripZoneWidths(drawn, width);
+            expect(widths.left, String(width)).toBeLessThanOrEqual(widths.share);
+            expect(widths.right, String(width)).toBeLessThanOrEqual(widths.share);
+            expect(widths.centre, String(width)).toBeLessThanOrEqual(widths.usable);
+        }
+    });
+
+    it('keeps the account and the tally at every width, whatever the left zone costs', () => {
+        // Zone-aware, and this is the state that tests it hardest: the left
+        // zone is over by 99pt at 393 and the right zone is nowhere near its
+        // share. Nothing about the word may cut the account.
+        for (const width of [320, 375, 393]) {
+            const { drawn } = drawnAt(thinking, width);
+            expect(drawn.account, String(width)).toBe('jamrizzi');
+            expect(drawn.quotaPercent, String(width)).toBe('8%');
+            expect(drawn.tokens, String(width)).toBe('51.6k');
+        }
+    });
+
+    it('folds the state word LAST, behind the centre figure and the account', () => {
+        // DROVE-223's rule, kept by reordering the one list rather than by a
+        // second one. A tool name goes third; the same slot holding the word
+        // goes after everything.
+        const order = statusStripOrderFor(thinking, STATUS_ROW_GIVE_WAY);
+        expect(order[order.length - 1]).toBe('toolName');
+        expect(order.indexOf('tokens')).toBeLessThan(order.indexOf('toolName'));
+        expect(order.indexOf('account')).toBeLessThan(order.indexOf('toolName'));
+        // A tool's name is untouched: same list, same ranks.
+        expect(statusStripOrderFor(busy, STATUS_ROW_GIVE_WAY)).toEqual([...STATUS_ROW_GIVE_WAY]);
+    });
+
+    it('draws the count third, after the word and the clock', () => {
+        // The shape Claude Code's own status line uses —
+        // `Actualizing… (20s · ↓ 424 tokens)` — and the shape the strip's tool
+        // state already has in `Bash 2m 58s`. Verb, clock, tokens, in both.
+        const frame = resolveFlexFrames(statusStripNode(thinking, 393), statusRowUsableWidth(393));
+        const at = (name: string) => findFrame(frame, name)!.x;
+        expect(at('toolName')).toBeLessThan(at('elapsed'));
+        expect(at('elapsed')).toBeLessThan(at('thinkingTokens'));
+    });
+
+    it('has no thinking count on the line while a tool is running', () => {
+        // The two never share the row: the caller only supplies a count in the
+        // thinking state, and the layout must not reserve room for one.
+        expect(statusStripZoneWidths(busy, 393).left)
+            .toBe(statusStripZoneWidths({ ...busy, thinkingTokens: null }, 393).left);
     });
 });
