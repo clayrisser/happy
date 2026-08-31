@@ -51,10 +51,31 @@ public final class DroverSpeechModule: Module {
     private let speechDelegate = DroverSpeechDelegate()
 
     private var audioEngine: AVAudioEngine?
+    /// True between `installTap` and `removeTap` on the input bus. AVFAudio
+    /// raises an NSException on a second tap for the same bus, and Swift
+    /// cannot catch one, so the tap is tracked rather than assumed.
+    private var inputTapInstalled = false
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
     private var latestTranscript = ""
     private var pendingStop: Promise?
+
+    /// The session as it was before dictation took it over, put back when
+    /// dictation lets go. Nil while nobody is dictating.
+    private var sessionBeforeDictation: (
+        category: AVAudioSession.Category,
+        mode: AVAudioSession.Mode,
+        options: AVAudioSession.CategoryOptions
+    )?
+    /// Set when `beginDictation` paused an utterance mid-word so the
+    /// microphone could have the session; the utterance resumes on release.
+    private var speechPausedForDictation = false
+
+    /// Dictation holds the engine from `beginDictation` until teardown, and the
+    /// task from slightly later; either one means the microphone is spoken for.
+    private var isDictating: Bool {
+        audioEngine != nil || recognitionTask != nil
+    }
 
     public func definition() -> ModuleDefinition {
         Name("DroverSpeech")
@@ -74,7 +95,7 @@ public final class DroverSpeechModule: Module {
         /// One at a time: the JS queue speaks sentence by sentence so that
         /// stopping lands mid-sentence instead of at the end of a paragraph.
         AsyncFunction("speak") { (text: String, rate: Double, promise: Promise) in
-            if self.recognitionTask != nil {
+            if self.isDictating {
                 promise.reject(
                     "DroverSpeech",
                     "cannot read aloud while dictation is running"
@@ -113,7 +134,11 @@ public final class DroverSpeechModule: Module {
         /// both on interruption and when the queue drains.
         AsyncFunction("stop") { () -> Void in
             self.synthesizer.stopSpeaking(at: .immediate)
-            self.deactivateSession()
+            // The session belongs to the microphone while dictation runs;
+            // dropping it here would stop the engine under a live tap.
+            if !self.isDictating {
+                self.deactivateSession()
+            }
         }
 
         Function("isSpeaking") { () -> Bool in
@@ -146,11 +171,10 @@ public final class DroverSpeechModule: Module {
         /// so the UI does not tell the user to talk before anything is being
         /// heard. Partial transcripts arrive as `onDictationPartial`.
         AsyncFunction("startDictation") { (localeTag: String?, promise: Promise) in
-            if self.recognitionTask != nil {
+            if self.isDictating {
                 promise.reject("DroverSpeech", "dictation is already running")
                 return
             }
-            self.synthesizer.stopSpeaking(at: .immediate)
 
             SFSpeechRecognizer.requestAuthorization { status in
                 DispatchQueue.main.async {
@@ -185,7 +209,7 @@ public final class DroverSpeechModule: Module {
             self.pendingStop = promise
             self.recognitionRequest?.endAudio()
             self.audioEngine?.stop()
-            self.audioEngine?.inputNode.removeTap(onBus: 0)
+            self.removeInputTap()
 
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
                 self.settleStop(with: self.latestTranscript)
@@ -215,9 +239,21 @@ public final class DroverSpeechModule: Module {
         try session.setActive(true, options: [])
     }
 
+    /// `.playAndRecord` rather than `.record`: the synthesiser may be paused
+    /// mid-utterance on this same session and gets it back afterwards, and
+    /// `.record` alone would also drop AirPods to the built-in microphone.
     private func activateRecording() throws {
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.record, mode: .measurement, options: [.duckOthers])
+        #if compiler(>=6.2)
+        let bluetooth: AVAudioSession.CategoryOptions = .allowBluetoothHFP
+        #else
+        let bluetooth: AVAudioSession.CategoryOptions = .allowBluetooth
+        #endif
+        try session.setCategory(
+            .playAndRecord,
+            mode: .measurement,
+            options: [.defaultToSpeaker, bluetooth, .duckOthers]
+        )
         try session.setActive(true, options: [])
     }
 
@@ -226,11 +262,59 @@ public final class DroverSpeechModule: Module {
             .setActive(false, options: [.notifyOthersOnDeactivation])
     }
 
+    /// Take the shared session for the microphone. Speech out and speech in
+    /// share one AVAudioSession, and with stream-talk on it is in `.playback`
+    /// whenever the mic is pressed, so the synthesiser is paused first and
+    /// what it had is remembered for `releaseSession`.
+    private func claimSessionForDictation() throws {
+        let session = AVAudioSession.sharedInstance()
+        if synthesizer.isSpeaking && !synthesizer.isPaused {
+            synthesizer.pauseSpeaking(at: .immediate)
+            speechPausedForDictation = true
+        }
+        if sessionBeforeDictation == nil {
+            sessionBeforeDictation = (session.category, session.mode, session.categoryOptions)
+        }
+        try activateRecording()
+    }
+
+    /// Hand the session back to whoever had it before dictation took it over:
+    /// a paused utterance gets its playback category and carries on, anything
+    /// else gets the session released the way `stop` releases it.
+    private func releaseSession() {
+        let previous = sessionBeforeDictation
+        sessionBeforeDictation = nil
+        let resume = speechPausedForDictation
+        speechPausedForDictation = false
+
+        if resume, let previous, synthesizer.isPaused {
+            let session = AVAudioSession.sharedInstance()
+            do {
+                try session.setCategory(previous.category, mode: previous.mode, options: previous.options)
+                try session.setActive(true, options: [])
+                synthesizer.continueSpeaking()
+                return
+            } catch {
+                // Cutting it settles the utterance's promise (didCancel), so
+                // the reader moves on rather than waiting on a paused voice.
+                synthesizer.stopSpeaking(at: .immediate)
+            }
+        }
+        deactivateSession()
+    }
+
     //
     // Dictation
     //
 
     private func beginDictation(localeTag: String?, promise: Promise) {
+        // The permission callbacks in startDictation are asynchronous, so two
+        // presses can both pass its guard and arrive here in turn. The second
+        // must not build a second engine on the one input.
+        if isDictating {
+            promise.reject("DroverSpeech", "dictation is already running")
+            return
+        }
         let locale = localeTag.map { Locale(identifier: $0) } ?? Locale.current
         guard let recognizer = SFSpeechRecognizer(locale: locale) else {
             promise.reject("DroverSpeech", "no speech recogniser for \(locale.identifier)")
@@ -251,20 +335,45 @@ public final class DroverSpeechModule: Module {
             return
         }
 
-        let request = SFSpeechAudioBufferRecognitionRequest()
-        request.shouldReportPartialResults = true
-        request.requiresOnDeviceRecognition = true
-
-        let engine = AVAudioEngine()
-        let inputNode = engine.inputNode
-        let format = inputNode.outputFormat(forBus: 0)
-
+        // The session comes FIRST, before anything reads the input node. Build
+        // 9 read the format while the session was still in the synthesiser's
+        // `.playback` category, got 0 Hz / 0 channels because that category has
+        // no input route, and `installTap` raised an NSException on it, which
+        // Swift cannot catch: SIGABRT on the main queue, twice in a row
+        // (DROVE-96). Every guard below is a rejected promise instead.
         do {
-            try activateRecording()
+            try claimSessionForDictation()
         } catch {
+            releaseSession()
             promise.reject("DroverSpeech", error.localizedDescription)
             return
         }
+
+        let session = AVAudioSession.sharedInstance()
+        guard session.isInputAvailable else {
+            releaseSession()
+            promise.reject("DroverSpeech", "no microphone is available on the current audio route")
+            return
+        }
+
+        let engine = AVAudioEngine()
+        let inputNode = engine.inputNode
+        let format = inputNode.inputFormat(forBus: 0)
+        guard format.sampleRate > 0, format.channelCount > 0 else {
+            releaseSession()
+            promise.reject(
+                "DroverSpeech",
+                "microphone input has no usable format ("
+                    + "\(format.sampleRate) Hz, \(format.channelCount) ch, "
+                    + "session category \(session.category.rawValue)); "
+                    + "installing a tap on it would crash the app"
+            )
+            return
+        }
+
+        let request = SFSpeechAudioBufferRecognitionRequest()
+        request.shouldReportPartialResults = true
+        request.requiresOnDeviceRecognition = true
 
         self.latestTranscript = ""
         self.recognitionRequest = request
@@ -284,9 +393,14 @@ public final class DroverSpeechModule: Module {
             }
         }
 
+        // A second tap on a bus is the other thing AVFAudio raises on. The
+        // engine is fresh so there is none, but the removal is free and the
+        // alternative is an abort.
+        inputNode.removeTap(onBus: 0)
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
             request.append(buffer)
         }
+        inputTapInstalled = true
 
         engine.prepare()
         do {
@@ -308,15 +422,21 @@ public final class DroverSpeechModule: Module {
         promise.resolve(transcript)
     }
 
+    private func removeInputTap() {
+        guard inputTapInstalled, let engine = audioEngine else { return }
+        engine.inputNode.removeTap(onBus: 0)
+        inputTapInstalled = false
+    }
+
     private func teardownDictation() {
         recognitionTask?.cancel()
         recognitionTask = nil
         recognitionRequest = nil
         if let engine = audioEngine {
             if engine.isRunning { engine.stop() }
-            engine.inputNode.removeTap(onBus: 0)
+            removeInputTap()
         }
         audioEngine = nil
-        deactivateSession()
+        releaseSession()
     }
 }
