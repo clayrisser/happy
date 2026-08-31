@@ -19,8 +19,9 @@
  *     out, including when the caller flips `open` off;
  *   - dragged by a real grabber, dismissed by a drag down on the gate
  *     overlay's thresholds or by a tap outside;
- *   - exactly as tall as its content, and scrolled inside itself ONLY once
- *     that content passes the cap (DROVE-158).
+ *   - exactly as tall as its content, all the way to the top of the usable
+ *     screen, and scrolled inside itself ONLY once the content has run out of
+ *     screen to grow into (DROVE-158, then DROVE-201).
  *
  * It rides the keyboard rather than hiding behind it, which the anchored
  * version got for free by living inside the dock.
@@ -43,17 +44,8 @@ import Animated, {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useUnistyles } from 'react-native-unistyles';
 import { MobileGlassSurface } from './MobileGlass';
-import { composerSheetBody, composerSheetMaxHeight } from './composerSheetLayout';
+import { composerSheetBody, composerSheetLift } from './composerSheetLayout';
 import { swipeDismisses } from './sessionGateDeck';
-
-/** @see composerSheetMaxHeight, which is where the number and its reasons live. */
-export const COMPOSER_SHEET_MAX_HEIGHT = composerSheetMaxHeight;
-
-/**
- * Where the sheet parks before anything has measured it. Taller than any
- * sheet we draw, so the first frame is offscreen instead of a flash at rest.
- */
-const parked = 900;
 
 /** A phone gets the whole width; a desktop window gets a sheet, not a wall. */
 const maxSheetWidth = 640;
@@ -62,7 +54,6 @@ export function ComposerSheet(props: {
     open: boolean;
     onClose: () => void;
     children: React.ReactNode;
-    maxHeight?: number;
     /** A sheet with switches in it must not lose the first tap to the keyboard. */
     keyboardShouldPersistTaps?: 'always' | 'never' | 'handled';
     /**
@@ -99,7 +90,10 @@ export function ComposerSheet(props: {
      * how far the sheet still has to travel.
      */
     const progress = useSharedValue(1);
-    const sheetHeight = useSharedValue(parked);
+    // Where the sheet parks before anything has measured it. The window is
+    // taller than any sheet we can draw, so the first frame is offscreen
+    // rather than a flash at rest, on a phone and on a tablet alike.
+    const sheetHeight = useSharedValue(window.height);
     const [contentHeight, setContentHeight] = React.useState<number | null>(null);
     /**
      * Measuring stops for the length of the slide down.
@@ -185,8 +179,16 @@ export function ComposerSheet(props: {
         }), [freeze, onClose, progress, sheetHeight]);
 
     const sheetStyle = useAnimatedStyle(() => ({
-        // The keyboard's height is negative while it is up, so this lifts.
-        transform: [{ translateY: progress.value * sheetHeight.value + keyboard.height.value }],
+        // The keyboard's height is negative while it is up, so this lifts, up
+        // to whatever slack is left above a sheet that may now be full height.
+        transform: [{
+            translateY: progress.value * sheetHeight.value + composerSheetLift({
+                keyboardHeight: keyboard.height.value,
+                windowHeight: window.height,
+                safeAreaTop: safeArea.top,
+                sheetHeight: sheetHeight.value,
+            }),
+        }],
     }));
 
     const backdropStyle = useAnimatedStyle(() => ({
@@ -197,8 +199,9 @@ export function ComposerSheet(props: {
 
     const body = composerSheetBody({
         contentHeight,
-        maxHeight: props.maxHeight,
         windowHeight: window.height,
+        safeAreaTop: safeArea.top,
+        safeAreaBottom: safeArea.bottom,
     });
 
     return (
@@ -269,9 +272,9 @@ export function ComposerSheet(props: {
                                 view inside an auto-height card sizes itself,
                                 and what it sized itself to was short enough to
                                 slice the Add context tiles through their
-                                labels (DROVE-158). Below the cap this is the
-                                content's own height, so there is nothing to
-                                scroll and nothing left over. */}
+                                labels (DROVE-158). Short of the screen this is
+                                the content's own height, so there is nothing
+                                to scroll and nothing left over. */}
                             <Animated.ScrollView
                                 style={{ height: body.height, maxHeight: body.cap }}
                                 scrollEnabled={body.scrolls}

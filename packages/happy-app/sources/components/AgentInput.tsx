@@ -1637,7 +1637,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         <ComposerSheet
             open={desktopPickerOpen}
             onClose={closePicker}
-            maxHeight={400}
             keyboardShouldPersistTaps="always"
         >
             {desktopPickerOpen && (
@@ -1892,7 +1891,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 <ComposerSheet
                     open={mobilePickerOpen}
                     onClose={closePicker}
-                    maxHeight={400}
                     keyboardShouldPersistTaps="always"
                 >
                     {mobilePickerOpen && (

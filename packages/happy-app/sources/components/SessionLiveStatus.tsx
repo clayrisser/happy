@@ -129,21 +129,23 @@ export const SessionLiveStatusTree = React.memo(function SessionLiveStatusTree(p
     rows: LiveStatusRow[];
     /**
      * 180 is what the tree got when it unfolded inside the composer's
-     * furniture. In a sheet it has room, so the sheet passes its own cap
-     * (DROVE-111).
+     * furniture (DROVE-111). `null` means the caller is the cap: the sheet
+     * grows to the screen and scrolls itself, so a second scroll view inside
+     * it would fight the first (DROVE-201).
      */
-    maxHeight?: number;
+    maxHeight?: number | null;
 }) {
+    const capped = props.maxHeight !== null;
     return (
         <ScrollView
-            // Capped rather than unbounded: Clay runs 4-12 agents at a time
-            // and a tree that eats the whole screen is worse than one that
-            // scrolls.
-            style={{ maxHeight: props.maxHeight ?? 180 }}
+            // Capped rather than unbounded where nothing else bounds it: Clay
+            // runs 4-12 agents at a time and a tree that eats the whole screen
+            // is worse than one that scrolls.
+            style={capped ? { maxHeight: props.maxHeight ?? 180 } : undefined}
             // The tree sits against the composer, so a nested scroll that
             // steals the chat's gestures on web is worse than no scroll at
             // all.
-            scrollEnabled={Platform.OS !== 'web'}
+            scrollEnabled={capped && Platform.OS !== 'web'}
         >
             <View style={{ paddingBottom: 4 }}>
                 {props.rows.map((row) => (

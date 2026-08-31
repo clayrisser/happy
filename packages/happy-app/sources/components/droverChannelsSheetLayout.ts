@@ -5,10 +5,12 @@
  * Two things are measured here.
  *
  * HOW TALL. The sheet holds four mode rows and then two sections of two
- * switch rows, which is taller than the screen wants to give it, so it
- * scrolls. The cap has to leave the transcript visible behind it and still
- * show the whole mode list without the first scroll, because the complaint
- * on the ticket was that only Direct and Hands-free voice were on screen.
+ * switch rows. The complaint on the ticket was that only Direct and
+ * Hands-free voice were on screen, so what is measured here is the content,
+ * and what has to hold is that the whole mode list is drawn before anything
+ * scrolls. The cap itself is no longer this file's business: DROVE-201 made
+ * every composer sheet grow to the usable screen, so `composerSheetCap` is
+ * the only ceiling and this content fits under it on a phone.
  *
  * HOW WIDE THE LABEL COLUMN IS. `Speak prompts when they arrive` came back
  * from the phone as `Speak prompts when th...`, cut mid word, while
@@ -39,25 +41,6 @@ export function channelSheetContentHeight(input: { modes: number; toggleSections
         0,
     );
     return modeSection + toggleSections;
-}
-
-/**
- * The tallest the sheet is allowed to be. Four mode rows plus their heading
- * is 216pt, so any cap at or above that shows the whole mode list before the
- * first scroll, which is the criterion on the ticket.
- */
-export const channelSheetHeightCap = 460;
-
-/** Never so short that a mode row is half drawn. */
-export const channelSheetHeightFloor = 240;
-
-/**
- * Six tenths of the window, capped. On a 852pt iPhone that is 460; on a small
- * handset it shrinks rather than pushing the sheet off the top of the screen.
- */
-export function channelSheetMaxHeight(windowHeight: number): number {
-    const share = Math.round(windowHeight * 0.6);
-    return Math.max(channelSheetHeightFloor, Math.min(channelSheetHeightCap, share));
 }
 
 /** Whether the mode list is fully drawn before anything has to be scrolled. */
