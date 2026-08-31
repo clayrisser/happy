@@ -25,6 +25,13 @@ interface ChatHeaderViewProps {
     title: string;
     /** Project folder name (last path segment) */
     folderName?: string;
+    /**
+     * The checkout's branch, shown after the folder name under the title and
+     * truncated from the left so the ticket key at its end survives (DROVE-90).
+     */
+    branch?: string | null;
+    /** Tapping the branch; opens the worktree sheet. */
+    onBranchPress?: () => void;
     /** Extra path segment appended to the title with a separator (used for the file-view overlay). */
     extraPathSegment?: string;
     /** Optional content rendered at the right edge of the header (used by file-view / diff overlays). */
@@ -43,6 +50,8 @@ interface ChatHeaderViewProps {
 export const ChatHeaderView: React.FC<ChatHeaderViewProps> = ({
     title,
     folderName,
+    branch,
+    onBranchPress,
     extraPathSegment,
     rightSlot,
     onTitlePress,
@@ -59,6 +68,8 @@ export const ChatHeaderView: React.FC<ChatHeaderViewProps> = ({
     const glassEnabled = !isTablet && Platform.OS === 'ios' && !isRunningOnMac();
     const contentHeight = glassEnabled ? Math.max(headerHeight, MOBILE_GLASS_HEADER_HEIGHT) : headerHeight;
     const showFolderSubtitle = !!folderName && folderName !== title;
+    // The file-view overlay owns the subtitle while it is open.
+    const showBranch = !!branch && !hasExtra;
     const folderNameColor = glassEnabled
         ? theme.dark ? 'rgba(255, 255, 255, 0.78)' : 'rgba(24, 23, 28, 0.72)'
         : theme.colors.textSecondary;
@@ -133,6 +144,26 @@ export const ChatHeaderView: React.FC<ChatHeaderViewProps> = ({
                                             </Text>
                                         </>
                                     )}
+                                    {showBranch && (
+                                        <>
+                                            <Text style={[styles.webSeparator, { color: theme.colors.textSecondary, ...Typography.default() }]}>·</Text>
+                                            <Pressable
+                                                onPress={onBranchPress}
+                                                disabled={!onBranchPress}
+                                                accessibilityRole="button"
+                                                accessibilityLabel={`Branch ${branch}, show worktrees`}
+                                                style={styles.branchPressable}
+                                            >
+                                                <Text
+                                                    numberOfLines={1}
+                                                    ellipsizeMode="head"
+                                                    style={[styles.webBranch, { color: theme.colors.textSecondary, ...Typography.default() }]}
+                                                >
+                                                    {branch}
+                                                </Text>
+                                            </Pressable>
+                                        </>
+                                    )}
                                     {hasExtra && (
                                         <>
                                             <Text style={[styles.webSeparator, { color: theme.colors.textSecondary, ...Typography.default() }]}>/</Text>
@@ -176,7 +207,7 @@ export const ChatHeaderView: React.FC<ChatHeaderViewProps> = ({
             >
                 {title || folderName}
             </Text>
-            {(showFolderSubtitle || hasExtra) && (
+            {(showFolderSubtitle || showBranch || hasExtra) && (
                 <View style={[styles.subtitleRow, glassEnabled && styles.mobileSubtitleRow]}>
                     {showFolderSubtitle && (
                         <Text
@@ -185,11 +216,41 @@ export const ChatHeaderView: React.FC<ChatHeaderViewProps> = ({
                             style={[
                                 styles.folderName,
                                 glassEnabled && styles.mobileFolderName,
+                                // Beside a branch the folder holds its width;
+                                // the branch is what gives way.
+                                showBranch && styles.folderNameBesideBranch,
                                 { color: folderNameColor, ...Typography.default() },
                             ]}
                         >
                             {folderName}
                         </Text>
+                    )}
+                    {showFolderSubtitle && showBranch && (
+                        <Text style={[styles.separator, { color: folderNameColor, ...Typography.default() }]}>·</Text>
+                    )}
+                    {showBranch && (
+                        <Pressable
+                            onPress={onBranchPress}
+                            disabled={!onBranchPress}
+                            hitSlop={{ top: 8, bottom: 8, left: 4, right: 8 }}
+                            accessibilityRole="button"
+                            accessibilityLabel={`Branch ${branch}, show worktrees`}
+                            style={styles.branchPressable}
+                        >
+                            <Text
+                                numberOfLines={1}
+                                // From the left: `…BASED-98-cattle-drover` keeps the
+                                // ticket key, `lane/BASED-98-cattle-dr…` keeps nothing.
+                                ellipsizeMode="head"
+                                style={[
+                                    styles.folderName,
+                                    glassEnabled && styles.mobileFolderName,
+                                    { color: folderNameColor, ...Typography.default() },
+                                ]}
+                            >
+                                {branch}
+                            </Text>
+                        </Pressable>
                     )}
                     {showFolderSubtitle && hasExtra && (
                         <Text style={[styles.separator, { color: theme.colors.textSecondary, ...Typography.default() }]}>•</Text>
@@ -478,6 +539,17 @@ const styles = StyleSheet.create((theme) => ({
     folderName: {
         fontSize: 12,
         lineHeight: 16,
+        flexShrink: 1,
+    },
+    folderNameBesideBranch: {
+        flexShrink: 0,
+    },
+    branchPressable: {
+        flexShrink: 1,
+        minWidth: 0,
+    },
+    webBranch: {
+        fontSize: 14,
         flexShrink: 1,
     },
     separator: {

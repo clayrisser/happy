@@ -12,6 +12,7 @@ import { encodeBase64, decodeBase64, encrypt, decrypt } from './encryption';
 import { backoff } from '@/utils/time';
 import { RpcHandlerManager } from './rpc/RpcHandlerManager';
 import { registerDroverPolicyHandler } from '@/drover/flip/policyRpc';
+import { registerListWorktreesHandler } from '@/daemon/listWorktrees';
 import { detectCLIAvailability, CLIAvailability } from '@/utils/detectCLI';
 import { detectResumeSupport, type ResumeSupport } from '@/resume/localHappyAgentAuth';
 import { shouldReconnect } from '@/utils/lidState';
@@ -145,6 +146,9 @@ export class ApiMachineClient {
         // matters, since it is what the next session will pick up. The session
         // handler cannot serve it: there is no session to address.
         registerDroverPolicyHandler(this.rpcHandlerManager, () => null);
+
+        // The repo's worktrees, for the branch sheet in the session header (DROVE-90).
+        registerListWorktreesHandler(this.rpcHandlerManager);
     }
 
     setRPCHandlers({
