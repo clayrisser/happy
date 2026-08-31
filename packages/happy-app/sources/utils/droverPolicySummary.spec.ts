@@ -27,12 +27,33 @@ const policy = (over: Partial<DroverPolicy>): DroverPolicy => ({
 describe('droverPolicySummary', () => {
     it('names both policies in the words the engine uses', () => {
         expect(droverPolicySummary(policy({
+            effective: { onLimit: 'auto', onFamilyExhausted: 'flip-then-downgrade' },
+        }))).toBe('Switches on its own, then drops a model rung if it has to');
+
+        expect(droverPolicySummary(policy({
+            effective: { onLimit: 'prompt', onFamilyExhausted: 'flip-only' },
+        }))).toBe('Asks which account, and leaves the model alone');
+
+        expect(droverPolicySummary(policy({
+            effective: { onLimit: 'auto', onFamilyExhausted: 'downgrade-only' },
+        }))).toBe('Switches on its own, drops a model rung instead of moving account');
+
+        expect(droverPolicySummary(policy({
+            effective: { onLimit: 'prompt', onFamilyExhausted: 'nothing' },
+        }))).toBe('Asks which account, and changes nothing when it runs out');
+    });
+
+    it('reads the two values this key shipped with (DROVE-187)', () => {
+        // A settings file written before that ticket is still on Clay's Mac,
+        // and "unknown" on a screen whose whole job is to say what will happen
+        // is worse than no screen.
+        expect(droverPolicySummary(policy({
             effective: { onLimit: 'auto', onFamilyExhausted: 'fallback' },
-        }))).toBe('Switches on its own, falls back to another model');
+        }))).toBe('Switches on its own, then drops a model rung if it has to');
 
         expect(droverPolicySummary(policy({
             effective: { onLimit: 'prompt', onFamilyExhausted: 'stop' },
-        }))).toBe('Asks which account, stops when your model is out');
+        }))).toBe('Asks which account, and leaves the model alone');
     });
 
     it('says nothing was reported rather than inventing a default', () => {

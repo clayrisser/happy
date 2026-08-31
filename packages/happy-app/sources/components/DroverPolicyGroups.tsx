@@ -69,16 +69,40 @@ const onLimitChoices: Choice<'prompt' | 'auto'>[] = [
     },
 ];
 
-const onFamilyExhaustedChoices: Choice<'stop' | 'fallback'>[] = [
+/**
+ * What happens when the model runs out (DROVE-187).
+ *
+ * Four values, in the order they escalate. `flip-then-downgrade` is the default
+ * and the one that keeps an unattended session working: try the same model on
+ * another account first, because that changes nothing about the answers, and
+ * drop a rung only when no account can carry it.
+ *
+ * The two values this key shipped with — `stop` and `fallback` — are still
+ * accepted by the store and read as `flip-only` and `flip-then-downgrade`, so a
+ * Mac that set one before this shipped keeps the behaviour it chose.
+ */
+type FamilyPolicy = 'flip-then-downgrade' | 'flip-only' | 'downgrade-only' | 'nothing';
+
+const onFamilyExhaustedChoices: Choice<FamilyPolicy>[] = [
     {
-        value: 'stop',
-        title: 'Stop and say so',
-        subtitle: 'Halts rather than quietly answering an Opus question on Sonnet.',
+        value: 'flip-then-downgrade',
+        title: 'Switch account, then drop a model',
+        subtitle: 'Tries the same model on another account first. Only when no account has it does the model drop a rung — Fable to Opus to Sonnet, never Haiku.',
     },
     {
-        value: 'fallback',
-        title: 'Fall back to the next model',
-        subtitle: 'Moves down the chain and records the swap. Fable exhausted falls back to Opus.',
+        value: 'flip-only',
+        title: 'Switch account only',
+        subtitle: 'Moves to an account that has the model. If none has it, the session stops and says so rather than answering an Opus question on Sonnet.',
+    },
+    {
+        value: 'downgrade-only',
+        title: 'Drop a model only',
+        subtitle: 'Stays on this account and moves down the chain. For when the account matters more than the model.',
+    },
+    {
+        value: 'nothing',
+        title: 'Do nothing',
+        subtitle: 'Neither the account nor the model changes. The session waits for you.',
     },
 ];
 
@@ -201,7 +225,7 @@ export function DroverPolicyGroups(props: RowsProps) {
 
             <ItemGroup
                 title="When no account has your model"
-                footer="A model family with no chain behaves as Stop even when this says fall back."
+                footer="Whatever it does, the session says which of these chose and what it changed. A family with no chain below it cannot drop, so it behaves as Switch account only."
             >
                 <InForce policy={policy} policyKey="onFamilyExhausted" scope={scope} choices={onFamilyExhaustedChoices} />
                 <ChoiceRows {...props} policyKey="onFamilyExhausted" choices={onFamilyExhaustedChoices} />
@@ -236,7 +260,7 @@ export function DroverPolicyGroups(props: RowsProps) {
                         />
                     ))
                 ) : (
-                    <Item title="No chain" subtitle="Every family behaves as Stop." showChevron={false} />
+                    <Item title="No chain" subtitle="Nothing can drop a rung." showChevron={false} />
                 )}
             </ItemGroup>
 
