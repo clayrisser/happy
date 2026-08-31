@@ -17,6 +17,7 @@ import { storage } from './storage';
 import { sync } from './sync';
 import { sessionAllow, sessionDeny } from './ops';
 import { collectGates, questionTextFor } from './droverGates';
+import { demoLog, isDroverDemoId } from './droverDemo';
 import { isSessionArchived } from './sessionArchive';
 import { liveStatusSince, liveStatusWatchLine } from '@/utils/liveStatus';
 import {
@@ -452,6 +453,15 @@ export function startDroverWatchFeed(): () => void {
     });
 
     const answers = addDroverAnswerListener((event) => {
+        // The wrist's own demo refuses to send an answer for a `demo:` gate,
+        // and no demo gate is ever in a snapshot. This is the phone-side
+        // refusal for the same id, so a demo answer arriving off the wire by
+        // any route is logged as a demo and dropped rather than replayed into
+        // sessionAllow (DROVE-75).
+        if (isDroverDemoId(event.id)) {
+            demoLog(`wrist answered demo gate ${event.id}; dropped, nothing sent`);
+            return;
+        }
         const split = event.id.indexOf(':');
         if (split <= 0) return;
         const sessionId = event.id.slice(0, split);

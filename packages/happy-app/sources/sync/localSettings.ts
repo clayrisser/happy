@@ -24,6 +24,10 @@ export const LocalSettingsSchema = z.object({
     // almost never should.
     readAloudEnabled: z.boolean().describe('Read assistant replies aloud as they arrive'),
     voiceDictationEnabled: z.boolean().describe('Show the press-and-hold talk button in the composer'),
+    // The channel demo doubles as onboarding (DROVE-75): shown once, on the
+    // first authenticated launch, then reachable from Settings. Device-local
+    // because the thing being learned is what THIS phone's buzz feels like.
+    droverDemoSeenAt: z.number().nullable().describe('When the channel demo was first shown on this device; null until it has been'),
     // CLI version acknowledgments - keyed by machineId
     acknowledgedCliVersions: z.record(z.string(), z.string()).describe('Acknowledged CLI versions per machine'),
     // Collapsed Rig projects in the session list - keyed by project id
@@ -55,6 +59,7 @@ export const localSettingsDefaults: LocalSettings = {
     zenMode: false,
     readAloudEnabled: false,
     voiceDictationEnabled: true,
+    droverDemoSeenAt: null,
     sidebarPanelsOpen: [],
     sidebarPanelActive: null,
     acknowledgedCliVersions: {},

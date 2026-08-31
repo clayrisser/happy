@@ -13,6 +13,8 @@ import { backoff } from '@/utils/time';
 import { RpcHandlerManager } from './rpc/RpcHandlerManager';
 import { registerDroverPolicyHandler } from '@/drover/flip/policyRpc';
 import { registerListWorktreesHandler } from '@/daemon/listWorktrees';
+import { registerDroverDemoPushHandler } from '@/drover/demo';
+import { PushNotificationClient } from './pushNotifications';
 import { detectCLIAvailability, CLIAvailability } from '@/utils/detectCLI';
 import { detectResumeSupport, type ResumeSupport } from '@/resume/localHappyAgentAuth';
 import { shouldReconnect } from '@/utils/lidState';
@@ -149,6 +151,15 @@ export class ApiMachineClient {
 
         // The repo's worktrees, for the branch sheet in the session header (DROVE-90).
         registerListWorktreesHandler(this.rpcHandlerManager);
+        // The channel demo's test push (DROVE-75). On the daemon for the same
+        // reason the policy handler is: the phone wants to prove the push path
+        // while nothing is running. Its own push client rather than the
+        // ApiClient's, because this class only ever sees the token; the client
+        // is stateless apart from the wake throttle, which the demo never uses.
+        registerDroverDemoPushHandler(
+            this.rpcHandlerManager,
+            new PushNotificationClient(this.token, configuration.serverUrl),
+        );
     }
 
     setRPCHandlers({
