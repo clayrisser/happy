@@ -787,6 +787,15 @@ export const zhHans: TranslationStructure = {
         usageUsed: ({ used, limit }: { used: string; limit: string }) => `已使用 ${used}，共 ${limit}`,
         supportTitle: '升级语音',
         supportSubtitle: '获取更多语音时间并支持开发',
+        // Which device speaks a reply (DROVE-92)
+        speakOn: {
+            title: '朗读回复的设备',
+            footer: '由哪个设备朗读回复。自动跟随耳机：耳机配对到手机时由手机朗读，配对到手表时由手表朗读，否则由手机朗读。无论哪个设备朗读，回复开始时手表都会震动。',
+            phone: '手机',
+            watch: '手表',
+            auto: '自动',
+            autoDetail: '连接耳机的那个',
+        },
         speaking: {
             title: '朗读声音',
             footer: '用哪个已安装的声音朗读回复。高级和增强声音听起来像真人；紧凑型是默认的机械声。更多声音可在 设置 > 辅助功能 > 朗读内容 > 声音 中下载。',

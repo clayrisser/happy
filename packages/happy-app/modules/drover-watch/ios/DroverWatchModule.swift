@@ -32,6 +32,14 @@ final class DroverWatchDelegate: NSObject, WCSessionDelegate {
     /// Called when the wrist opens a session's transcript, or leaves it
     /// (DROVE-91). The event carries `sessionId` only while one is open.
     var onOpened: (([String: Any]) -> Void)?
+    /// Called when the wrist dictated a message for a session (DROVE-92).
+    var onSay: (([String: Any]) -> Void)?
+    /// Called when the wrist reports whether its audio route has headphones
+    /// (DROVE-92), on opening a transcript and on every route change.
+    var onRoute: (([String: Any]) -> Void)?
+    /// Called when the wrist finished, or cut, a sentence the phone sent it
+    /// to speak (DROVE-92); the phone's read-aloud queue paces on it.
+    var onSpoken: (([String: Any]) -> Void)?
 
     /// How long the wrist may be kept waiting before it is answered with
     /// whatever this phone last published.
@@ -147,6 +155,28 @@ final class DroverWatchDelegate: NSObject, WCSessionDelegate {
             onOpened?(event)
             return
         }
+        // A message dictated on the wrist for a session (DROVE-92). It goes
+        // out through the same send path a phone-typed message takes, so the
+        // phone only has to hand it over. Above the answer guard like the rest.
+        if payload["kind"] as? String == "say" {
+            guard let sessionId = payload["sessionId"] as? String,
+                  let text = payload["text"] as? String else { return }
+            onSay?(["sessionId": sessionId, "text": text])
+            return
+        }
+        // Whether the wrist's own audio route has headphones (DROVE-92). JS
+        // arbitrates which device speaks on it.
+        if payload["kind"] as? String == "route" {
+            onRoute?(["headphones": payload["headphones"] as? Bool ?? false])
+            return
+        }
+        // The wrist finished (or cut) a sentence the phone asked it to speak
+        // (DROVE-92). The id is the one the phone sent with it.
+        if payload["kind"] as? String == "spoken" {
+            guard let id = payload["id"] as? String else { return }
+            onSpoken?(["id": id, "finished": payload["finished"] as? Bool ?? false])
+            return
+        }
         guard let id = payload["id"] as? String,
               let allow = payload["allow"] as? Bool else { return }
         var event: [String: Any] = ["id": id, "allow": allow]
@@ -195,7 +225,7 @@ public final class DroverWatchModule: Module {
     public func definition() -> ModuleDefinition {
         Name("DroverWatch")
 
-        Events("onAnswer", "onFlip", "onRefresh", "onOpened")
+        Events("onAnswer", "onFlip", "onRefresh", "onOpened", "onSay", "onRoute", "onSpoken")
 
         OnCreate {
             self.watchDelegate.onAnswer = { [weak self] event in
@@ -210,6 +240,15 @@ public final class DroverWatchModule: Module {
             }
             self.watchDelegate.onOpened = { [weak self] event in
                 self?.sendEvent("onOpened", event)
+            }
+            self.watchDelegate.onSay = { [weak self] event in
+                self?.sendEvent("onSay", event)
+            }
+            self.watchDelegate.onRoute = { [weak self] event in
+                self?.sendEvent("onRoute", event)
+            }
+            self.watchDelegate.onSpoken = { [weak self] event in
+                self?.sendEvent("onSpoken", event)
             }
             guard WCSession.isSupported() else { return }
             let session = WCSession.default
@@ -292,6 +331,25 @@ public final class DroverWatchModule: Module {
                   let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let dict = plistSanitized(raw) as? [String: Any] else {
                 throw Exception(name: "DroverWatch", description: "transcript was not a JSON object")
+            }
+            session.sendMessage(dict, replyHandler: nil, errorHandler: nil)
+            return true
+        }
+
+        /// Send one small message to a REACHABLE watch and nothing to one that
+        /// is not (DROVE-92): a sentence for the wrist to speak, a stop, or the
+        /// reply-start cue. Same rule as sendTranscript, for the same reason:
+        /// a sentence queued for a watch that is not looking is spoken into a
+        /// sleeve twenty minutes later. Resolves whether it was sent, so the
+        /// phone's queue knows to speak it itself instead.
+        AsyncFunction("sendToWatch") { (json: String) -> Bool in
+            guard WCSession.isSupported() else { return false }
+            let session = WCSession.default
+            guard session.activationState == .activated, session.isReachable else { return false }
+            guard let data = json.data(using: .utf8),
+                  let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let dict = plistSanitized(raw) as? [String: Any] else {
+                throw Exception(name: "DroverWatch", description: "message was not a JSON object")
             }
             session.sendMessage(dict, replyHandler: nil, errorHandler: nil)
             return true

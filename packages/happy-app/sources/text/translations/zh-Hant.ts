@@ -786,6 +786,15 @@ export const zhHant: TranslationStructure = {
         usageUsed: ({ used, limit }: { used: string; limit: string }) => `已使用 ${used}，共 ${limit}`,
         supportTitle: '升級語音',
         supportSubtitle: '獲取更多語音時間並支持開發',
+        // Which device speaks a reply (DROVE-92)
+        speakOn: {
+            title: '朗讀回覆的裝置',
+            footer: '由哪個裝置朗讀回覆。自動跟隨耳機：耳機配對到手機時由手機朗讀，配對到手錶時由手錶朗讀，否則由手機朗讀。無論哪個裝置朗讀，回覆開始時手錶都會震動。',
+            phone: '手機',
+            watch: '手錶',
+            auto: '自動',
+            autoDetail: '連接耳機的那個',
+        },
         speaking: {
             title: '朗讀聲音',
             footer: '用哪個已安裝的聲音朗讀回覆。高級和增強聲音聽起來像真人；精簡版是預設的機械聲。更多聲音可在 設定 > 輔助使用 > 朗讀內容 > 聲音 中下載。',

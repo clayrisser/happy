@@ -93,6 +93,17 @@ final class WristBuzzer {
         }
     }
 
+    /// A reply has started being spoken, on this wrist or on the phone
+    /// (DROVE-92). One beat, frontmost only: the cue arrives by `sendMessage`,
+    /// which only ever reaches a watch app that is on screen, so there is no
+    /// background alert to post and none wanted. It is not a WristCue: those
+    /// are gates and ranked against each other, and a reply starting must
+    /// never outrank, or be deduplicated against, a question.
+    func replyStarted() {
+        guard WKApplication.shared().applicationState == .active else { return }
+        WKInterfaceDevice.current().play(.start)
+    }
+
     /// The per-kind pattern, beat by beat.
     private func play(_ cue: WristCue) {
         let device = WKInterfaceDevice.current()

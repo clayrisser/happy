@@ -20,6 +20,7 @@ import { getVoiceExperimentStatus, getVoiceUpsellVariantLabel } from '@/realtime
 import { getVoiceLocalCounters, resetVoiceLocalCounters } from '@/sync/persistence';
 import { SpeakingVoiceSettings } from '@/components/SpeakingVoiceSettings';
 import { canReadAloud } from '@/voice/speechEngine';
+import { resolveSpeakReplies, speakerChoices, type SpeakerChoice } from '@/sync/settings';
 
 function formatVoiceTime(totalSeconds: number): string {
     const mins = Math.floor(totalSeconds / 60);
@@ -38,6 +39,11 @@ export default React.memo(function VoiceSettingsScreen() {
     // assistant below — neither of them calls a server at all.
     const [readAloudEnabled, setReadAloudEnabled] = useLocalSettingMutable('readAloudEnabled');
     const [voiceDictationEnabled, setVoiceDictationEnabled] = useLocalSettingMutable('voiceDictationEnabled');
+    // Which device speaks a reply: this phone, the watch, or whichever has
+    // headphones (DROVE-92). Synced, not local: it is a preference about
+    // the pair, not about one handset.
+    const [speakReplies, setSpeakReplies] = useSettingMutable('speakReplies');
+    const speakOn = resolveSpeakReplies({ speakReplies });
     const experiments = useSetting('experiments');
     const devModeEnabled = __DEV__ || useLocalSetting('devModeEnabled');
 
@@ -79,6 +85,25 @@ export default React.memo(function VoiceSettingsScreen() {
             setVoiceBypassToken(trimmed !== null);
         }
     }, [voiceCustomAgentId, setVoiceCustomAgentId, setVoiceBypassToken]);
+
+    const speakOnLabel = React.useCallback((choice: SpeakerChoice) => {
+        if (choice === 'phone') return t('settingsVoice.speakOn.phone');
+        if (choice === 'watch') return t('settingsVoice.speakOn.watch');
+        return t('settingsVoice.speakOn.auto');
+    }, []);
+
+    const handleSpeakOn = React.useCallback(() => {
+        Modal.alert(
+            t('settingsVoice.speakOn.title'),
+            t('settingsVoice.speakOn.footer'),
+            speakerChoices.map((choice) => ({
+                text: choice === 'auto'
+                    ? `${speakOnLabel(choice)} (${t('settingsVoice.speakOn.autoDetail')})`
+                    : speakOnLabel(choice),
+                onPress: () => setSpeakReplies({ on: choice }),
+            })),
+        );
+    }, [setSpeakReplies, speakOnLabel]);
 
     const handleVoiceExperimentOverride = React.useCallback(() => {
         Modal.alert(
@@ -181,6 +206,23 @@ export default React.memo(function VoiceSettingsScreen() {
             {/* Which voice reads, and how (DROVE-97). Native speech only: the
                 web engine has no voice list to pick from. */}
             {canReadAloud() && Platform.OS !== 'web' ? <SpeakingVoiceSettings /> : null}
+
+            {/* Which device speaks (DROVE-92). iOS only: the watch is the
+                other device, and there is none anywhere else. */}
+            {canReadAloud() && Platform.OS === 'ios' ? (
+                <ItemGroup
+                    title={t('settingsVoice.speakOn.title')}
+                    footer={t('settingsVoice.speakOn.footer')}
+                >
+                    <Item
+                        title={t('settingsVoice.speakOn.title')}
+                        subtitle={speakOn === 'auto' ? t('settingsVoice.speakOn.autoDetail') : undefined}
+                        detail={speakOnLabel(speakOn)}
+                        icon={<Ionicons name="headset-outline" size={29} color="#34C759" />}
+                        onPress={handleSpeakOn}
+                    />
+                </ItemGroup>
+            ) : null}
 
             {/* Voice Usage */}
             {usageLoading ? (

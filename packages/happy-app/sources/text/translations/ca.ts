@@ -786,6 +786,15 @@ export const ca: TranslationStructure = {
         usageUsed: ({ used, limit }: { used: string; limit: string }) => `${used} utilitzat de ${limit}`,
         supportTitle: 'Millorar veu',
         supportSubtitle: 'Més temps de veu i suport al desenvolupament',
+        // Which device speaks a reply (DROVE-92)
+        speakOn: {
+            title: 'Llegir respostes a',
+            footer: 'Quin dispositiu llegeix la resposta en veu alta. Automàtic segueix els auriculars: el telèfon parla quan hi estan aparellats, el rellotge quan ho estan amb el rellotge, i el telèfon altrament. El rellotge vibra quan comença una resposta, parli qui parli.',
+            phone: 'Telèfon',
+            watch: 'Rellotge',
+            auto: 'Automàtic',
+            autoDetail: 'El que tingui auriculars',
+        },
         speaking: {
             title: 'Veu de lectura',
             footer: 'Quina veu instal·lada llegeix les respostes en veu alta. Les veus premium i millorades sonen humanes; la compacta és la robòtica per defecte. Es descarreguen més veus a Configuració > Accessibilitat > Contingut llegit > Veus.',

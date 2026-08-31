@@ -23,6 +23,13 @@ const mocks = vi.hoisted(() => ({
     onFlip: null as ((event: { sessionId: string; account?: string }) => void) | null,
     onRefresh: null as (() => void) | null,
     onOpened: null as ((event: { sessionId?: string }) => void) | null,
+    onSay: null as ((event: { sessionId: string; text: string }) => void) | null,
+    onRoute: null as ((event: { headphones: boolean }) => void) | null,
+    onSpoken: null as ((event: { id: string; finished: boolean }) => void) | null,
+    /** What the voice side was told (DROVE-92). */
+    interrupted: [] as string[],
+    watchRoute: [] as boolean[],
+    settled: [] as { id: string; finished: boolean }[],
     onStorage: null as (() => void) | null,
 }));
 
@@ -50,6 +57,16 @@ vi.mock('./sync', () => ({
 vi.mock('@/components/tools/knownTools', () => ({ knownTools: {} }));
 vi.mock('@/text', () => ({
     t: (key: string, params?: { count?: number }) => `${key}:${params?.count ?? ''}`,
+}));
+
+// The voice side owns the reader and the wrist speaker; the feed only hands
+// them facts off the wire (DROVE-92).
+vi.mock('@/voice/readAloudService', () => ({
+    readAloud: { interrupt: (reason: string) => mocks.interrupted.push(reason) },
+}));
+vi.mock('@/voice/watchSpeaker', () => ({
+    setWatchRoute: (headphones: boolean) => mocks.watchRoute.push(headphones),
+    settleWatchUtterance: (id: string, finished: boolean) => mocks.settled.push({ id, finished }),
 }));
 
 vi.mock('./ops', () => ({
@@ -88,6 +105,18 @@ vi.mock('drover-watch', () => ({
     addDroverOpenedListener: (listener: typeof mocks.onOpened) => {
         mocks.onOpened = listener;
         return { remove: () => { mocks.onOpened = null; } };
+    },
+    addDroverSayListener: (listener: typeof mocks.onSay) => {
+        mocks.onSay = listener;
+        return { remove: () => { mocks.onSay = null; } };
+    },
+    addDroverRouteListener: (listener: typeof mocks.onRoute) => {
+        mocks.onRoute = listener;
+        return { remove: () => { mocks.onRoute = null; } };
+    },
+    addDroverSpokenListener: (listener: typeof mocks.onSpoken) => {
+        mocks.onSpoken = listener;
+        return { remove: () => { mocks.onSpoken = null; } };
     },
     sendDroverTranscript: (delta: DroverTranscriptDelta) => {
         if (!mocks.reachable) return Promise.resolve(false);
@@ -165,6 +194,12 @@ beforeEach(() => {
     mocks.transcripts = [];
     mocks.visible.mockReset();
     mocks.onOpened = null;
+    mocks.onSay = null;
+    mocks.onRoute = null;
+    mocks.onSpoken = null;
+    mocks.interrupted = [];
+    mocks.watchRoute = [];
+    mocks.settled = [];
     mocks.published = [];
     mocks.woken = [];
     mocks.reachable = true;
@@ -544,6 +579,33 @@ describe('startDroverWatchFeed', () => {
         expect(mocks.allow).toHaveBeenCalledWith(
             'sess1', 'req1', undefined, undefined, undefined, undefined,
         );
+    });
+
+    // Clay: "I should be able to speak back to it, in fact I should be able
+    // to speak with the watch." A dictated message takes the composer's own
+    // send path, so it reaches the inbox socket like any typed one (DROVE-92).
+    it('sends a message dictated on the wrist exactly like a phone-typed one', () => {
+        start();
+        mocks.onSay!({ sessionId: 's1', text: '  run the tests again  ' });
+        expect(mocks.sendMessage).toHaveBeenCalledWith('s1', 'run the tests again', { source: 'voice' });
+        expect(mocks.interrupted).toEqual(['sent']);
+    });
+
+    it('sends nothing for a dictation that heard silence', () => {
+        start();
+        mocks.onSay!({ sessionId: 's1', text: '   ' });
+        mocks.onSay!({ sessionId: '', text: 'hello' });
+        expect(mocks.sendMessage).not.toHaveBeenCalled();
+        expect(mocks.interrupted).toEqual([]);
+    });
+
+    it('hands the wrist route and spoken acknowledgements to the voice side', () => {
+        start();
+        mocks.onRoute!({ headphones: true });
+        mocks.onRoute!({ headphones: false });
+        mocks.onSpoken!({ id: 'u1', finished: true });
+        expect(mocks.watchRoute).toEqual([true, false]);
+        expect(mocks.settled).toEqual([{ id: 'u1', finished: true }]);
     });
 
     it('turns a wrist flip into the /flip message the CLI already intercepts', () => {

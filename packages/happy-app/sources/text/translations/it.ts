@@ -784,6 +784,15 @@ export const it: TranslationStructure = {
         usageUsed: ({ used, limit }: { used: string; limit: string }) => `${used} utilizzato su ${limit}`,
         supportTitle: 'Migliora voce',
         supportSubtitle: 'Più tempo vocale e supporta lo sviluppo',
+        // Which device speaks a reply (DROVE-92)
+        speakOn: {
+            title: 'Leggi le risposte su',
+            footer: 'Quale dispositivo legge la risposta ad alta voce. Automatico segue le cuffie: parla il telefono quando sono abbinate a lui, l\'orologio quando sono abbinate all\'orologio, altrimenti il telefono. L\'orologio vibra all\'inizio di una risposta, chiunque parli.',
+            phone: 'Telefono',
+            watch: 'Orologio',
+            auto: 'Automatico',
+            autoDetail: 'Quello con le cuffie',
+        },
         speaking: {
             title: 'Voce di lettura',
             footer: 'Quale voce installata legge le risposte ad alta voce. Le voci premium e migliorate suonano umane; quella compatta è la robotica predefinita. Altre voci si scaricano in Impostazioni > Accessibilità > Contenuto letto > Voci.',

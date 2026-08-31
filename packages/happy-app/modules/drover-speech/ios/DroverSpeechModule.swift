@@ -188,6 +188,15 @@ public final class DroverSpeechModule: Module {
             self.synthesizer.isSpeaking
         }
 
+        /// The output ports of the phone's current audio route, by the names
+        /// AVAudioSession gives them ("Headphones", "BluetoothA2DPOutput",
+        /// "Speaker", ...). JS decides which of those count as headphones and
+        /// therefore whether this phone or the watch speaks (DROVE-92);
+        /// nothing here does.
+        Function("audioRoute") { () -> [String] in
+            AVAudioSession.sharedInstance().currentRoute.outputs.map { $0.portType.rawValue }
+        }
+
         /// Whether this device can transcribe WITHOUT sending audio anywhere.
         /// JS asks before offering the talk button, so an unsupported locale
         /// says so up front instead of failing on the first press.

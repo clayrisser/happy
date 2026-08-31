@@ -104,6 +104,15 @@ struct TranscriptView: View {
                     Label("Session", systemImage: "info.circle")
                 }
             }
+            // Talk to the session from the wrist (DROVE-92). Tap to dictate:
+            // `TextFieldLink` opens watchOS's own input sheet, where
+            // dictation is one tap away beside the keyboard and Scribble, the
+            // same path GateDetailView answers a question by (DROVE-55).
+            // watchOS gives no hold gesture on that control, so there is no
+            // push-to-talk here; the sheet closes on Done and the text goes.
+            ToolbarItem(placement: .bottomBar) {
+                SayLink(session: session)
+            }
         }
         .onAppear { store.watchTranscript(of: session.id) }
         // A push on top of this screen (a gate, the session's facts) is a
@@ -118,6 +127,27 @@ struct TranscriptView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { store.watchTranscript(of: session.id) }
         }
+    }
+}
+
+/// The mic: dictate a message to this session (DROVE-92).
+///
+/// One control, used from the transcript's bottom bar and from the session's
+/// facts screen, so both places send by the one `GateStore.say`. The sheet
+/// hands back whatever was said (or typed); a blank is refused by the store
+/// and the transcript's banner says so, which is why nothing here dismisses.
+struct SayLink: View {
+    let session: DroverSession
+    @EnvironmentObject private var store: GateStore
+
+    var body: some View {
+        TextFieldLink(prompt: Text("Say to \(session.title)")) {
+            Label("Dictate", systemImage: "mic.fill")
+                .font(.caption)
+        } onSubmit: { said in
+            store.say(session, text: said)
+        }
+        .tint(.green)
     }
 }
 

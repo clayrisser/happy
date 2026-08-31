@@ -61,6 +61,19 @@ export const streamTalkDefaults: Required<StreamTalk> = {
     maxLagSeconds: 15,
 };
 
+// Which device speaks a reply (DROVE-92): the phone, the watch, or whichever
+// one currently has headphones on its audio route, else the phone. A string
+// rather than an enum so a value from a newer app version parses instead of
+// failing the whole settings object; resolveSpeakReplies maps anything it
+// does not know back to auto.
+export const speakerChoices = ['phone', 'watch', 'auto'] as const;
+export type SpeakerChoice = typeof speakerChoices[number];
+export const SpeakRepliesSchema = z.object({
+    on: z.string().optional(),
+});
+export type SpeakReplies = z.infer<typeof SpeakRepliesSchema>;
+export const speakRepliesDefault: SpeakerChoice = 'auto';
+
 export const SettingsSchema = z.object({
     // Schema version for compatibility detection
     schemaVersion: z.number().default(SUPPORTED_SCHEMA_VERSION).describe('Settings schema version for compatibility checks'),
@@ -94,6 +107,7 @@ export const SettingsSchema = z.object({
     usageLimitShowRemaining: z.boolean().describe('Show plan rate limits as quota remaining instead of quota used'),
     codeWrap: CodeWrapSchema.describe('Soft-wrap monospace text in terminal cards and code blocks, toggled by double-tap'),
     streamTalk: StreamTalkSchema.describe('Read-aloud voice: chosen voice identifier, rate, pitch and the lag threshold before skipping ahead'),
+    speakReplies: SpeakRepliesSchema.describe('Which device speaks replies aloud: phone, watch, or auto (the one whose audio route has headphones, else the phone)'),
 
     // Drives the archive-visibility toggle: it hides archived sessions, not
     // merely disconnected ones. The key keeps its original name because these
@@ -180,6 +194,7 @@ export const settingsDefaults: Settings = {
     usageLimitShowRemaining: false,
     codeWrap: { terminal: false, code: false },
     streamTalk: { ...streamTalkDefaults },
+    speakReplies: { on: speakRepliesDefault },
 
     hideInactiveSessions: true,
     sortSessionsByActivity: true,
@@ -316,4 +331,14 @@ export function resolveStreamTalk(settings: Pick<Settings, 'streamTalk'>): Requi
 /** The delta that changes some stream-talk fields and keeps the rest. */
 export function updateStreamTalk(settings: Pick<Settings, 'streamTalk'>, patch: Partial<StreamTalk>): Pick<Settings, 'streamTalk'> {
     return { streamTalk: { ...resolveStreamTalk(settings), ...patch } };
+}
+
+//
+// Which device speaks (DROVE-92)
+//
+
+/** The speaker choice, with anything unknown or missing read as auto. */
+export function resolveSpeakReplies(settings: Pick<Settings, 'speakReplies'>): SpeakerChoice {
+    const on = settings.speakReplies?.on;
+    return (speakerChoices as readonly string[]).includes(on ?? '') ? (on as SpeakerChoice) : speakRepliesDefault;
 }

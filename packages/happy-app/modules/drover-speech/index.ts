@@ -61,6 +61,11 @@ type DroverSpeechModuleType = {
     listVoices: () => Promise<SpeechVoice[]>;
     stop: () => Promise<void>;
     isSpeaking: () => boolean;
+    /**
+     * Optional: builds up to 11 have no such function. The output port types
+     * of the current audio route, as AVAudioSession names them (DROVE-92).
+     */
+    audioRoute?: () => string[];
     dictationSupport: (localeTag: string | null) => Promise<DictationSupport>;
     startDictation: (localeTag: string | null) => Promise<boolean>;
     /** Resolves with the final transcript. */
@@ -124,6 +129,40 @@ export function isSpeaking(): boolean {
         return native.isSpeaking();
     } catch {
         return false;
+    }
+}
+
+/**
+ * AVAudioSession port types that mean something is in or on the ears
+ * (DROVE-92). Wired ("Headphones", USB-C), and the three Bluetooth profiles
+ * AirPods and the like show up as. A car stereo, AirPlay and the built-in
+ * speaker are routes, but not headphones, and the watch rule is about
+ * headphones: Apple plays audio on the device the headphones are paired to.
+ */
+export const headphonePortTypes = [
+    'Headphones',
+    'BluetoothA2DPOutput',
+    'BluetoothHFP',
+    'BluetoothLE',
+    'USBAudio',
+] as const;
+
+/** Whether a list of output port types, as `audioRoute()` returns them, has headphones in it. */
+export function routeHasHeadphones(ports: readonly string[]): boolean {
+    return ports.some((port) => (headphonePortTypes as readonly string[]).includes(port));
+}
+
+/**
+ * The output port types of the phone's current audio route. Empty on a build
+ * without the function, which reads as "no headphones" and so keeps speech
+ * on the phone, which is what every build before this did.
+ */
+export function audioRoute(): string[] {
+    if (!native || typeof native.audioRoute !== 'function') return [];
+    try {
+        return native.audioRoute();
+    } catch {
+        return [];
     }
 }
 

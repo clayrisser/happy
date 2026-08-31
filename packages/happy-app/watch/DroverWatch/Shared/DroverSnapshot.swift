@@ -498,3 +498,64 @@ struct DroverOpened: Codable {
         self.sessionId = sessionId
     }
 }
+
+/// A message dictated on the wrist for a session (DROVE-92). Same channel as
+/// an answer, told apart by `kind`. The phone sends it through the composer's
+/// own path, so it reaches the session and both transcripts exactly like a
+/// phone-typed message.
+struct DroverSay: Codable {
+    /// Always "say".
+    let kind: String
+    let sessionId: String
+    let text: String
+
+    init(sessionId: String, text: String) {
+        self.kind = "say"
+        self.sessionId = sessionId
+        self.text = text
+    }
+}
+
+/// Whether this wrist's audio route has headphones (DROVE-92). The phone
+/// picks which device speaks a reply on it: Apple plays audio on the device
+/// the headphones are paired to, and this is how the phone learns which.
+struct DroverAudioRoute: Codable {
+    /// Always "route".
+    let kind: String
+    let headphones: Bool
+
+    init(headphones: Bool) {
+        self.kind = "route"
+        self.headphones = headphones
+    }
+}
+
+/// The wrist finished, or cut, a sentence the phone sent it to speak
+/// (DROVE-92). `id` is the one the phone sent; its read-aloud queue paces on
+/// this the way it paces on its own synthesiser settling.
+struct DroverSpoken: Codable {
+    /// Always "spoken".
+    let kind: String
+    let id: String
+    let finished: Bool
+
+    init(id: String, finished: Bool) {
+        self.kind = "spoken"
+        self.id = id
+        self.finished = finished
+    }
+}
+
+/// A sentence the phone asks this wrist to speak, or a stop (DROVE-92).
+/// Decoded off a `sendMessage` dictionary told apart by `kind == "speak"`.
+struct DroverSpeak: Codable {
+    static let kindValue = "speak"
+    let kind: String
+    /// Absent on a stop.
+    let id: String?
+    let text: String?
+    /// Present and true on a stop: cut whatever is speaking and clear the queue.
+    let stop: Bool?
+
+    var isStop: Bool { stop == true }
+}

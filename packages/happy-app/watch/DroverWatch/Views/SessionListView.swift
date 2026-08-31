@@ -149,6 +149,11 @@ struct SessionDetailView: View {
 
                 facts
 
+                // Dictate a message to this session from its facts screen
+                // too (DROVE-92): the same control the transcript's bottom
+                // bar carries, so the mic is wherever the session is.
+                SayLink(session: session)
+
                 Button {
                     store.flip(session)
                     dismiss()

@@ -787,6 +787,15 @@ export const ja: TranslationStructure = {
         usageUsed: ({ used, limit }: { used: string; limit: string }) => `${limit}中${used}使用済み`,
         supportTitle: '音声をアップグレード',
         supportSubtitle: '音声時間を増やして開発を支援',
+        // Which device speaks a reply (DROVE-92)
+        speakOn: {
+            title: '返答を読み上げる端末',
+            footer: 'どの端末が返答を読み上げるか。自動はヘッドフォンに従います。iPhoneにペアリングされていればiPhone、Apple Watchにペアリングされていれば時計、どちらでもなければiPhoneが話します。どちらが話しても、返答が始まると時計が振動します。',
+            phone: 'iPhone',
+            watch: '時計',
+            auto: '自動',
+            autoDetail: 'ヘッドフォンがある方',
+        },
         speaking: {
             title: '読み上げの声',
             footer: 'インストール済みのどの声で返信を読み上げるか。プレミアムと拡張の声は人の声に近く、コンパクトは機械的な既定の声です。声の追加は 設定 > アクセシビリティ > 読み上げコンテンツ > 声 からダウンロードできます。',

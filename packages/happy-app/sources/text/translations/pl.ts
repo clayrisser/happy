@@ -802,6 +802,15 @@ export const pl: TranslationStructure = {
         usageUsed: ({ used, limit }: { used: string; limit: string }) => `${used} wykorzystano z ${limit}`,
         supportTitle: 'Ulepsz głos',
         supportSubtitle: 'Więcej czasu głosowego i wsparcie rozwoju',
+        // Which device speaks a reply (DROVE-92)
+        speakOn: {
+            title: 'Czytaj odpowiedzi na',
+            footer: 'Które urządzenie czyta odpowiedź na głos. Auto podąża za słuchawkami: telefon mówi, gdy są sparowane z nim, zegarek, gdy są sparowane z zegarkiem, w przeciwnym razie telefon. Zegarek wibruje na początku odpowiedzi niezależnie od tego, kto mówi.',
+            phone: 'Telefon',
+            watch: 'Zegarek',
+            auto: 'Auto',
+            autoDetail: 'To, które ma słuchawki',
+        },
         speaking: {
             title: 'Głos czytania',
             footer: 'Który zainstalowany głos czyta odpowiedzi na głos. Głosy premium i ulepszone brzmią jak człowiek; kompaktowy to domyślny, robotyczny. Więcej głosów pobierzesz w Ustawienia > Dostępność > Czytana zawartość > Głosy.',

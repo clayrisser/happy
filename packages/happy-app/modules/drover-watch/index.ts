@@ -287,6 +287,46 @@ export interface DroverFlipEvent {
     account?: string;
 }
 
+/**
+ * A message dictated on the wrist for a session (DROVE-92). The phone sends
+ * it through the same path the composer uses, so it reaches the session, and
+ * the transcript on both devices, exactly as a phone-typed message does.
+ */
+export interface DroverSayEvent {
+    sessionId: string;
+    text: string;
+}
+
+/**
+ * Whether the wrist's own audio route has headphones on it (DROVE-92). Sent
+ * when a transcript is opened and on every route change, so the phone can
+ * pick which device speaks a reply.
+ */
+export interface DroverRouteEvent {
+    headphones: boolean;
+}
+
+/**
+ * The wrist finished, or cut, a sentence the phone sent it to speak
+ * (DROVE-92). `id` is the one the phone sent with the sentence; the
+ * read-aloud queue paces on it the way it paces on the phone's own
+ * synthesiser settling.
+ */
+export interface DroverSpokenEvent {
+    id: string;
+    finished: boolean;
+}
+
+/**
+ * What the phone sends a reachable watch by `sendMessage` for the voice half
+ * (DROVE-92): a sentence to speak with an id to acknowledge, a stop, or the
+ * reply-start cue that buzzes the wrist whichever device speaks.
+ */
+export type DroverWatchVoiceMessage =
+    | { kind: 'speak'; id: string; text: string }
+    | { kind: 'speak'; stop: true }
+    | { kind: 'cue'; cue: 'reply' };
+
 // The emitter members are declared explicitly rather than by extending
 // NativeModule<…>: that generic resolves to a stub without them under this
 // project's moduleResolution, and an inaccurate type is worse than a written
@@ -307,11 +347,20 @@ type DroverWatchModuleType = {
      * and resolves false, doing nothing, when it is not (DROVE-91).
      */
     sendTranscript?: (json: string) => Promise<boolean>;
+    /**
+     * Optional for the same reason: builds up to 11 have no such function.
+     * Sends one voice message to a reachable watch and resolves false, doing
+     * nothing, when it is not (DROVE-92).
+     */
+    sendToWatch?: (json: string) => Promise<boolean>;
     addListener: {
         (eventName: 'onAnswer', listener: (event: DroverAnswerEvent) => void): EventSubscription;
         (eventName: 'onFlip', listener: (event: DroverFlipEvent) => void): EventSubscription;
         (eventName: 'onRefresh', listener: (event: DroverRefreshEvent) => void): EventSubscription;
         (eventName: 'onOpened', listener: (event: DroverOpenedEvent) => void): EventSubscription;
+        (eventName: 'onSay', listener: (event: DroverSayEvent) => void): EventSubscription;
+        (eventName: 'onRoute', listener: (event: DroverRouteEvent) => void): EventSubscription;
+        (eventName: 'onSpoken', listener: (event: DroverSpokenEvent) => void): EventSubscription;
     };
 };
 
@@ -442,6 +491,51 @@ export function addDroverOpenedListener(listener: (event: DroverOpenedEvent) => 
     if (!native) return { remove: () => {} };
     try {
         return native.addListener('onOpened', listener);
+    } catch {
+        return { remove: () => {} };
+    }
+}
+
+/**
+ * Send one voice message to a reachable watch (DROVE-92). False when the
+ * watch is not reachable or the binary predates the function, and nothing is
+ * sent then: the caller speaks on the phone instead, which is what every
+ * build before this did.
+ */
+export async function sendDroverWatchVoice(message: DroverWatchVoiceMessage): Promise<boolean> {
+    if (!native || typeof native.sendToWatch !== 'function') return false;
+    try {
+        return await native.sendToWatch(JSON.stringify(message));
+    } catch {
+        return false;
+    }
+}
+
+/** A message dictated on the wrist (DROVE-92). Same guard as onRefresh. */
+export function addDroverSayListener(listener: (event: DroverSayEvent) => void) {
+    if (!native) return { remove: () => {} };
+    try {
+        return native.addListener('onSay', listener);
+    } catch {
+        return { remove: () => {} };
+    }
+}
+
+/** The wrist's audio route, headphones or not (DROVE-92). Same guard as onRefresh. */
+export function addDroverRouteListener(listener: (event: DroverRouteEvent) => void) {
+    if (!native) return { remove: () => {} };
+    try {
+        return native.addListener('onRoute', listener);
+    } catch {
+        return { remove: () => {} };
+    }
+}
+
+/** The wrist finished a sentence the phone sent it (DROVE-92). Same guard as onRefresh. */
+export function addDroverSpokenListener(listener: (event: DroverSpokenEvent) => void) {
+    if (!native) return { remove: () => {} };
+    try {
+        return native.addListener('onSpoken', listener);
     } catch {
         return { remove: () => {} };
     }

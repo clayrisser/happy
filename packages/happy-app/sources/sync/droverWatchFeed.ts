@@ -25,6 +25,9 @@ import {
     addDroverFlipListener,
     addDroverOpenedListener,
     addDroverRefreshListener,
+    addDroverRouteListener,
+    addDroverSayListener,
+    addDroverSpokenListener,
     describeDroverWakeBudget,
     getDroverWatchStatus,
     isDroverWatchAvailable,
@@ -37,6 +40,8 @@ import {
     type DroverTranscript,
 } from 'drover-watch';
 import { buildWristRows, createWristCoalescer, rowKey, transcriptDelta } from './droverWatchTranscript';
+import { readAloud } from '@/voice/readAloudService';
+import { setWatchRoute, settleWatchUtterance } from '@/voice/watchSpeaker';
 import type { Message } from './typesMessage';
 
 /**
@@ -522,6 +527,27 @@ export function startDroverWatchFeed(): () => void {
         void Promise.resolve(sync.sendMessage(event.sessionId, text)).catch(() => {});
     });
 
+    // A message dictated on the wrist (DROVE-92). It leaves this phone by the
+    // same sync.sendMessage the composer's Send calls, so it reaches the
+    // session's inbox and lands in the transcript, on both devices, exactly
+    // as a phone-typed message does. Whatever the phone was reading aloud is
+    // cut first, as SessionView cuts it on its own Send: a reply narrated
+    // over the question just asked is the wrong reply.
+    const says = addDroverSayListener((event) => {
+        const text = (event.text ?? '').trim();
+        if (!event.sessionId || !text) return;
+        readAloud.interrupt('sent');
+        void Promise.resolve(sync.sendMessage(event.sessionId, text, { source: 'voice' })).catch(() => {});
+    });
+
+    // The wrist's audio route, and the wrist finishing a sentence the phone
+    // sent it (DROVE-92). Both are facts the voice side owns; the feed only
+    // carries them off the wire.
+    const routes = addDroverRouteListener((event) => setWatchRoute(!!event.headphones));
+    const spoken = addDroverSpokenListener((event) => {
+        if (event.id) settleWatchUtterance(event.id, !!event.finished);
+    });
+
     // The wrist asked, which means iOS has just woken this app in the
     // background to answer (DROVE-22). Forced, because the ask is about the
     // TIMESTAMP: the gate set is usually identical and the change check would
@@ -548,6 +574,9 @@ export function startDroverWatchFeed(): () => void {
         flips.remove();
         refreshes.remove();
         opened.remove();
+        says.remove();
+        routes.remove();
+        spoken.remove();
         coalescer.stop();
         watchedSessionId = null;
         lastTranscript = null;

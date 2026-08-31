@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { SettingsSchema, settingsParse, applySettings, settingsDefaults, settingsToSyncPayload, isCodeWrapOn, toggleCodeWrap, resolveStreamTalk, updateStreamTalk, type Settings } from './settings';
+import { SettingsSchema, settingsParse, applySettings, settingsDefaults, settingsToSyncPayload, isCodeWrapOn, toggleCodeWrap, resolveStreamTalk, updateStreamTalk, type Settings, resolveSpeakReplies } from './settings';
 
 describe('settings', () => {
     describe('settingsParse', () => {
@@ -201,6 +201,7 @@ describe('settings', () => {
                 usageLimitShowRemaining: false,
                 codeWrap: { terminal: false, code: false },
                 streamTalk: { voiceId: null, rate: 0.52, pitch: 1.0, maxLagSeconds: 15 },
+                speakReplies: { on: 'auto' },
                 hideInactiveSessions: true,
                 sortSessionsByActivity: true,
                 expResumeSession: true,
@@ -536,6 +537,25 @@ describe('codeWrap (DROVE-95)', () => {
         it('patches one field and keeps the rest', () => {
             const patched = updateStreamTalk({ streamTalk: { voiceId: 'x', rate: 0.5 } }, { maxLagSeconds: 20 });
             expect(patched).toEqual({ streamTalk: { voiceId: 'x', rate: 0.5, pitch: 1.0, maxLagSeconds: 20 } });
+        });
+    });
+
+    describe('speakReplies (DROVE-92)', () => {
+        it('defaults to auto', () => {
+            expect(resolveSpeakReplies(settingsDefaults)).toBe('auto');
+            expect(resolveSpeakReplies({ speakReplies: {} })).toBe('auto');
+            expect(resolveSpeakReplies({ speakReplies: undefined as any })).toBe('auto');
+        });
+
+        it('keeps a chosen device', () => {
+            expect(resolveSpeakReplies({ speakReplies: { on: 'watch' } })).toBe('watch');
+            expect(resolveSpeakReplies({ speakReplies: { on: 'phone' } })).toBe('phone');
+        });
+
+        it('reads a value it does not know as auto rather than failing the parse', () => {
+            const parsed = settingsParse({ speakReplies: { on: 'toaster' } });
+            expect(parsed.speakReplies).toEqual({ on: 'toaster' });
+            expect(resolveSpeakReplies(parsed)).toBe('auto');
         });
     });
 });

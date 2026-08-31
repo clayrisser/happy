@@ -45,11 +45,20 @@ final class GateStore: NSObject, ObservableObject {
     /// state of a later one.
     private var askedAt: Date?
     private let buzzer = WristBuzzer()
+    /// Voices the sentences the phone sends when this wrist is the speaker
+    /// (DROVE-92), and reports its audio route so the phone can decide.
+    private let speaker = WatchSpeaker()
 
     override init() {
         super.init()
         buzzer.onRefusal = { [weak self] reason in
             Task { @MainActor in self?.buzzRefusal = reason }
+        }
+        speaker.onUtteranceEnded = { [weak self] id, finished in
+            self?.reportSpoken(id: id, finished: finished)
+        }
+        speaker.onRouteChanged = { [weak self] _ in
+            self?.sendRoute()
         }
         // Activation belongs to the bridge, which the app delegate has
         // normally already run on launch; calling it again is a no-op. It is
@@ -212,6 +221,62 @@ final class GateStore: NSObject, ObservableObject {
               let dict = try? JSONSerialization.jsonObject(with: payload) as? [String: Any] else { return }
         droverLog.notice("transcript opened session=\(sessionId ?? "none", privacy: .public) reachable=\(session.isReachable, privacy: .public)")
         session.sendMessage(dict, replyHandler: nil, errorHandler: nil)
+        // The route rides along with every open: the phone picks the speaker
+        // per sentence off the last route it heard, and a wrist that has just
+        // come to the front is the wrist that is about to be spoken to.
+        if sessionId != nil { sendRoute() }
+    }
+
+    /// Say something to a session, from the wrist (DROVE-92). The text is
+    /// what watchOS dictation (or the keyboard, or Scribble) handed back; the
+    /// phone sends it through the composer's own path, so it lands in the
+    /// session and in both transcripts like a typed message. Queued when the
+    /// phone is out of reach, like an answer: a sentence spoken to a session
+    /// is worth delivering late rather than dropping.
+    ///
+    /// Returns whether it left this watch, so the caller can show
+    /// `lastError` instead of pretending it was sent.
+    @discardableResult
+    func say(_ session: DroverSession, text: String) -> Bool {
+        let typed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if typed.isEmpty {
+            lastError = "Nothing was heard"
+            return false
+        }
+        return send(DroverSay(sessionId: session.id, text: typed), describing: "message")
+    }
+
+    /// Tell the phone whether this wrist has headphones on its route
+    /// (DROVE-92). Reachable only, never queued: a route reported twenty
+    /// minutes late describes headphones that have since come off.
+    func sendRoute() {
+        guard let session, session.activationState == .activated, session.isReachable else { return }
+        guard let payload = try? JSONEncoder().encode(DroverAudioRoute(headphones: speaker.headphonesConnected)),
+              let dict = try? JSONSerialization.jsonObject(with: payload) as? [String: Any] else { return }
+        session.sendMessage(dict, replyHandler: nil, errorHandler: nil)
+    }
+
+    /// A sentence the phone sent is over; the phone's queue is waiting to
+    /// hear so before it sends the next (DROVE-92).
+    private func reportSpoken(id: String, finished: Bool) {
+        guard let session, session.activationState == .activated, session.isReachable else { return }
+        guard let payload = try? JSONEncoder().encode(DroverSpoken(id: id, finished: finished)),
+              let dict = try? JSONSerialization.jsonObject(with: payload) as? [String: Any] else { return }
+        session.sendMessage(dict, replyHandler: nil, errorHandler: nil)
+    }
+
+    /// The phone asking this wrist to speak a sentence, or to stop
+    /// (DROVE-92). Only ever arrives when the phone picked the watch as the
+    /// speaker, so nothing here second-guesses the choice.
+    fileprivate func applySpeak(_ message: [String: Any]) {
+        guard let data = try? JSONSerialization.data(withJSONObject: message),
+              let speak = try? JSONDecoder().decode(DroverSpeak.self, from: data) else { return }
+        if speak.isStop {
+            speaker.stop()
+            return
+        }
+        guard let id = speak.id, let text = speak.text, !text.isEmpty else { return }
+        speaker.speak(id: id, text: text)
     }
 
     /// Answer a gate. `optionId` is a pick, `text` is typed or dictated; a
@@ -413,8 +478,16 @@ extension GateStore {
             // told apart by `kind`, which a snapshot never carries at the top
             // (DROVE-91). Buffered and replayed by the bridge exactly as a
             // snapshot is.
-            if message["kind"] as? String == DroverTranscriptDelta.kindValue {
+            let kind = message["kind"] as? String
+            if kind == DroverTranscriptDelta.kindValue {
                 applyTranscriptDelta(message)
+            } else if kind == DroverSpeak.kindValue {
+                // A sentence to voice on this wrist, or a stop (DROVE-92).
+                applySpeak(message)
+            } else if kind == "cue" {
+                // A reply has started being spoken, here or on the phone;
+                // the wrist buzzes either way (DROVE-92).
+                buzzer.replyStarted()
             } else {
                 apply(message)
             }

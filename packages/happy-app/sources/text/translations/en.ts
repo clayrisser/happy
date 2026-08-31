@@ -801,6 +801,15 @@ export const en: TranslationStructure = {
         supportTitle: 'Upgrade Voice',
         supportSubtitle: 'Get more voice time and support development',
         // Speaking voice for read-aloud (DROVE-97)
+        // Which device speaks a reply (DROVE-92)
+        speakOn: {
+            title: 'Speak replies on',
+            footer: 'Which device reads a reply aloud. Auto follows the headphones: the phone speaks when headphones are paired to it, the watch when they are paired to the watch, and the phone otherwise. The watch buzzes when a reply starts whichever one speaks.',
+            phone: 'Phone',
+            watch: 'Watch',
+            auto: 'Auto',
+            autoDetail: 'Whichever has headphones',
+        },
         speaking: {
             title: 'Speaking Voice',
             footer: 'Which installed voice reads replies aloud. Premium and enhanced voices sound like a person; the compact one is the robotic default. More voices download in Settings > Accessibility > Spoken Content > Voices.',
