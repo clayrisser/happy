@@ -95,19 +95,24 @@ export function mungedProjectName(cwd: string): string {
 }
 
 /**
- * The fixture-shaped directory names in a projects dir: the three cwd
- * patterns cattle-drover's lib/drover-fixtures.sh hides, as their munged
- * names. Used to assert that a run added none of them to the shared store.
+ * The fixture-shaped directory names in a projects dir: the cwd patterns
+ * cattle-drover's lib/drover-fixtures.sh hides, as their munged names. Used
+ * to assert that a run added none of them to the shared store. A worktree
+ * under ~/.cache/drover-worktrees is NOT one: a real session starts there;
+ * only its environments/data/envs/<name>/project copy is a fixture, and that
+ * path matches the envs pattern on its own.
  */
 export function fixtureProjectNames(projectsDir: string): string[] {
     if (!existsSync(projectsDir)) {
         return [];
     }
-    const worktrees = mungedProjectName(join(homedir(), '.cache', 'drover-worktrees')) + '-';
     return readdirSync(projectsDir).filter((name) => {
         return name.startsWith('-private-tmp-happy-testing-ground-')
             || name.startsWith('-tmp-happy-testing-ground-')
-            || name.includes('-environments-data-envs-')
-            || name.startsWith(worktrees);
+            || name.startsWith('-private-tmp-happy-claude-goal-fixtures')
+            || name.startsWith('-tmp-happy-claude-goal-fixtures')
+            || name.startsWith('-private-tmp-drover-trust-test')
+            || name.startsWith('-tmp-drover-trust-test')
+            || /-environments-data-envs-.+-project(-|$)/.test(name);
     }).sort();
 }

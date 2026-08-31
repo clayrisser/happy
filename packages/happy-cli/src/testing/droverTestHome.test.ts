@@ -78,11 +78,15 @@ describe('isClaudeConfigDirLoggedIn', () => {
 });
 
 describe('fixtureProjectNames', () => {
-    it('is the three cwd patterns drover hides, as munged names', () => {
+    it('is the cwd patterns drover hides, as munged names, and never a plain worktree', () => {
         const projects = join(scratch, 'projects');
+        const worktreeEnvs = join(homedir(), '.cache', 'drover-worktrees', 'DROVE-1', 'happy', 'environments', 'data', 'envs', 'keen-cloud', 'project');
         for (const cwd of [
             '/private/tmp/happy-testing-ground-0a1b2c3d',
+            '/private/tmp/happy-claude-goal-fixtures',
+            '/private/tmp/drover-trust-test',
             '/Users/x/happy/environments/data/envs/bold-forest/project',
+            worktreeEnvs,
             join(homedir(), '.cache', 'drover-worktrees', 'DROVE-1', 'happy'),
             '/Users/x/Projects/real',
         ]) {
@@ -90,7 +94,9 @@ describe('fixtureProjectNames', () => {
         }
         expect(fixtureProjectNames(projects)).toEqual([
             '-Users-x-happy-environments-data-envs-bold-forest-project',
-            mungedProjectName(join(homedir(), '.cache', 'drover-worktrees', 'DROVE-1', 'happy')),
+            mungedProjectName(worktreeEnvs),
+            '-private-tmp-happy-claude-goal-fixtures',
+            '-private-tmp-drover-trust-test',
             '-private-tmp-happy-testing-ground-0a1b2c3d',
         ].sort());
         expect(fixtureProjectNames(join(scratch, 'missing'))).toEqual([]);
