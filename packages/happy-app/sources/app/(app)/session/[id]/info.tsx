@@ -7,7 +7,7 @@ import { Item } from '@/components/Item';
 import { ItemGroup } from '@/components/ItemGroup';
 import { ItemList } from '@/components/ItemList';
 import { Avatar } from '@/components/Avatar';
-import { useSession, useIsDataReady, useSessionProjectAvatar } from '@/sync/storage';
+import { useSession, useIsDataReady, useSessionProjectAvatar, useAllSessions } from '@/sync/storage';
 import { getSessionName, useSessionStatus, formatOSPlatform, formatPathRelativeToHome, getSessionAvatarId, getResumeCommand } from '@/utils/sessionUtils';
 import * as Clipboard from 'expo-clipboard';
 import { Modal } from '@/modal';
@@ -27,10 +27,10 @@ import { MobileGlassSurface } from '@/components/MobileGlass';
 import { getRigIdentity, isRigMetadata } from '@/sync/rig';
 import { droverPolicySummary } from '@/utils/droverPolicySummary';
 import { harnessName } from '@/utils/harnessName';
+import { cloneLineageRows } from '@/utils/droverClone';
 import { MOBILE_GLASS_HEADER_HEIGHT } from '@/components/navigation/headerMetrics';
 import { Switch } from '@/components/Switch';
 import { findSessionForAtRisk, isAtRiskListFresh, resolveRemoteControlState, supportsRemoteControlToggle } from '@/components/remoteControlToggle';
-import { useAllSessions } from '@/sync/storage';
 
 // Animated status dot component
 function StatusDot({ color, isPulsing, size = 8 }: { color: string; isPulsing?: boolean; size?: number }) {
@@ -149,6 +149,26 @@ function SessionInfoContent({ session }: { session: Session }) {
         resumeSessionSubtitle,
     } = useSessionQuickActions(session);
 
+    // Clone lineage (DROVE-58), and the map from the CLAUDE session ids the
+    // ledger names to the HAPPY ids this app routes by. Only sessions this
+    // device already holds can be linked to; the rest still show their line,
+    // because "cloned into a session you have not opened" is true and useful.
+    const cloneRows = React.useMemo(
+        () => cloneLineageRows(session.metadata?.droverClone),
+        [session.metadata?.droverClone],
+    );
+    const allSessions = useAllSessions();
+    const cloneTargets = React.useMemo(() => {
+        if (cloneRows.length === 0) return {} as Record<string, string>;
+        const wanted = new Set(cloneRows.map((r) => r.claudeSessionId).filter((v): v is string => !!v));
+        const found: Record<string, string> = {};
+        for (const s of allSessions) {
+            const claudeId = s.metadata?.claudeSessionId;
+            if (claudeId && wanted.has(claudeId)) found[claudeId] = s.id;
+        }
+        return found;
+    }, [cloneRows, allSessions]);
+
     // Check if CLI version is outdated
     const isCliOutdated = session.metadata?.version && !isVersionSupported(session.metadata.version, MINIMUM_CLI_VERSION);
 
@@ -167,8 +187,7 @@ function SessionInfoContent({ session }: { session: Session }) {
     // DROVE-37 + DROVE-63: the sessions this one's last flip knocked off
     // Remote Control, each with the button that turns it back on. The flip
     // already said their names out loud; this is the same list somewhere a
-    // thumb can reach.
-    const allSessions = useAllSessions();
+    // thumb can reach. allSessions is the same hook the clone rows above use.
     const atRisk = isAtRiskListFresh(session.metadata?.remoteControlAtRiskAt, Date.now())
         ? session.metadata?.remoteControlAtRisk ?? []
         : [];
@@ -371,6 +390,33 @@ function SessionInfoContent({ session }: { session: Session }) {
                             }}
                         />
                     )}
+                    {/* Clone lineage (DROVE-58). A flip is one session on
+                        another account and needs no line; a clone is TWO
+                        sessions, because no harness but Claude Code can read a
+                        Claude Code transcript. Without this the app shows two
+                        unrelated rows and nothing says which came from which. */}
+                    {cloneRows.map((row) => (
+                        <Item
+                            key={`${row.direction}-${row.claudeSessionId ?? 'pending'}`}
+                            title={row.title}
+                            subtitle={row.subtitle}
+                            icon={<Ionicons name="git-branch-outline" size={29} color="#FF9500" />}
+                            showChevron={!!cloneTargets[row.claudeSessionId ?? '']}
+                            onPress={row.claudeSessionId ? () => {
+                                // The ledger names CLAUDE session ids and the
+                                // app routes by HAPPY ones, so a link is only
+                                // offered when this device actually holds the
+                                // other session. Otherwise the id is copied,
+                                // which is what `drover clone --list` wants.
+                                const happyId = cloneTargets[row.claudeSessionId!];
+                                if (happyId) {
+                                    router.push(`/session/${happyId}`);
+                                } else {
+                                    Clipboard.setStringAsync(row.claudeSessionId!);
+                                }
+                            } : undefined}
+                        />
+                    ))}
                     {/* Resume command — shown for disconnected sessions with a backend session ID */}
                     {/* TODO: migrate to `happy resume <happy-session-id>` once it works without happy-agent auth */}
                     {!sessionStatus.isConnected && getResumeCommand(session) && (

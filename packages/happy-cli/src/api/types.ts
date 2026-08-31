@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import type { Update, UpdateMachineBody } from '@slopus/happy-wire';
 import { UsageSchema } from '@/claude/types'
+import type { DroverClone } from '@/drover/flip/clones';
 import type { DroverUsage } from '@/drover/flip/usage';
 import type { DroverPolicy } from '@/drover/flip/policy';
 import type { LiveStatus } from '@/claude/utils/liveStatus';
@@ -339,6 +340,15 @@ export type Metadata = {
    * drops the record.
    */
   droverPolicy?: DroverPolicy,
+  /**
+   * Clone lineage (DROVE-58). A flip is one session moving between accounts,
+   * so there is nothing to say about it here. A CLONE is two sessions — no
+   * harness but Claude Code can read a Claude Code transcript, so cloning into
+   * OpenCode or Cursor starts a new session seeded with a summary — and this
+   * is how each end knows about the other: `from` on the clone, `to` on the
+   * source. Both are read from one ledger, so they cannot disagree.
+   */
+  droverClone?: DroverClone,
   gitBranch?: string,
   claudeSessionId?: string, // Claude Code session ID
   codexThreadId?: string, // Codex app-server thread ID

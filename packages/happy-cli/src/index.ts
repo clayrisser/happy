@@ -717,6 +717,13 @@ ${chalk.bold('To clean up runaway processes:')} Use ${chalk.cyan('drover doctor 
         options.permissionMode = args[++i] as StartOptions['permissionMode']
       } else if (arg === '--effort') {
         options.effort = z.enum(['low', 'medium', 'high', 'xhigh', 'max', 'ultracode']).parse(args[++i])
+      } else if (arg === '--seed') {
+        // The clone's seed (DROVE-58): a FILE holding the first prompt.
+        // `drover clone` writes one and `bin/drover` passes the path through,
+        // because a seed is tens of kilobytes and a command line is where one
+        // stray quote turns it into a syntax error. Read here, handed to the
+        // first child only.
+        options.seedFile = args[++i]
       } else if (arg === '--started-by') {
         options.startedBy = args[++i] as 'daemon' | 'terminal'
       } else if (arg === '--js-runtime') {

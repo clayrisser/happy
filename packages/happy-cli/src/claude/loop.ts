@@ -61,6 +61,16 @@ interface LoopOptions {
     usage?: UsageReporter
     /** Set when runClaude reattached to the Happy session holding this transcript (BASED-98). */
     reattachedClaudeSessionId?: string
+    /**
+     * The first prompt for the FIRST child only (DROVE-58).
+     *
+     * `drover clone --seed <file>` puts a whole exported conversation here. It
+     * rides `pendingInitialPrompt`, the one-shot channel a flip already uses,
+     * rather than claudeArgs: an argv survives every relaunch, so a seed put
+     * there would paste the entire conversation in again after each flip or
+     * crash.
+     */
+    initialPrompt?: string
 }
 
 export async function loop(opts: LoopOptions): Promise<number> {
@@ -88,6 +98,8 @@ export async function loop(opts: LoopOptions): Promise<number> {
         usage: opts.usage,
         reattachedClaudeSessionId: opts.reattachedClaudeSessionId,
     });
+
+    if (opts.initialPrompt) session.pendingInitialPrompt = opts.initialPrompt;
 
     opts.onSessionReady?.(session)
 

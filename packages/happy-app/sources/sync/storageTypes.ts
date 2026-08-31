@@ -76,6 +76,34 @@ const DroverPolicySchema = z.object({
 export type DroverPolicy = NonNullable<z.infer<typeof DroverPolicySchema>>;
 export type DroverPolicyValues = z.infer<typeof PolicyValuesSchema>;
 
+/**
+ * Clone lineage (DROVE-58). A flip is ONE session moving between accounts, so
+ * the app sees one row and nothing needs saying. A CLONE is TWO sessions: no
+ * harness but Claude Code can read a Claude Code transcript, so cloning into
+ * OpenCode or Cursor starts a new session seeded with a summary of the old
+ * one. Two rows, and neither can say on its own what it is — this is what
+ * lets the clone show where it came from and the source show where it went.
+ *
+ * `session` is null on a clone that has not spoken yet: the ledger row is
+ * written before the window opens, and the bus fills the id in from the
+ * clone's first hook. Rendering "starting…" is the honest answer for those
+ * seconds; dropping the entry would make the source look un-cloned.
+ *
+ * Ephemeral and additive, the same as droverUsage: a malformed block degrades
+ * to absent rather than failing the whole metadata parse and dropping the
+ * session off the list.
+ */
+const DroverCloneLinkSchema = z.object({
+    session: z.string().nullish(),
+    harness: z.string().nullish(),
+    at: z.string().nullish(),
+}).passthrough();
+
+const DroverCloneSchema = z.object({
+    from: DroverCloneLinkSchema.optional(),
+    to: z.array(DroverCloneLinkSchema).optional(),
+}).passthrough().optional().catch(undefined);
+
 export const MetadataSchema = z.object({
     models: z.array(z.object({
         code: z.string(),
@@ -213,6 +241,7 @@ export const MetadataSchema = z.object({
     droverAccount: z.string().optional(),
     droverUsage: DroverUsageSchema,
     droverPolicy: DroverPolicySchema,
+    droverClone: DroverCloneSchema,
     claudeSessionId: z.string().optional(), // Claude Code session ID
     codexThreadId: z.string().optional(), // Codex app-server thread ID
     tools: z.array(z.string()).optional(),

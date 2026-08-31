@@ -42,6 +42,7 @@ import { join } from 'node:path';
 import { RawJSONLinesSchema, type RawJSONLines } from './types';
 import { FlipController, parseFlipCommand } from '@/drover/flip/controller';
 import { currentAccount, readAccounts } from '@/drover/flip/accounts';
+import { CloneReporter, readSeedPrompt } from '@/drover/flip/clones';
 import { UsageReporter } from '@/drover/flip/usage';
 import { PolicyReporter } from '@/drover/flip/policy';
 import { registerDroverPolicyHandler } from '@/drover/flip/policyRpc';
@@ -63,6 +64,15 @@ export interface StartOptions {
     noSandbox?: boolean
     /** JavaScript runtime to use for spawning Claude Code (default: 'node') */
     jsRuntime?: JsRuntime
+    /**
+     * A file holding this session's first prompt (DROVE-58).
+     *
+     * `drover clone` writes one — a whole exported conversation — and passes
+     * the PATH, because a seed is tens of kilobytes and a command line is
+     * where one stray quote turns it into a syntax error. Read once, handed to
+     * the first child only.
+     */
+    seedFile?: string
 }
 
 // No default permission mode. "Default" in the picker means "whatever this
@@ -1193,8 +1203,51 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
         logger.debug('[flip] policy reporter started');
     }
 
+    // Clone lineage (DROVE-58). A flip is ONE session on another account; a
+    // clone is TWO sessions, because no harness but Claude Code can read a
+    // Claude Code transcript. Two rows in the app, and neither can say on its
+    // own what it is — so both read the ledger `drover clone` writes and show
+    // the other end of the pair.
+    //
+    // POLLED, not read once. `drover clone` writes the row BEFORE it opens the
+    // window, with the clone's own session id still unknown, and the bus fills
+    // that in from the clone's first SessionStart hook. A snapshot taken at
+    // start-up would be taken before that happened, every time.
+    //
+    // Not gated on the registry the way the two above are: a clone has nothing
+    // to do with how many accounts exist.
+    const cloneReporter = new CloneReporter({
+        current: currentClaudeSessionId,
+        publish: (droverClone) => {
+            session.updateMetadata((meta) => {
+                if (!droverClone) {
+                    const { droverClone: _gone, ...rest } = meta as Metadata;
+                    return rest as Metadata;
+                }
+                return { ...meta, droverClone };
+            });
+        },
+    });
+    cloneReporter.start();
+
+    // The clone's seed (DROVE-58). Read HERE rather than in the shell so it
+    // travels as a path through `pick-account` and the `drover account use`
+    // re-entry, and delivered as `pendingInitialPrompt` rather than an argv:
+    // an argv survives every relaunch, so a seed there would paste the whole
+    // conversation in again after each flip.
+    //
+    // An unreadable seed is a FAILURE, not a session that starts with no
+    // context and looks like it worked. `bin/drover` checks first, so this
+    // only fires for a CLI invoked directly.
+    let seedPrompt: string | undefined;
+    if (options.seedFile) {
+        seedPrompt = readSeedPrompt(options.seedFile);
+        logger.debug(`[clone] seeded from ${options.seedFile} (${seedPrompt.length} chars)`);
+    }
+
     const exitCode = await loop({
         path: workingDirectory,
+        initialPrompt: seedPrompt,
         model: options.model,
         permissionMode: initialPermissionMode,
         startingMode: options.startingMode,
@@ -1249,6 +1302,7 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
     flipController?.stop();
     usageReporter?.stop();
     policyReporter?.stop();
+    cloneReporter.stop();
 
     // Cleanup session resources (intervals, callbacks) - prevents memory leak
     // Note: currentSession is set by onSessionReady callback during loop()
