@@ -38,6 +38,8 @@ import { structuredRowsOmitting } from '@/utils/structuredFields';
 import { knownTools } from '../../tools/knownTools';
 import { useTickingNow } from '../../useTickingNow';
 import { RawDisclosure, RowsView } from '../StructuredFieldsView';
+import { DisclosureFooter, useInlineDisclosure } from '@/components/DisclosureFooter';
+import { edgeClearance, tapSlopFor } from '@/components/scrollIndicatorInset';
 import { ToolViewProps } from './_all';
 
 interface FilteredTool {
@@ -100,7 +102,7 @@ function stepTitle(step: ToolCall, metadata: Metadata | null): string {
 
 export const TaskView = React.memo<ToolViewProps>(({ tool, metadata, messages, sessionId }) => {
     const { theme } = useUnistyles();
-    const [expanded, setExpanded] = React.useState(false);
+    const { expanded, toggle, expand, collapse, headerRef, footerRef } = useInlineDisclosure();
 
     const subagentType = agentSubagentType(tool.input);
     const prompt = agentPrompt(tool.input);
@@ -156,8 +158,10 @@ export const TaskView = React.memo<ToolViewProps>(({ tool, metadata, messages, s
     return (
         <View style={styles.container}>
             <Pressable
-                onPress={() => setExpanded((value) => !value)}
-                hitSlop={6}
+                ref={headerRef}
+                collapsable={false}
+                onPress={toggle}
+                hitSlop={tapSlopFor(statusRowHeight)}
                 accessibilityRole="button"
                 accessibilityLabel={t('tools.agent.details')}
                 style={({ pressed }) => [styles.statusRow, pressed && styles.pressed]}
@@ -204,7 +208,7 @@ export const TaskView = React.memo<ToolViewProps>(({ tool, metadata, messages, s
                     {hiddenSteps > 0 ? (
                         <Pressable
                             style={styles.moreSteps}
-                            onPress={() => setExpanded(true)}
+                            onPress={expand}
                             hitSlop={8}
                             accessibilityRole="button"
                         >
@@ -228,9 +232,21 @@ export const TaskView = React.memo<ToolViewProps>(({ tool, metadata, messages, s
 
             {expanded && rest.length > 0 ? <RowsView rows={rest} /> : null}
             {expanded ? <RawDisclosure value={tool.input} /> : null}
+            {expanded ? (
+                <DisclosureFooter
+                    label={[stateLabel, ...numbers].join(' · ')}
+                    onPress={collapse}
+                    innerRef={footerRef}
+                    iconSize={14}
+                    textStyle={styles.stateText}
+                />
+            ) : null}
         </View>
     );
 });
+
+/** Kept as a name so the row's hit slop can be derived from it. */
+const statusRowHeight = 24;
 
 const styles = StyleSheet.create((theme) => ({
     container: {
@@ -242,7 +258,9 @@ const styles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         gap: 8,
-        minHeight: 24,
+        minHeight: statusRowHeight,
+        // The chevron sat flush right, under the scroll indicator (DROVE-156).
+        paddingRight: edgeClearance(),
     },
     pressed: {
         opacity: 0.6,

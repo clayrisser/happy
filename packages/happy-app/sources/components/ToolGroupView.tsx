@@ -20,6 +20,9 @@ import { getToolActivityLabel, getToolSummaryCategory, ToolSummaryCategory } fro
 import { toolRunLabel } from '@/utils/toolRunGroups';
 import { getToolRowRoute } from '@/utils/toolRowRoute';
 import { useRouter } from 'expo-router';
+import { DisclosureFooter } from './DisclosureFooter';
+import { footerCollapseAnchorY } from './inlineDisclosure';
+import { edgeClearance, tapSlopFor } from './scrollIndicatorInset';
 
 interface ToolGroupViewProps {
     group: ToolGroupItem;
@@ -85,6 +88,8 @@ export const ToolGroupView = React.memo<ToolGroupViewProps>((props) => {
     // Every consolidated group draws the same openable row, a same-tool run
     // included. Folding a run saved vertical space; it never meant the command
     // and its output stopped being reachable (DROVE-152).
+    const groupHeaderRef = React.useRef<View>(null);
+    const { footerRef, collapse } = useGroupFooterCollapse(groupHeaderRef, handleAnchoredToggle);
     const renderGroupMessage = React.useCallback((msg: Message) => (
         <ToolGroupMessageRow
             key={msg.id}
@@ -104,10 +109,18 @@ export const ToolGroupView = React.memo<ToolGroupViewProps>((props) => {
                 onPress={singleToolMessage ? handleSingleToolPress : handleAnchoredToggle}
                 category={summaryCategory}
                 showChevron
+                nodeRef={groupHeaderRef}
             />
             {expanded && !suppressChildren && (
                 <View style={runCategory ? styles.runContent : styles.content}>
                     {group.messages.map(renderGroupMessage)}
+                    <DisclosureFooter
+                        label={summary}
+                        onPress={collapse}
+                        innerRef={footerRef}
+                        textStyle={styles.summaryText}
+                        style={styles.groupFooter}
+                    />
                 </View>
             )}
         </View>
@@ -146,6 +159,8 @@ export const AgentWorkGroupView = React.memo<AgentWorkGroupViewProps>((props) =>
         : group.completedAt - group.startedAt;
     const label = t('toolGroup.workedFor', { duration: formatWorkDuration(durationMs) });
     const handleAnchoredToggle = useAnchoredToggle(expanded, onToggle, onAnchorLayoutChange);
+    const workHeaderRef = React.useRef<View>(null);
+    const { footerRef, collapse } = useGroupFooterCollapse(workHeaderRef, handleAnchoredToggle);
     const nestedItemsNewestFirst = React.useMemo(
         () => groupToolCallsForDisplay(group.messages, true, { groupSingleToolCalls: true }),
         [group.messages],
@@ -237,10 +252,18 @@ export const AgentWorkGroupView = React.memo<AgentWorkGroupViewProps>((props) =>
                     hasRunning={!isCompleted && group.hasRunning}
                     label={label}
                     onPress={handleAnchoredToggle}
+                    nodeRef={workHeaderRef}
                 />
                 {expanded && (
                     <View style={styles.content}>
                         {nestedItems.map(renderNestedItem)}
+                        <DisclosureFooter
+                            label={label}
+                            onPress={collapse}
+                            innerRef={footerRef}
+                            textStyle={styles.summaryText}
+                            style={styles.groupFooter}
+                        />
                     </View>
                 )}
             </View>
@@ -257,10 +280,13 @@ function CollapseHeader(props: {
     category?: ToolSummaryCategory | null;
     showChevron?: boolean;
     disabled?: boolean;
+    /** Handed out so the group's footer can put the list back on the header. */
+    nodeRef?: React.RefObject<View | null>;
 }) {
     const { theme } = useUnistyles();
     const showChevron = props.showChevron ?? true;
-    const headerRef = React.useRef<View>(null);
+    const ownRef = React.useRef<View>(null);
+    const headerRef = props.nodeRef ?? ownRef;
     const handlePress = React.useCallback(() => {
         const node = headerRef.current;
         if (!node) {
@@ -318,6 +344,7 @@ function CollapseHeader(props: {
             ref={headerRef}
             collapsable={false}
             onPress={handlePress}
+            hitSlop={tapSlopFor(groupHeaderHeight)}
             style={({ pressed }) => [
                 styles.header,
                 pressed && styles.headerPressed,
@@ -326,6 +353,33 @@ function CollapseHeader(props: {
             {content}
         </Pressable>
     );
+}
+
+/**
+ * The collapse row an expanded group wears at its end (DROVE-150). It measures
+ * both rows before closing so the header lands where the finger already is,
+ * then goes through the same anchored toggle the header uses.
+ */
+function useGroupFooterCollapse(
+    headerRef: React.RefObject<View | null>,
+    onPress: (anchor?: ToolGroupLayoutAnchor) => void,
+): { footerRef: React.RefObject<View | null>; collapse: () => void } {
+    const footerRef = React.useRef<View>(null);
+    const collapse = React.useCallback(() => {
+        const footer = footerRef.current;
+        const header = headerRef.current;
+        if (!footer || !header) {
+            onPress();
+            return;
+        }
+        footer.measureInWindow((_fx, footerY) => {
+            header.measureInWindow((_hx, headerY) => {
+                const y = footerCollapseAnchorY(headerY, footerY);
+                onPress(y === null ? undefined : { node: header, y });
+            });
+        });
+    }, [headerRef, onPress]);
+    return { footerRef, collapse };
 }
 
 function useAnchoredToggle(
@@ -503,6 +557,12 @@ function getGroupSummaryCategory(messages: Message[]): ToolSummaryCategory | nul
     return categories.size > 1 ? 'other' : null;
 }
 
+// isFileEditTool moved to utils/toolRowRoute.ts with DROVE-152, so the card,
+// the folded child and the group row all ask one function where a row opens.
+
+const groupHeaderMargin = 16;
+const groupHeaderHeight = 28;
+
 const styles = StyleSheet.create((theme) => ({
     outerContainer: {
         flexDirection: 'row',
@@ -528,10 +588,12 @@ const styles = StyleSheet.create((theme) => ({
         alignItems: 'center',
         gap: 6,
         alignSelf: 'stretch',
-        marginHorizontal: 16,
-        minHeight: 28,
+        marginHorizontal: groupHeaderMargin,
+        minHeight: groupHeaderHeight,
         paddingVertical: 4,
         borderRadius: 4,
+        // The 16pt margin already clears the scroll indicator (DROVE-156).
+        paddingRight: edgeClearance(groupHeaderMargin),
     },
     headerPressed: {
         opacity: 0.6,
@@ -553,6 +615,12 @@ const styles = StyleSheet.create((theme) => ({
     content: {
         marginTop: 6,
         gap: 4,
+    },
+    // Sits level with the header it mirrors, so the two chevrons line up.
+    groupFooter: {
+        marginTop: 2,
+        marginHorizontal: groupHeaderMargin,
+        paddingRight: edgeClearance(groupHeaderMargin),
     },
     // The per-call rows of a same-tool run sit a step in from the header so
     // the list reads as one folded item, not four loose ones.

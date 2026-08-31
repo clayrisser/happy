@@ -21,6 +21,8 @@ import { useElapsedTime } from '@/hooks/useElapsedTime';
 import { useSpokenSentence } from '@/voice/readAloudPlayhead';
 import { formatWorkDuration } from '@/hooks/useGroupedMessages';
 import { agentLongPressCopyText } from '@/utils/agentTurnCopy';
+import { DisclosureFooter, useInlineDisclosure } from './DisclosureFooter';
+import { edgeClearance, tapSlopFor } from './scrollIndicatorInset';
 
 
 export const MessageView = React.memo((props: {
@@ -258,7 +260,7 @@ function ThinkingBlock(props: {
   sessionId: string;
 }) {
   const { theme } = useUnistyles();
-  const [expanded, setExpanded] = React.useState(false);
+  const { expanded, toggle, collapse, headerRef, footerRef } = useInlineDisclosure();
   const thinking = React.useMemo(() => extractThinkingText(props.text), [props.text]);
   const elapsedSeconds = useElapsedTime(props.live ? props.startedAt : null);
   const label = props.live
@@ -268,8 +270,11 @@ function ThinkingBlock(props: {
   return (
     <View style={styles.disclosureContainer}>
       <Pressable
+        ref={headerRef}
+        collapsable={false}
         accessibilityRole="button"
-        onPress={() => setExpanded((value) => !value)}
+        onPress={toggle}
+        hitSlop={tapSlopFor(disclosureHeaderHeight)}
         style={({ pressed }) => [styles.disclosureHeader, pressed && styles.disclosurePressed]}
       >
         <Ionicons name="sparkles-outline" size={13} color={theme.colors.textSecondary} />
@@ -281,9 +286,18 @@ function ThinkingBlock(props: {
         />
       </Pressable>
       {expanded ? (
-        <View style={styles.disclosureBody}>
-          <MarkdownView markdown={thinking} sessionId={props.sessionId} />
-        </View>
+        <>
+          <View style={styles.disclosureBody}>
+            <MarkdownView markdown={thinking} sessionId={props.sessionId} />
+          </View>
+          <DisclosureFooter
+            label={label}
+            onPress={collapse}
+            innerRef={footerRef}
+            textStyle={styles.disclosureLabel}
+            style={styles.disclosureFooter}
+          />
+        </>
       ) : null}
     </View>
   );
@@ -430,6 +444,9 @@ function ToolCallBlock(props: {
   );
 }
 
+const disclosureContainerMargin = 16;
+const disclosureHeaderHeight = 28;
+
 const styles = StyleSheet.create((theme) => ({
   messageContainer: {
     flexDirection: 'row',
@@ -516,7 +533,7 @@ const styles = StyleSheet.create((theme) => ({
   // One muted disclosure row, sized like ToolGroupView's CollapseHeader so a
   // thought process, an agent and a "Ran N commands" row all read as one family.
   disclosureContainer: {
-    marginHorizontal: 16,
+    marginHorizontal: disclosureContainerMargin,
     marginVertical: 4,
     maxWidth: '100%',
     overflow: 'hidden',
@@ -526,9 +543,11 @@ const styles = StyleSheet.create((theme) => ({
     alignItems: 'center',
     gap: 6,
     alignSelf: 'stretch',
-    minHeight: 28,
+    minHeight: disclosureHeaderHeight,
     paddingVertical: 4,
     borderRadius: 4,
+    // The container's own 16pt margin already clears the indicator's lane.
+    paddingRight: edgeClearance(disclosureContainerMargin),
   },
   disclosurePressed: {
     opacity: 0.6,
@@ -539,6 +558,10 @@ const styles = StyleSheet.create((theme) => ({
     fontSize: 13,
     lineHeight: 20,
     color: theme.colors.textSecondary,
+  },
+  disclosureFooter: {
+    // The container's margin already clears the indicator, as on the header.
+    paddingRight: edgeClearance(disclosureContainerMargin),
   },
   disclosureBody: {
     marginTop: 2,

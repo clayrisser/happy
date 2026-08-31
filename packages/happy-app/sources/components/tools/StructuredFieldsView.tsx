@@ -16,6 +16,7 @@ import { Ionicons } from '@expo/vector-icons';
 
 import { t } from '@/text';
 import { CodeView } from '@/components/CodeView';
+import { DisclosureFooter, useInlineDisclosure } from '@/components/DisclosureFooter';
 import { isInlineValue, rawJson, type StructuredRow, type StructuredValue } from '@/utils/structuredFields';
 
 /** A folded text block shows this much before the reader asks for the rest. */
@@ -140,23 +141,36 @@ export const RowsView = React.memo<{ rows: StructuredRow[]; depth?: number }>(({
  */
 export const RawDisclosure = React.memo<{ value: unknown; title?: string }>(({ value, title }) => {
     const { theme } = useUnistyles();
-    const [expanded, setExpanded] = React.useState(false);
+    const { expanded, toggle, collapse, headerRef, footerRef } = useInlineDisclosure();
+    const label = title ?? t('toolView.raw');
 
     return (
         <View style={styles.rawSection}>
             <Pressable
-                onPress={() => setExpanded((open) => !open)}
+                ref={headerRef}
+                collapsable={false}
+                onPress={toggle}
                 hitSlop={6}
                 style={({ pressed }) => [styles.rawHeader, pressed && styles.pressed]}
             >
-                <Text style={styles.rawTitle}>{title ?? t('toolView.raw')}</Text>
+                <Text style={styles.rawTitle}>{label}</Text>
                 <Ionicons
                     name={expanded ? 'chevron-down' : 'chevron-forward'}
                     size={13}
                     color={theme.colors.textSecondary}
                 />
             </Pressable>
-            {expanded ? <CodeView code={rawJson(value)} /> : null}
+            {expanded ? (
+                <>
+                    <CodeView code={rawJson(value)} />
+                    <DisclosureFooter
+                        label={label}
+                        onPress={collapse}
+                        innerRef={footerRef}
+                        textStyle={styles.rawTitle}
+                    />
+                </>
+            ) : null}
         </View>
     );
 });

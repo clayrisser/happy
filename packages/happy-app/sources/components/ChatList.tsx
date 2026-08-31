@@ -7,6 +7,8 @@ import { useHeaderHeight } from '@/utils/responsive';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MessageView } from './MessageView';
 import { AgentWorkGroupView, type ToolGroupLayoutAnchor, ToolGroupView } from './ToolGroupView';
+import { DisclosureAnchorProvider } from './DisclosureFooter';
+import { anchoredScrollOffset } from './inlineDisclosure';
 import { Metadata, Session } from '@/sync/storageTypes';
 import { ChatFooter } from './ChatFooter';
 import { Message } from '@/sync/typesMessage';
@@ -186,18 +188,19 @@ export const ChatListInternal = React.memo((props: {
     }, [props.sessionId, trackReadAloudPlayhead]);
     const preserveToolGroupAnchor = React.useCallback((anchor: ToolGroupLayoutAnchor) => {
         // Inverted FlatList rows keep their visual bottom edge fixed when their
-        // height changes. Measure the pressed header after layout and offset the
-        // list by the movement so details grow below it instead.
+        // height changes. Measure the anchored row after layout and offset the
+        // list by the movement so details grow below it instead. A collapse
+        // from a block's footer (DROVE-150) reuses this with the HEADER as the
+        // node, so the block's top lands back under the finger that closed it.
         requestAnimationFrame(() => {
             anchor.node.measureInWindow((_x, nextY, _width, height) => {
-                if (!Number.isFinite(nextY) || height <= 0) {
+                if (height <= 0) {
                     return;
                 }
-                const adjustment = anchor.y - nextY;
-                if (Math.abs(adjustment) < 0.5) {
+                const nextOffset = anchoredScrollOffset(scrollMetricsRef.current.offsetY, anchor.y, nextY);
+                if (nextOffset === null) {
                     return;
                 }
-                const nextOffset = Math.max(0, scrollMetricsRef.current.offsetY + adjustment);
                 scrollMetricsRef.current.offsetY = nextOffset;
                 flatListRef.current?.scrollToOffset({ offset: nextOffset, animated: false });
             });
@@ -508,6 +511,9 @@ export const ChatListInternal = React.memo((props: {
     }, []);
 
     return (
+        // Every inline disclosure under here can ask the list to hold its place
+        // when it collapses from its own footer (DROVE-150).
+        <DisclosureAnchorProvider value={preserveToolGroupAnchor}>
         <View style={{ flex: 1 }}>
             <FlatList
                 key={`${props.sessionId}:${handoffListRevision}`}
@@ -592,6 +598,7 @@ export const ChatListInternal = React.memo((props: {
                 </View>
             )}
         </View>
+        </DisclosureAnchorProvider>
     )
 });
 
