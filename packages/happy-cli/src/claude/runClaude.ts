@@ -1256,6 +1256,13 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
         // be one — the controller reaches the same answer through
         // currentAccount() without claiming a wrapper put it there.
         flipController.startedOn(process.env.DROVER_ACCOUNT);
+        // What model and effort this session is set to, asked fresh (DROVE-187).
+        // The controller needs it to keep a `[1m]` context across a downgrade
+        // and to clamp an effort the model it drops to cannot take.
+        flipController.setSelectionProbe(() => ({
+            model: session.getMetadata()?.modelMode ?? null,
+            effort: session.getMetadata()?.effortLevel ?? null,
+        }));
         flipController.start();
         logger.debug('[flip] account flip armed');
     }
@@ -1297,6 +1304,12 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
             sessionId: claudeSessionId,
             publish: (droverPolicy) => {
                 session.updateMetadata((meta) => ({ ...meta, droverPolicy }));
+                // The Account switching setting the flip controller decides on
+                // (DROVE-187). Handed over from the poll that was already
+                // happening rather than read again: apply() is synchronous and
+                // the store is behind HTTP, and two readers of one store is how
+                // `drover accounts` came to contradict the picker.
+                flipController?.setPolicy(droverPolicy.effective);
             },
         });
         policyReporter.start();

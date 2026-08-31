@@ -129,8 +129,12 @@ interface Harness {
     metadata: () => Record<string, unknown>
 }
 
-function makeSession(opts: { cwd: string; sessionId: string; flip: any; account: string; configDir: string }): Harness {
-    const events: string[] = []
+function makeSession(opts: { cwd: string; sessionId: string; flip: any; account: string; configDir: string; events?: string[] }): Harness {
+    // Passed in so the controller's `announce` and the session's own event sink
+    // are ONE list, which is what they are in production: runClaude hands the
+    // controller session.sendSessionEvent and nothing else. Two lists here is
+    // how a note emitted twice landed once in each and nobody counted (DROVE-187).
+    const events: string[] = opts.events ?? []
     let metadata: Record<string, unknown> = { path: opts.cwd }
     const session: any = {
         path: opts.cwd,
@@ -231,7 +235,8 @@ async function build(
     // because the real one shells out to `tmux display-message` — a test run
     // inside tmux would otherwise paint the developer's own status line.
     const pane: string[] = []
-    const flip = new FlipController(cwd, (m: string) => said.push(m), {
+    const events: string[] = []
+    const flip = new FlipController(cwd, (m: string) => { said.push(m); events.push(m) }, {
         toTerminal: (m: string) => terminal.push(m),
         toPane: (m: string) => pane.push(m),
         ...(opts.parkAnnounceMs === undefined ? {} : { parkAnnounceMs: opts.parkAnnounceMs }),
@@ -239,7 +244,7 @@ async function build(
     // Same seeding runClaude does: say where the session started rather than
     // letting the controller read an environment that goes stale on flip 1.
     flip.startedOn('main')
-    const harness = makeSession({ cwd, sessionId: 'sess-1', flip, account: 'main', configDir: mainDir })
+    const harness = makeSession({ cwd, sessionId: 'sess-1', flip, account: 'main', configDir: mainDir, events })
     writeTranscript(mainDir, cwd, 'sess-1')
 
     const { claudeLocalLauncher } = await import('@/claude/claudeLocalLauncher')
@@ -745,7 +750,7 @@ describe('flipping to an account that has the MODEL', () => {
         expect(h.events.join('\n')).not.toContain('parked')
     })
 
-    it('takes an account with headroom for SOME model, and says which one to switch to', async () => {
+    it('takes an account with headroom for SOME model, and drops to that model itself', async () => {
         const now = Date.now()
         // main out ENTIRELY, alt out of Fable only. The move has to be worth
         // making: this fixture used to leave main with Fable headroom, so the
@@ -763,11 +768,15 @@ describe('flipping to an account that has the MODEL', () => {
         await run
 
         // alt has no Fable left, but it is a live session rather than a
-        // five-hour park — as long as the note says so.
+        // five-hour park. It used to land there and print a sentence asking
+        // Clay to type `/model` himself; since DROVE-187 it drops the rung and
+        // says which setting told it to.
         expect(spawns[1].account).toBe('alt')
         const said = h.events.join('\n')
-        expect(said).toContain('Nothing has Fable headroom')
-        expect(said).toContain('/model')
+        expect(said).toContain('no account has Fable headroom')
+        expect(said).toContain('dropped to Opus (claude-opus-5)')
+        expect(said).toContain('account switching: flip then downgrade')
+        expect(h.flip.takeDowngradePick()).toEqual({ model: 'claude-opus-5', effort: null })
     })
 
     it('records an auto-flip cooldown against the MODEL the notice named', async () => {

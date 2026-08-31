@@ -42,7 +42,17 @@ import {
     whenBack,
 } from './accounts'
 import { describeInFlight, emptyInFlight, type InFlightSnapshot } from './inflight'
+import {
+    downgradeNote,
+    mayDowngradeModel,
+    planDowngrade,
+    policySuffix,
+    switchPolicyOf,
+    type DowngradePlan,
+    type SwitchPolicy,
+} from './downgrade'
 import { detectLimit, familyLabel, familyOf, modelOfTranscriptMessage, textOfTranscriptMessage } from './limits'
+import type { PolicyValues } from './policy'
 import { resolveFlipPrompt } from './prompt'
 import { carryTranscript } from './transcript'
 
@@ -187,6 +197,8 @@ export type ApplyResult =
           note: string
           /** False when there was no conversation to carry, so the new child starts clean. */
           resume: boolean
+          /** Set when the model dropped a rung as well as the account moving (DROVE-187). */
+          downgrade?: DowngradePlan
       }
     | {
           kind: 'parked'
@@ -194,8 +206,23 @@ export type ApplyResult =
           note: string
           /** Who we wake up for, so the park heartbeat can name it. */
           account: DroverAccount
+          /**
+           * Never set. Declared so the union carries the key on every branch
+           * and a caller can ask `result.downgrade` without narrowing first —
+           * a park is by definition the answer when no rung below runs either.
+           */
+          downgrade?: undefined
       }
-    | { kind: 'refused'; note: string }
+    | {
+          kind: 'refused'
+          note: string
+          /**
+           * Set when we stayed on this account but dropped the model (DROVE-187).
+           * `refused` is the launcher's word for "no account change"; it is not
+           * a word for "nothing happened", and a downgrade rides it.
+           */
+          downgrade?: DowngradePlan
+      }
 
 interface BusFlipFrame {
     target?: { sessionId?: string | null; pane?: string | null; cwd?: string | null; all?: boolean }
@@ -269,8 +296,40 @@ export class FlipController {
 
     /** The last REAL model this session ran, as a family. See modelFamily(). */
     private seenFamily: string | undefined
+    /** The same turn's full model id, for the `[1m]` variant and the effort ceiling. */
+    private seenModel: string | undefined
     /** What a limit notice said had run out, when it named a model. */
     private noticedFamily: string | undefined
+
+    /**
+     * The Account switching policy, cached from the bus (DROVE-187).
+     *
+     * apply() is synchronous and the store is behind HTTP, so it cannot be read
+     * at the moment of the decision. The PolicyReporter already polls it every
+     * 30s and stamps it on metadata; runClaude hands the same snapshot here, so
+     * there is one reader of the bus and not two.
+     *
+     * Empty means nothing has been read yet, which switchPolicyOf turns into
+     * `flip-then-downgrade` — the default, and the behaviour Clay is asking
+     * for. A session whose bus is down must not be the one that does nothing.
+     */
+    private policyValues: PolicyValues = {}
+
+    /**
+     * The model and effort the session is set to, asked fresh. Used to keep a
+     * `[1m]` context across a downgrade and to clamp an effort the new model
+     * cannot take. Null probe means "nothing known", which is safe: an unknown
+     * model keeps the whole effort scale rather than trimming it on a guess.
+     */
+    private pick: (() => { model?: string | null; effort?: string | null }) | null = null
+
+    /**
+     * A downgrade decided but not yet typed into the pane. Taken once by the
+     * launcher on its way back up, because the metadata write that records it
+     * does NOT come back through the client's own metadata event — see the
+     * comment in apiSession.ts — so nothing else would ever act on it.
+     */
+    private pendingPick: { model: string; effort: string | null } | null = null
 
     /**
      * Who is still running inside the child, asked at the moment we are about
@@ -528,8 +587,12 @@ export class FlipController {
         // has to already be held from the last real turn by the time the
         // synthetic one arrives, and skipping this line while a flip is
         // pending would throw away the freshest one we ever get.
-        const family = familyOf(modelOfTranscriptMessage(message))
-        if (family) this.seenFamily = family
+        const ran = modelOfTranscriptMessage(message)
+        const family = familyOf(ran)
+        if (family) {
+            this.seenFamily = family
+            if (typeof ran === 'string') this.seenModel = ran
+        }
 
         if (this.pending) return
         const read = textOfTranscriptMessage(message)
@@ -763,6 +826,72 @@ export class FlipController {
         this.inFlight = fn
     }
 
+    /**
+     * The Account switching policy, as the bus last reported it (DROVE-187).
+     * Fed by the PolicyReporter's publish so there is one poll, not two.
+     */
+    setPolicy(values: PolicyValues | undefined): void {
+        this.policyValues = values ?? {}
+    }
+
+    /** Where to ask what model and effort this session is set to. */
+    setSelectionProbe(fn: (() => { model?: string | null; effort?: string | null }) | null): void {
+        this.pick = fn
+    }
+
+    /** What the Account switching setting says, defaulting to flip-then-downgrade. */
+    switchPolicy(): SwitchPolicy {
+        return switchPolicyOf(this.policyValues.onFamilyExhausted)
+    }
+
+    /**
+     * Take the model change a downgrade decided, once.
+     *
+     * The launcher asks on its way back up and types it into the pane. Once,
+     * because a second launcher iteration must not retype a `/model` Clay may
+     * have changed his mind about in the meantime.
+     */
+    takeDowngradePick(): { model: string; effort: string | null } | null {
+        const pick = this.pendingPick
+        this.pendingPick = null
+        return pick
+    }
+
+    /** The model id this session is on, transcript first, then the app's pick. */
+    private currentModel(): string | undefined {
+        if (this.seenModel) return this.seenModel
+        const asked = this.pick?.()?.model
+        if (typeof asked === 'string' && asked.length > 0) return asked
+        const here = this.here()
+        return here ? readSettingsModel(here) ?? undefined : undefined
+    }
+
+    /** The effort this session is set to, or null when nothing picked one. */
+    private currentEffort(): string | null {
+        const asked = this.pick?.()?.effort
+        return typeof asked === 'string' && asked.length > 0 ? asked : null
+    }
+
+    /**
+     * Can anything run this family right now?
+     *
+     * Answered through pickTarget, deliberately, so headroom is derived in ONE
+     * place. `withoutModel` is pickTarget's own way of saying "I settled for an
+     * account that cannot run what you asked for", so a rung is only runnable
+     * when the answer is an account with that flag absent.
+     */
+    private runnableFamily(now: number): (family: string) => boolean {
+        // No `current` passed, deliberately. pickTarget excludes the account we
+        // are ON from its candidates, which is right for "where do I move to"
+        // and wrong for "can anything run this" — the account we are sitting on
+        // is very often the one that can. Asked this way every logged-in
+        // account counts, including ours.
+        return (family: string) => {
+            const p = pickTarget(undefined, null, now, family)
+            return p.kind === 'account' && !p.withoutModel
+        }
+    }
+
     // --- the flip itself ----------------------------------------------------
 
     /**
@@ -772,7 +901,76 @@ export class FlipController {
     apply(req: FlipRequest, claudeSessionId: string | null): ApplyResult {
         const from = this.here()
         const family = this.modelFamily()
-        const choice = pickTarget(from?.name, req.account, Date.now(), family)
+        const now = Date.now()
+        const policy = this.switchPolicy()
+        // The policy governs the AUTOMATIC choice. A named account is a human
+        // overruling the machinery, and every other decision in this file
+        // already treats that as final — refusing it here would make `/flip
+        // alt` do nothing on a setting Clay forgot he had moved.
+        const auto = !req.account
+
+        // Nothing at all, and say which setting decided that. This is the one
+        // value where the session genuinely stops, so it has to be unmistakable
+        // rather than silent.
+        if (auto && policy === 'nothing') {
+            return {
+                kind: 'refused',
+                note:
+                    `Cattle Drover: ${from?.name ?? 'this account'} ran out and nothing was changed` +
+                    `${policySuffix(policy)}. Move by hand with \`/flip <account>\` or \`/model\`.`,
+            }
+        }
+
+        const plan = (): DowngradePlan | null =>
+            planDowngrade({
+                family,
+                model: this.currentModel(),
+                effort: this.currentEffort(),
+                familyFallback: this.policyValues.familyFallback ?? null,
+                runnable: this.runnableFamily(now),
+            })
+
+        // Downgrade only: the account never moves, so do not even ask where it
+        // would have moved to. Staying put is `refused` in this file's
+        // vocabulary — the launcher's word for "no account change" — and the
+        // downgrade rides along on it.
+        if (auto && policy === 'downgrade-only') {
+            const only = plan()
+            if (only) {
+                this.pendingPick = { model: only.model, effort: only.effort }
+                return {
+                    kind: 'refused',
+                    downgrade: only,
+                    note:
+                        `${downgradeNote(only, policy)} Staying on ${from?.name ?? 'this account'}; ` +
+                        'the account was not changed because that is what this setting says.',
+                }
+            }
+            return {
+                kind: 'refused',
+                note:
+                    `Cattle Drover: no lower model has headroom either, so nothing changed` +
+                    `${policySuffix(policy)}. See \`drover accounts\` for when the next window is back.`,
+            }
+        }
+
+        let downgrade: DowngradePlan | null = null
+        let choice = pickTarget(from?.name, req.account, now, family)
+
+        // Account first, model second. We are here only because the pass above
+        // could not find an account that runs the model Clay is on — either it
+        // parked, or it settled for one that is out of this family too, which
+        // is exactly what `withoutModel` means. Both are the moment to drop a
+        // rung rather than print a sentence asking him to.
+        const stuck = choice.kind === 'parked' || (choice.kind === 'account' && !!choice.withoutModel)
+        if (auto && stuck && mayDowngradeModel(policy)) {
+            downgrade = plan()
+            // Re-ask for the LOWER family. The answer may be this very account,
+            // in which case nothing relaunches onto anywhere new and only the
+            // model changes, or it may be another login that has the headroom.
+            if (downgrade) choice = pickTarget(from?.name, null, now, downgrade.to)
+        }
+
         logger.debug(
             `[flip] applying: from=${from?.name ?? '(unknown)'} model=${family ?? '(unknown)'} ` +
                 `choice=${choice.kind}` +
@@ -806,15 +1004,30 @@ export class FlipController {
                 kind: 'parked',
                 until: choice.until,
                 account: choice.account,
-                note: parkNote(choice, req),
+                note: parkNote(choice, req, policy, mayDowngradeModel(policy) ? 'tried' : 'not allowed'),
             }
         }
 
         const target = choice.account
-        const switchHint = choice.withoutModel
-            ? ` Nothing has ${familyLabel(choice.withoutModel)} headroom, so switch models with ` +
-              '`/model` or the next turn hits the same wall.'
-            : ''
+        // What the tail of every sentence below says. Three cases, and each one
+        // NAMES THE POLICY that chose it, because "it did nothing" and "it was
+        // told to do nothing" look identical from the phone at 3am.
+        //
+        //   a downgrade happened          say what it dropped to and why
+        //   nothing has this model, and   say so, and say which setting stopped
+        //   we were not allowed to drop   us dropping — never just "use /model"
+        //   everything is fine            say nothing extra
+        const switchHint = downgrade
+            ? ` ${downgradeNote(downgrade, policy)}`
+            : choice.withoutModel
+                ? ` Nothing has ${familyLabel(choice.withoutModel)} headroom` +
+                  (mayDowngradeModel(policy)
+                      ? ', and no lower model has any either'
+                      : ', and the model was left alone') +
+                  `${policySuffix(policy)}. Switch models with \`/model\` or the next turn hits the ` +
+                  'same wall.'
+                : ''
+        if (downgrade) this.pendingPick = { model: downgrade.model, effort: downgrade.effort }
 
         if (from && target.name === from.name) {
             // Waking from a park onto our own account is the NORMAL end of a
@@ -826,8 +1039,8 @@ export class FlipController {
                     : choice.onlyOption
                         ? `Cattle Drover: every other account is out of headroom, so staying on ` +
                           `${target.name}.${switchHint} See \`drover accounts\` for when the next one is back.`
-                        : `Cattle Drover: already on ${target.name}.`
-            return { kind: 'refused', note }
+                        : `Cattle Drover: already on ${target.name}.${switchHint}`
+            return { kind: 'refused', note, ...(downgrade ? { downgrade } : {}) }
         }
 
         const carried = claudeSessionId
@@ -875,6 +1088,7 @@ export class FlipController {
             account: target,
             prompt,
             resume,
+            ...(downgrade ? { downgrade } : {}),
             note:
                 `Cattle Drover: ${from?.name ?? 'this session'} → ${target.name} (${req.reason}, by ${req.by}), ` +
                 (resume
@@ -956,6 +1170,9 @@ export class FlipController {
 function parkNote(
     choice: { until: number; account: DroverAccount; cooling: CoolingAccount[]; family?: string },
     req: FlipRequest,
+    policy: SwitchPolicy,
+    /** Whether a model downgrade was even on the table, so the park can say so. */
+    downgradeAttempt: 'tried' | 'not allowed',
 ): string {
     const out: string[] = []
     const shortOf = choice.family ? `${familyLabel(choice.family)} headroom` : 'headroom'
@@ -984,6 +1201,14 @@ function parkNote(
     out.push(
         `Resuming on ${choice.account.name} by itself at ` +
             `${new Date(choice.until).toLocaleTimeString()} (${humanGap(choice.until - Date.now())}).`,
+    )
+    // A park is the answer of LAST resort, so it says what else was considered.
+    // Without this line a park under `flip-only` and a park where every lower
+    // model is also exhausted read identically, and they are different problems.
+    out.push(
+        downgradeAttempt === 'tried'
+            ? `No lower model has headroom either${policySuffix(policy)}.`
+            : `The model was left alone${policySuffix(policy)}.`,
     )
     out.push(overrideHint)
     return out.join('\n')

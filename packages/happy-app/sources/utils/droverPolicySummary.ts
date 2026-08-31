@@ -25,9 +25,16 @@ export function droverPolicySummary(policy: DroverPolicy | undefined): string {
         onLimit === 'auto' ? 'Switches on its own'
         : onLimit === 'prompt' ? 'Asks which account'
         : 'Switching behaviour unknown';
+    // DROVE-187 gave this key four values. The two older ones still turn up in
+    // a settings file written before that ticket, so they are read here rather
+    // than shown as "unknown".
     const family =
-        onFamilyExhausted === 'fallback' ? 'falls back to another model'
-        : onFamilyExhausted === 'stop' ? 'stops when your model is out'
+        onFamilyExhausted === 'flip-then-downgrade' || onFamilyExhausted === 'fallback'
+            ? 'then drops a model rung if it has to'
+        : onFamilyExhausted === 'flip-only' || onFamilyExhausted === 'stop'
+            ? 'and leaves the model alone'
+        : onFamilyExhausted === 'downgrade-only' ? 'drops a model rung instead of moving account'
+        : onFamilyExhausted === 'nothing' ? 'and changes nothing when it runs out'
         : 'model fallback unknown';
 
     return `${limit}, ${family}`;

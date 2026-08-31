@@ -56,7 +56,12 @@ const PolicyValuesSchema = z.object({
     onLimit: z.enum(['auto', 'prompt']).nullish(),
     onLimitTimeout: z.enum(['auto', 'stop']).nullish(),
     onLimitPromptTtlMs: z.number().nullish(),
-    onFamilyExhausted: z.enum(['stop', 'fallback']).nullish(),
+    // The Account switching policy (DROVE-187). The last two are the values
+    // this key shipped with and are still on disk in older settings files:
+    // `stop` reads as flip-only, `fallback` as flip-then-downgrade.
+    onFamilyExhausted: z
+        .enum(['flip-then-downgrade', 'flip-only', 'downgrade-only', 'nothing', 'stop', 'fallback'])
+        .nullish(),
     familyFallback: z.record(z.string(), z.array(z.string())).nullish(),
     // The delivery channels ride the same store and the same RPC (DROVE-72):
     // three announce switches, how audio may answer, and the saved modes. A

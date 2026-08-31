@@ -155,8 +155,16 @@ function makeSession(opts: {
     account: string
     configDir: string
     queue: any
+    /**
+     * Where session events land. Passed in so the flip controller's `announce`
+     * can be the SAME sink, which is what it is in production — runClaude hands
+     * the controller `session.sendSessionEvent` and nothing else (DROVE-187).
+     * A harness with two separate sinks is why the double emit survived: the
+     * duplicate landed one line in each and no assertion counted either.
+     */
+    events?: string[]
 }): Harness {
-    const events: string[] = []
+    const events: string[] = opts.events ?? []
     const handlers: Record<string, (...args: any[]) => any> = {}
     let metadata: Record<string, unknown> = { path: opts.cwd }
     const session: any = {
@@ -254,13 +262,17 @@ async function build(opts: { flipConfirmMs?: number } = {}) {
     const { MessageQueue2 } = await import('@/utils/MessageQueue2')
     const said: string[] = []
     const terminal: string[] = []
-    const flip = new FlipController(cwd, (m: string) => said.push(m), {
+    const events: string[] = []
+    // announce() IS sendSessionEvent in production. `said` is kept because most
+    // of this file reads it, but both names now point at one sink, so a note
+    // emitted twice is visibly twice.
+    const flip = new FlipController(cwd, (m: string) => { said.push(m); events.push(m) }, {
         toTerminal: (m: string) => terminal.push(m),
         ...(opts.flipConfirmMs === undefined ? {} : { flipConfirmMs: opts.flipConfirmMs }),
     })
     flip.startedOn('main')
     const queue = new MessageQueue2<any>(() => 'mode-hash')
-    const harness = makeSession({ cwd, sessionId: 'sess-1', flip, account: 'main', configDir: mainDir, queue })
+    const harness = makeSession({ cwd, sessionId: 'sess-1', flip, account: 'main', configDir: mainDir, queue, events })
     writeTranscript(mainDir, cwd, 'sess-1')
 
     const { claudeRemoteLauncher } = await import('@/claude/claudeRemoteLauncher')
@@ -435,6 +447,41 @@ describe('a flip requested while the session is in REMOTE mode', () => {
 
         h.handlers.switch()
         await run
+    })
+
+    it('says a refused flip ONCE, not twice (DROVE-187)', async () => {
+        // Clay's screenshot has the whole three-line notice printed verbatim
+        // back to back. applyPendingFlip called sendSessionEvent AND flip.say()
+        // for the same note, and say() is announce() plus the terminal —
+        // announce() being the sendSessionEvent callback runClaude hands the
+        // controller. So every note went to the phone twice. All three branches
+        // had the pair.
+        const h = await build()
+        const run = h.start()
+        await waitForEngines(1)
+        h.flip.request({ account: 'nosuch', reason: 'manual', by: 'app' })
+        await waitForEngines(2)
+
+        const refusals = h.events.filter((m) => m.includes('no account named "nosuch"'))
+        expect(refusals).toHaveLength(1)
+        // ...and still exactly once on the keyboard, which was never doubled.
+        expect(h.terminal.filter((m) => m.includes('no account named "nosuch"'))).toHaveLength(1)
+
+        h.handlers.switch()
+        await expect(run).resolves.toBe('switch')
+    })
+
+    it('says a successful flip once too', async () => {
+        const h = await build()
+        const run = h.start()
+        await waitForEngines(1)
+        h.flip.request({ account: 'alt', reason: 'manual', by: 'app' })
+        await waitForEngines(2)
+
+        expect(h.events.filter((m) => m.includes('main → alt'))).toHaveLength(1)
+
+        h.handlers.switch()
+        await expect(run).resolves.toBe('switch')
     })
 
     it('announces a refused flip and keeps the session alive rather than exiting', async () => {

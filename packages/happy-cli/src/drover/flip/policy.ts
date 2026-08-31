@@ -47,7 +47,21 @@ const DROVER_URL = () => process.env.DROVER_URL || 'http://127.0.0.1:7970'
 
 export type OnLimit = 'auto' | 'prompt'
 export type OnLimitTimeout = 'auto' | 'stop'
-export type OnFamilyExhausted = 'stop' | 'fallback'
+/**
+ * The Account switching setting (DROVE-187; DROVE-160 named that screen).
+ *
+ * `stop` and `fallback` are the two values this key shipped with, kept so an
+ * older settings file on disk still validates. Everything reads them through
+ * switchPolicyOf in flip/downgrade.ts, which folds `stop` onto `flip-only` and
+ * `fallback` onto `flip-then-downgrade`.
+ */
+export type OnFamilyExhausted =
+    | 'flip-then-downgrade'
+    | 'flip-only'
+    | 'downgrade-only'
+    | 'nothing'
+    | 'stop'
+    | 'fallback'
 export type AnswerAudio = 'off' | 'click' | 'speech' | 'both'
 
 /** One saved delivery combination (DROVE-72): a row in `modes`. */

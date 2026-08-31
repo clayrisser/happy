@@ -760,6 +760,34 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
         // with the app's request still standing (a flip, a crash, a resume)
         // honours it instead of waiting for the next metadata write (DROVE-63).
         reconcileRemoteControl();
+        // A model downgrade decided by the flip controller (DROVE-187).
+        //
+        // It cannot ride onMetadataChanged: applyDowngrade writes the pick
+        // through updateMetadata, and apiSession only emits `metadata` for
+        // changes that arrive from SOMEBODY ELSE, on purpose, so a listener
+        // cannot echo itself into a loop. It cannot ride paneSelection either
+        // — that is seeded from the same metadata a line above and would
+        // therefore believe the pane is already on the new model, which it is
+        // not: the flip has just started a fresh claude child on the account's
+        // own default.
+        //
+        // So it is taken once, here, and typed. `allowWhileBusy`, like every
+        // other picker command since DROVE-164: Claude Code runs `/model` and
+        // `/effort` mid-turn, and the idle gate this used to wait for never
+        // opened on a session Clay was actually working.
+        const downgraded = session.flip?.takeDowngradePick();
+        if (downgraded) {
+            const commands = [`/model ${downgraded.model}`];
+            if (downgraded.effort) commands.push(`/effort ${downgraded.effort}`);
+            paneSelection = {
+                ...paneSelection,
+                modelMode: downgraded.model,
+                ...(downgraded.effort ? { effortLevel: downgraded.effort } : {}),
+            };
+            logger.debug(`[local]: flip downgraded the model — queueing ${commands.join(', ')}`);
+            for (const command of commands) paneCommands.request([command], { allowWhileBusy: true });
+            pumpPaneCommands();
+        }
     }
 
     // `let`, not `const`: a Cattle Drover flip aborts the child on purpose and

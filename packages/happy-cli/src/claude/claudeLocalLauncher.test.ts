@@ -2107,6 +2107,9 @@ describe('claudeLocalLauncher in a tmux pane', () => {
                 hasPending: () => false,
                 take: () => null,
                 request: vi.fn(),
+                // Asked once on the way up, for a model the flip dropped a rung
+                // to (DROVE-187). Nothing dropped here.
+                takeDowngradePick: () => null,
             };
 
             const launcher = claudeLocalLauncher(session as any);

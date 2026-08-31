@@ -36,6 +36,7 @@ import { logger } from '@/ui/logger'
 import { remoteControlWarning, type BusSession } from './remoteControl'
 
 import { ambientDataDir } from './accounts'
+import type { DowngradePlan } from './downgrade'
 import { projectDirFor } from './transcript'
 
 /**
@@ -100,6 +101,35 @@ export function nameAfterFlip(opts: {
     }
 }
 
+/**
+ * Record a model downgrade where every surface can see it (DROVE-187).
+ *
+ * `modelMode` and `effortLevel` are the keys the phone's own pickers write, and
+ * both launchers already read them — the SDK path hands them to query(), and
+ * the pane path types `/model` and `/effort`. So a downgrade is spelled as the
+ * pick Clay would have made himself, and the composer stops claiming Fable the
+ * moment the session leaves it.
+ *
+ * `effort` null means the new model takes the effort we were on, so it is left
+ * alone rather than rewritten to the same value.
+ *
+ * This write does NOT come back through the client's own `metadata` event —
+ * apiSession only emits for changes that arrive from somebody else — so the
+ * pane still has to be told separately. That is what the controller's
+ * takeDowngradePick() is for, and the local launcher asks on its way back up.
+ */
+function applyDowngrade(session: Session, downgrade: DowngradePlan): void {
+    session.client.updateMetadata((metadata) => ({
+        ...metadata,
+        modelMode: downgrade.model,
+        ...(downgrade.effort ? { effortLevel: downgrade.effort } : {}),
+    }))
+    logger.debug(
+        `[flip] downgraded ${downgrade.from} -> ${downgrade.to} (${downgrade.model})` +
+            (downgrade.effort ? ` and effort ${downgrade.previousEffort} -> ${downgrade.effort}` : ''),
+    )
+}
+
 /** The one thing applyPendingFlip needs from a launcher's session scanner. */
 interface ScannerLike {
     setClaudeConfigDir?: (claudeConfigDir: string | null | undefined) => void
@@ -153,7 +183,14 @@ export async function applyPendingFlip(opts: ApplyPendingFlipOptions): Promise<b
     // exiting — a session that would not close.
     let result = flip.apply(request, session.sessionId)
     while (result.kind === 'parked') {
-        session.client.sendSessionEvent({ type: 'message', message: result.note })
+        // ONE emit, not two (DROVE-187). flip.say() is announce() plus the
+        // terminal, and announce() IS session.sendSessionEvent — the callback
+        // runClaude hands the controller. So the explicit sendSessionEvent that
+        // used to stand here put the identical sentence in the transcript
+        // twice; Clay's screenshot has the whole three-line notice printed
+        // verbatim back to back. All three branches of this function had the
+        // same pair.
+        //
         // say(), not announce(): a park runs with NO claude child, so this
         // terminal is the one surface that can show anything for the next few
         // hours, and it was the one surface a park never wrote to. Every trip
@@ -171,9 +208,14 @@ export async function applyPendingFlip(opts: ApplyPendingFlipOptions): Promise<b
 
     if (result.kind === 'refused') {
         // Say why, in the session, and carry on where we are. A refused flip
-        // must never take the session down with it.
-        session.client.sendSessionEvent({ type: 'message', message: result.note })
+        // must never take the session down with it. One emit: say() already
+        // reaches the phone (DROVE-187).
         flip.say(result.note)
+
+        // `refused` is "the account did not move", which is not the same as
+        // "nothing happened". A downgrade stays on this account by design, so
+        // it lands here (DROVE-187).
+        if (result.downgrade) applyDowngrade(session, result.downgrade)
 
         // ...and it must not take the session down on the way back UP either.
         // The child has already been aborted by the time we get here — that is
@@ -263,8 +305,8 @@ export async function applyPendingFlip(opts: ApplyPendingFlipOptions): Promise<b
             customTitle,
         }),
     }))
-    session.client.sendSessionEvent({ type: 'message', message: result.note })
     flip.say(result.note)
+    if (result.downgrade) applyDowngrade(session, result.downgrade)
 
     // DROVE-47: the strip has to say the NEW account's headroom, and say it
     // now rather than after the settle delay, so the metadata update carrying
