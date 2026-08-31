@@ -17,7 +17,7 @@ import { readAloud } from './readAloudService';
 import { startAudioRouteGuard } from './audioRouteGuardService';
 import { canReadAloud } from './speechEngine';
 import { DictationCapture, type DictationCaptureState } from './dictationCapture';
-import { joinDictation } from './dictationDraft';
+import { dictationComposerEvents } from './dictationComposer';
 import {
     idleMicGesture,
     reduceMicGesture,
@@ -119,26 +119,16 @@ export function useVoiceComposer(options: VoiceComposerOptions): VoiceComposerSt
                 stop: () => stopDictation(),
                 cancel: () => cancelDictation(),
             },
-            {
-                onPartial: (text) => {
-                    callbacks.current.setComposerText(joinDictation(baseRef.current, text));
-                },
-                onCommit: (text, shouldSend, reason) => {
-                    // Typing means the user is already editing over the
-                    // partial; rewriting it would eat the keystroke.
-                    if (reason !== 'typed') {
-                        callbacks.current.setComposerText(joinDictation(baseRef.current, text));
-                    }
-                    if (shouldSend) callbacks.current.send();
-                },
-                onDiscard: (reason) => {
-                    // The send cleared the composer itself; anything else
-                    // that dropped the words puts the draft back as it was.
-                    if (reason !== 'sent') callbacks.current.setComposerText(baseRef.current);
-                },
+            // The composer side lives in dictationComposer.ts, not here, so
+            // the invariant it holds (a capture ending never costs words,
+            // DROVE-120) is tested against the same code the app runs.
+            dictationComposerEvents({
+                base: () => baseRef.current,
+                setComposerText: (text) => callbacks.current.setComposerText(text),
+                send: () => callbacks.current.send(),
                 onError: (message) => callbacks.current.onError(message),
                 onChange: (state) => setTalk(state),
-            },
+            }),
         );
     }
     const capture = captureRef.current;
