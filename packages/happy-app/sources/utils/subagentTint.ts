@@ -1,24 +1,27 @@
 import type { Theme } from '@/theme';
 
 /**
- * The tint that says "you are inside a subagent" (DROVE-109).
+ * The tint that says "you are inside a subagent" (DROVE-109, DROVE-145).
  *
  * The agent screen (DROVE-93) draws a subagent's transcript with the session's
  * own cards, so with several agents open it is easy to lose track of where you
- * are. The fix is a wash over the whole surface in the colour family the
- * status row already uses for a running agent, applied as a THEME OVERRIDE
+ * are. The fix is a wash over the whole surface, applied as a THEME OVERRIDE
  * around the subtree rather than as props threaded through every row: the
  * tinted themes registered in `unistyles.ts` are the base themes with their
- * surfaces mixed towards the accent, and the agent screen wraps its body in
+ * surfaces mixed towards the wash, and the agent screen wraps its body in
  * `<ScopedTheme>` so every card and tool view picks it up for free.
  *
- * Everything here is pure — colours in, colours out — so both themes can be
+ * Everything here is pure. Colours in, colours out, so both themes can be
  * checked for contrast in a unit test instead of by eye.
  *
- * The accent is `colors.permission.acceptEdits`, the theme's own system blue
- * (#007AFF light, #0A84FF dark). That is the same family as the running-agent
- * dot in AgentInputStatusRow, so the tree and the screen agree, while still
- * coming from the theme rather than a hardcoded hex.
+ * DROVE-109 washed towards `colors.permission.acceptEdits`, the theme's own
+ * system blue, and drew a blue rail down the left edge. Together they read as
+ * a different app rather than a different screen. DROVE-145 dropped the rail
+ * and moved the wash to a NEUTRAL GREY at a lighter strength: the agent screen
+ * is the same theme a shade over, darker in light mode and lighter in dark,
+ * with no hue of its own. `washGrey` is a hardcoded mid grey on purpose. Every
+ * grey in the theme carries a little blue, and borrowing one would put that
+ * blue straight back.
  */
 
 export type Rgb = { r: number; g: number; b: number };
@@ -31,14 +34,36 @@ export function subagentThemeName(themeName: string | undefined): SubagentThemeN
     return themeName === 'dark' || themeName === 'darkSubagent' ? 'darkSubagent' : 'lightSubagent';
 }
 
-/** How hard each role is pulled towards the accent. Dark needs more: a wash over near-black reads as nothing. */
+/**
+ * The colour every surface is pulled towards. A pure mid grey: r, g and b are
+ * equal, so a mix can only move a surface along its own lightness and can
+ * never introduce a hue. Mid, so the one constant darkens the light theme and
+ * lightens the dark one.
+ */
+export const washGrey = '#808080';
+
+/**
+ * How hard each role is pulled towards the grey. Dark needs more: a wash over
+ * near-black reads as nothing. Every number is BELOW what DROVE-109 shipped
+ * (light 0.08/0.06/0.09/0.10/0.22/0.07, dark 0.12/0.11/0.12/0.15/0.30/0.12),
+ * which is the lighter half of DROVE-145; the spec pins them, so fading the
+ * wash further or creeping it back up has to be deliberate.
+ *
+ * Ground and header carry most of the signal because they are the biggest
+ * fields on screen. Surface moves least: in light mode those are white cards,
+ * and greying them hard is what made the screen read as another app.
+ */
 const ratios = {
-    light: { ground: 0.08, surface: 0.06, elevated: 0.09, header: 0.10, divider: 0.22, userMessage: 0.07 },
-    dark: { ground: 0.12, surface: 0.11, elevated: 0.12, header: 0.15, divider: 0.30, userMessage: 0.12 },
+    light: { ground: 0.07, surface: 0.05, elevated: 0.075, header: 0.085, divider: 0.18, userMessage: 0.06 },
+    dark: { ground: 0.10, surface: 0.09, elevated: 0.10, header: 0.12, divider: 0.25, userMessage: 0.10 },
 } as const;
 
-const railAlpha = { light: 0.9, dark: 0.85 } as const;
-const railMarkerAlpha = { light: 0.45, dark: 0.5 } as const;
+export type SubagentTintRatios = typeof ratios;
+
+/** The pinned strengths, for the spec and for anyone asking how heavy the wash is. */
+export function subagentTintRatios(): SubagentTintRatios {
+    return ratios;
+}
 
 export function parseHex(color: string): Rgb | null {
     if (typeof color !== 'string') {
@@ -91,12 +116,17 @@ export function mixHex(base: string, overlay: string, ratio: number): string {
     });
 }
 
-export function withAlpha(color: string, alpha: number): string {
+/**
+ * How far a colour sits from neutral, 0 (r = g = b) to 1. This is what "no hue
+ * of its own" means in a test: a washed surface may move along the lightness
+ * scale, but it must not pick up a cast.
+ */
+export function saturation(color: string): number {
     const rgb = parseHex(color);
     if (!rgb) {
-        return color;
+        return 0;
     }
-    return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${alpha})`;
+    return (Math.max(rgb.r, rgb.g, rgb.b) - Math.min(rgb.r, rgb.g, rgb.b)) / 255;
 }
 
 /** WCAG relative luminance. Returns 0 for anything unparseable, which makes contrastRatio conservative. */
@@ -137,7 +167,6 @@ export function colorDistance(a: string, b: string): number {
 /** Just the colours the tint reads, so the maths can be tested without pulling react-native in. */
 export type SubagentTintSource = {
     dark: boolean;
-    accent: string;
     ground: string;
     surface: string;
     surfacePressed: string;
@@ -151,7 +180,8 @@ export type SubagentTintSource = {
 };
 
 export type SubagentTintPalette = {
-    accent: string;
+    /** The grey everything was mixed towards. Useful in a test, unused on screen. */
+    wash: string;
     ground: string;
     surface: string;
     surfacePressed: string;
@@ -162,35 +192,29 @@ export type SubagentTintPalette = {
     divider: string;
     input: string;
     userMessage: string;
-    /** The left edge rail, and the notches repeated down it. Both survive scrolling. */
-    rail: string;
-    railMarker: string;
 };
 
 export function subagentTintPalette(source: SubagentTintSource): SubagentTintPalette {
     const r = source.dark ? ratios.dark : ratios.light;
-    const accent = source.accent;
+    const wash = washGrey;
     return {
-        accent,
-        ground: mixHex(source.ground, accent, r.ground),
-        surface: mixHex(source.surface, accent, r.surface),
-        surfacePressed: mixHex(source.surfacePressed, accent, r.elevated),
-        surfaceSelected: mixHex(source.surfaceSelected, accent, r.elevated),
-        surfaceHigh: mixHex(source.surfaceHigh, accent, r.elevated),
-        surfaceHighest: mixHex(source.surfaceHighest, accent, r.elevated),
-        header: mixHex(source.header, accent, r.header),
-        divider: mixHex(source.divider, accent, r.divider),
-        input: mixHex(source.input, accent, r.elevated),
-        userMessage: mixHex(source.userMessage, accent, r.userMessage),
-        rail: withAlpha(accent, source.dark ? railAlpha.dark : railAlpha.light),
-        railMarker: withAlpha(accent, source.dark ? railMarkerAlpha.dark : railMarkerAlpha.light),
+        wash,
+        ground: mixHex(source.ground, wash, r.ground),
+        surface: mixHex(source.surface, wash, r.surface),
+        surfacePressed: mixHex(source.surfacePressed, wash, r.elevated),
+        surfaceSelected: mixHex(source.surfaceSelected, wash, r.elevated),
+        surfaceHigh: mixHex(source.surfaceHigh, wash, r.elevated),
+        surfaceHighest: mixHex(source.surfaceHighest, wash, r.elevated),
+        header: mixHex(source.header, wash, r.header),
+        divider: mixHex(source.divider, wash, r.divider),
+        input: mixHex(source.input, wash, r.elevated),
+        userMessage: mixHex(source.userMessage, wash, r.userMessage),
     };
 }
 
 export function subagentTintSource(theme: Theme): SubagentTintSource {
     return {
         dark: theme.dark,
-        accent: theme.colors.permission.acceptEdits,
         ground: theme.colors.groupped.background,
         surface: theme.colors.surface,
         surfacePressed: theme.colors.surfacePressed,
@@ -209,7 +233,7 @@ export function subagentTintPaletteFor(theme: Theme): SubagentTintPalette {
 }
 
 /**
- * The base theme with its surfaces washed towards the accent. Text colours are
+ * The base theme with its surfaces washed towards the grey. Text colours are
  * left exactly as they are: the tint sits BEHIND body text, so moving both
  * would be the way to quietly lose contrast.
  */
