@@ -214,17 +214,22 @@ describe('UsageAccountBarRow holds its columns when a field is absent', () => {
             .toBe('risserproperties, 43%, Fable back Sep 2');
     });
 
-    it('gives every row in a popup the same track, measured once for all of them', () => {
+    it('gives every row in a sheet the same track, measured once for all of them', () => {
         const renderer = mount(React.createElement(UsageAccountBars, {
             width: 393,
             groups: [
-                { key: 'usage', title: 'jamrizzi · 51% left', rows: [bar({ key: 'session', name: 'Session' })] },
                 {
-                    key: 'accounts',
-                    title: '',
+                    key: 'account:jamrizzi',
+                    title: 'jamrizzi · 51% left',
+                    active: true,
+                    rows: [bar({ key: 'jamrizzi:five_hour', name: 'Session' })],
+                },
+                {
+                    key: 'account:main',
+                    title: 'main · 0% left',
                     rows: [
-                        bar({ key: 'account:main', name: 'main', percentText: null, trailing: 'Back Sep 3' }),
-                        bar({ key: 'account:jamrizzi', name: 'jamrizzi', trailing: '' }),
+                        bar({ key: 'main:five_hour', name: 'Session', percentText: null, trailing: 'Back Sep 3' }),
+                        bar({ key: 'main:seven_day', name: 'Week', trailing: '' }),
                     ],
                 },
             ],
@@ -232,9 +237,70 @@ describe('UsageAccountBarRow holds its columns when a field is absent', () => {
         const rows = renderer.root.findAllByType(UsageAccountBarRow as any);
         expect(rows).toHaveLength(3);
         expect(rows.map((node: any) => node.props.trackWidth)).toEqual([track, track, track]);
-        // The account list carries no heading of its own (DROVE-117); the
-        // window rows above it still do.
+        // Each block is headed by its own account (DROVE-148); nothing heads
+        // the list itself (DROVE-117).
         expect(texts(renderer)).toContain('jamrizzi · 51% left');
+        expect(texts(renderer)).toContain('main · 0% left');
         expect(texts(renderer)).not.toContain('Other accounts');
+    });
+});
+
+/**
+ * Five accounts times three bars, the shape DROVE-148 asks the sheet to hold.
+ * The risk in giving every account all three measures is that the sheet stops
+ * being a column: one block drops a row it has no figure for, the next one's
+ * Week lines up with someone's Fable week, and comparing down it stops meaning
+ * anything. So these count the rows, pin the track and the columns across all
+ * fifteen, and check that the only difference for the current account is a dot.
+ */
+describe('the sheet at five accounts times three bars (DROVE-148)', () => {
+    const track = usageBarTrackWidth(393);
+    const names = ['promanagerdevteam@gmail.com', 'main', 'jamrizzi', 'bitspur.com', 'risserproperties'];
+    const measures = ['Session', 'Week', 'Fable week'];
+    const groups = names.map((name, index) => ({
+        key: `account:${name}`,
+        title: `${name} · ${index * 20}% left`,
+        active: index === 0,
+        rows: measures.map((measure, m) => bar({
+            key: `${name}:${m}`,
+            name: measure,
+            fullName: measure,
+            // The middle account has no Fable limit, the case that used to
+            // tempt a dropped row.
+            percentText: index === 1 && m === 2 ? null : '43%',
+            trailing: index === 1 && m === 2 ? '' : 'Resets Sep 5',
+        })),
+    }));
+    const renderer = mount(React.createElement(UsageAccountBars, { width: 393, groups }));
+
+    it('draws all fifteen rows on one track width', () => {
+        const rows = renderer.root.findAllByType(UsageAccountBarRow as any);
+        expect(rows).toHaveLength(15);
+        expect(new Set(rows.map((node: any) => node.props.trackWidth))).toEqual(new Set([track]));
+        // Every column keeps its width in all fifteen, missing figure or not.
+        expect(widths(renderer)).toEqual([usageBarColumns.name, track, usageBarColumns.percent, usageBarColumns.trailing]);
+    });
+
+    it('marks the account the session is on rather than reshaping its rows', () => {
+        // One dot, on the first block. It is the only difference between the
+        // current account's block and anyone else's.
+        const dots = renderer.root.findAll((node: any) => node.type === 'View'
+            && node.props.style?.width === 5
+            && node.props.style?.backgroundColor === 'text');
+        expect(dots).toHaveLength(1);
+        const heads = renderer.root.findAllByType('Text' as any)
+            .filter((node: any) => String(node.props.children).includes('%')
+                && String(node.props.children).includes('·'));
+        expect(heads.map((node: any) => node.props.style.color))
+            .toEqual(['text', 'secondary', 'secondary', 'secondary', 'secondary']);
+    });
+
+    it('holds a long account name on one line so it cannot push the bars around', () => {
+        const head = renderer.root.findAllByType('Text' as any)
+            .find((node: any) => String(node.props.children).startsWith('promanagerdevteam'));
+        expect(head.props.numberOfLines).toBe(1);
+        expect(head.props.ellipsizeMode).toBe('tail');
+        // Shrinks inside the heading row instead of widening it.
+        expect(head.props.style.flexShrink).toBe(1);
     });
 });

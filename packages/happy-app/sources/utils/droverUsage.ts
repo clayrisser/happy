@@ -92,22 +92,47 @@ export function usageLimitsFromDroverUsage(
 ): UsageLimitsLike {
     const account = currentDroverUsageAccount(usage, droverAccount);
     if (!usage || !account) return null;
-    const windows = rows(account).map((row) => {
+    const windows = droverAccountWindows(account).map((w) => ({
+        id: w.id,
+        ...(w.family ? { label: w.family } : {}),
+        utilization: w.utilization,
+        resetsAt: w.resetsAt,
+    }));
+    return { capturedAt: usage.capturedAt, windows };
+}
+
+export type DroverUsageWindow = {
+    /** `five_hour`, `seven_day`, `seven_day_fable`, or the cache's own kind. */
+    id: string;
+    /** "Fable" when the row is scoped to a model family; null when it is not. */
+    family: string | null;
+    /** Percent USED, the wire's direction. */
+    utilization: number;
+    resetsAt: number | null;
+};
+
+/**
+ * One account's limits as windows, ids matching the SDK's.
+ *
+ * Split out for DROVE-148: the quota sheet now draws Session, Week and each
+ * family week for EVERY account, not only the one the session is on, so the
+ * mapping that used to serve the current account alone has to work on any of
+ * them. A row this cannot place is still passed through under its own kind.
+ */
+export function droverAccountWindows(account: DroverUsageAccountLike | null | undefined): DroverUsageWindow[] {
+    return rows(account).map((row) => {
         const scoped = !!(row.scope || row.family);
-        const id = scoped
-            ? droverFamilyWindowId(row)
-            : row.kind === 'session' ? 'five_hour'
-                : row.kind === 'weekly_all' ? 'seven_day'
-                    : row.kind;
-        const family = scoped ? droverFamilyLabel(row) : null;
         return {
-            id,
-            ...(family ? { label: family } : {}),
+            id: scoped
+                ? droverFamilyWindowId(row)
+                : row.kind === 'session' ? 'five_hour'
+                    : row.kind === 'weekly_all' ? 'seven_day'
+                        : row.kind,
+            family: scoped ? droverFamilyLabel(row) : null,
             utilization: row.percent,
             resetsAt: row.resetsAt ?? null,
         };
     });
-    return { capturedAt: usage.capturedAt, windows };
 }
 
 export type DroverFamilyRow = {
@@ -181,6 +206,37 @@ function toAccountRow(a: DroverUsageAccountLike): DroverOtherAccountRow {
         back: cooling?.until ?? null,
         family,
     };
+}
+
+export type DroverAccountUsageRow = DroverOtherAccountRow & {
+    /** The account the session is on. Exactly one, when the snapshot names one. */
+    current: boolean;
+    windows: DroverUsageWindow[];
+};
+
+/**
+ * EVERY account in the snapshot, the current one first, registry order after
+ * it, each carrying its own quota windows (DROVE-148).
+ *
+ * Clay: "This should be listing all three bars for each account." One headroom
+ * number per account does not answer the question the sheet exists for, which
+ * is where to flip to: an account can be fine on the week and burnt on the
+ * session, and that is exactly the moment the sheet gets opened. So the sheet
+ * needs each account's windows, not just its fullest limit.
+ *
+ * Current first rather than in registry order, because it is the account being
+ * compared against; the rest keep the order `drover accounts` prints.
+ */
+export function droverAccountsUsage(usage: DroverUsageLike, droverAccount?: string | null): DroverAccountUsageRow[] {
+    if (!usage || !Array.isArray(usage.accounts)) return [];
+    const current = currentDroverUsageAccount(usage, droverAccount);
+    const named = usage.accounts.filter((a) => a && typeof a.name === 'string');
+    const ordered = current ? [current, ...named.filter((a) => a !== current)] : named;
+    return ordered.map((a) => ({
+        ...toAccountRow(a),
+        current: a === current,
+        windows: droverAccountWindows(a),
+    }));
 }
 
 /**
