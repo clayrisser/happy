@@ -116,6 +116,7 @@ import { createTracer, traceMessages, TracerState } from "./reducerTracer";
 import { AgentState, TodoItem, TodoItemsSchema } from "../storageTypes";
 import { MessageMeta } from "../typesMessageMeta";
 import { parseMessageAsEvent } from "./messageToEvent";
+import { isAsyncAgentLaunch } from "@/utils/agentCard";
 
 type ReducerMessage = {
     id: string;
@@ -937,7 +938,16 @@ export function reducer(state: ReducerState, messages: NormalizedMessage[], agen
                         continue;
                     }
 
-                    if (message.tool.state !== 'running') {
+                    // DROVE-115: a background agent's Agent call is closed by
+                    // a LAUNCH RECEIPT within milliseconds, long before the
+                    // agent has done anything. The CLI sends the real result
+                    // on the same call once the agent's task-notification
+                    // reaches the parent transcript, so that one result is
+                    // allowed to land on a call the receipt already completed.
+                    // Only that one: everything else keeps its first result,
+                    // and the receipt is gone once the real one replaces it,
+                    // so a repeated notification changes nothing.
+                    if (message.tool.state !== 'running' && !isAsyncAgentLaunch(message.tool.result)) {
                         continue;
                     }
 

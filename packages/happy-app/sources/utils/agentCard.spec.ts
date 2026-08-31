@@ -6,7 +6,10 @@ import {
     agentPrompt,
     agentQuietFor,
     agentRunState,
+    agentRunStateOf,
+    agentStateFromStatus,
     agentSubagentType,
+    isAsyncAgentLaunch,
     SUBAGENT_QUIET_MS,
 } from './agentCard';
 
@@ -144,5 +147,72 @@ describe('agentQuietFor', () => {
         const state = agentRunState({ state: 'completed', result: asyncLaunch });
         expect(state).toBe('running');
         expect(agentQuietFor(state === 'running', launchedAt, now)).toBe(12 * 60_000);
+    });
+});
+
+/**
+ * DROVE-115. The receipt has to be told from the outcome, because the reducer
+ * lets the outcome land on a call the receipt already closed, and only that
+ * one.
+ */
+describe('isAsyncAgentLaunch', () => {
+    it('is the launch receipt and nothing else', () => {
+        expect(isAsyncAgentLaunch(asyncLaunch)).toBe(true);
+        expect(isAsyncAgentLaunch({ isAsync: true, status: 'completed', agentId: 'a1' })).toBe(false);
+        expect(isAsyncAgentLaunch({ status: 'completed' })).toBe(false);
+        expect(isAsyncAgentLaunch(null)).toBe(false);
+        expect(isAsyncAgentLaunch('async_launched')).toBe(false);
+    });
+});
+
+describe('agentStateFromStatus', () => {
+    it('knows the two terminal vocabularies and admits when it does not', () => {
+        expect(agentStateFromStatus('completed')).toBe('finished');
+        expect(agentStateFromStatus(' DONE ')).toBe('finished');
+        expect(agentStateFromStatus('killed')).toBe('failed');
+        expect(agentStateFromStatus('timed_out')).toBe('failed');
+        expect(agentStateFromStatus('async_launched')).toBeNull();
+        expect(agentStateFromStatus('whatever_the_cli_invents_next')).toBeNull();
+        expect(agentStateFromStatus(undefined)).toBeNull();
+    });
+});
+
+describe('agentRunStateOf', () => {
+    // The card says finished, the agent screen's CLI says done. One
+    // translation, so the two surfaces cannot drift apart.
+    it('speaks the agent screen vocabulary in the words the card uses', () => {
+        expect(agentRunStateOf('done')).toBe('finished');
+        expect(agentRunStateOf('failed')).toBe('failed');
+        expect(agentRunStateOf('running')).toBe('running');
+        expect(agentRunStateOf(undefined)).toBe('running');
+    });
+});
+
+describe('a background agent that has reported', () => {
+    const stop = (status: string) => ({
+        isAsync: true,
+        status,
+        agentId: 'a752a2a9e89efbca8',
+        content: [{ type: 'text', text: 'Pushed as 55c43f95.' }],
+        totalDurationMs: 600_000,
+    });
+
+    it('is finished, with its report and a duration that has stopped moving', () => {
+        const tool = { state: 'completed' as const, result: stop('completed') };
+        expect(agentRunState(tool)).toBe('finished');
+        expect(agentOutcome(tool.result)).toMatchObject({ text: 'Pushed as 55c43f95.', durationMs: 600_000 });
+        // Nothing left for the ticking clock to key off.
+        expect(agentQuietFor(false, 1000, 9_999_999)).toBeUndefined();
+    });
+
+    it('is failed on a failure status even when the call itself did not error', () => {
+        expect(agentRunState({ state: 'completed', result: stop('failed') })).toBe('failed');
+        expect(agentRunState({ state: 'completed', result: stop('killed') })).toBe('failed');
+    });
+
+    it('reaches the same word the agent screen reaches for the same agent', () => {
+        expect(agentRunState({ state: 'completed', result: stop('completed') })).toBe(agentRunStateOf('done'));
+        expect(agentRunState({ state: 'completed', result: stop('failed') })).toBe(agentRunStateOf('failed'));
+        expect(agentRunState({ state: 'completed', result: asyncLaunch })).toBe(agentRunStateOf('running'));
     });
 });

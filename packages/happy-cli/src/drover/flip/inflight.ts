@@ -50,6 +50,7 @@
 
 import { closeSync, fstatSync, openSync, readSync } from 'node:fs'
 
+import { parseAgentNotifications, readAsyncAgentLaunch } from '@/claude/utils/agentNotification'
 import { logger } from '@/ui/logger'
 
 export interface InFlightAgent {
@@ -74,96 +75,11 @@ export interface InFlightSnapshot {
 export const emptyInFlight: InFlightSnapshot = { count: 0, ids: [], names: [], agents: [] }
 
 /**
- * Every status Claude Code has been observed to write, all of them terminal.
- * Counted across this machine's transcripts: completed 9567, failed 967,
- * killed 171, stopped 30. The rest are listed because a status this tracker
- * does not recognise is one that never clears, and an agent is not going to
- * report "cancelled" and then carry on.
+ * What a launch and a notification look like lives in
+ * `@/claude/utils/agentNotification` (DROVE-115), so the flip gate and the
+ * terminal `tool-call-end` the phone's Agent card keys off cannot disagree
+ * about which agents are still running.
  */
-const terminalStatuses = new Set([
-    'completed',
-    'complete',
-    'failed',
-    'failure',
-    'error',
-    'killed',
-    'stopped',
-    'cancelled',
-    'canceled',
-    'aborted',
-    'timeout',
-    'timed_out',
-])
-
-const launchBanner = 'Async agent launched successfully'
-const agentIdPattern = /\bagentId:\s*([A-Za-z0-9_-]{4,64})\b/
-const outputFilePattern = /\boutput_file:\s*(\S+)/
-const notificationPattern = /<task-notification>([\s\S]*?)<\/task-notification>/g
-const taskIdPattern = /<task-id>\s*([^<]+?)\s*<\/task-id>/
-const statusPattern = /<status>\s*([A-Za-z_]+)\s*<\/status>/
-
-/**
- * Every readable string on a transcript record, whatever shape it arrived in.
- *
- * Shape-driven rather than type-driven on purpose: the same block of text is
- * a `content` string on a queue-operation, an `attachment.prompt` on an
- * attachment, a `message.content` string on a delivered user turn, and a
- * nested `text` inside a tool_result's content array. Nothing here may throw —
- * a record we do not understand is a record we ignore, never a crash in the
- * scanner's callback.
- */
-function readableStrings(record: unknown): string[] {
-    const out: string[] = []
-    const r = record as Record<string, unknown> | null
-    if (!r || typeof r !== 'object') return out
-
-    const push = (value: unknown): void => {
-        if (typeof value === 'string' && value) out.push(value)
-    }
-
-    push(r.content)
-    const attachment = r.attachment as { prompt?: unknown } | undefined
-    if (attachment && typeof attachment === 'object') push(attachment.prompt)
-
-    const message = r.message as { content?: unknown } | undefined
-    const content = message && typeof message === 'object' ? message.content : undefined
-    push(content)
-    if (Array.isArray(content)) {
-        for (const block of content) {
-            const b = block as { text?: unknown; content?: unknown } | null
-            if (!b || typeof b !== 'object') continue
-            push(b.text)
-            push(b.content)
-            if (Array.isArray(b.content)) {
-                for (const inner of b.content) {
-                    const i = inner as { text?: unknown } | null
-                    if (i && typeof i === 'object') push(i.text)
-                }
-            }
-        }
-    }
-    return out
-}
-
-/** A launch, read off the structured `toolUseResult` the launch record carries. */
-function structuredLaunch(record: unknown): InFlightAgent | null {
-    const r = record as { toolUseResult?: unknown } | null
-    if (!r || typeof r !== 'object') return null
-    const result = r.toolUseResult as
-        | { status?: unknown; isAsync?: unknown; agentId?: unknown; description?: unknown }
-        | undefined
-    if (!result || typeof result !== 'object') return null
-    if (typeof result.agentId !== 'string' || !result.agentId) return null
-    // `async_launched` is what Claude Code writes; isAsync alone is enough for
-    // a shape that renames the status, and neither being present means this is
-    // some other tool's result and not a launch at all.
-    if (result.status !== 'async_launched' && result.isAsync !== true) return null
-    return {
-        id: result.agentId,
-        name: typeof result.description === 'string' && result.description ? result.description : undefined,
-        at: Date.now(),
-    }
-}
 
 export interface InFlightTrackerOptions {
     /**
@@ -306,65 +222,37 @@ export class InFlightTracker {
     // --- reading ------------------------------------------------------------
 
     private consume(record: unknown): void {
-        const strings = readableStrings(record)
-
         // Completions first. A notification can only be about an agent that
         // launched earlier, so nothing is lost by clearing before adding, and
         // one record carrying both is not a shape that exists.
-        for (const text of strings) {
-            if (!text.includes('<task-notification>')) continue
-            notificationPattern.lastIndex = 0
-            let m: RegExpExecArray | null
-            while ((m = notificationPattern.exec(text)) !== null) {
-                const body = m[1]
-                const id = taskIdPattern.exec(body)?.[1]
-                const status = statusPattern.exec(body)?.[1]?.toLowerCase()
-                if (!id || !status) continue
-                if (!terminalStatuses.has(status)) continue
-                if (this.live.delete(id)) {
-                    logger.debug(`[inflight] ${id} reported ${status}; ${this.live.size} still running`)
-                } else {
-                    this.finished.add(id)
-                }
+        for (const notification of parseAgentNotifications(record)) {
+            if (!notification.terminal) continue
+            if (this.live.delete(notification.agentId)) {
+                logger.debug(`[inflight] ${notification.agentId} reported ${notification.status}; ${this.live.size} still running`)
+            } else {
+                this.finished.add(notification.agentId)
             }
         }
 
-        this.noteLaunch(record, strings)
+        this.noteLaunch(record)
     }
 
-    private noteLaunch(record: unknown, strings: string[]): void {
-        const structured = structuredLaunch(record)
-        let agent: InFlightAgent | null = structured
-
-        if (!agent) {
-            // A launch's tool_result is written into a USER record. Reading the
-            // banner off anything else would let Claude quoting its own tool
-            // result invent an agent that never existed.
-            const type = (record as { type?: unknown } | null)?.type
-            if (type !== 'user') return
-            const text = strings.find((s) => s.includes(launchBanner))
-            if (!text) return
-            const id = agentIdPattern.exec(text)?.[1]
-            if (!id) return
-            agent = { id, at: Date.now() }
-        }
-
-        // The output path is only ever in the prose, even when the structured
-        // result is present, so it is read from the text either way.
-        if (!agent.output) {
-            const text = strings.find((s) => s.includes(launchBanner))
-            const output = text ? outputFilePattern.exec(text)?.[1] : undefined
-            if (output) agent = { ...agent, output }
-        }
-
-        if (this.finished.delete(agent.id)) {
-            logger.debug(`[inflight] ${agent.id} had already reported before its launch was seen`)
+    private noteLaunch(record: unknown): void {
+        const launch = readAsyncAgentLaunch(record)
+        if (!launch) return
+        if (this.finished.delete(launch.agentId)) {
+            logger.debug(`[inflight] ${launch.agentId} had already reported before its launch was seen`)
             return
         }
-        if (this.live.has(agent.id)) return
-        this.live.set(agent.id, agent)
+        if (this.live.has(launch.agentId)) return
+        this.live.set(launch.agentId, {
+            id: launch.agentId,
+            ...(launch.description ? { name: launch.description } : {}),
+            ...(launch.outputFile ? { output: launch.outputFile } : {}),
+            at: Date.now(),
+        })
         this.seed()
-        logger.debug(`[inflight] ${agent.id} launched; ${this.live.size} running`)
+        logger.debug(`[inflight] ${launch.agentId} launched; ${this.live.size} running`)
     }
 
     /**

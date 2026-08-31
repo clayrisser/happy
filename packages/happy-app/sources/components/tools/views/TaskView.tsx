@@ -15,6 +15,13 @@
  * background agent's tool call ends at launch and used to draw a red Failed
  * over an agent that was working (DROVE-110). A run nothing has heard from for
  * a while is called quiet here in the same words as the agent screen.
+ *
+ * A background agent that has FINISHED then sat on "Running, quiet for 40m"
+ * forever, because the launch receipt was the only result its call would ever
+ * get. The CLI now sends the real one on the same call when the agent's
+ * task-notification lands (DROVE-115), so nothing here changed: the same
+ * agentRunState reads it, the clock stops because the agent is no longer
+ * running, and the numbers come off the report rather than the ticking now.
  */
 import * as React from 'react';
 import { ActivityIndicator, Platform, Pressable, Text, View } from 'react-native';

@@ -102,6 +102,7 @@ type ScannerOptions = {
     sessionId: string | null;
     workingDirectory: string;
     onMessage: (message: any) => void;
+    onAgentNotification?: (notification: any) => void;
     onRunObserved?: (run: { model: string; effort: string | null }) => void;
 };
 
@@ -417,6 +418,84 @@ describe('claudeLocalLauncher', () => {
             );
         });
         expect(session.client.sendClaudeSessionMessage).not.toHaveBeenCalled();
+
+        localRun.resolve();
+        await launcher;
+    });
+
+    /**
+     * DROVE-115. An async agent's Agent tool call ends at LAUNCH, so its card
+     * on the phone had no second result to move it off "Running" and a
+     * finished agent sat there for the rest of the session. The completion
+     * reaches the scanner as a task-notification; this is the launcher turning
+     * it into the terminal result for that same call.
+     */
+    it('sends a terminal tool-call-end when a background agent reports', async () => {
+        const localRun = createDeferred<void>();
+        let scannerOptions: ScannerOptions | undefined;
+
+        mockCreateSessionScanner.mockImplementation(async (opts: ScannerOptions) => {
+            scannerOptions = opts;
+            return { onNewSession: vi.fn(), cleanup: vi.fn(async () => {}) };
+        });
+        mockClaudeLocal.mockImplementation(async () => {
+            await localRun.promise;
+        });
+
+        const sendClaudeAgentStop = vi.fn();
+        const session = {
+            sessionId: 'claude-session-115',
+            path: '/tmp/project',
+            client: {
+                sendClaudeSessionMessage: vi.fn(),
+                sendClaudeSessionMessageFromLocalTranscript: vi.fn(async () => {}),
+                sendClaudeAgentStop,
+                closeClaudeSessionTurn: vi.fn(),
+                rpcHandlerManager: { registerHandler: vi.fn() },
+            },
+            queue: { reset: vi.fn(), setOnMessage: vi.fn(), size: vi.fn(() => 0) },
+            addSessionFoundCallback: vi.fn(),
+            removeSessionFoundCallback: vi.fn(),
+            onAbort: vi.fn(),
+            onSessionFound: vi.fn(),
+            onThinkingChange: vi.fn(),
+            consumeOneTimeFlags: vi.fn(),
+            claudeEnvVars: undefined,
+            claudeArgs: undefined,
+            mcpServers: {},
+            allowedTools: [],
+            hookSettingsPath: '/tmp/hook-settings.json',
+            sandboxConfig: undefined,
+        };
+
+        const launcher = claudeLocalLauncher(session as any);
+        await vi.waitFor(() => { expect(scannerOptions).toBeDefined(); });
+
+        // The launch is the only place the agent id and its Agent tool call
+        // are named together, and the notification below deliberately does not
+        // name the call, so this is what makes it addressable.
+        scannerOptions!.onMessage(asyncAgentLaunched('agent-115'));
+        scannerOptions!.onAgentNotification?.({
+            agentId: 'agent-115',
+            status: 'completed',
+            terminal: true,
+            succeeded: true,
+            result: 'Pushed as 55c43f95.',
+            at: Date.now(),
+        });
+
+        await vi.waitFor(() => { expect(sendClaudeAgentStop).toHaveBeenCalledTimes(1); });
+        expect(sendClaudeAgentStop.mock.calls[0][0]).toMatchObject({
+            call: 'toolu_agent-115',
+            isError: false,
+            result: { agentId: 'agent-115', status: 'completed', content: [{ type: 'text', text: 'Pushed as 55c43f95.' }] },
+        });
+
+        // A progress note must never settle a card, and an agent nothing knows
+        // a call for is left alone rather than addressed at a guess.
+        scannerOptions!.onAgentNotification?.({ agentId: 'agent-115', status: 'progress', terminal: false, succeeded: false, at: Date.now() });
+        scannerOptions!.onAgentNotification?.({ agentId: 'agent-unknown', status: 'completed', terminal: true, succeeded: true, at: Date.now() });
+        expect(sendClaudeAgentStop).toHaveBeenCalledTimes(1);
 
         localRun.resolve();
         await launcher;

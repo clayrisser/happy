@@ -39,6 +39,7 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 
+import { parseAgentNotifications } from './agentNotification'
 import { readNewLines, parseTimestamp, type Tail } from './liveStatus'
 
 export type SubagentState = 'running' | 'done' | 'failed'
@@ -92,6 +93,8 @@ const asyncLaunchPrefix = 'Async agent launched'
 
 interface Notification {
     status: string
+    /** Whether the status means it went WELL, per agentNotification.ts. */
+    succeeded: boolean
     result?: string
     at: number
 }
@@ -154,14 +157,6 @@ function exists(path: string): boolean {
     }
 }
 
-function tagOf(text: string, tag: string): string | undefined {
-    const open = text.indexOf(`<${tag}>`)
-    if (open < 0) return undefined
-    const close = text.indexOf(`</${tag}>`, open)
-    if (close < 0) return undefined
-    return text.slice(open + tag.length + 2, close).trim()
-}
-
 function clip(text: string): string {
     return text.length > maxResultChars ? text.slice(0, maxResultChars) : text
 }
@@ -204,12 +199,18 @@ function pumpParent(state: ParentState, path: string): void {
         const content = blocksOf(record)
         if (content === null) continue
         if (typeof content === 'string') {
-            if (!content.startsWith('<task-notification>')) continue
-            const id = tagOf(content, 'task-id')
-            if (!id) continue
-            const status = tagOf(content, 'status') ?? 'completed'
-            const result = tagOf(content, 'result')
-            state.byAgent.set(id, { status, at, ...(result ? { result: clip(result) } : {}) })
+            // One parser for the whole CLI (DROVE-115), so the agent screen's
+            // done/failed and the terminal tool-call-end the phone's card keys
+            // off cannot read the same notification two different ways.
+            for (const notification of parseAgentNotifications(record)) {
+                if (!notification.terminal) continue
+                state.byAgent.set(notification.agentId, {
+                    status: notification.status,
+                    succeeded: notification.succeeded,
+                    at,
+                    ...(notification.result ? { result: clip(notification.result) } : {}),
+                })
+            }
             continue
         }
         for (const block of content) {
@@ -222,6 +223,7 @@ function pumpParent(state: ParentState, path: string): void {
                 if (text.startsWith(asyncLaunchPrefix)) continue
                 state.byTool.set(block.tool_use_id, {
                     status: block.is_error === true ? 'failed' : 'completed',
+                    succeeded: block.is_error !== true,
                     at,
                     ...(text ? { result: clip(text) } : {}),
                 })
@@ -232,7 +234,7 @@ function pumpParent(state: ParentState, path: string): void {
 
 function stateOf(notification: Notification | undefined): SubagentState {
     if (!notification) return 'running'
-    return notification.status === 'completed' ? 'done' : 'failed'
+    return notification.succeeded ? 'done' : 'failed'
 }
 
 export interface SubagentTranscriptReader {

@@ -818,6 +818,41 @@ export class ApiSessionClient extends EventEmitter {
         this.enqueueSessionProtocolEnvelopes(mapped.envelopes);
     }
 
+    /**
+     * A background agent has stopped (DROVE-115).
+     *
+     * An async Agent tool call ends at LAUNCH, with a receipt
+     * (`status: 'async_launched'`) that is the only result the phone's Agent
+     * card would otherwise ever see, so a finished agent sat on
+     * `Running, quiet for 40m` forever. The outcome arrives minutes later as a
+     * `<task-notification>` on the parent transcript, and two of the three
+     * records it can ride in on never reach the mapper at all.
+     *
+     * So it is sent as a SECOND `tool-call-end` on the same call, carrying the
+     * agent id and its terminal status in the same shape the launch receipt
+     * had. The app keys off it exactly the way it keys off the launch —
+     * `agentRunState` in sources/utils/agentCard.ts — rather than parsing
+     * prose out of a transcript. No new wire event, so no schema change and no
+     * happy-wire rebuild.
+     */
+    sendClaudeAgentStop(stop: { call: string; result: unknown; isError: boolean; at?: number }): void {
+        const envelope = createEnvelope('agent', {
+            t: 'tool-call-end',
+            call: stop.call,
+            result: stop.result,
+            isError: stop.isError,
+        }, {
+            ...(stop.at ? { time: stop.at } : {}),
+            // Whatever turn is open, if any. Deliberately never OPENS one: the
+            // notification can land while the session is idle, and inventing a
+            // turn there would draw the session as busy.
+            ...(this.claudeSessionProtocolState.currentTurnId
+                ? { turn: this.claudeSessionProtocolState.currentTurnId }
+                : {}),
+        });
+        this.enqueueSessionProtocolEnvelope(envelope);
+    }
+
     closeClaudeSessionTurn(status: SessionTurnEndStatus = 'completed') {
         const mapped = closeClaudeTurnWithStatus(this.claudeSessionProtocolState, status);
         this.claudeSessionProtocolState.currentTurnId = mapped.currentTurnId;
