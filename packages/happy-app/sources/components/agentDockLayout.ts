@@ -425,6 +425,81 @@ export function resolveTranscriptMask(dockHeight: number, safeAreaBottom: number
     };
 }
 
+/**
+ * What the chat's bottom scrim holds its dim gradient at, and why that is zero.
+ *
+ * DROVE-219, and it starts with Clay's question: "Why is the fade mask at the
+ * bottom not masking the fade mask at the top". The top has one, the bottom
+ * does not, so why.
+ *
+ * The top is `MobileHeaderScrim`: a live `BlurView` and a dim gradient, both
+ * cut by the same feather. The bottom had only `resolveTranscriptMask`, which
+ * is ALPHA. Alpha is not softening. A line taken to 0.4 keeps every glyph edge
+ * exactly as crisp as it was, which is why "Ran 2 shell commands" reads clean
+ * in the gaps the composer does not cover with glass: between the bubble and
+ * the control row, and under the row. So the bottom was never short of dim. It
+ * was short of BLUR.
+ *
+ * Measured, in fraction of what is behind still reaching the eye:
+ *
+ *   under the header, at rest    0.560 dark   0.392 light
+ *   under the header, underlapped 0.472 dark   0.270 light
+ *   behind the composer           0.400        0.400        <- the mask alone
+ *
+ * The bottom already sits inside the header's own range, and on the dark theme
+ * it is past the header at its strongest. Any tint at all takes it out the
+ * bottom of that range, and 0.4 x (1 - 0.55) is 0.18: DROVE-168's erasure
+ * reached by a second route, with the glass back to refracting nothing
+ * (DROVE-171). So the bottom borrows the header's blur band and its 36pt ramp,
+ * and holds the tint at zero.
+ *
+ * It is the header's `strong` peak that is being held at zero, deliberately:
+ * raise this one constant and what appears is the header's gradient, not a
+ * second one invented here.
+ */
+export const CHAT_BOTTOM_SCRIM_OVERLAY_OPACITY = 0;
+
+/** Fraction of what is behind a scrim that still reaches the eye. */
+export function scrimTransmission(peak: number, overlayOpacity: number): number {
+    return 1 - peak * overlayOpacity;
+}
+
+export interface TranscriptBottomScrim {
+    /** False until the dock has been measured; there is nothing to hang off. */
+    visible: boolean;
+    /** How far the scrim hangs BELOW the dock's own box, to the screen edge. */
+    overhang: number;
+    /** What it covers, top to bottom: the dock's box plus that overhang. */
+    height: number;
+}
+
+/**
+ * The bottom fade's box, hung off the composer's measured height.
+ *
+ * The composer is not one bar. It is the bubble, the control row under it
+ * (DROVE-196) and the status strip under that, and the total moves as the
+ * field grows and as the row's contents change. A fixed height would be wrong
+ * most of the time, so this takes `dockHeight` straight from the dock's own
+ * `onLayout` and returns the same number the chat list reserves at its bottom,
+ * `resolveDockInset` itself, so the fade and the reservation cannot drift.
+ *
+ * `overhang` is what the scrim reaches below the dock's frame: the gap over
+ * the home indicator, which is bare page today.
+ */
+export function resolveTranscriptBottomScrim(
+    dockHeight: number,
+    safeAreaBottom: number,
+): TranscriptBottomScrim {
+    if (dockHeight <= 0) {
+        return { visible: false, overhang: 0, height: 0 };
+    }
+    return {
+        visible: true,
+        overhang: resolveDockBottomOffset(safeAreaBottom, true),
+        height: resolveDockInset({ dockHeight, safeAreaBottom, floatingDock: true }),
+    };
+}
+
 /** Alpha at `distance` points above the composer card's top edge. */
 export function transcriptAlphaAboveGlass(distance: number): number {
     if (distance >= TRANSCRIPT_EDGE_SOFTEN_HEIGHT) {

@@ -4,10 +4,13 @@ import { LayoutChangeEvent, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import MaskedView from '@react-native-masked-view/masked-view';
 import {
+    CHAT_BOTTOM_SCRIM_OVERLAY_OPACITY,
     resolveDockBottomOffset,
     resolveDockInset,
+    resolveTranscriptBottomScrim,
     resolveTranscriptMask,
 } from './agentDockLayout';
+import { MobileHeaderScrim } from './navigation/MobileHeaderScrim';
 import { useKeyboardHandler, useReanimatedKeyboardAnimation } from 'react-native-keyboard-controller';
 import Animated, { useAnimatedStyle, useSharedValue } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -63,6 +66,15 @@ export const AgentContentView: React.FC<AgentContentViewProps> = React.memo(({
     // down, so a white code block and body prose behave identically on either
     // theme, and the glass keeps the real screen behind it.
     const transcriptMask = resolveTranscriptMask(dockHeight, safeArea.bottom);
+    // And the other half of the same edge (DROVE-219). The mask above only
+    // takes the transcript's ALPHA down, which leaves every glyph as crisp as
+    // it was; the header softens because it is a live blur under a ramped
+    // gradient. So the bottom mounts that same scrim, mirrored, hung off the
+    // dock's MEASURED box rather than a height anyone typed: the composer is a
+    // bubble, a control row and a status strip, and it changes height as the
+    // field grows. See `CHAT_BOTTOM_SCRIM_OVERLAY_OPACITY` for why the tint
+    // half of it is held at zero here.
+    const bottomScrim = resolveTranscriptBottomScrim(dockHeight, safeArea.bottom);
 
     React.useEffect(() => {
         onDockInsetChange?.(resolveDockInset({ dockHeight, safeAreaBottom: safeArea.bottom, floatingDock }));
@@ -167,6 +179,30 @@ export const AgentContentView: React.FC<AgentContentViewProps> = React.memo(({
                         animatedInputStyle,
                     ]}
                 >
+                    {/* Behind the composer, never over it: painted before
+                        `input` in the same box, so the bubble, the control row
+                        and the status text are untouched by it. It reaches
+                        `overhang` points below the dock's frame so the gap over
+                        the home indicator fades too, and it carries the dock's
+                        keyboard translation for free by living inside it. */}
+                    {bottomScrim.visible && (
+                        <View
+                            pointerEvents="none"
+                            style={{
+                                position: 'absolute',
+                                left: 0,
+                                right: 0,
+                                bottom: -bottomScrim.overhang,
+                                height: bottomScrim.height,
+                            }}
+                        >
+                            <MobileHeaderScrim
+                                variant="strong"
+                                edge="bottom"
+                                overlayOpacity={CHAT_BOTTOM_SCRIM_OVERLAY_OPACITY}
+                            />
+                        </View>
+                    )}
                     {input}
                 </Animated.View>
             </View>
