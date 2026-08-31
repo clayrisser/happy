@@ -1893,11 +1893,13 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     style={(p) => ({
                         width: '100%',
                         height: '100%',
-                        // LEADING, not centre (DROVE-214). In a column flex
-                        // this is the horizontal axis, so the glyph is pinned
-                        // to the box's leading edge and still centred
-                        // vertically by `justifyContent`.
-                        alignItems: 'flex-start',
+                        // CENTRE, on both axes, and the horizontal one is
+                        // load-bearing (DROVE-214). The box is 36 inset 4 in a
+                        // 44pt field, so its centre is 22 from the rim on both
+                        // axes, which is the centre of the capsule's rounded
+                        // end. Centring the glyph in it therefore centres the
+                        // glyph in that end.
+                        alignItems: 'center',
                         justifyContent: 'center',
                         opacity: p.pressed ? 0.7 : 1,
                     })}
@@ -1911,18 +1913,14 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         name="add"
                         size={MOBILE_COMPOSER_METRICS.addIconSize}
                         color={composerPalette.accent}
-                        // PLACED BY ITS INK (DROVE-214). Centring the glyph in
-                        // this box is what Clay was looking at: the box is 4
-                        // off the rim like the send button's, but the send
-                        // button's box is a filled disc and this one is
-                        // transparent, so centring buried the `+`'s ink 9.875
-                        // further in than the disc's. Pulling the em box out
-                        // by its own side bearing puts INK on the disc's
-                        // column, 4 from the rim at both ends. The half point
-                        // of empty em box that lands outside the capsule
-                        // carries no pixels; the box, its 36pt size and its
-                        // 6pt slop are untouched, so the target is the same 46.
-                        style={{ marginLeft: -MOBILE_COMPOSER_LAYOUT.addGlyphInkInset }}
+                        // NO OFFSET. The first pass at DROVE-214 pulled the
+                        // em box out by its own side bearing so the `+`'s ink
+                        // started 4 from the rim, matching the disc's. It made
+                        // the numbers agree and it looked worse: Clay, on the
+                        // result, "is still wrong it looks like shit". The
+                        // reason is on `capsuleEndRadius`. Rim to ink is the
+                        // wrong quantity to match, so this offset is gone and
+                        // the glyph is centred in its box again.
                     />
                 </BubblePressable>
             </View>
