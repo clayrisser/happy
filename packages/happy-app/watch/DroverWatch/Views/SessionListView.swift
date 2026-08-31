@@ -203,6 +203,17 @@ struct SessionDetailView: View {
                 SayLink(session: session)
                 WristDraftBar(session: session)
 
+                // What this session is working through (DROVE-167). A link
+                // rather than the list itself: the facts screen is already a
+                // scroll, and a seven-line task list under the flip buttons
+                // would push them off the bottom of a 40mm screen.
+                if session.hasTasks {
+                    NavigationLink(value: DroverRoute.sessionTasks(session)) {
+                        Label(session.taskHeadline, systemImage: "checklist")
+                            .font(.caption)
+                    }
+                }
+
                 Button {
                     store.flip(session)
                     dismiss()
@@ -273,6 +284,13 @@ struct SessionDetailView: View {
             // The same line the row shows, at detail size (DROVE-54).
             if let status = session.status {
                 LiveStatusLine(status: status, since: session.statusSince, size: 11)
+            }
+            // Only when the session kept a list. "0 of 0 done" is noise, and a
+            // phone that predates the key sends no counts rather than zeros.
+            if session.hasTasks {
+                Text(session.taskHeadline)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
             }
             if flipping {
                 Text("switching…")

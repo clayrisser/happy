@@ -170,6 +170,9 @@ struct SharedWireTests {
         aSnapshotWithoutTheNewKeysStillDecodes()
         sessionCarriesWhatItIsDoing()
         sessionWithoutAStatusStillDecodes()
+        sessionTasksSurviveTheWire()
+        aSnapshotWithNoTasksSaysSoRatherThanShowingABlank()
+        theTaskDoorCountsInEnglish()
         theSessionStateTheWristDrawsIsThePhonesOwn()
         aStateTheWristDoesNotKnowFallsBackRatherThanThrowing()
         theWristTakesThePhonesTitleVerbatim()
@@ -572,10 +575,68 @@ struct SharedWireTests {
         check(session.status == nil, "a session with no status key decodes")
         check(session.statusSince == nil, "a session with no statusSince key decodes")
         check(session.state == nil, "a session with no state key decodes")
+        check(session.tasks == nil, "a session from a phone that predates the task keys decodes")
+        check(session.openTasks.isEmpty, "no task keys reads as no tasks, never as a crash")
+        check(!session.hasTasks, "a session with no task keys has no tasks")
+        check(session.taskHeadline == "No tasks yet", "and it says so rather than showing a blank")
         check(
             session.resolvedState == .thinking,
             "a running session from a phone that predates `state` still reads as busy"
         )
+    }
+
+    /// The task list the wrist draws is the phone's own, decided in
+    /// utils/sessionTasks.ts and SENT (DROVE-129, DROVE-167). The wrist sorts
+    /// nothing and drops nothing: what arrives is what it shows.
+    static func sessionTasksSurviveTheWire() {
+        let payload = """
+        {"gates":[],"updatedAt":"2026-08-31T07:00:00Z","connected":true,
+        "sessions":[{"id":"s1","title":"drover","active":true,
+        "tasks":["Wire the derivation","Draw the sheet"],"tasksDone":2,"tasksTotal":4}]}
+        """
+        guard let snapshot = try? DroverSnapshot.decoder.decode(
+            DroverSnapshot.self, from: Data(payload.utf8)
+        ), let session = snapshot.sessions.first else {
+            check(false, "a session carrying tasks decodes")
+            return
+        }
+        check(session.openTasks == ["Wire the derivation", "Draw the sheet"], "the wrist draws the phone's lines in the phone's order")
+        check(session.hasTasks, "a session with unfinished lines has tasks")
+        check(session.taskHeadline == "2 of 4 done", "the counts read as the phone's own sentence")
+        check(snapshot.sessionsWithTasks.count == 1, "the session is on the tasks door")
+        check(snapshot.openTaskCount == 2, "the door counts what is left, not the whole list")
+        check(snapshot.taskDoorLabel == "2 tasks in 1 session", "the door says what is behind it")
+    }
+
+    /// The empty case is a sentence on the wrist, and the door is not drawn at
+    /// all. The screenshot on DROVE-167 is what a blank one looks like.
+    static func aSnapshotWithNoTasksSaysSoRatherThanShowingABlank() {
+        let quiet = snapshot(sessions: [session("s1", active: true)])
+        check(quiet.sessionsWithTasks.isEmpty, "a session with no list is not on the tasks door")
+        check(quiet.openTaskCount == 0, "nothing is counted")
+        check(
+            quiet.sessions[0].taskHeadline == "No tasks yet",
+            "a session that never kept a list says so"
+        )
+        let finished = snapshot(sessions: [
+            session("s1", active: true, tasks: [], tasksDone: 3, tasksTotal: 3),
+        ])
+        check(
+            finished.sessionsWithTasks.isEmpty,
+            "a session whose list is finished is off the door: a wall of ticks is not read"
+        )
+        check(finished.sessions[0].taskHeadline == "3 of 3 done", "and its score still reads")
+    }
+
+    /// One task in one session must not read as `1 tasks in 1 sessions`.
+    static func theTaskDoorCountsInEnglish() {
+        let one = snapshot(sessions: [session("s1", active: true, tasks: ["Ship it"], tasksDone: 0, tasksTotal: 1)])
+        check(one.taskDoorLabel == "1 task in 1 session", "one of each is singular")
+        let many = snapshot(sessions: [
+            session("s1", active: true, tasks: ["a", "b"], tasksDone: 1, tasksTotal: 3),
+            session("s2", active: true, tasks: ["c"], tasksDone: 0, tasksTotal: 1),
+        ])
+        check(many.taskDoorLabel == "3 tasks in 2 sessions", "more than one of each is plural")
     }
 
     /// The phone resolves the session state and SENDS it, because the wrist
@@ -856,10 +917,18 @@ struct SharedWireTests {
         )
     }
 
-    static func session(_ id: String, active: Bool, state: String? = nil) -> DroverSession {
+    static func session(
+        _ id: String,
+        active: Bool,
+        state: String? = nil,
+        tasks: [String]? = nil,
+        tasksDone: Int? = nil,
+        tasksTotal: Int? = nil
+    ) -> DroverSession {
         DroverSession(
             id: id, title: id, account: nil, active: active,
-            path: nil, subagents: nil, status: nil, statusSince: nil, state: state
+            path: nil, subagents: nil, status: nil, statusSince: nil, state: state,
+            tasks: tasks, tasksDone: tasksDone, tasksTotal: tasksTotal
         )
     }
 

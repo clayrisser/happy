@@ -20,6 +20,9 @@ import { AnimatedFade } from './AnimatedOverlay';
 import { UsageAccountBarsSheet } from './UsageAccountBarsSheet';
 import type { UsageBarGroup } from './agentInputUsage';
 import { SessionAgentsSheet } from './SessionAgentsSheet';
+import { SessionTasksSheet } from './SessionTasksSheet';
+import { useSessionTasks } from './SessionTasksList';
+import { sessionTasksBadge } from '@/utils/sessionTasks';
 import { StatusDot } from './StatusDot';
 import { useTickingNow } from './useTickingNow';
 
@@ -260,9 +263,13 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
     const { theme } = useUnistyles();
     const { width } = useWindowDimensions();
     // One value, not two flags: what makes opening the quota close the tree.
-    const [openSheet, setOpenSheet] = React.useState<'agents' | 'usage' | null>(null);
+    const [openSheet, setOpenSheet] = React.useState<'agents' | 'tasks' | 'usage' | null>(null);
     const [showPreciseContext, setShowPreciseContext] = React.useState(false);
     const summary = useLiveStatusSummary(p.sessionId);
+    // The session's task list (DROVE-167). Free: the store already holds it,
+    // written by the reducer on every TodoWrite that lands.
+    const tasks = useSessionTasks(p.sessionId);
+    const tasksBadge = sessionTasksBadge(tasks);
     const closeSheet = React.useCallback(() => setOpenSheet(null), []);
 
     // Tapping an account block in the quota sheet moves the session onto it
@@ -279,7 +286,7 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
     }, [currentAccount, sessionId]);
 
     const hasUsage = p.weekPercent != null || p.contextStatus != null;
-    if (!summary && !p.connectionStatus && !hasUsage) {
+    if (!summary && !p.connectionStatus && !hasUsage && !tasksBadge) {
         return null;
     }
 
@@ -351,6 +358,39 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
                         color={theme.colors.textSecondary}
                     />
                 ) : null}
+            </Pressable>,
+        );
+    }
+
+    // What the session is working THROUGH, one tap from the strip (DROVE-167).
+    // Clay, three times: "why does this not let me see my fucking tasks". The
+    // list was already in the store the whole time, drawn once in the
+    // transcript and then scrolled away by the next twenty tool calls. Absent
+    // when the session never kept a list, because `0/0 tasks` is furniture.
+    if (tasksBadge && p.sessionId) {
+        segments.push(
+            <Pressable
+                key="tasks"
+                onPress={() => setOpenSheet((open) => (open === 'tasks' ? null : 'tasks'))}
+                accessibilityRole="button"
+                accessibilityLabel={tasks.headline}
+                accessibilityState={{ expanded: openSheet === 'tasks' }}
+                hitSlop={segmentHitSlop}
+                style={({ pressed }) => ({
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: 3,
+                    opacity: pressed ? 0.6 : 1,
+                })}
+            >
+                <Text style={{ fontSize: 11, color: theme.colors.textSecondary, ...Typography.default() }}>
+                    {tasksBadge}
+                </Text>
+                <Ionicons
+                    name={openSheet === 'tasks' ? 'chevron-down' : 'chevron-up'}
+                    size={10}
+                    color={theme.colors.textSecondary}
+                />
             </Pressable>,
         );
     }
@@ -494,6 +534,13 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
                     sessionId={p.sessionId}
                     summary={summary}
                     open={openSheet === 'agents'}
+                    onClose={closeSheet}
+                />
+            ) : null}
+            {p.sessionId ? (
+                <SessionTasksSheet
+                    sessionId={p.sessionId}
+                    open={openSheet === 'tasks'}
                     onClose={closeSheet}
                 />
             ) : null}

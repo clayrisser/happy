@@ -35,6 +35,7 @@ import { UsageAccountBars } from '@/components/UsageAccountBars';
 import type { UsageBarRow } from '@/components/agentInputUsage';
 import { flipRiskFooter, flipRiskSubtitle, resolveSessionAccount, sessionsLosingRemoteControl } from '@/utils/droverSessionAccount';
 import { describeDroverWakeBudget, getDroverWatchStatus, type DroverWatchStatus } from 'drover-watch';
+import { SessionTasksList, useSessionTasks } from '@/components/SessionTasksList';
 
 // Animated status dot component
 function StatusDot({ color, isPulsing, size = 8 }: { color: string; isPulsing?: boolean; size?: number }) {
@@ -188,6 +189,8 @@ function SessionInfoContent({ session }: { session: Session }) {
     const droverPolicySubtitle = droverPolicySummary(session.metadata?.droverPolicy);
     const watchStatus = useDroverWatchStatus();
     const sessionStatus = useSessionStatus(session);
+    // The same derivation the sheet and the wrist read (DROVE-167).
+    const sessionTasks = useSessionTasks(session.id);
     const {
         canFlipAccount,
         canShowResume,
@@ -827,6 +830,18 @@ function SessionInfoContent({ session }: { session: Session }) {
                         )}
                     </ItemGroup>
                 )}
+
+                {/* The session's task list (DROVE-167). Always here, empty or
+                    not: a session that never kept one says so, because a
+                    missing group and an empty list look identical and that is
+                    the confusion this ticket is about. */}
+                <ItemGroup title="Tasks" footer={sessionTasks.headline}>
+                    <>
+                        <View style={{ paddingHorizontal: 16, paddingVertical: 12 }}>
+                            <SessionTasksList tasks={sessionTasks} />
+                        </View>
+                    </>
+                </ItemGroup>
 
                 {/* Activity */}
                 <ItemGroup title={t('sessionInfo.activity')}>

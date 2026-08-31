@@ -154,8 +154,33 @@ struct DroverSession: Codable, Identifiable, Equatable, Hashable {
     /// place the words and colours live; sessionStateWire.spec.ts pins it to
     /// the phone's union so a new state cannot land on one side alone.
     let state: String?
+    /// What the session is still working THROUGH: Claude Code's task list,
+    /// unfinished lines only, in the phone's order (DROVE-167).
+    ///
+    /// Nothing is derived here. `utils/sessionTasks.ts` on the phone trims the
+    /// text, sorts the list and picks the subset, exactly as it does for the
+    /// sheet Clay opens off the composer, so a task reads the same on both
+    /// (DROVE-129). Nil for a session with no list, and nil for a phone that
+    /// predates the key.
+    let tasks: [String]?
+    /// How many of the session's tasks are finished, and how many there are.
+    let tasksDone: Int?
+    let tasksTotal: Int?
 
     var resolvedState: SessionState { SessionState(rawValue: state ?? "") ?? (active ? .thinking : .disconnected) }
+
+    /// The unfinished lines, empty when the phone sent none.
+    var openTasks: [String] { tasks ?? [] }
+
+    var hasTasks: Bool { !openTasks.isEmpty }
+
+    /// `2 of 7 done` — the phone's own sentence, rebuilt from the two counts
+    /// rather than sent as a third string, because a wrist that can add is
+    /// cheaper than a key on the wire.
+    var taskHeadline: String {
+        guard let total = tasksTotal, total > 0 else { return "No tasks yet" }
+        return "\(tasksDone ?? 0) of \(total) done"
+    }
 }
 
 /// What the phone says a session is doing, in the phone's own words
@@ -557,6 +582,31 @@ extension DroverSnapshot {
     var otherAccounts: [DroverAccount] {
         guard let current = currentAccount else { return [] }
         return accountRows.filter { $0.name != current.name }
+    }
+
+    /// Every session with something still to do, in the order the phone sent
+    /// them (DROVE-167).
+    ///
+    /// The phone already dropped the finished lists and put the session
+    /// actually working first, so this filters and does not sort. A session
+    /// whose list is finished is not here at all: a wall of struck-through
+    /// lines is how a wrist list stops being read.
+    var sessionsWithTasks: [DroverSession] {
+        sessions.filter { $0.hasTasks }
+    }
+
+    /// How many unfinished tasks the whole snapshot is carrying.
+    var openTaskCount: Int {
+        sessions.reduce(0) { $0 + $1.openTasks.count }
+    }
+
+    /// `3 tasks in 2 sessions` — the line on the door.
+    var taskDoorLabel: String {
+        let sessionsWith = sessionsWithTasks.count
+        let count = openTaskCount
+        let tasks = count == 1 ? "1 task" : "\(count) tasks"
+        let across = sessionsWith == 1 ? "1 session" : "\(sessionsWith) sessions"
+        return "\(tasks) in \(across)"
     }
 }
 

@@ -33,6 +33,18 @@ export type ClaudeSessionProtocolState = {
      * FIFO per exact text. See mapQueuedPromptToSessionEnvelopes.
      */
     queuedPromptEnvelopeIds?: Map<string, string[]>;
+    /**
+     * The main thread's task list, counted at the last TodoWrite (DROVE-167).
+     *
+     * `metadata.activity.tasks` has been on the wire and rendered by the
+     * phone's info screen since BASED-134 and hardcoded to zeros here, so the
+     * row said `0 in progress · 0 pending` for every session that ever kept a
+     * list. The list itself is not published: the transcript already carries
+     * every TodoWrite, and the app derives the lines from it
+     * (happy-app/sources/utils/sessionTasks.ts). These are the counts, which
+     * are what a session the phone has not opened can still say about itself.
+     */
+    claudeTasks?: { pending: number; inProgress: number; completed: number; total: number };
 };
 
 /**
@@ -453,8 +465,45 @@ export function readClaudeActivity(state: ClaudeSessionProtocolState): ClaudeAct
         },
         workflows: { running: 0, total: 0 },
         processes: { running: 0 },
-        tasks: { pending: 0, inProgress: 0, completed: 0, total: 0 },
+        tasks: state.claudeTasks ?? { pending: 0, inProgress: 0, completed: 0, total: 0 },
     };
+}
+
+/**
+ * Count a TodoWrite the main thread just issued (DROVE-167).
+ *
+ * The INPUT, not a result: the input is the list the agent is committing, it
+ * arrives one message earlier, and it is the only shape guaranteed to be there
+ * — Claude's structured `toolUseResult` is what the app prefers, but a
+ * provider that answers with a plain string leaves nothing to count.
+ *
+ * A SUBAGENT's list is not the session's. Six agents out, each keeping three
+ * tasks, would otherwise leave the phone's row saying whatever the last one to
+ * write happened to hold.
+ */
+function recordClaudeTasks(
+    state: ClaudeSessionProtocolState,
+    name: string,
+    input: unknown,
+    subagent: string | undefined,
+): void {
+    if (name !== 'TodoWrite' || subagent) {
+        return;
+    }
+    const todos = (input as { todos?: unknown } | null | undefined)?.todos;
+    if (!Array.isArray(todos)) {
+        return;
+    }
+    const counts = { pending: 0, inProgress: 0, completed: 0, total: 0 };
+    for (const todo of todos) {
+        const status = (todo as { status?: unknown } | null)?.status;
+        if (status === 'completed') counts.completed += 1;
+        else if (status === 'in_progress') counts.inProgress += 1;
+        else if (status === 'pending') counts.pending += 1;
+        else continue;
+        counts.total += 1;
+    }
+    state.claudeTasks = counts;
 }
 
 const emptyClaudeActivity = JSON.stringify(readClaudeActivity({ currentTurnId: null }));
@@ -800,6 +849,7 @@ function mapClaudeLogMessageToSessionEnvelopesInternal(
                 const name = typeof block.name === 'string' && block.name.length > 0 ? block.name : 'unknown';
                 const baseArgs = toToolArgs(block.input);
                 const title = toolTitle(name, block.input);
+                recordClaudeTasks(state, name, block.input, subagent);
                 const sessionSubagentForCall = ensureSessionSubagentIdForProviderSubagent(state, call);
                 if (isSubagentTool(name)) {
                     const prompt = pickTaskPrompt(block.input);
