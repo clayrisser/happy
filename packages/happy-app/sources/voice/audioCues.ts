@@ -79,7 +79,20 @@ export type AudioCueId =
     /** A reply arrived. Played before its first sentence, never over it. */
     | 'reply'
     /** The reader dropped its backlog and jumped to the newest sentence. */
-    | 'skipAhead';
+    | 'skipAhead'
+    /**
+     * The microphone opened. Played BEFORE it opens, never over it
+     * (DROVE-225).
+     */
+    | 'micOpen'
+    /** The microphone closed and the words are in the composer (DROVE-225). */
+    | 'micClosed'
+    /**
+     * A press that could not open the microphone (DROVE-225). The one cue
+     * that exists so a press which did nothing does not SOUND like a press
+     * that worked.
+     */
+    | 'micRefused';
 
 export interface AudioCueSpec {
     id: AudioCueId;
@@ -373,6 +386,46 @@ export const audioCues: readonly AudioCueSpec[] = [
         rank: 0,
         title: 'Skipped ahead',
         meaning: 'Reading was behind and jumped to the newest sentence. A quick blip up.',
+    },
+    //
+    // The microphone answers a press (DROVE-225).
+    //
+    // These three are the only cues that are a REPLY TO CLAY rather than news
+    // about the agent, and they are shaped accordingly. Long beats and an
+    // octave apart, so they are not mistaken for agentStart's third or
+    // reply's fourth in a pocket, and the loudest gains in the table, because
+    // an acknowledgement he does not hear is the failure the ticket exists to
+    // prevent. Rhythm still carries it with the pitch thrown away: up, down,
+    // or the same note twice going nowhere.
+    {
+        id: 'micOpen',
+        kind: 'event',
+        beats: [{ hz: 392, ms: 90 }, { hz: 784, ms: 110 }],
+        gapMs: 30,
+        gain: 0.95,
+        rank: 0,
+        title: 'Microphone opened',
+        meaning: 'The mic is listening. Two notes an octave apart, rising. Played before the mic opens, so it is never in the recording.',
+    },
+    {
+        id: 'micClosed',
+        kind: 'event',
+        beats: [{ hz: 784, ms: 90 }, { hz: 392, ms: 110 }],
+        gapMs: 30,
+        gain: 0.95,
+        rank: 0,
+        title: 'Microphone closed',
+        meaning: 'The mic stopped and the words are in the composer. The same octave, falling.',
+    },
+    {
+        id: 'micRefused',
+        kind: 'event',
+        beats: [{ hz: 196, ms: 120 }, { hz: 196, ms: 120 }],
+        gapMs: 90,
+        gain: 0.95,
+        rank: 0,
+        title: 'Microphone refused',
+        meaning: 'A press that could not open the mic. The same low note twice, going nowhere.',
     },
 ];
 

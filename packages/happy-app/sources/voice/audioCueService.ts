@@ -157,6 +157,35 @@ class AudioCueService {
         }
     }
 
+    /**
+     * Answer a press, now, whatever else is going on (DROVE-225).
+     *
+     * The mixer's job is to decide when the app may INTERRUPT him: a gap
+     * between sentences is not a gap, a burst of tool calls is rate-capped,
+     * a stale cue is dropped. Every one of those rules is right for news
+     * about the agent and wrong for a reply to something he just did. He
+     * pressed the button; the sound is the answer, and an answer that arrives
+     * late or not at all is the whole failure the ticket names: a press with
+     * no sound is indistinguishable from a press that did nothing.
+     *
+     * So this goes straight to the device, past the queue, the gap rule and
+     * the rate caps. It still respects the two settings that are Clay saying
+     * what he wants to hear: the master switch and the volume, and the mute
+     * list, so a row on the settings screen means what it says.
+     */
+    ack(id: AudioCueId): void {
+        try {
+            const resolved = settings();
+            if (!resolved.on) return;
+            if (resolved.muted.includes(id)) return;
+            playCue(id, Math.max(0, Math.min(1, resolved.volume * cueSpec(id).gain)));
+        } catch {
+            // A device that cannot make the sound simply does not, and the
+            // mic press goes ahead regardless: a missing beep is bad, a
+            // missing microphone is worse.
+        }
+    }
+
     /** The gate tracker, for the settings preview and the tests. */
     get gateSpeech(): GateSpeechTracker {
         return this.gates;
