@@ -25,6 +25,9 @@
  * Everything here is data, so the test beside it can walk the app and fail on
  * a control that shrinks, a surface that quietly goes back to a flat material,
  * or a fallback that would leave a control invisible.
+ *
+ * This is the surface-by-surface walk. The RULES it applies live in
+ * `nativeControls.ts` (DROVE-134), which is where a new control should start.
  */
 
 import type { ChromeControlSize } from './glassChrome';

@@ -27,9 +27,13 @@ import { GlassPressProvider, useNativeGlassPress } from './glassPress';
  * The session chrome's material, and the answer to the wall DROVE-133 hit
  * (DROVE-153).
  *
+ * THE POLICY THIS IS AN INSTANCE OF is `nativeControls.ts`: when to reach for a
+ * platform control, what can and cannot host React Native content, and the
+ * material rules restated in one place. Read that before adding a control.
+ *
  * THE WALL, AND WHY IT WAS THE WRONG DOOR. DROVE-133 made the back chevron and
- * the jump-to-bottom arrow native with `NativeGlassIconButton`, which is
- * `@expo/ui`'s SwiftUI `Button` with `.glass`. It then stopped, because the
+ * the jump-to-bottom arrow native with a since-deleted `NativeGlassIconButton`,
+ * which was `@expo/ui`'s SwiftUI `Button` with `.glass`. It then stopped, because the
  * title pill and the avatar carry React Native content and a SwiftUI Button
  * renders SwiftUI children only. That is true, and it is not the wall it looks
  * like: the SwiftUI button was never the only way to get the material.
@@ -40,9 +44,10 @@ import { GlassPressProvider, useNativeGlassPress } from './glassPress';
  * ordinary React Native views, so a two-line pill, a generated avatar, an SVG
  * meter and a `Pressable` all mount inside the real material without going
  * anywhere near SwiftUI. The rule to remember: reach for `GlassView` for the
- * MATERIAL and keep the gesture in React Native; reach for a SwiftUI button
- * only when the whole control is one SF Symbol and you want SwiftUI's press
- * behaviour with it. Written up on DROVE-134.
+ * MATERIAL and keep the gesture in React Native. DROVE-134 went one step
+ * further and dropped the SwiftUI-button escape hatch entirely: a second glass
+ * implementation drew a visibly different surface next to its neighbours, and
+ * the case for it never arrived. `nativeControls.ts` Rule 2.
  *
  * FALLBACK. Anything that is not iOS 26 with the glass API present, plus
  * anyone who has turned Reduce Transparency on, gets the flat surface the app
