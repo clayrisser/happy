@@ -29,10 +29,25 @@ import { MOBILE_COMPOSER_METRICS } from './agentInputLayout';
  * trailing glyph). This module owns only where it sits and how tall the strip
  * is. DROVE-153 is reworking the card's material and arrangement above this
  * line; nothing here reaches inside the card.
+ *
+ * DROVE-196 moved the `+` up beside send and the control row out from under
+ * the card, and this file's box did not move a point for it. That is the
+ * guarantee working: the strip is 6 + 18 whatever is above it, so the dock's
+ * arithmetic and the banner's overlay both survived the card being rebuilt.
  */
 
-/** Air between the composer card and whatever the strip holds. */
-export const COMPOSER_STRIP_PADDING_TOP = 6;
+/**
+ * Air between the composer's furniture and whatever the strip holds.
+ *
+ * The same 6pt gap that separates every other pair of things in the composer
+ * (`MOBILE_COMPOSER_METRICS.controlGap`): the `+` from the bubble, the bubble
+ * from the control row, one control from the next. Since DROVE-196 what is
+ * directly above this is the control row rather than the card's bottom edge,
+ * and the row keeps its own 8pt clear under itself
+ * (`COMPOSER_CONTROLS_BOTTOM_GAP`), so the status text sits 14pt below the
+ * lowest control exactly as it did when the row was inside the card.
+ */
+export const COMPOSER_STRIP_PADDING_TOP = MOBILE_COMPOSER_METRICS.controlGap;
 
 /**
  * Floor for the strip's content row. The status row's 11pt text is shorter
@@ -64,8 +79,13 @@ export interface RecordingBannerFrame {
 /**
  * Where the banner is pinned. `position: 'absolute'` is the load-bearing
  * part: change it and the composer starts moving the transcript again.
- * Left and right are the shell inset, so the bar is exactly as wide as the
- * composer card above it.
+ *
+ * Left and right are the shell inset, which is the composer's outer gutter:
+ * the bar runs from the `+`'s leading edge to the bubble's trailing rim, so it
+ * is exactly as wide as the composer above it. That claim used to be aspiration
+ * rather than fact, because the card spanned the whole dock and carried the
+ * gutter inside itself; DROVE-196 moved the gutter out onto the composer line
+ * and the control row, and the two now really are the same width.
  */
 export const RECORDING_BANNER_FRAME: RecordingBannerFrame = {
     position: 'absolute',

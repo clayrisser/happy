@@ -47,7 +47,8 @@ import {
     MOBILE_COMPOSER_LAYOUT,
     MOBILE_COMPOSER_METRICS,
     resolveMobileComposerActionGeometry,
-    resolveMobileComposerActionRowGeometry,
+    resolveMobileComposerControlRowGeometry,
+    resolveMobileComposerLineGeometry,
 } from './agentInputLayout';
 import { COMPOSER_STRIP_HEIGHT } from './composerStripLayout';
 import { shouldUseExpoNativeSettingsMenu } from './glassInteractionPolicy';
@@ -193,7 +194,8 @@ function permissionKindIcon(kind: string | null | undefined): React.ComponentPro
     return permissionModeGlyph(kind);
 }
 
-const MOBILE_ACTION_ROW_GEOMETRY = resolveMobileComposerActionRowGeometry();
+const MOBILE_COMPOSER_LINE_GEOMETRY = resolveMobileComposerLineGeometry();
+const MOBILE_CONTROL_ROW_GEOMETRY = resolveMobileComposerControlRowGeometry();
 const MOBILE_ICON_ACTION_GEOMETRY = resolveMobileComposerActionGeometry('icon');
 const MOBILE_PRIMARY_ACTION_GEOMETRY = resolveMobileComposerActionGeometry('primary');
 
@@ -239,9 +241,40 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         borderRadius: MOBILE_COMPOSER_METRICS.shellRadius,
         borderWidth: StyleSheet.hairlineWidth,
         borderColor: theme.colors.glass.border,
-        paddingHorizontal: MOBILE_COMPOSER_METRICS.shellInset,
-        paddingTop: MOBILE_COMPOSER_METRICS.shellPaddingTop,
-        paddingBottom: MOBILE_COMPOSER_METRICS.shellPaddingBottom,
+        // NO PADDING, and that is the ticket (DROVE-196). Clay: "the second
+        // row buttons should sit outside the speech bubble." The card is the
+        // message he is writing, so it holds the field and nothing else, and
+        // it hugs it: the in-field send button's own 4pt inset is the only air
+        // inside this card. The gutter that used to live here is on the
+        // composer line and the control row now, and 30pt of radius over a
+        // 44pt field draws the 22pt capsule that makes the bubble a bubble.
+    },
+    /**
+     * The composer's first line (DROVE-196): the `+` at the leading edge, the
+     * bubble taking the rest. Messages exactly, and the half of it DROVE-153
+     * left undone when it put the primary inside the field.
+     */
+    mobileComposerLine: MOBILE_COMPOSER_LINE_GEOMETRY,
+    /** The bubble takes whatever the `+` leaves. */
+    mobileBubbleShell: {
+        flex: 1,
+        minWidth: 0,
+    },
+    /**
+     * Mode, effort, model, speaker and mic, under the bubble rather than in it
+     * (DROVE-196). Every control keeps its 44pt and its colours; only the
+     * surface behind them changed, from the card's glass to the dock's own
+     * frame, and each of them carries glass of its own already.
+     */
+    mobileControlRow: MOBILE_CONTROL_ROW_GEOMETRY,
+    /**
+     * Thumbnails inside a card with no padding would sit on its rim, so the
+     * strip brings the air the card used to. 64pt thumb plus this is the 72
+     * `attachmentExtraHeight` has always promised.
+     */
+    mobileAttachmentInset: {
+        paddingTop: MOBILE_COMPOSER_METRICS.inputPaddingTop,
+        paddingBottom: MOBILE_COMPOSER_METRICS.inputPaddingBottom,
     },
     mobileUnifiedPanelShadow: {
         borderRadius: MOBILE_COMPOSER_METRICS.shellRadius,
@@ -257,13 +290,16 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     },
     mobileInputContainer: {
         alignItems: 'center',
-        // Keep a one-line composer compact while aligning its caret with the
-        // add glyph below. The previous 60pt slot left a full blank line below
-        // an empty input on phones.
+        // The bubble's whole height when the composer is empty (DROVE-196):
+        // the card has no padding of its own, so this floor is the card's
+        // floor, and it is already derived from what it holds — the 36pt send
+        // button inset 4 at each end.
         minHeight: MOBILE_COMPOSER_METRICS.inputMinHeight,
-        // 19pt from the outer edge: 10pt shell inset plus the 9pt inset from
-        // the add button edge to the 26pt glyph.
-        paddingLeft: MOBILE_COMPOSER_LAYOUT.inputContainerPaddingLeft,
+        // 19pt from the bubble's leading rim. The card used to supply 10 of it
+        // and this style the other 9; the card's gutter went outside in
+        // DROVE-196, so the field carries the whole inset and the caret has
+        // not moved.
+        paddingLeft: MOBILE_COMPOSER_LAYOUT.textInset,
         // The trailing side is not symmetric any more: the send/voice button
         // sits inside the field at that edge (DROVE-153), so the text has to
         // stop short of it rather than run underneath.
@@ -392,7 +428,6 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         justifyContent: 'space-between',
         paddingHorizontal: 0,
     },
-    mobileActionButtonsContainer: MOBILE_ACTION_ROW_GEOMETRY,
     mobileIconButton: MOBILE_ICON_ACTION_GEOMETRY,
     /**
      * The audio pair's shared capsule (DROVE-153).
@@ -2128,9 +2163,43 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
 
                 {/* Box 2: Action Area (Input + Send) */}
                 <Shaker ref={sendBlockShakerRef} onLayout={handleActionAreaLayout}>
+                    {/* The composer's FIRST LINE (DROVE-196). Clay: "Put plus
+                        to add image on same level as send button." The `+` is
+                        the one affordance that adds content to the message
+                        being written, so it belongs with the field rather than
+                        on the row of session settings underneath. Messages
+                        puts it outside the field at the leading edge and the
+                        primary action inside at the trailing edge; DROVE-153
+                        did the second half, this is the first. The line is
+                        bottom-aligned, so as the text wraps the `+` stays down
+                        beside send instead of riding up a tall capsule. */}
+                    <View style={compactMobileComposer ? styles.mobileComposerLine : undefined}>
+                    {/* The plus opens the Add context sheet (DROVE-128) rather
+                        than jumping straight into the photo library, and it
+                        keeps the surface every control got in DROVE-118 and
+                        the accent it got in DROVE-176: the `+` is a standing
+                        offer rather than a state. It is the same 44pt button
+                        it was on the row below, moved, not redrawn. */}
+                    {compactMobileComposer && !props.zenMode && canAddContext && (
+                        <GlassChromeButton
+                            onPress={handleAddContextPress}
+                            size={MOBILE_COMPOSER_METRICS.actionSize}
+                            style={openPicker === 'attach' ? styles.mobileIconButtonOpen : undefined}
+                            accessibilityRole="button"
+                            accessibilityLabel={t('imageUpload.addContextTitle')}
+                            accessibilityState={{ expanded: openPicker === 'attach' }}
+                        >
+                            <Ionicons
+                                name="add"
+                                size={MOBILE_COMPOSER_METRICS.addIconSize}
+                                color={composerPalette.accent}
+                            />
+                        </GlassChromeButton>
+                    )}
                     <View style={[
                         compactMobileComposer && styles.unifiedPanelShadow,
                         compactMobileComposer && styles.mobileUnifiedPanelShadow,
+                        compactMobileComposer && styles.mobileBubbleShell,
                     ]}>
                         {/* The slab is real Liquid Glass now, not a blur with a
                             flat colour over it (DROVE-153). `frosted` painted
@@ -2160,10 +2229,12 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         >
                     {/* Attachment preview strip */}
                     {props.selectedImages && props.selectedImages.length > 0 && (
-                        <AgentInputAttachmentStrip
-                            images={props.selectedImages}
-                            onRemove={props.onRemoveImage ?? (() => {})}
-                        />
+                        <View style={compactMobileComposer ? styles.mobileAttachmentInset : undefined}>
+                            <AgentInputAttachmentStrip
+                                images={props.selectedImages}
+                                onRemove={props.onRemoveImage ?? (() => {})}
+                            />
+                        </View>
                     )}
                     {/* Input field */}
                     <View style={[
@@ -2190,55 +2261,30 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         {compactMobileComposer ? mobilePrimaryAction : null}
                     </View>
 
-                    {compactMobileComposer ? (
-                    /* One row under the input (DROVE-111): add, then the
-                        session's mode and effort glyphs, then the voice
-                        cluster (stream-talk, talk, then send/boss/stop) on the
-                        right (DROVE-98 put the speaker back). The model's name
-                        is back in the capsule (DROVE-178), in the gap
-                        DROVE-153 opened. DROVE-83's dedicated pill row is
-                        gone, which is the row of
-                        composer furniture MOBILE_COMPOSER_BASE_HEIGHT never
-                        counted (DROVE-105) and therefore the end of
-                        DROVE-106's over-tall composer. */
-                    <>
-                    <View style={[
-                        styles.actionButtonsContainer,
-                        styles.mobileActionButtonsContainer,
-                    ]}>
-                        {/* The plus opens the Add context sheet (DROVE-128)
-                            rather than jumping straight into the photo
-                            library, and it finally gets the surface every
-                            other control on this row got in DROVE-118. It was
-                            already 42pt wide, so the model name's 63pt budget
-                            is untouched. */}
-                        {!props.zenMode && canAddContext && (
-                            <GlassChromeButton
-                                onPress={handleAddContextPress}
-                                size={MOBILE_COMPOSER_METRICS.actionSize}
-                                style={openPicker === 'attach' ? styles.mobileIconButtonOpen : undefined}
-                                accessibilityRole="button"
-                                accessibilityLabel={t('imageUpload.addContextTitle')}
-                                accessibilityState={{ expanded: openPicker === 'attach' }}
-                            >
-                                {/* The accent, always: the `+` is the one
-                                    affordance on the row that ADDS, and that
-                                    is a standing offer rather than a state
-                                    (DROVE-176). It was neutral until an image
-                                    was attached, which meant the row's only
-                                    accent appeared after the thing it invites
-                                    had already happened. Nothing is lost by
-                                    dropping that: an attachment is drawn as a
-                                    thumbnail over the field, which says it far
-                                    louder than a tinted glyph. */}
-                                <Ionicons
-                                    name="add"
-                                    size={MOBILE_COMPOSER_METRICS.addIconSize}
-                                    color={composerPalette.accent}
-                                />
-                            </GlassChromeButton>
-                        )}
+                    {compactMobileComposer ? null : desktopActionControls}
+                        </MobileGlassSurface>
+                    </View>
+                    </View>
 
+                    {compactMobileComposer ? (
+                    /* The control row, OUTSIDE the bubble (DROVE-196). Clay:
+                        "the second row buttons should sit outside the speech
+                        bubble." Mode, effort and model, then the audio pair on
+                        the right (DROVE-111, DROVE-153, DROVE-178, and
+                        DROVE-98 put the speaker back). They are settings for
+                        the session rather than part of the message, so the
+                        card is the message and these are furniture under it.
+
+                        Nothing about the controls changed: 44pt targets, 40pt
+                        chips inside them, DROVE-176's colours. What changed is
+                        the surface behind them, from the card's glass to the
+                        dock's own frame, which each of them can carry because
+                        each already draws glass of its own. The row keeps the
+                        shell gutter itself and an 8pt gap under it, which is
+                        the card's old bottom padding still holding the status
+                        row's tap targets off these buttons. */
+                    <>
+                    <View style={styles.mobileControlRow}>
                         {/* Mode, effort and model: three segments in one glass
                             capsule (DROVE-153, DROVE-178), three pickers, one
                             tap each (DROVE-111). The name is drawn in full and
@@ -2330,12 +2376,14 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         ) : null}
                     </View>
                     </>
-                    ) : desktopActionControls}
-                        </MobileGlassSurface>
-                    </View>
+                    ) : null}
                 </Shaker>
 
-                {/* The strip under the card, and both things that live in it.
+                {/* The strip under the composer, and both things that live
+                    in it. It is under the CONTROL ROW now rather than under
+                    the card (DROVE-196) and its box did not move a point for
+                    it: 6pt of padding over an 18pt line, 24 in total, with the
+                    row keeping its own 8pt clear above.
                     Every status fact on one line (DROVE-82): working state and
                     timer, connection, quota. Clay, seeing it in place: "this is
                     great, keep that shit down there." It owns its own two

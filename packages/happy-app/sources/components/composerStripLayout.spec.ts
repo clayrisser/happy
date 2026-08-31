@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { MOBILE_COMPOSER_METRICS, resolveMobileComposerHeight } from './agentInputLayout';
+import {
+    MOBILE_COMPOSER_METRICS,
+    resolveMobileComposerControlRowGeometry,
+    resolveMobileComposerHeight,
+    resolveMobileComposerLineGeometry,
+} from './agentInputLayout';
 import {
     COMPOSER_STRIP_HEIGHT,
     COMPOSER_STRIP_MIN_HEIGHT,
@@ -12,11 +17,15 @@ import {
 } from './composerStripLayout';
 import { resolveDockInset } from './agentDockLayout';
 
-/** One line of typing, no attachments: the card Clay is looking at. */
-const cardHeight = resolveMobileComposerHeight(MOBILE_COMPOSER_METRICS.inputLineHeight);
+/**
+ * One line of typing, no attachments: the composer Clay is looking at. Since
+ * DROVE-196 that is the bubble, the control row under it and the two gaps, not
+ * one card holding all of it.
+ */
+const composerBlockHeight = resolveMobileComposerHeight(MOBILE_COMPOSER_METRICS.inputLineHeight);
 
 function dockHeight(recordingActive: boolean, statusRowRendered = true): number {
-    return cardHeight + resolveComposerStripHeight(recordingActive, statusRowRendered);
+    return composerBlockHeight + resolveComposerStripHeight(recordingActive, statusRowRendered);
 }
 
 describe('the layout does not move when a recording starts', () => {
@@ -37,15 +46,19 @@ describe('the layout does not move when a recording starts', () => {
         }));
     });
 
-    it('never lets the banner into the card that the input and buttons size', () => {
-        // The card is input plus chrome and nothing else. If the banner is
-        // ever put back above the text field, this is the number that grows.
-        expect(cardHeight).toBe(
-            MOBILE_COMPOSER_METRICS.shellPaddingTop
-            + MOBILE_COMPOSER_METRICS.inputMinHeight
+    it('never lets the banner into the composer that the input and buttons size', () => {
+        // The block is the field plus its furniture and nothing else. If the
+        // banner is ever put back above the text field, this is the number
+        // that grows. DROVE-196 rewrote the decomposition, so it is restated
+        // here rather than carried over: bubble, gap, control row, and the
+        // row's clearance over this strip.
+        expect(composerBlockHeight).toBe(
+            MOBILE_COMPOSER_METRICS.inputMinHeight
+            + MOBILE_COMPOSER_METRICS.controlGap
             + MOBILE_COMPOSER_METRICS.actionRowHeight
-            + MOBILE_COMPOSER_METRICS.shellPaddingBottom,
+            + MOBILE_COMPOSER_METRICS.controlsBottomGap,
         );
+        expect(composerBlockHeight).toBe(102);
     });
 
     it('opens the strip only when a silent session has a recording to show', () => {
@@ -66,9 +79,19 @@ describe('where the recording banner lives', () => {
         expect(RECORDING_BANNER_FRAME.top).toBe(RECORDING_BANNER_INSET_TOP);
     });
 
-    it('makes the bar exactly as wide as the composer card above it', () => {
+    it('makes the bar exactly as wide as the composer above it', () => {
+        // The shell inset is the composer's outer gutter since DROVE-196: it
+        // is the padding on the line carrying the `+` and the bubble, and on
+        // the control row under them. The banner runs rim to rim with both.
+        // Before that the card spanned the whole dock and carried the gutter
+        // inside itself, so this assertion was true of the number and false of
+        // the picture.
         expect(RECORDING_BANNER_FRAME.left).toBe(MOBILE_COMPOSER_METRICS.shellInset);
         expect(RECORDING_BANNER_FRAME.right).toBe(MOBILE_COMPOSER_METRICS.shellInset);
+        expect(RECORDING_BANNER_FRAME.left)
+            .toBe(resolveMobileComposerLineGeometry().paddingHorizontal);
+        expect(RECORDING_BANNER_FRAME.left)
+            .toBe(resolveMobileComposerControlRowGeometry().paddingHorizontal);
     });
 
     it('leaves the bar tall enough to hold the dot, clock, level and glyph', () => {
@@ -79,5 +102,23 @@ describe('where the recording banner lives', () => {
     it('keeps the strip the 24pt the dock arithmetic was measured against', () => {
         expect(COMPOSER_STRIP_HEIGHT).toBe(COMPOSER_STRIP_PADDING_TOP + COMPOSER_STRIP_MIN_HEIGHT);
         expect(COMPOSER_STRIP_HEIGHT).toBe(24);
+    });
+
+    /**
+     * DROVE-196 rebuilt everything above this strip and the strip did not move
+     * a point. That is the DROVE-157 guarantee doing its job, so it is asserted
+     * rather than assumed.
+     */
+    it('survives the control row leaving the card without changing its box', () => {
+        expect(COMPOSER_STRIP_PADDING_TOP).toBe(MOBILE_COMPOSER_METRICS.controlGap);
+        expect(COMPOSER_STRIP_MIN_HEIGHT).toBe(18);
+        expect(COMPOSER_STRIP_HEIGHT).toBe(24);
+
+        // The status text still sits 14pt below the lowest control: 8 of the
+        // row's own clearance, then this strip's 6. It was 8 of card padding
+        // and the same 6 before the row moved out.
+        expect(MOBILE_COMPOSER_METRICS.controlsBottomGap + COMPOSER_STRIP_PADDING_TOP).toBe(14);
+        expect(MOBILE_COMPOSER_METRICS.controlsBottomGap)
+            .toBe(MOBILE_COMPOSER_METRICS.shellPaddingBottom);
     });
 });

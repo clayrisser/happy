@@ -108,8 +108,8 @@ export const TRANSCRIPT_GLASS_ALPHA = 0.4;
  * the tallest thing the transcript could draw. This one is measured against
  * the MATERIAL EDGE, which is what DROVE-180 asks for. Its only job is that a
  * line of text does not change strength on a hard boundary at the capsule's
- * rim, so it is sized to the rim rather than to the text: 12pt is a little
- * over the composer card's corner radius and half a body line box, which is
+ * rim, so it is sized to the rim rather than to the text: 12pt is half a body
+ * line box and half the bubble's drawn 22pt corner (DROVE-196), which is
  * enough for the eye to read the change as the glass beginning rather than as
  * an edge.
  *
@@ -121,10 +121,18 @@ export const TRANSCRIPT_EDGE_SOFTEN_HEIGHT = 12;
 /**
  * The one band that is still cleared, and it is not the composer.
  *
- * Everything from the composer card's bottom edge DOWN is the DROVE-82 status
- * row, its 8pt of container padding, and the gap over the home indicator. That
- * strip has no material of its own: it is 11pt text drawn straight onto the
- * dock's transparent frame. Content behind bare text is not "seen through", it
+ * Everything from the strip's top edge DOWN is the DROVE-82 status row, its
+ * 8pt of container padding, and the gap over the home indicator. That strip
+ * has no material of its own: it is 11pt text drawn straight onto the dock's
+ * transparent frame.
+ *
+ * DROVE-196 put the control row between the card and this band and did NOT
+ * widen the band for it, which is the deliberate half. Every control on that
+ * row carries its own glass (the `+`'s chrome button, the mode/effort/model
+ * capsule, the audio capsule), so it has the material this band exists for the
+ * lack of. The transcript runs behind the gaps between them at
+ * TRANSCRIPT_GLASS_ALPHA, which is a floating dock over a chat and is the
+ * thing DROVE-144 and DROVE-180 were buying back. Content behind bare text is not "seen through", it
  * is noise, and 11pt `textSecondary` (#8E8E93 on BOTH themes) does not clear
  * 3:1 even against its own page today, so there is no alpha that would make it
  * safe. The real fix for the strip is a material of its own, which is the
@@ -148,8 +156,9 @@ export function resolveStatusStripBandHeight(safeAreaBottom: number): number {
 /**
  * The ramp OUT of that clear band, back up to the glass alpha.
  *
- * Same length as the top one and for the same reason: it lands on the card's
- * bottom rim. It is the last place a ramp still reaches zero in this file, and
+ * Same length as the top one and for the same reason: it lands on the bottom
+ * edge of the composer's furniture, which is the control row since DROVE-196
+ * and was the card's rim before it. It is the last place a ramp still reaches zero in this file, and
  * it reaches zero because what is below it is bare text, not because anything
  * above it needed hiding.
  */
@@ -193,8 +202,14 @@ export const STATUS_ROW_TAP_SLOP_BOTTOM = 3;
  *   13      the segments' tap floor, exactly on the indicator's top edge.
  *   16      the status text's bottom (STATUS_ROW_BOTTOM_CLEARANCE).
  *   30      the status text's top: 11pt type in a 14pt line box.
- *   36      the composer card's bottom edge, over the row's 6pt paddingTop.
- *   44      the card's own buttons start, 8pt inside it (shellPaddingBottom).
+ *   36      the strip's top edge, over the row's 6pt paddingTop.
+ *   44      the composer's buttons start, 8pt above the strip.
+ *
+ * DROVE-196 moved the controls OUT of the card and every one of those numbers
+ * held, because the card's 8pt bottom padding became an 8pt gap under the
+ * control row (COMPOSER_CONTROLS_BOTTOM_GAP). What is at 44 is now the control
+ * row itself rather than the card's last inch; the bubble's bottom rim is at
+ * 94, another 44 of row and 6 of gap above it.
  *
  * So a segment can reach 44 before it is drawing its touch area over buttons
  * that are themselves 44pt tall. 44 - 13 is a 31pt box, and 14 above the text
@@ -230,11 +245,17 @@ export const STATUS_ROW_TAP_HEIGHT = STATUS_ROW_TAP_SLOP_TOP
 export const STATUS_ROW_ROW_HEIGHT = 6 + STATUS_ROW_TEXT_LINE_HEIGHT;
 
 /**
- * What the composer card keeps under its own button row. Mirrors
- * `MOBILE_COMPOSER_METRICS.shellPaddingBottom`, and it is the last inert band
- * between the status row and a control that must not lose presses to it.
+ * The last inert band between the status row and a control that must not lose
+ * presses to it. Mirrors `MOBILE_COMPOSER_METRICS.controlsBottomGap`.
+ *
+ * It was the composer card's own bottom padding, because the controls were
+ * inside the card. DROVE-196 took them out; the band is the same 8pt doing the
+ * same job from the other side of the card's edge, and it was renamed rather
+ * than deleted precisely so that this arithmetic could not be dropped on the
+ * way. `resolveComposerButtonFloor` still reads 44 from the screen edge and
+ * STATUS_ROW_TAP_SLOP_TOP is still 14 because of it.
  */
-export const COMPOSER_CARD_BOTTOM_PADDING = 8;
+export const COMPOSER_CONTROLS_BOTTOM_GAP = 8;
 
 /**
  * How far above the screen edge the composer's own buttons start, which is the
@@ -243,7 +264,7 @@ export const COMPOSER_CARD_BOTTOM_PADDING = 8;
 export function resolveComposerButtonFloor(safeAreaBottom: number): number {
     return resolveStatusRowBottomGap(safeAreaBottom)
         + STATUS_ROW_ROW_HEIGHT
-        + COMPOSER_CARD_BOTTOM_PADDING;
+        + COMPOSER_CONTROLS_BOTTOM_GAP;
 }
 
 /**
@@ -364,6 +385,11 @@ export interface TranscriptMask {
  *   0.4            the whole height of the composer card. THE TICKET.
  *   0.4 -> 0       12pt, landing on the card's bottom rim.
  *   0              the status strip, which has no material of its own.
+ *
+ * The 0.4 band covers the control row as well as the bubble since DROVE-196,
+ * and the lower ramp lands on the row's bottom edge rather than the card's
+ * rim. Same 12pt, same job: a line of text must not change strength on a hard
+ * boundary.
  *
  * DROVE-168's two bands were a 32pt ramp to zero above the composer and then
  * zero for the whole dock and the gap under it. Everything the composer covers
