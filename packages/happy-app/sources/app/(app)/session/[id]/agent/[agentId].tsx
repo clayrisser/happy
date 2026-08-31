@@ -8,6 +8,11 @@ import { useTickingNow } from '@/components/useTickingNow';
 import { Typography } from '@/constants/Typography';
 import { useSession, useSessionMessages, useSocketStatus } from '@/sync/storage';
 import {
+    clearSubagentMessages,
+    publishSubagentMessages,
+    SubagentScopeContext,
+} from '@/sync/subagentMessages';
+import {
     describeSubagent,
     findSubagentRun,
 } from '@/sync/subagentTranscript';
@@ -206,6 +211,20 @@ export default React.memo(() => {
     }, [reachable]);
 
     const { transcript, agent, trouble, refusal, loaded } = snapshot;
+
+    // These rows are not in the session's message map, so a row that opens
+    // has to leave them somewhere the detail screen can read (DROVE-166).
+    // Published on every poll, so a card tapped while its command was still
+    // running keeps filling in.
+    React.useEffect(() => {
+        if (!sessionId || !agentId) return;
+        publishSubagentMessages(sessionId, agentId, transcript.messagesMap);
+    }, [sessionId, agentId, transcript.messagesMap]);
+    React.useEffect(() => {
+        if (!sessionId || !agentId) return;
+        return () => clearSubagentMessages(sessionId, agentId);
+    }, [sessionId, agentId]);
+
     // What the session itself recorded about this run, off DROVE-115's
     // terminal tool-call-end. Stored on the phone, so it is still true while
     // the CLI is down and it is the only reason the header can say `Finished`
@@ -298,15 +317,24 @@ export default React.memo(() => {
                 }}
             />
             <ScopedTheme name={tintName}>
-                <View style={{ flex: 1, backgroundColor: tint.ground }}>
-                    {body}
-                    {hasRows ? (
-                        <View style={styles.footer}>
-                            {live || trouble ? <ActivityIndicator size="small" color={theme.colors.textSecondary} /> : null}
-                            <Text style={styles.footerText}>{footerLine}</Text>
-                        </View>
-                    ) : null}
-                </View>
+                {/*
+                  * Every row under here belongs to the agent, not the session,
+                  * so the route it opens has to say so (DROVE-166). A context
+                  * rather than a prop, for the same reason the tint is a
+                  * scoped theme: the rows are several memoized components down
+                  * and none of them should have to carry it.
+                  */}
+                <SubagentScopeContext.Provider value={agentId ?? null}>
+                    <View style={{ flex: 1, backgroundColor: tint.ground }}>
+                        {body}
+                        {hasRows ? (
+                            <View style={styles.footer}>
+                                {live || trouble ? <ActivityIndicator size="small" color={theme.colors.textSecondary} /> : null}
+                                <Text style={styles.footerText}>{footerLine}</Text>
+                            </View>
+                        ) : null}
+                    </View>
+                </SubagentScopeContext.Provider>
             </ScopedTheme>
         </>
     );

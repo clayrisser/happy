@@ -89,6 +89,17 @@ describe('getToolRowRoute', () => {
             .toBe('/session/s/message/m');
     });
 
+    it('names the agent when the row is a subagent transcript row (DROVE-166)', () => {
+        expect(getToolRowRoute({ sessionId: 'sess1', agentId: 'ag1', messageId: 'm7', tool: bash('ls') }))
+            .toBe('/session/sess1/message/m7?agentId=ag1');
+        // Same function, one destination shape. A session row is untouched.
+        expect(getToolRowRoute({ sessionId: 'sess1', agentId: null, messageId: 'm7', tool: bash('ls') }))
+            .toBe('/session/sess1/message/m7');
+        // A file is read off the machine by path, so it needs no agent.
+        expect(getToolRowRoute({ sessionId: 'sess1', agentId: 'ag1', messageId: 'm7', tool: { name: 'Write', input: { file_path: '/b' } } }))
+            .toBe(`/session/sess1/file?path=${btoa('/b')}`);
+    });
+
     it('has no destination without a session or a message', () => {
         expect(getToolRowRoute({ sessionId: '', messageId: 'm', tool: bash('ls') })).toBeNull();
         expect(getToolRowRoute({ sessionId: null, messageId: 'm', tool: bash('ls') })).toBeNull();
