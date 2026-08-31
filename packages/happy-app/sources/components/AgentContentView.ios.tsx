@@ -2,6 +2,13 @@ import { useHeaderHeight } from '@/utils/responsive';
 import * as React from 'react';
 import { LayoutChangeEvent, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
+import {
+    DOCK_SCRIM_FADE_HEIGHT,
+    resolveDockBottomOffset,
+    resolveDockInset,
+    resolveDockScrimHeight,
+    transparentOf,
+} from './agentDockLayout';
 import { useKeyboardHandler, useReanimatedKeyboardAnimation } from 'react-native-keyboard-controller';
 import Animated, { useAnimatedStyle, useSharedValue } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -38,31 +45,43 @@ export const AgentContentView: React.FC<AgentContentViewProps> = React.memo(({
         ));
     }, []);
 
+    // The dock's frame sits this far above the screen edge. In floating mode
+    // AgentInput's own 8pt container padding under the status row counts
+    // toward the home indicator clearance instead of stacking on top of it,
+    // which is the empty band in DROVE-113. Everything that animates with the
+    // keyboard uses this same number, so a dock at `bottom: B` translated by
+    // `-keyboardHeight + B * progress` lands exactly on the keyboard.
+    const dockBottomOffset = resolveDockBottomOffset(safeArea.bottom, floatingDock);
+    const dockScrimHeight = resolveDockScrimHeight(dockHeight, safeArea.bottom);
+    // The chat's own background. Opaque, so scrolled messages stop being
+    // legible through the dock instead of showing through a 66% scrim.
+    const dockSurface = theme.colors.groupped.background;
+
     React.useEffect(() => {
-        onDockInsetChange?.(floatingDock ? dockHeight + safeArea.bottom : 0);
+        onDockInsetChange?.(resolveDockInset({ dockHeight, safeAreaBottom: safeArea.bottom, floatingDock }));
     }, [dockHeight, floatingDock, onDockInsetChange, safeArea.bottom]);
 
     useKeyboardHandler({
         onEnd(e) {
             'worklet';
-            animatedPadding.value = e.progress === 1 ? (-height.height.value - safeArea.bottom) : 0;
+            animatedPadding.value = e.progress === 1 ? (-height.height.value - dockBottomOffset) : 0;
         },
         onStart(e) {
             'worklet';
             animatedPadding.value = 0;
         },
-    },[safeArea.bottom]);
+    },[dockBottomOffset]);
     const animatedStyle = useAnimatedStyle(() => ({
         paddingTop: animatedPadding.value,
-        transform: [{ translateY: height.height.value + safeArea.bottom * height.progress.value }]
-    }), [safeArea.bottom]);
+        transform: [{ translateY: height.height.value + dockBottomOffset * height.progress.value }]
+    }), [dockBottomOffset]);
     const animatedInputStyle = useAnimatedStyle(() => ({
-        transform: [{ translateY: height.height.value + safeArea.bottom * height.progress.value }]
-    }), [safeArea.bottom]);
+        transform: [{ translateY: height.height.value + dockBottomOffset * height.progress.value }]
+    }), [dockBottomOffset]);
     const animatePlaceholderdStyle = useAnimatedStyle(() => ({
         paddingTop: height.progress.value === 1 ? height.height.value : 0,
-        transform: [{ translateY: (height.height.value  + safeArea.bottom * height.progress.value) / 2 }]
-    }), [safeArea.bottom]);
+        transform: [{ translateY: (height.height.value  + dockBottomOffset * height.progress.value) / 2 }]
+    }), [dockBottomOffset]);
 
     if (floatingDock) {
         return (
@@ -80,7 +99,7 @@ export const AgentContentView: React.FC<AgentContentViewProps> = React.memo(({
                                 top: safeArea.top + headerHeight,
                                 left: 0,
                                 right: 0,
-                                bottom: dockHeight + safeArea.bottom,
+                                bottom: dockHeight + dockBottomOffset,
                             },
                             animatePlaceholderdStyle,
                         ]}
@@ -91,7 +110,15 @@ export const AgentContentView: React.FC<AgentContentViewProps> = React.memo(({
                         {placeholder}
                     </Animated.ScrollView>
                 )}
-                {dockHeight > 0 && (
+                {/* Opaque, not a scrim (DROVE-113). The old gradient topped
+                    out at 66% so chat text stayed legible under the status
+                    row and the strip below it. This fades in over the top
+                    28pt and is the chat's own surface from there down, past
+                    the dock and through the home indicator gap. It is a
+                    sibling BELOW the dock's zIndex, so the DROVE-88 gate
+                    overlay, which is a child of the dock at bottom: '100%',
+                    still paints above it and is not clipped. */}
+                {dockScrimHeight > 0 && (
                     <Animated.View
                         pointerEvents="none"
                         style={[
@@ -100,21 +127,20 @@ export const AgentContentView: React.FC<AgentContentViewProps> = React.memo(({
                                 left: 0,
                                 right: 0,
                                 bottom: 0,
-                                height: dockHeight + safeArea.bottom + 28,
+                                height: dockScrimHeight,
                                 zIndex: 1,
                             },
                             animatedInputStyle,
                         ]}
                     >
                         <LinearGradient
-                            colors={theme.dark
-                                ? ['rgba(0, 0, 0, 0)', 'rgba(0, 0, 0, 0.20)', 'rgba(0, 0, 0, 0.66)']
-                                : ['rgba(255, 255, 255, 0)', 'rgba(255, 255, 255, 0.18)', 'rgba(255, 255, 255, 0.74)']}
-                            locations={[0, 0.42, 1]}
+                            colors={[transparentOf(dockSurface), dockSurface]}
+                            locations={[0, 1]}
                             start={{ x: 0.5, y: 0 }}
                             end={{ x: 0.5, y: 1 }}
-                            style={{ flex: 1 }}
+                            style={{ height: DOCK_SCRIM_FADE_HEIGHT }}
                         />
+                        <View style={{ flex: 1, backgroundColor: dockSurface }} />
                     </Animated.View>
                 )}
                 <Animated.View
@@ -125,7 +151,7 @@ export const AgentContentView: React.FC<AgentContentViewProps> = React.memo(({
                             position: 'absolute',
                             left: 0,
                             right: 0,
-                            bottom: safeArea.bottom,
+                            bottom: dockBottomOffset,
                             zIndex: 2,
                         },
                         animatedInputStyle,
