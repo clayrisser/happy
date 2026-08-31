@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Message } from '@/sync/typesMessage';
 import { defaultMaxRateScale, ReadAloudReader, type ReadAloudOptions, type SpeakOptions, type SpeechEngine } from './readAloud';
-import { applyVisibleRange } from './readAloudSeek';
 
 /** An engine that lets a test decide when each utterance ends. */
 class FakeEngine implements SpeechEngine {
@@ -671,19 +670,19 @@ describe('ReadAloudReader interrupt listeners', () => {
 });
 
 /**
- * The transcript as a playhead (DROVE-114).
+ * The transcript as a playhead (DROVE-114), moved by a tap (DROVE-146).
  *
- * Clay: "If I scroll down you would start reading from there, so whatever
- * you're reading is always visible. When I scroll you jump down to where I
- * scrolled, or you jump up if I scroll up." And: "Go up to something you
- * already said, and you just wait till I scroll back down."
+ * DROVE-114 read Clay's "if I scroll down you would start reading from there"
+ * as one position shared by the voice and the viewport. He has since settled
+ * it the other way: "It will go back up if you double tap. Double tap a
+ * section and that's what changes the reading, not scrolling."
  *
- * So the reading position and the scroll position are one thing. What is
- * asserted here is the queue's half of that: it can be moved backwards as
- * well as forwards, it stops at the bottom of the screen instead of running
- * past it, and nothing is thrown away when it does.
+ * So the queue still has a playhead that moves backwards as well as forwards.
+ * What moves it is a gesture, and nothing else can stop it: there is no bound
+ * on how far reading may run any more, which is why a stale viewport cannot
+ * silence read-aloud (DROVE-146).
  */
-describe('the transcript as a playhead (DROVE-114)', () => {
+describe('the transcript as a playhead (DROVE-114, DROVE-146)', () => {
     let engine: FakeEngine;
     let reader: ReadAloudReader;
 
@@ -703,7 +702,7 @@ describe('the transcript as a playhead (DROVE-114)', () => {
         reader.focus('s1');
     });
 
-    it('seeks forwards: scrolling down reads from what is now visible', async () => {
+    it('reads on from a tap further down', async () => {
         seedThree(reader);
         await settle();
         expect(engine.spoken).toEqual(['First sentence 1.']);
@@ -715,142 +714,52 @@ describe('the transcript as a playhead (DROVE-114)', () => {
     });
 
     /**
-     * This test used to assert that seeking back REPLAYED 'First sentence 1.'
-     * It was written from DROVE-114's "go up to something you already said,
-     * and you just wait till I scroll back down", read as a replay. Clay
-     * settled it in DROVE-126: "scroll back, it wouldn't read it again, I've
-     * already told you that." Waiting is the whole of it. So the assertion is
-     * inverted here on purpose rather than deleted, because the seek itself
-     * still works and still moves the playhead; what it may not do is say
-     * anything twice.
+     * A tap outranks DROVE-126, and that is the whole difference between a
+     * gesture and a scroll frame. "It will go back up if you double tap": the
+     * section is read again because being asked is the exception the no-repeat
+     * invariant was always missing.
      */
-    it('seeks backwards without replaying: it lands on the unread edge', async () => {
+    it('reads a section again when it is tapped', async () => {
         seedThree(reader);
         await settle();
-        reader.seekTo(3);
-        await settle();
+        for (let i = 0; i < 2; i++) { engine.finishOne(); await settle(); }
+        expect(engine.spoken).toEqual(sentences('First', 3));
 
         reader.seekTo(1);
         await settle();
-        expect(engine.spoken).toEqual(['First sentence 1.', 'Third sentence 1.', 'First sentence 2.']);
+        expect(engine.spoken).toEqual([...sentences('First', 3), 'First sentence 1.']);
         expect(reader.playhead?.messageId).toBe('m1');
     });
 
-    /** And with the screen's own bound in place, a scroll back is silence. */
-    it('seeks backwards into fully read material and says nothing at all', async () => {
-        reader.onMessages('s1', [
-            agentText('m1', sentences('First', 2).join(' '), 1),
-            agentText('m2', sentences('Second', 2).join(' '), 2),
-        ]);
-        await settle();
-        engine.finishOne();
-        await settle();
-        expect(engine.spoken).toEqual(sentences('First', 2));
-
-        // Scrolled back onto m1, which is now the bottom of the screen too.
-        reader.setReadableThrough(1);
-        engine.finishOne();
-        await settle();
-        expect(reader.playhead).toBeNull();
-
-        reader.seekTo(1);
-        await settle();
-        expect(engine.spoken).toEqual(sentences('First', 2));
-        expect(reader.playhead).toBeNull();
-
-        // Back to the live edge and it picks up at the unread edge.
-        reader.setReadableThrough(null);
-        await settle();
-        expect(engine.spoken).toEqual([...sentences('First', 2), 'Second sentence 1.']);
-    });
-
-    it('a seek into the message being read does not restart it', async () => {
+    it('leaves reading alone when there is nothing sayable at the tap', async () => {
         seedThree(reader);
         await settle();
-        engine.finishOne();
-        await settle();
-        expect(engine.spoken).toEqual(['First sentence 1.', 'First sentence 2.']);
+        const spoken = [...engine.spoken];
         const stops = engine.stops;
 
-        // The list reports its top row on every scroll frame. If that could
-        // rewind the message being read, the same sentence would stutter for
-        // ever. This is the reader's half of the no-feedback-loop property.
-        reader.seekTo(1);
-        reader.seekTo(1);
+        // A tool card below the last thing anyone said.
+        reader.seekTo(99);
         await settle();
-        expect(engine.spoken).toEqual(['First sentence 1.', 'First sentence 2.']);
+        expect(engine.spoken).toEqual(spoken);
         expect(engine.stops).toBe(stops);
     });
 
-    it('reads only as far as the screen reaches, and waits there', async () => {
-        reader.setReadableThrough(1);
-        seedThree(reader);
-        await settle();
-        engine.finishOne();
-        await settle();
-        engine.finishOne();
-        await settle();
-        expect(engine.spoken).toEqual(sentences('First', 3));
-
-        // Parked. The rest is not lost, it is waiting below the fold.
-        engine.finishOne();
-        await settle();
-        expect(engine.spoken).toEqual(sentences('First', 3));
-        expect(reader.pending).toBe(6);
-        expect(reader.playhead).toBeNull();
-    });
-
-    it('resumes from the unread tail when the view comes back down', async () => {
-        reader.setReadableThrough(1);
-        seedThree(reader);
-        await settle();
-        for (let i = 0; i < 3; i++) { engine.finishOne(); await settle(); }
-        expect(engine.spoken).toEqual(sentences('First', 3));
-
-        reader.setReadableThrough(null);
-        await settle();
-        expect(engine.spoken).toEqual([...sentences('First', 3), 'Second sentence 1.']);
-    });
-
-    it('new content arriving while the view is parked in the history does not move reading', async () => {
-        let clock = 1_000_000;
-        const talk = new ReadAloudReader(engine, {
-            now: () => clock,
-            wordsPerMinute: 60,
-            maxBacklogSeconds: () => 4,
-        });
-        talk.setEnabled(true);
-        talk.focus('s1');
-        // The user is looking at the oldest message.
-        talk.setReadableThrough(1);
-        talk.onMessages('s1', [agentText('m1', 'First sentence 1. First sentence 2.', 1)]);
-        await settle();
-        expect(engine.spoken).toEqual(['First sentence 1.']);
-
-        // A reply lands, still streaming, far more than the threshold of it.
-        clock += 3000;
-        talk.onMessages('s1', [agentText('m2', sentences('Second', 4).join(' '), 2)]);
-        engine.finishOne();
-        await settle();
-
-        // No cut, no jump: reading carries on where the user is looking.
-        expect(engine.spoken).toEqual(['First sentence 1.', 'First sentence 2.']);
-        expect(talk.skipCount).toBe(0);
-
-        engine.finishOne();
-        await settle();
-        expect(talk.playhead).toBeNull();
-        expect(talk.pending).toBe(4);
-
-        // And when the view comes down, all four are still there, in order.
-        talk.setReadableThrough(2);
-        await settle();
-        for (let i = 0; i < 3; i++) { engine.finishOne(); await settle(); }
-        expect(engine.spoken).toEqual([
-            'First sentence 1.',
-            'First sentence 2.',
-            ...sentences('Second', 4),
-        ]);
+    /**
+     * The case that took read-aloud out entirely (DROVE-146). A reply lands
+     * while the user sits at the bottom and never touches the scroll view, and
+     * nothing on the outside is consulted about whether it may be read.
+     */
+    it('reads every reply that arrives, with no viewport feed at all', async () => {
+        const expected: string[] = [];
+        for (let i = 1; i <= 4; i++) {
+            expected.push(...sentences(`Block${i}`, 2));
+            reader.onMessages('s1', [agentText(`m${i}`, sentences(`Block${i}`, 2).join(' '), i)]);
+            await settle();
+            engine.finishOne();
+            await settle();
+        }
+        for (let i = 0; i < 8; i++) { engine.finishOne(); await settle(); }
+        expect(engine.spoken).toEqual(expected);
     });
 
     it('publishes the sentence at the engine, with the message it came from', async () => {
@@ -874,7 +783,7 @@ describe('the transcript as a playhead (DROVE-114)', () => {
         expect(reader.pending).toBe(0);
     });
 
-    it('an interrupted transcript can still be scrolled back into and re-read', async () => {
+    it('an interrupted transcript can still be tapped into and re-read', async () => {
         seedThree(reader);
         await settle();
         reader.interrupt('typed');
@@ -908,7 +817,7 @@ describe('the transcript as a playhead (DROVE-114)', () => {
         expect(talk.playhead?.messageId).toBe('m2');
     });
 
-    it('keeps a read position while idle, so a later scroll knows where it was', async () => {
+    it('keeps a read position while idle, so a later tap knows where it was', async () => {
         seedThree(reader);
         await settle();
         expect(reader.readPosition).toBe(1);
@@ -922,26 +831,21 @@ describe('the transcript as a playhead (DROVE-114)', () => {
 });
 
 /**
- * A sentence that has been spoken is never spoken again (DROVE-126).
+ * A sentence is never spoken twice on the queue's own initiative (DROVE-126).
  *
  * Clay: "you keep repeating things when you're reading things back. You stop,
  * then another message comes in and you read it back, and you end up reading
  * the same message again."
  *
- * These drive the REAL viewport decision, applyVisibleRange, and not seekTo
- * by hand, because the repeat came out of the two composing: reading kept
- * running while the list sat still, so the position ended up off the top of
- * the screen, and decideSeek answers that with the top row, which seekTo used
- * to resolve to the first sentence of a message it had already read out.
+ * The repeat came out of DROVE-114's scroll seek landing back on the first
+ * sentence of a message already read out. That seek is gone (DROVE-146), so
+ * the invariant now only has to hold against what the queue does by itself:
+ * an interruption, a new turn, a reply arriving in blocks. A double tap is
+ * the user asking, and is tested above.
  */
-describe('a sentence is never spoken twice (DROVE-126)', () => {
+describe('a sentence is never spoken twice on its own (DROVE-126)', () => {
     let engine: FakeEngine;
     let reader: ReadAloudReader;
-
-    /** What the chat list reports, in the shape ChatList actually sends. */
-    function viewport(oldest: number, newest: number, atLiveEdge: boolean): void {
-        applyVisibleRange(reader, { oldestCreatedAt: oldest, newestCreatedAt: newest, atLiveEdge });
-    }
 
     function duplicatesIn(said: readonly string[]): string[] {
         return said.filter((text, i) => said.indexOf(text) !== i);
@@ -957,63 +861,16 @@ describe('a sentence is never spoken twice (DROVE-126)', () => {
     it('says each sentence exactly once across a stop and new content', async () => {
         reader.onMessages('s1', [agentText('m1', sentences('First', 3).join(' '), 1)]);
         await settle();
-        viewport(1, 1, true);
         for (let i = 0; i < 3; i++) { engine.finishOne(); await settle(); }
         expect(engine.spoken).toEqual(sentences('First', 3));
 
-        // Clay sends, and the answer lands. The list was not resting at the
-        // newest message, so it did not follow: the window still shows m1
-        // while reading has moved on to m2.
         reader.userSent();
         reader.onMessages('s1', [userText('u1', 2), agentText('m2', sentences('Second', 3).join(' '), 3)]);
-        await settle();
-        viewport(1, 1, false);
         await settle();
         for (let i = 0; i < 4; i++) { engine.finishOne(); await settle(); }
 
         expect(duplicatesIn(engine.spoken)).toEqual([]);
         expect(engine.spoken.filter((t) => t.startsWith('First'))).toEqual(sentences('First', 3));
-    });
-
-    /**
-     * The AC this was written against asked for a seek back to RE-READ, from
-     * DROVE-114. Clay overruled that while this was being built: "scroll
-     * back, it wouldn't read it again, I've already told you that." So the
-     * second case asserts the opposite of what was asked for, deliberately.
-     */
-    it('goes quiet on a scroll back and picks up the unread edge on the way down', async () => {
-        reader.onMessages('s1', [
-            agentText('m1', sentences('First', 2).join(' '), 1),
-            agentText('m2', sentences('Second', 2).join(' '), 2),
-        ]);
-        await settle();
-        viewport(1, 2, true);
-        engine.finishOne();
-        await settle();
-        expect(engine.spoken).toEqual(sentences('First', 2));
-
-        // Scrolled up onto m1, which it has already read out in full.
-        viewport(1, 1, false);
-        await settle();
-        engine.finishOne();
-        await settle();
-        expect(engine.spoken).toEqual(sentences('First', 2));
-        expect(reader.playhead).toBeNull();
-
-        // Every frame of a slow scroll reports the same window. Still silence,
-        // and no churn at the engine.
-        const stops = engine.stops;
-        viewport(1, 1, false);
-        viewport(1, 1, false);
-        await settle();
-        expect(engine.spoken).toEqual(sentences('First', 2));
-        expect(engine.stops).toBe(stops);
-
-        // Back down to the live edge and it resumes where it had not read.
-        viewport(1, 2, true);
-        await settle();
-        expect(engine.spoken).toEqual([...sentences('First', 2), 'Second sentence 1.']);
-        expect(duplicatesIn(engine.spoken)).toEqual([]);
     });
 
     it('does not re-read the tail of a reply that was cut by a new turn', async () => {
@@ -1024,11 +881,17 @@ describe('a sentence is never spoken twice (DROVE-126)', () => {
         await settle();
         for (let i = 0; i < 4; i++) { engine.finishOne(); await settle(); }
 
-        // Scrolling back over the abandoned tail says nothing either: it was
-        // stepped over, and stepping back over it is not a reason to say it.
-        viewport(1, 1, false);
-        await settle();
         expect(duplicatesIn(engine.spoken)).toEqual([]);
         expect(engine.spoken.filter((t) => t === 'Old sentence 1.')).toHaveLength(1);
+    });
+
+    it('does not re-read a reply that arrives in blocks', async () => {
+        reader.onMessages('s1', [agentText('m1', 'Part one lands.', 1)]);
+        await settle();
+        reader.onMessages('s1', [agentText('m1', 'Part one lands. Part two lands.', 1)]);
+        await settle();
+        for (let i = 0; i < 3; i++) { engine.finishOne(); await settle(); }
+
+        expect(engine.spoken).toEqual(['Part one lands.', 'Part two lands.']);
     });
 });

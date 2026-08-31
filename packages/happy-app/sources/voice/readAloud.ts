@@ -52,27 +52,26 @@ import { stripToSpeakableProse } from './speakable';
  * DROVE-114 turned the private cursor into a PLAYHEAD. The queue is no longer
  * a queue that forgets what it said: every sentence stays in `timeline` and
  * `cursor` is a position in it, so reading can be moved backwards as well as
- * forwards. Two things drive that position from outside:
+ * forwards. One thing moves it from outside, `seekTo(createdAt)`, and one
+ * thing is published outwards, `playhead`: the sentence at the engine with
+ * the message it came from, so a row can mark it without reaching in here.
  *
- *   - `seekTo(createdAt)` moves the position, which is what a scroll does.
- *   - `setReadableThrough(createdAt)` says how far down the screen reaches,
- *     and reading stops there rather than running past what is visible. Null
- *     means the view is at the live edge and there is no bound at all.
+ * DROVE-146 cut the SCROLL out of that. DROVE-114 had wired the chat list's
+ * visible range to both the position and a bound on how far reading could
+ * run, so scrolling seeked and the bottom of the screen stopped the voice.
+ * Clay: "It will go back up if you double tap. Double tap a section and
+ * that's what changes the reading, not scrolling." So scrolling is free
+ * again, and moving the voice is one deliberate gesture. The bound is gone
+ * with it: nothing outside can stop reading any more, which is why read-aloud
+ * cannot go silent with nothing in the log.
  *
- * And one thing is published outwards: `playhead`, the sentence at the engine
- * with the message it came from, so a row can mark it without reaching in
- * here. The traffic is one way in each direction on purpose (see
- * readAloudSeek.ts for why that is what keeps it from oscillating).
+ * DROVE-126's invariant stays, and its job is narrower now:
  *
- * DROVE-126 added the invariant that holds all of that together, because
- * DROVE-114 and DROVE-122 between them took away the thing that used to
- * imply it:
+ *   A SENTENCE THAT HAS BEEN SPOKEN IS NEVER SPOKEN AGAIN, ON ITS OWN.
  *
- *   A SENTENCE THAT HAS BEEN SPOKEN IS NEVER SPOKEN AGAIN.
- *
- * See `skipSpoken`. Scrolling back into what was already read is silence,
- * not a replay, and reading picks up at the unread edge when the view comes
- * forward again.
+ * See `skipSpoken`. Nothing the queue does by itself repeats. A double tap
+ * is not the queue doing something by itself: it is a request to read from
+ * there, so it clears the marks from that point and reads on.
  */
 
 /** Why speech stopped. Carried for logs and for the tests to assert on. */
@@ -197,9 +196,10 @@ interface QueuedSentence {
     /** That message's createdAt: the one ordering the view and the queue share. */
     createdAt: number;
     /**
-     * It has been handed to the synthesiser once. Never again (DROVE-126).
-     * On the sentence rather than in the cursor because the cursor moves
-     * backwards now, so it cannot be the record of what was said.
+     * It has been handed to the synthesiser once. Never again on the queue's
+     * own initiative (DROVE-126). On the sentence rather than in the cursor
+     * because the cursor moves backwards now, so it cannot be the record of
+     * what was said. A double tap clears it from that point (DROVE-146).
      */
     spoken: boolean;
 }
@@ -300,11 +300,6 @@ export class ReadAloudReader {
      * screen every time the list twitched.
      */
     private lastPosition: number | null = null;
-    /**
-     * How far down the transcript the screen reaches, as a createdAt. Reading
-     * never runs past it. Null is the live edge: no bound at all.
-     */
-    private readableThrough: number | null = null;
 
     constructor(engine: SpeechEngine, options: ReadAloudOptions = {}) {
         this.engine = engine;
@@ -380,7 +375,6 @@ export class ReadAloudReader {
         this.timeline = [];
         this.cursor = 0;
         this.lastPosition = null;
-        this.readableThrough = null;
         this.interrupt(reason);
     }
 
@@ -398,21 +392,21 @@ export class ReadAloudReader {
     }
 
     /**
-     * Move reading to the first sentence at or after `createdAt` (DROVE-114).
+     * Read from `createdAt` on (DROVE-114, rewritten by DROVE-146).
      *
-     * A createdAt rather than a message id because the view can be looking at
-     * a user message or a tool card, which have no sentences of their own:
-     * seeking to one means "start from the first thing sayable at or after
-     * here". Landing where the cursor already is does nothing at all, which is
-     * what makes a repeated seek safe.
+     * The ONE way the position moves from outside, and it is a double tap on
+     * a section, not a scroll. A createdAt rather than a message id because
+     * the tap can land on a user message or a tool card, which have no
+     * sentences of their own: it means "start from the first thing sayable at
+     * or after here".
+     *
+     * Deliberate, so it outranks DROVE-126: the marks from the tap onwards are
+     * cleared and the section is read again. That invariant exists to stop the
+     * QUEUE repeating itself while nobody asked; being asked is the exception
+     * it was always missing. Nothing here is reachable from a scroll frame any
+     * more, so a repeated seek costs nothing and cannot stutter.
      */
     seekTo(createdAt: number): void {
-        // Already reading inside that message. Moving would restart it from
-        // its first sentence, and since the list reports its top row on every
-        // scroll frame, that would stutter the same sentence forever. This is
-        // the reader's half of what keeps the two directions from chasing
-        // each other; the other half is decideSeek in readAloudSeek.ts.
-        if (this.readPosition === createdAt) return;
         let next = this.timeline.length;
         for (let i = 0; i < this.timeline.length; i++) {
             if (this.timeline[i].createdAt >= createdAt) {
@@ -420,32 +414,16 @@ export class ReadAloudReader {
                 break;
             }
         }
-        // Land on the first thing not yet said rather than on the message's
-        // first sentence. Without this a scroll back would replay it, and a
-        // list that reports its top row every frame would keep dragging the
-        // cursor back into spoken text for pump to step over again.
-        next = this.skipSpoken(next);
-        if (next === this.cursor) return;
+        // Nothing sayable at or after the tap. Leave reading where it is
+        // rather than parking the cursor past the end.
+        if (next === this.timeline.length) return;
+        for (let i = next; i < this.timeline.length; i++) this.timeline[i].spoken = false;
         this.cursor = next;
         // Whatever is in the air belongs to the old position. Cut it without
-        // going through interrupt(): a scroll is not a reason to stop the mic.
+        // going through interrupt(): a tap is not a reason to stop the mic.
         this.cutCurrentUtterance();
         this.markerDue = false;
         this.pump();
-    }
-
-    /**
-     * How far down the screen reaches, as a createdAt; null for the live edge.
-     * Reading stops rather than running past it, and starts again by itself
-     * when the bound moves forward.
-     */
-    setReadableThrough(createdAt: number | null): void {
-        if (this.readableThrough === createdAt) return;
-        const widened = createdAt === null
-            || this.readableThrough === null
-            || createdAt > this.readableThrough;
-        this.readableThrough = createdAt;
-        if (widened) this.pump();
     }
 
     onMessages(sessionId: string, messages: Message[]): void {
@@ -670,29 +648,13 @@ export class ReadAloudReader {
         return this.now() - this.previousArrivalAt <= this.arrivalWindowMs;
     }
 
-    /**
-     * Seconds of audio left to say, from word count and the speaking rate.
-     * Only what is on screen counts: material below the fold is not something
-     * the voice is behind on, it is something the user has not scrolled to.
-     */
+    /** Seconds of audio left to say, from word count and the speaking rate. */
     private backlogSeconds(): number {
         let words = 0;
         for (let i = this.cursor; i < this.timeline.length; i++) {
-            const sentence = this.timeline[i];
-            if (this.readableThrough !== null && sentence.createdAt > this.readableThrough) break;
-            words += sentence.words;
+            words += this.timeline[i].words;
         }
         return (words * 60) / this.wordsPerMinute;
-    }
-
-    /** How many unspoken sentences are readable under the current bound. */
-    private readableCount(): number {
-        let count = 0;
-        for (let i = this.cursor; i < this.timeline.length; i++) {
-            if (this.readableThrough !== null && this.timeline[i].createdAt > this.readableThrough) break;
-            count += 1;
-        }
-        return count;
     }
 
     /**
@@ -738,7 +700,7 @@ export class ReadAloudReader {
         }
     }
 
-    /** Drained or parked: let the audio session go and mark nothing. */
+    /** Drained: let the audio session go and mark nothing. */
     private rest(): void {
         this.setPlayhead(null);
         if (this.started) {
@@ -762,19 +724,14 @@ export class ReadAloudReader {
         // audio is waiting, and the turn is still being written so that
         // newer material actually exists. A finished turn fails the third
         // test however long it is, which is the whole point.
-        //
-        // A bounded view is a fourth veto (DROVE-114): while the user is
-        // parked up in the history, new text arriving must not drag the
-        // reading position down to it.
-        if (this.readableThrough === null
-            && this.timeline.length - this.cursor > 1
+        if (this.timeline.length - this.cursor > 1
             && backlog > threshold
             && this.stillArriving()) {
             this.cursor = this.timeline.length - 1;
             this.markerDue = true;
         }
 
-        if (this.markerDue && this.readableCount() > 0) {
+        if (this.markerDue && this.cursor < this.timeline.length) {
             this.markerDue = false;
             this.skips += 1;
             this.setPlayhead(null);
@@ -787,12 +744,6 @@ export class ReadAloudReader {
             // Drained. Stopping here is not about cutting anything off, it is
             // about releasing the audio session so ducked music comes back up
             // instead of staying quiet until the next reply.
-            this.rest();
-            return;
-        }
-        if (this.readableThrough !== null && next.createdAt > this.readableThrough) {
-            // Parked: the next thing to say is below the fold. It is not lost,
-            // it waits here until the view comes down to it (DROVE-114).
             this.rest();
             return;
         }

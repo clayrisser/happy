@@ -5,6 +5,7 @@ import { resolveSpeaker } from './speaker';
 import { cueWatchReplyStart, watchSpeechEngine } from './watchSpeaker';
 import { storage } from '@/sync/storage';
 import { resolveStreamTalk } from '@/sync/settings';
+import { readFromHere } from './readAloudTap';
 
 /**
  * The one reader the app owns (DROVE-30).
@@ -38,3 +39,11 @@ export const readAloud = new ReadAloudReader(
         turnStillRunning: (sessionId) => storage.getState().sessions[sessionId]?.thinking === true,
     },
 );
+
+/**
+ * Double tap a section and reading moves there (DROVE-146). The wiring only;
+ * the rule about when a tap counts is in readAloudTap.ts.
+ */
+export function readAloudFromHere(sessionId: string, createdAt: number): boolean {
+    return readFromHere(readAloud, sessionId, createdAt);
+}
