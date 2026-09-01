@@ -5,22 +5,28 @@ import type { PluginReport, PluginSummary } from '@slopus/happy-wire';
 
 const plugin = (over: Partial<PluginSummary> = {}): PluginSummary => ({
     name: '@drover/huly',
+    id: { scope: '@drover', name: 'huly', full: '@drover/huly' },
     version: '1.2.0',
     manifestVersion: 1,
     summary: 'Huly ticketing',
-    dependsOn: [],
-    provides: { mcp: ['huly'], skills: ['huly-ticket'], hooks: [], bin: [], libexec: [] },
-    when: [],
-    sources: [{ kind: 'git', locator: 'git.example.com/huly.git', ref: 'main', sha256: null, patches: 0 }],
-    requires: [{ kind: 'env', name: 'HULY_TOKEN', note: 'set it yourself' }],
-    integrity: { sha256: null },
-    installs: false,
+    schema: 'drover.plugin/v1',
+    origin: 'catalog',
+    dir: '~/Projects/bitspur/cattle-drover/plugins/huly',
     state: 'enabled',
     scope: { kind: 'global' },
+    when: null,
+    enableDefault: true,
+    builds: false,
+    provides: { mcp: [{ name: 'huly', when: null }], skills: [], commands: [], subagents: [], rules: [], bin: [], hooks: [] },
+    requires: { commands: [], platform: [], plugins: [] },
+    vendor: [{ name: 'huly-mcp', kind: 'git', locator: 'git.example.com/huly-mcp.git', ref: 'v1.0.0' }],
+    capabilities: { network: null, paths: [], credentialNames: ['HULY_API_KEY'], harnesses: [], sudo: false },
+    warnings: [],
+    vars: [],
     from: null,
-    config: [],
-    manifestKnown: true,
-    staleSessions: 0,
+    installedAt: null,
+    sha256: null,
+    error: null,
     ...over,
 });
 
@@ -28,7 +34,11 @@ const report = (): PluginReport => ({
     machine: 'm',
     readAt: 1,
     harnesses: ['claude', 'cursor', 'codex', 'opencode', 'pi'],
+    config: '~/.config/drover/drover.yaml',
+    catalog: '~/Projects/bitspur/cattle-drover/plugins',
+    store: '~/.drover/plugins',
     plugins: [plugin()],
+    errors: [],
 });
 
 describe('readMachinePlugins', () => {
@@ -53,7 +63,7 @@ describe('readMachinePlugins', () => {
 
     it('asks the catalog route when catalog is requested', async () => {
         let asked = '';
-        await readMachinePlugins({ fetchBus: async (p) => ((asked = p), { machine: 'm', readAt: 1, catalog: '~/plugins', plugins: [] }) }, { catalog: true });
+        await readMachinePlugins({ fetchBus: async (p) => ((asked = p), report()) }, { catalog: true });
         expect(asked).toBe('/v1/plugins/catalog');
     });
 
@@ -73,9 +83,10 @@ describe('readMachinePlugins', () => {
         }
     });
 
-    it('REFUSES a report carrying a token on a source rather than stripping it', async () => {
+    it('REFUSES a report carrying a token on an install origin rather than stripping it', async () => {
         const leaky = report();
-        (leaky.plugins[0].sources[0] as unknown as Record<string, unknown>).token = 'sk-ant-leaked';
+        leaky.plugins[0].from = { kind: 'git', locator: 'h/r.git', ref: null, sha256: null, commit: null };
+        (leaky.plugins[0].from as unknown as Record<string, unknown>).token = 'sk-ant-leaked';
         const r = await readMachinePlugins({ fetchBus: async () => leaky });
         expect(r.ok).toBe(false);
         if (!r.ok) {
@@ -83,6 +94,14 @@ describe('readMachinePlugins', () => {
             expect(r.error).toContain('credential-shaped');
             expect(r.error).toContain('Update cattle-drover');
         }
+    });
+
+    it('REFUSES a report whose vars arrived as a map of values', async () => {
+        const leaky = report();
+        (leaky.plugins[0] as unknown as Record<string, unknown>).vars = { HULY_API_KEY: 'sk-ant-leaked' };
+        const r = await readMachinePlugins({ fetchBus: async () => leaky });
+        expect(r.ok).toBe(false);
+        if (!r.ok) expect(r.error).not.toContain('sk-ant-leaked');
     });
 
     it('passes a report with forward-compat unknown top-level fields', async () => {
@@ -120,8 +139,8 @@ describe('runPluginOp', () => {
 
     it('passes a bus error outcome through as an error', async () => {
         const r = await runPluginOp(
-            { op: 'disable', name: 'nope' },
-            { postBus: async () => ({ ok: false, error: '`nope` is not installed' }) },
+            { op: 'disable', name: '@drover/nope' },
+            { postBus: async () => ({ ok: false, error: '@drover/nope is not installed' }) },
         );
         expect(r.ok).toBe(false);
         if (!r.ok) expect(r.error).toContain('not installed');
@@ -149,12 +168,32 @@ describe('runPluginOp', () => {
 
     it('refuses an op outcome carrying a credential-shaped field', async () => {
         const leaky = plugin();
-        (leaky.sources[0] as unknown as Record<string, unknown>).apiKey = 'sk-leaked';
+        (leaky.vendor[0] as unknown as Record<string, unknown>).apiKey = 'sk-leaked';
         const r = await runPluginOp(
             { op: 'enable', name: '@drover/huly' },
             { postBus: async () => ({ ok: true, op: 'enable', plugin: leaky, staleSessions: 0 }) },
         );
         expect(r.ok).toBe(false);
         if (!r.ok) expect(r.error).not.toContain('sk-leaked');
+    });
+
+    it('relays the stale-sessions count and the links report as the machine said them', async () => {
+        const r = await runPluginOp(
+            { op: 'disable', name: '@drover/huly' },
+            {
+                postBus: async () => ({
+                    ok: true,
+                    op: 'disable',
+                    plugin: plugin({ state: 'disabled' }),
+                    staleSessions: 3,
+                    links: { linked: [], unchanged: [], skipped: [], removed: ['huly-cli'], kept: [], absent: [] },
+                }),
+            },
+        );
+        expect(r.ok).toBe(true);
+        if (r.ok) {
+            expect(r.outcome.staleSessions).toBe(3);
+            expect(r.outcome.links?.removed).toEqual(['huly-cli']);
+        }
     });
 });

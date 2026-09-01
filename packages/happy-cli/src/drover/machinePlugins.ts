@@ -9,7 +9,7 @@
  * uninstalls/inspects.
  *
  * THE WORK IS NOT DONE HERE, on purpose, and this file is a relay.
- * cattle-drover's `engine/plugins.js` owns the drover.yaml the user's choices
+ * cattle-drover's `engine/plugin/ops.js` owns the drover.yaml the user's choices
  * live in and the catalog they install from, and decides what may be said out
  * loud. Keeping the reader and the writer THERE keeps the count at one, the same
  * rule machineMcps.ts follows: the terminal (`drover plugins`) and the phone
@@ -225,8 +225,8 @@ export async function runPluginOp(params: PluginOpParams, deps: MachinePluginsDe
     }
 
     // The same gate as the read: never relay an outcome carrying a
-    // credential-shaped field, whichever of plugin/manifest/source it is on.
-    const leaks = leaksIn(o, [o.plugin, o.manifest]);
+    // credential-shaped field, whichever of plugin/source/links it is on.
+    const leaks = leaksIn(o, [o.plugin]);
     if (leaks.length) {
         logger.debug(`[API MACHINE] refusing to relay a plugin op result: ${leaks.join('; ')}`);
         return {
