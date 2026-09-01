@@ -5,7 +5,6 @@ import {
     isDroverSpeechAvailable,
 } from 'drover-speech';
 import { log } from '@/log';
-import { storage } from '@/sync/storage';
 import { t } from '@/text';
 import { AudioRouteGuard } from './audioRouteGuard';
 import { readAloud } from './readAloudService';
@@ -87,7 +86,11 @@ function announce(): void {
 const guard = new AudioRouteGuard({
     route: () => audioRoute(),
     isSpeaking: () => readAloud.isSpeaking,
-    isEnabled: () => readAloud.isEnabled && storage.getState().localSettings.readAloudEnabled,
+    // The reader's own gate, and nothing else. Since DROVE-297 the persisted
+    // setting is only the DEFAULT a session inherits, so a session he switched
+    // on by hand reads with that setting off — and a guard that ANDed the two
+    // would have decided reading was off while it was speaking.
+    isEnabled: () => readAloud.isEnabled,
     speaker: () => resolveSpeaker(),
     // THE pause of DROVE-233, on purpose: the same state and position the
     // long press, the headphone press and the lock screen use, so an unplug

@@ -404,7 +404,12 @@ function sameSessionSet(a: DroverSession[], b: DroverSession[]): boolean {
  */
 export function collectReading(): DroverReading | null {
     if (!readAloud.isEnabled) return null;
-    const sessionId = readAloud.focusedSessionId;
+    // The session ACTUALLY SPEAKING, not merely the one focused (DROVE-297).
+    // Reading is per session now, so a session he switched off keeps its
+    // screen for a moment after it has given the voice up; the wrist scopes
+    // its control by this id, and a control offered on a session that is not
+    // talking would pause a voice he cannot see.
+    const sessionId = readAloud.readingSessionId;
     return {
         state: readAloud.isPaused ? 'paused' : 'reading',
         // Spread rather than set to null: one NSNull fails the whole publish

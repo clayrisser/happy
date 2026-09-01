@@ -3,6 +3,13 @@ import { chunkStreamed } from './sentenceStream';
 import { sameSentence } from './sentenceMatch';
 import { stripToSpeakableProse } from './speakable';
 import { stopsSpeech, type ReadAloudInterruption } from './readAloudGate';
+import {
+    readingSessionState,
+    voiceMove,
+    type ReadingReport,
+    type ReadingSessionState,
+    type VoiceMove,
+} from './readingVoice';
 
 /**
  * The read-aloud queue (DROVE-30, mode B).
@@ -613,7 +620,52 @@ export class ReadAloudReader {
     private readonly interruptListeners = new Set<ReadAloudInterruptListener>();
     private readonly playheadListeners = new Set<ReadAloudPlayheadListener>();
     private readonly transportListeners = new Set<() => void>();
+    /**
+     * Does the session the VOICE is on read? (DROVE-297.)
+     *
+     * Derived, and kept equal to `enabledFor(this.focused)` at the two places
+     * either side can move: a focus change and `setSessionEnabled`. Everything
+     * inside this class asks it exactly as it always did — the queue, the
+     * gate lines, the tap — because from in here the question has not changed:
+     * is the reading this reader is holding one that may be spoken?
+     */
     private enabled = false;
+    /**
+     * Reading, per session (DROVE-297). Absent means "inherit `defaultEnabled`".
+     *
+     * RUNTIME, never persisted, for exactly the reason the pause is runtime
+     * (DROVE-233): coming back to a phone that is silently armed to read four
+     * sessions from yesterday is the failure this area keeps producing. A cold
+     * start therefore has every session inheriting the one persisted setting,
+     * which is the behaviour that shipped before this ticket.
+     */
+    private sessionEnabled = new Map<string, boolean>();
+    /**
+     * What a session the reader has not been told about inherits — the
+     * persisted `localSettings.readAloudEnabled`, written by the settings
+     * screens and by nothing else since DROVE-297 moved the composer's control
+     * onto the session.
+     *
+     * With this on and no session individually switched off, every session is
+     * enabled, so navigating takes the voice exactly as it did before this
+     * ticket. That is the explicit reconciliation with DROVE-179's "the reader
+     * follows him", which is pinned in readAloudNeverSilent.spec.ts and is not
+     * being walked back: it is what happens when there is nothing to
+     * distinguish the sessions by.
+     */
+    private defaultEnabled = false;
+    /**
+     * A boss-mode call has the audio route (DROVE-236). Everything is quiet
+     * for its duration, per-session switches included, and none of them is
+     * forgotten: a call is not him turning reading off.
+     */
+    private suspended = false;
+    /**
+     * The session he is LOOKING at, which since DROVE-297 need not be the one
+     * being read. Navigating into a session whose reading is off leaves the
+     * voice where it was, so the screen and the voice come apart on purpose.
+     */
+    private visited: string | null = null;
     /**
      * The microphone holds the audio session, so the reader says nothing
      * (DROVE-143). Not the same as disabled: the timeline keeps filling and
@@ -826,20 +878,194 @@ export class ReadAloudReader {
         return () => { this.playheadListeners.delete(listener); };
     }
 
+    /**
+     * The MASTER switch: what a session nobody has said anything about reads
+     * (DROVE-297 re-pointed this; the settings screens still drive it).
+     *
+     * Turning it off is the kill: every per-session switch and every held
+     * position goes with it, because off subsumes pause and this is off
+     * everywhere at once (DROVE-289). Turning it on is a default, not a
+     * command — a session he has explicitly switched off stays off.
+     *
+     * Only ever called on a real flip. Two chat surfaces can be mounted and
+     * both run the effect that calls this on mount, so a redundant call has to
+     * be free: one that cleared the per-session switches would wipe them on
+     * every navigation.
+     */
     setEnabled(enabled: boolean): void {
-        if (this.enabled === enabled) return;
-        this.enabled = enabled;
-        // OFF SUBSUMES PAUSE, in both directions (DROVE-233). Going off throws
-        // the position away, so there is nothing left to be holding. Coming on
-        // is a START, which DROVE-226 places at new content — the one thing a
-        // resume must never be. Either way the button comes back to two states
-        // and a pause cannot survive as a state nothing can see.
-        this.setPausedSilently(false);
+        if (this.defaultEnabled === enabled) return;
+        this.defaultEnabled = enabled;
         if (!enabled) {
+            this.sessionEnabled.clear();
             // Off throws EVERY position away, the held ones included
             // (DROVE-289): a held reading is a pause taken per session, and
             // off subsumes pause. Coming back on is a START wherever he is.
             this.heldReadings.clear();
+        }
+        this.applyEnabled(this.enabledFor(this.focused));
+    }
+
+    /**
+     * A call took the audio route (DROVE-236), and gives it back.
+     *
+     * Its own input rather than another argument to `setEnabled`, because the
+     * two say different things. A call must silence a session he switched on
+     * himself even when the master default is off, and it must give that
+     * session back afterwards rather than making him switch it on again.
+     */
+    setSuspended(suspended: boolean): void {
+        if (this.suspended === suspended) return;
+        this.suspended = suspended;
+        this.applyEnabled(this.enabledFor(this.focused));
+    }
+
+    /** Is reading switched on for this session? Its own switch, or the default. */
+    private enabledFor(sessionId: string | null): boolean {
+        if (this.suspended) return false;
+        if (sessionId === null) return this.defaultEnabled;
+        return this.sessionEnabled.get(sessionId) ?? this.defaultEnabled;
+    }
+
+    /** Is reading switched on for this session? (DROVE-297.) */
+    isSessionEnabled(sessionId: string): boolean {
+        return this.enabledFor(sessionId);
+    }
+
+    /**
+     * The session the VOICE is on: the focused one, and only while its reading
+     * is switched on (DROVE-297).
+     *
+     * Not the same as `focusedSessionId`, which is whose timeline this reader
+     * is holding. A session he switched off keeps its focus for a moment — the
+     * screen is still there — but it has given the voice up, and every rule in
+     * readingVoice.ts is written about the voice.
+     */
+    get readingSessionId(): string | null {
+        return this.enabled ? this.focused : null;
+    }
+
+    /** The session he is LOOKING at, which need not be the one being read. */
+    get visitedSessionId(): string | null {
+        return this.visited;
+    }
+
+    /**
+     * What the phone is reading right now, in one answer (DROVE-297).
+     *
+     * `drover read` with no argument is this (DROVE-298). Assembled here so
+     * the terminal cannot come to a different reading of the same fields than
+     * the composer and the wrist do.
+     */
+    readingReport(): ReadingReport {
+        const session = this.readingSessionId;
+        return {
+            session,
+            state: session === null ? 'off' : this.readingStateOf(session),
+            sentence: this.playheadValue?.sentence ?? null,
+            defaultEnabled: this.defaultEnabled,
+        };
+    }
+
+    /** What the list draws for this session (DROVE-297). */
+    readingStateOf(sessionId: string): ReadingSessionState {
+        return readingSessionState({
+            session: sessionId,
+            holder: this.readingSessionId,
+            enabled: this.enabledFor(sessionId),
+            paused: this.paused,
+        });
+    }
+
+    /**
+     * Switch this session's reading on or off, and let the rule decide what
+     * that does to the voice (DROVE-297).
+     *
+     * The composer's read-aloud control lands here, and so does DROVE-298's
+     * `drover read <session>` / `drover read off` from the terminal. One rule,
+     * two entry points: both go through `voiceMove`, so a terminal cannot
+     * invent semantics the thumb does not have.
+     */
+    setSessionEnabled(sessionId: string, enabled: boolean): void {
+        const was = this.enabledFor(sessionId);
+        this.sessionEnabled.set(sessionId, enabled);
+        if (was === enabled) return;
+        // OFF SUBSUMES PAUSE, PER SESSION (DROVE-289 decision 4), and it does
+        // so whether or not this session had the voice. Switching a YIELDED
+        // session off has to drop its held place too, or coming back on would
+        // resume in the middle of a reply from before he switched it off —
+        // which is the resume-at-a-stale-position failure, reached the long
+        // way round.
+        if (!enabled) this.heldReadings.delete(sessionId);
+        this.applyMove(voiceMove(enabled ? 'enable' : 'disable', {
+            holder: this.readingSessionId,
+            session: sessionId,
+            enabled: was,
+        }));
+    }
+
+    /**
+     * He navigated to this session (DROVE-297).
+     *
+     * Replaces the bare `focus` the chat screen used to call. The difference is
+     * the whole ticket: arriving somewhere is not a claim on the voice. If this
+     * session's reading is on it TAKES the voice, resuming at its own held
+     * position and pausing whoever had it. If it is off, nothing moves and the
+     * session he was listening to carries on talking while he reads this one.
+     */
+    visit(sessionId: string, reason: ReadAloudInterruption = 'switched-session'): void {
+        this.visited = sessionId;
+        this.applyMove(voiceMove('visit', {
+            holder: this.readingSessionId,
+            session: sessionId,
+            enabled: this.enabledFor(sessionId),
+        }), reason);
+    }
+
+    /**
+     * Carry out what the rule decided, with DROVE-289's machinery.
+     *
+     * `take` is `focus`, which already holds the outgoing session's whole
+     * position and restores the target's own — so "pauses the one that was
+     * reading" and "resumes at its own place" are the same two lines that
+     * shipped in DROVE-289 rather than a second implementation of them.
+     */
+    private applyMove(move: VoiceMove, reason: ReadAloudInterruption = 'switched-session'): void {
+        if (move.kind === 'keep') return;
+        if (move.kind === 'release') {
+            // The voice falls silent and nothing else claims it: turning one
+            // session off must never start another one talking. The position
+            // is thrown away by `applyEnabled`, which interrupts; the stashed
+            // one, if any, went with `setSessionEnabled`.
+            this.applyEnabled(false);
+            return;
+        }
+        if (this.focused === move.session) {
+            // Already the focused session, switched back on. `focus` would
+            // return early, so the arming is done here; the queue was thrown
+            // away when it went off, so this is a START at new content
+            // (DROVE-226), not a resume.
+            this.applyEnabled(true);
+            this.pump();
+            return;
+        }
+        this.focus(move.session, reason);
+    }
+
+    /**
+     * The live gate moved: the voice's session was switched on or off, a call
+     * took the route or gave it back, or the master flipped.
+     *
+     * OFF SUBSUMES PAUSE, in both directions (DROVE-233). Going off throws the
+     * position away, so there is nothing left to be holding. Coming on is a
+     * START, which DROVE-226 places at new content — the one thing a resume
+     * must never be. Either way the button comes back to two states and a
+     * pause cannot survive as a state nothing can see.
+     */
+    private applyEnabled(enabled: boolean): void {
+        if (this.enabled === enabled) return;
+        this.enabled = enabled;
+        this.setPausedSilently(false);
+        if (!enabled) {
             this.interrupt('toggled-off');
             this.notifyTransport();
             return;
@@ -1121,6 +1347,13 @@ export class ReadAloudReader {
      * captures are told either way — the mic that was dictating into the old
      * session must not land words in the new one — and the transport listeners
      * fire so the button, the card and the wrist follow the switch.
+     *
+     * SINCE DROVE-297 THIS IS THE MECHANISM, NOT THE DECISION. Moving the
+     * focus moves the voice, and the voice is only moved by the rule in
+     * readingVoice.ts. The chat screen calls `visit`; the composer's control
+     * and the CLI call `setSessionEnabled`; both ask the rule and only then
+     * reach this. Calling `focus` directly is still how the voice is MOVED,
+     * and it takes the target's own switch with it.
      */
     focus(sessionId: string | null, reason: ReadAloudInterruption = 'switched-session'): void {
         if (this.focused === sessionId) return;
@@ -1133,6 +1366,10 @@ export class ReadAloudReader {
         }
         this.holdFocused();
         this.focused = sessionId;
+        // The voice arrives switched on or off according to the session it
+        // arrived at (DROVE-297). `holdFocused` has already run, so it stashed
+        // the OUTGOING session against the outgoing answer.
+        this.enabled = this.enabledFor(sessionId);
         const restored = sessionId !== null ? this.heldReadings.get(sessionId) : undefined;
         if (restored !== undefined) {
             this.heldReadings.delete(sessionId as string);
@@ -1494,12 +1731,17 @@ export class ReadAloudReader {
     }
 
     onMessages(sessionId: string, messages: Message[]): void {
-        if (!this.enabled) return;
-        if (this.focused === null || sessionId !== this.focused) {
+        if (!this.enabled || this.focused === null || sessionId !== this.focused) {
             // A held session's timeline KEEPS FILLING, exactly as a paused
             // one's does (DROVE-233, taken per session by DROVE-289): what
             // arrives while he is elsewhere queues unspoken, so a resume
             // reads on through it instead of skipping it.
+            //
+            // Asked BEFORE the live gate since DROVE-297, not after. A yielded
+            // session's fill has nothing to do with whether the session that
+            // took the voice is still switched on, and gating it on that put a
+            // hole in the yielded session's reply the moment he switched the
+            // talking one off.
             const held = this.heldReadings.get(sessionId);
             if (held !== undefined) this.fillHeld(held, messages);
             return;
