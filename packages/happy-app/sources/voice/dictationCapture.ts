@@ -177,6 +177,45 @@ export function keptTranscript(heard: string, final: string): string {
     return settled;
 }
 
+/**
+ * The shortest live utterance the reset guard below will protect, in
+ * characters, and how much smaller an incoming partial has to be before it
+ * counts as a new sentence rather than a revision (DROVE-263).
+ *
+ * Both exist to keep the guard DEAF EARLY. A recogniser revising the first
+ * couple of words of an utterance legitimately replaces nearly all of it
+ * ("um hello" -> "hello"), and banking that would duplicate it. By the time a
+ * sentence is this long, a partial a fraction of its size that shares none of
+ * its opening is not a revision of it.
+ */
+const RESET_GUARD_MIN_CHARS = 24;
+const RESET_GUARD_SHRINK = 2;
+
+/**
+ * Whether an incoming partial has DROPPED the live utterance rather than
+ * revised it (DROVE-263).
+ *
+ * The native contract is that a partial is everything heard since the
+ * microphone opened, so it normally only grows. A build whose module does not
+ * bank utterances internally breaks that across a pause: the on-device
+ * recogniser keeps ONE task running and opens a new result sequence, and the
+ * next utterance arrives from empty looking like the whole transcript. That is
+ * the shipped binary on the phone today, so this guard is the half of
+ * DROVE-263 that reaches him without a TestFlight build.
+ *
+ * It cannot fire on a module that banks internally, because there the text
+ * never drops: the live text stays a prefix of what comes next.
+ */
+export function utteranceRestarted(live: string, incoming: string): boolean {
+    const shown = live.trim();
+    const next = incoming.trim();
+    if (shown.length === 0 || next.length === 0) return false;
+    // A revision restates the utterance it revises, so one contains the other.
+    if (shown.startsWith(next) || next.startsWith(shown)) return false;
+    if (shown.length < RESET_GUARD_MIN_CHARS) return false;
+    return next.length * RESET_GUARD_SHRINK <= shown.length;
+}
+
 const idle: DictationCaptureState = {
     active: false,
     mode: null,
@@ -302,6 +341,17 @@ export class DictationCapture {
      */
     partial(text: string): void {
         if (!this.state.active) return;
+        // The one case where a partial does NOT simply replace the live
+        // segment (DROVE-263). On a build whose native module does not bank
+        // utterances itself, a pause makes the recogniser open a new result
+        // sequence inside the SAME task, and the words after the pause arrive
+        // from empty. Replacing on that is what wrote his first sentence over
+        // three times running. Banking is safe on a module that does bank,
+        // because there this cannot fire: the text only ever grows.
+        if (utteranceRestarted(this.heard, text)) {
+            this.banked = joinDictation(this.banked, this.heard);
+            this.heard = '';
+        }
         this.heard = text;
         this.showTranscript(true);
     }

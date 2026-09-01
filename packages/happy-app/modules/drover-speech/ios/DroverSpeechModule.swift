@@ -131,8 +131,18 @@ public final class DroverSpeechModule: Module {
     /// finalises on its own after a pause and the next task reports from
     /// empty, so its words are banked here rather than written over.
     private var bankedTranscript = ""
-    /// What the CURRENT task has heard, revised in place while it runs.
+    /// What the CURRENT UTTERANCE has heard, revised in place while it runs.
+    /// An utterance is not a task: one on-device task reports many of them,
+    /// each from empty, which is DROVE-263.
     private var taskTranscript = ""
+    /// Where the live utterance starts in this capture's audio, on Apple's own
+    /// segment clock. A revision re-reports its utterance from the SAME
+    /// offset; a new one starts later. -1 before the first result names it.
+    private var liveUtteranceStart: TimeInterval = -1
+    /// Whether this capture has ever seen a non-zero segment timestamp. The
+    /// on-device recogniser reports a dead clock on some builds, and the
+    /// boundary then has only the words to go on (DROVE-263).
+    private var segmentClockSeen = false
     /// Tasks replaced in a row without hearing a word. A recogniser that
     /// finalises instantly over silence would otherwise be restarted forever.
     private var emptyRestarts = 0
@@ -169,6 +179,12 @@ public final class DroverSpeechModule: Module {
     /// next reply arrived at an app that was not running. While this is set,
     /// `stop` cuts the voice and keeps the session.
     private var sessionHeld = false
+    /// The near-silent loop that plays while the session is HELD (DROVE-259).
+    /// `UIBackgroundModes: ["audio"]` keeps a backgrounded app alive only
+    /// while it is ACTUALLY PRODUCING AUDIO, so an active session that says
+    /// nothing between two replies is a suspended app a minute later. Non-nil
+    /// only while the hold is on.
+    private var keepalive: AVAudioPlayer?
     /// Remote commands are registered once, lazily, on the first utterance.
     private var remoteCommandsWired = false
     /// What JS says read-aloud is doing (DROVE-233). See `setReadingState`.
@@ -205,6 +221,71 @@ public final class DroverSpeechModule: Module {
         bankedTranscript = ""
         taskTranscript = ""
         emptyRestarts = 0
+        liveUtteranceStart = -1
+        segmentClockSeen = false
+    }
+
+    /// Take one transcription from the live recognition task, keeping every
+    /// word said before it (DROVE-263).
+    ///
+    /// WHAT 070819ab MISSED, because a second fix that misses the same way is
+    /// the real risk here. That commit treated an utterance boundary as a TASK
+    /// boundary: Apple finalises after a pause, the module starts another task
+    /// on the same engine, and `continueAfterFinal` banks across the swap.
+    /// That is what the SERVER recogniser does. This request sets
+    /// `requiresOnDeviceRecognition = true`, and the on-device recogniser does
+    /// not finalise on a pause at all — it keeps ONE task running and opens a
+    /// NEW RESULT SEQUENCE, reporting the next utterance from empty. No final
+    /// arrives, so `continueAfterFinal` never runs, `bankedTranscript` stays
+    /// empty, and the bare `taskTranscript = result...formattedString` that
+    /// used to live at the call site wrote the second utterance straight over
+    /// the first. The task-id machinery is real and still needed for the
+    /// server path; it simply never fires on the path he is actually using,
+    /// which is exactly why the fix looked good and shipped broken.
+    ///
+    /// So the boundary is found HERE, between two results of ONE task, and the
+    /// invariant is the one Clay stated: no incoming partial may shorten what
+    /// he has already said.
+    private func absorb(_ transcription: SFTranscription) {
+        let text = transcription.formattedString
+        let incoming = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        // An empty result never takes words back. A new sequence opens with
+        // one, and writing it over the live utterance is the whole bug.
+        guard !incoming.isEmpty else { return }
+        let start = transcription.segments.first?.timestamp ?? 0
+        if start > 0 { segmentClockSeen = true }
+        if startsNewUtterance(incoming, at: start) {
+            bankedTranscript = latestTranscript
+            taskTranscript = ""
+        }
+        liveUtteranceStart = start
+        taskTranscript = text
+    }
+
+    /// Whether this result opens a LATER utterance rather than revising the
+    /// live one (DROVE-263).
+    private func startsNewUtterance(_ incoming: String, at start: TimeInterval) -> Bool {
+        let live = taskTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Nothing said yet in this utterance, so there is nothing to protect.
+        guard !live.isEmpty else { return false }
+        // Apple's clock decides it whenever Apple winds one. A revision
+        // re-reports the same utterance from the same offset, so only a
+        // STRICTLY later start is a new utterance; ties and rewinds are
+        // revisions. This is the path that carries a real device.
+        if segmentClockSeen, liveUtteranceStart >= 0 {
+            return start > liveUtteranceStart + 0.01
+        }
+        // No clock, so only the words are left. A revision restates the
+        // utterance it revises and therefore shares its opening; the first
+        // words of a new sentence against a finished one do not.
+        if live.hasPrefix(incoming) || incoming.hasPrefix(live) { return false }
+        // And only an utterance with real substance behind it is banked this
+        // way. Early on, a revision legitimately replaces the little that is
+        // there ("um hello" -> "hello") and must not become a sentence of its
+        // own, so the guard is deliberately deaf until a sentence has been
+        // said and the incoming result is a fraction of it.
+        guard live.count >= 24 else { return false }
+        return incoming.count * 2 <= live.count
     }
 
     /// Two stretches of speech with one space between them, and no space when
@@ -231,6 +312,7 @@ public final class DroverSpeechModule: Module {
 
         OnDestroy {
             self.synthesizer.stopSpeaking(at: .immediate)
+            self.stopSilenceKeepalive()
             self.teardownDictation()
             self.stopWatchingAudioRoute()
             self.stopWatchingInterruptions()
@@ -339,6 +421,10 @@ public final class DroverSpeechModule: Module {
             let next = ReadingState(rawValue: state) ?? .off
             self.readingState = next
             if next == .off {
+                // Read-aloud off is the outer release (DROVE-259): whatever JS
+                // does with the hold, nothing keeps playing for a reader that
+                // has been switched off.
+                self.stopSilenceKeepalive()
                 self.teardownRemoteCommands()
                 return
             }
@@ -382,6 +468,14 @@ public final class DroverSpeechModule: Module {
         AsyncFunction("stop") { () -> Void in
             self.synthesizer.stopSpeaking(at: .immediate)
             self.speechPausedByInterruption = false
+            // A drained queue under a HELD session is the gap itself
+            // (DROVE-259): the reader has stopped talking and is waiting for
+            // the next reply, which is exactly when iOS reclaims a
+            // backgrounded app that has gone quiet. Start the loop rather
+            // than let the silence stand.
+            if self.sessionHeld && !self.isDictating {
+                self.startSilenceKeepalive()
+            }
             // The session belongs to the microphone while dictation runs;
             // dropping it here would stop the engine under a live tap. And it
             // belongs to BACKGROUND READING while JS is holding it: releasing
@@ -412,18 +506,30 @@ public final class DroverSpeechModule: Module {
             self.sessionHeld = hold
             if hold {
                 try? self.activatePlayback()
+                // An ACTIVE session is not a living process (DROVE-259). The
+                // hold has to keep something PLAYING through the gap between
+                // two replies, or iOS reclaims the app in the quiet.
+                self.startSilenceKeepalive()
                 self.wireRemoteCommands()
                 self.updateNowPlaying(title: nil)
-            } else if !self.synthesizer.isSpeaking && !self.isDictating {
-                self.deactivateSession()
-                // Coming back to the foreground hands the SESSION back so
-                // ducked music comes up exactly when it used to. It no longer
-                // takes the card with it (DROVE-233): the card belongs to
-                // read-aloud being on, and `setReadingState` is the only thing
-                // that ends it. Still cleared here on a binary that has no
-                // reading state, which is the DROVE-189 behaviour unchanged.
-                if self.readingState == .off {
-                    self.clearNowPlaying()
+            } else {
+                // Released the moment the hold ends, whatever else is going
+                // on. A loop left running over a foregrounded app is a battery
+                // draw nobody asked for, and this is the one place that knows
+                // the hold is over.
+                self.stopSilenceKeepalive()
+                if !self.synthesizer.isSpeaking && !self.isDictating {
+                    self.deactivateSession()
+                    // Coming back to the foreground hands the SESSION back so
+                    // ducked music comes up exactly when it used to. It no
+                    // longer takes the card with it (DROVE-233): the card
+                    // belongs to read-aloud being on, and `setReadingState` is
+                    // the only thing that ends it. Still cleared here on a
+                    // binary that has no reading state, which is the DROVE-189
+                    // behaviour unchanged.
+                    if self.readingState == .off {
+                        self.clearNowPlaying()
+                    }
                 }
             }
         }
@@ -875,8 +981,83 @@ public final class DroverSpeechModule: Module {
     }
 
     private func deactivateSession() {
+        stopSilenceKeepalive()
         try? AVAudioSession.sharedInstance()
             .setActive(false, options: [.notifyOthersOnDeactivation])
+    }
+
+    /// Keep the process alive through the gaps by never going properly silent
+    /// (DROVE-259).
+    ///
+    /// WHY HOLDING THE SESSION WAS NOT ENOUGH. `holdSession(true)` keeps the
+    /// AVAudioSession ACTIVE, and DROVE-189 read that as keeping the app
+    /// alive. It is not the same thing. The audio background mode is a licence
+    /// to GO ON PLAYING, not a licence to exist, and iOS reclaims a
+    /// backgrounded app that holds an active session and emits nothing.
+    /// Read-aloud emits nothing between two sentences and nothing at all while
+    /// it waits for the next reply, which is the gap he actually hits: it
+    /// played in the bathroom and then stopped.
+    ///
+    /// THE COST, named rather than shipped quietly. This keeps the audio
+    /// hardware awake for as long as it runs, and that is a real battery draw.
+    /// So it runs in exactly one window and no wider: from `holdSession(true)`
+    /// to `holdSession(false)`. JS asks for the hold only while read-aloud is
+    /// ON and the app is BACKGROUNDED, and drops it on the way back to the
+    /// foreground and when read-aloud is switched off, so an idle phone in his
+    /// pocket is not holding audio. `deactivateSession` stops it too, so no
+    /// path can leave it looping over a session that has gone.
+    ///
+    /// It is stopped for the whole of a dictation as well: the microphone runs
+    /// the session in `.playAndRecord` at `.measurement`, and a loop playing
+    /// into that is something for the recogniser to hear.
+    private func startSilenceKeepalive() {
+        guard sessionHeld, keepalive == nil else { return }
+        guard let player = try? AVAudioPlayer(data: Self.silentLoopData()) else { return }
+        player.numberOfLoops = -1
+        keepalive = player
+        player.prepareToPlay()
+        player.play()
+    }
+
+    private func stopSilenceKeepalive() {
+        keepalive?.stop()
+        keepalive = nil
+    }
+
+    /// One second of mono 16-bit PCM, built here rather than shipped as a
+    /// bundle resource so the podspec needs no asset.
+    ///
+    /// The samples are ONE LSB rather than digital zero. A buffer of pure
+    /// zeros is the thing an audio path is most likely to shortcut, and the
+    /// whole point is to be playing; at 1/32768 of full scale it is ninety dB
+    /// down and inaudible. The player's own volume is left at 1 for the same
+    /// reason: what has to be quiet is the CONTENT, not the level iOS sees.
+    private static func silentLoopData() -> Data {
+        let sampleRate = 44_100
+        let frames = sampleRate
+        let bytesPerSample = 2
+        let dataBytes = frames * bytesPerSample
+
+        func le32(_ value: UInt32) -> Data { withUnsafeBytes(of: value.littleEndian) { Data($0) } }
+        func le16(_ value: UInt16) -> Data { withUnsafeBytes(of: value.littleEndian) { Data($0) } }
+
+        var wav = Data()
+        wav.append(Data("RIFF".utf8))
+        wav.append(le32(UInt32(36 + dataBytes)))
+        wav.append(Data("WAVE".utf8))
+        wav.append(Data("fmt ".utf8))
+        wav.append(le32(16))
+        wav.append(le16(1))                                   // PCM
+        wav.append(le16(1))                                   // mono
+        wav.append(le32(UInt32(sampleRate)))
+        wav.append(le32(UInt32(sampleRate * bytesPerSample)))  // byte rate
+        wav.append(le16(UInt16(bytesPerSample)))               // block align
+        wav.append(le16(16))                                   // bits per sample
+        wav.append(Data("data".utf8))
+        wav.append(le32(UInt32(dataBytes)))
+        let samples = [Int16](repeating: 1, count: frames)
+        samples.withUnsafeBufferPointer { wav.append(Data(buffer: $0)) }
+        return wav
     }
 
     /// Take the shared session for the microphone. Speech out and speech in
@@ -892,6 +1073,11 @@ public final class DroverSpeechModule: Module {
         if sessionBeforeDictation == nil {
             sessionBeforeDictation = (session.category, session.mode, session.categoryOptions)
         }
+        // The loop is playback, and the microphone is about to take the
+        // session to `.playAndRecord` at `.measurement`. Something for the
+        // recogniser to hear is the last thing it needs (DROVE-259);
+        // `releaseSession` starts it again if the hold is still on.
+        stopSilenceKeepalive()
         try activateRecording()
     }
 
@@ -910,12 +1096,29 @@ public final class DroverSpeechModule: Module {
                 try session.setCategory(previous.category, mode: previous.mode, options: previous.options)
                 try session.setActive(true, options: [])
                 synthesizer.continueSpeaking()
+                // The utterance carries on, but it ends, and the hold outlives
+                // it (DROVE-259). Starting here means the gap after it is
+                // covered rather than waiting on the next `stop`.
+                startSilenceKeepalive()
                 return
             } catch {
                 // Cutting it settles the utterance's promise (didCancel), so
                 // the reader moves on rather than waiting on a paused voice.
                 synthesizer.stopSpeaking(at: .immediate)
             }
+        }
+        // A HELD session belongs to background reading, not to the microphone
+        // that just finished with it (DROVE-259). `stop` and `holdSession`
+        // both check this and this did not, so a capture in the background
+        // ended by deactivating the session out from under the hold: the flip
+        // to `.playAndRecord` and back left NO active session at all, and a
+        // backgrounded app with no session is one iOS suspends. Going back to
+        // `.playback` is also what takes the microphone off a backgrounded app
+        // rather than leaving it wedged in `.playAndRecord`.
+        if sessionHeld {
+            try? activatePlayback()
+            startSilenceKeepalive()
+            return
         }
         deactivateSession()
     }
@@ -1079,6 +1282,10 @@ public final class DroverSpeechModule: Module {
         recognitionTaskId += 1
         let taskId = recognitionTaskId
         taskTranscript = ""
+        // A new task restarts Apple's segment clock, so the live utterance's
+        // offset is meaningless across the swap (DROVE-263).
+        liveUtteranceStart = -1
+        segmentClockSeen = false
         recognitionRequest = request
         tapTarget.set(request)
 
@@ -1089,7 +1296,10 @@ public final class DroverSpeechModule: Module {
             // that is already gone.
             guard self.recognitionTaskId == taskId, self.recognitionTask != nil else { return }
             if let result {
-                self.taskTranscript = result.bestTranscription.formattedString
+                // NOT a bare assignment (DROVE-263): one on-device task
+                // reports each utterance from empty, so the words before the
+                // pause are banked here rather than written over.
+                self.absorb(result.bestTranscription)
                 self.sendEvent("onDictationPartial", ["text": self.latestTranscript, "task": taskId])
             }
             let final = result?.isFinal ?? false
@@ -1134,6 +1344,7 @@ public final class DroverSpeechModule: Module {
         }
         bankedTranscript = latestTranscript
         taskTranscript = ""
+        liveUtteranceStart = -1
         // Let go of the finished task before making the next one, so
         // `isDictating` never sees two and the old callback stops here.
         recognitionTask = nil
