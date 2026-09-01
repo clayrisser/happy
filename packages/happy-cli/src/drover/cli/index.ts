@@ -49,6 +49,11 @@ export const droverVerbs: readonly DroverVerb[] = [
         summary: 'Every prompt still waiting for an answer, anywhere, including the ones no session owns.',
         load: () => import('./questions'),
     },
+    {
+        name: 'reclaim-sessions',
+        summary: 'What the one-store merge parked under superseded/, and what --apply would really free. Never a file the store lacks.',
+        load: () => import('./reclaim-sessions'),
+    },
 ];
 
 /** Is this a verb the node CLI carries? */
