@@ -12,6 +12,7 @@ import { MobileGlassBackdrop } from '@/components/MobileGlass';
 import { startDroverWatchFeed } from '@/sync/droverWatchFeed';
 import { startDroverAnnounce } from '@/sync/droverAnnounce';
 import { startDroverAutoAccept } from '@/sync/droverAutoAccept';
+import { startDroverReading } from '@/sync/droverReadingService';
 
 export const unstable_settings = {
     initialRouteName: 'index',
@@ -31,6 +32,12 @@ export default function RootLayout() {
     // It answers only plain Allow / Deny gates off the bus, it can never deny,
     // and every answer it sends is stamped `by auto-accept` on the ledger.
     React.useEffect(() => startDroverAutoAccept(), []);
+    // The TERMINAL steering this phone's voice (DROVE-298). Above the screen
+    // for the same reason auto-accept is: `drover read pause` is typed at a
+    // Mac about a session that is usually not the one on show, and a runtime
+    // that only ran while that session was visible would answer nothing most
+    // of the time. It never turns read-aloud ON — that switch is this phone's.
+    React.useEffect(() => startDroverReading(), []);
 
     // Every phone gets the app's own header (DROVE-161). It used to be
     // Android, Mac and web only, with iPhones left on UIKit's navigation bar,

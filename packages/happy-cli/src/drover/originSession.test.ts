@@ -87,3 +87,26 @@ describe('createOriginRegistry', () => {
         await expect(registry.happySessionIdFor(claudeId)).resolves.toBeNull()
     })
 })
+
+describe('the other direction (DROVE-298)', () => {
+    // `drover read` prints session names a human typed at `drover sessions`,
+    // and the phone answers in its own ids. Off the SAME rows as the forward
+    // join, deliberately: two caches over one fact drift, and a name from the
+    // wrong id space is worse than no name.
+    it('maps a happy session id back to its Claude session uuid', async () => {
+        const read = vi.fn(async () => rows)
+        const registry = createOriginRegistry(read)
+        expect(await registry.claudeSessionIdFor('happy-a')).toBe(claudeId)
+        expect(await registry.claudeSessionIdFor('happy-b')).toBe(otherClaudeId)
+    })
+
+    it('answers null for a row with no Claude session, and for one it has never seen', async () => {
+        // The bridge session itself is the first case: it is a mirror thread,
+        // not a conversation, so it has no harness session behind it.
+        const read = vi.fn(async () => rows)
+        const registry = createOriginRegistry(read)
+        expect(await registry.claudeSessionIdFor('happy-bridge')).toBeNull()
+        expect(await registry.claudeSessionIdFor('happy-zzz')).toBeNull()
+        expect(await registry.claudeSessionIdFor(null)).toBeNull()
+    })
+})
