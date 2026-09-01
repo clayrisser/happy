@@ -191,6 +191,8 @@ function harness(base = '') {
         get composer() { return composer; },
         get sends() { return sends; },
         get micState(): MicButtonState { return gesture.state; },
+        /** The touch clock right now, for stamping a lift by hand. */
+        get now(): number { return finger; },
         advance,
         /** Type into the field between gestures, as a thumb would. */
         type(text: string) { composer = text; },
@@ -207,6 +209,16 @@ function harness(base = '') {
         /** Finger up. */
         up() {
             stream.press.onPressOut({ nativeEvent: { timestamp: finger } } as never);
+        },
+        /**
+         * Finger up whose EVENT is processed now but whose STAMP is the
+         * touch's own, earlier time: a lift the main thread sat on before
+         * delivering (DROVE-293). RN stamps `nativeEvent.timestamp` when the
+         * touch happened, not when JS gets the callback, so the stamp
+         * survives however late the delivery is.
+         */
+        upStamped(stamp: number) {
+            stream.press.onPressOut({ nativeEvent: { timestamp: stamp } } as never);
         },
         /** A press-in whose touch clock the platform did not stamp (web). */
         downWithNoTouchClock() {
@@ -443,6 +455,105 @@ describe('a lift the platform never delivers cannot arm a send (DROVE-286)', () 
 
         expect(h.sends).toBe(0);
         expect(h.composer).toBe('');
+        expect(h.micState).toBe('idle');
+    });
+});
+
+describe('a lift delivered late is still a tap: the finger clock outranks the timer (DROVE-293)', () => {
+    /**
+     * THE STREAM 286'S HOIST ACTUALLY DELIVERS, one OTA later. Clay, an hour
+     * after DROVE-286 shipped: "hold and press to talk is working but when I
+     * tap it once to talk is not working correctly... it just doesn't
+     * activate."
+     *
+     * The tap cases above drive the pair PROMPTLY: the lift is processed
+     * milliseconds after the finger rose, and the reducer latches. The phone
+     * does not always deliver it that way. Press-in is the busiest moment
+     * the composer has -- it mounts the red glass disc, the banner and the
+     * waveform, and the recogniser's start flips the audio session's
+     * category -- and that work sits on the very main thread that must
+     * deliver touchesEnded. The finger rises at 80ms; the EVENT reaches JS
+     * after HOLD_MIN_MS, by which time the hold timer has confirmed a hold
+     * nobody is making.
+     *
+     * The late lift still carries the proof. RN stamps
+     * `nativeEvent.timestamp` with the touch's own time (BaseTouch.cpp puts
+     * UITouch's seconds into ms), so the stamp says 80ms however late the
+     * delivery. Today's reducer reads `confirmed ||` first and never looks:
+     * the tap takes the send arm, a zero-length push-to-talk -- opened,
+     * instantly closed, whatever was heard SENT. From outside, "it just
+     * doesn't activate".
+     *
+     * Before 286 this stream could not occur: the remount ate the lift
+     * entirely, which is the only reason tap-to-latch ever worked on device.
+     * 286 made lifts arrive, and the first thing a late one met was the
+     * timer's verdict. The DROVE-286 cases above stay: a lift can still be
+     * lost outright, and the recovery arm is theirs.
+     */
+    it('latches a single tap whose lift arrives after the hold timer fired', async () => {
+        const h = harness();
+        const pressed = h.now;
+        h.down();
+        await flush();
+        // Real time passes with the finger already up: the delivery is
+        // jammed behind press-in's own work, and the hold timer fires over
+        // a finger that rose at 80ms.
+        h.advance(HOLD_MIN_MS + 100);
+        h.upStamped(pressed + 80);
+        await flush();
+
+        expect(h.micState).toBe('latched');
+        expect(h.capture.current.active).toBe(true);
+        expect(h.capture.current.mode).toBe('latch');
+        // Still listening: the tap neither sent nor stopped the recogniser.
+        expect(h.engine.stops).toBe(0);
+        expect(h.sends).toBe(0);
+    });
+
+    it('the closing tap after a late-lift latch stops, words kept, unsent', async () => {
+        const h = harness();
+        const pressed = h.now;
+        h.down();
+        await flush();
+        h.advance(HOLD_MIN_MS + 100);
+        h.upStamped(pressed + 80);
+        await flush();
+
+        // He talks into what he rightly believes is a latched mic.
+        h.capture.partial('do not send this until I read it');
+        h.advance(2_000);
+        // The closing tap, delivered promptly: nothing jams the thread now.
+        h.down();
+        h.advance(tapFor);
+        h.up();
+        await flush();
+        h.engine.settle('do not send this until I read it');
+        await flush();
+
+        expect(h.sends).toBe(0);
+        expect(h.composer).toBe('do not send this until I read it');
+        expect(h.micState).toBe('idle');
+        expect(h.capture.current.active).toBe(false);
+    });
+
+    it('a hold whose lift is delivered late still sends: the stamp says hold', async () => {
+        // The do-not-regress half. A real hold's lift can be delivered late
+        // too, and its stamp then says the finger was down past HOLD_MIN_MS,
+        // which is what decides: the send survives on the same evidence that
+        // refuses the tap.
+        const h = harness();
+        const pressed = h.now;
+        h.down();
+        await flush();
+        h.capture.partial('send this one');
+        h.advance(HOLD_MIN_MS + 700);
+        h.upStamped(pressed + HOLD_MIN_MS + 600);
+        await flush();
+        h.engine.settle('send this one');
+        await flush();
+
+        expect(h.sends).toBe(1);
+        expect(h.composer).toBe('send this one');
         expect(h.micState).toBe('idle');
     });
 });
