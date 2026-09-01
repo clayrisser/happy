@@ -205,6 +205,13 @@ const RESET_GUARD_SHRINK = 2;
  *
  * It cannot fire on a module that banks internally, because there the text
  * never drops: the live text stays a prefix of what comes next.
+ *
+ * IT SAYS NOTHING ABOUT AN EMPTY SIDE, and that is not the same as saying an
+ * empty side is harmless. A new result sequence opens with an empty result,
+ * and there is no restart in it for this to find: `partial()` drops it before
+ * asking, exactly as Swift's `absorb()` does. Reading a false from here as
+ * permission to assign an empty over the live utterance is how the OTA half
+ * of this fix nearly shipped with the bug still in it.
  */
 export function utteranceRestarted(live: string, incoming: string): boolean {
     const shown = live.trim();
@@ -341,6 +348,19 @@ export class DictationCapture {
      */
     partial(text: string): void {
         if (!this.state.active) return;
+        // AN EMPTY RESULT NEVER TAKES WORDS BACK (DROVE-263). It is how a new
+        // result sequence opens on the on-device recogniser, and it is not a
+        // report that nothing was said: the words are still on screen and the
+        // recogniser is about to start describing the next sentence. Letting
+        // it through wipes the live utterance with nothing banked in its
+        // place, which is the whole bug wearing a different hat.
+        //
+        // The reset guard below cannot catch this one. An empty side is not a
+        // restart it can recognise, it is nothing at all, so `utteranceRestarted`
+        // reports false and the bare assignment underneath does the damage.
+        // The Swift `absorb()` guards the same case the same way, and the two
+        // halves of this fix have to agree or the OTA half is a lie.
+        if (text.trim().length === 0) return;
         // The one case where a partial does NOT simply replace the live
         // segment (DROVE-263). On a build whose native module does not bank
         // utterances itself, a pause makes the recogniser open a new result

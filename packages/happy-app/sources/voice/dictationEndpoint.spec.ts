@@ -21,10 +21,17 @@ import { dictationComposerEvents } from './dictationComposer';
  * shorter than the one before it. 070819ab handled the boundary Apple
  * announces and left the boundary Apple does not.
  *
+ * And FROM EMPTY means from empty. A new sequence opens with a result that
+ * carries no words at all, so an empty partial is the first thing that lands
+ * after the pause and the first thing that can take the sentence. An earlier
+ * version of this file said "from empty" in prose and never once passed `''`,
+ * which is 070819ab's own mistake in miniature: a test driving a stream the
+ * device does not send, green over a live bug.
+ *
  * So these tests never call `recogniserEnded`. They replay the partial stream
- * as the on-device recogniser actually produces it, and the assertion is the
- * invariant Clay stated: no incoming partial may shorten what he has already
- * said.
+ * as the on-device recogniser actually produces it, empties included, and the
+ * assertion is the invariant Clay stated: no incoming partial may shorten what
+ * he has already said.
  *
  * WHAT THIS CANNOT PROVE. It replays synthetic partials, and synthetic
  * partials are exactly what let the last fix ship broken. It is the floor, not
@@ -94,11 +101,68 @@ describe('a pause that Apple never announces', () => {
         expect(h.composer).toBe(first);
 
         // The pause. No ending, no task change: the recogniser simply starts
-        // reporting the next sentence from scratch.
+        // reporting the next sentence from scratch, and FROM EMPTY is what
+        // that literally means. The new sequence's first result carries no
+        // words at all, and it is the one that used to land on a bare
+        // assignment and take the sentence with it.
+        h.capture.partial('');
+        expect(h.composer).toBe(first);
+
         h.capture.partial('and then');
         expect(h.composer).toBe(`${first} and then`);
 
         h.capture.partial('and then I thought about it');
+        expect(h.composer).toBe(`${first} and then I thought about it`);
+    });
+
+    /**
+     * A sequence can open with more than one empty result, and a recogniser
+     * that hears nothing for a while sends nothing but empties. Neither is a
+     * report that the sentence was unsaid.
+     */
+    it('survives a run of empty results in the middle of a capture', async () => {
+        const h = harness();
+        h.hold();
+        await flush();
+
+        h.capture.partial(first);
+        h.capture.partial('');
+        h.capture.partial('   ');
+        h.capture.partial('');
+        expect(h.composer).toBe(first);
+
+        h.capture.partial('and then');
+        expect(h.composer).toBe(`${first} and then`);
+    });
+
+    /**
+     * The empty must not cost the words on the way OUT either. What the stop
+     * settles with is the live utterance alone, so the sentence before the
+     * pause has to have reached `banked` for it to survive the commit.
+     *
+     * Note the shape of the stream, because the guard depends on it: a
+     * recogniser reports a new sequence incrementally, so the first words
+     * after the empty are a FRAGMENT of the sentence to come. That fragment is
+     * what the reset guard reads. Handed the finished second sentence in one
+     * step it has nothing small to see, and the JS half cannot tell that from
+     * a revision, because it has no access to Apple's segment clock and only
+     * the words to go on. Swift's word branch has the same blind spot and its
+     * clock covers it. This is the floor the OTA half stands on.
+     */
+    it('an empty partial before the stop still commits both utterances', async () => {
+        const h = harness();
+        h.hold();
+        await flush();
+
+        h.capture.partial(first);
+        h.capture.partial('');
+        h.capture.partial('and then');
+        h.capture.partial('and then I thought about it');
+
+        h.capture.stop();
+        h.engine.settle('and then I thought about it');
+        await flush();
+
         expect(h.composer).toBe(`${first} and then I thought about it`);
     });
 
@@ -209,8 +273,22 @@ describe('utteranceRestarted', () => {
         expect(utteranceRestarted(first, 'and then')).toBe(true);
     });
 
-    it('never fires on an empty side', () => {
-        expect(utteranceRestarted('', 'and then')).toBe(false);
+    /**
+     * `utteranceRestarted` has nothing to say about an empty side, so this
+     * asks the thing that does. An earlier version of this file asserted the
+     * false and stopped there, which read as "an empty result is handled" when
+     * what actually happened next was a bare assignment wiping the sentence.
+     * The guard lives in `partial()`, mirroring Swift's `absorb()`, and the
+     * assertion belongs where the words are.
+     */
+    it('leaves the empty result to partial(), which drops it', async () => {
         expect(utteranceRestarted(first, '')).toBe(false);
+
+        const h = harness();
+        h.hold();
+        await flush();
+        h.capture.partial(first);
+        h.capture.partial('');
+        expect(h.composer).toBe(first);
     });
 });
