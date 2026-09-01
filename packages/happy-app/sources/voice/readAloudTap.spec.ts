@@ -21,6 +21,8 @@ interface Fake extends ReadAloudTapTarget {
     soughtSentences: [string, string][];
     /** Borrowed transcripts the reader was handed (DROVE-195). */
     detours: readonly ReadAloudDetourSentence[][];
+    /** createdAts the on-demand history ingest was asked for (DROVE-285). */
+    ensured: number[];
 }
 
 function target(over: Partial<ReadAloudTapTarget> & { hasSentence?: boolean } = {}): Fake {
@@ -28,12 +30,14 @@ function target(over: Partial<ReadAloudTapTarget> & { hasSentence?: boolean } = 
     const soughtSentences: [string, string][] = [];
     const detours: readonly ReadAloudDetourSentence[][] = [];
     const pauses: boolean[] = [];
+    const ensured: number[] = [];
     const { hasSentence = true, ...rest } = over;
     return {
         isEnabled: true,
         isPaused: false,
         focusedSessionId: 's1',
         setPaused(paused: boolean) { pauses.push(paused); },
+        ensureHistoryFrom(createdAt: number) { ensured.push(createdAt); },
         seekTo(createdAt: number) { sought.push(createdAt); },
         seekToSentence(messageId: string, sentence: string) {
             soughtSentences.push([messageId, sentence]);
@@ -47,6 +51,7 @@ function target(over: Partial<ReadAloudTapTarget> & { hasSentence?: boolean } = 
         soughtSentences,
         detours,
         pauses,
+        ensured,
         ...rest,
     };
 }
@@ -114,6 +119,64 @@ describe('double tap a SENTENCE to read from there (DROVE-163, DROVE-235)', () =
         expect(readSentenceFromHere(elsewhere, 's1', 'm1', 'Anything.', 42)).toBe(false);
         expect(elsewhere.soughtSentences).toEqual([]);
         expect(elsewhere.sought).toEqual([]);
+    });
+});
+
+/**
+ * A message from before the reader was on is not in the timeline to be found,
+ * so both session taps pull the transcript from the tap forward into it
+ * BEFORE they seek (DROVE-285). Pointing at it is the ask; the ingest arrives
+ * marked spoken, so on its own it says nothing.
+ */
+describe('a tap ingests the history it points at (DROVE-285)', () => {
+    it('asks for the ingest before the sentence lookup, with the tap\'s createdAt', () => {
+        const it1 = target();
+        expect(readSentenceFromHere(it1, 's1', 'm1', 'From the past.', 42)).toBe(true);
+        expect(it1.ensured).toEqual([42]);
+    });
+
+    it('finds a sentence the ingest just brought in, and never falls to the block', () => {
+        // Absent until the ingest runs: exactly the reported tap.
+        let ingested = false;
+        const it1 = target({
+            hasSentence: false,
+            ensureHistoryFrom(createdAt: number) {
+                it1.ensured.push(createdAt);
+                ingested = true;
+            },
+            seekToSentence(messageId: string, sentence: string) {
+                it1.soughtSentences.push([messageId, sentence]);
+                return ingested;
+            },
+        });
+        expect(readSentenceFromHere(it1, 's1', 'm1', 'From the past.', 42)).toBe(true);
+        expect(it1.ensured).toEqual([42]);
+        expect(it1.soughtSentences).toEqual([['m1', 'From the past.']]);
+        // The precise position stands; the block fallback must not overwrite it.
+        expect(it1.sought).toEqual([]);
+    });
+
+    it('the block tap ingests too, so its scan has the past to land in', () => {
+        const it1 = target();
+        expect(readFromHere(it1, 's1', 42)).toBe(true);
+        expect(it1.ensured).toEqual([42]);
+        expect(it1.sought).toEqual([42]);
+    });
+
+    it('a tap the guards refused ingests nothing, so scrolling panes stay free', () => {
+        const off = target({ isEnabled: false });
+        expect(readSentenceFromHere(off, 's1', 'm1', 'Anything.', 42)).toBe(false);
+        expect(off.ensured).toEqual([]);
+
+        const elsewhere = target({ focusedSessionId: 's2' });
+        expect(readFromHere(elsewhere, 's1', 42)).toBe(false);
+        expect(elsewhere.ensured).toEqual([]);
+    });
+
+    it('the subagent detour hands its sentences over and ingests nothing', () => {
+        const it1 = target();
+        expect(readDetourFromHere(it1, 's1', [{ messageId: 'a1', text: 'One.', createdAt: 7 }])).toBe(true);
+        expect(it1.ensured).toEqual([]);
     });
 });
 

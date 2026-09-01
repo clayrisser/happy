@@ -79,6 +79,10 @@ export const readAloud = new ReadAloudReader(
             if (isEmptyThinking(message.text)) return null;
             return extractThinkingText(message.text);
         },
+        // The transcript as the store holds it, for a double tap on a message
+        // from before the reader was on (DROVE-285). Read only inside the
+        // tap's `ensureHistoryFrom`, never on a scroll or a page arriving.
+        historyFor: (sessionId) => storage.getState().sessionMessages[sessionId]?.messages ?? [],
     },
 );
 
