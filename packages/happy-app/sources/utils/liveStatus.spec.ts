@@ -106,6 +106,9 @@ describe('summarizeLiveStatus', () => {
             kind: 'workflow',
             key: 'workflow:wf_1',
             title: 'drover-relaunch',
+            // The run id rides the row so a tap can open the wave screen
+            // (DROVE-290).
+            runId: 'wf_1',
             detail: 'Impl',
             progress: '3/5 agents',
             elapsed: '28m 15s',
@@ -651,7 +654,7 @@ describe('workflow agents (DROVE-268)', () => {
             .toEqual(['w1', 'w2', 'w3', 'v1', 'p1']);
     });
 
-    it('draws a run its agents indented under it, and never folds them away', () => {
+    it('draws a run its agents indented under it, folded behind a counted chevron', () => {
         const rows = summarizeLiveStatus(fanOut, now).rows;
         const kinds = rows.map((row) => `${row.kind}:${row.agentId ?? row.key}`);
         expect(kinds).toEqual([
@@ -664,10 +667,46 @@ describe('workflow agents (DROVE-268)', () => {
         // Indented under their run, and the pane's own left where it was.
         expect(rows.find((row) => row.agentId === 'w1')!.depth).toBe(1);
         expect(rows.find((row) => row.agentId === 'p1')!.depth).toBe(0);
-        // NOTHING is hidden with every fold shut. A workflow agent carries no
-        // parentId precisely so it cannot be: the complaint was that these
-        // were invisible, and a fold that defaults to closed reproduces it.
-        expect(visibleRows(rows, new Set())).toHaveLength(rows.length);
+    });
+
+    /**
+     * COLLAPSED IS THE DEFAULT, and the history is two rulings (DROVE-290).
+     *
+     * DROVE-268 made these rows unfoldable, because they used to be invisible
+     * and a silent fold reproduces that. Then Clay, at a run drawing six open
+     * rows: "Shouldn't you be able to collapse this?" The fold is no longer
+     * silent — the workflow row carries `childCount` and the chevron the
+     * agent parents already wear, and its summary line carries every count —
+     * so the sheet defaults to the one-line summary and opens on demand.
+     *
+     * Rendered both ways over this fixture before choosing: expanded is 7
+     * rows of which four say nothing the summary lines do not (three of them
+     * shared one truncated template label until DROVE-290's repair);
+     * collapsed is 3 rows — two workflow summaries and the pane's own agent —
+     * with `3` and `1` on the chevrons. The counts never fold: `sideCount`
+     * still says 5 either way.
+     */
+    it('folds a run behind its row by default, count on the chevron, counts unfolded', () => {
+        const summary = summarizeLiveStatus(fanOut, now);
+        const rows = summary.rows;
+        const wfA = rows.find((row) => row.key === 'workflow:wf_a')!;
+        expect(wfA.groupKey).toBe('workflow:wf_a');
+        expect(wfA.childCount).toBe(3);
+
+        const collapsed = visibleRows(rows, new Set());
+        expect(collapsed.map((row) => row.agentId ?? row.key)).toEqual([
+            'workflow:wf_a', 'workflow:wf_b', 'p1',
+        ]);
+
+        // One tap opens one run, not both.
+        const opened = visibleRows(rows, new Set(['workflow:wf_a']));
+        expect(opened.map((row) => row.agentId ?? row.key)).toEqual([
+            'workflow:wf_a', 'w1', 'w2', 'w3', 'workflow:wf_b', 'p1',
+        ]);
+
+        // Folding is a drawing decision and touches no number (DROVE-185's
+        // rule, restated for workflows).
+        expect(summary.sideCount).toBe(5);
     });
 
     it('says what a run has out and what it has settled, not just done/total', () => {

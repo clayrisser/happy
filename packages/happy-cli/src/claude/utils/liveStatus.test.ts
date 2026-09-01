@@ -8,6 +8,7 @@ import { createCompactionLatch } from './compaction'
 import {
     createLiveStatusReader,
     describeToolArg,
+    distinguishingLabels,
     LiveStatusPublisher,
     workflowNameFromScript,
     type LiveStatus,
@@ -1082,5 +1083,141 @@ describe('LiveStatusPublisher', () => {
             publisher.sync(null)
         }
         expect(seen).toHaveLength(2)
+    })
+})
+
+/**
+ * Six rows reading `You are executing ONE item of…` (DROVE-290).
+ *
+ * A wave's item prompts are one template with the item pasted in, so the
+ * shortened first line — the label fallback DROVE-268 added — is the SAME
+ * string for every sibling. The repair strips the set's common prefix and
+ * labels each row with the part of its own prompt that differs.
+ */
+describe('distinguishingLabels', () => {
+    it('labels each prompt with its first difference from the set', () => {
+        const template = (item: string) =>
+            `You are executing ONE item of a list the coordinator holds.\nItem: ${item}\nReport when done.`
+        expect(distinguishingLabels([
+            template('W2-vitest-react'),
+            template('W2-storybook'),
+            template('W2-tamagui'),
+        ])).toEqual(['Item: W2-vitest-react', 'Item: W2-storybook', 'Item: W2-tamagui'])
+    })
+
+    it('backs a near-line-start cut up so the whole line survives', () => {
+        expect(distinguishingLabels([
+            'Fix pkg: [alpha] then stop.',
+            'Fix pkg: [beta] then stop.',
+        ])).toEqual(['Fix pkg: [alpha] then stop.', 'Fix pkg: [beta] then stop.'])
+    })
+
+    it('yields undefined for prompts that never diverge', () => {
+        const same = 'Say ok and nothing else.'
+        expect(distinguishingLabels([same, same])).toEqual([undefined, undefined])
+    })
+
+    it('reaches a difference past the first line', () => {
+        const head = (item: string) => `Shared first line.\nShared second line.\nTarget: ${item}`
+        expect(distinguishingLabels([head('alpha'), head('beta')])).toEqual(['Target: alpha', 'Target: beta'])
+    })
+})
+
+describe('workflow sibling label repair (DROVE-290)', () => {
+    let root: string
+    let projectDir: string
+    const sessionId = 'sess-1'
+
+    beforeEach(() => {
+        root = mkdtempSync(join(tmpdir(), 'drove290-'))
+        projectDir = join(root, 'projects', '-x')
+        mkdirSync(join(projectDir, sessionId, 'subagents'), { recursive: true })
+        writeFileSync(join(projectDir, `${sessionId}.jsonl`), [promptRecord(Date.now() - 60_000, 'go'), ''].join('\n'))
+    })
+
+    afterEach(() => {
+        rmSync(root, { recursive: true, force: true })
+    })
+
+    const touch = (path: string, at: number) => {
+        const seconds = at / 1000
+        utimesSync(path, seconds, seconds)
+    }
+
+    const workflowAgent = (wf: string, id: string, at: number, prompt: string) => {
+        writeFileSync(join(wf, `agent-${id}.meta.json`), JSON.stringify({ agentType: 'workflow-subagent', spawnDepth: 1 }))
+        writeFileSync(join(wf, `agent-${id}.jsonl`), [
+            JSON.stringify({ type: 'user', isSidechain: true, timestamp: iso(at), uuid: `p-${id}`, message: { role: 'user', content: prompt } }),
+            '',
+        ].join('\n'))
+        touch(join(wf, `agent-${id}.jsonl`), at)
+    }
+
+    it('tells identical-template siblings apart by the item pasted into each prompt', () => {
+        const now = Date.now()
+        const wf = join(projectDir, sessionId, 'subagents', 'workflows', 'wf_labels-1')
+        mkdirSync(wf, { recursive: true })
+        const template = (item: string) =>
+            `You are executing ONE item of a list the coordinator holds. Work only that item.\nItem: ${item}\nStop when done.`
+        writeFileSync(join(wf, 'journal.jsonl'), [
+            JSON.stringify({ type: 'started', key: 'k1', agentId: 'wa' }),
+            JSON.stringify({ type: 'started', key: 'k2', agentId: 'wb' }),
+            JSON.stringify({ type: 'started', key: 'k3', agentId: 'wc' }),
+            '',
+        ].join('\n'))
+        workflowAgent(wf, 'wa', now - 30_000, template('W2-vitest-react'))
+        workflowAgent(wf, 'wb', now - 25_000, template('W2-storybook'))
+        workflowAgent(wf, 'wc', now - 20_000, template('W2-tamagui'))
+        touch(join(wf, 'journal.jsonl'), now - 20_000)
+
+        const status = createLiveStatusReader({ projectDir, sessionId }).read(now)
+        const labels = (status!.agents ?? []).map((agent) => agent.label).sort()
+        expect(labels).toEqual(['Item: W2-storybook', 'Item: W2-tamagui', 'Item: W2-vitest-react'])
+    })
+
+    it('numbers truly identical prompts instead of drawing equal rows', () => {
+        const now = Date.now()
+        const wf = join(projectDir, sessionId, 'subagents', 'workflows', 'wf_labels-2')
+        mkdirSync(wf, { recursive: true })
+        writeFileSync(join(wf, 'journal.jsonl'), [
+            JSON.stringify({ type: 'started', key: 'k1', agentId: 'ia' }),
+            JSON.stringify({ type: 'started', key: 'k2', agentId: 'ib' }),
+            '',
+        ].join('\n'))
+        workflowAgent(wf, 'ia', now - 30_000, 'Say ok and nothing else.')
+        workflowAgent(wf, 'ib', now - 25_000, 'Say ok and nothing else.')
+        touch(join(wf, 'journal.jsonl'), now - 20_000)
+
+        const status = createLiveStatusReader({ projectDir, sessionId }).read(now)
+        const labels = (status!.agents ?? []).map((agent) => agent.label).sort()
+        expect(labels).toEqual(['Say ok and nothing else. #1', 'Say ok and nothing else. #2'])
+        expect(new Set(labels).size).toBe(2)
+    })
+
+    it('keeps a repaired label once a sibling finishes and the group shrinks', () => {
+        const now = Date.now()
+        const wf = join(projectDir, sessionId, 'subagents', 'workflows', 'wf_labels-3')
+        mkdirSync(wf, { recursive: true })
+        const template = (item: string) => `Do the wave item.\nItem: ${item}\n`
+        writeFileSync(join(wf, 'journal.jsonl'), [
+            JSON.stringify({ type: 'started', key: 'k1', agentId: 'sa' }),
+            JSON.stringify({ type: 'started', key: 'k2', agentId: 'sb' }),
+            '',
+        ].join('\n'))
+        workflowAgent(wf, 'sa', now - 30_000, template('alpha'))
+        workflowAgent(wf, 'sb', now - 25_000, template('beta'))
+        touch(join(wf, 'journal.jsonl'), now - 20_000)
+
+        const reader = createLiveStatusReader({ projectDir, sessionId })
+        const first = reader.read(now)
+        expect((first!.agents ?? []).map((agent) => agent.label).sort()).toEqual(['Item: alpha', 'Item: beta'])
+
+        // sb goes stale: 90s with no write drops it from the live set. sa's
+        // label must not snap back to the shared template prefix.
+        const later = now + 120_000
+        workflowAgent(wf, 'sa', later - 1_000, template('alpha'))
+        const second = reader.read(later)
+        const labels = (second!.agents ?? []).map((agent) => agent.label)
+        expect(labels).toEqual(['Item: alpha'])
     })
 })

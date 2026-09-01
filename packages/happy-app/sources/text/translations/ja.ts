@@ -1119,6 +1119,23 @@ export const ja: TranslationStructure = {
         retrying: '再試行中…',
     },
 
+    workflowWaves: {
+        title: 'ウェーブ',
+        loading: 'ウェーブを読み込み中…',
+        unavailable: 'この実行のデータはまだディスクにありません。',
+        unattributed: 'ウェーブ待ち',
+        unattributedFootnote: '各エージェントのウェーブを記す記録は実行の終了または停止時に書かれます。それまでエージェントはここで数えられ、フェーズを推測されることはありません。',
+        current: '現在',
+        notStarted: '未開始',
+        running: '実行中',
+        queued: '待機中',
+        done: '完了',
+        failed: '失敗',
+        quiet: '静か',
+        agentsElided: ({ count }: { count: number }) => `他 ${count} 件は非表示`,
+    },
+
+
     codex: {
         // Codex permission dialog buttons
         permissions: {

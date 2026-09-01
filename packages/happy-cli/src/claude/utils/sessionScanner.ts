@@ -9,6 +9,8 @@ import { getProjectPath } from "./path";
 import type { CompactionLatch } from "./compaction";
 import { createLiveStatusReader, LiveStatusPublisher, type LiveStatus } from "./liveStatus";
 import { createSubagentTranscriptReader, type SubagentTranscriptRequest, type SubagentTranscriptResponse } from "./subagentTranscript";
+import { createWorkflowDetailReader } from "./workflowDetail";
+import type { WorkflowDetailRequest, WorkflowDetailResponse } from "@slopus/happy-wire";
 import { parseAgentNotifications, type AgentNotification } from "./agentNotification";
 
 /**
@@ -526,11 +528,20 @@ export async function createSessionScanner(opts: {
         getSessionId: () => currentSessionId,
     });
 
+    // DROVE-290: a workflow run's wave view on demand, same ownership rule.
+    const workflowDetails = createWorkflowDetailReader({
+        getProjectDir: () => projectDir,
+        getSessionId: () => currentSessionId,
+    });
+
     // Public interface
     return {
         /** The agent's transcript rows appended since `since`. See subagentTranscript.ts. */
         readSubagentTranscript: (request: SubagentTranscriptRequest): SubagentTranscriptResponse =>
             subagentTranscripts.read(request),
+        /** One workflow run folded into waves. See workflowDetail.ts (DROVE-290). */
+        readWorkflowDetail: (request: WorkflowDetailRequest): WorkflowDetailResponse =>
+            workflowDetails.read(request),
         cleanup: async () => {
             clearInterval(intervalId);
             if (liveStatusTimer) {

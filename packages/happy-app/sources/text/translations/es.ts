@@ -1118,6 +1118,23 @@ export const es: TranslationStructure = {
         retrying: 'Reintentando…',
     },
 
+    workflowWaves: {
+        title: 'Oleadas',
+        loading: 'Cargando oleadas…',
+        unavailable: 'Aún no hay nada en disco para esta ejecución.',
+        unattributed: 'A la espera de oleada',
+        unattributedFootnote: 'El registro que asigna cada agente a su oleada se escribe al terminar o detener la ejecución; hasta entonces los agentes se cuentan aquí, nunca se adivinan.',
+        current: 'actual',
+        notStarted: 'sin empezar',
+        running: 'en curso',
+        queued: 'en cola',
+        done: 'hecho',
+        failed: 'fallido',
+        quiet: 'sin actividad',
+        agentsElided: ({ count }: { count: number }) => `${count} más sin mostrar`,
+    },
+
+
     codex: {
         // Codex permission dialog buttons
         permissions: {

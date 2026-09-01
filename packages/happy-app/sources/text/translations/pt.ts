@@ -1117,6 +1117,23 @@ export const pt: TranslationStructure = {
         retrying: 'Tentando de novo…',
     },
 
+    workflowWaves: {
+        title: 'Ondas',
+        loading: 'Carregando ondas…',
+        unavailable: 'Ainda não há nada em disco para esta execução.',
+        unattributed: 'Aguardando onda',
+        unattributedFootnote: 'O registro que atribui cada agente à sua onda é escrito quando a execução termina ou é interrompida; até lá os agentes são contados aqui, nunca adivinhados.',
+        current: 'atual',
+        notStarted: 'não iniciada',
+        running: 'em andamento',
+        queued: 'na fila',
+        done: 'concluído',
+        failed: 'falhou',
+        quiet: 'quieto',
+        agentsElided: ({ count }: { count: number }) => `${count} a mais não exibidos`,
+    },
+
+
     codex: {
         // Codex permission dialog buttons
         permissions: {

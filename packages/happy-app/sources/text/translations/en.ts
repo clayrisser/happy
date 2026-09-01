@@ -1134,6 +1134,23 @@ export const en: TranslationStructure = {
         retrying: 'Still trying…',
     },
 
+    workflowWaves: {
+        title: 'Waves',
+        loading: 'Loading waves…',
+        unavailable: 'Nothing on disk yet for this workflow run.',
+        unattributed: 'Awaiting wave',
+        unattributedFootnote: 'The record naming each agent\'s wave is written when the run ends or is killed; until then agents are counted here, never guessed into a phase.',
+        current: 'current',
+        notStarted: 'not started',
+        running: 'running',
+        queued: 'queued',
+        done: 'done',
+        failed: 'failed',
+        quiet: 'quiet',
+        agentsElided: ({ count }: { count: number }) => `${count} more not shown`,
+    },
+
+
     codex: {
         // Codex permission dialog buttons
         permissions: {

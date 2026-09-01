@@ -6,3 +6,4 @@ export * from './voice';
 export * from './rigMetadata';
 export * from './statusDot';
 export * from './mcp';
+export * from './workflowDetail';

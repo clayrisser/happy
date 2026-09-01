@@ -590,6 +590,74 @@ export function promptLabel(record: Record<string, unknown>): string | undefined
 }
 
 /**
+ * Enough of a prompt to tell siblings apart (DROVE-290). A wave's item
+ * prompts are one template with the item pasted in, and the paste can sit
+ * DEEP: the real mpo-component-waves template runs 4.9 KB and writes
+ * `YOUR ITEM ID: W2-password` at character 4801, measured across its 60
+ * agents' transcripts. 8 KB reaches that with room, without pinning a
+ * transcript's worth of prompt per agent for the life of the run.
+ */
+const promptHeadChars = 8192
+
+/** The prompt's raw head, kept only for label disambiguation. */
+export function promptHead(record: Record<string, unknown>): string | undefined {
+    if (record.type !== 'user') return undefined
+    const message = record.message
+    if (!message || typeof message !== 'object') return undefined
+    const content = (message as Record<string, unknown>).content
+    if (typeof content !== 'string' || content.trim().length === 0) return undefined
+    return content.slice(0, promptHeadChars)
+}
+
+/**
+ * The DISTINGUISHING part of each prompt in a set that opens identically
+ * (DROVE-290).
+ *
+ * Clay's screenshot: six agent rows, every one reading `You are executing ONE
+ * item of…` — the shared template prefix, zero information per row. The rows
+ * differ where the template pastes the item in, so the label worth drawing
+ * starts at the end of the common prefix: strip the longest common prefix of
+ * the set, then take the first non-empty run of text from where each prompt
+ * diverges. `undefined` where a prompt does not diverge inside its head —
+ * identical prompts, or a template whose variance sits past the stored head —
+ * and the caller falls back to numbering rather than six equal strings.
+ */
+export function distinguishingLabels(heads: string[]): (string | undefined)[] {
+    if (heads.length < 2) return heads.map(() => undefined)
+    let lcp = heads[0].length
+    for (let i = 1; i < heads.length; i++) {
+        const other = heads[i]
+        const max = Math.min(lcp, other.length)
+        let j = 0
+        while (j < max && other.charCodeAt(j) === heads[0].charCodeAt(j)) j += 1
+        lcp = j
+    }
+    return heads.map((head) => {
+        // A head the common prefix swallows whole never diverged: identical
+        // prompts, or one that is a prefix of a sibling. Nothing here is a
+        // distinguishing part, and resurrecting shared text via the line
+        // snap below would dress the collision up as a repair.
+        if (lcp >= head.length) return undefined
+        // Back the cut up to the start of its line when the line is nearly
+        // new, so `YOUR ITEM ID: W2-radius-otp` survives whole instead of
+        // arriving as `-radius-otp` with its head eaten by the common prefix.
+        // Bounded, because backing into a long template sentence would put
+        // the same sixty characters on every row again — the exact failure
+        // this function exists to end.
+        const lineStart = head.lastIndexOf('\n', Math.max(lcp - 1, 0)) + 1
+        const start = lcp - lineStart <= 24 ? lineStart : lcp
+        const rest = head.slice(start)
+        for (const line of rest.split('\n')) {
+            // A mid-line cut can land on the template's separators; a cut
+            // snapped to its line start is already clean.
+            const trimmed = (start === lcp ? line.replace(/^[\s\p{P}\p{S}]+/u, '') : line).trim()
+            if (trimmed.length > 0) return trimmed
+        }
+        return undefined
+    })
+}
+
+/**
  * The phase titles a workflow script declares, in order (DROVE-268).
  *
  * The scripts on this machine all open with
@@ -665,6 +733,18 @@ interface AgentState {
      * previews, and it is record one of a file this already reads to the end.
      */
     prompt?: string
+    /**
+     * The prompt's raw head, kept only while the label came from the prompt,
+     * so siblings sharing a template can be told apart (DROVE-290).
+     */
+    promptHead?: string
+    /**
+     * The label after collision repair, computed once and then held
+     * (DROVE-290). Held, because the group it was computed against changes as
+     * siblings finish, and a row whose name drifts tick to tick is worse than
+     * one whose name is merely short.
+     */
+    distinctLabel?: string
     /** mtime of the last stat, so a file nothing writes drops out. */
     mtimeMs: number
 }
@@ -990,7 +1070,10 @@ export function createLiveStatusReader(opts: {
                         // that record is ever parsed, and only when meta.json
                         // gave nothing — a Task with a description keeps it and
                         // the pane's own agents read exactly as they did.
-                        if (!state.label) state.prompt = promptLabel(record)
+                        if (!state.label) {
+                            state.prompt = promptLabel(record)
+                            state.promptHead = promptHead(record)
+                        }
                     }
                     // One addition, three buckets (DROVE-184). The card's
                     // cumulative count and the two tallies are made of the
@@ -1010,13 +1093,45 @@ export function createLiveStatusReader(opts: {
                 // have a description and read exactly as they did; a
                 // workflow's have none, and this is what stops five of them
                 // sharing one string.
-                label: state.label ?? state.prompt ?? state.agentType ?? id,
+                label: state.distinctLabel ?? state.label ?? state.prompt ?? state.agentType ?? id,
                 startedAt: state.startedAt || mtimeMs,
                 ...(state.tokens > 0 ? { tokens: state.tokens } : {}),
                 ...(state.toolId ? { toolId: state.toolId } : {}),
                 ...(state.parentId ? { parentId: state.parentId } : {}),
                 ...(scope.runId ? { runId: scope.runId } : {}),
             })
+        }
+        // Six rows reading `You are executing ONE item of…` are six prompts
+        // cut at their common template prefix (DROVE-290). Repair collisions
+        // among the PROMPT-LABELLED rows of this one directory — a run's
+        // agents, or the pane's own — with the part of each prompt that
+        // differs. Description-labelled rows are never touched.
+        const colliding = new Map<string, number[]>()
+        for (let i = 0; i < out.length; i++) {
+            const state = agents.get(join(dir, `agent-${out[i].id}.jsonl`))
+            if (!state || state.label || !state.promptHead || !state.prompt) continue
+            // Grouped by the ORIGINAL prompt label, not the repaired one, so
+            // an agent that was already repaired still anchors its group and a
+            // newcomer with the same template joins it.
+            const rows = colliding.get(state.prompt)
+            if (rows) rows.push(i)
+            else colliding.set(state.prompt, [i])
+        }
+        for (const rows of colliding.values()) {
+            if (rows.length < 2) continue
+            const states = rows.map((i) => agents.get(join(dir, `agent-${out[i].id}.jsonl`))!)
+            const parts = distinguishingLabels(states.map((state) => state.promptHead!))
+            for (let k = 0; k < rows.length; k++) {
+                const state = states[k]
+                if (!state.distinctLabel) {
+                    // Computed once and held — see the field. The fallback
+                    // numbers identical prompts instead of leaving them equal.
+                    state.distinctLabel = parts[k] !== undefined
+                        ? shorten(parts[k]!)
+                        : shorten(`${out[rows[k]].label} #${k + 1}`)
+                }
+                out[rows[k]] = { ...out[rows[k]], label: state.distinctLabel }
+            }
         }
         return out
     }

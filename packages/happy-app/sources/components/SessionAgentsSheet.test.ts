@@ -169,8 +169,8 @@ const nestedSummary = {
     main: null,
     sideCount: 3,
     rows: [
-        { key: 'a', kind: 'agent', title: 'Top', elapsed: '5m', agentId: 'agent-1', depth: 0, childCount: 1 },
-        { key: 'b', kind: 'agent', title: 'Child', elapsed: '3m', agentId: 'agent-2', depth: 1, parentId: 'agent-1', childCount: 1 },
+        { key: 'a', kind: 'agent', title: 'Top', elapsed: '5m', agentId: 'agent-1', depth: 0, childCount: 1, groupKey: 'agent-1' },
+        { key: 'b', kind: 'agent', title: 'Child', elapsed: '3m', agentId: 'agent-2', depth: 1, parentId: 'agent-1', childCount: 1, groupKey: 'agent-2' },
         { key: 'c', kind: 'agent', title: 'Grandchild', elapsed: '1m', agentId: 'agent-3', depth: 2, parentId: 'agent-2' },
     ],
 } as unknown as LiveStatusSummary;
