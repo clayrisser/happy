@@ -237,6 +237,7 @@ export default function PluginsScreen() {
                     const report = state?.result?.ok ? state.result.report : null;
                     const catState = catalog[machine.id];
                     const catReport = catState?.result?.ok ? catState.result.report : null;
+                    const machineBusy = !!busy && busy.startsWith(`${machine.id}:`);
                     const rows: React.ReactNode[] = [];
 
                     if (!report) {
@@ -310,8 +311,17 @@ export default function PluginsScreen() {
                             <Item
                                 title="Install from a source"
                                 subtitle="A path on that computer, a git remote, or a pinned bundle"
-                                icon={<Ionicons name="add-circle-outline" size={29} color={blue} />}
-                                onPress={() => void installFromSource(machine.id)}
+                                icon={<Ionicons
+                                    name="add-circle-outline"
+                                    size={29}
+                                    color={machineBusy ? grey : blue}
+                                />}
+                                /* Inert while any op on THIS machine is in
+                                   flight. It has no row of its own to grey out,
+                                   so without this a second tap starts a second
+                                   install of the same thing. */
+                                onPress={machineBusy ? undefined : () => void installFromSource(machine.id)}
+                                disabled={machineBusy}
                                 showChevron={false}
                             />
                             <Item
