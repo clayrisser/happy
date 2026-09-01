@@ -68,8 +68,15 @@ describe('a double press hands the voice to the next reading-enabled session', (
     let sessions: string[];
     let press: (command: RemoteCommand) => void;
     let stop: () => void;
+    let cued: string[];
+    let named: string[];
+    /** Every side effect of one press, in the order it happened. */
+    let order: string[];
 
     beforeEach(() => {
+        cued = [];
+        named = [];
+        order = [];
         engine = new FakeEngine();
         reader = new ReadAloudReader(engine);
         // The master default, which DROVE-297 makes a default rather than a
@@ -84,7 +91,18 @@ describe('a double press hands the voice to the next reading-enabled session', (
             // asked of the real reader.
             cycle: () => sessions.filter((id) => reader.isSessionEnabled(id)),
             current: () => reader.readingSessionId,
-            take: (sessionId) => reader.takeVoice(sessionId),
+            take: (sessionId) => {
+                order.push(`take:${sessionId}`);
+                reader.takeVoice(sessionId);
+            },
+            ack: (id) => {
+                cued.push(id);
+                order.push(`cue:${id}`);
+            },
+            announce: (sessionId) => {
+                named.push(sessionId);
+                order.push(`named:${sessionId}`);
+            },
             subscribe: (fn) => {
                 listener = fn;
                 return { remove: () => { listener = null; } };
@@ -243,5 +261,66 @@ describe('a double press hands the voice to the next reading-enabled session', (
         press('next');
         await settle();
         expect(reader.readingSessionId).toBe('s1');
+    });
+
+    it('answers the press out loud, and names the session before it speaks', async () => {
+        // The gap is the point. He presses in the street, s2 is waiting on a
+        // reply and says nothing for a minute: without a cue the press is
+        // indistinguishable from a dead button, and without a name the lock
+        // screen still says s1 the whole time.
+        press('next');
+        await settle();
+        expect(cued).toEqual(['sessionSkipped']);
+        expect(named).toEqual(['s2']);
+        expect(reader.readingSessionId).toBe('s2');
+    });
+
+    it('names the session BEFORE the take, so a sentence can overwrite it', async () => {
+        // Ordering, and it is the reason `announce` is a line above `take`
+        // rather than below it. The take can start s2's first sentence
+        // synchronously and the synthesiser titles the card with what it is
+        // saying; naming the session after that would replace a true title
+        // with a weaker one. The cue leads both, so it plays into the gap the
+        // take opens rather than over the sentence it starts.
+        order.length = 0;
+        press('next');
+        await settle();
+        expect(order).toEqual(['cue:sessionSkipped', 'named:s2', 'take:s2']);
+
+        // And the sentence that overwrites the name really does come after
+        // it, which is what makes the ordering matter rather than being a
+        // preference. Fed AFTER the press because a session with no held
+        // reading is not listening until it has the voice.
+        reader.onMessages('s2', [prose('m2', 'Alpha.', 20)]);
+        await settle();
+        expect(engine.spoken).toEqual(['Alpha.']);
+    });
+
+    it('refuses out loud when only one session is armed', async () => {
+        // The ticket's own words: "a double press is a no-op rather than a
+        // stop — say so if that reads badly in practice". Silent was the way
+        // it read badly, so the no-op now says so.
+        reader.setSessionEnabled('s2', false);
+        await settle();
+        cued.length = 0;
+        named.length = 0;
+        press('next');
+        await settle();
+        expect(cued).toEqual(['skipRefused']);
+        expect(named).toEqual([]);
+        expect(reader.readingSessionId).toBe('s1');
+    });
+
+    it('refuses out loud with reading switched off everywhere', async () => {
+        // DROVE-189's rule is structural now — an empty cycle — and it must
+        // still make a sound, or a phone with reading off everywhere has a
+        // headphone button that is silently dead.
+        reader.setSessionEnabled('s1', false);
+        reader.setSessionEnabled('s2', false);
+        await settle();
+        cued.length = 0;
+        press('next');
+        await settle();
+        expect(cued).toEqual(['skipRefused']);
     });
 });

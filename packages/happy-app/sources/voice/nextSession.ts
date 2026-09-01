@@ -1,3 +1,4 @@
+import type { AudioCueId } from './audioCues';
 import { headphoneAction, type RemoteCommand } from './headphonePress';
 
 /**
@@ -87,12 +88,14 @@ export type NextSessionRefusal =
      * that he cannot resume with the same gesture. Going nowhere is the
      * honest answer to "next" when there is no next.
      *
-     * It is SILENT, and that is the one thing here worth arguing about later:
-     * headphonePress.ts's own doctrine is that eyes-free means a press with no
-     * sound is indistinguishable from a press that did nothing, which is why
-     * the mic has three cues. This refusal deserves one too. It is left
-     * unspent rather than guessed at, and the shape above is what makes it a
-     * one-line addition at the call site rather than a change in here.
+     * IT IS NOT SILENT. It used to be, and that was the one thing the first
+     * pass left open: headphonePress.ts's own doctrine is that eyes-free means
+     * a press with no sound is indistinguishable from a press that did
+     * nothing, which is why the mic spends three cues on it. Both refusals now
+     * play `skipRefused`, and the reason this type carries a `why` at all is
+     * that the two are genuinely different things a caller may want to say
+     * differently later. They sound the same today because from his ear they
+     * ARE the same fact: the press landed and there was nowhere to go.
      */
     | 'alone';
 
@@ -141,6 +144,28 @@ export interface NextSessionDeps {
      * stop, not a jump ahead, and not a claim that he navigated anywhere.
      */
     take(sessionId: string): void;
+    /**
+     * Play one cue now, past the mixer. `audioCues.ack`, the same door the mic
+     * press uses and for the same reason: the mixer's rules are right for news
+     * about the agent and wrong for an answer to something he just did.
+     */
+    ack(id: AudioCueId): void;
+    /**
+     * This session has the voice now: say so on the surfaces that name it.
+     *
+     * Today that is the Now Playing card, whose title is otherwise the
+     * SENTENCE at the synthesiser — right while a session is talking and
+     * stale the moment the voice moves. The session it lands on may be
+     * waiting on a reply, so the stale title is not a flicker: it is the lock
+     * screen and the CarPlay head unit naming a conversation he skipped away
+     * from, for as long as the new one stays quiet.
+     *
+     * A dep rather than a call, because WHICH surfaces name a session is not
+     * this file's business and the answer is about to grow: the wrist already
+     * carries the reading's sessionId (DROVE-275) and gets it from the reader
+     * on its own.
+     */
+    announce(sessionId: string): void;
     /** The native press stream. `addRemoteCommandListener`. */
     subscribe(listener: (command: RemoteCommand) => void): { remove(): void };
 }
@@ -159,13 +184,43 @@ export interface NextSessionDeps {
  * so there is no second owner to arbitrate with. When it does, it passes
  * `menu` while the menu is being read and this subscription goes quiet on its
  * own, because the table says `menu-next` and not `next-session`.
+ *
+ * EVERY PRESS MAKES A SOUND, and that is the half this function adds over the
+ * decision above it. A skip is the one gesture whose correct result can be
+ * silence: the session it lands on may be waiting on a reply and have nothing
+ * to say for a minute, and a refusal says nothing by definition. So the cue
+ * is the answer, not the speech that may or may not follow it.
+ *
+ * THE CUE LEADS THE TAKE rather than following it, so it plays into the gap
+ * the take opens — `focus` cuts the outgoing utterance on its way past — and
+ * not over the incoming session's first sentence. That is `reply`'s rule
+ * ("played before its first sentence, never over it") applied to a press.
+ *
+ * IT DOES NOT WAIT FOR THE CUE TO FINISH, which is where this differs from
+ * the mic. `micOpen` has to finish first or the beep is IN the recording;
+ * nothing here is being recorded, so a delay would buy a tidier overlap at
+ * the price of a timer on the pocket path and, worse, of the ring step: two
+ * quick presses would both read the same `current()` and take the same
+ * session twice. The press stays synchronous and the ring walks one at a
+ * time.
  */
 export function startNextSessionPress(deps: NextSessionDeps): () => void {
     const remote = deps.subscribe((command) => {
         if (headphoneAction(command, 'transport') !== 'next-session') return;
         try {
             const move = nextSessionMove(deps.cycle(), deps.current());
-            if (move.kind !== 'move') return;
+            if (move.kind !== 'move') {
+                deps.ack('skipRefused');
+                return;
+            }
+            deps.ack('sessionSkipped');
+            // BEFORE the take, and that order is the whole of it. The take can
+            // start the incoming session's first sentence synchronously, and
+            // the synthesiser titles the card with what it is saying; naming
+            // the session after that would overwrite a true title with a
+            // weaker one. Named first, the sentence wins the moment there is
+            // one and the name holds the surface until then.
+            deps.announce(move.to);
             deps.take(move.to);
         } catch {
             // A dead skip button is better than a dead reader. Same rule
