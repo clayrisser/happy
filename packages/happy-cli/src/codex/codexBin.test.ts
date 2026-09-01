@@ -10,7 +10,18 @@ import { tmpdir } from 'node:os';
 import { mkdtempSync } from 'node:fs';
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { findCodexBin, resolveCodexBin, CODEX_BIN } from './codexBin';
+import { findCodexBin as findCodexBinRaw, resolveCodexBin as resolveCodexBinRaw, CODEX_BIN } from './codexBin';
+
+/**
+ * NO SYSTEM DIRS. `brew install --cask codex` puts a real binary in
+ * /opt/homebrew/bin, and once it is there every "not installed" case below
+ * finds it and passes while asserting the opposite. The npm-beside-node and
+ * ~/.local/bin fallbacks are still exercised; they are derived from the env,
+ * which IS passed in (DROVE-295).
+ */
+const NO_SYSTEM: readonly string[] = [];
+const findCodexBin = (env: NodeJS.ProcessEnv, execPath?: string) => findCodexBinRaw(env, execPath, NO_SYSTEM);
+const resolveCodexBin = (env: NodeJS.ProcessEnv, execPath?: string) => resolveCodexBinRaw(env, execPath, NO_SYSTEM);
 
 let root: string;
 

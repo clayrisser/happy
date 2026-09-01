@@ -5,6 +5,7 @@ import { join } from 'path';
 import { findAgyBin } from '@/agy/constants';
 import { findCursorBin } from '@/cursor/cursorBin';
 import { findCodexBin } from '@/codex/codexBin';
+import { findPiBin } from '@/pi/piBin';
 
 export interface CLIAvailability {
   claude: boolean;
@@ -14,6 +15,8 @@ export interface CLIAvailability {
   agy: boolean;
   /** cursor-agent, which also installs itself as `agent` and `cursor`. */
   cursor: boolean;
+  /** pi — the LOCAL-model harness (DROVE-295). */
+  pi: boolean;
   detectedAt: number;
 }
 
@@ -52,6 +55,11 @@ function detectPosix(): CLIAvailability {
   // is not on the daemon's PATH, so a bare probe reports "not installed" on a
   // machine that runs Cursor every day.
   const cursor = findCursorBin() !== undefined;
+  // NOT commandExists, and pi is the sharpest case of it: `npm install -g
+  // @earendil-works/pi-coding-agent` lands a symlink in /opt/homebrew/bin,
+  // which no launchd daemon has on its PATH. A bare probe reports the
+  // local-model harness as uninstalled on the machine it was written for.
+  const pi = findPiBin() !== undefined;
 
   // OpenClaw: check command, config file, or env var
   const openclawCommand = commandExists('openclaw');
@@ -59,7 +67,7 @@ function detectPosix(): CLIAvailability {
   const openclawEnv = !!process.env.OPENCLAW_GATEWAY_URL;
   const openclaw = openclawCommand || openclawConfig || openclawEnv;
 
-  return { claude, codex, gemini, openclaw, agy, cursor, detectedAt: Date.now() };
+  return { claude, codex, gemini, openclaw, agy, cursor, pi, detectedAt: Date.now() };
 }
 
 function detectWindows(): CLIAvailability {
@@ -77,6 +85,8 @@ function detectWindows(): CLIAvailability {
   const gemini = checkCommand('gemini');
   const agy = findAgyBin() !== undefined;
   const cursor = findCursorBin() !== undefined;
+  // Same resolver as POSIX, which already knows the Windows wrapper names.
+  const pi = findPiBin() !== undefined;
 
   // OpenClaw: check command, config file, or env var
   const openclawCommand = checkCommand('openclaw');
@@ -84,5 +94,5 @@ function detectWindows(): CLIAvailability {
   const openclawEnv = !!process.env.OPENCLAW_GATEWAY_URL;
   const openclaw = openclawCommand || openclawConfig || openclawEnv;
 
-  return { claude, codex, gemini, openclaw, agy, cursor, detectedAt: Date.now() };
+  return { claude, codex, gemini, openclaw, agy, cursor, pi, detectedAt: Date.now() };
 }

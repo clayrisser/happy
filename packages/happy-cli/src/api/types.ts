@@ -155,6 +155,9 @@ export const MachineMetadataSchema = z.object({
     // Optional for the same reason as agy: a daemon predating DROVE-57 does
     // not report it, and the app must read that as "unknown", not "absent".
     cursor: z.boolean().optional(),
+    // And again for pi (DROVE-295). A daemon predating it reports nothing here,
+    // which is "unknown" rather than "not installed".
+    pi: z.boolean().optional(),
     detectedAt: z.number(),
   }).optional(),
   resumeSupport: z.object({

@@ -16,6 +16,21 @@ export const HARNESS_NAMES: Record<NewSessionAgentType, string> = {
 };
 
 /**
+ * Harnesses a session can BE, but that this app cannot start (DROVE-295).
+ *
+ * Kept apart from HARNESS_NAMES rather than folded into it, because that record
+ * is keyed by NewSessionAgentType and that type is a promise: everything in it
+ * flows into SpawnSessionOptions.agent, so anything named there is something the
+ * daemon says it can spawn. pi is not — a `drover pi` pane reaches the phone
+ * over the drover bus and registers no Happy session — but it still needs a name
+ * wherever one is rendered, and a row reading "pi" beside "Claude Code" reads as
+ * a typo rather than as a product.
+ */
+const NON_SPAWNABLE_HARNESS_NAMES: Record<string, string> = {
+    pi: 'Pi',
+};
+
+/**
  * Harnesses you can no longer start a session with.
  *
  * Gemini's CLI login is dead for individual accounts — it now refuses with
@@ -29,7 +44,18 @@ export const RETIRED_HARNESSES: ReadonlySet<NewSessionAgentType> = new Set([
     'openclaw',
 ]);
 
-/** Pick order for every harness list: the ones people reach for come first. */
+/**
+ * Pick order for every harness list: the ones people reach for come first.
+ *
+ * `pi` is not here and cannot be, because it is not a NewSessionAgentType
+ * (DROVE-295). A tap in this picker spawns `drover <agent>` through the daemon
+ * and expects a happy-cli runner on the other end to register a Happy session.
+ * pi has no such runner yet: a `drover pi` pane reaches the phone over the
+ * DROVER bus — the transcript stream, the gates, `POST /v1/sessions/<id>/send`
+ * — and never registers with the Happy server, which is the same gap OpenCode
+ * and Cursor panes have. Listing it would open a tmux window and call a session
+ * that never appears a success.
+ */
 export const HARNESS_ORDER: readonly NewSessionAgentType[] = [
     'claude',
     'codex',
@@ -50,7 +76,7 @@ export type HarnessOption = {
 };
 
 export function getHarnessName(key: NewSessionAgentType | string): string {
-    return HARNESS_NAMES[key as NewSessionAgentType] ?? key;
+    return HARNESS_NAMES[key as NewSessionAgentType] ?? NON_SPAWNABLE_HARNESS_NAMES[key] ?? key;
 }
 
 /** Whether this machine has given the app enough evidence to offer a harness. */
@@ -71,6 +97,10 @@ export function isHarnessAvailable({
     // reports nothing for it, and offering a harness on a machine that has no
     // cursor-agent produces a spawn that fails after the tmux window opens.
     if (key === 'cursor') return availability?.cursor === true;
+    // pi has no branch here because it has no slot in HARNESS_ORDER to be
+    // offered from (DROVE-295). The daemon reports `pi` in cliAvailability all
+    // the same — piBin.ts resolves the /opt/homebrew/bin install a launchd PATH
+    // cannot see — so the day a runner lands, this is one line and one entry.
     return !availability || availability[key] === true;
 }
 

@@ -75,6 +75,20 @@ export function unsupportedResumeReason(sessionId: string, flavor: string | null
             + 'or carry this conversation over with `drover clone ' + sessionId + ' --to opencode`.'
         );
     }
+    if (flavor === 'pi') {
+        // The opposite case to OpenCode, and the refusal has to say so or it
+        // reads as the same dead end. pi RESUMES perfectly — measured on 0.80.3,
+        // `--continue`, `--session <partial uuid>` and `--session-id <uuid>` all
+        // reopen the conversation with its messages intact. What is missing is a
+        // happy-cli runner for pi: these sessions reach the phone over the
+        // drover bus, not through this CLI, so there is nothing here to reopen
+        // them ONTO. Pointing at the command that does work is the useful half.
+        return (
+            `Happy session ${sessionId} is a pi session, and this CLI has no pi runner to reopen it with. `
+            + 'pi itself resumes fine: `drover pi --resume` picks from that project\'s sessions, '
+            + 'or `drover pi --resume <id>` reopens one directly.'
+        );
+    }
     return `Happy session ${sessionId} uses unsupported flavor "${named}".`;
 }
 

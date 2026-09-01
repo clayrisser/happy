@@ -17,6 +17,7 @@ import {
     getClaudeModelModes,
     getClaudePermissionModes,
     getGeminiPermissionModes,
+    getHardcodedEffortLevels,
     getHardcodedModelModes,
     getHardcodedPermissionModes,
     harnessHasModeControls,
@@ -470,6 +471,61 @@ describe('harnesses with no mode controls', () => {
     it('has no effort scale either, which was already true and stays true', () => {
         expect(getEffortLevelsForModel('opencode', 'default')).toEqual([]);
         expect(getEffortLevelsForPicker('opencode', 'default')).toEqual([]);
+    });
+});
+
+// DROVE-295. pi is the LOCAL-model harness, and that splits its two pickers in
+// opposite directions: the MODELS are per machine and only the session knows
+// them, while the thinking scale is a flag on the pi CLI and the same
+// everywhere. Getting either backwards produces the present-and-inert control
+// the block above exists to stop.
+describe('pi', () => {
+    it('has mode controls, unlike a bus-only pane harness', () => {
+        expect(harnessHasModeControls('pi')).toBe(true);
+    });
+
+    it('offers ONE permission mode, so the picker does not appear', () => {
+        // Every pi tool call is gated on the drover bus and an unanswered gate
+        // denies. That is not a per-session mode: the three settings that exist
+        // are read from the environment when the pane starts, and no route
+        // changes them on a running session.
+        const modes = getAvailablePermissionModes('pi', null, translate);
+        expect(modes.map((m) => m.key)).toEqual(['default']);
+        expect(modes[0].name).toBe('brokered');
+    });
+
+    it('hardcodes NO models, because they are per machine and not per login', () => {
+        // pi fronts whatever local runtime is being served — LM Studio on
+        // :1234, a local GLM on :8420 — and that list differs on every machine
+        // and changes when a model is loaded. There is no list to hardcode that
+        // would be true anywhere but the machine it was typed on.
+        expect(getHardcodedModelModes('pi', translate)).toEqual([]);
+        expect(getAvailableModels('pi', null, translate)).toEqual([]);
+    });
+
+    it('lets the session publish what `pi --list-models` actually reports', () => {
+        // DROVE-253's rule, one harness over: a model string is real only if
+        // the CLI listed it, so the picker is a LOOKUP over the published list
+        // and never free text.
+        const metadata = {
+            models: [
+                { code: 'lmstudio/openai/gpt-oss-120b', value: 'gpt-oss-120b (LM Studio)' },
+                { code: 'glm/glm-5.2', value: 'GLM-5.2 (local)' },
+            ],
+        } as never;
+        expect(getAvailableModels('pi', metadata, translate).map((m) => m.key))
+            .toEqual(['lmstudio/openai/gpt-oss-120b', 'glm/glm-5.2']);
+    });
+
+    it('publishes pi\'s own thinking scale, which does NOT include xhigh', () => {
+        // `--thinking off|minimal|low|medium|high|xhigh` is pi's flag, so this
+        // one really is knowable without asking the machine. xhigh is left out
+        // on pi's own word: its rpc docs say only OpenAI codex-max models take
+        // it, and nothing local here is one.
+        const levels = getEffortLevelsForModel('pi', 'lmstudio/openai/gpt-oss-120b');
+        expect(levels.map((l) => l.key)).toEqual(['off', 'minimal', 'low', 'medium', 'high']);
+        expect(getHardcodedEffortLevels('pi').map((l) => l.key))
+            .toEqual(['off', 'minimal', 'low', 'medium', 'high']);
     });
 });
 
