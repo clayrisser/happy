@@ -134,3 +134,28 @@ export function readingSessionState(facts: ReadingSessionFacts): ReadingSessionS
 export function readingSessionArmed(state: ReadingSessionState): boolean {
     return state !== 'off';
 }
+
+/**
+ * What the phone is reading right now, as one answer (DROVE-297, for
+ * DROVE-298).
+ *
+ * `drover read` with no argument asks this and prints it, and it is a READ:
+ * the phone is the single source of truth for what is speaking, so the CLI
+ * asks and reports rather than keeping a picture of its own that two terminals
+ * could race into disagreement.
+ *
+ * `defaultEnabled` is here for the terminal's third edge case: reading being
+ * off by default is a thing to REPORT, not to quietly fix. Enabling audio on a
+ * phone in his pocket from a Mac is a surprise, and surprises with audio are
+ * the thing he has complained about all the way through this area.
+ */
+export interface ReadingReport {
+    /** The session actually speaking or holding a place. Null when none is. */
+    readonly session: string | null;
+    /** `off` exactly when `session` is null. */
+    readonly state: ReadingSessionState;
+    /** The sentence at the synthesiser, or null between two of them. */
+    readonly sentence: string | null;
+    /** Does a session nobody has switched read at all? */
+    readonly defaultEnabled: boolean;
+}

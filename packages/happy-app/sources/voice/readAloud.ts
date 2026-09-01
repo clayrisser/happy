@@ -6,6 +6,7 @@ import { stopsSpeech, type ReadAloudInterruption } from './readAloudGate';
 import {
     readingSessionState,
     voiceMove,
+    type ReadingReport,
     type ReadingSessionState,
     type VoiceMove,
 } from './readingVoice';
@@ -946,6 +947,23 @@ export class ReadAloudReader {
     /** The session he is LOOKING at, which need not be the one being read. */
     get visitedSessionId(): string | null {
         return this.visited;
+    }
+
+    /**
+     * What the phone is reading right now, in one answer (DROVE-297).
+     *
+     * `drover read` with no argument is this (DROVE-298). Assembled here so
+     * the terminal cannot come to a different reading of the same fields than
+     * the composer and the wrist do.
+     */
+    readingReport(): ReadingReport {
+        const session = this.readingSessionId;
+        return {
+            session,
+            state: session === null ? 'off' : this.readingStateOf(session),
+            sentence: this.playheadValue?.sentence ?? null,
+            defaultEnabled: this.defaultEnabled,
+        };
     }
 
     /** What the list draws for this session (DROVE-297). */

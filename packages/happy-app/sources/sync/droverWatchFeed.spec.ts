@@ -111,6 +111,10 @@ vi.mock('@/voice/readAloudService', () => ({
         get isEnabled() { return mocks.reading.enabled; },
         get isPaused() { return mocks.reading.paused; },
         get focusedSessionId() { return mocks.reading.focused; },
+        // The session actually speaking (DROVE-297). Off the same field,
+        // because these two differ only where the feed already publishes
+        // nothing: `collectReading` returns null before it asks.
+        get readingSessionId() { return mocks.reading.enabled ? mocks.reading.focused : null; },
         setPaused: (paused: boolean) => { mocks.paused.push(paused); },
         addTransportListener: (listener: () => void) => {
             mocks.onReadingChanged = listener;
@@ -2033,6 +2037,23 @@ describe('the reading, on the wrist (DROVE-275)', () => {
         const before = mocks.published.length;
         mocks.onReadingChanged!();
         expect(mocks.published.length).toBe(before);
+    });
+
+    // DROVE-297. A take moves the voice from one session to another and moves
+    // NOTHING else about a snapshot — same gates, same sessions, same account
+    // rows, same 'reading' state. Without `sameReading` comparing the session
+    // id, the wrist would go on offering the control on the session that
+    // YIELDED, and a press there would pause a voice he cannot see. This is
+    // the pause bug of the test above, one field along.
+    it('publishes when the voice is taken by another session', () => {
+        mocks.sessions = { s1: session({ path: '/a' }), s2: session({ path: '/b' }) };
+        mocks.reading = { enabled: true, paused: false, focused: 's1' };
+        start();
+        const before = mocks.published.length;
+        mocks.reading = { enabled: true, paused: false, focused: 's2' };
+        mocks.onReadingChanged!();
+        expect(mocks.published.length).toBe(before + 1);
+        expect(mocks.published.at(-1)!.reading).toEqual({ state: 'reading', sessionId: 's2' });
     });
 
     it('drops the key when read-aloud goes off, so the wrist loses the control', () => {

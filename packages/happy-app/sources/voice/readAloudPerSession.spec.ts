@@ -477,6 +477,30 @@ describe('reading per session, over the real reader (DROVE-297)', () => {
         expect(fired, 'a release was silent on the wire').toBeGreaterThan(afterTake);
     });
 
+    it('reports what the phone is reading, for the terminal to print (DROVE-298)', async () => {
+        expect(reader.readingReport()).toEqual({
+            session: null, state: 'off', sentence: null, defaultEnabled: false,
+        });
+
+        reader.setSessionEnabled('a', true);
+        reader.visit('a');
+        await readTwoOf('a', 'ma', 10);
+        expect(reader.readingReport()).toEqual({
+            session: 'a', state: 'reading', sentence: 'Two.', defaultEnabled: false,
+        });
+
+        reader.setPaused(true);
+        await settle();
+        expect(reader.readingReport()).toMatchObject({ session: 'a', state: 'paused' });
+
+        // The default is reported rather than quietly fixed: reading being off
+        // by default is something the terminal SAYS, because switching audio
+        // on in a phone in his pocket from a Mac is a surprise.
+        reader.setPaused(false);
+        reader.setEnabled(true);
+        expect(reader.readingReport().defaultEnabled).toBe(true);
+    });
+
     it('the reading session is the one speaking, not merely the one focused', async () => {
         // What `collectReading` publishes and what the Now Playing card is
         // about: the session actually speaking. A focused session he has
