@@ -152,12 +152,19 @@ describe('needsUsageRefresh', () => {
 })
 
 describe('the refresh command', () => {
-    it('is the local /usage command, with no tools and no session left behind', async () => {
+    it('is the local /usage command, with no tools, no MCP servers and no session left behind', async () => {
         const { usageRefreshArgv } = await mod()
         // `-p /usage` is what was measured to write the cache: zero tokens,
         // zero cost, no model call. A prompt does not, on this version.
+        //
+        // The MCP flags are DROVE-340 and they are correctness as much as
+        // speed. Measured on Clay's machine with 40 servers configured: 9.5s
+        // per refresh without them, 6.5s with. At a thirty-second cadence a
+        // refresh that booted forty servers would not be a progress bar, it
+        // would be a second workload.
         expect(usageRefreshArgv('claude')).toEqual([
             'claude', '-p', '/usage', '--tools', '', '--no-session-persistence',
+            '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
         ])
     })
 
@@ -245,5 +252,112 @@ describe('the machine-wide sweep marker', () => {
         // Past the floor it is somebody's turn again.
         expect(await sweepUsage({ now: () => now + 5 * 60_000, run })).toEqual(['cold'])
         expect(ran).toEqual(['cold', 'cold'])
+    })
+})
+
+describe('recording what /usage printed (DROVE-340)', () => {
+    /**
+     * The measurement the ticket rests on. Claude Code will not rewrite its
+     * own cache inside five minutes (pinned on 2.1.257 at 11s, 60s, 120s and
+     * 180s gaps; it moved at 330s), but `/usage` fetches live every time. So
+     * the paragraph is fresher than the file, and the sheet was reading the
+     * file.
+     */
+    it('keeps the printed number when the vendor cache is frozen behind it', async () => {
+        writeAccount('bitspur.com', {
+            fetchedAtMs: now - 15 * 60_000,
+            rows: [{ kind: 'session', percent: 26, resets_at: '2026-09-01T04:20:00Z' }],
+        })
+        const { recordUsagePrint } = await mod()
+        const { readAccounts, readUsageCache, readVendorUsageCache } = await import('./accounts')
+        const account = readAccounts()[0]
+        expect(recordUsagePrint(account, 'Current session: 68% used', now)).toBe(true)
+        // The vendor's copy is untouched — nothing here writes .claude.json.
+        expect(readVendorUsageCache(account)!.rows[0].percent).toBe(26)
+        // What every consumer reads is the newer one.
+        const merged = readUsageCache(account)!
+        expect(merged.fetchedAt).toBe(now)
+        expect(merged.rows[0].percent).toBe(68)
+    })
+
+    it('leaves the previous reading standing when the print is unreadable', async () => {
+        // "We asked and could not read the answer" is not "we asked and it
+        // said nothing". Overwriting with an empty reading would erase a real
+        // number and report success.
+        writeAccount('bitspur.com', {
+            fetchedAtMs: now - 15 * 60_000,
+            rows: [{ kind: 'session', percent: 26, resets_at: '2026-09-01T04:20:00Z' }],
+        })
+        const { recordUsagePrint } = await mod()
+        const { readAccounts, readUsageCache } = await import('./accounts')
+        const account = readAccounts()[0]
+        expect(recordUsagePrint(account, 'Please run /login to continue', now)).toBe(false)
+        expect(readUsageCache(account)!.rows[0].percent).toBe(26)
+    })
+
+    it('borrows the reset the print left off from the vendor cache, never the percent', async () => {
+        writeAccount('bitspur.com', {
+            fetchedAtMs: now - 15 * 60_000,
+            rows: [{ kind: 'session', percent: 26, resets_at: '2026-09-05T04:20:00Z' }],
+        })
+        const { recordUsagePrint } = await mod()
+        const { readAccounts, readUsageCache } = await import('./accounts')
+        const account = readAccounts()[0]
+        recordUsagePrint(readAccounts()[0], 'Current session: 68% used', now)
+        const row = readUsageCache(readAccounts()[0])!.rows[0]
+        expect(row.percent).toBe(68)
+        expect(row.resets_at).toBe('2026-09-05T04:20:00.000Z')
+        expect(account.name).toBe('bitspur.com')
+    })
+})
+
+describe('refreshActiveAccount (DROVE-340)', () => {
+    it('refreshes the named account without asking how old its reading is', async () => {
+        // The sweep asks "is this old enough to be wrong", which is right for
+        // an account nobody is touching. For the one being spent right now a
+        // thirty-second-old reading is exactly the thing worth replacing.
+        writeAccount('live', {
+            fetchedAtMs: now - 10_000,
+            rows: [{ kind: 'session', percent: 5, resets_at: '2026-09-05T19:00:00Z' }],
+        })
+        const { refreshActiveAccount, needsUsageRefresh } = await mod()
+        const { readAccounts } = await import('./accounts')
+        expect(needsUsageRefresh(readAccounts()[0], now)).toBe(false)
+        const asked: string[] = []
+        expect(await refreshActiveAccount('live', {
+            shared: false,
+            now: () => now,
+            run: async (a) => { asked.push(a.name); return true },
+        })).toBe(true)
+        expect(asked).toEqual(['live'])
+    })
+
+    it('never spends a process on a logged-out account, or on no account at all', async () => {
+        writeAccount('empty', { loggedIn: false })
+        const { refreshActiveAccount } = await mod()
+        const run = async () => true
+        expect(await refreshActiveAccount('empty', { shared: false, now: () => now, run })).toBe(false)
+        expect(await refreshActiveAccount(undefined, { shared: false, now: () => now, run })).toBe(false)
+        expect(await refreshActiveAccount('stranger', { shared: false, now: () => now, run })).toBe(false)
+    })
+})
+
+describe('the per-account refresh claim (DROVE-340)', () => {
+    it('lets two sessions on DIFFERENT accounts both refresh, and one of two on the same', async () => {
+        // The sweep's marker is one timestamp for the whole machine, which
+        // would stop a second session refreshing its own, different account.
+        writeAccount('a')
+        writeAccount('b')
+        const { refreshActiveAccount } = await mod()
+        const ran: string[] = []
+        const run = async (a: DroverAccount) => { ran.push(a.name); return true }
+        expect(await refreshActiveAccount('a', { now: () => now, run })).toBe(true)
+        expect(await refreshActiveAccount('b', { now: () => now, run })).toBe(true)
+        // A second session on 'a', in the same window, does not spawn again.
+        expect(await refreshActiveAccount('a', { now: () => now, run })).toBe(false)
+        expect(ran).toEqual(['a', 'b'])
+        // Past the floor it is somebody's turn again.
+        expect(await refreshActiveAccount('a', { now: () => now + 30_000, run })).toBe(true)
+        expect(ran).toEqual(['a', 'b', 'a'])
     })
 })

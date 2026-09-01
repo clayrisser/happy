@@ -224,7 +224,7 @@ describe('the usage reporter', () => {
         const published: DroverUsage[] = []
         const { UsageReporter } = await usageModule()
         const reporter = new UsageReporter({
-            sweep: null,
+            sweep: null, active: null,
             current: () => 'main',
             publish: (u) => published.push(u),
             now: () => clock,
@@ -262,7 +262,7 @@ describe('the usage reporter', () => {
         let where = 'main'
         const published: DroverUsage[] = []
         const { UsageReporter } = await usageModule()
-        const reporter = new UsageReporter({ sweep: null, current: () => where, publish: (u) => published.push(u) })
+        const reporter = new UsageReporter({ sweep: null, active: null, current: () => where, publish: (u) => published.push(u) })
         reporter.tick()
         where = 'jamrizzi'
         expect(reporter.tick()).toBe(true)
@@ -285,7 +285,7 @@ describe('the usage reporter', () => {
         const published: DroverUsage[] = []
         const { UsageReporter } = await usageModule()
         const reporter = new UsageReporter({
-            sweep: null,
+            sweep: null, active: null,
             current: () => 'bitspur.com',
             family: () => family,
             publish: (u) => published.push(u),
@@ -303,7 +303,7 @@ describe('the usage reporter', () => {
         let clock = Date.parse('2026-08-30T18:00:00Z')
         const published: DroverUsage[] = []
         const { UsageReporter } = await usageModule()
-        const reporter = new UsageReporter({ sweep: null, current: () => 'main', publish: (u) => published.push(u), now: () => clock })
+        const reporter = new UsageReporter({ sweep: null, active: null, current: () => 'main', publish: (u) => published.push(u), now: () => clock })
         reporter.tick()
         clock += 4 * 60_000
         expect(reporter.tick()).toBe(false)
@@ -316,7 +316,7 @@ describe('the usage reporter', () => {
         const dirs = writeAccounts(['main'])
         const published: DroverUsage[] = []
         const { UsageReporter } = await usageModule()
-        const reporter = new UsageReporter({ sweep: null, current: () => 'main', publish: (u) => published.push(u), settleMs: 20 })
+        const reporter = new UsageReporter({ sweep: null, active: null, current: () => 'main', publish: (u) => published.push(u), settleMs: 20 })
         reporter.tick()
         writeCache(dirs.main, [{ kind: 'session', percent: 77, resets_at: '2099-01-01T00:00:00+00:00', scope: null }])
         touchLater(join(dirs.main, '.claude.json'), 5)
@@ -507,5 +507,150 @@ describe('an expired window', () => {
         // saying `stale` over it (DROVE-173).
         expect(account.limits.every((r) => r.usable)).toBe(true)
         expect(account.headroom).toBe(42)
+    })
+})
+
+/**
+ * How often the account this session is ON goes and looks (DROVE-340).
+ *
+ * Clay: "the limit progress cards are constantly out of date, at least the
+ * ones for the active session ... I need this more frequent than minutes and
+ * minutes." Before this the only thing that went and looked was a ten-minute
+ * sweep that treated his account like the four nobody was touching.
+ */
+describe('the active account cadence', () => {
+    function reporterWith(opts: {
+        clock: () => number
+        asked: { at: number; account: string | undefined }[]
+        fresh?: boolean
+    }) {
+        return {
+            sweep: null as null,
+            current: () => 'main',
+            publish: () => {},
+            now: opts.clock,
+            active: async (now: number, account: string | undefined) => {
+                opts.asked.push({ at: now, account })
+                return opts.fresh ?? false
+            },
+        }
+    }
+
+    it('looks every thirty seconds while the transcript is moving', async () => {
+        writeAccounts(['main'])
+        let clock = Date.parse('2026-09-01T18:00:00Z')
+        const asked: { at: number; account: string | undefined }[] = []
+        const { UsageReporter } = await usageModule()
+        const reporter = new UsageReporter(reporterWith({ clock: () => clock, asked }))
+
+        reporter.tick()
+        expect(asked).toHaveLength(1)
+        expect(asked[0].account).toBe('main')
+
+        // Inside the floor, even with the transcript moving: one process per
+        // thirty seconds, not one per turn.
+        clock += 20_000
+        reporter.refresh()
+        reporter.tick()
+        expect(asked).toHaveLength(1)
+
+        // Past it, with activity since the last look: worth a process.
+        clock += 15_000
+        reporter.refresh()
+        reporter.tick()
+        expect(asked).toHaveLength(2)
+        reporter.stop()
+    })
+
+    it('spends nothing on a session that is sitting at a prompt', async () => {
+        // The gate that makes thirty seconds affordable. An idle session is
+        // burning nothing, so its number cannot have changed, so asking is
+        // pure cost — it falls back to the ten-minute sweep, exactly as
+        // expensive as it was before this ticket.
+        writeAccounts(['main'])
+        let clock = Date.parse('2026-09-01T18:00:00Z')
+        const asked: { at: number; account: string | undefined }[] = []
+        const { UsageReporter } = await usageModule()
+        const reporter = new UsageReporter(reporterWith({ clock: () => clock, asked }))
+        reporter.tick()
+        expect(asked).toHaveLength(1)
+        for (let i = 0; i < 20; i++) {
+            clock += 60_000
+            reporter.tick()
+        }
+        expect(asked).toHaveLength(1)
+        reporter.stop()
+    })
+
+    it('counts a long turn as activity all the way through, not only at its first line', async () => {
+        // refresh() is called on EVERY transcript line and all but the first
+        // return early on the settle guard. If the activity stamp lived below
+        // that guard a turn would count as one moment and a long turn would
+        // look idle — which is precisely the session Clay watches.
+        writeAccounts(['main'])
+        let clock = Date.parse('2026-09-01T18:00:00Z')
+        const asked: { at: number; account: string | undefined }[] = []
+        const { UsageReporter } = await usageModule()
+        const reporter = new UsageReporter({
+            ...reporterWith({ clock: () => clock, asked }),
+            settleMs: 10_000_000,
+        })
+        reporter.tick()
+        expect(asked).toHaveLength(1)
+        // One burst of lines schedules one settle; the rest hit the guard.
+        for (let i = 0; i < 5; i++) {
+            reporter.refresh()
+            clock += 10_000
+        }
+        reporter.tick()
+        expect(asked).toHaveLength(2)
+        reporter.stop()
+    })
+
+    it('publishes the moment a fresh reading lands, without waiting for a poll', async () => {
+        // The reading is the thing the phone is waiting for, so the look that
+        // produced it ticks again rather than leaving it for thirty seconds.
+        const dirs = writeAccounts(['main'])
+        writeCache(dirs.main, [{ kind: 'session', percent: 26, resets_at: '2099-01-01T00:00:00+00:00', scope: null }])
+        const clock = Date.parse('2026-09-01T18:00:00Z')
+        const published: DroverUsage[] = []
+        const { UsageReporter } = await usageModule()
+        const { readingPath } = await import('./reading')
+        const { droverStateDir } = await import('./accounts')
+        const reporter = new UsageReporter({
+            sweep: null,
+            current: () => 'main',
+            publish: (u) => published.push(u),
+            now: () => clock,
+            active: async () => {
+                const { writeReading } = await import('./reading')
+                writeReading(droverStateDir(), 'main', [
+                    { kind: 'session', percent: 68, resets_at: '2099-01-01T00:00:00Z', scope: null },
+                ], clock)
+                return true
+            },
+        })
+        reporter.tick()
+        await new Promise((r) => setTimeout(r, 20))
+        // Two publishes: the opening snapshot, then the refreshed one. The
+        // second carries the number Claude Code printed but had not written.
+        expect(published).toHaveLength(2)
+        expect(published[1].accounts[0].headroom).toBe(32)
+        expect(readingPath(droverStateDir(), 'main')).toContain('main.json')
+        reporter.stop()
+    })
+
+    it('never asks when there is no account to ask about', async () => {
+        writeAccounts(['main'])
+        const clock = Date.parse('2026-09-01T18:00:00Z')
+        const asked: { at: number; account: string | undefined }[] = []
+        const { UsageReporter } = await usageModule()
+        const reporter = new UsageReporter({
+            ...reporterWith({ clock: () => clock, asked }),
+            current: () => undefined,
+        })
+        reporter.tick()
+        expect(asked).toEqual([])
+        reporter.stop()
     })
 })

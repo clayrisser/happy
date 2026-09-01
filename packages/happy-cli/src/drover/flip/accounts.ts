@@ -17,6 +17,7 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
 import { logger } from '@/ui/logger'
+import { fresherReading, readReading } from './reading'
 import { familyOf, familyOfDisplayName, familyOfLimitText } from './limits'
 import { projectDirFor } from './transcript'
 
@@ -527,17 +528,29 @@ export interface UsageCache {
 }
 
 /**
- * The usage cache, read off the account's .claude.json, or null when there is
- * no readable one.
+ * The freshest reading for this account, or null when there is none.
  *
- * The ONE place that file is parsed for headroom (DROVE-47). readUsageExhaustion
- * asks it "is anything at 100%" and the app's usage strip asks it "how full is
+ * The ONE place headroom is read from (DROVE-47). readUsageExhaustion asks it
+ * "is anything at 100%" and the app's usage strip asks it "how full is
  * everything"; two readers of the same rows is fine, two parsers of the same
  * file is how `drover accounts` and the picker once disagreed about a limit.
  * Nothing here interprets a row — that stays with the callers, so this cannot
  * quietly change what "blocked" means.
+ *
+ * TWO sources now, merged by age (DROVE-340). Claude Code's own
+ * `cachedUsageUtilization` is one, and it is throttled: `/usage` fetches live
+ * every time but rewrites that cache at most once every five minutes, so on
+ * the account a session is actively burning it runs minutes behind. Drover's
+ * own reading, parsed from what `/usage` PRINTED, is the other. Whichever was
+ * fetched later wins, so this returns the same shape it always did and every
+ * caller gets the newer number without knowing there are two.
  */
 export function readUsageCache(a: DroverAccount): UsageCache | null {
+    return fresherReading(readVendorUsageCache(a), readReading(droverStateDir(), a.name))
+}
+
+/** Claude Code's own cache, exactly as it sits in the account's .claude.json. */
+export function readVendorUsageCache(a: DroverAccount): UsageCache | null {
     let cached: unknown
     try {
         const cfg = accountConfigFile(a)
