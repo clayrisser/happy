@@ -13,6 +13,11 @@ export default defineConfig({
                     name: 'unit',
                     include: ['src/**/*.test.ts', 'scripts/**/*.test.ts'],
                     exclude: ['src/**/*.integration.test.ts'],
+                    // No unit test, and no child a unit test spawns, reaches the
+                    // real ~/.happy or a Happy server that is not loopback
+                    // (DROVE-336). The integration projects below stay real on
+                    // purpose; droverTestHome.setup.ts is their fence.
+                    setupFiles: ['./src/testing/noRealState.setup.ts'],
                     sequence: {
                         groupOrder: 0,
                     },
