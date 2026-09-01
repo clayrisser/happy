@@ -30,6 +30,7 @@ import { t } from '@/text';
 import { Metadata } from '@/sync/storageTypes';
 import { isRunningOnMac } from '@/utils/platform';
 import { MobileGlassSurface } from './MobileGlass';
+import { resolveComposerPressResponse } from './glassInteractionPolicy';
 import { GlassChromeSurface } from './GlassChromeControl';
 import { AnimatedFade } from './AnimatedOverlay';
 import { BubblePressable } from './BubblePressable';
@@ -956,6 +957,27 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         blocked: isSendBlocked,
     });
     const micSurface = composerMicSurface({ live: micLive });
+    /**
+     * WHICH PRESS RESPONSE EACH CONTROL ON THIS ROW GETS (DROVE-266).
+     *
+     * Clay: "shouldn't all these buttons have the Liquid Glass behavior". The
+     * bubble asks for `UIGlassEffect.isInteractive` now, so the controls whose
+     * glass is EXPOSED get the platform's own lensing and stand their
+     * imitation down. The ones wearing an opaque fill cover the material, so
+     * there is nothing under them to lens and the fade is the only response
+     * they can have. `resolveComposerPressResponse` is the rule and the
+     * argument; this is the one place it is read from.
+     *
+     * `compactMobileComposer` gates it because the desktop composer has no
+     * glass under it at all, so nothing there can be answered by the platform.
+     */
+    const pressResponse = (control: 'bare' | 'filled') => resolveComposerPressResponse({
+        surfaceDrawsNativeGlass: compactMobileComposer,
+        control,
+    });
+    const sendPress = pressResponse(sendSurface === 'none' ? 'bare' : 'filled');
+    const micPress = pressResponse(micSurface === 'none' ? 'bare' : 'filled');
+    const filledPress = pressResponse('filled');
     /**
      * The in-field send glyph: the accent once there is something to send, the
      * theme's neutral when there is not (DROVE-176). It no longer wears a
@@ -2026,6 +2048,10 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             ]}
         >
                 <BubblePressable
+                    // An opaque disc covers the glass, so the platform has
+                    // nothing to lens here and the fade is the response
+                    // (DROVE-266).
+                    nativeGlassPress={filledPress.nativeGlass}
                     style={(p) => ({
                         width: '100%',
                         height: '100%',
@@ -2033,7 +2059,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         // engine, which is all it ever needed (DROVE-214).
                         alignItems: 'center',
                         justifyContent: 'center',
-                        opacity: p.pressed ? 0.7 : 1,
+                        opacity: filledPress.fade && p.pressed ? 0.7 : 1,
                     })}
                     hitSlop={MOBILE_COMPOSER_METRICS.primaryActionSlop}
                     onPress={handleAddContextPress}
@@ -2123,12 +2149,17 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 ]}
             >
                 <BubblePressable
+                    // A BARE GLYPH LETS THE GLASS ANSWER (DROVE-266), and Stop
+                    // and the lock do not, because those two faces draw a fill
+                    // over it. Read from the same `sendSurface` the fill is, so
+                    // the response and the surface cannot disagree.
+                    nativeGlassPress={sendPress.nativeGlass}
                     style={(p) => ({
                         width: '100%',
                         height: '100%',
                         alignItems: 'center',
                         justifyContent: 'center',
-                        opacity: p.pressed ? 0.7 : 1,
+                        opacity: sendPress.fade && p.pressed ? 0.7 : 1,
                     })}
                     // 36 reserved plus 6 a side is a 48pt target, above the
                     // floor, and it is a target rather than a drawn circle for
@@ -2251,12 +2282,15 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             ]}
         >
             <BubblePressable
+                // Bare at rest, so the glass answers; filled once it is open,
+                // where the red disc covers the material (DROVE-266).
+                nativeGlassPress={micPress.nativeGlass}
                 style={(p) => ({
                     width: '100%',
                     height: '100%',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    opacity: p.pressed ? 0.7 : 1,
+                    opacity: micPress.fade && p.pressed ? 0.7 : 1,
                 })}
                 // 36 reserved plus 6 a side, the same bargain every control on
                 // this row strikes.
@@ -2386,12 +2420,15 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             <BubblePressable
                 onPress={handleAudioOutPress}
                 onLongPress={handleAudioOutLongPress}
+                // Always a filled disc, at every one of its four faces, so the
+                // fade is always its response (DROVE-266).
+                nativeGlassPress={filledPress.nativeGlass}
                 style={(p) => ({
                     width: '100%',
                     height: '100%',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    opacity: p.pressed ? 0.7 : 1,
+                    opacity: filledPress.fade && p.pressed ? 0.7 : 1,
                 })}
                 // 36 drawn plus 6 a side is a 48pt target, the same bargain the
                 // discs either side of it strike.
@@ -2878,6 +2915,30 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                             material="liquid"
                             glassEffectStyle="regular"
                             intensity={92}
+                            // ASK THE PLATFORM FOR THE PRESS (DROVE-266). Clay:
+                            // "shouldn't all these buttons have the Liquid
+                            // Glass behavior". They should, and the reason they
+                            // did not is this prop: with it unset,
+                            // `UIGlassEffect.isInteractive` was false, so every
+                            // control inside fell back to BubblePressable's
+                            // hand-rolled spring and a 0.7 fade — the same
+                            // three imitations DROVE-169 took out of the header
+                            // and never reached the composer.
+                            //
+                            // It buys the response for the controls whose glass
+                            // is EXPOSED, which is send and the mic at rest.
+                            // The four with opaque fills cover the material and
+                            // keep the fade, because there is nothing under
+                            // them to lens. `resolveComposerPressResponse` is
+                            // that split, with the argument for why the fills
+                            // cannot simply become glass.
+                            interactive
+                            // And the card keeps its clip. It is not a press
+                            // target — nobody presses the card — so DROVE-202's
+                            // "an interactive surface must not clip" does not
+                            // apply to it, and its rounded corners are what
+                            // round the field and the attachment strip inside.
+                            pressTarget={false}
                             style={[
                                 styles.unifiedPanel,
                                 compactMobileComposer && styles.mobileUnifiedPanel,
