@@ -17,6 +17,11 @@ const {
 
 vi.mock('node:child_process', () => ({
     execSync: mockExecSync,
+    // The version probe moved from execSync to execFileSync (DROVE-273) so it
+    // can run a RESOLVED codex path with no shell in between. Same mock behind
+    // both names: it is return-only, so every `mockExecSync.mockReturnValue
+    // ('codex-cli x.y.z')` below keeps meaning exactly what it did.
+    execFileSync: mockExecSync,
     spawn: mockSpawn,
 }));
 

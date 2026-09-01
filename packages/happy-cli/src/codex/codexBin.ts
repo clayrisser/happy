@@ -27,7 +27,7 @@
 
 import { existsSync, statSync } from 'node:fs';
 import os from 'node:os';
-import { delimiter, dirname, join } from 'node:path';
+import { delimiter, dirname, join, sep } from 'node:path';
 
 export const CODEX_BIN = 'codex';
 
@@ -46,11 +46,24 @@ function isExecutableFile(candidate: string): boolean {
     }
 }
 
+/**
+ * A node_modules/.bin entry is a build artifact of whichever tree you happen to
+ * be standing in, not an installation of Codex — and `@openai/codex` really is
+ * in this repo's node_modules, where its platform binary package
+ * (@openai/codex-darwin-arm64) is NOT installed, so the shim resolves and then
+ * ENOENTs on a vendor path. Test runners put that directory on PATH. Preferring
+ * it over a real system install would be wrong even if it worked.
+ */
+function isBuildArtifact(dir: string): boolean {
+    return dir.includes(`node_modules${sep}.bin`) || dir.endsWith('node_modules/.bin');
+}
+
 /** The first hit for `codex` on the given PATH, or undefined. */
 function searchPath(pathValue: string | undefined): string | undefined {
     if (!pathValue) return undefined;
     for (const dir of pathValue.split(delimiter)) {
         if (!dir) continue;
+        if (isBuildArtifact(dir)) continue;
         for (const name of candidateNames()) {
             const candidate = join(dir, name);
             if (isExecutableFile(candidate)) return candidate;

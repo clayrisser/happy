@@ -81,6 +81,23 @@ describe('findCodexBin', () => {
         expect(findCodexBin({ PATH: join(root, 'bin'), HOME: root }, join(root, 'node'))).toBeUndefined();
     });
 
+    // @openai/codex is genuinely in this repo's node_modules and its platform
+    // binary package is not, so the shim resolves and then ENOENTs on a vendor
+    // path. Test runners put that directory on PATH; a daemon does not.
+    it('ignores a node_modules/.bin shim, which is a build artifact not an install', () => {
+        const shim = join(root, 'node_modules', '.bin');
+        installAt(shim);
+        expect(findCodexBin({ PATH: shim, HOME: root }, join(root, 'node'))).toBeUndefined();
+    });
+
+    it('takes a real install over a node_modules/.bin shim earlier on PATH', () => {
+        const shim = join(root, 'node_modules', '.bin');
+        installAt(shim);
+        const real = installAt(join(root, 'bin'));
+        const path = [shim, join(root, 'bin')].join(':');
+        expect(findCodexBin({ PATH: path, HOME: root }, join(root, 'node'))).toBe(real);
+    });
+
     it('tolerates an unset PATH instead of throwing', () => {
         expect(findCodexBin({ HOME: root }, join(root, 'node'))).toBeUndefined();
     });
