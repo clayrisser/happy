@@ -2255,3 +2255,68 @@ describe('the reading, on the wrist (DROVE-275)', () => {
         expect(bytes).toBeLessThan(128);
     });
 });
+
+/**
+ * The wrist and the phone's sheet on ONE object (DROVE-340).
+ *
+ * Clay: "The watch surprisingly is showing the up-to-date thing, but in the
+ * mobile app it's not." Both were right about their own source and there were
+ * two of them. This feed reads `metadata.droverUsage` and nothing else; the
+ * composer sheet let `agentState.usageLimits` overwrite that snapshot's
+ * windows for the CURRENT account, with no comparison of the timestamps both
+ * objects carry. Under drover every session is a local TUI where the SDK's
+ * rate_limit_event never fires, so the override pinned the one account Clay
+ * was watching to the older reading.
+ *
+ * Driven from ONE fixture on purpose. Two fixtures could drift apart and the
+ * spec would still pass, which is exactly the failure being pinned.
+ */
+describe('the wrist and the sheet read one object', () => {
+    const snapshot = {
+        capturedAt: 1_000,
+        modelFamily: null,
+        accounts: [
+            {
+                name: 'jamrizzi', headroom: 51, loggedIn: true, onboarded: true, current: true,
+                fetchedAt: 1_000, cooling: null,
+                limits: [
+                    { kind: 'session', percent: 49, resetsAt: 9_000, scope: null, family: null },
+                    { kind: 'weekly_all', percent: 23, resetsAt: 9_000, scope: null, family: null },
+                ],
+            },
+        ],
+    };
+
+    it('lands on the same percentages when the SDK stream is the older reading', async () => {
+        const { resolveUsageStrip } = await import('@/components/agentInputUsage');
+        const rows = collectAccountRows({ s1: { metadata: { droverUsage: snapshot } } });
+        const wrist = rows.find((r) => r.name === 'jamrizzi')!;
+        const strip = resolveUsageStrip({
+            // A stream stamped 500 against a snapshot stamped 1000: this is
+            // the state a drover session sits in permanently.
+            usageLimits: { capturedAt: 500, windows: [{ id: 'five_hour', utilization: 4, resetsAt: 9_000 }] },
+            droverUsage: snapshot,
+            droverAccount: 'jamrizzi',
+        });
+        const sheet = strip.usageBarGroups.find((g) => g.key === 'account:jamrizzi')!;
+        // The wrist prints headroom, the sheet prints the window it was read
+        // off: 51% left is 49% used, and both come off limits[].percent.
+        expect(wrist.headroom).toBe(51);
+        expect(wrist.used).toBe(49);
+        expect(sheet.rows.find((r) => r.name === 'Session')!.percentText).toBe('49%');
+        // Not 4%, which is what the stream said and what the sheet used to
+        // draw over the snapshot.
+        expect(sheet.rows.map((r) => r.percentText)).not.toContain('4%');
+    });
+
+    it('still lets a genuinely newer stream through, which is the remote path', async () => {
+        const { resolveUsageStrip } = await import('@/components/agentInputUsage');
+        const strip = resolveUsageStrip({
+            usageLimits: { capturedAt: 2_000, windows: [{ id: 'five_hour', utilization: 4, resetsAt: 9_000 }] },
+            droverUsage: snapshot,
+            droverAccount: 'jamrizzi',
+        });
+        const sheet = strip.usageBarGroups.find((g) => g.key === 'account:jamrizzi')!;
+        expect(sheet.rows.find((r) => r.name === 'Session')!.percentText).toBe('4%');
+    });
+});

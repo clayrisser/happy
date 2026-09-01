@@ -224,7 +224,7 @@ describe('the usage reporter', () => {
         const published: DroverUsage[] = []
         const { UsageReporter } = await usageModule()
         const reporter = new UsageReporter({
-            sweep: null,
+            sweep: null, active: null,
             current: () => 'main',
             publish: (u) => published.push(u),
             now: () => clock,
@@ -262,7 +262,7 @@ describe('the usage reporter', () => {
         let where = 'main'
         const published: DroverUsage[] = []
         const { UsageReporter } = await usageModule()
-        const reporter = new UsageReporter({ sweep: null, current: () => where, publish: (u) => published.push(u) })
+        const reporter = new UsageReporter({ sweep: null, active: null, current: () => where, publish: (u) => published.push(u) })
         reporter.tick()
         where = 'jamrizzi'
         expect(reporter.tick()).toBe(true)
@@ -285,7 +285,7 @@ describe('the usage reporter', () => {
         const published: DroverUsage[] = []
         const { UsageReporter } = await usageModule()
         const reporter = new UsageReporter({
-            sweep: null,
+            sweep: null, active: null,
             current: () => 'bitspur.com',
             family: () => family,
             publish: (u) => published.push(u),
@@ -303,7 +303,7 @@ describe('the usage reporter', () => {
         let clock = Date.parse('2026-08-30T18:00:00Z')
         const published: DroverUsage[] = []
         const { UsageReporter } = await usageModule()
-        const reporter = new UsageReporter({ sweep: null, current: () => 'main', publish: (u) => published.push(u), now: () => clock })
+        const reporter = new UsageReporter({ sweep: null, active: null, current: () => 'main', publish: (u) => published.push(u), now: () => clock })
         reporter.tick()
         clock += 4 * 60_000
         expect(reporter.tick()).toBe(false)
@@ -316,7 +316,7 @@ describe('the usage reporter', () => {
         const dirs = writeAccounts(['main'])
         const published: DroverUsage[] = []
         const { UsageReporter } = await usageModule()
-        const reporter = new UsageReporter({ sweep: null, current: () => 'main', publish: (u) => published.push(u), settleMs: 20 })
+        const reporter = new UsageReporter({ sweep: null, active: null, current: () => 'main', publish: (u) => published.push(u), settleMs: 20 })
         reporter.tick()
         writeCache(dirs.main, [{ kind: 'session', percent: 77, resets_at: '2099-01-01T00:00:00+00:00', scope: null }])
         touchLater(join(dirs.main, '.claude.json'), 5)
@@ -507,5 +507,412 @@ describe('an expired window', () => {
         // saying `stale` over it (DROVE-173).
         expect(account.limits.every((r) => r.usable)).toBe(true)
         expect(account.headroom).toBe(42)
+    })
+})
+
+/**
+ * How often the account this session is ON goes and looks (DROVE-340).
+ *
+ * Clay: "the limit progress cards are constantly out of date, at least the
+ * ones for the active session ... I need this more frequent than minutes and
+ * minutes." Before this the only thing that went and looked was a ten-minute
+ * sweep that treated his account like the four nobody was touching.
+ */
+describe('the active account cadence', () => {
+    function reporterWith(opts: {
+        clock: () => number
+        asked: { at: number; account: string | undefined }[]
+        fresh?: boolean
+    }) {
+        return {
+            sweep: null as null,
+            current: () => 'main',
+            publish: () => {},
+            now: opts.clock,
+            active: async (now: number, account: string | undefined) => {
+                opts.asked.push({ at: now, account })
+                return opts.fresh ?? false
+            },
+        }
+    }
+
+    /**
+     * Let an in-flight look finish.
+     *
+     * `maybeRefreshActive` will not start a second look while one is running,
+     * which is a real gate and not the one these specs are about. Without
+     * this every assertion below would pass for that reason instead of the
+     * one named, and the idle spec in particular would prove nothing at all.
+     * A real look is ~6.5s against a 30s floor, so in production it has
+     * always finished by the time the next tick asks.
+     */
+    const settled = () => new Promise((r) => setTimeout(r, 0))
+
+    it('looks every thirty seconds while the transcript is moving', async () => {
+        writeAccounts(['main'])
+        let clock = Date.parse('2026-09-01T18:00:00Z')
+        const asked: { at: number; account: string | undefined }[] = []
+        const { UsageReporter } = await usageModule()
+        const reporter = new UsageReporter(reporterWith({ clock: () => clock, asked }))
+
+        reporter.tick()
+        await settled()
+        expect(asked).toHaveLength(1)
+        expect(asked[0].account).toBe('main')
+
+        // Inside the floor, even with the transcript moving: one process per
+        // thirty seconds, not one per turn.
+        clock += 20_000
+        reporter.refresh()
+        reporter.tick()
+        await settled()
+        expect(asked).toHaveLength(1)
+
+        // Past it, with activity since the last look: worth a process.
+        clock += 15_000
+        reporter.refresh()
+        reporter.tick()
+        await settled()
+        expect(asked).toHaveLength(2)
+        expect(asked[1].at - asked[0].at).toBe(35_000)
+        reporter.stop()
+    })
+
+    it('spends nothing on a session that is sitting at a prompt', async () => {
+        // The gate that makes thirty seconds affordable. An idle session is
+        // burning nothing, so its number cannot have changed, so asking is
+        // pure cost — it falls back to the ten-minute sweep, exactly as
+        // expensive as it was before this ticket.
+        writeAccounts(['main'])
+        let clock = Date.parse('2026-09-01T18:00:00Z')
+        const asked: { at: number; account: string | undefined }[] = []
+        const { UsageReporter } = await usageModule()
+        const reporter = new UsageReporter(reporterWith({ clock: () => clock, asked }))
+        reporter.tick()
+        await settled()
+        expect(asked).toHaveLength(1)
+        // Twenty minutes of polling, every one of them past the floor. The
+        // only thing holding the process back is that nothing has moved.
+        for (let i = 0; i < 20; i++) {
+            clock += 60_000
+            reporter.tick()
+            await settled()
+        }
+        expect(asked).toHaveLength(1)
+        reporter.stop()
+    })
+
+    it('counts a long turn as activity all the way through, not only at its first line', async () => {
+        // refresh() is called on EVERY transcript line and all but the first
+        // return early on the settle guard. If the activity stamp lived below
+        // that guard a turn would count as one moment and a long turn would
+        // look idle — which is precisely the session Clay watches.
+        writeAccounts(['main'])
+        let clock = Date.parse('2026-09-01T18:00:00Z')
+        const asked: { at: number; account: string | undefined }[] = []
+        const { UsageReporter } = await usageModule()
+        const reporter = new UsageReporter({
+            ...reporterWith({ clock: () => clock, asked }),
+            settleMs: 10_000_000,
+        })
+        reporter.tick()
+        await settled()
+        expect(asked).toHaveLength(1)
+        // One burst of lines schedules one settle; the rest hit the guard.
+        for (let i = 0; i < 5; i++) {
+            reporter.refresh()
+            clock += 10_000
+        }
+        reporter.tick()
+        await settled()
+        expect(asked).toHaveLength(2)
+        reporter.stop()
+    })
+
+    it('publishes the moment a fresh reading lands, without waiting for a poll', async () => {
+        // The reading is the thing the phone is waiting for, so the look that
+        // produced it ticks again rather than leaving it for thirty seconds.
+        const dirs = writeAccounts(['main'])
+        writeCache(dirs.main, [{ kind: 'session', percent: 26, resets_at: '2099-01-01T00:00:00+00:00', scope: null }])
+        const clock = Date.parse('2026-09-01T18:00:00Z')
+        const published: DroverUsage[] = []
+        const { UsageReporter } = await usageModule()
+        const { readingPath } = await import('./reading')
+        const { droverStateDir } = await import('./accounts')
+        const reporter = new UsageReporter({
+            sweep: null,
+            current: () => 'main',
+            publish: (u) => published.push(u),
+            now: () => clock,
+            active: async () => {
+                const { writeReading } = await import('./reading')
+                writeReading(droverStateDir(), 'main', [
+                    { kind: 'session', percent: 68, resets_at: '2099-01-01T00:00:00Z', scope: null },
+                ], clock)
+                return true
+            },
+        })
+        reporter.tick()
+        await new Promise((r) => setTimeout(r, 20))
+        // Two publishes: the opening snapshot, then the refreshed one. The
+        // second carries the number Claude Code printed but had not written.
+        expect(published).toHaveLength(2)
+        expect(published[1].accounts[0].headroom).toBe(32)
+        expect(readingPath(droverStateDir(), 'main')).toContain('main.json')
+        reporter.stop()
+    })
+
+    it('never asks when there is no account to ask about', async () => {
+        writeAccounts(['main'])
+        const clock = Date.parse('2026-09-01T18:00:00Z')
+        const asked: { at: number; account: string | undefined }[] = []
+        const { UsageReporter } = await usageModule()
+        const reporter = new UsageReporter({
+            ...reporterWith({ clock: () => clock, asked }),
+            current: () => undefined,
+        })
+        reporter.tick()
+        expect(asked).toEqual([])
+        reporter.stop()
+    })
+})
+
+/**
+ * A turn ending goes and looks (DROVE-340).
+ *
+ * The thirty-second timer covers a long turn; this covers the moment the turn
+ * closes, which is both when the number certainly moved and when the card is
+ * read. Locally it is the ONLY turn boundary there is — a local transcript
+ * carries no record marking a turn closing, so the launcher's working/idle
+ * boolean, which it already computes for the terminal dot, is the signal.
+ */
+describe('a turn ending', () => {
+    const settled = () => new Promise((r) => setTimeout(r, 0))
+
+    function reporterOpts(clock: () => number, asked: number[]) {
+        return {
+            sweep: null as null,
+            current: () => 'main',
+            publish: () => {},
+            now: clock,
+            active: async (now: number) => { asked.push(now); return false },
+        }
+    }
+
+    it('looks on the working-to-idle edge, without waiting out the thirty second floor', async () => {
+        writeAccounts(['main'])
+        let clock = Date.parse('2026-09-01T18:00:00Z')
+        const asked: number[] = []
+        const { UsageReporter } = await usageModule()
+        const reporter = new UsageReporter(reporterOpts(() => clock, asked))
+        reporter.tick()
+        await settled()
+        expect(asked).toHaveLength(1)
+
+        // A turn runs for twelve seconds — nowhere near the thirty second
+        // floor — and ends.
+        reporter.noteLiveStatus(true)
+        await settled()
+        clock += 12_000
+        reporter.noteLiveStatus(false)
+        await settled()
+        expect(asked).toHaveLength(2)
+        reporter.stop()
+    })
+
+    it('is still floored, so a burst of short turns does not stack processes', async () => {
+        // Ten seconds. Without a floor here a session doing many one-second
+        // turns would spawn a six-second process per turn.
+        writeAccounts(['main'])
+        let clock = Date.parse('2026-09-01T18:00:00Z')
+        const asked: number[] = []
+        const { UsageReporter } = await usageModule()
+        const reporter = new UsageReporter(reporterOpts(() => clock, asked))
+        reporter.tick()
+        await settled()
+        expect(asked).toHaveLength(1)
+        for (let i = 0; i < 8; i++) {
+            reporter.noteLiveStatus(true)
+            await settled()
+            clock += 1_000
+            reporter.noteLiveStatus(false)
+            await settled()
+        }
+        // Eight turns in eight seconds bought one extra look, not eight.
+        expect(asked).toHaveLength(1)
+        clock += 5_000
+        reporter.noteLiveStatus(true)
+        await settled()
+        reporter.noteLiveStatus(false)
+        await settled()
+        expect(asked).toHaveLength(2)
+        reporter.stop()
+    })
+
+    it('does not treat a turn STARTING, or a repeated idle report, as an ending', async () => {
+        // The launcher calls this on every live-status update, which is far
+        // more often than a turn changes state. Only the edge counts.
+        writeAccounts(['main'])
+        let clock = Date.parse('2026-09-01T18:00:00Z')
+        const asked: number[] = []
+        const { UsageReporter } = await usageModule()
+        const reporter = new UsageReporter(reporterOpts(() => clock, asked))
+        reporter.tick()
+        await settled()
+        expect(asked).toHaveLength(1)
+        clock += 15_000
+        for (let i = 0; i < 5; i++) {
+            reporter.noteLiveStatus(false)
+            await settled()
+        }
+        expect(asked).toHaveLength(1)
+        for (let i = 0; i < 5; i++) {
+            reporter.noteLiveStatus(true)
+            await settled()
+        }
+        expect(asked).toHaveLength(1)
+        reporter.stop()
+    })
+})
+
+/**
+ * Print to card, with no manual step (DROVE-340).
+ *
+ * The regression Clay actually reported: "the mobile app did pick it up too,
+ * but I had to run /usage in the CLI for it to do it." Running `/usage` by
+ * hand wrote the cache, the reporter's next poll saw a new mtime and the card
+ * corrected — which proved the transport was fine and the trigger missing.
+ *
+ * Everything here is on a throwaway state dir: its own XDG_STATE_HOME, its own
+ * registry, DROVER_URL pointed at a dead port. No daemon, no bridge, no real
+ * ~/.claude. The one thing stubbed is the child process, and only the SPAWN of
+ * it — the text is a real `/usage` paragraph and it goes through the real
+ * parser, the real reading file and the real publish.
+ */
+describe('what /usage prints reaches the card by itself', () => {
+    it('goes print -> reading -> snapshot inside the stated window, with nothing run by hand', async () => {
+        const dirs = writeAccounts(['main'])
+        // The state Clay was in: Claude Code's own cache frozen fifteen
+        // minutes back, saying 26%, because it will not rewrite inside five.
+        const start = Date.parse('2026-09-01T18:00:00Z')
+        writeCache(dirs.main, [
+            { kind: 'session', percent: 26, resets_at: '2026-09-02T04:20:00+00:00', scope: null },
+        ], start - 15 * 60_000)
+
+        let clock = start
+        const published: DroverUsage[] = []
+        const { UsageReporter } = await usageModule()
+        const { refreshActiveAccount } = await import('./refresh')
+        const reporter = new UsageReporter({
+            sweep: null,
+            current: () => 'main',
+            publish: (u) => published.push(u),
+            now: () => clock,
+            // The real refresh, with only the child stubbed out. What it
+            // "printed" is the paragraph Claude Code prints, which the real
+            // recordUsagePrint parses and writes.
+            active: (now, account) => refreshActiveAccount(account, {
+                now: () => now,
+                run: async (a) => {
+                    const { recordUsagePrint } = await import('./refresh')
+                    return recordUsagePrint(
+                        a,
+                        'Current session: 68% used · resets Sep 2 at 4:20am (America/Chicago)\n',
+                        now,
+                    )
+                },
+            }),
+        })
+
+        reporter.start()
+        // The opening snapshot is the stale one, exactly as it was.
+        expect(published[0].accounts[0].headroom).toBe(74)
+
+        // A turn ends. Nothing else happens: no /usage typed anywhere.
+        clock += 12_000
+        reporter.noteLiveStatus(true)
+        clock += 8_000
+        reporter.noteLiveStatus(false)
+        await new Promise((r) => setTimeout(r, 20))
+
+        // Within twenty seconds of the turn starting, the card carries the
+        // number the paragraph printed rather than the one the file holds.
+        expect(published.length).toBeGreaterThan(1)
+        const latest = published.at(-1)!
+        expect(latest.accounts[0].headroom).toBe(32)
+        expect(latest.accounts[0].limits[0].percent).toBe(68)
+        expect(latest.capturedAt - start).toBeLessThanOrEqual(20_000)
+
+        // And Claude Code's own file was never written to — the reading lives
+        // in drover's state dir, so nothing here can race a live Claude Code
+        // rewriting its whole config.
+        const { readVendorUsageCache, readAccounts } = await import('./accounts')
+        expect(readVendorUsageCache(readAccounts()[0])!.rows[0].percent).toBe(26)
+        reporter.stop()
+    })
+})
+
+/**
+ * DROVE-173's three disagreements, re-asked of the NEW row source (DROVE-340).
+ *
+ * That ticket made the sheet agree with `/usage` in three ways: the bars fill
+ * with what is USED, headroom ignores a family window the session's model is
+ * not in, and a reset resolves in the zone Claude Code named rather than the
+ * machine's. All three were settled over rows read from
+ * `cachedUsageUtilization`. This ticket changed where the rows come from — the
+ * printed paragraph — so all three are asked again, of a snapshot built from a
+ * print and nothing else.
+ */
+describe('the three disagreements, over a printed reading', () => {
+    const print = [
+        'Current session: 1% used · resets Sep 2 at 4:20am (Europe/London)',
+        'Current week (all models): 12% used · resets Sep 3 at 10am (Europe/London)',
+        'Current week (Fable): 100% used · resets Sep 3 at 10am (Europe/London)',
+    ].join('\n')
+
+    async function snapshotFromPrint(family: string | undefined) {
+        writeAccounts(['bitspur.com'])
+        const now = Date.parse('2026-09-01T22:30:00Z')
+        const { recordUsagePrint } = await import('./refresh')
+        const { readAccounts } = await import('./accounts')
+        const { usageSnapshot } = await usageModule()
+        expect(recordUsagePrint(readAccounts()[0], print, now)).toBe(true)
+        return usageSnapshot('bitspur.com', now, family)
+    }
+
+    it('leaves an Opus session available with the Fable week spent (disagreement 2)', async () => {
+        // The original complaint exactly: "bitspur.com · 0% left" while the
+        // session window was 99% free, because headroom took the minimum over
+        // every window including a Fable one that does not bind Opus.
+        const opus = await snapshotFromPrint('opus')
+        expect(opus.accounts[0].headroom).toBe(88)
+        // And the family window is still CARRIED, so the wrist and the sheet
+        // can show it — it is ignored for headroom, not dropped. That it is
+        // marked 'fable' at all is what makes the rule work, and it is derived
+        // from the display name the paragraph printed.
+        const scoped = opus.accounts[0].limits.find((r) => r.kind === 'weekly_scoped')!
+        expect(scoped.family).toBe('fable')
+        expect(scoped.percent).toBe(100)
+
+        // The same account, running Fable, is correctly out.
+        const fableRun = await snapshotFromPrint('fable')
+        expect(fableRun.accounts[0].headroom).toBe(0)
+    })
+
+    it('resolves the printed reset in the zone Claude Code named (disagreement 3)', async () => {
+        // 4:20am Europe/London on Sep 2 is 03:20Z — London is on BST. Getting
+        // this wrong by an offset is what made a reset look stale.
+        const snap = await snapshotFromPrint('opus')
+        const session = snap.accounts[0].limits.find((r) => r.kind === 'session')!
+        expect(session.resetsAt).toBe(Date.parse('2026-09-02T03:20:00Z'))
+    })
+
+    it('carries percent USED, which is what the fill convention reads (disagreement 1)', async () => {
+        // The rows say used; `headroom` is the one derived "left" figure and
+        // the app fills from the row. A print that said 1% used must not
+        // arrive as 1% left.
+        const snap = await snapshotFromPrint('opus')
+        expect(snap.accounts[0].limits.find((r) => r.kind === 'session')!.percent).toBe(1)
+        expect(snap.accounts[0].limits.find((r) => r.kind === 'weekly_all')!.percent).toBe(12)
     })
 })

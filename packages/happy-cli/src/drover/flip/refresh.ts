@@ -52,16 +52,36 @@ import {
     isLoggedIn,
     readAccounts,
     readUsageCache,
+    readVendorUsageCache,
     type DroverAccount,
 } from './accounts'
+import { parseUsagePrint, writeReading } from './reading'
 
 /**
- * Claude Code will not rewrite the cache it just wrote for five minutes
- * (`Ten = 300000` in the 2.1.251 bundle, the guard in front of the config
- * write). So a reading younger than that CANNOT be improved by asking again,
- * and asking is a wasted process. This is the floor, not a target.
+ * How often an IDLE account is worth a process.
+ *
+ * This used to be described as Claude Code's own rewrite floor, and the floor
+ * is real -- it will not rewrite `cachedUsageUtilization` inside five minutes
+ * of writing it (measured at 11s, 60s and 120s gaps on 2.1.257; the same bytes
+ * come back). But it is no longer a CEILING on how fresh a reading can be,
+ * because `/usage` fetches live every time and drover now keeps what it
+ * printed (DROVE-340, reading.ts). So this is a politeness floor on spawning a
+ * six-second process for an account nobody is using, not a limit on accuracy.
  */
 export const usageRefreshFloorMs = 5 * 60_000
+
+/**
+ * How often the account a session is RUNNING ON is worth a process.
+ *
+ * Clay: "I need this more frequent than minutes and minutes." Thirty seconds,
+ * and the arithmetic is the justification. One refresh is about 6.5s of wall
+ * clock with MCP loading off (9.5s with it on), zero tokens, zero cost, one
+ * GET -- so a session burning turns costs roughly a fifth of one background
+ * process, for exactly one account. It is also gated on ACTIVITY: an idle
+ * session spawns nothing at all and falls back to the sweep, so the cost is
+ * paid only while there is something to measure.
+ */
+export const activeRefreshFloorMs = 30_000
 
 /**
  * How old a usable reading may get before it is refreshed anyway.
@@ -108,7 +128,17 @@ export function claudeBinary(env: NodeJS.ProcessEnv = process.env): string {
  * surface Clay uses.
  */
 export function usageRefreshArgv(claudeBin = claudeBinary()): string[] {
-    return [claudeBin, '-p', '/usage', '--tools', '', '--no-session-persistence']
+    return [
+        claudeBin, '-p', '/usage',
+        '--tools', '',
+        '--no-session-persistence',
+        // A usage refresh must not start the account's MCP servers. Measured
+        // on this machine, with 40 of them configured: 9.5s without these two
+        // flags, 6.5s with. Correctness as much as speed -- a background
+        // process that boots forty servers every thirty seconds is not a
+        // progress bar, it is a second workload.
+        '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
+    ]
 }
 
 /**
@@ -173,17 +203,24 @@ export interface UsageRefreshDeps {
     run?: (a: DroverAccount) => Promise<boolean>
     claudeBin?: string
     timeoutMs?: number
+    now?: () => number
 }
 
 /**
- * Ask Claude Code what this account's headroom is, and let it write its own
- * cache. Resolves true when the process exited cleanly.
+ * Ask Claude Code what this account's headroom is, and KEEP WHAT IT SAID.
+ * Resolves true when the process exited cleanly and a reading was recorded.
  *
- * The child's output goes nowhere. `/usage` prints a paragraph for a human;
- * the value is entirely the side effect on `.claude.json`, which every reader
- * here already knows how to parse. Parsing the paragraph as well would be a
- * second parser of the same fact, which is the thing readUsageCache exists to
- * prevent.
+ * The child's stdout used to go nowhere, on the argument that the value was
+ * entirely the side effect on `.claude.json` and that parsing the paragraph
+ * would be a second parser of the same fact. Measured, it is not the same
+ * fact (DROVE-340, reading.ts): `/usage` fetches live and prints what it
+ * fetched, but rewrites its cache at most every five minutes, so the paragraph
+ * is routinely minutes fresher than the file. On the account a session is
+ * burning down that gap was 15 minutes and 42 percentage points.
+ *
+ * So the paragraph is parsed and stored as drover's own reading, in the same
+ * row shape, and readUsageCache merges the two by age. Still one shape and one
+ * reader downstream; the second parser buys the only fresh number available.
  *
  * cwd is the temp dir on purpose: a refresh must not be attributed to whatever
  * project the session happens to be in, and must not trip a trust prompt.
@@ -191,12 +228,13 @@ export interface UsageRefreshDeps {
 function spawnUsageRefresh(a: DroverAccount, deps: UsageRefreshDeps): Promise<boolean> {
     const argv = usageRefreshArgv(deps.claudeBin ?? 'claude')
     const timeout = deps.timeoutMs ?? usageRefreshTimeoutMs
+    const now = deps.now ?? Date.now
     return new Promise<boolean>((resolve) => {
         let child: ReturnType<typeof spawn>
         try {
             child = spawn(argv[0], argv.slice(1), {
                 cwd: tmpdir(),
-                stdio: 'ignore',
+                stdio: ['ignore', 'pipe', 'ignore'],
                 env: usageRefreshEnv(a),
             })
         } catch (err) {
@@ -204,6 +242,14 @@ function spawnUsageRefresh(a: DroverAccount, deps: UsageRefreshDeps): Promise<bo
             resolve(false)
             return
         }
+        // Capped, because this is a paragraph and anything much larger is a
+        // wizard, a stack trace, or a Claude Code that decided to answer the
+        // slash command with prose. None of those parse, and none of them
+        // should be able to grow a background process's memory.
+        let out = ''
+        child.stdout?.on('data', (chunk: Buffer | string) => {
+            if (out.length < 64_000) out += String(chunk)
+        })
         const timer = setTimeout(() => {
             logger.debug('[flip] usage refresh for ' + a.name + ' timed out')
             child.kill('SIGKILL')
@@ -216,9 +262,36 @@ function spawnUsageRefresh(a: DroverAccount, deps: UsageRefreshDeps): Promise<bo
         })
         child.on('close', (code) => {
             clearTimeout(timer)
-            resolve(code === 0)
+            if (code !== 0) {
+                resolve(false)
+                return
+            }
+            resolve(recordUsagePrint(a, out, now()))
         })
     })
+}
+
+/**
+ * Store what the child printed, falling back to Claude Code's own cache when
+ * the paragraph carried no rows.
+ *
+ * The VENDOR cache is the fallback source for a reset the print left off, not
+ * `readUsageCache`, because that one already merges in the reading being
+ * replaced and would let a stale reset outlive the window it describes.
+ *
+ * A print that parses to nothing is NOT recorded and the refresh reports
+ * false. That keeps "we asked and it said 0%" apart from "we asked and could
+ * not read the answer": the second must leave the previous reading in place
+ * and let it age honestly, never overwrite it with an empty one.
+ */
+export function recordUsagePrint(a: DroverAccount, text: string, now: number): boolean {
+    const rows = parseUsagePrint(text, now, readVendorUsageCache(a)?.rows ?? [])
+    if (!rows) {
+        logger.debug('[flip] usage refresh for ' + a.name + ' printed nothing readable')
+        return false
+    }
+    writeReading(droverStateDir(), a.name, rows, now)
+    return true
 }
 
 export async function refreshUsage(a: DroverAccount, deps: UsageRefreshDeps = {}): Promise<boolean> {
@@ -296,4 +369,83 @@ export async function sweepUsage(opts: UsageSweepOptions = {}): Promise<string[]
         if (ok) done.push(a.name)
     }
     return done
+}
+
+/**
+ * When THIS account was last asked, on this machine, by whoever asked.
+ *
+ * The sweep's marker is one timestamp for the whole machine, which is right
+ * for a sweep and wrong here: two sessions on two different accounts must both
+ * be allowed to refresh their own, and two sessions on the SAME account must
+ * not both spawn. So the claim is per account, and the account is the key.
+ */
+function accountMarkerPath(name: string): string {
+    return join(droverStateDir(), 'usage-refresh', encodeURIComponent(name) + '.json')
+}
+
+/**
+ * Take the right to refresh this account for the next `floor` ms, or say no.
+ *
+ * Written BEFORE the process starts rather than after it finishes, so the
+ * six seconds a refresh takes are covered by the claim. A corrupt or
+ * unwritable marker means the refresh goes ahead: a duplicated process is
+ * waste, a skipped one is a wrong number on Clay's phone, and the ticket is
+ * about the second.
+ */
+export function claimAccountRefresh(name: string, now: number, floor: number): boolean {
+    const path = accountMarkerPath(name)
+    try {
+        const at = Number(JSON.parse(readFileSync(path, 'utf8'))?.at)
+        if (Number.isFinite(at) && now - at >= 0 && now - at < floor) return false
+    } catch {
+        // No marker, or an unreadable one. Either way nobody holds it.
+    }
+    try {
+        mkdirSync(join(path, '..'), { recursive: true })
+        writeFileSync(path, JSON.stringify({ at: now }))
+    } catch (err) {
+        logger.debug('[flip] could not record the usage refresh claim for ' + name, err)
+    }
+    return true
+}
+
+export interface ActiveRefreshOptions extends UsageRefreshDeps {
+    now?: () => number
+    floor?: number
+    accounts?: () => DroverAccount[]
+    /** Skip the per-account claim; set in tests. */
+    shared?: boolean
+}
+
+/**
+ * Refresh ONE account -- the one this session is running on (DROVE-340).
+ *
+ * Separate from `sweepUsage` because it answers a different question. The
+ * sweep asks "is any account's reading old enough to be wrong", which is about
+ * the flip picker and can afford ten minutes. This asks "is the number Clay is
+ * LOOKING AT the number that is true", which cannot.
+ *
+ * It deliberately does NOT consult `needsUsageRefresh`. That helper's job is
+ * to avoid a wasted process, and it decides by the age of the reading -- which
+ * is right for an account nobody is touching and wrong for the one being spent
+ * right now, where a thirty-second-old reading is exactly the thing worth
+ * replacing. The claim above is what stops the waste instead.
+ *
+ * Returns true when a fresh reading was written.
+ */
+export async function refreshActiveAccount(
+    name: string | undefined,
+    opts: ActiveRefreshOptions = {},
+): Promise<boolean> {
+    if (!name) return false
+    const now = opts.now ?? Date.now
+    const list = opts.accounts ?? readAccounts
+    const account = list().find((a) => a.name === name)
+    // A logged-out account has no token to ask with, and the child would land
+    // in the first-run wizard rather than printing a paragraph.
+    if (!account || !isLoggedIn(account)) return false
+    if (opts.shared !== false && !claimAccountRefresh(name, now(), opts.floor ?? activeRefreshFloorMs)) {
+        return false
+    }
+    return refreshUsage(account, opts)
 }

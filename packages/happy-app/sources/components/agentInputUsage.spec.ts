@@ -47,6 +47,7 @@ import {
     usageSkippedFamilyWindows,
     usageAccountGroupTitle,
     usageSnapshotAgeText,
+    fresherUsageLimits,
     type UsageBarGroup,
 } from './agentInputUsage';
 
@@ -1201,4 +1202,58 @@ describe('a window under a spent one', () => {
         expect(groups.map((g) => g.key))
             .toEqual(['account:jamrizzi', 'account:main', 'account:bitspur.com', 'account:spare']);
     });
+});
+
+/**
+ * The wrist and the sheet on one object (DROVE-340).
+ *
+ * Clay: "The watch surprisingly is showing the up-to-date thing, but in the
+ * mobile app it's not." Both were right about their own source and there were
+ * two. `droverWatchFeed` reads `metadata.droverUsage` and nothing else; the
+ * sheet let `agentState.usageLimits` overwrite that snapshot's windows for the
+ * CURRENT account, unconditionally, with no comparison of the two timestamps
+ * both objects carry.
+ *
+ * `agentState.usageLimits` is written when the SDK emits a rate_limit_event
+ * and is not touched again. Under drover every session is a local TUI where
+ * that event never fires at all, so it holds whatever was last seen while the
+ * snapshot is re-read every thirty seconds. The override therefore pinned the
+ * one account Clay was watching to the oldest reading of the two.
+ */
+describe('the two readings of the current account', () => {
+    const older: UsageLimitsLike = {
+        capturedAt: 500,
+        windows: [
+            { id: 'five_hour', utilization: 4, resetsAt: sessionReset },
+            { id: 'seven_day', utilization: 7, resetsAt: sep5 },
+        ],
+    };
+
+    it('takes the SDK stream only while it is the later of the two', () => {
+        expect(fresherUsageLimits(sdkLimits, paneUsage)).toBe(sdkLimits);
+        expect(fresherUsageLimits(older, paneUsage)).toBeNull();
+        // A tie goes to the snapshot: it is the object every other surface
+        // already reads, and reading one object is the whole point.
+        expect(fresherUsageLimits({ ...older, capturedAt: 1_000 }, paneUsage)).toBeNull();
+        // With no snapshot to compare against, the stream is all there is.
+        expect(fresherUsageLimits(older, null)).toBe(older);
+        expect(fresherUsageLimits(null, paneUsage)).toBeNull();
+    });
+
+    it('draws the bars from the snapshot when the stream is behind it', () => {
+        // The regression, with the numbers the wrong way round: a 500-stamped
+        // stream saying 4% against a 1000-stamped snapshot saying 49%.
+        const strip = resolveUsageStrip({ ...pane, usageLimits: older });
+        const current = strip.usageBarGroups.find((g) => g.key === 'account:jamrizzi')!;
+        expect(current.rows.map((r) => `${r.name} ${r.percentText}`)).toEqual([
+            'Session 49%',
+            'Week 23%',
+            'Fable week 39%',
+        ]);
+        // And the headline figure with it — fixing the bars alone would have
+        // left the strip's own week number stale above them.
+        expect(strip.weekPercent).toBe(23);
+        expect(strip.usageFromDrover).toBe(true);
+    });
+
 });

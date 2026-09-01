@@ -253,11 +253,19 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
             // snapshot exists, and a compaction — which is the main thread
             // working and the one state nothing else reports. Publishes only
             // when the state moves; see dotPublish.ts.
+            const mainWorking = !!liveStatus?.main || thinking || !!liveStatus?.compacting
             dotPublisher.sync({
-                mainWorking: !!liveStatus?.main || thinking || !!liveStatus?.compacting,
+                mainWorking,
                 toolRunning: !!liveStatus?.main && !!liveStatus.tool,
                 compacting: !!liveStatus?.compacting,
             })
+            // DROVE-340: the same boolean is the only turn boundary local mode
+            // has. Its working-to-idle edge is a turn ending, which is when
+            // the account's usage has certainly moved and when Clay looks at
+            // the card, so the reporter goes and asks rather than waiting out
+            // its thirty-second floor. The edge is detected in the reporter,
+            // beside the rest of the cadence.
+            session.usage?.noteLiveStatus(mainWorking)
         },
         // DROVE-115: an async agent's tool call ended the instant it launched,
         // so its card had no way to learn the agent had finished and sat on

@@ -34,6 +34,7 @@ import {
     accountHarness,
     coolingState,
     cooldownFamily,
+    droverStateDir,
     isClaudeAccount,
     isLoggedIn,
     isOnboarded,
@@ -49,7 +50,8 @@ import {
     type UsageLimitRow,
 } from './accounts'
 import { familyOfDisplayName } from './limits'
-import { sweepUsage } from './refresh'
+import { activeRefreshFloorMs, refreshActiveAccount, sweepUsage } from './refresh'
+import { readingPath } from './reading'
 
 /**
  * One usage row, reduced to what a phone can render.
@@ -455,6 +457,38 @@ const settleMs = 1_500
  */
 const sweepMs = 10 * 60_000
 
+/**
+ * How often the account THIS SESSION IS ON goes and looks (DROVE-340).
+ *
+ * Clay: "the limit progress cards are constantly out of date, at least the
+ * ones for the active session ... I need this more frequent than minutes and
+ * minutes." The sweep above is ten minutes and treats his account like the
+ * four nobody is touching, so the number he watches was measured at fifteen
+ * minutes old and 42 points wrong.
+ *
+ * Thirty seconds, and gated on ACTIVITY rather than run on a bare timer: a
+ * refresh only happens when the transcript has moved since the last one, so a
+ * session sitting at a prompt spawns nothing and an idle machine costs exactly
+ * what it did before. That is what makes thirty seconds affordable -- the
+ * session burning quota is the one paying for the measurement, which is also
+ * the only one whose number is changing.
+ */
+const activeMs = activeRefreshFloorMs
+
+/**
+ * How soon after a TURN ENDS the active account is worth a look (DROVE-340).
+ *
+ * A turn ending is not just more activity, it is the one moment the number is
+ * KNOWN to have moved, and the moment Clay looks at the card. So it gets its
+ * own, tighter floor rather than waiting out the thirty-second one.
+ *
+ * Ten seconds and not zero, because a session doing many short turns would
+ * otherwise spawn a six-second process per turn and stack them. Ten is the
+ * point where back-to-back turns cost at most one look each, and a turn of
+ * any normal length always gets one at its end.
+ */
+const turnEndMs = 10_000
+
 export interface UsageReporterOptions {
     /** The account this session is on, asked fresh each time — a flip moves it. */
     current: () => string | undefined
@@ -477,6 +511,16 @@ export interface UsageReporterOptions {
      */
     sweep?: ((now: number) => Promise<string[]>) | null
     sweepMs?: number
+    /**
+     * Go and look at the account THIS session is on (DROVE-340). Overridden in
+     * tests, and null turns it off — a session under test must not spawn
+     * Claude Code, and `DROVER_USAGE_REFRESH=0` turns both this and the sweep
+     * off for the same reason the sweep has a switch.
+     */
+    active?: ((now: number, account: string | undefined) => Promise<boolean>) | null
+    activeMs?: number
+    /** The tighter floor a turn ending gets. See `turnEndMs`. */
+    turnEndMs?: number
 }
 
 /**
@@ -497,12 +541,33 @@ export class UsageReporter {
     private readonly settle: number
     private readonly sweeper: ((now: number) => Promise<string[]>) | null
     private readonly sweepEvery: number
+    private readonly activeRefresher: ((now: number, account: string | undefined) => Promise<boolean>) | null
+    private readonly activeEvery: number
+    private readonly turnEndEvery: number
 
     private stamp = ''
     private signature = ''
     private publishedAt = 0
     private sweptAt = 0
     private sweeping = false
+    private activeAt = 0
+    private activeRefreshing = false
+    /**
+     * Whether the main thread was working last time the launcher said. The
+     * EDGE is what matters — working to idle is a turn ending — and holding it
+     * here rather than in the launcher keeps the cadence and its rules in one
+     * file, and lets both be driven by a unit test.
+     */
+    private mainWorking = false
+    /** When a turn last ended, which buys the next look the tighter floor. */
+    private turnEndedAt = 0
+    /**
+     * When the transcript last moved. A refresh of the live account is worth a
+     * process only when something has happened since the last one — see
+     * `activeMs`. Seeded to 0 so the FIRST tick after start counts as activity
+     * and the session opens on a number rather than on whatever was left over.
+     */
+    private activityAt = 1
     private settleTimer: NodeJS.Timeout | null = null
     private pollTimer: NodeJS.Timeout | null = null
     private stopped = false
@@ -524,6 +589,14 @@ export class UsageReporter {
                 : (now: number) => sweepUsage({ now: () => now }))
             : opts.sweep
         this.sweepEvery = opts.sweepMs ?? sweepMs
+        this.activeRefresher = opts.active === undefined
+            ? (process.env.DROVER_USAGE_REFRESH === '0'
+                ? null
+                : (now: number, account: string | undefined) =>
+                    refreshActiveAccount(account, { now: () => now }))
+            : opts.active
+        this.activeEvery = opts.activeMs ?? activeMs
+        this.turnEndEvery = opts.turnEndMs ?? turnEndMs
     }
 
     start(): void {
@@ -544,12 +617,43 @@ export class UsageReporter {
 
     /** Something may have changed; look soon, once, however many times this is called. */
     refresh(): void {
-        if (this.stopped || this.settleTimer) return
+        if (this.stopped) return
+        // Recorded before the settle guard, not after it. Every transcript
+        // line calls this and all but the first return early on that guard; if
+        // the stamp lived below it, a whole turn would count as one moment of
+        // activity and a long turn would look idle (DROVE-340).
+        this.activityAt = this.now()
+        if (this.settleTimer) return
         this.settleTimer = setTimeout(() => {
             this.settleTimer = null
             this.tick()
         }, this.settle)
         this.settleTimer.unref?.()
+    }
+
+    /**
+     * Whether the main thread is working, as the launcher already computes it
+     * for the terminal dot (DROVE-340).
+     *
+     * The working-to-idle edge is a TURN ENDING, and locally that edge is the
+     * only turn boundary there is: the SDK's `result` message exists on the
+     * remote path, and a local transcript carries no record for it — measured
+     * on a real session's JSONL, which holds assistant/user/system records and
+     * nothing that marks a turn closing.
+     *
+     * A turn ending looks straight away rather than waiting out the thirty
+     * second floor, because it is the one moment the number is known to have
+     * moved and the moment the card is read. `turnEndMs` keeps a burst of
+     * short turns from stacking processes.
+     */
+    noteLiveStatus(mainWorking: boolean): void {
+        if (this.stopped) return
+        const was = this.mainWorking
+        this.mainWorking = mainWorking
+        if (mainWorking || !was) return
+        this.turnEndedAt = this.now()
+        this.activityAt = this.turnEndedAt
+        this.tick()
     }
 
     /**
@@ -562,6 +666,7 @@ export class UsageReporter {
         try {
             const now = this.now()
             this.maybeSweep(now)
+            this.maybeRefreshActive(now)
             const stale = now - this.publishedAt >= refreshIntervalMs
             const stamp = this.stampOf()
             if (stamp === this.stamp && !stale) return false
@@ -609,6 +714,45 @@ export class UsageReporter {
             })
     }
 
+    /**
+     * Go and look at the account this session is on, if it is worth it
+     * (DROVE-340).
+     *
+     * Three gates, and each one is a cost the ticket had to answer for:
+     *
+     *   - not while one is already running. A refresh is about six seconds and
+     *     the poll is thirty, so without this a slow machine would stack them.
+     *   - not more often than `activeEvery` — thirty seconds — or, when a
+     *     turn has ended since the last look, `turnEndEvery`, which is ten.
+     *   - not unless the TRANSCRIPT MOVED since the last refresh. This is the
+     *     one that makes the cadence affordable: a session parked at a prompt
+     *     is burning nothing, so its number cannot have changed, so asking is
+     *     pure cost. An idle session falls back to the ten-minute sweep and is
+     *     exactly as expensive as it was before this ticket.
+     *
+     * Fired and forgotten, like the sweep, because `tick` is synchronous so a
+     * flip can call it and relaunch. When it lands it ticks again, since the
+     * reading it just wrote is the thing the phone is waiting for.
+     */
+    private maybeRefreshActive(now: number): void {
+        if (!this.activeRefresher || this.activeRefreshing) return
+        const floor = this.turnEndedAt > this.activeAt ? this.turnEndEvery : this.activeEvery
+        if (this.activeAt !== 0 && now - this.activeAt < floor) return
+        if (this.activityAt <= this.activeAt) return
+        const account = this.current()
+        if (!account) return
+        this.activeRefreshing = true
+        this.activeAt = now
+        void this.activeRefresher(now, account)
+            .then((fresh) => {
+                if (fresh && !this.stopped) this.tick()
+            })
+            .catch((err) => logger.debug('[flip] active usage refresh failed (ignored)', err))
+            .finally(() => {
+                this.activeRefreshing = false
+            })
+    }
+
     /** What could have changed the answer, cheaply: file mtimes and who we are. */
     private stampOf(): string {
         // The family is in the stamp because it changes the ANSWER: a /model
@@ -622,7 +766,15 @@ export class UsageReporter {
                 return '-'
             }
         }
-        for (const a of readAccounts()) parts.push(a.name, mtime(accountConfigFile(a)))
+        for (const a of readAccounts()) {
+            // BOTH files, because there are now two readings and either can be
+            // the fresher one (DROVE-340). Statting only the account config
+            // was correct while Claude Code's cache was the only source; with
+            // drover keeping its own, a refresh that Claude Code declined to
+            // persist would move nothing this stamp could see, and the phone
+            // would sit on the old number until the five-minute re-stamp.
+            parts.push(a.name, mtime(accountConfigFile(a)), mtime(readingPath(droverStateDir(), a.name)))
+        }
         parts.push(mtime(ledgerPath()))
         return parts.join('\0')
     }
