@@ -1302,6 +1302,7 @@ function writeWhereabouts(entries: Record<string, { account: string; cwd: string
 }
 
 const inAnHour = () => new Date(Date.now() + 60 * 60 * 1000).toISOString()
+const inADay = () => new Date(Date.now() + 26 * 60 * 60 * 1000).toISOString()
 
 describe('one login wearing two names', () => {
     // main (~/.claude) and risserproperties both hold risserproperties@gmail.com:
@@ -1473,7 +1474,68 @@ describe('the account a session starts on', () => {
         expect(pick.via).toBe('cwd')
         expect(pick.account?.name).toBe('alt')
         expect(pick.note).toContain('Every account is cooling')
-        expect(pick.note).toContain('Starting there anyway')
+        // The account it STARTS is named (DROVE-262), and it is the account
+        // stdout returns. Nothing here can run anything, so the next reset is
+        // the one number left worth printing and it survives — spelled out as
+        // a reset, and after the start, so it cannot be read as the choice.
+        expect(pick.note).toContain('Starting on alt')
+        expect(pick.note).not.toContain('Starting there')
+        expect(pick.note).toMatch(/is the first to reset, at \d\d:\d\d/)
+    })
+
+    it('names the account it is starting, not the one that recovers first', async () => {
+        // DROVE-262, and the fixture is the mix that exposed it: `alt` is out
+        // of FABLE alone, so it runs everything else right now; `main` and
+        // `third` are out of EVERYTHING and merely come back sooner. Staying
+        // on alt was always the right pick. The sentence read
+        //
+        //   alt is cooling: Fable weekly limit at 100% (...), back Wed 14:59.
+        //   Every account is cooling; main is back first. Starting there anyway
+        //
+        // so the last account it named was main and the session opened on alt.
+        // "Back first" ranks time to FULL recovery; the pick ranks what can
+        // run now, and this mix is precisely where those two orders disagree.
+        three()
+        writeWhereabouts({ s1: { account: 'alt', cwd, at: 1000 } })
+        writeUsage(join(root, 'st-alt'), [
+            { kind: 'weekly_scoped', percent: 100, resets_at: inADay(), scope: scopedTo('Fable') },
+        ])
+        for (const d of ['st-main', 'st-third']) {
+            writeUsage(join(root, d), [{ kind: 'weekly_all', percent: 100, resets_at: inAnHour() }])
+        }
+        const { pickStartAccount } = await accountsModule()
+
+        // No model anywhere: unknown counts every maxed row, so the picker
+        // parks and this stays put. That is the run Clay reproduced.
+        const blind = pickStartAccount({ cwd })
+        expect(blind.account?.name).toBe('alt')
+        expect(blind.note).toContain('Every account is cooling')
+
+        // With the family known the picker settles on alt outright rather
+        // than parking. Different path, same sentence, same account.
+        const fable = pickStartAccount({ cwd, model: 'claude-fable-5[1m]' })
+        expect(fable.account?.name).toBe('alt')
+
+        for (const pick of [blind, fable]) {
+            const note = pick.note!
+            // It names what it starts, and says why that beat the others.
+            expect(note).toContain('Starting on alt')
+            expect(note).toContain('only model-scoped limits are out')
+            expect(note).toContain('switch models with /model')
+            // The recovery race is gone: neither the phrase nor either of the
+            // accounts that would win it appears at all.
+            expect(note).not.toContain('back first')
+            expect(note).not.toContain('Starting there')
+            expect(note).not.toContain('main')
+            expect(note).not.toContain('third')
+            // And the last account the line names is the one it returns —
+            // the whole of the misreading was that it was not.
+            const named = ['main', 'alt', 'third']
+                .map((n) => ({ n, at: note.lastIndexOf(n) }))
+                .filter((x) => x.at >= 0)
+                .sort((a, b) => b.at - a.at)
+            expect(named[0]!.n).toBe(pick.account!.name)
+        }
     })
 
     it('skips a remembered account that has no login', async () => {
