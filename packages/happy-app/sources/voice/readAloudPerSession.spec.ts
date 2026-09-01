@@ -493,10 +493,19 @@ describe('reading per session, over the real reader (DROVE-297)', () => {
         await settle();
         expect(reader.readingReport()).toMatchObject({ session: 'a', state: 'paused' });
 
+        // It names the session SPEAKING, not the one focused. Switching A off
+        // leaves its screen — and its focus — exactly where they were, and a
+        // terminal that printed "reading a" there would be reporting a voice
+        // that is not talking.
+        reader.setPaused(false);
+        reader.setSessionEnabled('a', false);
+        await settle();
+        expect(reader.focusedSessionId).toBe('a');
+        expect(reader.readingReport()).toMatchObject({ session: null, state: 'off' });
+
         // The default is reported rather than quietly fixed: reading being off
         // by default is something the terminal SAYS, because switching audio
         // on in a phone in his pocket from a Mac is a surprise.
-        reader.setPaused(false);
         reader.setEnabled(true);
         expect(reader.readingReport().defaultEnabled).toBe(true);
     });

@@ -82,6 +82,25 @@ describe('the reading state, phone and wrist', () => {
         expect(feed).toContain('if (!readAloud.isEnabled) return null;');
         expect(feed).toContain('...(reading ? { reading } : {}),');
     });
+
+    /**
+     * DROVE-297. Reading is per session now, so the reader has two session
+     * ids: `focused` is whose timeline it holds, `readingSessionId` is who is
+     * actually SPEAKING. The wrist scopes its pause control by the id in this
+     * payload (`DroverReading.applies(to:)`), so the wrong one would offer a
+     * pause on a session that has given the voice up.
+     *
+     * Asserted as SOURCE rather than as behaviour on purpose, and the same way
+     * every other claim in this file is: today the two ids agree wherever
+     * `collectReading` gets past its guard, so a behavioural test could only
+     * force the reader into a state it cannot reach. What is worth pinning is
+     * that the payload asks the right QUESTION, so the day the two come apart
+     * the wire is already right.
+     */
+    it('names the session speaking, not merely the one focused', () => {
+        expect(feed).toContain('const sessionId = readAloud.readingSessionId;');
+        expect(feed).not.toContain('const sessionId = readAloud.focusedSessionId;');
+    });
 });
 
 describe('the transport press, wrist to phone', () => {
