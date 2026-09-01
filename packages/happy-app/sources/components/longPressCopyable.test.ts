@@ -219,6 +219,67 @@ describe('the hold offers both the coarse action and the fine one', () => {
     });
 });
 
+describe('the taller menu still lands on screen', () => {
+    /**
+     * DROVE-282 gave the menu a second row, so the clamp that keeps it on
+     * screen now has twice as much to hold back. The case that exercises it is
+     * a reply TALLER than the window: there is no room above it, and its
+     * bottom edge is off screen, so the "drop below" branch would put the menu
+     * past the bottom if it were not clamped. The window is 800 tall here.
+     *
+     * The expected height is READ OFF the rendered rows rather than written
+     * down, so adding a third item later is caught by this test instead of
+     * quietly pushing the menu off the bottom.
+     */
+    function renderAt(y: number, height: number): ReactTestRenderer {
+        let renderer!: ReactTestRenderer;
+        act(() => {
+            renderer = create(React.createElement(AndroidCopyable, {
+                text: MESSAGE,
+                children: React.createElement('Bubble'),
+            }), {
+                createNodeMock: () => ({
+                    measureInWindow: (callback: (x: number, y: number, w: number, h: number) => void) =>
+                        callback(40, y, 240, height),
+                }),
+            });
+        });
+        act(() => shared.longPressHandlers[0]());
+        return renderer;
+    }
+
+    function flatten(style: unknown): Record<string, any> {
+        const parts = (Array.isArray(style) ? style.flat(Infinity) : [style]).filter(Boolean);
+        return Object.assign({}, ...parts as object[]);
+    }
+
+    function menuRows(renderer: ReactTestRenderer): any[] {
+        return renderer.root.findAllByType('Pressable' as any)
+            .filter((row: any) => typeof row.props.accessibilityLabel === 'string');
+    }
+
+    function menuTop(renderer: ReactTestRenderer): number {
+        return flatten(renderer.root.findByType('AnimatedPopup' as any).props.style).top;
+    }
+
+    function menuHeight(renderer: ReactTestRenderer): number {
+        const rows = menuRows(renderer);
+        return rows.reduce((total: number, row: any) => total + flatten(row.props.style({ pressed: false })).height, 0);
+    }
+
+    it('sits above an ordinary message rather than covering it', () => {
+        const renderer = renderAt(300, 60);
+        expect(menuTop(renderer)).toBe(300 - menuHeight(renderer) - 8);
+    });
+
+    it('stays fully on screen when the message is taller than the window', () => {
+        const renderer = renderAt(20, 900);
+        const top = menuTop(renderer);
+        expect(top).toBeGreaterThanOrEqual(12);
+        expect(top + menuHeight(renderer)).toBeLessThanOrEqual(800 - 12);
+    });
+});
+
 describe('LongPressCopyable fallbacks', () => {
     // Android has no context-menu primitive in @expo/ui, so the hold degrades
     // to the anchored menu it has today rather than to no copy at all.
