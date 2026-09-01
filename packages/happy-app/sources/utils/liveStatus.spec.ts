@@ -343,7 +343,43 @@ describe('the tally across main and every subagent (DROVE-184, DROVE-241)', () =
 
 describe('liveStatusWatchLine', () => {
     it('is one short line: the tool name, the workflow, the count', () => {
-        expect(liveStatusWatchLine(busy, now)).toBe('Bash · drover-relaunch 3/5 · 2 agents');
+        expect(liveStatusWatchLine(busy, now)).toBe('Bash · drover-relaunch · 3 agents');
+    });
+
+    /**
+     * The assertion above used to read `drover-relaunch 3/5 · 2 agents`, and
+     * both halves of that were the same drift (DROVE-268). The run's fan-out
+     * was stated twice on a twenty-character row, as two different numbers:
+     * `2` was `agents.length` while the strip beside it drew `sideCount`, which
+     * counted the workflow too. DROVE-209 removed that disagreement once and
+     * DROVE-257 found it back, so this pins the two together rather than
+     * restating the constant — the wrist and the screen must be the same
+     * number by construction, not by having been typed the same on one day.
+     */
+    it('says the same number as the strip, on old wire and new', () => {
+        expect(liveStatusWatchLine(busy, now))
+            .toContain(`${summarizeLiveStatus(busy, now).sideCount} agents`);
+
+        // The same session from a CLI that publishes the run's agents: five
+        // workers where the old wire showed one workflow and said nothing of
+        // them. The count still comes off one derivation, so the wrist moves
+        // with the strip instead of being one short of it.
+        const published: LiveStatus = {
+            ...busy,
+            agents: [
+                ...busy.agents!,
+                { id: 'w1', label: 'implement:DROVE-21', startedAt: now - 60_000, runId: 'wf_1' },
+                { id: 'w2', label: 'implement:DROVE-22', startedAt: now - 60_000, runId: 'wf_1' },
+                { id: 'w3', label: 'implement:DROVE-23', startedAt: now - 60_000, runId: 'wf_1' },
+            ],
+            workflows: [{ ...busy.workflows![0], running: 3, done: 1, failed: 1, quiet: 0, total: 5 }],
+        };
+        const summary = summarizeLiveStatus(published, now);
+        expect(summary.sideCount).toBe(5);
+        expect(liveStatusWatchLine(published, now)).toContain('5 agents');
+        // And the run itself is not added on top of the agents it just
+        // published, which would have made it six.
+        expect(summary.rows.filter((row) => row.kind === 'agent')).toHaveLength(5);
     });
 
     it('never carries an elapsed time, because the wrist ticks its own from liveStatusSince', () => {
@@ -561,9 +597,135 @@ describe('the count the row shows and the wrist beats', () => {
     });
 
     it('counts the workflow, whose own agents are nowhere else on the wire', () => {
-        // The CLI collapses a workflow's agents into done/total and keeps them
-        // out of `agents` entirely, so the workflow row IS that fan-out here.
+        // An OLDER CLI collapses a workflow's agents into done/total and keeps
+        // them out of `agents` entirely, so the workflow row IS that fan-out
+        // here. DROVE-220 means this is what a session running right now
+        // sends, so it has to keep counting the way it always did.
         expect(summarizeLiveStatus(busy, now).sideCount).toBe(3);
+    });
+});
+
+/**
+ * A WORKFLOW'S AGENTS, IN THE LIST WITH EVERYONE ELSE'S (DROVE-268).
+ *
+ * Clay, with six agents running and five of them having written to disk inside
+ * the last 35 seconds: "Why aren't you doing anything in subagent". He was
+ * right about what the app showed him. Agents launched by the Agent tool
+ * reached the phone; agents launched inside a Workflow did not, because the
+ * CLI folded them into a `done/total` and published no row, no id and no
+ * count for any of them.
+ *
+ * They are ordinary entries in `agents` now, each stamped with the `runId`
+ * that launched it, and this is what keeps them there.
+ */
+describe('workflow agents (DROVE-268)', () => {
+    /** Two runs, four of their agents writing, and one agent the pane launched. */
+    const fanOut: LiveStatus = {
+        at: now,
+        turnStartedAt: now - 600_000,
+        agents: [
+            { id: 'p1', label: 'Cut TestFlight build 16', startedAt: now - 300_000 },
+            { id: 'w1', label: 'Work in ~/Projects/bitspur/happy', startedAt: now - 120_000, runId: 'wf_a' },
+            { id: 'w2', label: 'Work in ~/Projects/bitspur/cattle-drover', startedAt: now - 118_000, runId: 'wf_a' },
+            { id: 'w3', label: 'Merge the stranded harness lanes', startedAt: now - 117_000, runId: 'wf_a' },
+            { id: 'v1', label: 'Reconcile the wave', startedAt: now - 60_000, runId: 'wf_b' },
+        ],
+        workflows: [
+            {
+                id: 'wf_a', name: 'drove-finish-everything', phaseNames: ['Work', 'Verify'],
+                running: 3, done: 0, failed: 0, quiet: 1, total: 4, startedAt: now - 130_000,
+            },
+            {
+                id: 'wf_b', name: 'drove-wave-two', phaseNames: ['Reconcile', 'Build'],
+                running: 1, done: 2, failed: 0, quiet: 2, total: 5, startedAt: now - 900_000,
+            },
+        ],
+    };
+
+    it('puts every running agent on the strip, workflow or not', () => {
+        const summary = summarizeLiveStatus(fanOut, now);
+        // Five workers, not "one agent and two workflows". This number is the
+        // whole ticket: it was 1 for the state Clay was looking at.
+        expect(summary.sideCount).toBe(5);
+        expect(summary.rows.filter((row) => row.kind === 'agent').map((row) => row.agentId))
+            .toEqual(['w1', 'w2', 'w3', 'v1', 'p1']);
+    });
+
+    it('draws a run its agents indented under it, and never folds them away', () => {
+        const rows = summarizeLiveStatus(fanOut, now).rows;
+        const kinds = rows.map((row) => `${row.kind}:${row.agentId ?? row.key}`);
+        expect(kinds).toEqual([
+            'workflow:workflow:wf_a',
+            'agent:w1', 'agent:w2', 'agent:w3',
+            'workflow:workflow:wf_b',
+            'agent:v1',
+            'agent:p1',
+        ]);
+        // Indented under their run, and the pane's own left where it was.
+        expect(rows.find((row) => row.agentId === 'w1')!.depth).toBe(1);
+        expect(rows.find((row) => row.agentId === 'p1')!.depth).toBe(0);
+        // NOTHING is hidden with every fold shut. A workflow agent carries no
+        // parentId precisely so it cannot be: the complaint was that these
+        // were invisible, and a fold that defaults to closed reproduces it.
+        expect(visibleRows(rows, new Set())).toHaveLength(rows.length);
+    });
+
+    it('says what a run has out and what it has settled, not just done/total', () => {
+        const row = summarizeLiveStatus(fanOut, now).rows.find((r) => r.key === 'workflow:wf_b')!;
+        expect(row.progress).toBe('1 running · 2 done / 5');
+        // The phases the run's script declares. No agent is placed in one:
+        // nothing live maps an agent to a phase, so the row says what the run
+        // is made of and stops there.
+        expect(row.detail).toBe('Reconcile → Build');
+    });
+
+    it('counts a failure as settled, so a dead run stops reading as a young one', () => {
+        // Measured on Clay's machine: a run of 5 started and 5 failed, which
+        // drew as `0/5` because only `result` counted toward done.
+        const dead: LiveStatus = {
+            at: now,
+            agents: [{ id: 'x1', label: 'last one standing', startedAt: now - 30_000, runId: 'wf_c' }],
+            workflows: [{
+                id: 'wf_c', name: 'drover-new-surfaces',
+                running: 1, done: 0, failed: 4, quiet: 0, total: 5, startedAt: now - 300_000,
+            }],
+        };
+        expect(summarizeLiveStatus(dead, now).rows.find((r) => r.kind === 'workflow')!.progress)
+            .toBe('1 running · 4 failed / 5');
+    });
+
+    it('never counts a quiet agent as a running one', () => {
+        // `quiet` is started, unsettled and not writing — killed with a
+        // session, or blocked on a long tool call. Publishing those as running
+        // would swap tonight's silence for a louder lie, so they are on the
+        // run's own numbers and never in `agents`.
+        const summary = summarizeLiveStatus(fanOut, now);
+        expect(summary.sideCount).toBe(5);
+        expect(fanOut.workflows!.reduce((n, w) => n + (w.quiet ?? 0), 0)).toBe(3);
+        expect(summary.rows.filter((row) => row.kind === 'agent')).toHaveLength(5);
+    });
+
+    it('keeps a running agent when its run is not in the snapshot', () => {
+        // A row is never lost to a missing header — the same promotion
+        // orderAgentRows does for a child whose parent has finished.
+        const orphaned: LiveStatus = { ...fanOut, workflows: [] };
+        const summary = summarizeLiveStatus(orphaned, now);
+        expect(summary.sideCount).toBe(5);
+        expect(summary.rows.every((row) => row.depth === 0)).toBe(true);
+    });
+
+    it('drops a run and its agents together when the run ends', () => {
+        // The CLI stops publishing both at once: a run with nothing writing
+        // and nothing left to write leaves the snapshot, and its agents went
+        // out of `agents` as they fell stale. Neither lingers.
+        const over: LiveStatus = {
+            at: now,
+            agents: [{ id: 'p1', label: 'Cut TestFlight build 16', startedAt: now - 300_000 }],
+            workflows: [],
+        };
+        const summary = summarizeLiveStatus(over, now);
+        expect(summary.sideCount).toBe(1);
+        expect(summary.rows.map((row) => row.agentId)).toEqual(['p1']);
     });
 });
 

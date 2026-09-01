@@ -365,10 +365,17 @@ export interface LiveStatusSummary {
      * `rows` for `kind === 'agent'`, which is agents WITHOUT workflows, so the
      * wrist said two while the screen said three for as long as a workflow was
      * running — the exact disagreement DROVE-209 set out to remove, surviving
-     * because its spec never put a workflow in the fixture. A workflow's own
-     * agents are not in `agents` at all (the CLI collapses them into
-     * done/total), so the workflow row IS those agents on this row; dropping
-     * it undercounts the fan-out rather than tidying it.
+     * because its spec never put a workflow in the fixture.
+     *
+     * IT NO LONGER ADDS THE WORKFLOWS, and that is an inversion, not a
+     * regression (DROVE-268). A workflow's agents used to be missing from
+     * `agents` entirely — the CLI collapsed them into a done/total — so the
+     * workflow row had to stand in for the whole fan-out and dropping it
+     * undercounted. The CLI publishes those agents now, each stamped with a
+     * `runId`, so the row is a group header and adding it back would count
+     * five agents as six. The number this field answers is unchanged: how many
+     * workers are out. What changed is that five of them stopped being
+     * invisible.
      *
      * NESTED AGENTS COUNT, and they always did (DROVE-185). Every agent at
      * every depth is one entry in `agents`, so this number is unchanged by the
@@ -487,22 +494,99 @@ export function orderAgentRows(agents: LiveStatusAgent[], now: number): LiveStat
     return rows;
 }
 
+/**
+ * `4 running · 1 done / 5` — what a run has out, and what it has settled
+ * (DROVE-268).
+ *
+ * `done/total` alone was the whole progress line, and it said the wrong thing
+ * twice over: a run of 5 started and 5 failed drew as `0/5`, because only
+ * `result` counted; and a run with four agents flat out drew the same `0/5` as
+ * a run with four agents dead, because nothing on the line was about NOW.
+ * Running leads for that reason — it is the answer to the question Clay
+ * actually asked the phone.
+ *
+ * `quiet` is deliberately not in this string. It is on the row as work this
+ * reader cannot see, and it is the difference between the numbers that add up
+ * and `total`, which is where a reader will look for it.
+ */
+function workflowProgress(workflow: LiveStatusWorkflow): string {
+    // An older CLI publishes neither `running` nor `failed`, and DROVE-220
+    // makes that the common case for a session running right now. It cannot
+    // say how many are working, so the row keeps the sentence it always drew
+    // rather than saying `0 running` about a run it simply cannot see into.
+    if (typeof workflow.running !== 'number') return `${workflow.done}/${workflow.total} agents`;
+    const running = workflow.running;
+    const failed = workflow.failed ?? 0;
+    const parts: string[] = [];
+    if (running > 0) parts.push(`${running} running`);
+    if (workflow.done > 0) parts.push(`${workflow.done} done`);
+    if (failed > 0) parts.push(`${failed} failed`);
+    // "launched", not "planned": the journal is append-only and nothing on
+    // disk states how many agents a workflow will end up running, so this
+    // rises as the run fans out. The terminal counts it the same way.
+    if (parts.length === 0) return `0/${workflow.total} agents`;
+    return `${parts.join(' · ')} / ${workflow.total}`;
+}
+
 function workflowRow(workflow: LiveStatusWorkflow, now: number): LiveStatusRow {
+    // The phase TITLES, when the run's script declared them, in place of the
+    // newest agent's label (DROVE-268). `Work → Verify` says what the run is
+    // made of; the old `detail` was the label of whichever agent started last,
+    // which on a fan-out is an arbitrary one of five. There is still no claim
+    // about WHICH phase is current, because nothing live states it.
+    const phases = workflow.phaseNames ?? [];
+    const detail = phases.length > 0 ? phases.join(' → ') : workflow.phase;
     return {
         kind: 'workflow',
         key: `workflow:${workflow.id}`,
         title: workflow.name,
-        ...(workflow.phase ? { detail: workflow.phase } : {}),
-        // "launched", not "planned": the journal is append-only and nothing on
-        // disk states how many agents a workflow will end up running, so this
-        // rises as the run fans out. The terminal counts it the same way.
-        progress: `${workflow.done}/${workflow.total} agents`,
+        ...(detail ? { detail } : {}),
+        progress: workflowProgress(workflow),
         elapsed: formatElapsed(now - workflow.startedAt),
         ...(typeof workflow.tokens === 'number' && workflow.tokens > 0
             ? { tokens: formatTokens(workflow.tokens) }
             : {}),
         depth: 0,
     };
+}
+
+/**
+ * HOW MUCH IS OUT — the one derivation, read by the strip, the sheet and the
+ * wrist (DROVE-155, DROVE-209, DROVE-268).
+ *
+ * It is the length of `agents`, and nothing else. That array now holds a
+ * workflow's agents as well as the pane's, each stamped with a `runId`, so
+ * counting the workflows too would count the same fan-out twice — the
+ * opposite of the old rule here, and for the opposite reason. Before
+ * DROVE-268 a workflow's agents were not in `agents` at all, so the workflow
+ * itself had to stand in for them; now they are there, and the workflow row is
+ * a group header rather than a worker.
+ *
+ * The wrist reads THIS, not its own count. DROVE-209 set out to stop the
+ * wrist and the screen disagreeing and DROVE-257 found them drifted again, so
+ * the derivation is a function rather than an expression repeated twice.
+ */
+export function liveStatusWorkerCount(status: LiveStatus | null | undefined): number {
+    const agents = status?.agents ?? [];
+    // A workflow that PUBLISHES its agents is a group header: its workers are
+    // in `agents` already, stamped with its `runId`, and counting the run too
+    // would count them twice.
+    //
+    // A workflow from an older CLI publishes none — it collapses its fan-out
+    // into a done/total and nothing else on the wire speaks for those agents —
+    // so it still stands in for them, worth the one it has always been worth.
+    // `running` is the tell, and a run that reports it always reports at least
+    // one: the CLI drops a run the moment nothing of it is writing, so
+    // `running: 0` never reaches here and cannot silently zero a live fan-out.
+    // DROVE-220 means an old CLI is what a session running right now has.
+    const opaqueWorkflows = (status?.workflows ?? [])
+        .filter((workflow) => typeof workflow.running !== 'number').length;
+    return agents.length + opaqueWorkflows;
+}
+
+/** Depth-shift a block of rows so it nests under the row above it. */
+function indented(rows: LiveStatusRow[], by: number): LiveStatusRow[] {
+    return rows.map((row) => ({ ...row, depth: row.depth + by }));
 }
 
 function countPhrase(count: number, one: string, many: string): string | null {
@@ -594,10 +678,42 @@ export function summarizeLiveStatus(status: LiveStatus, now: number): LiveStatus
             depth: 0,
         });
     }
-    for (const workflow of workflows) rows.push(workflowRow(workflow, now));
+    // A workflow, then ITS agents, indented one step under it (DROVE-268).
+    //
+    // The same sheet, the same row shape, the same tap: this is what "folded,
+    // not dropped" means for a fan-out that used to arrive as a single line
+    // saying `0/5`. They are indented but NOT foldable — a workflow agent has
+    // no `parentId`, so `visibleRows` can never hide it. That is deliberate.
+    // The complaint being answered is that they were invisible, and a fold
+    // that defaults to shut reproduces it exactly. Their own children still
+    // fold, because those were always behind a chevron.
+    const byRun = new Map<string, LiveStatusAgent[]>();
+    const paneAgents: LiveStatusAgent[] = [];
+    for (const agent of agents) {
+        if (!agent.runId) {
+            paneAgents.push(agent);
+            continue;
+        }
+        const list = byRun.get(agent.runId);
+        if (list) list.push(agent);
+        else byRun.set(agent.runId, [agent]);
+    }
+    for (const workflow of workflows) {
+        rows.push(workflowRow(workflow, now));
+        const mine = byRun.get(workflow.id);
+        if (!mine) continue;
+        byRun.delete(workflow.id);
+        for (const row of indented(orderAgentRows(mine, now), 1)) rows.push(row);
+    }
+    // An agent whose run is not in this snapshot is NOT dropped: it is drawn at
+    // top level beside the pane's own, the same promotion `orderAgentRows`
+    // does for a child whose parent has finished. Losing a running agent
+    // because its header went missing is the bug this ticket exists to fix,
+    // and every count below is taken off these rows.
+    for (const orphans of byRun.values()) paneAgents.push(...orphans);
     // Ordered parent-then-child and stamped with a depth (DROVE-185). Same
     // rows, same number of them, in an order that can be drawn as a tree.
-    for (const row of orderAgentRows(agents, now)) rows.push(row);
+    for (const row of orderAgentRows(paneAgents, now)) rows.push(row);
 
     // The headline is what Clay sees without expanding anything, so it names
     // the most specific thing running. A tool beats a fan-out because the tool
@@ -621,7 +737,7 @@ export function summarizeLiveStatus(status: LiveStatus, now: number): LiveStatus
             : `${status.tool.name} · ${elapsed}`;
     } else if (workflows.length > 0) {
         const workflow = workflows[0];
-        headline = `${workflow.name} · ${workflow.done}/${workflow.total} agents`;
+        headline = `${workflow.name} · ${workflowProgress(workflow)}`;
     } else if (agents.length > 0) {
         headline = countPhrase(agents.length, 'agent running', 'agents running')!;
     } else {
@@ -639,7 +755,10 @@ export function summarizeLiveStatus(status: LiveStatus, now: number): LiveStatus
 
     const tally = liveStatusTally(status);
     const main = liveStatusMain(status, now, tally);
-    const sideCount = agents.length + workflows.length;
+    // Agents, and only agents (DROVE-268) — see `liveStatusWorkerCount`. A
+    // workflow used to be added here because its agents were nowhere else;
+    // they are in `agents` now, so adding it would count the fan-out twice.
+    const sideCount = liveStatusWorkerCount(status);
 
     return {
         headline,
@@ -766,13 +885,19 @@ export function liveStatusWatchLine(status: LiveStatus | null | undefined, now: 
     }
     if (live.tool) parts.push(live.tool.name);
     const workflows = live.workflows ?? [];
-    if (workflows.length > 0) {
-        const workflow = workflows[0];
-        parts.push(`${workflow.name} ${workflow.done}/${workflow.total}`);
-    }
-    const agents = live.agents ?? [];
-    const agentPhrase = countPhrase(agents.length, 'agent', 'agents');
-    if (agentPhrase) parts.push(agentPhrase);
+    // THE RUN'S NAME, AND NOT ITS NUMBERS (DROVE-268).
+    //
+    // This segment used to carry `drover-relaunch 3/5` and the line then added
+    // an agent count beside it, so the same fan-out was stated twice on a row
+    // twenty characters wide — and stated as two different numbers, because
+    // the count was `agents.length` and the strip's was `sideCount`, which
+    // included the workflow. That is the drift DROVE-209 removed once and
+    // DROVE-257 found back. There is one count on this line now and it comes
+    // from the same function the strip calls; the run contributes its name,
+    // which is the part the number cannot say.
+    if (workflows.length > 0) parts.push(workflows[0].name);
+    const workerPhrase = countPhrase(liveStatusWorkerCount(live), 'agent', 'agents');
+    if (workerPhrase) parts.push(workerPhrase);
     if (parts.length === 0) parts.push(LIVE_STATUS_THINKING_WORD);
     return parts.join(' · ');
 }

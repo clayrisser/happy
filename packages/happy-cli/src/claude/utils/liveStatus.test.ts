@@ -307,10 +307,137 @@ describe('createLiveStatusReader', () => {
             name: 'drover-relaunch',
             phase: 'Implement the fix',
             done: 1,
+            // w3 is writing; w1 reported; w2 started and went quiet. Three
+            // buckets over the three the journal says were launched
+            // (DROVE-268), never `total - done` — that subtraction would have
+            // called w2 busy for the rest of the session.
+            running: 1,
+            quiet: 1,
             total: 3,
+            agentIds: ['w3'],
             startedAt: now - 60_000,
             tokens: 5000,
         }])
+        // And the agent itself is on the wire, stamped with the run that
+        // launched it, in the ONE array every surface counts (DROVE-268).
+        expect(status!.agents!.find((agent) => agent.id === 'w3'))
+            .toEqual({
+                id: 'w3',
+                label: 'Implement the fix',
+                startedAt: now - 60_000,
+                tokens: 5000,
+                runId: 'wf_abc123-def',
+            })
+    })
+
+    /**
+     * THE BUG CLAY WAS LOOKING AT (DROVE-268).
+     *
+     * `readWorkflows` opened with a freshness check on the JOURNAL:
+     *
+     *     if (now - statSync(journal).mtimeMs > agentStaleMs) continue
+     *
+     * which is a heartbeat read off a file that has no pulse. The journal gets
+     * one line when an agent starts and one when it stops; in between, a run
+     * whose agents work for twenty minutes writes nothing to it at all. So a
+     * whole fan-out fell out of the snapshot after ninety seconds and the app
+     * had nothing to draw.
+     *
+     * Measured against his live session at the moment he asked why nothing was
+     * happening: two runs, one with five agents last written 0.9s earlier and
+     * one with an agent written 7s earlier, both journals last touched 467s
+     * and 458s before. The reader published `agents: 1, workflows: 0`. Eight
+     * agents flat out, reported as nothing.
+     */
+    it('keeps reporting a run whose agents are busy but whose journal has gone quiet', () => {
+        const now = Date.now()
+        writeFixture(now)
+        const wf = join(subagents, 'workflows', 'wf_long-run')
+        mkdirSync(wf, { recursive: true })
+        writeFileSync(join(wf, 'journal.jsonl'), [
+            JSON.stringify({ type: 'started', key: 'k1', agentId: 'w1' }),
+            JSON.stringify({ type: 'started', key: 'k2', agentId: 'w2' }),
+            '',
+        ].join('\n'))
+        for (const id of ['w1', 'w2']) {
+            writeFileSync(join(wf, `agent-${id}.meta.json`), JSON.stringify({ agentType: 'workflow-subagent' }))
+            writeFileSync(join(wf, `agent-${id}.jsonl`), [agentRecord(now - 1_200_000), ''].join('\n'))
+            // Both writing a second ago...
+            touch(join(wf, `agent-${id}.jsonl`), now - 1_000)
+        }
+        // ...while the journal has not been touched for eight minutes, because
+        // nothing has started or finished in that time.
+        touch(join(wf, 'journal.jsonl'), now - 480_000)
+
+        const status = createLiveStatusReader({ projectDir, sessionId }).read(now)
+        expect(status!.workflows).toHaveLength(1)
+        expect(status!.workflows![0].running).toBe(2)
+        expect(status!.agents!.filter((agent) => agent.runId === 'wf_long-run')).toHaveLength(2)
+    })
+
+    it('counts a failed agent as settled, so a dead run does not read as a young one', () => {
+        const now = Date.now()
+        writeFixture(now)
+        const wf = join(subagents, 'workflows', 'wf_all-failed')
+        mkdirSync(wf, { recursive: true })
+        // Measured on Clay's machine: a run of 5 started and 5 failed. Only
+        // `result` counted toward done, so it drew `0/5` — a run that had
+        // entirely died, reported as one barely under way — and it never left
+        // the list, because `done >= started` was false forever.
+        writeFileSync(join(wf, 'journal.jsonl'), [
+            JSON.stringify({ type: 'started', key: 'k1', agentId: 'w1' }),
+            JSON.stringify({ type: 'started', key: 'k2', agentId: 'w2' }),
+            JSON.stringify({ type: 'failed', key: 'k1', agentId: 'w1' }),
+            JSON.stringify({ type: 'failed', key: 'k2', agentId: 'w2' }),
+            '',
+        ].join('\n'))
+        touch(join(wf, 'journal.jsonl'), now - 1_000)
+
+        // Everything it launched has settled and nothing is writing: the run
+        // is over, and it leaves rather than lingering at `0/2`.
+        const status = createLiveStatusReader({ projectDir, sessionId }).read(now)
+        expect(status!.workflows ?? []).toEqual([])
+    })
+
+    it('names a workflow agent by its prompt, because its meta.json names nothing', () => {
+        const now = Date.now()
+        writeFixture(now)
+        const wf = join(subagents, 'workflows', 'wf_unlabelled')
+        mkdirSync(wf, { recursive: true })
+        mkdirSync(join(projectDir, sessionId, 'workflows', 'scripts'), { recursive: true })
+        // The phase list is on the script, which Claude Code writes at launch.
+        // The run record that carries a per-agent `phaseTitle` is written when
+        // the run ENDS, so nothing here can place an agent in a phase.
+        writeFileSync(
+            join(projectDir, sessionId, 'workflows', 'scripts', 'drove-finish-everything-wf_unlabelled.js'),
+            "export const meta = {\n  name: 'drove-finish-everything',\n  phases: [\n    { title: 'Work', detail: 'one agent per item' },\n    { title: 'Verify' },\n  ],\n}\n",
+        )
+        writeFileSync(join(wf, 'journal.jsonl'), JSON.stringify({ type: 'started', key: 'k1', agentId: 'w1' }) + '\n')
+        // Measured across 152 workflow agent metas on this machine: 138 carry
+        // exactly {agentType, spawnDepth} and 14 add the worktree pair. Not
+        // one has a description, so the label used to bottom out at the type
+        // and five agents drew five identical rows.
+        writeFileSync(join(wf, 'agent-w1.meta.json'), JSON.stringify({
+            agentType: 'workflow-subagent',
+            worktreePath: '/x/.claude/worktrees/wf_unlabelled-4',
+            spawnDepth: 1,
+        }))
+        writeFileSync(join(wf, 'agent-w1.jsonl'), [
+            JSON.stringify({
+                type: 'user',
+                isSidechain: true,
+                timestamp: iso(now - 90_000),
+                uuid: 'w1-0',
+                message: { role: 'user', content: 'Merge the stranded harness lanes.\n\nGROUND RULES:\n- work in your worktree' },
+            }),
+            '',
+        ].join('\n'))
+        touch(join(wf, 'agent-w1.jsonl'), now - 1_000)
+
+        const status = createLiveStatusReader({ projectDir, sessionId }).read(now)
+        expect(status!.agents!.find((agent) => agent.id === 'w1')!.label)
+            .toBe('Merge the stranded harness lanes.')
+        expect(status!.workflows![0].phaseNames).toEqual(['Work', 'Verify'])
     })
 
     it('says nothing at all once the turn has ended', () => {
