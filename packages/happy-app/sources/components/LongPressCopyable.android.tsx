@@ -91,7 +91,10 @@ export function LongPressCopyable(props: LongPressCopyableProps) {
 function CopyMenu({ anchor, onClose, router, text }: {
     anchor: AnchorRect;
     onClose: () => void;
-    router: { push: (href: string) => void };
+    // expo-router's own Router, not a hand-written shape: its `push` is
+    // typed against the generated route union, so a structural `(href:
+    // string) => void` is not assignable to it (TS2322).
+    router: ReturnType<typeof useRouter>;
     text: string;
 }) {
     const { theme } = useUnistyles();
