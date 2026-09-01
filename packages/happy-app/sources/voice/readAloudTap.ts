@@ -52,6 +52,17 @@ import type { ReadAloudDetourSentence } from './readAloud';
  * that moved the reading somewhere he never pointed at. So the two are
  * separate entry points now, and the subagent's one hands its sentences over
  * rather than naming a position the reader cannot resolve.
+ *
+ * A MESSAGE FROM BEFORE THE READER WAS ON is the session's own version of
+ * that hole (DROVE-285). Clay: "when I scroll up and double tap because I
+ * wanted it to go read something to me from the past, it doesn't read it."
+ * The transcript is fetched once, mostly before the toggle, and `onHistory`
+ * drops what goes past while the reader is off — so the tapped sentence was
+ * not in the timeline, and the fallback seeked past the whole of history to
+ * the live head. Both session taps therefore ensure the transcript from the
+ * tap forward is ingested before they seek: pointing at it is the ask, the
+ * ingest arrives marked spoken so it alone says nothing, and scrolling
+ * without the gesture stays as silent as DROVE-226 demands.
  */
 export interface ReadAloudTapTarget {
     readonly isEnabled: boolean;
@@ -60,6 +71,13 @@ export interface ReadAloudTapTarget {
     readonly focusedSessionId: string | null;
     /** A tap is an instruction to read, so it lifts a pause (DROVE-275). */
     setPaused(paused: boolean): void;
+    /**
+     * Pull the transcript at or after `createdAt` into the timeline before
+     * the seek runs (DROVE-285). A message from before the reader was on was
+     * never ingested, so the tap on it resolved to nothing; pointing at it is
+     * the ask, and the ingest arrives marked spoken so it alone says nothing.
+     */
+    ensureHistoryFrom(createdAt: number): void;
     seekTo(createdAt: number): void;
     /** True when the tapped sentence was found in the queue (DROVE-163). */
     seekToSentence(messageId: string, sentence: string): boolean;
@@ -109,6 +127,7 @@ export function readFromHere(
     createdAt: number,
 ): boolean {
     if (!steers(target, sessionId)) return false;
+    target.ensureHistoryFrom(createdAt);
     target.seekTo(createdAt);
     resumeForTap(target);
     return true;
@@ -131,6 +150,14 @@ export function readSentenceFromHere(
     createdAt: number,
 ): boolean {
     if (!steers(target, sessionId)) return false;
+    // BEFORE the lookup, not as its fallback (DROVE-285). A sentence from
+    // before the reader was on is not in the timeline to be found, and the
+    // block fallback would then seek a timeline whose every entry is newer
+    // than the tap — landing on the live head instead of the past he pointed
+    // at, or on nothing at all. Ingesting first also keeps this ONE lookup:
+    // the guards above already passed, so the tap is going to move reading
+    // regardless, and the only question left is how precisely it lands.
+    target.ensureHistoryFrom(createdAt);
     if (target.seekToSentence(messageId, sentence)) {
         resumeForTap(target);
         return true;

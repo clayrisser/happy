@@ -404,6 +404,18 @@ export interface ReadAloudOptions {
      * the reply it precedes and never after it.
      */
     thinkingFor?: (message: Message, sessionId: string) => string | null;
+    /**
+     * The session's transcript as the STORE holds it, for a tap's on-demand
+     * ingest (DROVE-285). The timeline only ever held what arrived while the
+     * reader was on and focused: `onHistory` drops every page that goes past
+     * while it is off or elsewhere, and the transcript is fetched once per
+     * session, so everything from before the toggle was permanently absent
+     * and a double tap up in the history resolved to nothing. Injected like
+     * `asideFor` because where the transcript lives is the store's business,
+     * not a queue's; read only inside `ensureHistoryFrom`, which is reached
+     * only from his tap — never from a scroll or a page arriving.
+     */
+    historyFor?: (sessionId: string) => readonly Message[];
 }
 
 /**
@@ -597,6 +609,7 @@ export class ReadAloudReader {
     private readonly asideFor: ((message: Message, sessionId: string) => string | null) | null;
     private readonly onSkip: (() => void) | null;
     private readonly thinkingFor: ((message: Message, sessionId: string) => string | null) | null;
+    private readonly historyFor: ((sessionId: string) => readonly Message[]) | null;
     private readonly interruptListeners = new Set<ReadAloudInterruptListener>();
     private readonly playheadListeners = new Set<ReadAloudPlayheadListener>();
     private readonly transportListeners = new Set<() => void>();
@@ -754,6 +767,7 @@ export class ReadAloudReader {
         this.asideFor = options.asideFor ?? null;
         this.onSkip = options.onSkip ?? null;
         this.thinkingFor = options.thinkingFor ?? null;
+        this.historyFor = options.historyFor ?? null;
     }
 
     get isSpeaking(): boolean {
@@ -1431,6 +1445,52 @@ export class ReadAloudReader {
         }));
         this.timeline.splice(at, 0, ...remembered);
         if (at <= this.cursor) this.cursor += remembered.length;
+    }
+
+    /**
+     * Make sure the transcript at or after `createdAt` is in the timeline,
+     * because a tap is about to seek there (DROVE-285).
+     *
+     * Clay: "when I scroll up and double tap because I wanted it to go read
+     * something to me from the past, it doesn't read it." The timeline only
+     * ever held what went past while the reader was ON and FOCUSED:
+     * `onHistory` drops every page that arrives while it is off or elsewhere,
+     * the transcript is fetched exactly once per session, and neither
+     * `setEnabled` nor `focus` re-feeds anything (`freshFocus` starts empty
+     * on purpose). So everything on his screen from before the toggle was
+     * permanently absent, the sentence lookup missed, and the block fallback
+     * seeked a timeline whose every entry was newer than the tap — the wrong
+     * place, or nothing at all.
+     *
+     * Pointing at it IS the ask, which is what squares this with DROVE-226:
+     * the absent messages are pulled from the store and go through the same
+     * `onHistory` ingestion, in their place in time, MARKED SPOKEN — so the
+     * ingest itself says nothing, ever, and only the seek that follows it
+     * clears the marks from the sentence he touched. History still never
+     * reads unasked; it just stops being unreachable when he asks.
+     *
+     * Everything from the tap FORWARD, not just the tapped message, so the
+     * reading runs on through the rest of the history and into the live
+     * replies instead of falling into a gap after one block. Messages the
+     * reader has already seen are skipped by id — `queuedChunks` keys every
+     * prose ingest, live or historic — which is also what makes a second tap
+     * on the same sentence a plain re-read rather than a duplicate:
+     * `onHistory` counts only COMPLETE sentences, so re-offering a message
+     * whose tail had no full stop would remember that tail twice.
+     *
+     * Only the FOCUSED session's live timeline is touched. A held reading's
+     * stash (DROVE-289) is by definition not the focused one, so an ingest
+     * here can never corrupt it.
+     */
+    ensureHistoryFrom(createdAt: number): void {
+        if (!this.enabled) return;
+        if (this.focused === null) return;
+        if (this.historyFor === null) return;
+        const absent = this.historyFor(this.focused).filter(
+            (message) => message.createdAt >= createdAt && !this.queuedChunks.has(message.id),
+        );
+        if (absent.length === 0) return;
+        this.onHistory(this.focused, absent);
     }
 
     onMessages(sessionId: string, messages: Message[]): void {
