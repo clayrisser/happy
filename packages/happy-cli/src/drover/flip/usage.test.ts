@@ -870,7 +870,7 @@ describe('the three disagreements, over a printed reading', () => {
         'Current week (Fable): 100% used · resets Sep 3 at 10am (Europe/London)',
     ].join('\n')
 
-    async function snapshotFromPrint(family: string | null) {
+    async function snapshotFromPrint(family: string | undefined) {
         writeAccounts(['bitspur.com'])
         const now = Date.parse('2026-09-01T22:30:00Z')
         const { recordUsagePrint } = await import('./refresh')
