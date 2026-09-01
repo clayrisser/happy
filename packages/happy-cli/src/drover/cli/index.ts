@@ -53,6 +53,9 @@ export const droverVerbs: readonly DroverVerb[] = [
         name: 'reclaim-sessions',
         summary: 'What the one-store merge parked under superseded/, and what --apply would really free. Never a file the store lacks.',
         load: () => import('./reclaim-sessions'),
+        name: 'todos',
+        summary: 'The things a session needs you to do, until you have done them.',
+        load: () => import('./todos'),
     },
 ];
 
