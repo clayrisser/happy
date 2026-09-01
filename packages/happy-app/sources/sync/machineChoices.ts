@@ -161,14 +161,21 @@ export function machineChoiceAgentAvailable(
 /**
  * Whether the Home picker should contain this harness at all.
  *
- * Common harnesses stay visible but disabled when unavailable. Antigravity and
- * Happy Agent stay absent until this computer reports them available.
+ * Common harnesses stay visible but disabled when unavailable. Antigravity,
+ * Happy Agent, Cursor and pi stay absent until this computer reports them
+ * available.
+ *
+ * pi joined that second group in DROVE-316 for its own reason: it is the
+ * LOCAL-model harness, so a greyed-out pi row reads as something you could
+ * switch on from the phone, and you cannot — it needs a pi install and a model
+ * runtime being served on that machine.
  */
 export function machineChoiceAgentVisible(
     choice: MachineChoice | null,
     agent: NewSessionAgentType,
 ): boolean {
-    return (agent !== 'agy' && agent !== 'rig' && agent !== 'cursor') || machineChoiceAgentAvailable(choice, agent);
+    return (agent !== 'agy' && agent !== 'rig' && agent !== 'cursor' && agent !== 'pi')
+        || machineChoiceAgentAvailable(choice, agent);
 }
 
 /**

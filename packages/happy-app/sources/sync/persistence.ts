@@ -20,7 +20,7 @@ const VOICE_MESSAGE_COUNT_KEY = 'voice-message-count';
 // tmux window opened. Its display name lives in harnessCatalog's
 // NON_SPAWNABLE_HARNESS_NAMES instead, and its per-agent defaults in
 // sync/agentDefaults, both of which a terminal-started pi session does use.
-export type NewSessionAgentType = 'claude' | 'codex' | 'cursor' | 'gemini' | 'openclaw' | 'agy' | 'rig';
+export type NewSessionAgentType = 'claude' | 'codex' | 'cursor' | 'gemini' | 'openclaw' | 'agy' | 'rig' | 'pi';
 export type NewSessionSessionType = 'simple' | 'worktree';
 
 export interface NewSessionDraft {
@@ -170,7 +170,7 @@ export function loadNewSessionDraft(): NewSessionDraft | null {
         const input = typeof parsed.input === 'string' ? parsed.input : '';
         const selectedMachineId = typeof parsed.selectedMachineId === 'string' ? parsed.selectedMachineId : null;
         const selectedPath = typeof parsed.selectedPath === 'string' ? parsed.selectedPath : null;
-        const agentType: NewSessionAgentType = parsed.agentType === 'codex' || parsed.agentType === 'cursor' || parsed.agentType === 'gemini' || parsed.agentType === 'openclaw' || parsed.agentType === 'agy' || parsed.agentType === 'rig'
+        const agentType: NewSessionAgentType = parsed.agentType === 'codex' || parsed.agentType === 'cursor' || parsed.agentType === 'gemini' || parsed.agentType === 'openclaw' || parsed.agentType === 'agy' || parsed.agentType === 'rig' || parsed.agentType === 'pi'
             ? parsed.agentType
             : 'claude';
         const permissionMode: PermissionModeKey | null = typeof parsed.permissionMode === 'string'

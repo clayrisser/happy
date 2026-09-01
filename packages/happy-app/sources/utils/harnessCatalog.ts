@@ -13,22 +13,28 @@ export const HARNESS_NAMES: Record<NewSessionAgentType, string> = {
     agy: 'Antigravity',
     gemini: 'Gemini',
     openclaw: 'OpenClaw',
+    // Capitalised, because a row reading "pi" beside "Claude Code" reads as a
+    // typo rather than as a product.
+    pi: 'Pi',
 };
 
 /**
- * Harnesses a session can BE, but that this app cannot start (DROVE-295).
+ * Harnesses a session can BE, but that this app cannot start.
  *
  * Kept apart from HARNESS_NAMES rather than folded into it, because that record
  * is keyed by NewSessionAgentType and that type is a promise: everything in it
  * flows into SpawnSessionOptions.agent, so anything named there is something the
- * daemon says it can spawn. pi is not — a `drover pi` pane reaches the phone
- * over the drover bus and registers no Happy session — but it still needs a name
- * wherever one is rendered, and a row reading "pi" beside "Claude Code" reads as
- * a typo rather than as a product.
+ * daemon says it can spawn.
+ *
+ * EMPTY as of DROVE-316. pi was its only entry, and it is now spawnable — it
+ * has a happy-cli runner (`packages/happy-cli/src/pi/runPi.ts`) that creates a
+ * Happy session, streams the transcript, renders tool calls as tool calls and
+ * raises gates that fail closed. The record stays because the next harness to
+ * reach the phone over the drover bus before it has a runner belongs here, and
+ * because getHarnessName still falls through it for any flavor a session can
+ * carry that this list does not name.
  */
-const NON_SPAWNABLE_HARNESS_NAMES: Record<string, string> = {
-    pi: 'Pi',
-};
+const NON_SPAWNABLE_HARNESS_NAMES: Record<string, string> = {};
 
 /**
  * Harnesses you can no longer start a session with.
@@ -47,14 +53,17 @@ export const RETIRED_HARNESSES: ReadonlySet<NewSessionAgentType> = new Set([
 /**
  * Pick order for every harness list: the ones people reach for come first.
  *
- * `pi` is not here and cannot be, because it is not a NewSessionAgentType
- * (DROVE-295). A tap in this picker spawns `drover <agent>` through the daemon
- * and expects a happy-cli runner on the other end to register a Happy session.
- * pi has no such runner yet: a `drover pi` pane reaches the phone over the
- * DROVER bus — the transcript stream, the gates, `POST /v1/sessions/<id>/send`
- * — and never registers with the Happy server, which is the same gap OpenCode
- * and Cursor panes have. Listing it would open a tmux window and call a session
- * that never appears a success.
+ * `pi` is here as of DROVE-316, and the order of those two events is the whole
+ * rule. A tap in this picker spawns `drover <agent>` through the daemon and
+ * expects a happy-cli runner on the other end to register a Happy session.
+ * Until DROVE-316 pi had none — a `drover pi` pane reached the phone over the
+ * DROVER bus and never registered with the Happy server — so listing it would
+ * have opened a tmux window and called a session that never appeared a success.
+ * The runner landed first; this line is second. Never the other way round.
+ *
+ * Last, because it is the specialist: pi fronts whatever local runtime is being
+ * served on that machine, and a machine with nothing loaded has nothing for it
+ * to answer with.
  */
 export const HARNESS_ORDER: readonly NewSessionAgentType[] = [
     'claude',
@@ -62,6 +71,7 @@ export const HARNESS_ORDER: readonly NewSessionAgentType[] = [
     'cursor',
     'agy',
     'rig',
+    'pi',
 ];
 
 export function isRetiredHarness(key: NewSessionAgentType | string): boolean {
@@ -97,10 +107,13 @@ export function isHarnessAvailable({
     // reports nothing for it, and offering a harness on a machine that has no
     // cursor-agent produces a spawn that fails after the tmux window opens.
     if (key === 'cursor') return availability?.cursor === true;
-    // pi has no branch here because it has no slot in HARNESS_ORDER to be
-    // offered from (DROVE-295). The daemon reports `pi` in cliAvailability all
-    // the same — piBin.ts resolves the /opt/homebrew/bin install a launchd PATH
-    // cannot see — so the day a runner lands, this is one line and one entry.
+    // pi, for the same reason as Cursor and Antigravity, and with one of its
+    // own (DROVE-316): it is the LOCAL-model harness, so offering it on a
+    // machine with no pi is a spawn that fails after the window opens, and the
+    // daemon has to have said so. The report is trustworthy — piBin.ts resolves
+    // the /opt/homebrew/bin install a launchd PATH cannot see, which is the bug
+    // that hid Codex from the phone for weeks.
+    if (key === 'pi') return availability?.pi === true;
     return !availability || availability[key] === true;
 }
 
@@ -126,10 +139,14 @@ export function listAvailableHarnesses({
     selected?: NewSessionAgentType | null;
 }): HarnessOption[] {
     const keys = HARNESS_ORDER.filter((key) => (
-        (key === selected && key !== 'agy')
+        (key === selected && key !== 'agy' && key !== 'pi')
         || isHarnessAvailable({ availability, happyAgentAvailable, key })
     ));
-    const fallback = HARNESS_ORDER.filter((key) => key !== 'agy' && key !== 'cursor');
+    // pi joins agy and cursor in being excluded from the fallback: all three
+    // are only offered on an explicit installation report, so a machine with an
+    // older daemon (or none picked yet) gets the familiar catalog rather than a
+    // speculative row that fails on tap.
+    const fallback = HARNESS_ORDER.filter((key) => key !== 'agy' && key !== 'cursor' && key !== 'pi');
     return (keys.length > 0 ? keys : fallback).map((key) => ({
         key,
         name: HARNESS_NAMES[key],

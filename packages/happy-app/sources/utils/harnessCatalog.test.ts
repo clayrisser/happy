@@ -107,3 +107,73 @@ describe('harness catalog', () => {
         }).map((harness) => harness.key)).toEqual(['claude', 'codex', 'rig']);
     });
 });
+
+// DROVE-316. pi is in the picker at last, and the ORDER of the two events is
+// the rule this block exists to keep: the happy-cli runner landed first, and
+// only then did `pi` become a NewSessionAgentType and get a slot here. A name
+// in HARNESS_ORDER is a promise that the daemon can spawn it, and a promise
+// with no runner behind it is a tap that opens a tmux window and then calls a
+// session that never appears a success.
+describe('pi in the picker', () => {
+    it('has a product name rather than a CLI id', () => {
+        // A row reading "pi" beside "Claude Code" reads as a typo.
+        expect(HARNESS_NAMES.pi).toBe('Pi');
+    });
+
+    it('is offered once the daemon reports a pi install', () => {
+        const harnesses = listAvailableHarnesses({
+            availability: { claude: true, pi: true },
+            happyAgentAvailable: false,
+            selected: 'claude',
+        });
+        expect(harnesses.map((h) => h.key)).toEqual(['claude', 'pi']);
+        expect(harnesses.map((h) => h.name)).toEqual(['Claude Code', 'Pi']);
+    });
+
+    it('is LAST, because it is the specialist', () => {
+        const harnesses = listAvailableHarnesses({
+            availability: { claude: true, codex: true, cursor: true, pi: true },
+            happyAgentAvailable: true,
+            selected: 'claude',
+        });
+        expect(harnesses.map((h) => h.key)).toEqual(['claude', 'codex', 'cursor', 'rig', 'pi']);
+    });
+
+    it('is never offered without an explicit installation report', () => {
+        // Same rule as Antigravity and Cursor, with a reason of its own: pi is
+        // the LOCAL-model harness, so offering it on a machine that has no pi
+        // is a spawn that fails after the window has already opened.
+        expect(listAvailableHarnesses({
+            availability: { claude: true, pi: false },
+            happyAgentAvailable: false,
+            selected: 'claude',
+        }).map((h) => h.key)).toEqual(['claude']);
+
+        expect(listAvailableHarnesses({
+            availability: { claude: true },
+            happyAgentAvailable: false,
+            selected: 'claude',
+        }).map((h) => h.key)).toEqual(['claude']);
+    });
+
+    it('is not resurrected by a stale draft that still selects it', () => {
+        // The "keep the current selection listed" rule is exempted for pi for
+        // the same reason it is for Antigravity: the row cannot be turned on
+        // from the phone, so showing it strands whoever taps it.
+        expect(listAvailableHarnesses({
+            availability: { claude: true, pi: false },
+            happyAgentAvailable: false,
+            selected: 'pi',
+        }).map((h) => h.key)).toEqual(['claude']);
+    });
+
+    it('is absent from the no-capabilities fallback', () => {
+        // An older daemon reports nothing at all. Speculating that it has pi
+        // produces exactly the failing tap this whole rule is about.
+        expect(listAvailableHarnesses({
+            availability: null,
+            happyAgentAvailable: false,
+            selected: 'pi',
+        }).map((h) => h.key)).toEqual(['claude', 'codex']);
+    });
+});

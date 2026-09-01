@@ -109,6 +109,7 @@ const agentIcons = {
     openclaw: require('@/assets/images/icon-openclaw.png'),
     gemini: require('@/assets/images/icon-gemini.png'),
     agy: require('@/assets/images/icon-agy.png'),
+    pi: require('@/assets/images/icon-pi.png'),
 };
 
 type AgentKey = NewSessionAgentType;
@@ -120,6 +121,9 @@ const ALL_AGENTS: { key: AgentKey; label: string }[] = [
     { key: 'cursor', label: 'cursor' },
     { key: 'agy', label: 'antigravity' },
     { key: 'rig', label: 'drover' },
+    // DROVE-316. Filtered by machineChoiceAgentAvailable below, so it only
+    // appears on a computer whose daemon reported a pi install.
+    { key: 'pi', label: 'pi' },
 ];
 
 type PickerItem = { key: string; label: string; subtitle?: string; dimmed?: boolean; disabled?: boolean };
