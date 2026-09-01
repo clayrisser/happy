@@ -19,14 +19,18 @@ import {
     type ReadingCommand,
     type ReadingPolicy,
     type ReadingSessionRow,
+    type ReadingSessionState,
 } from './readingControl';
 
 interface FakeState {
-    global: boolean;
-    focused: string | null;
+    /** The phone's default read-aloud switch: localSettings.readAloudEnabled. */
+    defaultEnabled: boolean;
+    /** Who has the voice. */
+    holder: string | null;
     paused: boolean;
     known: string[];
-    held: string[];
+    /** Armed sessions, which under DROVE-297 is per session and not one flag. */
+    armed: string[];
     took: string[];
     disabled: string[];
     pauses: boolean[];
@@ -34,47 +38,52 @@ interface FakeState {
 
 function fake(over: Partial<FakeState> = {}): { state: FakeState; policy: ReadingPolicy } {
     const state: FakeState = {
-        global: true,
-        focused: 'A',
+        defaultEnabled: true,
+        holder: 'A',
         paused: false,
         known: ['A', 'B', 'C'],
-        held: ['B'],
+        armed: ['A', 'B'],
         took: [],
         disabled: [],
         pauses: [],
         ...over,
     };
+    const stateOf = (id: string): ReadingSessionState => {
+        if (!state.armed.includes(id)) return 'off';
+        if (state.holder !== id) return 'yielded';
+        return state.paused ? 'paused' : 'reading';
+    };
     const policy: ReadingPolicy = {
-        globalEnabled: () => state.global,
-        speaking: () => ({
-            sessionId: state.focused,
-            playing: state.focused !== null && !state.paused,
-            sentence: state.focused ? 'The lane is green.' : null,
+        report: () => ({
+            session: state.holder,
+            state: state.holder === null ? 'off' : stateOf(state.holder),
+            sentence: state.holder ? 'The lane is green.' : null,
+            defaultEnabled: state.defaultEnabled,
         }),
-        knows: (id) => state.known.includes(id),
-        take: (id) => {
-            state.took.push(id);
-            if (state.focused && state.focused !== id) state.held.push(state.focused);
-            state.focused = id;
-            state.paused = false;
-        },
-        disable: (id) => {
+        knows: (id: string) => state.known.includes(id),
+        isEnabled: (id: string) => state.armed.includes(id),
+        setEnabled: (id: string, on: boolean) => {
+            if (on) {
+                // DROVE-297's rule, in the fake: enabling TAKES the voice.
+                state.took.push(id);
+                if (!state.armed.includes(id)) state.armed.push(id);
+                state.holder = id;
+                state.paused = false;
+                return;
+            }
             state.disabled.push(id);
-            if (state.focused === id) state.focused = null;
+            state.armed = state.armed.filter((s) => s !== id);
+            if (state.holder === id) state.holder = null;
         },
-        setPaused: (p) => {
+        setPaused: (p: boolean) => {
             state.pauses.push(p);
             state.paused = p;
         },
-        rows: (): ReadingSessionRow[] => [
-            ...(state.focused
-                ? [{ sessionId: state.focused, enabled: true, state: state.paused ? ('paused' as const) : ('speaking' as const), title: state.focused }]
-                : []),
-            ...state.held
-                .filter((id) => id !== state.focused)
-                .map((id) => ({ sessionId: id, enabled: true, state: 'yielded' as const, title: id })),
-        ],
-        titleOf: (id) => id,
+        rows: (): ReadingSessionRow[] =>
+            state.known
+                .map((id) => ({ sessionId: id, enabled: true, state: stateOf(id), title: id }))
+                .filter((row) => row.state !== 'off'),
+        titleOf: (id: string) => id,
     };
     return { state, policy };
 }
@@ -90,7 +99,7 @@ const cmd = (over: Partial<ReadingCommand> = {}): ReadingCommand => ({
 
 describe('the phone answers a terminal (DROVE-298)', () => {
     it('reports the truth for status, whatever the phone is set to', () => {
-        const { policy } = fake({ global: false, focused: null });
+        const { policy } = fake({ defaultEnabled: false, holder: null, armed: [] });
         const v = applyReadingCommand(cmd({ verb: 'status' }), policy, 2_000);
         expect(v.applied).toBe(true);
         expect(v.state.global).toBe('off');
@@ -111,18 +120,21 @@ describe('the phone answers a terminal (DROVE-298)', () => {
         // a table that cannot tell them apart makes the behaviour mysterious.
         const { policy } = fake();
         const rows = readingSnapshotOf(policy).sessions;
-        expect(rows.find((r) => r.sessionId === 'A')?.state).toBe('speaking');
+        expect(rows.find((r) => r.sessionId === 'A')?.state).toBe('reading');
         expect(rows.find((r) => r.sessionId === 'B')?.state).toBe('yielded');
+        // and C, which nobody armed, is not on the table at all
+        expect(rows.find((r) => r.sessionId === 'C')).toBeUndefined();
     });
 
-    it('gives a named session the voice through the ONE policy, not a second copy', () => {
+    it('gives a named session the voice through the ONE rule, not a second copy', () => {
         const { state, policy } = fake();
         const v = applyReadingCommand(cmd({ verb: 'on', sessionId: 'C' }), policy, 2_000);
         expect(v.applied).toBe(true);
-        // It called take(), which is DROVE-297's rule. Nothing here decides
-        // what taking the voice means; a thumb reaches the same function.
+        // It called setEnabled(), which is readAloud.setSessionEnabled, which
+        // is DROVE-297's voiceMove. Nothing here decides what taking the voice
+        // means; the composer's control reaches the same function.
         expect(state.took).toEqual(['C']);
-        expect(state.focused).toBe('C');
+        expect(state.holder).toBe('C');
         // and whoever had it is still on the list, holding its place
         expect(v.state.sessions.find((r) => r.sessionId === 'A')?.state).toBe('yielded');
     });
@@ -131,41 +143,58 @@ describe('the phone answers a terminal (DROVE-298)', () => {
         const { state, policy } = fake();
         expect(applyReadingCommand(cmd({ verb: 'pause' }), policy, 2_000).applied).toBe(true);
         expect(state.pauses).toEqual([true]);
-        expect(state.focused).toBe('A');
+        expect(state.holder).toBe('A');
         const v = applyReadingCommand(cmd({ id: 'rd-2', verb: 'resume' }), policy, 2_000);
         expect(v.applied).toBe(true);
         expect(state.pauses).toEqual([true, false]);
-        expect(state.focused).toBe('A');
+        expect(state.holder).toBe('A');
     });
 
-    it('off gives up the voice and is NOT a pause', () => {
+    it('off releases the voice and is NOT a pause', () => {
+        // DROVE-297's release: the voice goes quiet and nothing else claims it.
+        // A terminal turning one session off must not start another talking.
         const { state, policy } = fake();
         const v = applyReadingCommand(cmd({ verb: 'off', sessionId: 'A' }), policy, 2_000);
         expect(v.applied).toBe(true);
         expect(state.disabled).toEqual(['A']);
         expect(state.pauses).toEqual([]);
         expect(v.state.sessionId).toBeNull();
+        // B was armed and stays armed, and stays quiet
+        expect(v.state.sessions.find((r) => r.sessionId === 'B')?.state).toBe('yielded');
     });
 });
 
 describe('the three things a terminal must never cause', () => {
-    it('reading off on the phone is REPORTED, never quietly switched on', () => {
+    it('arming a session on a phone whose read-aloud is OFF is reported, never done', () => {
         // Clay's own words on the ticket: starting audio on a device in his
-        // pocket from a terminal is a surprise. So every mutating verb refuses
-        // and says why, and nothing on the reader is touched.
-        const { state, policy } = fake({ global: false });
-        for (const verb of ['on', 'off', 'pause', 'resume'] as const) {
-            const v = applyReadingCommand(
-                cmd({ verb, sessionId: verb === 'on' || verb === 'off' ? 'A' : undefined }),
-                policy,
-                2_000,
-            );
-            expect(v.applied).toBe(false);
-            expect(v.reason).toContain('read aloud is off on the phone');
-        }
+        // pocket from a terminal is a surprise. `on` is the only verb that can
+        // make sound out of nothing, so it is the one that is gated — and
+        // DROVE-297 put `defaultEnabled` on its report for exactly this check.
+        const { state, policy } = fake({ defaultEnabled: false, armed: [], holder: null });
+        const v = applyReadingCommand(cmd({ verb: 'on', sessionId: 'A' }), policy, 2_000);
+        expect(v.applied).toBe(false);
+        expect(v.reason).toContain('read aloud is off on the phone');
         expect(state.took).toEqual([]);
-        expect(state.disabled).toEqual([]);
-        expect(state.pauses).toEqual([]);
+        expect(v.state.global).toBe('off');
+    });
+
+    it('but a session HE armed by hand is still steerable, default off or not', () => {
+        // The default being off does not mean nothing is speaking: under
+        // DROVE-297 arming is per session. Refusing to move the voice of a
+        // session he switched on himself would refuse the remote control
+        // exactly where it is most useful.
+        const { state, policy } = fake({ defaultEnabled: false, armed: ['A'], holder: 'A' });
+        expect(applyReadingCommand(cmd({ verb: 'pause' }), policy, 2_000).applied).toBe(true);
+        expect(state.pauses).toEqual([true]);
+        expect(applyReadingCommand(cmd({ id: 'rd-2', verb: 'off', sessionId: 'A' }), policy, 2_000).applied).toBe(true);
+        expect(state.disabled).toEqual(['A']);
+    });
+
+    it('and nothing quieter than it was is ever refused for being off', () => {
+        // `off` and `pause` only ever REMOVE audio. Gating them on the default
+        // would be refusing the one direction that can never surprise him.
+        const { policy } = fake({ defaultEnabled: false, armed: ['A'], holder: 'A' });
+        expect(applyReadingCommand(cmd({ verb: 'off', sessionId: 'A' }), policy, 2_000).reason).toBeUndefined();
     });
 
     it('a session the phone does not know is refused BY NAME', () => {
@@ -198,14 +227,14 @@ describe('the three things a terminal must never cause', () => {
 
 describe('refusals that are answers, not errors', () => {
     it('pausing silence says so instead of pretending', () => {
-        const { policy } = fake({ focused: null });
+        const { policy } = fake({ holder: null });
         const v = applyReadingCommand(cmd({ verb: 'pause' }), policy, 2_000);
         expect(v.applied).toBe(false);
         expect(v.reason).toContain('nothing is reading');
     });
 
     it('resuming nothing says so instead of picking a session for him', () => {
-        const { state, policy } = fake({ focused: null });
+        const { state, policy } = fake({ holder: null });
         const v = applyReadingCommand(cmd({ verb: 'resume' }), policy, 2_000);
         expect(v.applied).toBe(false);
         expect(state.took).toEqual([]);
@@ -219,9 +248,9 @@ describe('refusals that are answers, not errors', () => {
     });
 
     it('every refusal still carries the state, so one round trip is enough', () => {
-        const { policy } = fake({ global: false });
+        const { policy } = fake({ defaultEnabled: false, armed: [], holder: null });
         const v = applyReadingCommand(cmd({ verb: 'pause' }), policy, 2_000);
+        expect(v.applied).toBe(false);
         expect(v.state.global).toBe('off');
-        expect(v.state.sessions.length).toBeGreaterThan(0);
     });
 });

@@ -17,15 +17,15 @@
  * decides WHAT taking the voice means; that is `ReadingPolicy` below, which
  * DROVE-297 owns.
  *
- * WHY THE POLICY IS AN INTERFACE. DROVE-297 is landing per-session reading
- * enablement and the take-the-voice rule (navigate to an ENABLED session and
- * it takes the voice while the speaker pauses at its position; navigate to a
- * DISABLED one and nothing changes). That rule must have exactly one
- * implementation, reached identically by a thumb and by a terminal. Rather
- * than write a second copy while that lands, this file names the six questions
- * it needs answered and `livePolicy` in readingControlService.ts answers them
- * against whatever the reader can do today. When 297 lands, its per-session
- * enablement replaces livePolicy's body and NOTHING here changes.
+ * WHY THE POLICY IS AN INTERFACE. The rule itself is DROVE-297's
+ * `voiceMove()` in readingVoice.ts, carried out by the reader's
+ * `setSessionEnabled` / `visit`. This file holds NO copy of it: it turns a
+ * terminal's verb into one of those calls, checks the three things a terminal
+ * must never cause, and reports what the phone says. The interface is what
+ * lets that be tested without a reader, and what makes the two entry points
+ * visibly one — a thumb on the composer control and `drover read <session>`
+ * both end in `setEnabled`, which is `setSessionEnabled`, which is
+ * `voiceMove`.
  *
  * A REFUSAL IS AN ANSWER. Reading off on the phone, a session the app has
  * never seen, nothing currently speaking: none of those is an error, and none
@@ -35,6 +35,8 @@
  * here — starting audio on a device in a pocket is the surprise the ticket
  * exists to refuse.
  */
+
+import type { ReadingReport, ReadingSessionState } from './readingVoice';
 
 /** What a terminal may ask for. Mirrors VERBS in cattle-drover's engine/reading.js. */
 export type ReadingVerb = 'status' | 'on' | 'off' | 'pause' | 'resume';
@@ -50,14 +52,14 @@ export interface ReadingCommand {
 }
 
 /**
- * What a session's reader is doing, and the reason this is four values.
- *
- * `yielded` is enabled-but-silent because another session took the voice, and
- * it MUST be tellable from `off`. That distinction is the visible half of
- * DROVE-297's rule — it is what makes the behaviour legible instead of
- * mysterious, on the phone's list and in `drover read`'s table alike.
+ * What a session's reader is doing. DROVE-297's four values, imported rather
+ * than restated: `yielded` is enabled-but-silent because another session took
+ * the voice, and it MUST be tellable from `off`. That distinction is the
+ * visible half of the rule, and it has to mean the same thing on the phone's
+ * list and in `drover read`'s table or the terminal is describing a different
+ * feature.
  */
-export type ReadingSessionState = 'off' | 'speaking' | 'paused' | 'yielded';
+export type { ReadingSessionState } from './readingVoice';
 
 export interface ReadingSessionRow {
     sessionId: string;
@@ -82,25 +84,23 @@ export interface ReadingVerdict {
 }
 
 /**
- * The six questions applying a command needs answered, and the seam DROVE-297
- * fills. Everything here is about ONE reader with ONE voice.
+ * The reader, as this file needs to ask it. Every member is a call DROVE-297
+ * already exports; nothing here is a rule of its own.
  */
 export interface ReadingPolicy {
-    /** The phone's own read-aloud switch. Never set from a terminal. */
-    globalEnabled(): boolean;
-    /** The session with the voice right now, and whether it is actually speaking. */
-    speaking(): { sessionId: string | null; playing: boolean; sentence: string | null };
+    /** DROVE-297's `readAloud.readingReport()`: what is speaking, and the default. */
+    report(): ReadingReport;
     /** Does the app know this session at all? An unknown one is refused by name. */
     knows(sessionId: string): boolean;
+    /** `readAloud.isSessionEnabled` — is this one armed? */
+    isEnabled(sessionId: string): boolean;
     /**
-     * Enable reading on this session AND give it the voice: DROVE-297's rules
-     * 3 and 4. Whatever was speaking pauses AT ITS POSITION and keeps its
-     * place; the arriving session resumes from its own. Never a stop, never a
-     * jump ahead.
+     * `readAloud.setSessionEnabled`, which is `voiceMove`. THE RULE IS THERE
+     * AND ONLY THERE: enabling takes the voice and whoever had it pauses at
+     * its position; disabling releases it and starts nothing else talking.
+     * This file only chooses which of the two to ask for.
      */
-    take(sessionId: string): void;
-    /** Turn this session's reader off. Not a pause: `off` drops the held place. */
-    disable(sessionId: string): void;
+    setEnabled(sessionId: string, enabled: boolean): void;
     /** The phone's own pause, holding position (DROVE-233/289). */
     setPaused(paused: boolean): void;
     /** Every session with a reading state worth reporting. */
@@ -109,12 +109,15 @@ export interface ReadingPolicy {
 }
 
 export function readingSnapshotOf(policy: ReadingPolicy): ReadingSnapshot {
-    const now = policy.speaking();
+    const now = policy.report();
     return {
-        global: policy.globalEnabled() ? 'on' : 'off',
-        playing: now.playing,
-        sessionId: now.sessionId,
-        title: now.sessionId ? policy.titleOf(now.sessionId) : null,
+        // The phone's DEFAULT, which is what `drover read` calls "off on the
+        // phone". Per-session arming lives in the rows below, where it belongs
+        // now that enablement is per session (DROVE-297).
+        global: now.defaultEnabled ? 'on' : 'off',
+        playing: now.state === 'reading',
+        sessionId: now.session,
+        title: now.session ? policy.titleOf(now.session) : null,
         sentence: now.sentence,
         sessions: policy.rows(),
     };
@@ -161,8 +164,6 @@ export function applyReadingCommand(
     // from one that has been shut for a week.
     if (cmd.verb === 'status') return done();
 
-    if (!policy.globalEnabled()) return refuse(OFF_REASON);
-
     if (cmd.verb === 'on' || cmd.verb === 'off') {
         const sessionId = cmd.sessionId ?? null;
         if (!sessionId) return refuse(`\`${cmd.verb}\` names a session and this one carried none`);
@@ -170,19 +171,34 @@ export function applyReadingCommand(
         // heard of; this is the other half — an id the bus knows and the phone
         // does not, which happens when a session has never reached this device.
         if (!policy.knows(sessionId)) return refuse('the phone does not know that session');
-        if (cmd.verb === 'on') policy.take(sessionId);
-        else policy.disable(sessionId);
+        if (cmd.verb === 'off') {
+            policy.setEnabled(sessionId, false);
+            return done();
+        }
+        // THE ONE GATE ON `on`, and the reason DROVE-297 put `defaultEnabled`
+        // on its report. Arming a session a terminal names is arming a session
+        // — fine, and invariant 4 says it takes the voice. Arming one on a
+        // phone whose read-aloud is off ENTIRELY is starting audio in his
+        // pocket from a Mac, which is the surprise this ticket refuses. An
+        // already-armed session is untouched by the gate: turning it on by
+        // hand was his decision and the terminal is only moving the voice.
+        if (!policy.report().defaultEnabled && !policy.isEnabled(sessionId)) return refuse(OFF_REASON);
+        policy.setEnabled(sessionId, true);
         return done();
     }
 
-    const now_ = policy.speaking();
+    // pause and resume act on THE VOICE, of which there is one. They are not
+    // gated on the default: a session he armed by hand on a phone whose
+    // default is off is still speaking, and refusing to hold it would be
+    // refusing the one thing that makes something quieter.
+    const holder = policy.report().session;
     if (cmd.verb === 'pause') {
-        if (!now_.sessionId) return refuse('nothing is reading, so there is nothing to hold');
+        if (!holder) return refuse('nothing is reading, so there is nothing to hold');
         policy.setPaused(true);
         return done();
     }
     if (cmd.verb === 'resume') {
-        if (!now_.sessionId) return refuse('nothing is held, so there is nothing to carry on');
+        if (!holder) return refuse('nothing is held, so there is nothing to carry on');
         policy.setPaused(false);
         return done();
     }

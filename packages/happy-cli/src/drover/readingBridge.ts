@@ -39,7 +39,10 @@ export interface ReadingCommandFrame {
     state?: string
 }
 
-export type ReadingSessionState = 'off' | 'speaking' | 'paused' | 'yielded'
+/** DROVE-297's four, and the app's own names for them. `reading` is not
+ * `speaking`: the vocabulary is the phone's, and a courier that renames things
+ * on the way past is how two surfaces come to describe different features. */
+export type ReadingSessionState = 'off' | 'reading' | 'paused' | 'yielded'
 
 export interface ReadingSessionRow {
     sessionId: string

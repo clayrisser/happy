@@ -35,72 +35,36 @@ import {
 } from './droverReading';
 
 /**
- * The reader, answering the six questions applyReadingCommand asks.
+ * The reader, answered with DROVE-297's own calls.
  *
- * ★ DROVE-297'S SEAM. Per-session reading enablement does not exist yet: the
- * app has ONE global switch (`localSettings.readAloudEnabled`) and ONE focused
- * session (`readAloud.focus`/`blur`). So today `isEnabled` means "this is the
- * focused session and reading is on", `take` is `focus` — which restores that
- * session's held position and auto-resumes it, DROVE-289's machinery, while
- * whatever was speaking is held at its own place — and `disable` is `blur`.
- *
- * When DROVE-297 lands, per-session enablement replaces the bodies of
- * `globalEnabled`, `isEnabled`, `take`, `disable` and `rows` HERE and nothing
- * in readingControl.ts moves. The two entry points stay one rule: a thumb
- * navigating to a session and a terminal naming one both end up in `take`.
+ * There is no policy in here. Every member is a pass-through to the reader
+ * that 297 gave a public per-session API: `readingReport`, `isSessionEnabled`,
+ * `setSessionEnabled` (which is `voiceMove`), `readingStateOf`, `setPaused`.
+ * That is the whole of "one rule, two entry points" — a thumb on the composer
+ * control and `drover read <session>` typed in a pane both reach
+ * setSessionEnabled, so a terminal cannot invent semantics the thumb does not
+ * have, and neither can drift from the other.
  */
 export function livePolicy(): ReadingPolicy {
     const sessions = () => storage.getState().sessions ?? {};
     return {
-        globalEnabled: () => !!storage.getState().localSettings?.readAloudEnabled && readAloud.isEnabled,
-        speaking: () => {
-            const sessionId = readAloud.focusedSessionId;
-            return {
-                sessionId,
-                playing: readAloud.isSpeaking && !readAloud.isPaused,
-                sentence: readAloud.playhead?.sentence ?? null,
-            };
-        },
+        report: () => readAloud.readingReport(),
         knows: (sessionId) => !!sessions()[sessionId],
-        take: (sessionId) => {
-            // DROVE-297's rules 3 and 4, as the reader can express them today:
-            // focus() stashes whatever had the voice through holdFocused (its
-            // position, its pause and its held place all survive) and restores
-            // this session's own, resuming where IT stopped. Never a stop and
-            // never a jump ahead, which is the half of the rule that matters.
-            readAloud.focus(sessionId, 'switched-session');
-        },
-        disable: (sessionId) => {
-            // `off` is not a pause: it gives up the voice rather than holding
-            // it. blur() is the reader's own leave-this-session path, so a
-            // terminal turning a session off looks to the reader exactly like
-            // walking away from it.
-            if (readAloud.focusedSessionId === sessionId) readAloud.blur(sessionId, 'left-session');
-        },
+        isEnabled: (sessionId) => readAloud.isSessionEnabled(sessionId),
+        setEnabled: (sessionId, enabled) => readAloud.setSessionEnabled(sessionId, enabled),
         setPaused: (paused) => readAloud.setPaused(paused),
         rows: () => {
-            // Only the sessions with a reading state worth reporting: the one
-            // holding the voice, and every one holding a place. A row per
-            // session in the app would be a hundred lines of `off` in a
-            // terminal table, which says nothing.
+            // Only the sessions that are ARMED. A row per session in the app
+            // would be a hundred lines of `off` in a terminal table, which says
+            // nothing — and `off` is the default state of almost every session
+            // almost all the time, which is exactly why the list on the phone
+            // draws nothing for it either (readingRowMark, DROVE-297).
             const out: ReadingSessionRow[] = [];
-            const focused = readAloud.focusedSessionId;
             const all = sessions();
-            if (focused) {
-                out.push({
-                    sessionId: focused,
-                    enabled: true,
-                    state: readAloud.isPaused ? 'paused' : 'speaking',
-                    title: titleOf(all, focused),
-                });
-            }
             for (const id of Object.keys(all)) {
-                if (id === focused) continue;
-                if (!readAloud.hasHeldReading(id)) continue;
-                // Held but not speaking IS `yielded`, and it has to be
-                // tellable from `off`. That distinction is the visible half of
-                // DROVE-297's rule on every surface, this table included.
-                out.push({ sessionId: id, enabled: true, state: 'yielded', title: titleOf(all, id) });
+                const state = readAloud.readingStateOf(id);
+                if (state === 'off') continue;
+                out.push({ sessionId: id, enabled: true, state, title: titleOf(all, id) });
             }
             return out;
         },

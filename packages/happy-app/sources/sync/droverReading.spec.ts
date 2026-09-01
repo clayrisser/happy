@@ -27,11 +27,10 @@ const bridge = (command: Partial<ReadingCommand> | null) => ({
 });
 
 const policy: ReadingPolicy = {
-    globalEnabled: () => true,
-    speaking: () => ({ sessionId: 'A', playing: true, sentence: 'The lane is green.' }),
+    report: () => ({ session: 'A', state: 'reading', sentence: 'The lane is green.', defaultEnabled: true }),
     knows: () => true,
-    take: vi.fn(),
-    disable: vi.fn(),
+    isEnabled: () => true,
+    setEnabled: vi.fn(),
     setPaused: vi.fn(),
     rows: () => [],
     titleOf: () => 'A',

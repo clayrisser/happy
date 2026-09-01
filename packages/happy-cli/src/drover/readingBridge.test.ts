@@ -61,7 +61,7 @@ describe('the phone answers in ITS ids, the terminal reads its own', () => {
         sessionId: 'happy-a',
         sentence: 'The lane is green.',
         sessions: [
-            { sessionId: 'happy-a', enabled: true, state: 'speaking' },
+            { sessionId: 'happy-a', enabled: true, state: 'reading' },
             { sessionId: 'happy-b', enabled: true, state: 'yielded' },
         ],
     }
