@@ -1,4 +1,5 @@
 import { logger } from "@/ui/logger";
+import { createDotPublisher } from "@/drover/dotPublish";
 import { claudeLocal, ExitCodeError } from "./claudeLocal";
 import { applyCustomTitle, resumesExistingTranscript, Session } from "./session";
 import { Future } from "@/utils/future";
@@ -138,6 +139,10 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
         session.onThinkingChange(next);
     };
 
+    // DROVE-247: the terminal's dot. Created here rather than inside the
+    // scanner because it reads `thinking` above, which is this scope's.
+    const dotPublisher = createDotPublisher(() => session.sessionId);
+
     const scanner = await createSessionScanner({
         sessionId: session.sessionId,
         workingDirectory: session.path,
@@ -232,10 +237,24 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
         // by the `PreCompact` hook (runClaude wires the hook server to it) and
         // closed by the `compact_boundary` record this same reader tails.
         compaction: compactionLatch,
-        onLiveStatus: (liveStatus) => session.client.updateMetadata((metadata) => ({
-            ...metadata,
-            liveStatus,
-        })),
+        onLiveStatus: (liveStatus) => {
+            session.client.updateMetadata((metadata) => ({
+                ...metadata,
+                liveStatus,
+            }))
+            // DROVE-247: and the same facts to the drover bus, so the TERMINAL
+            // can draw the dot the phone has drawn since DROVE-231. The three
+            // terms are the strip's own (`AgentInputStatusRow`): the snapshot's
+            // `main`, the fd 3 thinking counter for the seconds before a
+            // snapshot exists, and a compaction — which is the main thread
+            // working and the one state nothing else reports. Publishes only
+            // when the state moves; see dotPublish.ts.
+            dotPublisher.sync({
+                mainWorking: !!liveStatus?.main || thinking || !!liveStatus?.compacting,
+                toolRunning: !!liveStatus?.main && !!liveStatus.tool,
+                compacting: !!liveStatus?.compacting,
+            })
+        },
         // DROVE-115: an async agent's tool call ended the instant it launched,
         // so its card had no way to learn the agent had finished and sat on
         // "Running, quiet for 40m" for as long as the session lived. This is
@@ -2042,6 +2061,10 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
         session.removeSessionFoundCallback(scannerSessionCallback);
 
         // Cleanup
+        // DROVE-247: stop before the scanner, so a `working` cannot be in
+        // flight to the bus after the row has gone quiet. The bus ages the last
+        // publish out on `staleMs`; nothing has to send a final `connected`.
+        dotPublisher.dispose();
         await scanner.cleanup();
         await scannerMessageChain;
     }

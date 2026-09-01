@@ -90,14 +90,22 @@ export const idleSessionDotFacts: SessionDotFacts = {
  * clock that turns yellow into red: that one belongs to whoever draws the dot,
  * because a row can sit on screen for minutes without the store touching it.
  *
- * WHY `thinking` COUNTS AS WORKING HERE and does not on the strip. The strip
- * takes `mainWorking` from the live snapshot alone, so a session whose CLI
- * publishes no snapshot — an old one, a Rig session, the seconds before the
- * first publish — draws green there while it works. A LIST cannot afford that:
- * `thinking` is the only thing many rows ever get, and a row that goes green
- * mid-turn is the same lie in the other direction. Both facts come from the one
- * resolver (`resolveSessionState`), so when DROVE-244 settles what the strip's
- * thinking state means the two converge without a second edit here.
+ * WHY `thinking` COUNTS AS WORKING HERE, and why the strip now agrees.
+ *
+ * It was written as a difference: the strip took `mainWorking` from the live
+ * snapshot alone, so a session whose CLI publishes no snapshot — an old one, a
+ * Rig session, the seconds before the first publish — drew green there while it
+ * worked, and this note deferred the reconciliation to DROVE-244. That has
+ * landed. `AgentInputStatusRow` widens its own `mainWorking` with `thinking`
+ * (and, since DROVE-257, with `compacting`), so both surfaces ask the question
+ * the same way and neither draws green mid-turn. Both still read the one
+ * resolver, `resolveSessionState`.
+ *
+ * The TERMINAL is the third surface and it does not come through here at all
+ * (DROVE-247). It cannot: a tmux status line has no Session object and no phone
+ * to wait on. happy-cli resolves the same six states from its own facts and
+ * publishes them to the drover bus — same table, now `@slopus/happy-wire`'s —
+ * so there are three renderers and still one vocabulary.
  */
 export function sessionDotFacts(session: Session, now: number): SessionDotFacts {
     const online = session.presence === 'online';
