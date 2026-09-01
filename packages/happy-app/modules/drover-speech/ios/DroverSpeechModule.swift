@@ -755,6 +755,17 @@ public final class DroverSpeechModule: Module {
             guard let self else { return }
             let raw = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt ?? 0
             let outputs = AVAudioSession.sharedInstance().currentRoute.outputs.map { $0.portType.rawValue }
+            // A route change stops the loop as surely as an interruption does
+            // (DROVE-275). Headphones coming out is the ordinary case: iOS
+            // pauses playback on `oldDeviceUnavailable` so nothing blasts out
+            // of the speaker, and it does not care that this player is ninety
+            // dB down. The hold outlives the route, so the loop has to come
+            // back or the next gap is silent and the app is reclaimed in it.
+            // This is a no-op unless the hold is on AND the player it has is
+            // actually stopped, so the common route change costs one bool.
+            if self.sessionHeld && !self.isDictating {
+                self.startSilenceKeepalive()
+            }
             self.sendEvent("onAudioRouteChange", [
                 "outputs": outputs,
                 "reason": Self.routeChangeReasonName(raw)
@@ -791,6 +802,9 @@ public final class DroverSpeechModule: Module {
                     self.synthesizer.pauseSpeaking(at: .word)
                     self.speechPausedByInterruption = true
                 }
+                // iOS has already stopped the loop; this drops the corpse so
+                // `.ended` can build a live one (DROVE-275).
+                self.stopSilenceKeepalive()
                 self.sendEvent("onSpeechInterruption", ["state": "began"])
             case .ended:
                 let optionsRaw = notification.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
@@ -807,6 +821,28 @@ public final class DroverSpeechModule: Module {
                     }
                 } else if resume && self.sessionHeld {
                     try? self.activatePlayback()
+                }
+                // THE LOOP HAS TO COME BACK, and this is the half that decides
+                // whether the app is still alive ten minutes later (DROVE-275).
+                //
+                // iOS stops every player it interrupts, so the keepalive is
+                // dead here whether or not a sentence was in flight — and the
+                // gap between two replies is the case where none was, which is
+                // the one that put the phone in his pocket back to silence. A
+                // call, an alarm, a timer, a Siri question: each one used to
+                // leave a HELD session with nothing playing under it, which is
+                // the exact condition DROVE-259 wrote the loop to prevent.
+                //
+                // The session is reactivated first, because an `.ended`
+                // WITHOUT `.shouldResume` reactivated nothing at all and a
+                // player needs somewhere to play. `.duckOthers` is what lets
+                // that succeed while the other app carries on; if it does not,
+                // `startSilenceKeepalive` builds a player that cannot start
+                // and the reader is over until the next `speak`, which is the
+                // honest answer rather than a pretended one.
+                if self.sessionHeld && !self.isDictating {
+                    try? self.activatePlayback()
+                    self.startSilenceKeepalive()
                 }
                 self.sendEvent("onSpeechInterruption", [
                     "state": "ended",
@@ -1066,7 +1102,20 @@ public final class DroverSpeechModule: Module {
     /// the session in `.playAndRecord` at `.measurement`, and a loop playing
     /// into that is something for the recogniser to hear.
     private func startSilenceKeepalive() {
-        guard sessionHeld, keepalive == nil else { return }
+        // Never into a live recogniser. `stop` and `claimSessionForDictation`
+        // each asked this at their own call site and `holdSession` did not, so
+        // a hold taken mid-capture started the loop under the microphone. One
+        // guard here answers it for every caller.
+        guard sessionHeld, !isDictating else { return }
+        // A player that is STILL PLAYING is the only reason to keep the one
+        // that is there. `keepalive == nil` used to be the whole test, and a
+        // non-nil player that iOS had already STOPPED — which is what every
+        // interruption leaves behind — therefore blocked every restart for the
+        // rest of the hold. Nothing could notice, because the field it checks
+        // was exactly as non-nil as a healthy one (DROVE-275).
+        if let existing = keepalive, existing.isPlaying { return }
+        keepalive?.stop()
+        keepalive = nil
         guard let player = try? AVAudioPlayer(data: Self.silentLoopData()) else { return }
         player.numberOfLoops = -1
         keepalive = player
