@@ -23,6 +23,8 @@ import {
     buildWristRows,
     createWristCoalescer,
     droverWristMoreTail,
+    droverWristRowLimit,
+    droverWristTextLimit,
     transcriptDelta,
     trimForWrist,
     rowKey,
@@ -284,5 +286,54 @@ describe('createWristCoalescer', () => {
         coalescer.stop();
         vi.advanceTimersByTime(1000);
         expect(send).not.toHaveBeenCalled();
+    });
+});
+
+/**
+ * What the biggest possible delta weighs on the wire.
+ *
+ * The row cap and the text cap are the only things standing between a long
+ * conversation and an oversized frame, and an oversized frame does not error
+ * on the way out — Socket.IO CLOSES the socket (DROVE-211), and
+ * WatchConnectivity's `sendMessage` is tighter still at roughly 64KB. Neither
+ * failure names the transcript when it happens, so the ceiling is asserted
+ * here rather than left to whoever next reaches for a bigger window.
+ *
+ * Raising either cap is allowed. Raising one past this line without moving
+ * this line is what the test is for.
+ */
+describe('what a delta weighs', () => {
+    /** WatchConnectivity's sendMessage limit, the tighter of the two wires. */
+    const watchFrameLimit = 64 * 1024;
+
+    /** Every row at its longest, every id long, the whole window changed. */
+    function worstCaseDelta() {
+        const sessionId = `sess-${'y'.repeat(36)}`;
+        const messages: Message[] = [];
+        for (let i = 0; i < droverWristRowLimit * 2; i++) {
+            messages.push(agent(`msg-${'x'.repeat(30)}-${i}`, 'w'.repeat(droverWristTextLimit * 4), 1000 + i));
+        }
+        const rows = buildWristRows(newestFirst(...messages), { sessionId, thinking: true });
+        return { sessionId, rows, delta: transcriptDelta(sessionId, rows, true, new Map(), null) };
+    }
+
+    it('caps the window at the row limit however long the conversation is', () => {
+        const { rows } = worstCaseDelta();
+        expect(rows).toHaveLength(droverWristRowLimit);
+    });
+
+    it('stays well inside the watch frame limit at its very worst', () => {
+        const { delta } = worstCaseDelta();
+        const bytes = Buffer.byteLength(JSON.stringify(delta), 'utf8');
+        expect(bytes).toBeLessThan(watchFrameLimit);
+        // Roughly 20KB today. The margin is the point: a frame that only just
+        // fits is one product decision away from not fitting.
+        expect(bytes).toBeLessThan(watchFrameLimit / 2);
+    });
+
+    it('never carries a row longer than the text limit plus its tail', () => {
+        const { rows } = worstCaseDelta();
+        const longest = Math.max(...rows.map((row) => row.text.length));
+        expect(longest).toBeLessThanOrEqual(droverWristTextLimit + droverWristMoreTail.length + 1);
     });
 });
