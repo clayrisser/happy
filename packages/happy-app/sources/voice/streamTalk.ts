@@ -16,15 +16,19 @@
  * voice.
  *
  * `useVoiceComposer` hands the composer `readAloudEnabled` plus
- * `onReadAloudToggle` as before; the value is now this session's own. This
- * module says how it is drawn and announced, so the button, the sheet and the
- * settings row cannot disagree about what "on" looks like.
+ * `onAudioOutPress`; the value is this session's own, and the press goes
+ * through the transport table (DROVE-327) so a tap on a paused reader resumes
+ * rather than flipping the switch. This module says how it is drawn and
+ * announced, so the button, the sheet and the settings row cannot disagree
+ * about what "on" looks like.
  *
  * Not the same thing as the drover Audio channel (`droverAnnounceAudio`,
  * droverChannels.ts): that one decides whether a Cattle Drover prompt is
  * spoken when it arrives and is mirrored to every Mac. Stream-talk is per
  * phone and is about the assistant's replies.
  */
+
+import type { TransportEffect } from './readAloudTransport';
 
 export type StreamTalkIcon = 'volume-high' | 'volume-mute-outline';
 
@@ -100,4 +104,28 @@ export function flipStreamTalk(
  */
 export function streamTalkPauseToast(paused: boolean): StreamTalkToastKey {
     return paused ? 'agentInput.streamTalk.paused' : 'agentInput.streamTalk.resumed';
+}
+
+/**
+ * What ANY press on the audio-out button says, from the effect it had
+ * (DROVE-327).
+ *
+ * One naming for both gestures, because both go through the table now and a
+ * tap can resume as well as start or stop. `boss-mode` and `nothing` say
+ * nothing here: the first is a call the composer announces its own way, and
+ * the second did nothing worth a line.
+ */
+export function audioOutToast(
+    effect: TransportEffect,
+    sentenceTapUsed = true,
+): StreamTalkToastKey | null {
+    switch (effect) {
+        case 'turn-on': return flipStreamTalk(false, sentenceTapUsed).toastKey;
+        case 'turn-off': return 'agentInput.streamTalk.off';
+        case 'pause': return streamTalkPauseToast(true);
+        case 'resume': return streamTalkPauseToast(false);
+        case 'boss-mode':
+        case 'nothing':
+            return null;
+    }
 }

@@ -72,21 +72,30 @@ describe('what the collapsed button draws', () => {
      * And the whole round trip through the table that drives it, because the
      * button is drawn from a state some OTHER surface may have set: a
      * headphone squeeze and the lock screen land on the same `setPaused`.
+     *
+     * Hold pauses, TAP resumes (DROVE-327). The hold from paused is off.
      */
-    it('draws reading again after a long press pauses and a long press resumes', () => {
+    it('draws reading again after a hold pauses and a tap resumes', () => {
         let paused = false;
-        const step = () => {
+        const step = (gesture: 'tap' | 'long-press') => {
             const button = audioOutButton({ readAloudEnabled: true, paused });
-            const effect = transportEffect('long-press', button.state);
+            const effect = transportEffect(gesture, button.state);
             if (effect === 'pause') paused = true;
             if (effect === 'resume') paused = false;
             return button;
         };
-        expect(step().fill).toBe('accent');
-        expect(step().fill).toBe('paused');
-        const back = step();
+        expect(step('long-press').fill).toBe('accent');
+        expect(step('tap').fill).toBe('paused');
+        const back = step('long-press');
         expect(back.fill).toBe('accent');
         expect(back.glyph).toBe('volume-high');
+    });
+
+    it('a hold on the pause bars is the exit, not a second resume (DROVE-327)', () => {
+        const paused = audioOutButton({ readAloudEnabled: true, paused: true });
+        expect(paused.glyph).toBe('pause');
+        expect(transportEffect('long-press', paused.state)).toBe('turn-off');
+        expect(transportEffect('tap', paused.state)).toBe('resume');
     });
 
     it('reads a LIVE CALL as the recording disc', () => {
@@ -168,14 +177,27 @@ describe('what the collapsed button draws', () => {
 describe('the button and the table agree about which row he is on', () => {
     it('hands the transport table the state it will be asked about', () => {
         // The button does not decide anything; it reports the state the table
-        // reads, so what is drawn and what a long press does cannot diverge.
+        // reads, so what is drawn and what a press does cannot diverge. Both
+        // gestures, because the tap goes through the table too now
+        // (DROVE-327): the bug was a tap that never asked it.
         const cases = [
-            { input: { readAloudEnabled: false }, longPress: 'boss-mode' },
-            { input: { readAloudEnabled: true }, longPress: 'pause' },
-            { input: { readAloudEnabled: true, paused: true }, longPress: 'resume' },
+            { input: { readAloudEnabled: false }, tap: 'turn-on', longPress: 'boss-mode' },
+            { input: { readAloudEnabled: true }, tap: 'turn-off', longPress: 'pause' },
+            { input: { readAloudEnabled: true, paused: true }, tap: 'resume', longPress: 'turn-off' },
         ] as const;
-        for (const { input, longPress } of cases) {
-            expect(transportEffect('long-press', audioOutButton(input).state)).toBe(longPress);
+        for (const { input, tap, longPress } of cases) {
+            const state = audioOutButton(input).state;
+            expect(transportEffect('tap', state), `tap on ${state}`).toBe(tap);
+            expect(transportEffect('long-press', state), `hold on ${state}`).toBe(longPress);
         }
+    });
+
+    it('the pause bars promise a resume on tap, and keep it (DROVE-327)', () => {
+        // The glyph says which state you are in. On the pause bars, the
+        // cheapest gesture reads on; a face that showed a pause icon and then
+        // went silent-and-off on a tap is the bug Clay reported.
+        const paused = audioOutButton({ readAloudEnabled: true, paused: true });
+        expect(paused.glyph).toBe('pause');
+        expect(transportEffect('tap', paused.state)).toBe('resume');
     });
 });

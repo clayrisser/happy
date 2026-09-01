@@ -39,7 +39,7 @@ import { resolveComposerPrimaryPress, type ComposerPrimaryGesture } from './comp
 import { talkButtonWiring } from './talkButtonWiring';
 import { useTalkTouchStream } from './talkTouchStream';
 import { ComposerToast } from './ComposerToast';
-import { flipStreamTalk, streamTalkPauseToast } from '@/voice/streamTalk';
+import { audioOutToast } from '@/voice/streamTalk';
 import { audioOutButton } from './composerAudioOut';
 import type { TransportEffect } from '@/voice/readAloudTransport';
 import { AgentInputStatusRow } from './AgentInputStatusRow';
@@ -129,7 +129,14 @@ interface AgentInputProps {
     readAloudEnabled?: boolean;
     /** On and holding its place (DROVE-233). */
     readAloudPaused?: boolean;
-    onReadAloudToggle?: () => void;
+    /**
+     * The tap on the one audio-out button (DROVE-327): start from off, stop
+     * while reading, RESUME from paused. Like the long press it applies the
+     * effect itself and returns what the transport table chose, so this
+     * component only says it. It was `onReadAloudToggle`, a bare flip of the
+     * session's switch, which is how a tap on a paused reader turned it off.
+     */
+    onAudioOutPress?: () => TransportEffect;
     /**
      * The long press on the one audio-out button (DROVE-233, DROVE-236).
      *
@@ -1389,7 +1396,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
      * MEANS is the transport table in the voice layer.
      */
     const audioOut = audioOutButton({
-        readAloudEnabled: props.onReadAloudToggle ? props.readAloudEnabled : undefined,
+        readAloudEnabled: props.onAudioOutPress ? props.readAloudEnabled : undefined,
         paused: props.readAloudPaused === true,
         bossActive: props.bossModeActive === true,
     });
@@ -1410,21 +1417,32 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     // is the moment to say the gesture exists (DROVE-195). Until he has used
     // it once; after that the toast is the plain line again.
     const sentenceTapUsed = useLocalSetting('sentenceTapUsed');
-    const handleAudioOutPress = React.useCallback(() => {
-        if (!props.onReadAloudToggle) return;
-        const flipped = flipStreamTalk(!!props.readAloudEnabled, sentenceTapUsed);
-        hapticsLight();
-        props.onReadAloudToggle();
-        showComposerToast(t(flipped.toastKey));
-    }, [props.onReadAloudToggle, props.readAloudEnabled, sentenceTapUsed, showComposerToast]);
     /**
-     * The long press: pause, resume, or boss mode (DROVE-233, DROVE-236).
+     * The tap: start, stop, or RESUME (DROVE-327).
+     *
+     * Clay: "if it's paused and I single tap it should unpause not end the
+     * reading." The voice layer has already done it and says which; this only
+     * announces it. It used to flip the switch here and toast the flip, which
+     * on a paused reader announced "off" and meant it.
+     */
+    const handleAudioOutPress = React.useCallback(() => {
+        if (!props.onAudioOutPress) return;
+        const effect = props.onAudioOutPress();
+        const toast = audioOutToast(effect, sentenceTapUsed);
+        if (toast === null) return;
+        hapticsLight();
+        showComposerToast(t(toast));
+    }, [props.onAudioOutPress, sentenceTapUsed, showComposerToast]);
+    /**
+     * The long press: pause, off, or boss mode (DROVE-233, DROVE-236,
+     * DROVE-327).
      *
      * Clay: "if you long press the read back it goes into pause so when you
-     * resume it goes back to where it was reading", and "long press for boss
-     * mode". The TAP is untouched and still means on/off; this is the second
-     * gesture on the same control, which is the pattern the send button already
-     * uses (resolveComposerPrimaryPress).
+     * resume it goes back to where it was reading", "long press for boss
+     * mode", and then "To go into pause though you hold it in." The hold is
+     * the second gesture on the same control, which is the pattern the send
+     * button already uses (resolveComposerPrimaryPress); from paused it is the
+     * way OUT, because the tap is the resume.
      *
      * The decision is `transportEffect`'s, over in the voice layer beside the
      * headphone and lock-screen presses, so the three surfaces cannot come to
@@ -1445,10 +1463,11 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             handleMicrophonePress();
             return;
         }
-        if (effect === 'nothing') return;
+        const toast = audioOutToast(effect, sentenceTapUsed);
+        if (toast === null) return;
         hapticsLight();
-        showComposerToast(t(streamTalkPauseToast(effect === 'pause')));
-    }, [handleMicrophonePress, props.onAudioOutLongPress, props.onMicPress, showComposerToast]);
+        showComposerToast(t(toast));
+    }, [handleMicrophonePress, props.onAudioOutLongPress, props.onMicPress, sentenceTapUsed, showComposerToast]);
 
     const permissionTitle = isCodex
         ? t('agentInput.codexPermissionMode.title')

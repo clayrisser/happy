@@ -152,12 +152,13 @@ export interface ComposerReadAloudSegment {
     glyph: AudioOutGlyph;
     /** Which of the four faces, from `audioOutButton`. */
     fill: AudioOutFill;
-    /** Read-aloud is on, paused included: what a TAP will turn off. */
+    /** Read-aloud is on, paused included. Drawn as toggled. */
     on: boolean;
     /** Already translated by the caller, which owns `t`. */
     accessibilityLabel: string;
+    /** Start from off, stop while reading, RESUME from paused (DROVE-327). */
     onPress: () => void;
-    /** Boss mode from off, pause/resume while on (DROVE-233/275). */
+    /** Boss mode from off, pause while reading, off from paused (DROVE-233/236/327). */
     onLongPress?: () => void;
 }
 
