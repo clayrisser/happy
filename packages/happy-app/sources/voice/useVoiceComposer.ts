@@ -4,12 +4,10 @@ import * as Application from 'expo-application';
 import {
     addDictationEndedListener,
     addDictationPartialListener,
-    addRemoteCommandListener,
     cancelDictation,
     dictationReportsProgress,
     getDictationSupport,
     isDroverSpeechAvailable,
-    remoteTriplePressAvailable,
     startDictation,
     stopDictation,
 } from 'drover-speech';
@@ -30,11 +28,8 @@ import {
     type MicGestureEvent,
 } from './micButton';
 import { dictationBlock, unknownBuild } from './dictationCapability';
-import { headphoneAction } from './headphonePress';
 import { readAloudTransport, transportEffect, type TransportEffect } from './readAloudTransport';
-import { HeadphoneMic } from './headphoneMic';
-import { audioCues as cueService } from './audioCueService';
-import { cueDurationMs, cueSpec } from './audioCues';
+import { registerDictationSurface } from './dictationSurface';
 
 /**
  * The composer's half of modes A and B (DROVE-30), and the talk button's
@@ -539,104 +534,46 @@ export function useVoiceComposer(options: VoiceComposerOptions): VoiceComposerSt
     const offersDictation = active && dictationEnabled && dictationSupported && !voiceCallActive;
 
     /**
-     * Would a press open the mic, asked WITHOUT saying anything (DROVE-225).
+     * This composer is on screen, so the headphone press has somewhere better
+     * to go than the draft (DROVE-302).
      *
-     * `canPress` is the on-screen check and it pops an alert on a refusal,
-     * which is right for a thumb on a button and wrong for a phone in a
-     * pocket: he cannot read it, and the alert would still be there when he
-     * next looks. The headphone path asks this instead and answers with a
-     * sound.
+     * THE SUBSCRIPTION IS NOT HERE ANY MORE, and that is the whole of the
+     * ticket. It used to be: a `HeadphoneMic` and an `addRemoteCommandListener`
+     * lived in this hook, so the triple press could only ever reach a session
+     * screen that happened to be mounted. React native does not unmount the
+     * tree when the app leaves the screen, so the gesture DID work in his
+     * pocket while a session was open, which is why it tested fine; background
+     * the app from the session LIST and the press landed on nothing at all,
+     * with no cue to say so. Clay's requirement is that the mappings behave
+     * the same foreground and backgrounded, and a subscription owned by a
+     * screen cannot meet it.
+     *
+     * The owner is micPress.ts now, started once beside the double press in
+     * readAloudService.ts. This hook's part is to say that a composer exists
+     * for this session, so the press routes into the SAME capture the thumb
+     * drives rather than opening a second one underneath it. When nothing has
+     * registered, the press still lands: headlessDictation.ts writes into the
+     * session draft instead.
+     *
+     * DROVE-300's refusal did not move with it — it moved INTO `micTarget`,
+     * where it finally has a test. A triple press after a double press, with
+     * this screen still up and the voice on another session, refuses audibly
+     * rather than putting words in a composer he is not listening to.
+     *
+     * `tap` goes through a ref so the registration itself is stable: the
+     * callback changes identity with every render, and re-registering on each
+     * one would churn the surface listeners for nothing.
      */
-    const micBlocked = React.useCallback(() => {
-        if (capture.current.settling) return true;
-        // THE MIC FOLLOWS THE VOICE, NOT THE SCREEN (DROVE-300).
-        //
-        // The double press moves the voice to another session while this
-        // screen stays mounted and stays subscribed. Without this line the
-        // next triple press would open the mic against THIS session and put
-        // the words in a composer he is not listening to and cannot see, which
-        // is the one dictation mistake that is not recoverable by pressing
-        // anything. Refusing is audible — `micRefused` — so it is a press that
-        // says no rather than a press that lies.
-        //
-        // `readingSessionId` and not `focusedSessionId` (DROVE-297): a session
-        // he switched reading off on keeps its focus for a moment and has
-        // already given the voice up, and the mic should follow the voice.
-        // Nobody holding it at all is not a conflict, so the ordinary
-        // reading-off case is unaffected.
-        const holder = readAloud.readingSessionId;
-        if (holder !== null && holder !== sessionId) return true;
-        return dictationBlock({
-            moduleAvailable: isDroverSpeechAvailable(),
-            reportsProgress: dictationReportsProgress(),
-            build: Application.nativeBuildVersion,
-        }) !== null;
-    }, [capture, sessionId]);
-
-    /**
-     * Push to talk from the headphones (DROVE-225, moved to the TRIPLE press
-     * by DROVE-300).
-     *
-     * A TRIPLE press opens the mic and a triple press closes it. The single
-     * press stays play/pause, which is what build 13 already does and what the
-     * hardware is labelled with, and the double press is now the next
-     * reading-enabled session, which is the job a next-track gesture actually
-     * has. Press-and-hold is not on offer: there is no held-button command in
-     * MPRemoteCommandCenter at all and AirPods give the hold to Siri, so the
-     * gesture the name asks for cannot be delivered. headphonePress.ts carries
-     * the measurement and the arbitration with DROVE-73's audio menus;
-     * headphoneMic.ts carries the cue-then-open ordering.
-     *
-     * NOTHING IN THIS BLOCK MOVED, which is the point of the owner table: the
-     * predicate below still asks for `'mic'` and headphonePress.ts changed
-     * which press answers to it. A remapping that had to be made in two files
-     * is a remapping that gets made in one of them.
-     *
-     * `onTalkTap` is the join, which means this is not a second capture. It is
-     * the same call DROVE-210 gave the composer's primary button, so a latch
-     * opened by ear is stopped by the capsule's button, and one opened by
-     * thumb is stopped by a triple press.
-     *
-     * The owner is `transport` and nothing else yet: DROVE-73 has not shipped
-     * an audio menu, so no press has a second meaning to arbitrate with. When
-     * it does, it passes `menu` here while the menu is being read.
-     *
-     * Not subscribed at all on a binary that cannot send the TRIPLE press.
-     * Build 15 and earlier disable `previousTrackCommand` outright, so the
-     * event never arrives however long we listen, and a live subscription
-     * would only suggest otherwise. The double press needs no new build, so a
-     * bundle sent over the air to build 15 gets the session skip and waits for
-     * a binary for the microphone.
-     *
-     * IT STAYS SUBSCRIBED WHILE BACKGROUNDED, which is what makes the gesture
-     * work in his pocket: react-native does not unmount the tree when the app
-     * leaves the screen, so this effect and its listener outlive the
-     * backgrounding. What it does NOT survive is never being mounted — see the
-     * note on `micBlocked` and DROVE-300's report.
-     */
+    const talkTapRef = React.useRef(onTalkTap);
+    talkTapRef.current = onTalkTap;
     React.useEffect(() => {
         if (!offersDictation) return;
-        if (!remoteTriplePressAvailable()) return;
-        const mic = new HeadphoneMic({
+        return registerDictationSurface({
+            session: sessionId,
             capturing: () => capture.current.active,
-            blocked: micBlocked,
-            ack: (id) => cueService.ack(id),
-            duration: (id) => cueDurationMs(cueSpec(id)),
-            tap: onTalkTap,
-            delay: (run, ms) => {
-                const timer = setTimeout(run, ms);
-                return () => clearTimeout(timer);
-            },
+            tap: () => talkTapRef.current(),
         });
-        const remote = addRemoteCommandListener((command) => {
-            if (headphoneAction(command, 'transport') !== 'mic') return;
-            mic.press();
-        });
-        return () => {
-            remote.remove();
-            mic.dispose();
-        };
-    }, [offersDictation, capture, micBlocked, onTalkTap]);
+    }, [offersDictation, sessionId, capture]);
 
     return {
         readAloudEnabled: offersReadAloud ? readAloudEnabled : undefined,
