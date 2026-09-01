@@ -59,6 +59,11 @@ export const droverVerbs: readonly DroverVerb[] = [
         summary: 'The things a session needs you to do, until you have done them.',
         load: () => import('./todos'),
     },
+    {
+        name: 'share-sessions',
+        summary: 'One session store for every account, so a flip stops copying transcripts. Dry run unless --apply.',
+        load: () => import('./share-sessions'),
+    },
 ];
 
 /** Is this a verb the node CLI carries? */
