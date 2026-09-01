@@ -11,15 +11,23 @@
  *
  * On top of the bats, one differential test runs the SHELL verb on the same
  * rows and compares its stdout byte for byte with the node verb's, so the port
- * cannot drift a character from what the ship loop printed before it.
+ * cannot drift a character from what the ship loop printed before it. And one
+ * runs the BUILT ENTRY — `node dist/index.mjs stale-sessions`, the way the
+ * verb is actually reached — under a throwaway HOME and HAPPY_HOME_DIR, with
+ * a resolve hook listing every chunk the run loads.
+ *
+ * Nothing here may reach ~/.happy. HAPPY_HOME_DIR is pinned to a throwaway
+ * directory before the first import, checked again at every run and every
+ * spawn, and the modules a session registration goes through are mocked to
+ * THROW on import. The pin below says which night made that necessary.
  */
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { droverEnv } from './env';
 import {
@@ -32,6 +40,98 @@ import {
     staleTranscriptOf,
     type Probe,
 } from './stale-sessions';
+
+/**
+ * A throwaway HAPPY_HOME_DIR, pinned above every import.
+ *
+ * On 2026-09-01 the startup benchmarks for this port spawned
+ * `node dist/index.mjs --version` against a base that predated DROVE-314,
+ * where --version printed the version and went on into authAndEnsureDaemon()
+ * and runClaude(). No bench had set HAPPY_HOME_DIR, so each spawn read the
+ * real ~/.happy/access.key and registered a real session with the real
+ * daemon: seventy-eight of them from this worktree, on Clay's phone. Later the
+ * same night a probe passed `stale-sessions --help` as ONE token (zsh does not
+ * split an unquoted variable), the entry took the unknown word to Claude as it
+ * always has, and two more were registered. The verb never touches ~/.happy
+ * and this file never spawned the entry, but the leak came from the same tree
+ * and nothing in it said no. This does.
+ *
+ * vi.hoisted runs before the static imports, so the pin is in place before
+ * ./stale-sessions, or anything it might one day import, is evaluated. The
+ * guard is applied again at every boundary a session could be registered
+ * across: each in-process run, each spawn of the shell verb, each spawn of the
+ * built entry. Unset resolves to ~/.happy too, and is refused too.
+ */
+const { happyHome, realHappyHome } = await vi.hoisted(async () => {
+    const fs = await import('node:fs');
+    const os = await import('node:os');
+    const path = await import('node:path');
+    const realHappyHome = path.join(os.homedir(), '.happy');
+    const happyHome = fs.mkdtempSync(path.join(os.tmpdir(), 'stale-sessions-happy-'));
+    process.env.HAPPY_HOME_DIR = happyHome;
+    return { happyHome, realHappyHome };
+});
+
+// The modules a session registration goes through. The verb imports none of
+// them; a factory that throws turns a future import into a failure of this
+// whole file at load, instead of a test that quietly reads ~/.happy.
+vi.mock('../../configuration', () => {
+    throw new Error('stale-sessions.test: configuration (the ~/.happy reader) was imported; the verb must not reach the session machinery');
+});
+vi.mock('../../persistence', () => {
+    throw new Error('stale-sessions.test: persistence (access.key, settings) was imported; the verb must not reach the session machinery');
+});
+vi.mock('../../api/api', () => {
+    throw new Error('stale-sessions.test: api/api (session registration) was imported; the verb must not reach the session machinery');
+});
+vi.mock('../../claude/runClaude', () => {
+    throw new Error('stale-sessions.test: claude/runClaude was imported; the verb must not reach the session machinery');
+});
+
+type Env = Record<string, string | undefined>;
+
+/** Where HAPPY_HOME_DIR points, read the way configuration.ts reads it: unset is ~/.happy, a leading ~ is home. */
+function happyHomeOf(env: Env): string {
+    const raw = env.HAPPY_HOME_DIR;
+    return raw ? resolve(raw.replace(/^~/, homedir())) : resolve(realHappyHome);
+}
+
+/**
+ * Refuse an environment whose HAPPY_HOME_DIR is the real one. Thrown rather
+ * than expect()ed so it fires inside helpers and fails the file, not one test.
+ */
+function refuseRealHappyHome(env: Env, where: string): void {
+    if (happyHomeOf(env) === resolve(realHappyHome)) {
+        throw new Error(
+            `${where}: HAPPY_HOME_DIR resolves to the real ${realHappyHome} (it is ${env.HAPPY_HOME_DIR ?? 'unset'}). `
+            + 'Anything that reached the entry from here would register sessions on the real daemon. Refusing.',
+        );
+    }
+}
+
+/** The files a session start leaves under a HAPPY_HOME_DIR. A debug log under logs/ is not one of them. */
+const REGISTRATION_FILES = ['access.key', 'daemon.state.json', 'daemon.state.json.lock', 'sessions.json', 'settings.json'];
+
+function registrationFilesUnder(dir: string): string[] {
+    if (!existsSync(dir)) return [];
+    return readdirSync(dir).filter((f) => REGISTRATION_FILES.includes(f));
+}
+
+beforeAll(() => {
+    refuseRealHappyHome(process.env, 'stale-sessions.test');
+    if (happyHomeOf(process.env) !== happyHome) {
+        throw new Error(`stale-sessions.test: HAPPY_HOME_DIR moved off the pin (it is ${process.env.HAPPY_HOME_DIR}); refusing to run`);
+    }
+});
+
+afterAll(() => {
+    // Nothing in this file registered anything, or created anything: the
+    // pinned home is exactly as empty as mkdtemp made it. Merely loading
+    // configuration.ts would have put a logs/ here.
+    refuseRealHappyHome(process.env, 'stale-sessions.test (afterAll)');
+    expect(existsSync(happyHome) ? readdirSync(happyHome) : []).toEqual([]);
+    rmSync(happyHome, { recursive: true, force: true });
+});
 
 /** A Probe that proves nothing on this machine is asked. */
 const noProbe: Probe = {
@@ -71,13 +171,14 @@ interface Captured {
     lines: string[];
 }
 
-async function capture(args: string[], env: Record<string, string | undefined>, probe: Probe = noProbe): Promise<Captured> {
+async function capture(args: string[], env: Env, probe: Probe = noProbe, uid: number = 501): Promise<Captured> {
+    refuseRealHappyHome(process.env, 'capture');
     const out: string[] = [];
     const err: string[] = [];
     const so = vi.spyOn(process.stdout, 'write').mockImplementation((c: string | Uint8Array) => (out.push(String(c)), true));
     const se = vi.spyOn(process.stderr, 'write').mockImplementation((c: string | Uint8Array) => (err.push(String(c)), true));
     try {
-        const code = await run(args, { env, probe, uid: () => 501 });
+        const code = await run(args, { env, probe, uid: () => uid });
         const text = out.join('');
         return { code, out: text, err: err.join(''), lines: text.split('\n').filter((l) => l !== '') };
     } finally {
@@ -337,6 +438,47 @@ describe('drover stale-sessions — help answers before anything is looked at', 
     });
 });
 
+// --- the guards, proven armed ------------------------------------------------------
+//
+// A guard that has never been seen to fire is a promise. These fire it.
+
+/** The innermost message of a failed import: vitest wraps a throwing mock factory, and the cause is ours. */
+async function trapped(load: () => Promise<unknown>): Promise<string> {
+    try {
+        await load();
+    } catch (e) {
+        let err = e as { message?: string; cause?: unknown } | undefined;
+        while (err && typeof err === 'object' && err.cause && typeof err.cause === 'object') err = err.cause as typeof err;
+        return String(err?.message ?? e);
+    }
+    return '';
+}
+
+describe('drover stale-sessions — the guards are armed', () => {
+    it('the pin holds: this file runs under a throwaway HAPPY_HOME_DIR, not ~/.happy', () => {
+        expect(process.env.HAPPY_HOME_DIR).toBe(happyHome);
+        expect(happyHome).not.toBe(realHappyHome);
+        expect(happyHome.startsWith(realHappyHome)).toBe(false);
+    });
+
+    it('the guard refuses the real ~/.happy, whether spelled out, as ~, or left unset', () => {
+        expect(() => refuseRealHappyHome({}, 'unset')).toThrow(/resolves to the real/);
+        expect(() => refuseRealHappyHome({ HAPPY_HOME_DIR: '~/.happy' }, 'tilde')).toThrow(/resolves to the real/);
+        expect(() => refuseRealHappyHome({ HAPPY_HOME_DIR: join(homedir(), '.happy') }, 'spelled out')).toThrow(/resolves to the real/);
+        expect(() => refuseRealHappyHome({ HAPPY_HOME_DIR: join(homedir(), '.happy', '..', '.happy') }, 'dotted')).toThrow(/resolves to the real/);
+        expect(() => refuseRealHappyHome({ HAPPY_HOME_DIR: happyHome }, 'pinned')).not.toThrow();
+    });
+
+    it('importing the session machinery fails before it can read ~/.happy', async () => {
+        expect(await trapped(() => import('../../configuration'))).toMatch(/configuration .* must not reach the session machinery/);
+        expect(await trapped(() => import('../../persistence'))).toMatch(/persistence .* must not reach the session machinery/);
+        expect(await trapped(() => import('../../api/api'))).toMatch(/api\/api .* must not reach the session machinery/);
+        expect(await trapped(() => import('../../claude/runClaude'))).toMatch(/runClaude .* must not reach the session machinery/);
+        // And none of those attempts created the home configuration.ts would have made.
+        expect(existsSync(happyHome) ? readdirSync(happyHome) : []).toEqual([]);
+    });
+});
+
 // --- the elapsed-time parse ------------------------------------------------------
 //
 // ps -o etime= is [[DD-]HH:]MM:SS, and the leading zeros in it were the trap:
@@ -496,6 +638,7 @@ describe.skipIf(process.platform !== 'darwin' || !existsSync(shellVerb))(
                     DROVER_STALE_SERVICE_ROWS: srows,
                     DROVER_STALE_DIST_MTIME: String(build),
                 };
+                refuseRealHappyHome(env, 'the shell verb spawn');
                 const uid = process.getuid?.() ?? 0;
                 for (const args of [[], ['--raw']]) {
                     const shell = spawnSync(shellVerb, args, { env, encoding: 'utf8' });
@@ -513,3 +656,133 @@ describe.skipIf(process.platform !== 'darwin' || !existsSync(shellVerb))(
         });
     },
 );
+
+// --- the built entry, the way the verb is reached ------------------------------------------
+//
+// bin/drover routes the live name to libexec/ until its arm flips, so the port
+// is reached as `drover.mjs stale-sessions`: the lazy arm in src/index.ts, the
+// row in the table, the chunk pkgroll split out. Only the BUILT entry proves
+// those three. And the 2026-09-01 leak was an entry going on into runClaude,
+// so this is where that is refused: the same argv through the same entry,
+// under a HOME and a HAPPY_HOME_DIR that are throwaway, with an ESM resolve
+// hook recording every dist chunk the run loads. No session, auth or api
+// chunk may load, and nothing may be registered under that home.
+
+const distEntry = join(__dirname, '..', '..', '..', 'dist', 'index.mjs');
+
+/** The chunks that mean the session machinery loaded: index.startup.test.ts's list. */
+const HEAVY = /(?:runClaude|api-[A-Za-z0-9_]+\.[cm]js|codexCommand|persistence-|auth-[A-Za-z0-9_]+\.[cm]js)/;
+
+interface EntryRun {
+    status: number | null;
+    stdout: string;
+    stderr: string;
+    /** Every dist chunk the run loaded, by basename. */
+    chunks: string[];
+    /** The registration files left under the run's throwaway HAPPY_HOME_DIR. */
+    registered: string[];
+}
+
+function runEntry(args: string[], doors: Record<string, string>): EntryRun {
+    const work = mkdtempSync(join(tmpdir(), 'stale-entry-'));
+    try {
+        const home = join(work, 'home');
+        const happy = join(home, 'happy');
+        mkdirSync(home, { recursive: true });
+        const chunksOut = join(work, 'chunks.txt');
+        writeFileSync(join(work, 'hook.mjs'), [
+            'import fs from \'node:fs\';',
+            'const out = process.env.CHUNKS_OUT;',
+            'export async function resolve(specifier, context, nextResolve) {',
+            '    const r = await nextResolve(specifier, context);',
+            '    try {',
+            '        if (out && /\\/dist\\/[^/]+\\.(mjs|cjs)$/.test(r.url)) fs.appendFileSync(out, r.url.split(\'/\').pop() + \'\\n\');',
+            '    } catch {}',
+            '    return r;',
+            '}',
+            '',
+        ].join('\n'));
+        writeFileSync(join(work, 'register.mjs'), 'import { register } from \'node:module\';\nregister(\'./hook.mjs\', import.meta.url);\n');
+        // A scrubbed environment: PATH, a HOME that is nobody's, the doors, and
+        // nothing inherited from the shell that ran vitest — not
+        // CLAUDE_CONFIG_DIR, not DROVER_ACCOUNT, not TMUX_PANE.
+        const env: Record<string, string> = {
+            PATH: process.env.PATH ?? '',
+            HOME: home,
+            HAPPY_HOME_DIR: happy,
+            CHUNKS_OUT: chunksOut,
+            DROVER_DIR: work,
+            STATE_DIR: work,
+            DROVER_FORK_CLI: join(work, 'happy-cli'),
+            ...doors,
+        };
+        refuseRealHappyHome(env, 'the entry spawn');
+        const r = spawnSync(
+            process.execPath,
+            ['--no-warnings', '--no-deprecation', '--import', join(work, 'register.mjs'), distEntry, ...args],
+            { encoding: 'utf8', input: '', timeout: 20_000, env },
+        );
+        const chunks = existsSync(chunksOut) ? [...new Set(readFileSync(chunksOut, 'utf8').split('\n').filter(Boolean))] : [];
+        return { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '', chunks, registered: registrationFilesUnder(happy) };
+    } finally {
+        rmSync(work, { recursive: true, force: true });
+    }
+}
+
+describe('drover stale-sessions — through the built entry, registering nothing', () => {
+    beforeAll(() => {
+        if (!existsSync(distEntry)) {
+            throw new Error(
+                `${distEntry} is missing. Build the CLI before running this test `
+                + '(`pnpm run build`, which `pnpm test` and vitest\'s global setup do for you).',
+            );
+        }
+    });
+
+    it('--help is the verb\'s own help, from its own chunk, with no session chunk loaded', async () => {
+        const entry = runEntry(['stale-sessions', '--help'], {});
+        const inProcess = await capture(['--help'], {});
+        expect(entry.status, entry.stderr).toBe(0);
+        expect(entry.stdout).toBe(inProcess.out);
+        expect(entry.chunks.some((c) => c.startsWith('stale-sessions-')), entry.chunks.join(', ')).toBe(true);
+        expect(entry.chunks.filter((c) => HEAVY.test(c))).toEqual([]);
+        expect(entry.registered).toEqual([]);
+    });
+
+    it('the report and --raw match the in-process verb byte for byte, and load no session chunk', async () => {
+        const dir = mkdtempSync(join(tmpdir(), 'entry-rows-'));
+        try {
+            const build = Math.floor(Date.now() / 1000) - 600;
+            const rows = join(dir, 'rows');
+            const srows = join(dir, 'srows');
+            writeFileSync(rows, [
+                `1\t${build - 3600}\t0\taaaaaaaa-0000-0000-0000-000000000000\tselfhosted-cloud:cattle-drover`,
+                `2\t${build - 60}\t1\tbbbbbbbb-0000-0000-0000-000000000000\tcattle-drover:happy`,
+                `3\t${build + 30}\t1\t-\tfresh-one`,
+                '',
+            ].join('\n'));
+            writeFileSync(srows, [
+                `bus\t${build - 3600}\t${build}\tcom.bitspur.cattle-drover.bus`,
+                `daemon\t${build + 30}\t${build}\tcom.bitspur.cattle-drover.daemon`,
+                '',
+            ].join('\n'));
+            const doors = { DROVER_STALE_ROWS: rows, DROVER_STALE_SERVICE_ROWS: srows, DROVER_STALE_DIST_MTIME: String(build) };
+            const uid = process.getuid?.() ?? 0;
+            for (const args of [[], ['--raw']]) {
+                const entry = runEntry(['stale-sessions', ...args], doors);
+                const inProcess = await capture(
+                    args,
+                    { HOME: dir, STATE_DIR: dir, DROVER_DIR: dir, DROVER_FORK_CLI: join(dir, 'happy-cli'), ...doors },
+                    noProbe,
+                    uid,
+                );
+                expect(entry.status, `${args.join(' ')}: ${entry.stderr}`).toBe(0);
+                expect(entry.stdout, args.join(' ')).toBe(inProcess.out);
+                expect(entry.chunks.filter((c) => HEAVY.test(c)), args.join(' ')).toEqual([]);
+                expect(entry.registered, args.join(' ')).toEqual([]);
+            }
+        } finally {
+            rmSync(dir, { recursive: true, force: true });
+        }
+    });
+});
