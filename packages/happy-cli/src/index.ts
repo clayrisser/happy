@@ -497,6 +497,57 @@ Conversation history is preserved on the server, but in-flight tool calls are in
       process.exit(1)
     }
     return;
+  } else if (subcommand === 'pi') {
+    // A pi session (DROVE-316). pi is the LOCAL-model harness — LM Studio and
+    // a local GLM, not a cloud login — and this is the runner that lets the
+    // daemon spawn one from the phone's picker. DROVE-295 built everything
+    // around it and stopped exactly here, because listing a harness the daemon
+    // cannot spawn is a tap that opens a window and then fails.
+    try {
+      const { runPi } = await import('@/pi/runPi');
+
+      let startedBy: 'daemon' | 'terminal' | undefined = undefined;
+      let model: string | null = null;
+      let thinking: string | null = null;
+      let resumeSessionId: string | null = null;
+      let gate = true;
+      let seedFile: string | null = null;
+      for (let i = 1; i < args.length; i++) {
+        if (args[i] === '--started-by') {
+          startedBy = args[++i] as 'daemon' | 'terminal';
+        } else if (args[i] === '--seed') {
+          seedFile = args[++i] ?? null;
+        } else if (args[i] === '--model') {
+          model = args[++i] ?? null;
+        } else if (args[i] === '--thinking' || args[i] === '--effort') {
+          // `--effort` because that is what appendDaemonSpawnModeArgs spells
+          // the app's thought-level pick, and pi calls the same axis thinking.
+          thinking = args[++i] ?? null;
+        } else if (args[i] === '--resume') {
+          resumeSessionId = args[++i] ?? null;
+        } else if (args[i] === '--no-gate') {
+          gate = false;
+        } else if (args[i] === '--no-extensions' || args[i] === '-ne') {
+          // Refused here as well as in piArgs.ts, so the message names the
+          // reason rather than letting pi answer `Unknown provider "lmstudio"`
+          // three layers down. The local model providers ARE extensions.
+          console.error(chalk.red('Error:'), 'drover pi: --no-extensions takes the LOCAL MODELS down with it.');
+          console.error('  The lmstudio and glm providers are pi extensions, so pi refuses to start.');
+          process.exit(2);
+        }
+      }
+
+      const { credentials } = await authAndEnsureDaemon();
+
+      await runPi({ credentials, startedBy, model, thinking, resumeSessionId, gate, seedFile });
+    } catch (error) {
+      console.error(chalk.red('Error:'), error instanceof Error ? error.message : 'Unknown error')
+      if (process.env.DEBUG) {
+        console.error(error)
+      }
+      process.exit(1)
+    }
+    return;
   } else if (subcommand === 'agy') {
     try {
       const { runAgy } = await import('@/agy/runAgy');
@@ -793,6 +844,7 @@ ${chalk.bold('Usage:')}
   drover pair              QR-pair a phone or watch (= drover auth login)
   drover resume            Resume a previous Drover session by Drover session ID
   drover codex             Start Codex mode
+  drover pi                Start a pi session (local models: LM Studio, GLM)
   drover gemini            Start Gemini mode (ACP) [deprecated — use agy]
   drover agy               Start agy (Antigravity CLI) mode
   drover acp               Start a generic ACP-compatible agent

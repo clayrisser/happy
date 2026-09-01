@@ -36,7 +36,11 @@ import { basename, join } from 'node:path';
 import { droverDir } from '@/drover/hooks';
 
 /** Agents the daemon knows how to launch. `rig` is handled by another RPC. */
-export const daemonAgents = ['claude', 'codex', 'cursor', 'gemini', 'openclaw', 'agy'] as const;
+// `pi` joined in DROVE-316, once `drover pi` gained a happy-cli runner. Being
+// in this list IS the promise the phone's picker makes, so the order is
+// always runner first: a name here with no runner behind it opens a tmux
+// window and then calls a session that never appears a success.
+export const daemonAgents = ['claude', 'codex', 'cursor', 'gemini', 'openclaw', 'agy', 'pi'] as const;
 
 export type DaemonAgent = (typeof daemonAgents)[number];
 

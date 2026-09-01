@@ -45,6 +45,17 @@ export type CodexGateRequest = {
     preview: string;
     sessionId: string | null;
     cwd: string | null;
+    /**
+     * Which harness raised this, for `origin.harness` on the bus (DROVE-316).
+     *
+     * Defaults to 'codex' so every existing caller is unchanged. pi reaches the
+     * bus through the same publish-and-wait — its approvals are also in-process
+     * events with no shell hook point — and a pi gate labelled 'codex' would
+     * make `drover sessions` and the watch attribute it to the wrong session.
+     */
+    harness?: string;
+    /** Overrides the card's title. Defaults to the Codex wording below. */
+    title?: string;
 };
 
 export type CodexGateOptions = {
@@ -71,6 +82,7 @@ const DEFAULT_BUS = 'http://127.0.0.1:7970';
 const PREVIEW_MAX = 2000;
 
 function cardTitle(req: CodexGateRequest): string {
+    if (req.title) return req.title;
     if (req.type === 'exec') return 'Codex wants to run a command';
     if (req.type === 'patch') return 'Codex wants to edit files';
     return `Codex wants to call ${req.toolName}`;
@@ -122,7 +134,7 @@ export function openCodexGate(
                     preview: (req.preview || '').slice(0, PREVIEW_MAX),
                     channel: 'hook-wait',
                     origin: {
-                        harness: 'codex',
+                        harness: req.harness ?? 'codex',
                         sessionId: req.sessionId,
                         cwd: req.cwd,
                         // PRESENT beats truthy in the registry (DROVE-31): the
@@ -208,4 +220,22 @@ export function openCodexGate(
  */
 export function codexGateEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
     return env.DROVER_CODEX_GATE === '1';
+}
+
+/**
+ * The same gate, under a name that does not claim a harness (DROVE-316).
+ *
+ * pi's approvals have the same shape as Codex's for the purposes of the bus:
+ * raised in-process, with no shell hook point to publish from, and fail-closed
+ * once published. Rather than a second implementation of publish-and-long-poll
+ * that could drift from this one, pi passes `harness` and `title` and uses this.
+ */
+export const openDroverToolGate = openCodexGate;
+
+/** Whether to put pi approvals on the bus as well as on the phone. */
+export function piGateEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+    // ON by default, unlike Codex's. pi's gate is the one surface DROVE-295
+    // already shipped and Clay already answers from gum and the watch; turning
+    // it off when the runner landed would be a regression he would feel.
+    return env.DROVER_PI_GATE !== '0' && (env.DROVER_PI_GATE ?? 'on').toLowerCase() !== 'off';
 }

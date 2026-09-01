@@ -148,6 +148,76 @@ export abstract class BasePermissionHandler {
     }
 
     /**
+     * Raise a permission request and wait for an answer.
+     *
+     * Lifted here from CodexPermissionHandler (DROVE-316) unchanged, because pi
+     * needs exactly this and a second copy of it is a second place for the
+     * agent-state bookkeeping to drift. Codex still overrides it to run its
+     * auto-approve allowlist first and then calls up to this.
+     *
+     * There is no timeout and no default. The promise settles only when a
+     * surface answers or when abortAll/reset clears it, which is what makes an
+     * unanswered gate a suspended tool rather than an approved one.
+     */
+    async handleToolCall(
+        toolCallId: string,
+        toolName: string,
+        input: unknown
+    ): Promise<PermissionResult> {
+        return new Promise<PermissionResult>((resolve, reject) => {
+            this.pendingRequests.set(toolCallId, { resolve, reject, toolName, input });
+            this.addPendingRequestToState(toolCallId, toolName, input);
+            logger.debug(`${this.getLogPrefix()} Permission request sent for tool: ${toolName} (${toolCallId})`);
+        });
+    }
+
+    /**
+     * Answer a pending request from somewhere that is not the app's RPC —
+     * today, a Cattle Drover bus surface: the gum popup in tmux, or the watch
+     * (DROVE-273, generalised in DROVE-316).
+     *
+     * Same three steps the 'permission' RPC handler takes, in the same order:
+     * drop it from pending so a second answer is a no-op, resolve the promise
+     * the approval handler is awaiting, and move the card from requests to
+     * completedRequests so the app stops showing it. Without that last step the
+     * phone would keep displaying a question that has already been answered on
+     * the wrist.
+     *
+     * Returns false when the request is unknown or already answered, which is
+     * the normal outcome of a race the other surface won.
+     */
+    resolveExternally(toolCallId: string, decision: PermissionResult['decision'], by: string): boolean {
+        const pending = this.pendingRequests.get(toolCallId);
+        if (!pending) return false;
+        this.pendingRequests.delete(toolCallId);
+        pending.resolve({ decision });
+
+        this.session.updateAgentState((currentState) => {
+            const request = currentState.requests?.[toolCallId];
+            if (!request) return currentState;
+            const { [toolCallId]: _dropped, ...remainingRequests } = currentState.requests || {};
+            return {
+                ...currentState,
+                requests: remainingRequests,
+                completedRequests: {
+                    ...currentState.completedRequests,
+                    [toolCallId]: {
+                        ...request,
+                        completedAt: Date.now(),
+                        status: decision === 'approved' || decision === 'approved_for_session'
+                            ? 'approved'
+                            : 'denied',
+                        decision,
+                    },
+                },
+            } satisfies AgentState;
+        });
+
+        logger.debug(`${this.getLogPrefix()} Permission ${decision} for ${pending.toolName} (answered by ${by})`);
+        return true;
+    }
+
+    /**
      * Abort all pending permission requests.
      * Unlike reset(), this resolves (not rejects) pending promises with { decision: 'abort' },
      * causing the approval response to send 'cancel' to the provider. This is used when the

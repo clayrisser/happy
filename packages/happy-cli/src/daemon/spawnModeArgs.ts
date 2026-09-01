@@ -74,6 +74,21 @@ export function appendDaemonSpawnModeArgs(
     }
     return;
   }
+  // pi takes a model and a thinking level, and nothing else (DROVE-316). Its
+  // permission setting is not per-session — the gate's three modes are read
+  // from the pane's environment when it starts — so there is no
+  // `--permission-mode` to forward, which is why the app offers pi exactly one
+  // mode. `--effort` is the app's spelling of the axis pi calls thinking; the
+  // runner accepts both names for it.
+  if (agent === 'pi') {
+    if (options.modelMode && options.modelMode !== 'default') {
+      args.push('--model', options.modelMode);
+    }
+    if (options.effortLevel) {
+      args.push('--effort', options.effortLevel);
+    }
+    return;
+  }
   if (agent !== 'claude' && agent !== 'codex') return;
 
   appendDaemonPermissionArgs(args, agent, options.permissionMode, skipPermissions);
