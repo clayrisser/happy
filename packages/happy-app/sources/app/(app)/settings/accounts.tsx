@@ -119,6 +119,7 @@ import {
     type PendingAccountLogin,
 } from '@/sync/machineAccountsFlow';
 import { harnessName } from '@/utils/harnessName';
+import { accountHarness } from '@/utils/droverAccounts';
 import { DroverAccountLoginBody } from '@/components/tools/views/DroverAccountLoginBody';
 import { MachineMcpRows } from '@/components/MachineMcpRows';
 import { machineDroverMcps, type MachineMcpsResult } from '@/sync/machineMcps';
@@ -410,7 +411,7 @@ export default function AccountsScreen() {
         );
         if (!ok) return;
         setBusyRemove(`${machineId}:${account.name}`);
-        const result = await machineDroverAccountRemove(machineId, account.name);
+        const result = await machineDroverAccountRemove(machineId, account.name, accountHarness(account));
         setBusyRemove(null);
         if (!result.ok) {
             Modal.alert('That machine refused', result.error);

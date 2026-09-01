@@ -63,12 +63,16 @@ export async function machineDroverAccounts(machineId: string): Promise<MachineA
 export async function machineDroverAccountRemove(
     machineId: string,
     name: string,
+    harness?: string,
 ): Promise<MachineAccountRemoveResult> {
     try {
-        return await apiSocket.machineRPC<MachineAccountRemoveResult, { name: string }>(
+        // The harness rides along (DROVE-338): a Claude row and a cursor row
+        // may share a name, and the Mac refuses a bare rm of a shared name
+        // rather than guess. The row being removed knows which it is.
+        return await apiSocket.machineRPC<MachineAccountRemoveResult, { name: string; harness?: string }>(
             machineId,
             'drover-account-remove',
-            { name },
+            harness ? { name, harness } : { name },
         );
     } catch (error) {
         return {

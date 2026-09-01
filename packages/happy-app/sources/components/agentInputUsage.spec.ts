@@ -33,6 +33,7 @@ vi.mock('@/text', async () => {
 });
 
 import {
+    cursorRowTrailing,
     droverBindingLimit,
     holdUsageGroupOrder,
     resolveUsageStrip,
@@ -44,9 +45,32 @@ import {
     usageBarTrailingFits,
     usageFill,
     usageSkippedFamilyWindows,
+    usageAccountGroupTitle,
     usageSnapshotAgeText,
     type UsageBarGroup,
 } from './agentInputUsage';
+
+describe('a cursor row on the quota sheet says it is one (DROVE-338)', () => {
+    // The sheet is one flat list, and a Claude account and a cursor account
+    // may share an address. The night it bit, "clayrisser@gmail.com · no quota
+    // published" beside a Claude row read as a broken Claude login.
+    const cursor = {
+        name: 'clayrisser@gmail.com', harness: 'cursor', tokenState: 'live', current: false,
+        loggedIn: true, fetchedAt: null, headroom: null, cooling: null, limits: [],
+    };
+    it('prefixes the harness to the trailing and the group title', () => {
+        expect(cursorRowTrailing(cursor as never)).toBe('Cursor · no quota published');
+        expect(usageAccountGroupTitle(cursor as never)).toBe('clayrisser@gmail.com · Cursor · no quota published');
+    });
+    it('keeps the deadline wording behind the harness when the token is about to expire', () => {
+        const renew = { ...cursor, tokenState: 'renew', expiresInDays: 2 };
+        expect(cursorRowTrailing(renew as never)).toBe('Cursor · renew in 2d');
+    });
+    it('leaves a Claude row alone', () => {
+        const claude = { ...cursor, harness: 'claude', loggedIn: true, fetchedAt: 900, headroom: 51 };
+        expect(usageAccountGroupTitle(claude as never)).not.toContain('Cursor');
+    });
+});
 
 // What the CLI stamps for Clay's registry as measured 2026-08-30: on jamrizzi,
 // main dead for the week, bitspur.com out for Fable only, spare never logged in.

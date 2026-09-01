@@ -38,6 +38,7 @@ import { promisify } from 'node:util';
 
 import { droverBinExists, droverBinPath } from '@/daemon/tmuxSpawn';
 import {
+    accountHarness,
     isAmbientSpelling,
     isClaudeAccount,
     loginEmail,
@@ -87,6 +88,13 @@ export type ListMachineAccountsResponse =
 
 export interface RemoveMachineAccountRequest {
     name?: string;
+    /**
+     * Which harness's row, when a Claude account and a cursor account share
+     * the name (DROVE-338). The phone knows: every row it draws carries its
+     * harness. Absent means "the only row called that", and a name two rows
+     * answer to is refused here rather than removing whichever came first.
+     */
+    harness?: string;
 }
 
 export type RemoveMachineAccountResponse =
@@ -230,7 +238,24 @@ export async function removeMachineAccount(
         return { ok: false, error: `'${name}' is not a usable account name, so no account is called that.` };
     }
 
-    const account = readAccounts().find((a) => a.name === name);
+    // ONE NAME, ONE HARNESS (DROVE-338). The rows called this, and the one
+    // meant: the harness the phone named, or the only one there is. Two rows
+    // and no harness is a refusal, not a guess — a Claude account and a cursor
+    // account are different things (a config dir with a Keychain item; a
+    // token), and removing the wrong one is silent.
+    const harness = typeof request?.harness === 'string' ? request.harness.trim().toLowerCase() : '';
+    const named = readAccounts().filter((a) => a.name === name);
+    const account = harness
+        ? named.find((a) => accountHarness(a) === harness)
+        : named.length > 1 ? undefined : named[0];
+    if (harness && named.length > 0 && !account) {
+        const have = named.map((a) => accountHarness(a)).join(' and ');
+        return { ok: false, error: `No ${harness} account is called '${name}' on that machine — the ${have} one is.` };
+    }
+    if (!harness && named.length > 1) {
+        const have = named.map((a) => accountHarness(a)).join(' and ');
+        return { ok: false, error: `Two accounts are called '${name}' on that machine, ${have}. Say which one.` };
+    }
     if (account && (account.ambient === true || isAmbientSpelling(account.configDir))) {
         return {
             ok: false,
@@ -251,7 +276,9 @@ export async function removeMachineAccount(
 
     const run = deps.run ?? defaultRunner(droverBin);
     try {
-        const stdout = await run(['account', 'rm', name]);
+        // `--harness` only when the phone named one: the wrapper refuses a
+        // bare rm of a shared name itself, and an unshared name needs no flag.
+        const stdout = await run(harness ? ['account', 'rm', name, '--harness', harness] : ['account', 'rm', name]);
         return { ok: true, name, message: stdout.trim() || `Removed '${name}'.` };
     } catch (error) {
         return { ok: false, error: describeDroverError(error) };

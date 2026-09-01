@@ -22,6 +22,8 @@ vi.mock('@/drover/flip/accounts', () => ({
     // registry that held only Claude accounts.
     isClaudeAccount: (a: { harness?: string }) =>
         ((a.harness ?? '').trim().toLowerCase() || 'claude') === 'claude',
+    accountHarness: (a: { harness?: string }) =>
+        (a.harness ?? '').trim().toLowerCase() || 'claude',
 }));
 
 // The credential probe spawns Claude Code, and this file is about the JOIN.
@@ -256,5 +258,73 @@ describe('describeDroverError', () => {
             .toBe('boom');
         expect(describeDroverError(new Error('spawn ENOENT'))).toBe('spawn ENOENT');
         expect(describeDroverError('plain')).toBe('plain');
+    });
+});
+
+describe('removeMachineAccount when a Claude row and a cursor row share the name (DROVE-338)', () => {
+    // An account's identity is (harness, name). The night it bit, the registry
+    // held a cursor row named clayrisser@gmail.com FIRST, so a first-match by
+    // name was the token, not the Claude account beside it.
+    const deps = (run: (args: string[]) => Promise<string>) => ({
+        droverBin: '/d/bin/drover',
+        exists: () => true,
+        run,
+    });
+    function seedShared(): void {
+        registry = [
+            { name: 'main', configDir: 'default', ambient: true },
+            { name: 'clayrisser@gmail.com', configDir: '', harness: 'cursor' },
+            { name: 'clayrisser@gmail.com', configDir: '/Users/clay/.claude-accounts/account-6' },
+        ];
+        emails = { main: 'jamrizzi@gmail.com', 'clayrisser@gmail.com': 'clayrisser@gmail.com' };
+        twins = {};
+        headroom = {};
+    }
+
+    it('refuses a bare shared name rather than removing whichever row came first', async () => {
+        seedShared();
+        const run = vi.fn();
+        const result = await removeMachineAccount({ name: 'clayrisser@gmail.com' }, deps(run as never));
+        expect(run).not.toHaveBeenCalled();
+        expect(result.ok).toBe(false);
+        expect((result as { error: string }).error).toContain('Two accounts are called');
+        expect((result as { error: string }).error).toContain('cursor and claude');
+    });
+
+    it('passes the harness the phone named through to the wrapper', async () => {
+        seedShared();
+        const calls: string[][] = [];
+        const result = await removeMachineAccount(
+            { name: 'clayrisser@gmail.com', harness: 'cursor' },
+            deps(async (args) => { calls.push(args); return "removed 'clayrisser@gmail.com'\n"; }),
+        );
+        expect(calls).toEqual([['account', 'rm', 'clayrisser@gmail.com', '--harness', 'cursor']]);
+        expect(result.ok).toBe(true);
+    });
+
+    it('says which harness the name does have when asked for one it does not', async () => {
+        registry = [
+            { name: 'main', configDir: 'default', ambient: true },
+            { name: 'clayrisser@gmail.com', configDir: '', harness: 'cursor' },
+        ];
+        const run = vi.fn();
+        const result = await removeMachineAccount(
+            { name: 'clayrisser@gmail.com', harness: 'claude' },
+            deps(run as never),
+        );
+        expect(run).not.toHaveBeenCalled();
+        expect((result as { error: string }).error).toContain('No claude account is called');
+        expect((result as { error: string }).error).toContain('the cursor one is');
+    });
+
+    it('still names the ambient login by its Claude row when a cursor row shares the name', async () => {
+        registry = [
+            { name: 'main', configDir: '', harness: 'cursor' },
+            { name: 'main', configDir: 'default', ambient: true },
+        ];
+        const run = vi.fn();
+        const result = await removeMachineAccount({ name: 'main', harness: 'claude' }, deps(run as never));
+        expect(run).not.toHaveBeenCalled();
+        expect((result as { error: string }).error).toContain('ambient login');
     });
 });
