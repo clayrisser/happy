@@ -12,6 +12,7 @@ import { readDetourFromHere, readFromHere, readSentenceFromHere } from './readAl
 import { subagentDetourFrom } from './subagentRead';
 import { getSubagentMessages } from '@/sync/subagentMessages';
 import { startBackgroundAudio } from './backgroundAudio';
+import { startReadingDefault } from './readingDefault';
 import { startNextSessionPress } from './nextSession';
 import { startMicPress } from './micPress';
 import { HeadlessDictation } from './headlessDictation';
@@ -171,6 +172,31 @@ function rememberSentenceTap(moved: boolean): boolean {
 }
 
 audioCues.attach(readAloud);
+
+/**
+ * The persisted setting reaches the reader with no screen mounted (DROVE-301).
+ *
+ * FIRST, AND THAT ORDER IS THE FIX. `startBackgroundAudio` publishes on its
+ * first `apply()`, so a reader still sitting at its `defaultEnabled = false`
+ * would have it publish `'off'` at launch — which native takes as a command to
+ * tear the remote commands down and clear the card. Arming the default before
+ * that call means a cold launch with read-aloud persisted ON comes up holding
+ * the session and publishing `'reading'`, and the lock screen has a card from
+ * the first second.
+ *
+ * WIRED HERE for the reason DROVE-300 and DROVE-302 wired the double and triple
+ * presses here: this module has no react in it and runs once at import, so the
+ * setting lands whether a SessionView is mounted, unmounted, or was never
+ * opened this launch. Settings -> Voice, the channels screen and
+ * `DroverChannelsSheet` write nothing but the local setting, and this is what
+ * turns that write into an app that is actually reading.
+ */
+startReadingDefault({
+    read: () => storage.getState().localSettings.readAloudEnabled,
+    subscribe: (listener) => storage.subscribe(listener),
+    setEnabled: (enabled) => readAloud.setEnabled(enabled),
+});
+
 startBackgroundAudio(readAloud);
 
 /**
