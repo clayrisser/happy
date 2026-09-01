@@ -98,6 +98,7 @@ import {
     cursorAccountUsable,
     isCursorAccount,
 } from '@/utils/droverAccounts';
+import { harnessName } from '@/utils/harnessName';
 import {
     formatUsageLimitResetTime,
     getUsageLimitRows,
@@ -622,7 +623,7 @@ export function usageAccountBarRow(a: DroverOtherAccountRow): UsageBarRow {
             key: `account:${a.name}`,
             name: a.name,
             percentLeft: null,
-            trailing: cursorAccountTrailing(a),
+            trailing: cursorRowTrailing(a),
             // `renew` is NOT disabled. The token works today and simply has a
             // deadline; greying it out for the last week of sixty days would
             // hide a working account.
@@ -696,6 +697,18 @@ export function usageMeasures(accounts: DroverAccountUsageRow[]): UsageMeasure[]
     return measures;
 }
 
+/**
+ * A cursor row SAYS it is one, on this sheet (DROVE-338). The Accounts screen
+ * groups rows under "machine · Cursor", but here every account is one flat
+ * list, and a Claude account and a cursor account may share an address — the
+ * night it bit, a bare "clayrisser@gmail.com · no quota published" beside a
+ * Claude row was read as a broken Claude login. The harness name is the same
+ * one the session header uses.
+ */
+export function cursorRowTrailing(a: DroverOtherAccountRow): string {
+    return `${harnessName('cursor')} · ${cursorAccountTrailing(a)}`;
+}
+
 /** "jamrizzi · 51% left on Week", or the reason there is no figure. */
 export function usageAccountGroupTitle(a: DroverOtherAccountRow, bindingLabel?: string | null): string {
     if (!a.name) return '';
@@ -705,7 +718,7 @@ export function usageAccountGroupTitle(a: DroverOtherAccountRow, bindingLabel?: 
     // sixty-day token is inside the last week the heading says THAT instead —
     // the deadline is the only thing on this row Clay can act on, and it cannot
     // be refreshed without him.
-    if (isCursorAccount(a)) return `${a.name} · ${cursorAccountTrailing(a)}`;
+    if (isCursorAccount(a)) return `${a.name} · ${cursorRowTrailing(a)}`;
     if (!a.loggedIn) return `${a.name} · ${t('agentInput.usagePopup.noLogin')}`;
     // Two different nothings, and saying the wrong one is the bug (DROVE-204).
     // "not measured" means nobody ever asked. This means somebody asked, and

@@ -941,6 +941,35 @@ describe('the arrival prompt', () => {
     })
 })
 
+describe('one name, two harnesses (DROVE-338)', () => {
+    it('accountByName takes the Claude row when a cursor row shares the name, wherever it sits', async () => {
+        // The registry on Clay's Mac held the cursor row FIRST. A first-match
+        // by name would have said this session's account was a token with no
+        // config dir, and every Claude question here — where am I, am I
+        // cooling, what does an explicit flip target — would have been asked
+        // of the wrong account.
+        const { accountByName, currentAccount } = await accountsModule()
+        const rows: { name: string; configDir?: string; harness?: string }[] = [
+            { name: 'main', configDir: join(root, 'd338-main') },
+            { name: 'clay', harness: 'cursor' },
+            { name: 'clay', configDir: join(root, 'd338-clay') },
+        ]
+        writeAccounts(rows)
+        expect(accountByName('clay')).toMatchObject({ name: 'clay', configDir: join(root, 'd338-clay') })
+        expect(accountByName('clay')?.harness).toBeUndefined()
+        process.env.DROVER_ACCOUNT = 'clay'
+        try {
+            expect(currentAccount()).toMatchObject({ name: 'clay', configDir: join(root, 'd338-clay') })
+        } finally {
+            delete process.env.DROVER_ACCOUNT
+        }
+        // A name only a cursor row answers to is still that row: it is not
+        // invented as a Claude account.
+        writeAccounts([{ name: 'main', configDir: join(root, 'd338-main') }, { name: 'tok', harness: 'cursor' }] as typeof rows)
+        expect(accountByName('tok')).toMatchObject({ name: 'tok', harness: 'cursor', configDir: '' })
+    })
+})
+
 describe('where the session actually is', () => {
     it('takes the growing transcript over a whereabouts record left by an old flip', async () => {
         // DROVE-43, Clay's exact case. He flipped to jamrizzi, quit drover,

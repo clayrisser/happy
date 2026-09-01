@@ -419,8 +419,19 @@ export function canStartSession(a: DroverAccount): boolean {
     return isLoggedIn(a) && isOnboarded(a)
 }
 
+/**
+ * THE CLAUDE ROW WINS A SHARED NAME (DROVE-338). An account's identity is
+ * (harness, name): a Claude row and a cursor row may both be called
+ * clayrisser@gmail.com, one a config dir and one a token. Every caller here is
+ * a Claude-session question — which account is this session on, is it cooling,
+ * what does an explicit flip target — so when both answer to the name, the
+ * Claude one is meant. The night the registry held the cursor row FIRST, a
+ * bare first-match would have named this session's account as a token with no
+ * config dir. Only a name nothing but a cursor row answers to returns that row.
+ */
 export function accountByName(name: string): DroverAccount | undefined {
-    return readAccounts().find((a) => a.name === name)
+    const named = readAccounts().filter((a) => a.name === name)
+    return named.find(isClaudeAccount) ?? named[0]
 }
 
 // --- one login wearing two names ---------------------------------------------
