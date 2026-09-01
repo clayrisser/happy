@@ -30,10 +30,13 @@ import {
     type DroverAccount,
     type Exhaustion,
     accountByName,
+    coolingUntil,
     currentAccount,
     defaultCooldownMs,
     explicitExhaustion,
+    modelDemand,
     pickTarget,
+    readLedger,
     readSettingsModel,
     accountByNewestTranscript,
     recallWhereabouts,
@@ -54,6 +57,7 @@ import {
 import { detectLimit, familyLabel, familyOf, modelOfTranscriptMessage, textOfTranscriptMessage } from './limits'
 import type { PolicyValues } from './policy'
 import { resolveFlipPrompt } from './prompt'
+import { planRestore, type RestorePlan } from './restore'
 import { carryTranscript } from './transcript'
 
 const DROVER_URL = process.env.DROVER_URL || 'http://127.0.0.1:7970'
@@ -199,6 +203,12 @@ export type ApplyResult =
           resume: boolean
           /** Set when the model dropped a rung as well as the account moving (DROVE-187). */
           downgrade?: DowngradePlan
+          /**
+           * What the session was set to, and what it must come up on over
+           * there (DROVE-272). Set on every flip that had a pick to honour;
+           * `rewrite` says whether anything actually has to be written.
+           */
+          restore?: RestorePlan
       }
     | {
           kind: 'parked'
@@ -904,6 +914,21 @@ export class FlipController {
         }
     }
 
+    /**
+     * Can ONE account run this family right now (DROVE-272)?
+     *
+     * `runnableFamily` above asks the registry -- "is there anywhere this could
+     * run" -- which is the right question for a downgrade, because a downgrade
+     * gets to move again afterwards. It is the wrong question for a restore: by
+     * then the account is chosen, the transcript has been carried, and
+     * "somewhere has Opus" is no answer at all to "does the machine I am about
+     * to land on have Opus". Asked of the target and nothing else.
+     */
+    private runnableOn(target: DroverAccount, now: number): (family: string) => boolean {
+        const ledger = readLedger()
+        return (family: string) => coolingUntil(target, ledger, now, modelDemand(family)) === 0
+    }
+
     // --- the flip itself ----------------------------------------------------
 
     /**
@@ -1092,6 +1117,34 @@ export class FlipController {
         // so this call still has the list to hand.
         const stranded = this.busy().agents
 
+        // WHAT THE SESSION WAS SET TO, AND WHAT IT CAN HAVE OVER THERE
+        // (DROVE-272). Read here, at the last moment before the target becomes
+        // `this.current`, because everything above may still have moved the
+        // answer: a downgrade rewrites the model, and the re-ask for the lower
+        // family can land the flip on a different account entirely.
+        //
+        // Skipped when a downgrade already decided the model. That decision is
+        // strictly better informed than this one -- it searched the whole
+        // registry and then chose where to go, while a restore only gets to
+        // look at the account already settled on -- and two writers of
+        // `pendingPick` would be one of them silently losing.
+        const restore = downgrade
+            ? undefined
+            : planRestore({
+                  remembered: { model: this.currentModel(), effort: this.currentEffort() },
+                  runnable: this.runnableOn(target, now),
+                  familyFallback: this.policyValues.familyFallback ?? null,
+                  mayChangeModel: mayDowngradeModel(policy),
+              }) ?? undefined
+        // Only a substitution is written and typed. A plain restore is already
+        // carried: `modeCarryArgs` puts the app's own `modelMode`/`effortLevel`
+        // on the replacement child's argv, so rewriting the request to itself
+        // and typing a `/model` the pane is already on would buy a confirmation
+        // dialog and nothing else.
+        if (restore?.rewrite && restore.model) {
+            this.pendingPick = { model: restore.model, effort: restore.effort }
+        }
+
         // The config dirs go with it so the handover can name the agent's own
         // `subagents/agent-<id>.jsonl` -- carryTranscript has just copied that
         // directory into the target, so the path handed over is one the new
@@ -1105,6 +1158,7 @@ export class FlipController {
             override: req.prompt,
             account: target,
             stranded,
+            restore,
             configDir: target.configDir,
             ...(from?.configDir ? { fromConfigDir: from.configDir } : {}),
         })
@@ -1125,6 +1179,7 @@ export class FlipController {
             prompt,
             resume,
             ...(downgrade ? { downgrade } : {}),
+            ...(restore ? { restore } : {}),
             note:
                 `Cattle Drover: ${from?.name ?? 'this session'} → ${target.name} (${req.reason}, by ${req.by}), ` +
                 (resume
