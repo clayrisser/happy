@@ -122,6 +122,12 @@ type DroverSpeechModuleType = {
     handlesReadingState?: () => boolean;
     /** Read-aloud is on, paused or off, for the lock screen. See DROVE-233. */
     setReadingState?: (state: string) => Promise<void>;
+    /**
+     * Optional: name the card after the session that just took the voice
+     * (DROVE-300). Absent on every build up to 18, where the title is the
+     * sentence at the synthesiser and nothing else can set it.
+     */
+    setNowPlayingTitle?: (title: string) => Promise<void>;
     dictationSupport: (localeTag: string | null) => Promise<DictationSupport>;
     startDictation: (localeTag: string | null) => Promise<boolean>;
     /** Resolves with the final transcript. */
@@ -338,6 +344,24 @@ export async function setReadingState(state: ReadingState): Promise<void> {
     if (!native || typeof native.setReadingState !== 'function') return;
     try {
         await native.setReadingState(state);
+    } catch {
+        // A card that would not update is not worth taking the reader down for.
+    }
+}
+
+/**
+ * Name the card after the session that just took the voice (DROVE-300).
+ *
+ * A no-op on a build that has no such function, which is every build up to 18:
+ * there the title stays whatever the synthesiser last said, so a bundle shipped
+ * over the air keeps exactly the behaviour it has today rather than throwing on
+ * a name the binary has never heard of. The degradation is the honest one — the
+ * card lags the skip by one sentence — and it costs nothing else.
+ */
+export async function setNowPlayingTitle(title: string): Promise<void> {
+    if (!native || typeof native.setNowPlayingTitle !== 'function') return;
+    try {
+        await native.setNowPlayingTitle(title);
     } catch {
         // A card that would not update is not worth taking the reader down for.
     }
