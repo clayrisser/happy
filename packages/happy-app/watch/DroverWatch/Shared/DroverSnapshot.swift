@@ -945,3 +945,57 @@ struct DroverSpeak: Codable {
 
     var isStop: Bool { stop == true }
 }
+
+/// The wrist opening or closing its microphone (DROVE-130).
+///
+/// The control half of the latched recorder: the audio itself rides its own
+/// `wristaudio` messages, and this says which session it is for and when it
+/// starts and stops. Separate from the audio so the phone can open its
+/// recogniser BEFORE the first chunk arrives, and so a stop is a small
+/// reliable message rather than something inferred from silence.
+///
+/// `capture` is the wrist's own id for one press-to-press recording. The phone
+/// echoes it on every `DroverHeard`, which is what lets the wrist drop a
+/// straggler from a capture that has already ended without guessing from the
+/// words (see `WristHearing`).
+struct DroverListen: Codable {
+    static let kindValue = "listen"
+    /// Always "listen".
+    let kind: String
+    let sessionId: String
+    let capture: String
+    /// "start", "stop" or "cancel". Stop keeps the words; cancel throws the
+    /// whole capture away, which is the wrist's equivalent of the phone's
+    /// slide-off-the-button.
+    let state: String
+
+    init(sessionId: String, capture: String, state: String) {
+        self.kind = Self.kindValue
+        self.sessionId = sessionId
+        self.capture = capture
+        self.state = state
+    }
+}
+
+/// What the phone has heard so far on an open wrist capture (DROVE-130).
+///
+/// `text` is the phone's `latestTranscript`: EVERYTHING heard since the
+/// recorder opened, with utterances before a pause already banked by
+/// `DroverSpeechModule.absorb()`. So the wrist draws it rather than
+/// accumulating it, and the DROVE-263 fix is inherited rather than copied.
+///
+/// `seq` is monotonic within one capture. `sendMessage` promises no ordering,
+/// and the wrist cannot tell a stale duplicate from a legitimate revision by
+/// reading the words — a revision is often SHORTER and correct — so ordering
+/// is carried rather than guessed.
+struct DroverHeard: Codable {
+    static let kindValue = "heard"
+    let kind: String
+    let capture: String
+    let seq: Int
+    let text: String
+    /// The last word on this capture: the recogniser settled, or gave up.
+    let final: Bool?
+
+    var isFinal: Bool { final == true }
+}

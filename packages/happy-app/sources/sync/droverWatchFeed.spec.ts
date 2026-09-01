@@ -28,6 +28,20 @@ const mocks = vi.hoisted(() => ({
     onSay: null as ((event: { sessionId: string; text: string }) => void) | null,
     onRoute: null as ((event: { headphones: boolean }) => void) | null,
     onSpoken: null as ((event: { id: string; finished: boolean }) => void) | null,
+    /** The wrist's held-open recorder (DROVE-130). */
+    onListen: null as
+        ((event: { sessionId: string; capture: string; state: string }) => void) | null,
+    /** Every voice message the phone sent the wrist, `heard` included. */
+    voice: [] as { kind: string; capture?: string; seq?: number; text?: string; final?: boolean }[],
+    /** Whether this build claims it can transcribe wrist audio. */
+    wristSupported: true,
+    /** Captures the native speech module was asked to start. */
+    wristStarted: [] as string[],
+    wristCancelled: 0,
+    /** What `stopDictation` resolves with. */
+    wristFinal: '',
+    onDictationPartial: null as ((text: string, task?: number) => void) | null,
+    onDictationEnded: null as ((text: string, reason: string, task?: number) => void) | null,
     /** What the voice side was told (DROVE-92). */
     interrupted: [] as string[],
     watchRoute: [] as boolean[],
@@ -162,6 +176,38 @@ vi.mock('drover-watch', () => ({
         mocks.transcripts.push(delta);
         return Promise.resolve(true);
     },
+    addDroverListenListener: (listener: typeof mocks.onListen) => {
+        mocks.onListen = listener;
+        return { remove: () => { mocks.onListen = null; } };
+    },
+    sendDroverWatchVoice: (message: { kind: string }) => {
+        mocks.voice.push(message);
+        return Promise.resolve(true);
+    },
+}));
+
+// drover-speech pulls in React Native the same way, and the feed only reaches
+// it to run a WRIST capture (DROVE-130): the watch holds the microphone, this
+// module does the recognising.
+vi.mock('drover-speech', () => ({
+    wristDictationSupported: () => mocks.wristSupported,
+    startWristDictation: (capture: string) => {
+        mocks.wristStarted.push(capture);
+        return Promise.resolve(true);
+    },
+    stopDictation: () => Promise.resolve(mocks.wristFinal),
+    cancelDictation: () => {
+        mocks.wristCancelled += 1;
+        return Promise.resolve(undefined);
+    },
+    addDictationPartialListener: (listener: typeof mocks.onDictationPartial) => {
+        mocks.onDictationPartial = listener;
+        return { remove: () => { mocks.onDictationPartial = null; } };
+    },
+    addDictationEndedListener: (listener: typeof mocks.onDictationEnded) => {
+        mocks.onDictationEnded = listener;
+        return { remove: () => { mocks.onDictationEnded = null; } };
+    },
 }));
 
 import {
@@ -244,6 +290,11 @@ function start() {
     stopFeed = startDroverWatchFeed();
 }
 
+/// Let the wrist dictation promise chain run out (DROVE-130). It is two deep —
+/// the engine's start, then its stop — so a single microtask tick is not
+/// enough and a test that used one would pass or fail on scheduling.
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
 beforeEach(() => {
     mocks.sessions = {};
     mocks.sessionMessages = {};
@@ -253,6 +304,14 @@ beforeEach(() => {
     mocks.onSay = null;
     mocks.onRoute = null;
     mocks.onSpoken = null;
+    mocks.onListen = null;
+    mocks.onDictationPartial = null;
+    mocks.onDictationEnded = null;
+    mocks.voice = [];
+    mocks.wristSupported = true;
+    mocks.wristStarted = [];
+    mocks.wristCancelled = 0;
+    mocks.wristFinal = '';
     mocks.interrupted = [];
     mocks.watchRoute = [];
     mocks.settled = [];
@@ -875,6 +934,113 @@ describe('startDroverWatchFeed', () => {
         mocks.onSay!({ sessionId: '', text: 'hello' });
         expect(mocks.sendMessage).not.toHaveBeenCalled();
         expect(mocks.interrupted).toEqual([]);
+    });
+
+
+    // Clay: "why can't a single press [of] the microphone hold open the
+    // recorder". The first pass at DROVE-130 could not do it and kept
+    // watchOS's one-shot sheet; this is the path that can, and these are the
+    // assertions that say the whole loop is joined up (DROVE-130).
+    it('opens the recogniser when the wrist opens its recorder', async () => {
+        start();
+        mocks.onListen!({ sessionId: 's1', capture: 'c1', state: 'start' });
+        await settle();
+        expect(mocks.wristStarted).toEqual(['c1']);
+        // The phone stops narrating the old reply while he talks, exactly as
+        // it does for the phone's own microphone (DROVE-122).
+        expect(mocks.interrupted).toEqual(['sent']);
+    });
+
+    // THE BUG THIS FEATURE IS NOT ALLOWED TO REINTRODUCE (DROVE-263).
+    //
+    // With requiresOnDeviceRecognition the recogniser does not finalise on a
+    // pause: it keeps ONE task and opens a new result sequence, reporting the
+    // next utterance FROM EMPTY. Anything that forwards that empty to the
+    // wrist wipes what he already said, which is the fault he reported three
+    // times on the phone.
+    it('never lets a pause take back what the wrist has already been told', async () => {
+        start();
+        mocks.onListen!({ sessionId: 's1', capture: 'c1', state: 'start' });
+        await settle();
+        mocks.onDictationPartial!('fix the login race');
+        mocks.onDictationPartial!('');
+        mocks.onDictationPartial!('   ');
+        mocks.onDictationPartial!('fix the login race and push it');
+        expect(mocks.voice.filter((v) => v.kind === 'heard').map((v) => v.text)).toEqual([
+            'fix the login race',
+            'fix the login race and push it',
+        ]);
+    });
+
+    it('numbers what it tells the wrist, so an out-of-order arrival can be dropped', async () => {
+        start();
+        mocks.onListen!({ sessionId: 's1', capture: 'c1', state: 'start' });
+        await settle();
+        mocks.onDictationPartial!('one');
+        mocks.onDictationPartial!('one two');
+        const heard = mocks.voice.filter((v) => v.kind === 'heard');
+        expect(heard.map((v) => v.seq)).toEqual([0, 1]);
+        expect(heard.every((v) => v.capture === 'c1')).toBe(true);
+    });
+
+    // Stopping is not sending. The words go back to the wrist to be read, and
+    // the existing `say` path is what actually sends them — the phone's rule
+    // that only a deliberate act sends (DROVE-105), and a wrist has no lift.
+    it('returns the words to the wrist on stop and sends nothing to the session', async () => {
+        mocks.wristFinal = 'fix the login race and push it';
+        start();
+        mocks.onListen!({ sessionId: 's1', capture: 'c1', state: 'start' });
+        await settle();
+        mocks.onDictationPartial!('fix the login race');
+        mocks.onListen!({ sessionId: 's1', capture: 'c1', state: 'stop' });
+        await settle();
+        const last = mocks.voice.filter((v) => v.kind === 'heard').at(-1);
+        expect(last?.final).toBe(true);
+        expect(last?.text).toBe('fix the login race and push it');
+        expect(mocks.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('throws the capture away when the wrist discards it', async () => {
+        start();
+        mocks.onListen!({ sessionId: 's1', capture: 'c1', state: 'start' });
+        await settle();
+        mocks.onDictationPartial!('never mind');
+        const before = mocks.voice.length;
+        mocks.onListen!({ sessionId: 's1', capture: 'c1', state: 'cancel' });
+        await settle();
+        expect(mocks.wristCancelled).toBe(1);
+        expect(mocks.voice).toHaveLength(before);
+    });
+
+    // The native binary ships by TestFlight and this file ships OTA, so a
+    // phone running an older build has to say so rather than leaving the wrist
+    // recording into nothing.
+    it('tells the wrist to stop when the build cannot transcribe wrist audio', async () => {
+        mocks.wristSupported = false;
+        start();
+        mocks.onListen!({ sessionId: 's1', capture: 'c1', state: 'start' });
+        await settle();
+        expect(mocks.wristStarted).toEqual([]);
+        expect(mocks.voice.at(-1)).toMatchObject({ kind: 'heard', capture: 'c1', final: true });
+    });
+
+    it('never opens a recogniser for the demo session', async () => {
+        start();
+        mocks.onListen!({ sessionId: 'demo:finish-1', capture: 'c1', state: 'start' });
+        await settle();
+        expect(mocks.wristStarted).toEqual([]);
+    });
+
+    // A recogniser that gives up must not leave a latched microphone looking
+    // live on the wrist (DROVE-30), and it must not cost him the words either.
+    it('closes the capture on the wrist when the recogniser ends by itself', async () => {
+        start();
+        mocks.onListen!({ sessionId: 's1', capture: 'c1', state: 'start' });
+        await settle();
+        mocks.onDictationPartial!('half a sentence');
+        mocks.onDictationEnded!('', 'the recogniser gave up');
+        const last = mocks.voice.filter((v) => v.kind === 'heard').at(-1);
+        expect(last).toMatchObject({ final: true, text: 'half a sentence' });
     });
 
     it('hands the wrist route and spoken acknowledgements to the voice side', () => {

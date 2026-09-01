@@ -20,6 +20,7 @@ swiftc -o "$out/shared-wire-test" \
 	"$root/DroverWatch/Shared/WristReach.swift" \
 	"$root/DroverWatch/Shared/DroverDemo.swift" \
 	"$root/DroverWatch/Shared/WristDraft.swift" \
+	"$root/DroverWatch/Shared/WristHearing.swift" \
 	"$root/tests/SharedWireTests.swift"
 
 "$out/shared-wire-test"
@@ -43,3 +44,28 @@ if [ -n "$offenders" ]; then
 	exit 1
 fi
 echo "ok: every NavigationLink in DroverWatch is value-based (DROVE-10)"
+
+# And that the app itself still COMPILES against the watchOS SDK (DROVE-130).
+#
+# The checks above cover Shared/ only, because that is all plain `swiftc` can
+# link on a Mac. Views/ and Model/ had NO cheap check at all: a compile error
+# in either was invisible until someone ran a full `expo prebuild` + `pod
+# install` + `xcodebuild`, which is half an hour. `-typecheck` against the
+# watchsimulator SDK catches it in about eight seconds — not a substitute for a
+# real build (it does not link, sign, or run), but it is the difference between
+# finding a typo now and finding it after a prebuild.
+#
+# Skipped rather than failed where no watchOS SDK is installed, so this script
+# still runs on a box with only the command-line tools.
+sdk=$(xcrun --sdk watchsimulator --show-sdk-path 2>/dev/null || true)
+if [ -z "$sdk" ]; then
+	echo "skip: no watchsimulator SDK here, so the app was not typechecked"
+	exit 0
+fi
+# shellcheck disable=SC2046
+swiftc -typecheck -sdk "$sdk" -target arm64-apple-watchos10.0-simulator \
+	$(find "$root/DroverWatch" -name '*.swift')
+echo "ok: DroverWatch typechecks against $(basename "$sdk")"
+swiftc -typecheck -sdk "$sdk" -target arm64-apple-watchos10.0-simulator \
+	"$root"/DroverWatchWidget/*.swift "$root"/DroverWatch/Shared/*.swift
+echo "ok: DroverWatchWidget typechecks against $(basename "$sdk")"

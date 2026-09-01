@@ -47,8 +47,10 @@ import {
     addDroverOpenedListener,
     addDroverRefreshListener,
     addDroverRouteListener,
+    addDroverListenListener,
     addDroverSayListener,
     addDroverSpokenListener,
+    sendDroverWatchVoice,
     describeDroverWakeBudget,
     getDroverWatchStatus,
     isDroverWatchAvailable,
@@ -63,6 +65,15 @@ import {
 import { buildWristRows, createWristCoalescer, rowKey, transcriptDelta } from './droverWatchTranscript';
 import { readAloud } from '@/voice/readAloudService';
 import { setWatchRoute, settleWatchUtterance } from '@/voice/watchSpeaker';
+import { WristDictation } from '@/voice/wristDictation';
+import {
+    addDictationEndedListener,
+    addDictationPartialListener,
+    cancelDictation,
+    startWristDictation,
+    stopDictation,
+    wristDictationSupported,
+} from 'drover-speech';
 import type { Message } from './typesMessage';
 
 /**
@@ -736,6 +747,68 @@ export function startDroverWatchFeed(): () => void {
         void Promise.resolve(sync.sendMessage(event.sessionId, text, { source: 'voice' })).catch(() => {});
     });
 
+    // The wrist's held-open recorder (DROVE-130).
+    //
+    // One press on the watch opens the microphone and it STAYS open across
+    // pauses, which watchOS's own input sheet cannot do. The watch captures
+    // and this phone transcribes, because `Speech.framework` is absent from
+    // the watchOS SDK entirely — so the recogniser that survives a pause
+    // correctly (DROVE-263) is the one already running here, inherited rather
+    // than copied.
+    //
+    // The PCM does not pass through JS: it goes from the watch bridge to the
+    // speech module inside the native process. What comes through here is the
+    // control and the transcript, which is the part worth shipping OTA.
+    const wrist = new WristDictation(
+        {
+            start: (capture) => startWristDictation(capture),
+            stop: () => stopDictation(),
+            cancel: () => cancelDictation(),
+        },
+        {
+            heard: (capture, seq, text, final) => {
+                void sendDroverWatchVoice({ kind: 'heard', capture, seq, text, final });
+            },
+            // Reporting only. Closing the wrist is the job of the final
+            // `heard`, and doing it twice is how an empty message lands after
+            // the real transcript and wipes it.
+            error: (capture, message) => {
+                demoLog(`wrist dictation failed on ${capture}: ${message}`);
+            },
+        },
+    );
+    // The recogniser's own output. Both of these no-op unless a WRIST capture
+    // is open: the phone's composer mic emits the same events, and the native
+    // module refuses to run two captures at once, so there is never a moment
+    // when these two could be confused for each other.
+    const wristPartials = addDictationPartialListener((text) => wrist.partial(text));
+    const wristEnds = addDictationEndedListener((text, reason) => wrist.ended(text, reason));
+    const listens = addDroverListenListener((event) => {
+        if (!event.capture) return;
+        // A build older than DROVE-130 has no native entry point for this. Say
+        // so rather than opening a recorder nothing will listen to; the wrist
+        // falls back to its one-shot sheet, which still works.
+        if (!wristDictationSupported()) {
+            void sendDroverWatchVoice({
+                kind: 'heard', capture: event.capture, seq: -1, text: '', final: true,
+            });
+            return;
+        }
+        if (event.state === 'start') {
+            if (!event.sessionId || isDroverDemoId(event.sessionId)) return;
+            // The phone stops narrating the old reply while he talks, exactly
+            // as it does for the phone's own mic (DROVE-122).
+            readAloud.userSent();
+            wrist.open(event.capture);
+            return;
+        }
+        if (event.state === 'stop') {
+            wrist.close(event.capture);
+            return;
+        }
+        if (event.state === 'cancel') wrist.discard(event.capture);
+    });
+
     // The wrist's audio route, and the wrist finishing a sentence the phone
     // sent it (DROVE-92). Both are facts the voice side owns; the feed only
     // carries them off the wire.
@@ -771,6 +844,12 @@ export function startDroverWatchFeed(): () => void {
         refreshes.remove();
         opened.remove();
         says.remove();
+        listens.remove();
+        wristPartials.remove();
+        wristEnds.remove();
+        // A feed torn down mid-capture leaves the microphone open on the
+        // wrist over a recogniser nobody is reading. Close it.
+        if (wrist.openCapture) wrist.discard(wrist.openCapture);
         routes.remove();
         spoken.remove();
         coalescer.stop();

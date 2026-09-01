@@ -186,6 +186,13 @@ struct SharedWireTests {
         aWristDraftAccumulatesAcrossSheets()
         aWristDraftIgnoresAnEmptySheet()
         aWristDraftCanDropItsLastPhrase()
+        aLatchedWristKeepsWordsAcrossAPause()
+        aStalePartialCannotTakeWordsBack()
+        aPartialFromAnotherCaptureIsIgnored()
+        aFinalSettlesTheCaptureWithoutBlankingIt()
+        aRevisionIsAllowedToBeShorter()
+        theWristShipsAudioThePhoneCanRecognise()
+        theLatchedRecorderSurvivesTheWire()
         aNewGateEarnsACue()
         aGateTheWristAlreadyKnowsDoesNot()
         anOldGateDoesNotBuzzOnAColdLaunch()
@@ -1064,6 +1071,139 @@ struct SharedWireTests {
             "undoing every phrase empties the draft"
         )
         check(WristDraft.empty.droppingLast().isEmpty, "an undo with nothing to undo is a no-op")
+    }
+
+    /// THE WRIST HALF OF DROVE-263, which is the whole reason the latched
+    /// recorder is allowed to exist (DROVE-130).
+    ///
+    /// Clay reported the phone bug at least three times: he spoke, paused,
+    /// spoke again, and everything before the pause was gone. The cause was
+    /// the on-device recogniser opening a NEW RESULT SEQUENCE after a pause
+    /// and reporting the next utterance from empty, over a single unchanging
+    /// task, and code that assigned that incoming result over the held text.
+    ///
+    /// The phone now banks in `absorb()`. The wrist does not recognise at all,
+    /// so it cannot reproduce THAT bug — but it draws what the phone sends
+    /// over a wire with no ordering promise, so it can reproduce the SHAPE of
+    /// it. This is the assertion that says it does not.
+    static func aLatchedWristKeepsWordsAcrossAPause() {
+        var heard = WristHearing.opening("c1")
+        heard = heard.absorbing(captureId: "c1", seq: 0, text: "fix the login race", final: false)
+        check(heard.text == "fix the login race", "the first utterance is drawn")
+        // The pause. A new result sequence opens with an EMPTY result, which
+        // is not a report that nothing was said.
+        heard = heard.absorbing(captureId: "c1", seq: 1, text: "", final: false)
+        check(
+            heard.text == "fix the login race",
+            "an empty partial after a pause does not wipe what was already said"
+        )
+        // And he carries on. The phone has already banked, so what arrives is
+        // the whole capture, not just the new sentence.
+        heard = heard.absorbing(captureId: "c1", seq: 2, text: "fix the login race and push it", final: false)
+        check(
+            heard.text == "fix the login race and push it",
+            "the words after the pause join the words before it"
+        )
+        check(heard.isOpen, "the recorder is still held open through all of that")
+    }
+
+    /// `sendMessage` promises no ordering, so a partial can arrive after one
+    /// that supersedes it. Re-drawing the older one is the same loss wearing a
+    /// different hat, and no amount of reading the words would catch it.
+    static func aStalePartialCannotTakeWordsBack() {
+        var heard = WristHearing.opening("c1")
+        heard = heard.absorbing(captureId: "c1", seq: 4, text: "the whole sentence he said", final: false)
+        let stale = heard.absorbing(captureId: "c1", seq: 2, text: "the whole", final: false)
+        check(stale == heard, "a partial that arrives out of order changes nothing")
+        let repeated = heard.absorbing(captureId: "c1", seq: 4, text: "", final: false)
+        check(repeated == heard, "the same partial twice changes nothing")
+    }
+
+    /// The structural guard, and the reason there is a capture id on the wire
+    /// at all: the phone's task id taught that a boundary has to be carried,
+    /// not guessed from the text.
+    static func aPartialFromAnotherCaptureIsIgnored() {
+        let heard = WristHearing.opening("c2").absorbing(captureId: "c2", seq: 0, text: "hello", final: false)
+        let straggler = heard.absorbing(captureId: "c1", seq: 9, text: "words from the last press", final: false)
+        check(straggler == heard, "a partial from a capture that has ended is dropped")
+        check(
+            WristHearing.idle.absorbing(captureId: "", seq: 0, text: "anything", final: false) == WristHearing.idle,
+            "a partial arriving while nothing is being heard is dropped"
+        )
+    }
+
+    /// A capture has to END even when the last thing on the wire says nothing,
+    /// or a latched mic sits there looking live over a finished task. It ends
+    /// with the words still on screen, which is the other half.
+    static func aFinalSettlesTheCaptureWithoutBlankingIt() {
+        var heard = WristHearing.opening("c1")
+        heard = heard.absorbing(captureId: "c1", seq: 0, text: "ship it", final: false)
+        let settled = heard.absorbing(captureId: "c1", seq: 1, text: "", final: true)
+        check(settled.text == "ship it", "a final that says nothing keeps every word")
+        check(settled.settled && !settled.isOpen, "a final closes the recorder")
+        let spoken = heard.absorbing(captureId: "c1", seq: 1, text: "ship it now", final: true)
+        check(spoken.text == "ship it now" && spoken.settled, "a final that says more is taken and closes")
+    }
+
+    /// The guard that was NOT written, spelled out so nobody 'fixes' it into
+    /// existence later. "A partial may never be shorter" looks like the safe
+    /// rule and is the wrong one: a recogniser revising its own guess
+    /// legitimately shrinks the text, and freezing the first guess on screen
+    /// would be its own bug. Ordering is what the wire breaks, so ordering is
+    /// what is defended.
+    static func aRevisionIsAllowedToBeShorter() {
+        var heard = WristHearing.opening("c1")
+        heard = heard.absorbing(captureId: "c1", seq: 0, text: "um hello there", final: false)
+        heard = heard.absorbing(captureId: "c1", seq: 1, text: "hello", final: false)
+        check(heard.text == "hello", "a later revision may shorten the live utterance")
+        heard = heard.absorbing(captureId: "c1", seq: 2, text: "  spaced out  ", final: false)
+        check(heard.text == "spaced out", "what is drawn is trimmed, like every other phrase on the wrist")
+    }
+
+    /// The wrist and the phone have to agree on the audio, and a disagreement
+    /// about sample rate is SILENT: recognition comes back as nonsense rather
+    /// than failing. So the numbers are asserted rather than merely written.
+    static func theWristShipsAudioThePhoneCanRecognise() {
+        check(WristAudio.sampleRate == 16_000, "16 kHz, which is what the recogniser wants")
+        check(WristAudio.channels == 1, "one channel, because a watch has one microphone")
+        check(WristAudio.chunkFrames == 3_200, "a fifth of a second per message")
+        check(
+            WristAudio.idleStopSeconds == 15,
+            "the wrist's latch times out exactly when the phone's does (DICTATION_LATCH_IDLE_MS)"
+        )
+    }
+
+    /// The control and transcript halves of the latched recorder, over the
+    /// same JSON the phone actually writes (DROVE-130). A `kind` that does not
+    /// round-trip is a message that silently becomes a snapshot on the far
+    /// side, which is how the wire fails here.
+    static func theLatchedRecorderSurvivesTheWire() {
+        let listen = DroverListen(sessionId: "s1", capture: "c7", state: "start")
+        let out = json(listen)
+        check(out["kind"] as? String == "listen", "a listen names itself on the wire")
+        check(out["capture"] as? String == "c7", "a listen carries the capture the audio belongs to")
+        check(out["state"] as? String == "start", "a listen carries what the microphone just did")
+        check(DroverListen.kindValue == "listen", "the dispatcher and the struct agree on the kind")
+
+        let payload = """
+        {"kind":"heard","capture":"c7","seq":3,"text":"fix the login race","final":true}
+        """
+        guard let heard = try? JSONDecoder().decode(DroverHeard.self, from: Data(payload.utf8)) else {
+            check(false, "a heard message decodes")
+            return
+        }
+        check(heard.capture == "c7" && heard.seq == 3, "a partial says which capture and which number it is")
+        check(heard.text == "fix the login race", "a partial carries the whole transcript so far")
+        check(heard.isFinal, "a final partial says so")
+
+        let partial = """
+        {"kind":"heard","capture":"c7","seq":0,"text":"fix the"}
+        """
+        guard let live = try? JSONDecoder().decode(DroverHeard.self, from: Data(partial.utf8)) else {
+            check(false, "a heard message with no final key decodes")
+            return
+        }
+        check(!live.isFinal, "an absent final key reads as not final, not as a throw")
     }
 
     // ---- the wrist buzz, DROVE-62 -----------------------------------------

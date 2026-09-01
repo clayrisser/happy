@@ -107,6 +107,12 @@ type DroverSpeechModuleType = {
     dictationSupport: (localeTag: string | null) => Promise<DictationSupport>;
     startDictation: (localeTag: string | null) => Promise<boolean>;
     /** Resolves with the final transcript. */
+    /**
+     * Optional: a build older than DROVE-130 has no such native function.
+     * Recognises audio captured on the WATCH rather than by this phone's
+     * microphone. Ended by the ordinary `stopDictation` / `cancelDictation`.
+     */
+    startWristDictation?: (capture: string, localeTag?: string) => Promise<boolean>;
     stopDictation: () => Promise<string>;
     cancelDictation: () => Promise<void>;
     addListener: {
@@ -417,6 +423,32 @@ async function awaitDictationStart(): Promise<void> {
     } catch {
         // A start that failed has nothing to stop; the caller carries on.
     }
+}
+
+/**
+ * Whether this binary can transcribe audio captured on the wrist (DROVE-130).
+ *
+ * Checked rather than assumed, for the same reason every other native addition
+ * here is: this file ships OTA and the native module does not, so a phone
+ * running an older build has to fall back to the watch's one-shot input sheet
+ * instead of opening a recorder nothing will listen to.
+ */
+export function wristDictationSupported(): boolean {
+    return native !== null && typeof native.startWristDictation === 'function';
+}
+
+/**
+ * Start recognising audio the watch is capturing (DROVE-130).
+ *
+ * The phone does not open its own microphone: it only transcribes. That is
+ * what lets this run while a reply is being read aloud without the two
+ * fighting over the audio session.
+ */
+export async function startWristDictation(capture: string, localeTag?: string): Promise<boolean> {
+    if (!native || typeof native.startWristDictation !== 'function') {
+        throw new Error('this build cannot transcribe audio from the watch');
+    }
+    return await native.startWristDictation(capture, localeTag);
 }
 
 export async function stopDictation(): Promise<string> {

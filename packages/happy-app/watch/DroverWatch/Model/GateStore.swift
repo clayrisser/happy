@@ -57,6 +57,8 @@ final class GateStore: NSObject, ObservableObject {
     /// Voices the sentences the phone sends when this wrist is the speaker
     /// (DROVE-92), and reports its audio route so the phone can decide.
     private let speaker = WatchSpeaker()
+    /// The wrist's microphone, held open across pauses (DROVE-130).
+    private let recorder = WristRecorder()
 
     override init() {
         super.init()
@@ -76,6 +78,9 @@ final class GateStore: NSObject, ObservableObject {
         }
         speaker.onRouteChanged = { [weak self] _ in
             self?.sendRoute()
+        }
+        recorder.onLevel = { [weak self] value in
+            self?.micLevel = value
         }
         // Activation belongs to the bridge, which the app delegate has
         // normally already run on launch; calling it again is a no-op. It is
@@ -402,6 +407,177 @@ final class GateStore: NSObject, ObservableObject {
         if draft.isEmpty { draftSessionId = nil }
     }
 
+
+    // MARK: The latched recorder (DROVE-130)
+
+    /// Whether the wrist's microphone is open right now.
+    ///
+    /// THE ASK, and what shipped instead the first time. Clay asked why a
+    /// single press of the microphone could not hold the recorder open so he
+    /// could talk, pause, think and keep talking. The first pass at DROVE-130
+    /// answered that watchOS cannot do it and moved the latch up a level: the
+    /// one-shot `TextFieldLink` sheet stayed, and what it handed back
+    /// accumulated in a draft (see `WristDraft`). That is a real improvement
+    /// and it is still here — the sheet is how Scribble and the keyboard get
+    /// in, and it is the fallback when the phone is out of reach — but it is
+    /// not what was asked for. The sheet still ends the recording every time
+    /// he stops for breath.
+    ///
+    /// What that pass got RIGHT is that the watch cannot recognise speech:
+    /// `Speech.framework` is genuinely absent from the watchOS SDK. What it
+    /// set aside, in its own words as "a different and much larger job", is
+    /// that recognition does not have to happen ON the watch. The phone
+    /// already owns a recogniser that survives a pause correctly, so the wrist
+    /// captures and the phone transcribes. That is this.
+    @Published private(set) var listening = false
+    /// Input loudness while listening, 0...1, for the meter.
+    @Published private(set) var micLevel: Double = 0
+    /// What the phone has heard on the open capture. Drawn, never accumulated
+    /// here: the phone sends the whole transcript each time (see
+    /// `WristHearing`).
+    @Published private(set) var hearing: WristHearing = .idle
+    /// The session the open capture belongs to.
+    private var listeningSessionId: String?
+    /// When a latch with nothing new said stops itself.
+    private var idleStopAt: Date?
+    /// Ticks the idle clock while the microphone is open.
+    private var idleWatchdog: Task<Void, Never>?
+
+    /// The single press (DROVE-130).
+    ///
+    /// One control, two meanings, exactly as the phone's mic button works: a
+    /// press with the microphone shut OPENS it and leaves it open; a press
+    /// with it open STOPS it and KEEPS the words. Stopping never sends — the
+    /// words land in the draft to be read and sent deliberately, which is the
+    /// phone's rule that only a lift sends (DROVE-105), and the wrist has no
+    /// lift.
+    func toggleMic(_ session: DroverSession) {
+        if listening {
+            stopListening()
+        } else {
+            startListening(session)
+        }
+    }
+
+    /// Open the microphone and tell the phone to start recognising.
+    func startListening(_ session: DroverSession) {
+        guard !listening else { return }
+        // A capture id that cannot collide with the last one, so a straggling
+        // partial from a capture that has ended is dropped structurally.
+        let capture = UUID().uuidString
+        recorder.start(captureId: capture) { [weak self] live in
+            guard let self else { return }
+            guard live else {
+                self.lastError = self.recorder.failure ?? "The microphone would not open"
+                return
+            }
+            self.lastError = nil
+            self.listening = true
+            self.listeningSessionId = session.id
+            self.hearing = .opening(capture)
+            self.tellPhone(session.id, capture, "start")
+            self.armIdleStop()
+        }
+    }
+
+    /// Close the microphone, keeping every word. The words go into the draft,
+    /// which is where Send, Clear and Undo already live.
+    func stopListening() {
+        guard listening else { return }
+        let sessionId = listeningSessionId
+        let capture = hearing.captureId
+        recorder.stop()
+        listening = false
+        micLevel = 0
+        idleWatchdog?.cancel()
+        idleWatchdog = nil
+        idleStopAt = nil
+        if let sessionId { tellPhone(sessionId, capture, "stop") }
+        bankWhatWasHeard(into: sessionId)
+        listeningSessionId = nil
+    }
+
+    /// Throw the whole capture away. The wrist's cancel, which the phone
+    /// spells as sliding the finger off the button before lifting.
+    func cancelListening() {
+        guard listening else { return }
+        let sessionId = listeningSessionId
+        let capture = hearing.captureId
+        recorder.stop()
+        listening = false
+        micLevel = 0
+        idleWatchdog?.cancel()
+        idleWatchdog = nil
+        idleStopAt = nil
+        hearing = .idle
+        listeningSessionId = nil
+        if let sessionId { tellPhone(sessionId, capture, "cancel") }
+    }
+
+    /// Move what was heard into the draft as one phrase, so a capture behaves
+    /// exactly like a sheet return and everything already built on the draft
+    /// keeps working.
+    private func bankWhatWasHeard(into sessionId: String?) {
+        let words = hearing.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        hearing = .idle
+        guard !words.isEmpty, let sessionId,
+              let session = snapshot.sessions.first(where: { $0.id == sessionId }) else { return }
+        addToDraft(session, heard: words)
+    }
+
+    private func tellPhone(_ sessionId: String, _ capture: String, _ state: String) {
+        guard let session, session.activationState == .activated, session.isReachable else { return }
+        guard let payload = try? JSONEncoder().encode(
+            DroverListen(sessionId: sessionId, capture: capture, state: state)
+        ), let dict = try? JSONSerialization.jsonObject(with: payload) as? [String: Any] else { return }
+        // Never queued. A "start listening" delivered when the pair reconnects
+        // would open a recogniser for audio that was never sent.
+        session.sendMessage(dict, replyHandler: nil, errorHandler: nil)
+    }
+
+    /// A partial from the phone (DROVE-130).
+    ///
+    /// The guards that keep this from becoming DROVE-263 again live in
+    /// `WristHearing.absorbing`, not here, so they are unit-tested on the Mac
+    /// rather than only on a wrist.
+    fileprivate func applyHeard(_ message: [String: Any]) {
+        guard let data = try? JSONSerialization.data(withJSONObject: message),
+              let heard = try? JSONDecoder().decode(DroverHeard.self, from: data) else { return }
+        let next = hearing.absorbing(
+            captureId: heard.capture, seq: heard.seq, text: heard.text, final: heard.isFinal
+        )
+        guard next != hearing else { return }
+        // Him talking is the only thing that pushes the idle deadline out. A
+        // partial that says the same thing is the recogniser thinking, not
+        // Clay speaking.
+        if next.text != hearing.text { armIdleStop() }
+        hearing = next
+        // The recogniser gave up or settled on its own. Close the microphone
+        // rather than leaving a latch looking live over a dead task.
+        if next.settled, listening { stopListening() }
+    }
+
+    /// A latched microphone with nothing new said stops itself, and keeps the
+    /// words. The phone's own `DICTATION_LATCH_IDLE_MS`, which `WristAudio`
+    /// holds so the two cannot drift apart.
+    private func armIdleStop() {
+        idleStopAt = Date().addingTimeInterval(WristAudio.idleStopSeconds)
+        guard idleWatchdog == nil else { return }
+        idleWatchdog = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard let self else { return }
+                let done = await MainActor.run { () -> Bool in
+                    guard self.listening, let deadline = self.idleStopAt else { return true }
+                    guard Date() >= deadline else { return false }
+                    self.stopListening()
+                    return true
+                }
+                if done { return }
+            }
+        }
+    }
+
     /// Tell the phone whether this wrist has headphones on its route
     /// (DROVE-92). Reachable only, never queued: a route reported twenty
     /// minutes late describes headphones that have since come off.
@@ -656,6 +832,9 @@ extension GateStore {
             } else if kind == DroverSpeak.kindValue {
                 // A sentence to voice on this wrist, or a stop (DROVE-92).
                 applySpeak(message)
+            } else if kind == DroverHeard.kindValue {
+                // What the phone has heard on the open capture (DROVE-130).
+                applyHeard(message)
             } else if kind == "cue" {
                 // A reply has started being spoken, here or on the phone;
                 // the wrist buzzes either way (DROVE-92).

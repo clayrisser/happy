@@ -40,6 +40,9 @@ final class DroverWatchDelegate: NSObject, WCSessionDelegate {
     /// Called when the wrist finished, or cut, a sentence the phone sent it
     /// to speak (DROVE-92); the phone's read-aloud queue paces on it.
     var onSpoken: (([String: Any]) -> Void)?
+    /// Called when the wrist opened or closed its held-open recorder
+    /// (DROVE-130). The audio does NOT come this way; only the control does.
+    var onListen: (([String: Any]) -> Void)?
 
     /// How long the wrist may be kept waiting before it is answered with
     /// whatever this phone last published.
@@ -164,6 +167,37 @@ final class DroverWatchDelegate: NSObject, WCSessionDelegate {
             onSay?(["sessionId": sessionId, "text": text])
             return
         }
+        // The wrist opening or closing its microphone (DROVE-130). Only the
+        // CONTROL comes through JS — which session, and start/stop/cancel —
+        // so the policy around it ships OTA. The audio itself does not; see
+        // below.
+        if payload["kind"] as? String == "listen" {
+            guard let sessionId = payload["sessionId"] as? String,
+                  let capture = payload["capture"] as? String,
+                  let state = payload["state"] as? String else { return }
+            onListen?(["sessionId": sessionId, "capture": capture, "state": state])
+            return
+        }
+        // A chunk of audio from the wrist's held-open recorder (DROVE-130).
+        //
+        // This one does NOT go to JS. It arrives about five times a second and
+        // JS has no use for PCM: it would be pure bridge traffic on the way to
+        // the speech module, which is the only thing that wants it. So it is
+        // posted for `DroverSpeechModule` to pick up in the same process, and
+        // the notification name is the contract between the two — spelled out
+        // at both ends because they are separate pods and a mistyped string
+        // would be a microphone that records and is never transcribed.
+        if payload["kind"] as? String == "wristaudio" {
+            guard let capture = payload["capture"] as? String,
+                  let seq = payload["seq"] as? Int,
+                  let pcm = payload["pcm"] as? Data else { return }
+            NotificationCenter.default.post(
+                name: Notification.Name("DroverWristAudio"),
+                object: nil,
+                userInfo: ["capture": capture, "seq": seq, "pcm": pcm]
+            )
+            return
+        }
         // Whether the wrist's own audio route has headphones (DROVE-92). JS
         // arbitrates which device speaks on it.
         if payload["kind"] as? String == "route" {
@@ -225,7 +259,10 @@ public final class DroverWatchModule: Module {
     public func definition() -> ModuleDefinition {
         Name("DroverWatch")
 
-        Events("onAnswer", "onFlip", "onRefresh", "onOpened", "onSay", "onRoute", "onSpoken")
+        Events(
+            "onAnswer", "onFlip", "onRefresh", "onOpened", "onSay", "onRoute", "onSpoken",
+            "onListen"
+        )
 
         OnCreate {
             self.watchDelegate.onAnswer = { [weak self] event in
@@ -240,6 +277,9 @@ public final class DroverWatchModule: Module {
             }
             self.watchDelegate.onOpened = { [weak self] event in
                 self?.sendEvent("onOpened", event)
+            }
+            self.watchDelegate.onListen = { [weak self] event in
+                self?.sendEvent("onListen", event)
             }
             self.watchDelegate.onSay = { [weak self] event in
                 self?.sendEvent("onSay", event)
