@@ -194,11 +194,19 @@ export function collectAccountRows(
     // function, two surfaces, no second ranking and no second set of words for
     // "window reset".
     //
-    // No SDK override is passed, and there is nothing to pass: the sheet hands
-    // `usageAccountBarGroup` the live `agentState.usageLimits` for the account
-    // its session is on, and this feed is not scoped to a session. So every
-    // wrist figure comes off the registry snapshot, exactly as `headroom` and
-    // the binding limit already do.
+    // No SDK override is passed, and there is nothing to pass: this feed is
+    // not scoped to a session. So every wrist figure comes off the registry
+    // snapshot, exactly as `headroom` and the binding limit already do.
+    //
+    // That used to be the whole difference between the wrist and the sheet,
+    // and it is why Clay saw the watch up to date while the phone was minutes
+    // behind (DROVE-340): the sheet handed `usageAccountBarGroup` the live
+    // `agentState.usageLimits` for its own account UNCONDITIONALLY, and under
+    // drover every session is a local TUI where the SDK's rate_limit_event
+    // never fires, so that override was the oldest reading of the two. It is
+    // now taken only while it is strictly newer than the snapshot
+    // (`fresherUsageLimits`), which on a drover session it never is. One
+    // function, one object, two surfaces.
     const usage = {
         capturedAt: freshest.capturedAt,
         modelFamily: freshest.modelFamily,

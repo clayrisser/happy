@@ -774,3 +774,80 @@ describe('a turn ending', () => {
         reporter.stop()
     })
 })
+
+/**
+ * Print to card, with no manual step (DROVE-340).
+ *
+ * The regression Clay actually reported: "the mobile app did pick it up too,
+ * but I had to run /usage in the CLI for it to do it." Running `/usage` by
+ * hand wrote the cache, the reporter's next poll saw a new mtime and the card
+ * corrected — which proved the transport was fine and the trigger missing.
+ *
+ * Everything here is on a throwaway state dir: its own XDG_STATE_HOME, its own
+ * registry, DROVER_URL pointed at a dead port. No daemon, no bridge, no real
+ * ~/.claude. The one thing stubbed is the child process, and only the SPAWN of
+ * it — the text is a real `/usage` paragraph and it goes through the real
+ * parser, the real reading file and the real publish.
+ */
+describe('what /usage prints reaches the card by itself', () => {
+    it('goes print -> reading -> snapshot inside the stated window, with nothing run by hand', async () => {
+        const dirs = writeAccounts(['main'])
+        // The state Clay was in: Claude Code's own cache frozen fifteen
+        // minutes back, saying 26%, because it will not rewrite inside five.
+        const start = Date.parse('2026-09-01T18:00:00Z')
+        writeCache(dirs.main, [
+            { kind: 'session', percent: 26, resets_at: '2026-09-02T04:20:00+00:00', scope: null },
+        ], start - 15 * 60_000)
+
+        let clock = start
+        const published: DroverUsage[] = []
+        const { UsageReporter } = await usageModule()
+        const { refreshActiveAccount } = await import('./refresh')
+        const reporter = new UsageReporter({
+            sweep: null,
+            current: () => 'main',
+            publish: (u) => published.push(u),
+            now: () => clock,
+            // The real refresh, with only the child stubbed out. What it
+            // "printed" is the paragraph Claude Code prints, which the real
+            // recordUsagePrint parses and writes.
+            active: (now, account) => refreshActiveAccount(account, {
+                now: () => now,
+                run: async (a) => {
+                    const { recordUsagePrint } = await import('./refresh')
+                    return recordUsagePrint(
+                        a,
+                        'Current session: 68% used, resets Sep 2 at 4:20am (America/Chicago)\n',
+                        now,
+                    )
+                },
+            }),
+        })
+
+        reporter.start()
+        // The opening snapshot is the stale one, exactly as it was.
+        expect(published[0].accounts[0].headroom).toBe(74)
+
+        // A turn ends. Nothing else happens: no /usage typed anywhere.
+        clock += 12_000
+        reporter.noteLiveStatus(true)
+        clock += 8_000
+        reporter.noteLiveStatus(false)
+        await new Promise((r) => setTimeout(r, 20))
+
+        // Within twenty seconds of the turn starting, the card carries the
+        // number the paragraph printed rather than the one the file holds.
+        expect(published.length).toBeGreaterThan(1)
+        const latest = published.at(-1)!
+        expect(latest.accounts[0].headroom).toBe(32)
+        expect(latest.accounts[0].limits[0].percent).toBe(68)
+        expect(latest.capturedAt - start).toBeLessThanOrEqual(20_000)
+
+        // And Claude Code's own file was never written to — the reading lives
+        // in drover's state dir, so nothing here can race a live Claude Code
+        // rewriting its whole config.
+        const { readVendorUsageCache, readAccounts } = await import('./accounts')
+        expect(readVendorUsageCache(readAccounts()[0])!.rows[0].percent).toBe(26)
+        reporter.stop()
+    })
+})
