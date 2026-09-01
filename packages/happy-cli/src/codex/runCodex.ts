@@ -30,6 +30,7 @@ import { setupOfflineReconnection } from '@/utils/setupOfflineReconnection';
 import type { PermissionMode } from '@/api/types';
 import type { ApiSessionClient } from '@/api/apiSession';
 import { resolveCodexExecutionPolicy, shouldAutoApproveCodexApproval } from './executionPolicy';
+import { codexGateEnabled, openCodexGate } from './droverGate';
 import {
     mapCodexMcpMessageToSessionEnvelopes,
     mapCodexProcessorMessageToSessionEnvelopes,
@@ -669,11 +670,57 @@ export async function runCodex(opts: {
             return 'approved';
         }
 
+        // The drover bus, in parallel with the app's own card (DROVE-273).
+        // Codex approvals reached the phone and nothing else; gum in tmux and
+        // the watch are bus surfaces and src/codex/ never spoke to the bus.
+        // Whichever surface answers first withdraws the other, which is the
+        // bus's own "first resolution wins" rule applied across the two
+        // channels. Off unless DROVER_CODEX_GATE=1.
+        const gate = codexGateEnabled()
+            ? openCodexGate({
+                type: params.type,
+                toolName,
+                preview: params.type === 'exec'
+                    ? (params.command ?? []).join(' ')
+                    : JSON.stringify(input),
+                sessionId: session.sessionId ?? null,
+                cwd: params.type === 'exec' ? (params.cwd ?? null) : (process.cwd() ?? null),
+            })
+            : null;
+
         try {
-            const result = await permissionHandler.handleToolCall(params.callId, toolName, input);
-            logger.debug('[Codex] Permission result:', result.decision);
-            return result.decision;
+            const fromApp = permissionHandler.handleToolCall(params.callId, toolName, input);
+            if (!gate) {
+                const result = await fromApp;
+                logger.debug('[Codex] Permission result:', result.decision);
+                return result.decision;
+            }
+
+            // A bus that could not be asked resolves null, and null is not a
+            // decision — that arm must never win the race, or an unreachable
+            // drover would answer for the human. It is dropped instead, and the
+            // app's card decides alone, exactly as it did before this existed.
+            const fromBus = gate.decision.then((d) => (
+                d === null
+                    ? new Promise<never>(() => { /* never settles: not a decision */ })
+                    : { source: 'bus' as const, decision: d }
+            ));
+            const winner = await Promise.race([
+                fromApp.then((r) => ({ source: 'app' as const, decision: r.decision })),
+                fromBus,
+            ]);
+
+            if (winner.source === 'bus') {
+                // Unblock the approval handler's own promise and clear the card
+                // the phone is still showing.
+                permissionHandler.resolveExternally(params.callId, winner.decision, 'drover');
+            } else {
+                gate.cancel();
+            }
+            logger.debug(`[Codex] Permission result: ${winner.decision} (via ${winner.source})`);
+            return winner.decision;
         } catch (error) {
+            gate?.cancel();
             logger.debug('[Codex] Error handling permission:', error);
             return 'denied';
         }

@@ -13,10 +13,11 @@
  * app-server wrapper or approval callbacks. See docs/plans/codex-app-server-migration.md.
  */
 
-import { execSync, type ChildProcess } from 'node:child_process';
+import { execFileSync, type ChildProcess } from 'node:child_process';
 import { spawn as crossSpawn } from 'cross-spawn';
 import { createInterface, type Interface as ReadlineInterface } from 'node:readline';
 import { logger } from '@/ui/logger';
+import { resolveCodexBin } from './codexBin';
 import type {
     InitializeParams,
     NewConversationParams,
@@ -107,7 +108,13 @@ function parseCodexCliVersion(version: string): { major: number; minor: number; 
 
 function readCodexCliVersion(): { major: number; minor: number; patch: number } | null {
     try {
-        const version = execSync('codex --version', { encoding: 'utf8', windowsHide: true }).trim();
+        // resolveCodexBin, not a bare 'codex': under launchd the daemon's PATH
+        // does not carry an npm-global or Homebrew install, and a probe that
+        // ENOENTs here reads as "Codex is not installed" (DROVE-273).
+        const version = execFileSync(resolveCodexBin(), ['--version'], {
+            encoding: 'utf8',
+            windowsHide: true,
+        }).trim();
         return parseCodexCliVersion(version);
     } catch {
         return null;
@@ -597,22 +604,23 @@ export class CodexAppServerClient {
 
         if (!isAppServerAvailable()) {
             throw new Error(
-                'Codex CLI is not installed\n\n' +
+                'Codex CLI is not installed, or is older than 0.100 (app-server).\n\n' +
                 'Please install Codex CLI using one of these methods:\n\n' +
                 'Option 1 - npm (recommended):\n  npm install -g @openai/codex\n\n' +
                 'Option 2 - Homebrew (macOS):\n  brew install --cask codex\n\n' +
+                'Installed somewhere unusual? Name it:\n  HAPPY_CODEX_PATH=/path/to/codex\n\n' +
                 'Alternatively, use Claude Code:\n  happy claude',
             );
         }
 
-        let command = 'codex';
+        let command = resolveCodexBin();
         let args = ['app-server', '--listen', 'stdio://'];
         this.sandboxEnabled = false;
 
         if (this.sandboxConfig?.enabled && process.platform !== 'win32') {
             try {
                 this.sandboxCleanup = await initializeSandbox(this.sandboxConfig, process.cwd());
-                const wrapped = await wrapForMcpTransport('codex', ['app-server', '--listen', 'stdio://']);
+                const wrapped = await wrapForMcpTransport(command, ['app-server', '--listen', 'stdio://']);
                 command = wrapped.command;
                 args = wrapped.args;
                 this.sandboxEnabled = true;

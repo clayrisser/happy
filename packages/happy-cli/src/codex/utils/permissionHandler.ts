@@ -66,6 +66,52 @@ export class CodexPermissionHandler extends BasePermissionHandler {
     }
 
     /**
+     * Answer a pending request from somewhere that is not the app's RPC —
+     * today, a Cattle Drover bus surface: the gum popup in tmux, or the watch
+     * (DROVE-273).
+     *
+     * Same three steps the 'permission' RPC handler takes, in the same order:
+     * drop it from pending so a second answer is a no-op, resolve the promise
+     * the approval handler is awaiting, and move the card from requests to
+     * completedRequests so the app stops showing it. Without that last step the
+     * phone would keep displaying a question that has already been answered on
+     * the wrist.
+     *
+     * Returns false when the request is unknown or already answered, which is
+     * the normal outcome of a race the other surface won.
+     */
+    resolveExternally(toolCallId: string, decision: PermissionResult['decision'], by: string): boolean {
+        const pending = this.pendingRequests.get(toolCallId);
+        if (!pending) return false;
+        this.pendingRequests.delete(toolCallId);
+        pending.resolve({ decision });
+
+        this.session.updateAgentState((currentState) => {
+            const request = currentState.requests?.[toolCallId];
+            if (!request) return currentState;
+            const { [toolCallId]: _dropped, ...remainingRequests } = currentState.requests || {};
+            return {
+                ...currentState,
+                requests: remainingRequests,
+                completedRequests: {
+                    ...currentState.completedRequests,
+                    [toolCallId]: {
+                        ...request,
+                        completedAt: Date.now(),
+                        status: decision === 'approved' || decision === 'approved_for_session'
+                            ? 'approved'
+                            : 'denied',
+                        decision,
+                    },
+                },
+            } satisfies AgentState;
+        });
+
+        logger.debug(`${this.getLogPrefix()} Permission ${decision} for ${pending.toolName} (answered by ${by})`);
+        return true;
+    }
+
+    /**
      * Handle a tool permission request
      * @param toolCallId - The unique ID of the tool call
      * @param toolName - The name of the tool being called

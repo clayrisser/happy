@@ -4,6 +4,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { findAgyBin } from '@/agy/constants';
 import { findCursorBin } from '@/cursor/cursorBin';
+import { findCodexBin } from '@/codex/codexBin';
 
 export interface CLIAvailability {
   claude: boolean;
@@ -40,7 +41,11 @@ function commandExists(command: string): boolean {
 
 function detectPosix(): CLIAvailability {
   const claude = commandExists('claude');
-  const codex = commandExists('codex');
+  // NOT commandExists: `npm install -g @openai/codex` and `brew install --cask
+  // codex` both land outside a launchd daemon's PATH, so a bare probe reports
+  // "not installed" on a machine that runs Codex every day — and the app's
+  // picker then hides the harness entirely (DROVE-273).
+  const codex = findCodexBin() !== undefined;
   const gemini = commandExists('gemini');
   const agy = findAgyBin() !== undefined;
   // NOT commandExists: the installer puts cursor-agent in ~/.local/bin, which
@@ -68,7 +73,7 @@ function detectWindows(): CLIAvailability {
   };
 
   const claude = checkCommand('claude');
-  const codex = checkCommand('codex');
+  const codex = findCodexBin() !== undefined;
   const gemini = checkCommand('gemini');
   const agy = findAgyBin() !== undefined;
   const cursor = findCursorBin() !== undefined;
