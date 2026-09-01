@@ -136,6 +136,10 @@ vi.mock('react-native-svg', () => ({
     default: host('Svg'), Circle: host('Circle'), Line: host('Line'), Path: host('Path'),
 }));
 vi.mock('@/constants/Typography', () => ({ Typography: { default: () => ({}) } }));
+// Reanimated, which vitest cannot transform. `ComposerBubble`'s rows are
+// `Animated.View`s so Home can hand them its reveal timings; what this file
+// needs from them is only that they are views with a style.
+vi.mock('react-native-reanimated', () => ({ default: { View: host('AnimatedView') } }));
 // Reanimated, which vitest cannot transform. A bare glyph owes this file only
 // the fact that it mounts no glass of its own.
 vi.mock('./BubblePressable', () => ({ BubblePressable: host('BubblePressable') }));
@@ -143,6 +147,7 @@ vi.mock('./BubblePressable', () => ({ BubblePressable: host('BubblePressable') }
 import { MobileGlassSurface } from './MobileGlass';
 import { ComposerControlButton } from './ComposerControlButton';
 import { ComposerSessionControls } from './ComposerSessionControls';
+import { ComposerBubble } from './ComposerBubble';
 import {
     COMPOSER_BUBBLE_SURFACE,
     COMPOSER_BUBBLE_TEXT_ROW_GEOMETRY,
@@ -349,6 +354,65 @@ describe('the session capsule is interactive glass and is not clipped (DROVE-343
             .find((node: any) => flatten(node.props.style).backgroundColor === composerSessionCapsuleFill(true));
         expect(flat).toBeTruthy();
         expect(flatten(flat!.props.style).overflow).toBe('hidden');
+    });
+});
+
+describe('the shared composer keeps its own padding under a hostile card style (DROVE-345)', () => {
+    /**
+     * Both screens hand `ComposerBubble` a card style, and a card style setting
+     * `paddingHorizontal` or `paddingVertical` beats a shorthand inside the
+     * component however it is ordered. That leak shipped for two tickets as a
+     * comment claiming zero padding over a style that never wrote one, and a
+     * spec that resolves the GEOMETRY cannot see it, because it lives in the
+     * stylesheet.
+     */
+    const hostile = { paddingHorizontal: 8, paddingVertical: 2, paddingBottom: 8 };
+
+    it('applies the bubble\u2019s four sides after whatever the caller said', () => {
+        const renderer = mount(React.createElement(
+            ComposerBubble,
+            { style: hostile } as never,
+            React.createElement('Field'),
+        ));
+        const [shell] = glassViews(renderer);
+        const resolved = flatten(shell.props.style);
+        expect(resolved.paddingTop).toBe(MOBILE_COMPOSER_METRICS.bubbleInset);
+        expect(resolved.paddingLeft).toBe(MOBILE_COMPOSER_METRICS.bubbleInset);
+        expect(resolved.paddingRight).toBe(MOBILE_COMPOSER_METRICS.bubbleInset);
+        // The floor is the only side with no text against it (DROVE-236).
+        expect(resolved.paddingBottom).toBe(MOBILE_COMPOSER_METRICS.bubbleInsetBottom);
+    });
+
+    it('mounts the shell calm and the text row interactive, in that order', () => {
+        const views = glassViews(mount(React.createElement(
+            ComposerBubble,
+            {} as never,
+            React.createElement('Field'),
+        )));
+        // Two surfaces: the shell, then the field's own inside it.
+        expect(views).toHaveLength(2);
+        expect(views[0].props.isInteractive).toBe(false);
+        expect(views[1].props.isInteractive).toBe(true);
+        expect(views[1].findAllByType('Field' as any).length).toBeGreaterThan(0);
+    });
+
+    it('puts one gap between trailing controls and none before the first', () => {
+        // The row wants a fixed 6 in three places and slack in exactly one, and
+        // a row-level `gap` cannot say that: it would gap both sides of the
+        // spacer too (`resolveComposerBubbleGapGeometry`).
+        const renderer = mount(React.createElement(
+            ComposerBubble,
+            {
+                leading: React.createElement('Add'),
+                controls: React.createElement('Capsule'),
+                trailing: [React.createElement('Mic'), React.createElement('Send')],
+            } as never,
+            React.createElement('Field'),
+        ));
+        const gaps = renderer.root.findAllByType('View' as any)
+            .filter((node: any) => flatten(node.props.style).width === MOBILE_COMPOSER_METRICS.controlGap);
+        // `+` | capsule, capsule | spacer, mic | send. Three, never four.
+        expect(gaps).toHaveLength(3);
     });
 });
 

@@ -30,6 +30,7 @@ import { t } from '@/text';
 import { Metadata } from '@/sync/storageTypes';
 import { isRunningOnMac } from '@/utils/platform';
 import { MobileGlassSurface } from './MobileGlass';
+import { ComposerBubble } from './ComposerBubble';
 import { ComposerControlButton } from './ComposerControlButton';
 import { GlassChromeSurface, useGlassChromeMaterial } from './GlassChromeControl';
 import { AnimatedFade } from './AnimatedOverlay';
@@ -56,15 +57,8 @@ import {
     resolveMobileComposerLineGeometry,
 } from './agentInputLayout';
 import {
-    COMPOSER_BUBBLE_ACTION_ROW_GEOMETRY,
-    COMPOSER_BUBBLE_GAP_GEOMETRY,
-    COMPOSER_BUBBLE_GEOMETRY,
-    COMPOSER_BUBBLE_SESSION_CAPSULE_GEOMETRY,
-    COMPOSER_BUBBLE_SPACER_GEOMETRY,
+
     COMPOSER_BUBBLE_SURFACE,
-    COMPOSER_BUBBLE_TEXT_ROW_GEOMETRY,
-    COMPOSER_BUBBLE_TEXT_ROW_SURFACE,
-    resolveComposerBubbleSurfaceStyle,
 } from './composerBubbleLayout';
 import { COMPOSER_STRIP_BOX } from './composerStripLayout';
 import { LiveMicBanner } from './LiveMicBanner';
@@ -350,30 +344,12 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         }),
         borderWidth: StyleSheet.hairlineWidth,
         borderColor: theme.colors.glass.border,
-        // THE BUBBLE'S OWN LAYOUT, and it comes from `composerBubbleLayout`
-        // rather than being written here (DROVE-214). Clay: "probably we
-        // should put everything in the speech bubble with the buttons on the
-        // bottom and the text input one row above it?" So it is a column of
-        // two rows with one padding all round, and that padding is the only
-        // air anywhere inside it: the discs' margin, the text's, the lot.
-        //
-        // Four padding LONGHANDS, still, because the desktop `unifiedPanel`
-        // underneath sets `paddingVertical` / `paddingBottom` /
-        // `paddingHorizontal` and a shorthand here loses to them however it is
-        // ordered. That leak shipped for two tickets as a comment claiming
-        // zero padding over a style that never wrote one.
-        //
-        // EACH ONE READS THE GEOMETRY OBJECT (DROVE-236). They used to restate
-        // `bubbleInset` four times, which was true while the four sides were
-        // one number and silently wrong the moment the floor became its own
-        // (DROVE-236's move). Restating a value in the renderer is the exact
-        // drift `composerBubbleLayout.spec.ts` exists to catch and cannot see,
-        // because it resolves the geometry and this is the stylesheet.
-        ...COMPOSER_BUBBLE_GEOMETRY,
-        paddingTop: COMPOSER_BUBBLE_GEOMETRY.padding,
-        paddingBottom: COMPOSER_BUBBLE_GEOMETRY.paddingBottom,
-        paddingLeft: COMPOSER_BUBBLE_GEOMETRY.padding,
-        paddingRight: COMPOSER_BUBBLE_GEOMETRY.padding,
+        // THE BUBBLE'S OWN LAYOUT IS `ComposerBubble`'S NOW (DROVE-345). The
+        // column, the padding and the gap were spread here and Home spread
+        // nothing at all, which is how five glass tickets landed on one screen
+        // and missed the other. What is left is the tint an Android without
+        // the material needs and the hairline that separates the card from the
+        // chat.
     },
     /**
      * The composer's first line, which carries the gutter and holds the
@@ -423,8 +399,12 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
      * rather than left to a shorthand.
      */
     mobileInputContainer: {
+        // THE GEOMETRY IS `ComposerBubble`'S NOW (DROVE-345). It was spread
+        // here, and Home spread nothing at all, which is how five glass
+        // tickets landed on one screen and missed the other. What is left is
+        // the one thing that is this screen's: the field sits centred in a row
+        // it shares with nothing.
         alignItems: 'center',
-        ...COMPOSER_BUBBLE_TEXT_ROW_GEOMETRY,
     },
     /**
      * THE BUBBLE'S BUTTON ROW: the `+`, a spacer, send (DROVE-214).
@@ -434,9 +414,7 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
      * height this row were given, which is exactly what the offsets it
      * replaces could not do.
      */
-    mobileBubbleActionRow: COMPOSER_BUBBLE_ACTION_ROW_GEOMETRY,
     /** Holds send at the trailing end even in zen mode, where no `+` is drawn. */
-    mobileBubbleActionSpacer: COMPOSER_BUBBLE_SPACER_GEOMETRY,
     /**
      * One fixed gap between two controls on that row (DROVE-236).
      *
@@ -444,9 +422,6 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
      * wants a fixed 6 in three places and slack in exactly one, and `gap`
      * cannot say that; the reasoning is on `resolveComposerBubbleGapGeometry`.
      */
-    mobileBubbleGap: COMPOSER_BUBBLE_GAP_GEOMETRY,
-    /** The session capsule, sized to its content, inside that row. */
-    mobileBubbleSessionCapsule: COMPOSER_BUBBLE_SESSION_CAPSULE_GEOMETRY,
 
     // Overlay styles
     autocompleteOverlay: {
@@ -2376,9 +2351,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     const mobileSessionControls = props.zenMode ? null : (
             <ComposerSessionControls
                 label={sessionPillLabel}
-                // The row's own geometry, resolved by the layout engine in
-                // `composerBubbleLayout.spec.ts` rather than restated here.
-                style={styles.mobileBubbleSessionCapsule}
                 size={MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE}
                 // The glyph segments are NOT square in here (DROVE-284). Four
                 // of them at a disc's width is 156pt of a 393pt phone, and a
@@ -2950,99 +2922,53 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         compactMobileComposer && styles.mobileUnifiedPanelShadow,
                         compactMobileComposer && styles.mobileBubbleShell,
                     ]}>
-                        {/* The slab is real Liquid Glass now, not a blur with a
+                        {/* THE COMPOSER, WHICH IS ONE COMPONENT NOW
+                            (DROVE-345). The shell, the field's surface and the
+                            button row are `ComposerBubble`'s; this screen fills
+                            the slots. Clay filed it about Home — "this input is
+                            not using our liquid glass input that we have
+                            everywhere else" — and the fix that makes it true is
+                            that there is one input for both screens to use.
+
+                            The slab is real Liquid Glass, not a blur with a
                             flat colour over it (DROVE-153). `frosted` painted
-                            rgba(20,20,22,0.82) on top of a blur, and a blur of a
-                            black chat is black, so what Clay photographed was
-                            the overlay: a flat dark grey slab. `liquid` renders
-                            GlassView, which is a UIVisualEffectView carrying a
-                            UIGlassEffect, and `regular` is the style the system
-                            uses for its own floating controls. Legibility does
+                            rgba(20,20,22,0.82) on top of a blur, and a blur of
+                            a black chat is black, so what Clay photographed was
+                            the overlay: a flat dark grey slab. Legibility does
                             not depend on the material: the transcript is masked
                             to nothing before it reaches the card (DROVE-168,
                             resolveTranscriptMask), so the glass has a known
-                            surface under it rather than whatever the chat is
-                            showing. It is the page itself now rather than a
-                            painted slab, and the card takes its separation from
-                            the measured chrome tint (DROVE-171). */}
-                        <MobileGlassSurface
-                            enabled={compactMobileComposer}
-                            // THE MATERIAL, AND THE PRESS, from one object
-                            // (DROVE-328). `interactive` is in there: Clay,
-                            // "shouldn't all these buttons have the Liquid
-                            // Glass behavior" (DROVE-266), and with it unset
-                            // `UIGlassEffect.isInteractive` was false, so every
-                            // control inside fell back to BubblePressable's
-                            // hand-rolled spring and a 0.7 fade. What is NOT in
-                            // there is the `pressTarget={false}` 266 put beside
-                            // it to keep this card clipped on the theory that
-                            // nobody presses the card. The effect answers a
-                            // touch on anything inside it by swelling the whole
-                            // bubble, and Clay photographed that swell cut at
-                            // the resting frame. `MobileGlassSurface` decides
-                            // last that an interactive surface is never
-                            // clipped (DROVE-202); `unifiedPanel`'s clip below
-                            // is for the flat desktop card and loses to it here.
-                            {...COMPOSER_BUBBLE_SURFACE}
-                            style={[
-                                styles.unifiedPanel,
-                                compactMobileComposer && styles.mobileUnifiedPanel,
-                                // NEVER CLIPPED, AND NOW SAID HERE (DROVE-343).
-                                // The primitive forces this on a surface it
-                                // knows is interactive, and the shell stopped
-                                // being one when the press moved to the text
-                                // row. It holds three things that swell — the
-                                // text row, the `+`, the capsule — so a clip
-                                // would cut all three at the bubble's edge,
-                                // which is DROVE-328's photograph one level
-                                // out. `resolveComposerBubbleSurfaceStyle`
-                                // reaches `getGlassSurfaceOverflow` for it
-                                // rather than writing 'visible' down, and takes
-                                // the material as its argument so the flat card
-                                // on a phone without Liquid Glass still clips.
-                                compactMobileComposer
-                                    && resolveComposerBubbleSurfaceStyle(glassChromeMaterial === 'liquid'),
-                            ]}
-                        >
-                    {/* Attachment preview strip */}
-                    {props.selectedImages && props.selectedImages.length > 0 && (
-                        <View style={compactMobileComposer ? styles.mobileAttachmentInset : undefined}>
-                            <AgentInputAttachmentStrip
-                                images={props.selectedImages}
-                                onRemove={props.onRemoveImage ?? (() => {})}
-                            />
-                        </View>
-                    )}
-                    {/* THE TEXT ROW, AND THE BUBBLE'S PRESS TARGET
-                        (DROVE-214, DROVE-343). On mobile it is the bubble's top
-                        row and holds nothing but the field; the `+` and send
-                        are on the row below.
-
-                        IT IS THE INTERACTIVE SURFACE NOW. Clay: "the input box
-                        should not also have that touch effect [when a control
-                        is pressed]. The input box should only get the touch
-                        effect when I'm touching where the text is."
-                        `UIGlassEffect.isInteractive` is a property of the
-                        effect VIEW and answers every touch delivered inside it,
-                        so there is no per-region switch to reach for — the
-                        press had to MOVE. The shell above is calm glass, this
-                        frame is the one that lenses and swells, and every
-                        control on the row below owns a surface of its own.
-
-                        Nested glass over the shell's own draws as nothing at
-                        rest, which is DROVE-254's finding used rather than
-                        fought: a capsule has to read as an object and this must
-                        not. `enabled` is the mobile gate, so the desktop card
-                        still renders the plain view it always did. */}
-                    <MobileGlassSurface
-                        enabled={compactMobileComposer}
-                        {...COMPOSER_BUBBLE_TEXT_ROW_SURFACE}
-                        style={[
-                            styles.inputContainer,
-                            compactMobileComposer && styles.mobileInputContainer,
-                            props.minHeight ? { minHeight: props.minHeight } : undefined,
-                        ]}
-                    >
+                            surface under it. */}
+                        {compactMobileComposer ? (
+                            <ComposerBubble
+                                // `unifiedPanel` is the DESKTOP card's style and
+                                // is not in here: it carries a 8/8/2 padding
+                                // that the bubble's four longhands used to have
+                                // to fight, and on this branch there is no
+                                // desktop card to style.
+                                style={styles.mobileUnifiedPanel}
+                                fieldStyle={[
+                                    styles.mobileInputContainer,
+                                    props.minHeight ? { minHeight: props.minHeight } : undefined,
+                                ]}
+                                above={props.selectedImages && props.selectedImages.length > 0 ? (
+                                    <View style={styles.mobileAttachmentInset}>
+                                        <AgentInputAttachmentStrip
+                                            images={props.selectedImages}
+                                            onRemove={props.onRemoveImage ?? (() => {})}
+                                        />
+                                    </View>
+                                ) : null}
+                                leading={showMobileAddButton ? mobileAddAction : null}
+                                controls={mobileSessionControls}
+                                /* THE MIC, ITS OWN CONTROL AGAIN (DROVE-264),
+                                   and since DROVE-284 send's only neighbour.
+                                   The pair it belongs to is voice-in and send:
+                                   one puts words in the field, the next sends
+                                   them, and Clay's composition runs left to
+                                   right across exactly those two. */
+                                trailing={[mobileMicAction, mobilePrimaryAction]}
+                            >
                         <MultiTextInput
                             ref={inputRef}
                             defaultValue={props.initialValue}
@@ -3059,61 +2985,48 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                             maxHeight={Platform.OS === 'web' ? 480 : MOBILE_COMPOSER_METRICS.inputMaxHeight}
                             lineHeight={compactMobileComposer ? MOBILE_COMPOSER_METRICS.inputLineHeight : undefined}
                         />
-                    </MobileGlassSurface>
-
-                    {/* THE BUTTON ROW, inside the bubble and under the text
-                        (DROVE-214), and since DROVE-236 it is the ONLY row.
-                        Clay: "put everything in the speech bubble with the
-                        buttons on the bottom and the text input one row above
-                        it", then, with the composer marked up in red, an arrow
-                        from the session capsule and one from the audio button
-                        pointing up into this row's empty middle.
-
-                        Left to right: the `+`, a gap, the session capsule, a
-                        gap, the spacer, the audio button, a gap, send/mic. The
-                        gaps are children with a width rather than the row's
-                        `gap` property, because the row wants a fixed 6 in
-                        three places and slack in exactly one. See
-                        `resolveComposerBubbleGapGeometry`. */}
-                    {/* ONE ROW AGAIN, AT EVERY WIDTH (DROVE-284). DROVE-266
-                        gave the capsule a row of its own below 389 and
-                        DROVE-281 made that every phone. Clay: "Dude I don't
-                        like that extra row. Add the reading mode whatever thing
-                        to the group and keep it all on the same row as send and
-                        +." So read-aloud is a segment of the capsule, the
-                        capsule's glyph segments stopped being as wide as discs,
-                        and the second row is gone rather than conditional.
-                        sessionPillLabel.ts carries the arithmetic. */}
-                    {compactMobileComposer ? (
-                        <View style={styles.mobileBubbleActionRow}>
-                            {showMobileAddButton ? mobileAddAction : null}
-                            {showMobileAddButton && mobileSessionControls
-                                ? <View style={styles.mobileBubbleGap} />
-                                : null}
-                            {mobileSessionControls}
-                            {mobileSessionControls
-                                ? <View style={styles.mobileBubbleGap} />
-                                : null}
-                            <View style={styles.mobileBubbleActionSpacer} />
-                            {/* THE MIC, ITS OWN CONTROL AGAIN (DROVE-264), and
-                                since DROVE-284 send's only neighbour. The pair
-                                it belongs to is voice-in and send: one puts
-                                words in the field, the next sends them, and
-                                Clay's composition runs left to right across
-                                exactly those two. Read-aloud used to stand to
-                                its left and is in the capsule now, which leaves
-                                the trailing end of the row holding only the two
-                                controls that act on the message being written. */}
-                            {mobileMicAction}
-                            {mobileMicAction
-                                ? <View style={styles.mobileBubbleGap} />
-                                : null}
-                            {mobilePrimaryAction}
+                            </ComposerBubble>
+                        ) : (
+                            /* THE DESKTOP CARD, which is a different
+                               arrangement and not this component's business:
+                               one row with the controls beside the field rather
+                               than a bubble with a button row under it. It has
+                               never been the bubble and `ComposerBubble` does
+                               not pretend it is. */
+                            <MobileGlassSurface enabled={false} style={styles.unifiedPanel}>
+                    {/* Attachment preview strip */}
+                    {props.selectedImages && props.selectedImages.length > 0 && (
+                        <View style={compactMobileComposer ? styles.mobileAttachmentInset : undefined}>
+                            <AgentInputAttachmentStrip
+                                images={props.selectedImages}
+                                onRemove={props.onRemoveImage ?? (() => {})}
+                            />
                         </View>
-                    ) : null}
-
-                    {compactMobileComposer ? null : desktopActionControls}
-                        </MobileGlassSurface>
+                    )}
+                                <View style={[
+                                    styles.inputContainer,
+                                    props.minHeight ? { minHeight: props.minHeight } : undefined,
+                                ]}>
+                        <MultiTextInput
+                            ref={inputRef}
+                            defaultValue={props.initialValue}
+                            paddingTop={compactMobileComposer
+                                ? MOBILE_COMPOSER_METRICS.inputPaddingTop
+                                : Platform.OS === 'web' ? 10 : 8}
+                            paddingBottom={compactMobileComposer
+                                ? MOBILE_COMPOSER_METRICS.inputPaddingBottom
+                                : Platform.OS === 'web' ? 10 : 8}
+                            onChangeText={handleTextChange}
+                            placeholder={props.placeholder}
+                            onKeyPress={handleKeyPress}
+                            onStateChange={handleInputStateChange}
+                            maxHeight={Platform.OS === 'web' ? 480 : MOBILE_COMPOSER_METRICS.inputMaxHeight}
+                            lineHeight={compactMobileComposer ? MOBILE_COMPOSER_METRICS.inputLineHeight : undefined}
+                        />
+                                </View>
+                                {desktopActionControls}
+                            </MobileGlassSurface>
+                        )}
                     </View>
                     </View>
                 </Shaker>

@@ -30,6 +30,7 @@ import {
 } from './composerControlColour';
 import { permissionAccessibilityValue } from './autoAcceptRow';
 import { MOBILE_COMPOSER_SEGMENT_FILL_INSET } from './agentInputLayout';
+import { COMPOSER_BUBBLE_SESSION_CAPSULE_GEOMETRY } from './composerBubbleLayout';
 import {
     COMPOSER_MODEL_SEGMENT,
     COMPOSER_SESSION_CONTROL_SIZE,
@@ -356,9 +357,13 @@ const styles = StyleSheet.create((theme) => ({
     // the caller (DROVE-236), because the chat draws this inside the bubble's
     // 36pt button row and Home draws it on a 44pt row of its own.
     capsule: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        flexShrink: 1,
+        // THE FRAME THE RESOLVER MODELS, read from it rather than restated
+        // (DROVE-214, DROVE-345). It was passed in as a `style` by the chat and
+        // by nothing at all on Home, so the two screens drew the same control
+        // in two shapes. The HEIGHT still comes from the caller's `size`,
+        // because the chat's capsule is the bubble's 39 and Home's row-of-its-
+        // own capsule was 44.
+        ...COMPOSER_BUBBLE_SESSION_CAPSULE_GEOMETRY,
         minWidth: 0,
         // NO `overflow` HERE ANY MORE (DROVE-343). The capsule is an
         // interactive surface again, and an interactive surface is never

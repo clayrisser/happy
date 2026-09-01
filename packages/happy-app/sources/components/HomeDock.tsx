@@ -19,8 +19,13 @@ import Animated, {
 } from 'react-native-reanimated';
 import { MobileGlassSurface } from './MobileGlass';
 import { BubblePressable } from './BubblePressable';
+import { ComposerBubble } from './ComposerBubble';
+import { ComposerControlButton } from './ComposerControlButton';
+import { ComposerSessionControls, type ComposerSessionPicker } from './ComposerSessionControls';
+import { COMPOSER_IN_FIELD_DISC } from './composerControlColour';
+import { COMPOSER_BUBBLE_SURFACE } from './composerBubbleLayout';
+import type { SessionPillLabel } from './sessionPillLabel';
 import { NativeOptionsPicker } from './NativeOptionsPicker';
-import { NativeSettingsMenu, type NativeSettingsMenuGroup, type NativeSettingsMenuProps } from './NativeSettingsMenu';
 import { AgentInputAttachmentStrip } from './AgentInputAttachmentStrip';
 import { Typography } from '@/constants/Typography';
 import { layout } from './layout';
@@ -75,20 +80,20 @@ import { StatusDot } from './StatusDot';
 import { Shaker, type ShakeInstance } from './Shaker';
 import { hapticsError } from './haptics';
 import { HARNESS_ORDER, getHarnessName } from '@/utils/harnessCatalog';
-import { getPermissionModeMenuLabel, getPermissionModeShortLabel } from '@/utils/permissionModeLabels';
+import { getPermissionModeShortLabel } from '@/utils/permissionModeLabels';
 import { getRigMachineSessionCreation } from '@/sync/rigSessionCreation';
 import {
     MobileHeaderScrim,
     MOBILE_HOME_SCRIM_OVERLAY_OPACITY,
 } from './navigation/MobileHeaderScrim';
 import {
+    MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE,
+    MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH,
     MOBILE_COMPOSER_LAYOUT,
     MOBILE_COMPOSER_METRICS,
     resolveMobileComposerActionGeometry,
-    resolveMobileComposerActionRowGeometry,
     resolveMobileCollapsedComposerGeometry,
     resolveMobileHomeComposerHeight,
-    resolveMobileComposerMenuGeometry,
 } from './agentInputLayout';
 
 export const MOBILE_HOME_DOCK_CONTENT_INSET = 108;
@@ -99,11 +104,6 @@ type PickerPage = EnvironmentSetting | AgentSetting;
 
 const CUSTOM_PROJECT_PATH_KEY = '__custom_project_path__';
 
-const MOBILE_MODEL_MENU_GEOMETRY = resolveMobileComposerMenuGeometry('model');
-const MOBILE_EFFORT_MENU_GEOMETRY = resolveMobileComposerMenuGeometry('effort');
-const MOBILE_PERMISSION_MENU_GEOMETRY = resolveMobileComposerMenuGeometry('permission');
-const MOBILE_ACTION_ROW_GEOMETRY = resolveMobileComposerActionRowGeometry();
-const MOBILE_ICON_ACTION_GEOMETRY = resolveMobileComposerActionGeometry('icon');
 const MOBILE_PRIMARY_ACTION_GEOMETRY = resolveMobileComposerActionGeometry('primary');
 const MOBILE_COLLAPSED_COMPOSER_GEOMETRY = resolveMobileCollapsedComposerGeometry();
 const MOBILE_HOME_DOCK_TOP_PADDING = 8;
@@ -173,10 +173,6 @@ const styles = StyleSheet.create((theme) => ({
         paddingRight: MOBILE_COLLAPSED_COMPOSER_GEOMETRY.contentPaddingRight,
         gap: 4,
     },
-    sideButton: MOBILE_ICON_ACTION_GEOMETRY,
-    sideButtonPressed: {
-        backgroundColor: theme.colors.glass.backgroundSubtle,
-    },
     input: {
         flex: 1,
         minWidth: 0,
@@ -204,12 +200,17 @@ const styles = StyleSheet.create((theme) => ({
     inputEntryPlaceholder: {
         color: theme.colors.textSecondary,
     },
+    /**
+     * What is left of Home's own composer card (DROVE-345): where it sits, and
+     * the dense tint an Android without the material needs. The SHAPE — the
+     * radius, the padding, the two rows, the clip — is `ComposerBubble`'s, and
+     * restating any of it here is what let this screen drift away from the
+     * chat's through five glass tickets.
+     */
     focusedComposerSurface: {
         width: '100%',
         maxWidth: layout.maxWidth,
         alignSelf: 'center',
-        borderRadius: MOBILE_COMPOSER_METRICS.shellRadius,
-        overflow: 'hidden',
         borderWidth: StyleSheet.hairlineWidth,
         borderColor: theme.colors.glass.border,
         backgroundColor: Platform.select({
@@ -241,12 +242,6 @@ const styles = StyleSheet.create((theme) => ({
         left: 0,
         right: 0,
         bottom: 0,
-    },
-    focusedComposerContent: {
-        flex: 1,
-        paddingHorizontal: MOBILE_COMPOSER_METRICS.shellInset,
-        paddingTop: MOBILE_COMPOSER_METRICS.shellPaddingTop,
-        paddingBottom: MOBILE_COMPOSER_METRICS.shellPaddingBottom,
     },
     focusedInput: {
         flex: 1,
@@ -283,26 +278,6 @@ const styles = StyleSheet.create((theme) => ({
         paddingRight: MOBILE_COMPOSER_LAYOUT.inputContainerPaddingRight,
         paddingTop: MOBILE_COMPOSER_METRICS.inputPaddingTop,
         paddingBottom: MOBILE_COMPOSER_METRICS.inputPaddingBottom,
-    },
-    focusedComposerActions: MOBILE_ACTION_ROW_GEOMETRY,
-    nativeModeMenu: MOBILE_MODEL_MENU_GEOMETRY.frame,
-    focusedModeButton: MOBILE_MODEL_MENU_GEOMETRY.content,
-    nativeEffortMenu: MOBILE_EFFORT_MENU_GEOMETRY.frame,
-    focusedEffortButton: MOBILE_EFFORT_MENU_GEOMETRY.content,
-    nativePermissionMenu: MOBILE_PERMISSION_MENU_GEOMETRY.frame,
-    focusedPermissionButton: MOBILE_PERMISSION_MENU_GEOMETRY.content,
-    focusedModeText: {
-        flexShrink: 1,
-        minWidth: 0,
-        color: theme.colors.text,
-        fontSize: 14,
-        ...Typography.default(),
-    },
-    focusedModeSeparator: {
-        flexShrink: 0,
-        color: theme.colors.textSecondary,
-        fontSize: 14,
-        ...Typography.default(),
     },
     sendButton: {
         ...MOBILE_PRIMARY_ACTION_GEOMETRY,
@@ -951,6 +926,24 @@ export const HomeDock = React.memo(({
         ?? availableAgents[0]
         ?? { key: agentType, name: getHarnessName(agentType) };
     const permissionLabel = getPermissionModeShortLabel(currentPermission);
+    /**
+     * WHAT THE COMPOSER'S CAPSULE READS (DROVE-345).
+     *
+     * The same three values the three word-triggers carried, handed to the
+     * component the chat uses instead of drawn again here. There is no
+     * read-aloud segment, because there is no session to read from yet, and
+     * `ComposerSessionControls` draws no segment for a reader that is absent
+     * rather than a dead one (DROVE-284).
+     */
+    const composerDiscFill = theme.dark ? COMPOSER_IN_FIELD_DISC.dark : COMPOSER_IN_FIELD_DISC.light;
+    const sessionPillLabel: SessionPillLabel = {
+        mode: permissionLabel ?? currentPermission?.name ?? null,
+        model: currentModel?.name ?? currentAgent.name,
+        effort: currentEffort?.name ?? null,
+        // The joined form is the status chip's, and Home has no chip.
+        text: '',
+    };
+    const effortIndex = effortOptions.findIndex((option) => option.key === currentEffort?.key);
     const focusedPromptPlaceholder = resolveHomeDockPromptPlaceholder(currentAgent.key, currentAgent.name);
     const canSubmit = !isSubmitting && (
         prompt.trim().length > 0 || selectedImages.length > 0
@@ -1321,39 +1314,35 @@ export const HomeDock = React.memo(({
         };
     };
 
-    const agentSettingsGroups: NativeSettingsMenuGroup[] = agentRows.map((row) => {
-        const config = getAgentPickerConfig(row.page as AgentSetting);
-        return {
-            key: row.page,
-            label: row.value || config.title,
-            title: config.title,
-            systemImage: {
-                agent: 'cpu',
-                model: 'cube',
-                permission: 'shield',
-                effort: 'bolt',
-            }[row.page],
-            options: config.options.map((option) => ({
-                key: option.key,
-                // The permission menu spells the mode out; only its chip is
-                // short on space. Model and effort read fine on their own.
-                label: row.page === 'permission' ? getPermissionModeMenuLabel(option) : option.name,
-                disabled: option.disabled,
-            })),
-            selectedKey: config.selectedKey,
-            onSelect: config.onSelect,
-        };
-    });
-    const modelSettingsGroup = agentSettingsGroups.find((group) => group.key === 'model');
-    const effortSettingsGroup = agentSettingsGroups.find((group) => group.key === 'effort');
-    const permissionSettingsGroup = agentSettingsGroups.find((group) => group.key === 'permission');
+    /*
+     * `agentSettingsGroups` and the three `*SettingsGroup` lookups lived here
+     * and are gone with the triggers they fed (DROVE-345). Whether a segment
+     * of the capsule can be opened is a question about the OPTIONS, which is
+     * what `canOpen` reads now, and `getAgentPickerConfig` is still where each
+     * of the three gets its list.
+     */
 
     const getPickerConfig = (page: PickerPage): PickerConfig => (
         page === 'machine' || page === 'project' || page === 'worktree'
             ? getEnvironmentPickerConfig(page)
             : getAgentPickerConfig(page)
     );
-    const sheetVisible = !useNativeMenus && sheetPage !== null;
+    /**
+     * The three the COMPOSER opens are always sheets (DROVE-345, DROVE-242).
+     *
+     * They were native menus on iOS, which is what the capsule cannot use: a
+     * menu UIKit places and UIKit dismisses is outside the picker's own
+     * dismissal state, so a second tap on the segment could not close it
+     * because the segment never saw the tap. Clay ruled on the chat's copy of
+     * this in DROVE-242 — "Shouldn't these show in sheets like the effort does"
+     * — and the capsule is the chat's control. The environment rows above keep
+     * their menus; nothing about them changed.
+     */
+    const composerSheetPage = (page: PickerPage | null): page is ComposerSessionPicker => (
+        page === 'permission' || page === 'model' || page === 'effort'
+    );
+    const composerPicker = composerSheetPage(sheetPage) ? sheetPage : null;
+    const sheetVisible = sheetPage !== null && (!useNativeMenus || composerSheetPage(sheetPage));
     const markNativeMenuOpen = React.useCallback(() => {
         nativeMenuOpenRef.current = true;
     }, []);
@@ -1459,60 +1448,19 @@ export const HomeDock = React.memo(({
         </FocusConfigRevealRow>
     ));
 
-    const renderMenuControl = ({
-        page,
-        groups,
-        flat,
-        style,
-        accessibilityLabel,
-        triggerSystemImage,
-        triggerLabel,
-        triggerAlignment,
-        children,
-    }: {
-        page: PickerPage;
-        groups: NativeSettingsMenuGroup[];
-        flat?: boolean;
-        style: NativeSettingsMenuProps['style'];
-        accessibilityLabel: string;
-        triggerSystemImage?: NativeSettingsMenuProps['triggerSystemImage'];
-        triggerLabel?: NativeSettingsMenuProps['triggerLabel'];
-        triggerAlignment?: NativeSettingsMenuProps['triggerAlignment'];
-        children: React.ReactNode;
-    }) => (
-        <RefusableControl refusing={isSubmitting} onRefuse={refuse}>
-            {!useNativeMenus ? (
-                <Pressable
-                    onPress={() => setSheetPage(page)}
-                    style={style}
-                    accessibilityRole="button"
-                    accessibilityLabel={accessibilityLabel}
-                >
-                    {children}
-                </Pressable>
-            ) : (
-                <NativeSettingsMenu
-                    accessibilityLabel={accessibilityLabel}
-                    groups={groups.map((group) => ({
-                        ...group,
-                        onSelect: (key) => {
-                            nativeMenuOpenRef.current = false;
-                            group.onSelect(key);
-                        },
-                    }))}
-                    onMenuOpen={markNativeMenuOpen}
-                    flat={flat}
-                    style={style}
-                    triggerSystemImage={triggerSystemImage}
-                    triggerLabel={triggerLabel}
-                    triggerAlignment={triggerAlignment}
-                >
-                    {children}
-                </NativeSettingsMenu>
-            )}
-        </RefusableControl>
-    );
-
+    /*
+     * `renderMenuControl` lived here and is gone (DROVE-345).
+     *
+     * It wrapped the composer's three word-triggers — permission, the model,
+     * effort — in a `NativeSettingsMenu` on iOS and a sheet-opening `Pressable`
+     * everywhere else. The composer's capsule is the control now, and it opens
+     * sheets on every platform for DROVE-242's reason: a menu UIKit places and
+     * UIKit dismisses is outside the picker's own dismissal state, so a second
+     * tap on the segment could not close it. It had no other caller — the
+     * environment rows above use `renderPickerRow`, which reaches
+     * `NativeOptionsPicker` — so it is deleted rather than kept for a caller
+     * that does not exist.
+     */
     // Only reached with a page selected: `sheetVisible` gates the whole sheet.
     const renderSettingsSheet = (page: PickerPage) => {
         const config = getPickerConfig(page);
@@ -1594,10 +1542,16 @@ export const HomeDock = React.memo(({
         activateOnPress?: () => void;
     }) => (
         <View style={styles.composerShadow}>
+            {/* THE RESTING DOCK PILL, ON THE COMPOSER'S MATERIAL (DROVE-345).
+                `frosted` is expo-blur with rgba(20,20,22,0.82) painted over
+                it, and a blur of a black home screen is black, so what Clay
+                photographed was the overlay: a flat dark slab. It is the same
+                `liquid` the composer it opens into wears, spread from the same
+                object so the two cannot drift again. It is NOT interactive:
+                the pill is a target for the whole dock rather than a control,
+                and the composer's press rules are the bubble's (DROVE-343). */}
             <MobileGlassSurface
-                nativeEffect
-                material="frosted"
-                intensity={92}
+                {...COMPOSER_BUBBLE_SURFACE}
                 style={styles.composerSurface}
             >
                 <View style={styles.composerContent}>
@@ -1670,25 +1624,140 @@ export const HomeDock = React.memo(({
         })();
     };
 
+    /**
+     * THE HOME COMPOSER, WHICH IS THE SESSION COMPOSER (DROVE-345).
+     *
+     * Clay, on this sheet: "on the homepage it's not properly using liquid
+     * glass and this input is not using our liquid glass input that we have
+     * everywhere else."
+     *
+     * It was a second implementation of one thing: a `frosted` surface with a
+     * hairline border, a raw `TextInput`, a `BubblePressable` `+`, three words
+     * for permission / model / effort, and a filled white send disc. It shared
+     * `agentInputLayout.ts`'s numbers with the chat and nothing else, which is
+     * why DROVE-153, DROVE-266, DROVE-328, DROVE-331 and DROVE-343 each landed
+     * on the chat's composer and left this one flat.
+     *
+     * The shell, the field's glass and the button row are `ComposerBubble`'s
+     * now, and the controls in it are the composer's own: `ComposerControlButton`
+     * for the `+` and send, `ComposerSessionControls` for the capsule. What is
+     * still Home's is what Home has and a session does not — the reveal timings
+     * as the dock opens, the measurement text that drives the field's height,
+     * and the refusal blocker while a session is being created.
+     *
+     * WHAT THE CAPSULE CARRIES HERE is the harness's three settings rather than
+     * a running session's four: permission, effort, the model. There is no
+     * read-aloud, because there is nothing to read yet, and
+     * `ComposerSessionControls` draws no segment for a reader that is absent
+     * rather than a dead one (DROVE-284).
+     *
+     * AND ALL THREE OPEN SHEETS, which is DROVE-242 reaching this screen. They
+     * were native menus here; the capsule's segments report a picker and the
+     * sheet is what draws it, so a second tap on a control can close it because
+     * the control sees the tap. The environment rows above still use their
+     * menus — nothing about them changed.
+     */
     const renderFocusedComposer = () => (
         <Shaker ref={composerShakerRef} style={styles.focusedComposerShadow}>
             <Animated.View style={[styles.focusedComposerAnimationShell, focusedComposerAnimationStyle]}>
-                <MobileGlassSurface
-                    nativeEffect
-                    material="frosted"
-                    intensity={92}
+                <ComposerBubble
                     style={[
                         styles.focusedComposerSurface,
                         styles.focusedComposerAnchored,
                         { height: focusedComposerHeight },
                     ]}
-                >
-                <View style={styles.focusedComposerContent}>
-                    {selectedImages.length > 0 && (
+                    actionRowStyle={focusedActionsRevealStyle}
+                    above={selectedImages.length > 0 ? (
                         <Animated.View style={focusedInputRevealStyle}>
                             <AgentInputAttachmentStrip images={selectedImages} onRemove={removeImage} />
                         </Animated.View>
+                    ) : null}
+                    /* Painted over the attachments and the input, and stopping
+                       short of the action row. The controls keep their normal
+                       appearance; only the touch is refused. */
+                    overlay={isSubmitting ? (
+                        <Pressable
+                            style={styles.composerPressBlocker}
+                            onPress={() => refuseWithShake(composerShakerRef)}
+                        />
+                    ) : null}
+                    leading={(
+                        <RefusableControl refusing={isSubmitting} onRefuse={refuse}>
+                            <ComposerControlButton
+                                fill={composerDiscFill}
+                                onPress={() => void pickImages()}
+                                accessibilityRole="button"
+                                accessibilityLabel="Add image"
+                            >
+                                <Ionicons
+                                    name="add"
+                                    size={MOBILE_COMPOSER_METRICS.addIconSize}
+                                    color={theme.colors.text}
+                                />
+                            </ComposerControlButton>
+                        </RefusableControl>
                     )}
+                    controls={(
+                        <RefusableControl refusing={isSubmitting} onRefuse={refuse}>
+                            <ComposerSessionControls
+                                label={sessionPillLabel}
+                                size={MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE}
+                                segmentWidth={MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH}
+                                verticalSlop={MOBILE_COMPOSER_METRICS.primaryActionSlop}
+                                modeKey={currentPermission?.key}
+                                effortIndex={effortIndex}
+                                effortCount={effortOptions.length}
+                                openPicker={composerPicker}
+                                canOpen={{
+                                    permission: permissionOptions.length > 0,
+                                    model: modelOptions.length > 0,
+                                    effort: effortPickerOptions.length > 0,
+                                }}
+                                onPress={(picker) => setSheetPage(picker)}
+                            />
+                        </RefusableControl>
+                    )}
+                    trailing={[(
+                        /* One button, read the same way as the session
+                           composer's: it sends, and while the session is being
+                           created it stops. Its FACES are the chat's too now —
+                           a bare glyph at rest, because "the send button
+                           shouldn't have a circle around it" (DROVE-264) was
+                           never only about the chat, and a filled disc while it
+                           is Stop. */
+                        <Animated.View key="primary" style={primaryActionFlashStyle}>
+                            <ComposerControlButton
+                                fill={primaryAction === 'stop'
+                                    ? (theme.dark ? '#F5F5F5' : theme.colors.button.primary.background)
+                                    : undefined}
+                                onPress={primaryAction === 'stop' ? handleStopPress : submitFromFocusMode}
+                                disabled={primaryAction !== 'send' && primaryAction !== 'stop'}
+                                accessibilityRole="button"
+                                accessibilityLabel={primaryAction === 'stop' ? 'Stop' : 'Send'}
+                            >
+                                {primaryAction === 'stop' && (
+                                    <Animated.View
+                                        pointerEvents="none"
+                                        style={[styles.primaryActionFlash, primaryActionFlashOverlayStyle]}
+                                    />
+                                )}
+                                {primaryAction === 'busy' ? (
+                                    <ActivityIndicator size="small" color={theme.colors.textSecondary} />
+                                ) : primaryAction === 'stop' ? (
+                                    <Octicons name="stop" size={16} color={primaryActionIconColor} />
+                                ) : (
+                                    <Ionicons
+                                        name="arrow-up"
+                                        size={16}
+                                        color={primaryAction === 'send'
+                                            ? theme.colors.text
+                                            : theme.colors.textSecondary}
+                                    />
+                                )}
+                            </ComposerControlButton>
+                        </Animated.View>
+                    )]}
+                >
                     <Animated.View style={[
                         styles.focusedInputReveal,
                         { height: focusedInputContainerHeight },
@@ -1727,144 +1796,7 @@ export const HomeDock = React.memo(({
                             style={[styles.focusedInput, { height: focusedInputLayout.height }]}
                         />
                     </Animated.View>
-                    {/* Painted over the attachments and the input, and stopping
-                        short of the action row. The controls keep their normal
-                        appearance; only the touch is refused. */}
-                    {isSubmitting && (
-                        <Pressable
-                            style={styles.composerPressBlocker}
-                            onPress={() => refuseWithShake(composerShakerRef)}
-                        />
-                    )}
-                    <Animated.View style={[styles.focusedComposerActions, focusedActionsRevealStyle]}>
-                        <RefusableControl refusing={isSubmitting} onRefuse={refuse}>
-                            <BubblePressable
-                                onPress={() => void pickImages()}
-                                style={styles.sideButton}
-                                accessibilityRole="button"
-                                accessibilityLabel="Add image"
-                            >
-                                <Ionicons
-                                    name="add"
-                                    size={MOBILE_COMPOSER_METRICS.addIconSize}
-                                    color={theme.colors.text}
-                                />
-                            </BubblePressable>
-                        </RefusableControl>
-                        {/* The permission mode reads out in words instead of
-                            hiding behind a gear: it is the one setting here that
-                            changes what the agent is allowed to do to your
-                            machine, so it is worth the width. */}
-                        {permissionSettingsGroup && permissionLabel && renderMenuControl({
-                            page: 'permission',
-                            groups: [permissionSettingsGroup],
-                            flat: true,
-                            style: styles.nativePermissionMenu,
-                            accessibilityLabel: t('agentInput.permissionMode.title'),
-                            triggerLabel: permissionLabel,
-                            // Centered to agree with the React Native chip this
-                            // stands in for on iOS: the frame is sized by that
-                            // chip, so a leading trigger would print the word
-                            // flush left while the chip reserves padding.
-                            triggerAlignment: 'center',
-                            children: (
-                                <View style={styles.focusedPermissionButton}>
-                                    <Text style={styles.focusedModeText} numberOfLines={1}>
-                                        {permissionLabel}
-                                    </Text>
-                                </View>
-                            ),
-                        })}
-                        {/* Pushes model/effort right so the pair sits against the
-                            send button instead of drifting when a label changes. */}
-                        <View style={{ flex: 1 }} />
-                        {modelSettingsGroup ? (
-                            renderMenuControl({
-                                page: 'model',
-                                groups: [modelSettingsGroup],
-                                flat: true,
-                                style: styles.nativeModeMenu,
-                                accessibilityLabel: t('agentInput.model.title'),
-                                triggerLabel: currentModel?.name ?? currentAgent.name,
-                                triggerAlignment: 'trailing',
-                                children: (
-                                    <View style={styles.focusedModeButton}>
-                                        <Text style={styles.focusedModeText} numberOfLines={1}>
-                                            {currentModel?.name ?? currentAgent.name}
-                                        </Text>
-                                    </View>
-                                ),
-                            })
-                        ) : (
-                            <View style={styles.nativeModeMenu}>
-                                <View style={styles.focusedModeButton}>
-                                    <Text style={styles.focusedModeText} numberOfLines={1}>
-                                        {currentAgent.name}
-                                    </Text>
-                                </View>
-                            </View>
-                        )}
-                        {/* The separator is its own element rather than part of the
-                            effort label, which would wrap it onto a second line
-                            inside the narrow trigger. */}
-                        {effortSettingsGroup && (
-                            <Text style={styles.focusedModeSeparator}>·</Text>
-                        )}
-                        {effortSettingsGroup && renderMenuControl({
-                            page: 'effort',
-                            groups: [effortSettingsGroup],
-                            flat: true,
-                            style: styles.nativeEffortMenu,
-                            accessibilityLabel: t('agentInput.effort.title'),
-                            triggerLabel: currentEffort?.name ?? t('agentInput.effort.title'),
-                            triggerAlignment: 'leading',
-                            children: (
-                                <View style={styles.focusedEffortButton}>
-                                    <Text style={styles.focusedModeText} numberOfLines={1}>
-                                        {currentEffort?.name ?? t('agentInput.effort.title')}
-                                    </Text>
-                                </View>
-                            ),
-                        })}
-                        {/* Nothing covers this row as a whole: each control
-                            beside Stop refuses its own presses, which leaves
-                            Stop itself reachable without having to be painted
-                            over a blocker. */}
-                        {/* One button, read the same way as the session
-                            composer's: it sends, and while the session is being
-                            created it stops. */}
-                        <Animated.View style={primaryActionFlashStyle}>
-                            <BubblePressable
-                                onPress={primaryAction === 'stop' ? handleStopPress : submitFromFocusMode}
-                                disabled={primaryAction !== 'send' && primaryAction !== 'stop'}
-                                style={[styles.sendButton, primaryActionFilled && styles.sendButtonActive]}
-                                accessibilityRole="button"
-                                accessibilityLabel={primaryAction === 'stop' ? 'Stop' : 'Send'}
-                            >
-                                {primaryAction === 'stop' && (
-                                    <Animated.View
-                                        pointerEvents="none"
-                                        style={[styles.primaryActionFlash, primaryActionFlashOverlayStyle]}
-                                    />
-                                )}
-                                {primaryAction === 'busy' ? (
-                                    <ActivityIndicator size="small" color={theme.colors.textSecondary} />
-                                ) : primaryAction === 'stop' ? (
-                                    <Octicons name="stop" size={16} color={primaryActionIconColor} />
-                                ) : (
-                                    <Ionicons
-                                        name="arrow-up"
-                                        size={16}
-                                        color={primaryAction === 'send'
-                                            ? primaryActionIconColor
-                                            : theme.colors.textSecondary}
-                                    />
-                                )}
-                            </BubblePressable>
-                        </Animated.View>
-                    </Animated.View>
-                </View>
-                </MobileGlassSurface>
+                </ComposerBubble>
             </Animated.View>
         </Shaker>
     );

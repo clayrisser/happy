@@ -185,8 +185,8 @@ export const screenChromeSurfaces: readonly ScreenChromeSurface[] = [
         name: 'home dock composer',
         source: 'components/HomeDock.tsx',
         floating: true,
-        material: 'writing',
-        reason: 'Frosted is what keeps content from competing with text being typed. Its contrast is DROVE-171, which is live on the session composer right now; two lanes repainting the same surface is how one of them loses.',
+        material: 'material',
+        reason: 'It is the session composer now (DROVE-345): the same ComposerBubble, spreading the same COMPOSER_BUBBLE_SURFACE. The frosted exemption said content must not compete with text being typed, and DROVE-153 had already answered that for the chat — frosted paints rgba(20,20,22,0.82) over a blur, and a blur of a black screen is black, so what it bought was a flat slab rather than legibility. Legibility comes from the backdrop being masked before it reaches the card (DROVE-168).',
     },
     {
         name: 'session composer',
@@ -264,10 +264,6 @@ export const flatChromeExemptions: readonly FlatChromeExemption[] = [
     {
         source: 'components/ChatHeaderView.tsx',
         reason: 'Only on the branch taken when glass is off, where MobileGlassSurface returns a plain view and the material name is inert. DROVE-153 converted the branch that draws.',
-    },
-    {
-        source: 'components/HomeDock.tsx',
-        reason: 'The dock composer is a writing surface, and frosted is what keeps the list behind it from competing with text being typed. Composer contrast is DROVE-171.',
     },
     {
         source: 'components/TabBar.tsx',
