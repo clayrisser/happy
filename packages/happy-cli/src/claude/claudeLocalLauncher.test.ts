@@ -797,6 +797,53 @@ describe('claudeLocalLauncher in a tmux pane', () => {
      * so the pick was ignored in silence. `/model` and `/effort` are the pane's
      * own way in — both real commands in Claude Code 2.1.251.
      */
+    /**
+     * DROVE-278. `drover --model X --effort Y` parsed into StartOptions and
+     * went nowhere for a pane session: nothing pushed the picks to the child's
+     * argv and the initial metadata said nothing, so the session — the
+     * daemon-spawned shape the phone uses included — quietly booted on
+     * defaults. runClaude now seeds the initial metadata with them, and the
+     * launcher's existing carry (DROVE-232) is what puts them on the argv.
+     * These tests pin the launcher half: metadata present at BOOT, not
+     * arriving as a delta, reaches the first child.
+     */
+    describe('the model and effort the command line carried (DROVE-278)', () => {
+        it('boots the FIRST child on them, and types nothing at a pane that came up running them', async () => {
+            const runs = trackRuns();
+            let scannerOptions: ScannerOptions | undefined;
+            mockCreateSessionScanner.mockImplementation(async (opts: ScannerOptions) => {
+                scannerOptions = opts;
+                return { onNewSession: vi.fn(), cleanup: vi.fn(async () => {}) };
+            });
+            const { session } = paneSession({ modelMode: 'claude-fable-5', effortLevel: 'max' });
+            mockInjectIntoPane.mockResolvedValue(true);
+
+            const launcher = claudeLocalLauncher(session as any);
+            await vi.waitFor(() => expect(runs).toHaveLength(1));
+
+            // The argv proof: the first spawn — a plain start, not a flip's
+            // replacement — carries both picks, through the same carry the
+            // flip path uses.
+            expect(runs[0].opts.claudeArgs).toEqual(['--model', 'claude-fable-5', '--effort', 'max']);
+
+            // The dialog verdict: an argv-borne choice is boot state, not a
+            // switch. "Switch model?" / "Change effort level?" only ever
+            // appear in answer to a typed /model or /effort
+            // (paneCommandOutcome reads them back after a command goes in),
+            // and with the argv landed the pane already holds the request, so
+            // the launcher types no command and presses no key — nothing
+            // exists for Claude Code to confirm.
+            await vi.waitFor(() => expect(scannerOptions?.onRunObserved).toBeTypeOf('function'));
+            scannerOptions!.onRunObserved!({ model: 'claude-fable-5', effort: 'max' });
+            await new Promise((r) => setTimeout(r, 80));
+            expect(mockInjectIntoPane).not.toHaveBeenCalled();
+            expect(mockPressPaneKey).not.toHaveBeenCalled();
+
+            runs[0].run.resolve();
+            await launcher;
+        });
+    });
+
     describe('a model picked in the app', () => {
         it('is typed into the pane as /model at the next idle prompt', async () => {
             const runs = trackRuns();
