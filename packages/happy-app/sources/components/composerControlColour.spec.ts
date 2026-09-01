@@ -41,7 +41,7 @@ import {
     composerGlyphLayers,
     micColour,
     primaryActionColour,
-    permissionLockColour,
+    autoAcceptColour,
 } from './composerControlColour';
 import {
     CHROME_BACKDROP_EXTREMES,
@@ -171,19 +171,39 @@ describe.each(themes)('the rule on the $name theme: the foreground unless it is 
      * here rather than beside the modes because it is not one: a mode is a
      * value the session holds, and auto-accept is the app answering prompts on
      * Clay's behalf while he is not looking. Same class as an open mic.
+     *
+     * IT IS THE BOLT'S COLOUR SINCE DROVE-281, not the padlock's. DROVE-277
+     * had no control to colour — the switch was inside the padlock's sheet, so
+     * the padlock was the only object that could carry the state. The bolt is
+     * a segment of the capsule now, so the state sits on the control that
+     * changes it and the padlock goes back to the rule with no exception.
      */
-    it('leaves the padlock on the foreground in every mode, which is DROVE-215 unchanged', () => {
-        expect(permissionLockColour(palette, false)).toBe(palette.foreground);
-        expect(permissionLockColour(palette, false)).toBe(composerGlyphColour(palette));
+    it('leaves the bolt on the foreground while auto-accept is off', () => {
+        expect(autoAcceptColour(palette, false)).toBe(palette.foreground);
+        expect(autoAcceptColour(palette, false)).toBe(composerGlyphColour(palette));
     });
 
-    it('colours the padlock with the accent while auto-accept is on, and spends no new hue on it', () => {
-        expect(permissionLockColour(palette, true)).toBe(palette.accent);
+    it('colours the bolt with the accent while auto-accept is on, and spends no new hue on it', () => {
+        expect(autoAcceptColour(palette, true)).toBe(palette.accent);
         // The same accent the send button wears when it has something to send:
         // one colour, one meaning, "something is about to happen".
-        expect(permissionLockColour(palette, true)).toBe(primaryActionColour(palette, true));
+        expect(autoAcceptColour(palette, true)).toBe(primaryActionColour(palette, true));
         // And the palette did not grow to fit it.
         expect(Object.keys(palette).sort()).toEqual(['accent', 'foreground', 'pending', 'recording']);
+    });
+
+    it('does it on both themes, so the state is legible wherever Clay is reading', () => {
+        // The accent is a different hex per theme and the same ROLE, which is
+        // the property that matters: the bolt separates from the capsule's
+        // fill on dark and on light, measured below against
+        // `COMPOSER_DISC_SEPARATION_FLOOR`, and it is never the foreground
+        // while it is on.
+        for (const dark of [true, false]) {
+            const p = composerControlPalette(dark);
+            expect(autoAcceptColour(p, true)).toBe(p.accent);
+            expect(autoAcceptColour(p, true)).not.toBe(p.foreground);
+            expect(autoAcceptColour(p, false)).toBe(p.foreground);
+        }
     });
 
     it('leaves the SHAPE alone, so the colour adds a state instead of hiding the mode', () => {
@@ -600,6 +620,40 @@ describe.each(themes)('the session capsule on the $name theme', ({ name, dark })
         // answered by the dividers rather than by a second grey.
         expect(fill).toBe(dark ? COMPOSER_IN_FIELD_DISC.dark : COMPOSER_IN_FIELD_DISC.light);
         expect(COMPOSER_SESSION_CAPSULE_FILL).toBe(COMPOSER_IN_FIELD_DISC);
+    });
+
+    /**
+     * THE BOLT AGAINST THE CAPSULE IT SITS IN, ON BOTH THEMES (DROVE-281).
+     *
+     * DROVE-254 and DROVE-264 measured every new object on this row against
+     * what is behind it, and the bolt is a new object. It is a graphical
+     * control rather than text, so the floor that applies is WCAG 1.4.11's
+     * 3:1, and both states clear it on both themes with the ON state — the one
+     * whose cost of being missed is a command running unasked — clearing it by
+     * the smallest margin, which is the number worth writing down.
+     *
+     * THE THIRD RATIO IS THE ONE THAT MATTERS MOST. On against off is what a
+     * glance actually reads, and it is the measurement that would quietly rot
+     * if someone ever moved the accent nearer the foreground. It is well over
+     * `COMPOSER_DISC_SEPARATION_FLOOR`, which is the bar the row already uses
+     * for "these two are different objects".
+     */
+    it('draws the bolt clear of the capsule in both states, measured (DROVE-281)', () => {
+        const p = composerControlPalette(dark);
+        const bed = parseColor(fill);
+        const on = contrastRatio(parseColor(autoAcceptColour(p, true)), bed);
+        const off = contrastRatio(parseColor(autoAcceptColour(p, false)), bed);
+        expect(on, `${name} on`).toBeGreaterThanOrEqual(3);
+        expect(off, `${name} off`).toBeGreaterThanOrEqual(3);
+        expect(on).toBeCloseTo(dark ? 4.483 : 3.812, 3);
+        expect(off).toBeCloseTo(dark ? 14.743 : 13.802, 3);
+        // And the two states apart from EACH OTHER, which is what a glance reads.
+        const separation = contrastRatio(
+            parseColor(autoAcceptColour(p, true)),
+            parseColor(autoAcceptColour(p, false)),
+        );
+        expect(separation).toBeCloseTo(dark ? 3.288 : 3.621, 3);
+        expect(separation).toBeGreaterThan(COMPOSER_DISC_SEPARATION_FLOOR);
     });
 
     it('measures the same 1.36:1 the discs do, because it is the same value', () => {

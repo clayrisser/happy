@@ -9,16 +9,26 @@
  * the boundary rather than selling the feature, and it names the two halves
  * the classifier actually keeps apart.
  *
- * IT LIVES IN THE LOCK'S SHEET, and that is a decision with a measurement
- * behind it. Clay asked for the toggle "next to the microphone or next to the
- * model or the effort button" — which is where the padlock already is. It
- * cannot be a fourth control on that row: DROVE-264's budget table leaves the
- * model segment 22pt at 320 and DROVE-266 spent 18 more growing every object
- * 36 -> 39, so a new 39pt disc would push the row past its rim on the two
- * narrowest phones with nothing left in the give-way order to spend (the last
- * step, the capsule taking its own row, has already fired at both widths).
- * The sheet behind the padlock has room, is one tap from where he pointed, and
- * is where the app already keeps the rest of its permission vocabulary.
+ * IT IS ON THE ROW SINCE DROVE-281, AND IT WAS IN THE LOCK'S SHEET BEFORE
+ * THAT. The original reasoning was a real measurement and it is worth keeping
+ * because it is what the move had to answer: DROVE-264's budget table left the
+ * model segment 22pt at 320, DROVE-266 spent 18 more growing every object
+ * 36 -> 39, so a new 39pt control had nothing left in the give-way order to
+ * take. The sheet had room and was one tap from where Clay pointed.
+ *
+ * That was sound and the answer was still wrong, which is the useful thing on
+ * the record here. Clay, with the row photographed: "add a button for toggling
+ * auto accepting prompts". A posture he changes per session, mid-work, from
+ * behind two taps is one he does not change. So DROVE-281 spends the width
+ * instead of routing around it — the bolt is a segment of the session capsule
+ * and the capsule takes a row of its own on every phone, which is DROVE-264's
+ * own named remedy: vertical space, which a phone has.
+ *
+ * THE SUBTITLE IS STILL WHERE THE SWITCH IS. It could not follow the control
+ * onto a 39pt segment, so the sheet's row is KEPT rather than deleted: both
+ * drive the same set and cannot disagree, the boundary stays spelled out in
+ * the place it was argued for, and the row is the one-tap path. On the segment
+ * the same sentence is the accessibility hint.
  */
 
 /** Ionicons name for the row. A bolt: it goes through without stopping. */
@@ -43,13 +53,26 @@ export function autoAcceptGlyph(on: boolean): typeof AUTO_ACCEPT_GLYPH | typeof 
 }
 
 /**
+ * What VoiceOver hears on the BOLT, which is the control itself (DROVE-281).
+ *
+ * The sighted carriers are a hue and a fill, and neither reaches a screen
+ * reader, so the state is in the words as well. `accessibilityState.checked`
+ * says it too; this says it in the value so it survives a reader that
+ * announces the value and not the state.
+ */
+export function autoAcceptSegmentValue(on: boolean): string {
+    return on ? 'On' : 'Off';
+}
+
+/**
  * What VoiceOver hears on the padlock.
  *
- * The colour is the sighted carrier and it is the only one on that 39pt
- * control, so the state has to be in the words too — this is the half of
- * "visibly wears it" that does not depend on seeing a hue. Named after the
- * mode so the announcement stays "Permission mode, Yolo, auto-accept on"
- * rather than losing the mode it is qualifying.
+ * KEPT AFTER DROVE-281 MOVED THE COLOUR OFF IT. The padlock no longer carries
+ * the state to the eye, but auto-accept still qualifies what the mode means —
+ * "Yolo, auto-accept on" is a different situation from "Yolo" — and the
+ * announcement costs nothing on a control the reader is already on. Named
+ * after the mode so it stays "Permission mode, Yolo, auto-accept on" rather
+ * than losing the mode it is qualifying.
  */
 export function permissionAccessibilityValue(
     modeValue: string | undefined,

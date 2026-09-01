@@ -279,8 +279,8 @@ export function primaryActionColour(palette: ComposerControlPalette, hasSomethin
 }
 
 /**
- * The padlock's glyph colour, which is the foreground in every permission mode
- * and the accent while AUTO-ACCEPT is on (DROVE-277).
+ * The auto-accept BOLT's glyph colour: the foreground while it is off, the
+ * accent while it is on (DROVE-277, moved off the padlock by DROVE-281).
  *
  * THIS IS THE RULE APPLIED, NOT AN EXCEPTION TO IT, and the distinction is the
  * whole reason it is written here rather than tinted at the call site. The rule
@@ -296,15 +296,28 @@ export function primaryActionColour(palette: ComposerControlPalette, hasSomethin
  * missed is a command running unasked, so if any state on the composer earns a
  * colour it is this one.
  *
+ * IT WAS THE PADLOCK'S COLOUR UNTIL DROVE-281 AND IT IS THE BOLT'S NOW, which
+ * is a move rather than an addition. DROVE-277 had no control to colour: the
+ * switch was a row inside the padlock's sheet, so the padlock was the only
+ * object on the row that could wear the state at all, and tinting it was the
+ * only way the session could visibly wear it. DROVE-281 puts the bolt on the
+ * row as its own segment, so the state now has the control that owns it to sit
+ * on, and the padlock goes back to the foreground in every mode.
+ *
+ * TINTING BOTH WAS THE OTHER OPTION AND IS REFUSED. Two accent glyphs touching
+ * inside one capsule say the same thing twice on the row with the least width
+ * on the phone, and the second one says it about a control that is not the one
+ * you press to change it. One state, one coloured glyph, and it is the glyph
+ * that toggles it.
+ *
  * It reuses `accent`. No new palette entry, no new hue, and
  * `ComposerActiveSignal` does not widen — the three signals are still recording,
- * accent and pending, which is what the spec pins. The mode's own SILHOUETTE is
- * untouched: the padlock, shield, eye and map still say which mode, so the
- * colour adds a state rather than replacing the value, and a reader who cannot
- * see the difference still reads the mode correctly (the sheet and the
- * accessibility value carry auto-accept in words).
+ * accent and pending, which is what the spec pins. The bolt also FILLS when it
+ * is on (`autoAcceptGlyph`), so the state is carried by the silhouette as well
+ * as by the hue and a reader who cannot see the difference still reads it; the
+ * accessibility value carries it in words on top of that.
  */
-export function permissionLockColour(palette: ComposerControlPalette, autoAccept: boolean): string {
+export function autoAcceptColour(palette: ComposerControlPalette, autoAccept: boolean): string {
     return composerGlyphColour(palette, autoAccept ? 'accent' : null);
 }
 
