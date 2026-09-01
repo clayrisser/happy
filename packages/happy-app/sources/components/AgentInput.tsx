@@ -2260,42 +2260,75 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             // it, so the measured box IS the button's box.
             {...micTouch.view}
         >
-            <ComposerControlButton
-                // NO CIRCLE UNLESS OPEN, which is why `fill` is undefined at
-                // rest (DROVE-254, and Clay's standing instruction). A bare
-                // glyph gets no glass button of its own — that would BE the
-                // circle he took off — and it does not need one: it stands on
-                // the bubble's own interactive glass, so the press it draws is
-                // already the platform's. Open, it is a glass button tinted
-                // with the row's recording red (DROVE-266).
-                fill={micSurface === 'recording' ? composerControlPalette(theme.dark).recording : undefined}
+            {/*
+              THE PRESSABLE OUTLIVES THE FACE (DROVE-286).
+
+              The press stream used to be spread on ComposerControlButton
+              itself, and that control swaps COMPONENT TYPE with its fill:
+              BubblePressable bare, GlassChromeButton open. The mic's press-in
+              is exactly what turns its fill red, so the very press that
+              opened the capture unmounted the pressable under the finger, and
+              React Native fires no onPressOut for a press whose responder was
+              unmounted. The opening tap's lift died with the old view, the
+              reducer sat 'held' over a phantom finger, and the CLOSING tap's
+              lift read as a push-to-talk release and sent (Clay: "not if I
+              tap and then talk and then tap again"). The same loss ate a
+              hold's release, which is push-to-talk's one gesture.
+
+              So the gesture lives on this plain Pressable, mounted for the
+              life of the control, and the face below is DECORATION behind
+              `pointerEvents="none"`: it may remount with every fill it likes,
+              and no press event is riding on it when it does. This is
+              DROVE-236's "it cannot flip under a thumb" finished: the face
+              may not DECIDE from the composer, and now it cannot take the
+              gesture down with it either.
+
+              Still no `onPress`: the lift is `onPressOut`, and an `onPress`
+              beside it would fire on the same lift and toggle the latch
+              straight back off (DROVE-269).
+
+              The cost, named: the open disc's own press response (the glass
+              deform, the 0.6 fallback fade) no longer fires, because its
+              pressable never hears the touch. The reducer ticks a haptic on
+              every lift, and at rest the bubble's interactive glass still
+              draws the press, so the closing tap is felt and the resting tap
+              looks as it did.
+            */}
+            <Pressable
+                {...micTouch.press}
                 // 36 reserved plus 6 a side, the same bargain every control on
                 // this row strikes.
                 hitSlop={MOBILE_COMPOSER_METRICS.primaryActionSlop}
-                // No `onPress`. The lift is `onPressOut`, and the reducer
-                // decides from how long the finger was down what that lift
-                // meant; an `onPress` beside it would fire on the same lift and
-                // toggle the latch straight back off (DROVE-269). The glass
-                // button extends PressableProps, so the spread lands on the
-                // real Pressable underneath the material.
-                {...micTouch.press}
                 accessibilityRole="button"
                 accessibilityState={{ busy: props.talkState === 'held', selected: props.talkState === 'latched' }}
                 accessibilityLabel={t(micLive
                     ? 'agentInput.audioOut.micStop'
                     : 'agentInput.audioOut.micStart')}
             >
-                <Ionicons
-                    name="mic"
-                    size={18}
-                    // White on the red disc while it is open, the row's
-                    // foreground while it is not. `micColour` is the one way to
-                    // either, so the glyph and the fill read the same state.
-                    color={micLive
-                        ? composerFillTint(composerControlPalette(theme.dark).recording)
-                        : micColour(composerPalette, 'idle')}
-                />
-            </ComposerControlButton>
+                <View pointerEvents="none" accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+                    <ComposerControlButton
+                        // NO CIRCLE UNLESS OPEN, which is why `fill` is undefined at
+                        // rest (DROVE-254, and Clay's standing instruction). A bare
+                        // glyph gets no glass button of its own — that would BE the
+                        // circle he took off — and it does not need one: it stands on
+                        // the bubble's own interactive glass, so the press it draws is
+                        // already the platform's. Open, it is a glass button tinted
+                        // with the row's recording red (DROVE-266).
+                        fill={micSurface === 'recording' ? composerControlPalette(theme.dark).recording : undefined}
+                    >
+                        <Ionicons
+                            name="mic"
+                            size={18}
+                            // White on the red disc while it is open, the row's
+                            // foreground while it is not. `micColour` is the one way to
+                            // either, so the glyph and the fill read the same state.
+                            color={micLive
+                                ? composerFillTint(composerControlPalette(theme.dark).recording)
+                                : micColour(composerPalette, 'idle')}
+                        />
+                    </ComposerControlButton>
+                </View>
+            </Pressable>
         </View>
     ) : null;
 
