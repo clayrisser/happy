@@ -618,6 +618,43 @@ extension DroverTranscript {
     }
 }
 
+/// What read-aloud is doing on the phone (DROVE-275).
+///
+/// The wrist is the FOURTH surface on one state, not a second copy of it. The
+/// phone resolves reading-or-paused and sends the answer, exactly as it does
+/// for `SessionState` (DROVE-129): the wrist cannot import the reader, and two
+/// implementations of one rule in two languages is two rules.
+///
+/// ABSENT MEANS READ-ALOUD IS OFF. There is no "off" case here on purpose —
+/// the phone omits the whole object — so this enumeration cannot drift out of
+/// step with the native `ReadingState`, which does have one.
+struct DroverReading: Codable, Equatable {
+    /// "reading" or "paused". Pinned against the TypeScript union by
+    /// sources/sync/readingWire.spec.ts.
+    let state: String
+    /// The session the reader is following, when the phone knows it.
+    let sessionId: String?
+
+    static let readingState = "reading"
+    static let pausedState = "paused"
+
+    /// He is holding it. Anything that is not the paused spelling reads as
+    /// reading, because a snapshot is data from another process and a state
+    /// this build has never heard of is still a reader that is running.
+    var isPaused: Bool { state == Self.pausedState }
+
+    /// Whether this session's screen may show the control.
+    ///
+    /// A pause pressed on another session's transcript would stop a voice
+    /// reading something he is not looking at. A snapshot with no `sessionId`
+    /// — an older phone, or a reader following nothing in particular — offers
+    /// the control nowhere rather than everywhere: silently steering the wrong
+    /// session is worse than a button that is not there.
+    func applies(to sessionId: String) -> Bool {
+        self.sessionId == sessionId
+    }
+}
+
 struct DroverSnapshot: Codable, Equatable {
     var gates: [DroverGate]
     /// Stamped by the phone at publish. The wrist's only liveness signal — see
@@ -648,6 +685,10 @@ struct DroverSnapshot: Codable, Equatable {
     /// (DROVE-91). Absent from a phone that predates the key, and from the
     /// background republish, which the store treats as "keep what you have".
     var transcript: DroverTranscript? = nil
+    /// What read-aloud is doing (DROVE-275). Absent when it is off, and absent
+    /// from a phone that predates the key; both mean "no reader here" and the
+    /// wrist shows neither indicator nor control.
+    var reading: DroverReading? = nil
 
     static let empty = DroverSnapshot(gates: [], updatedAt: .distantPast, connected: false)
 
@@ -760,6 +801,7 @@ extension DroverSnapshot {
         accounts = try container.decodeIfPresent([String].self, forKey: .accounts) ?? []
         accountRows = try container.decodeIfPresent([DroverAccount].self, forKey: .accountRows) ?? []
         transcript = try container.decodeIfPresent(DroverTranscript.self, forKey: .transcript)
+        reading = try container.decodeIfPresent(DroverReading.self, forKey: .reading)
     }
 }
 
@@ -929,6 +971,32 @@ struct DroverSpoken: Codable {
         self.kind = "spoken"
         self.id = id
         self.finished = finished
+    }
+}
+
+/// Pause or resume the reading, from the wrist (DROVE-275). Same channel as an
+/// answer, told apart by `kind`. The phone hands it to the one reader every
+/// surface drives, so a pause taken on the wrist is the same pause the lock
+/// screen and the headphones take, holding the same place.
+struct DroverTransport: Codable {
+    /// Always "transport".
+    let kind: String
+    /// "pause" or "resume".
+    ///
+    /// EXPLICIT, NEVER A TOGGLE. The wrist presses off the last snapshot it
+    /// received, which can be a minute old or older with the phone out of
+    /// range, and a toggle sent from a stale screen resumes precisely the
+    /// reading he had just paused. Naming the destination makes a stale press
+    /// a no-op, which is the failure worth having.
+    let action: String
+
+    static let kindValue = "transport"
+    static let pauseAction = "pause"
+    static let resumeAction = "resume"
+
+    init(paused: Bool) {
+        self.kind = Self.kindValue
+        self.action = paused ? Self.pauseAction : Self.resumeAction
     }
 }
 

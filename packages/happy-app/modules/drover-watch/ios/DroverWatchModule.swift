@@ -46,6 +46,10 @@ final class DroverWatchDelegate: NSObject, WCSessionDelegate {
     /// Called when the wrist opened or closed its held-open recorder
     /// (DROVE-130). The audio does NOT come this way; only the control does.
     var onListen: (([String: Any]) -> Void)?
+    /// Called when the wrist pauses or resumes the reading (DROVE-275). The
+    /// action is explicit — "pause" or "resume", never a toggle — because the
+    /// wrist presses off a snapshot that may be a minute old.
+    var onTransport: (([String: Any]) -> Void)?
 
     /// How long the wrist may be kept waiting before it is answered with
     /// whatever this phone last published.
@@ -214,6 +218,19 @@ final class DroverWatchDelegate: NSObject, WCSessionDelegate {
             onSpoken?(["id": id, "finished": payload["finished"] as? Bool ?? false])
             return
         }
+        // Pause or resume the reading, from the wrist (DROVE-275). Above the
+        // answer guard like every other kind, for the same reason: that guard
+        // returns on a missing `allow` and this has none.
+        //
+        // The action travels as it was pressed and nothing is decided here.
+        // JS owns what a press means, exactly as it does for the lock screen
+        // and the headphones (DROVE-233), so the four surfaces cannot come to
+        // disagree about what one press did.
+        if payload["kind"] as? String == "transport" {
+            guard let action = payload["action"] as? String else { return }
+            onTransport?(["action": action])
+            return
+        }
         guard let id = payload["id"] as? String,
               let allow = payload["allow"] as? Bool else { return }
         var event: [String: Any] = ["id": id, "allow": allow]
@@ -264,7 +281,7 @@ public final class DroverWatchModule: Module {
 
         Events(
             "onAnswer", "onFlip", "onRefresh", "onOpened", "onSay", "onRoute", "onSpoken",
-            "onListen"
+            "onListen", "onTransport"
         )
 
         OnCreate {
@@ -283,6 +300,9 @@ public final class DroverWatchModule: Module {
             }
             self.watchDelegate.onListen = { [weak self] event in
                 self?.sendEvent("onListen", event)
+            }
+            self.watchDelegate.onTransport = { [weak self] event in
+                self?.sendEvent("onTransport", event)
             }
             self.watchDelegate.onSay = { [weak self] event in
                 self?.sendEvent("onSay", event)

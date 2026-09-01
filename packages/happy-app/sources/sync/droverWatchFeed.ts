@@ -51,6 +51,7 @@ import {
     addDroverListenListener,
     addDroverSayListener,
     addDroverSpokenListener,
+    addDroverTransportListener,
     sendDroverWatchVoice,
     describeDroverWakeBudget,
     getDroverWatchStatus,
@@ -62,6 +63,7 @@ import {
     type DroverGate,
     type DroverSession,
     type DroverTranscript,
+    type DroverReading,
 } from 'drover-watch';
 import { publishDroverWidgetFace, resetDroverWidgetMemory } from './droverWidgetPublish';
 import { buildWristRows, createWristCoalescer, rowKey, transcriptDelta } from './droverWatchTranscript';
@@ -388,6 +390,43 @@ function sameSessionSet(a: DroverSession[], b: DroverSession[]): boolean {
     return b.every((s) => keys.has(key(s)));
 }
 
+/**
+ * What read-aloud is doing, for the wrist (DROVE-275).
+ *
+ * Null when it is off, which is what keeps the key off the snapshot entirely
+ * rather than sending an "off" the watch would have to know a third spelling
+ * for.
+ *
+ * READ OFF THE READER, never off the settings toggle. That is the same call
+ * DROVE-233 made for the lock screen's playback rate and for the same reason:
+ * the toggle says what he asked for and the reader says what is happening, and
+ * a wrist showing the toggle would say "Reading" through a pause.
+ */
+export function collectReading(): DroverReading | null {
+    if (!readAloud.isEnabled) return null;
+    const sessionId = readAloud.focusedSessionId;
+    return {
+        state: readAloud.isPaused ? 'paused' : 'reading',
+        // Spread rather than set to null: one NSNull fails the whole publish
+        // with WCErrorCodePayloadUnsupportedTypes.
+        ...(sessionId ? { sessionId } : {}),
+    };
+}
+
+/**
+ * Whether the reading is where the last publish left it.
+ *
+ * In the change guard because a pause moves NOTHING else about a snapshot: the
+ * gates, the sessions and the account rows are all identical either side of
+ * it, so a publish keyed on those three alone would drop it and the wrist
+ * would sit on "Reading" until something unrelated happened. That is the exact
+ * shape of the bug DROVE-131 fixed for the binding limit.
+ */
+function sameReading(a: DroverReading | null, b: DroverReading | null): boolean {
+    if (a === null || b === null) return a === b;
+    return a.state === b.state && (a.sessionId ?? '') === (b.sessionId ?? '');
+}
+
 function sameAccountRows(a: DroverAccountRow[], b: DroverAccountRow[]): boolean {
     if (a.length !== b.length) return false;
     // The binding limit and which account is current are in the key because
@@ -430,6 +469,7 @@ let started = false;
 let lastGates: DroverGate[] = [];
 let lastSessions: DroverSession[] = [];
 let lastAccountRows: DroverAccountRow[] = [];
+let lastReading: DroverReading | null = null;
 /**
  * The first publish of a run has nothing to compare against, so every gate in
  * it reads as new. Waking for that would spend the budget on a wall of work
@@ -488,6 +528,7 @@ export function startDroverWatchFeed(): () => void {
         const gates = collectGates();
         const sessions = collectSessions();
         const accountRows = collectAccountRows(storage.getState().sessions ?? {});
+        const reading = collectReading();
         // Only publish on a real change: updateApplicationContext throttles,
         // and a redundant write can displace a fresh one. A flip changes the
         // SESSION set and not the gate set, so both are compared — checking
@@ -501,6 +542,9 @@ export function startDroverWatchFeed(): () => void {
             // what the flip picker orders on — so a picker fed only by the
             // other two comparisons offers yesterday's ranking.
             && sameAccountRows(accountRows, lastAccountRows)
+            // A pause moves nothing else, so without this the wrist keeps
+            // yesterday's answer (DROVE-275).
+            && sameReading(reading, lastReading)
         ) return;
         // Computed against the PREVIOUS sets, so it has to happen before they
         // are replaced below (DROVE-62).
@@ -537,6 +581,7 @@ export function startDroverWatchFeed(): () => void {
         lastGates = gates;
         lastSessions = sessions;
         lastAccountRows = accountRows;
+        lastReading = reading;
         publishedOnce = true;
         const status = getDroverWatchStatus();
         const snapshot = {
@@ -554,6 +599,12 @@ export function startDroverWatchFeed(): () => void {
             // rationed below, and republishing the whole context per token is
             // what that rationing exists to avoid.
             ...(lastTranscript ? { transcript: lastTranscript } : {}),
+            // What the reader is doing, so the wrist can show it and press it
+            // (DROVE-275). Omitted with read-aloud off, and it is a handful of
+            // bytes when it is there: the sentence stays off the wire, because
+            // every snapshot rides `sendMessage` to a reachable watch and that
+            // wire is capped near 64KB (droverWatchTranscript.spec.ts).
+            ...(reading ? { reading } : {}),
             updatedAt: new Date().toISOString(),
             // "connected" is WatchConnectivity pairing state and nothing more:
             // this phone is activated, a watch is paired, and it has the app.
@@ -838,6 +889,32 @@ export function startDroverWatchFeed(): () => void {
     // The wrist's audio route, and the wrist finishing a sentence the phone
     // sent it (DROVE-92). Both are facts the voice side owns; the feed only
     // carries them off the wire.
+    // Pause or resume from the WRIST (DROVE-275).
+    //
+    // It reaches the one reader every other surface drives, so the pause taken
+    // here is the pause the lock screen and the headphones take, holding the
+    // same place. Explicit rather than a toggle, and unknown actions are
+    // dropped: the wrist presses off a snapshot that may be a minute old, and
+    // a toggle from a stale screen would resume exactly what he just paused.
+    //
+    // `setPaused(false)` on a reader that is OFF does nothing at all, which is
+    // DROVE-189's rule and the reason this cannot turn the voice back on for a
+    // session he walked away from.
+    const transport = addDroverTransportListener((event) => {
+        if (event.action !== 'pause' && event.action !== 'resume') return;
+        try {
+            readAloud.setPaused(event.action === 'pause');
+        } catch {
+            // A dead wrist button is better than a dead reader.
+        }
+    });
+
+    // And a pause taken ANYWHERE republishes at once, so the wrist redraws off
+    // the press rather than off the next heartbeat up to a minute later. The
+    // change guard is what makes this cheap: an unchanged reading still stops
+    // at the top of `push`.
+    const readingChanged = readAloud.addTransportListener(() => { push(); });
+
     const routes = addDroverRouteListener((event) => setWatchRoute(!!event.headphones));
     const spoken = addDroverSpokenListener((event) => {
         if (event.id) settleWatchUtterance(event.id, !!event.finished);
@@ -882,6 +959,9 @@ export function startDroverWatchFeed(): () => void {
         if (wrist.openCapture) wrist.discard(wrist.openCapture);
         routes.remove();
         spoken.remove();
+        transport.remove();
+        readingChanged();
+        lastReading = null;
         coalescer.stop();
         watchedSessionId = null;
         lastTranscript = null;

@@ -30,6 +30,75 @@ struct SharedWireTests {
         return dict
     }
 
+    // MARK: DROVE-275, the reading on the wrist
+
+    /// What read-aloud is doing, off a real phone payload.
+    static func theReadingSurvivesTheWire() {
+        let payload = """
+        {"gates":[],"updatedAt":"2026-09-01T01:00:00Z","connected":true,
+        "reading":{"state":"paused","sessionId":"s1"}}
+        """
+        guard let snapshot = try? DroverSnapshot.decoder.decode(
+            DroverSnapshot.self, from: Data(payload.utf8)
+        ) else {
+            check(false, "a snapshot carrying the reading decodes")
+            return
+        }
+        check(snapshot.reading?.state == "paused", "the reading state comes across")
+        check(snapshot.reading?.sessionId == "s1", "the session being read comes across")
+        check(snapshot.reading?.isPaused == true, "paused reads as held")
+    }
+
+    /// READ-ALOUD OFF IS THE KEY BEING ABSENT, and a snapshot without it has
+    /// to decode WHOLE. Synthesized decoding ignores a property's default — a
+    /// missing key throws — which is the bug the hand-written decoder exists
+    /// for, and every new optional key is a fresh chance to reintroduce it.
+    static func aSnapshotWithoutAReadingStillDecodes() {
+        let payload = """
+        {"gates":[],"updatedAt":"2026-09-01T01:00:00Z","connected":true}
+        """
+        guard let snapshot = try? DroverSnapshot.decoder.decode(
+            DroverSnapshot.self, from: Data(payload.utf8)
+        ) else {
+            check(false, "a snapshot with no reading decodes")
+            return
+        }
+        check(snapshot.reading == nil, "no reading key means no reader, not a failed decode")
+    }
+
+    /// A state this build has never heard of came off a NEWER phone, and a
+    /// newer phone with a reader running is a reader that is running. Drawing
+    /// it as paused would put a Resume button over a voice that is talking.
+    static func anUnknownReadingStateIsStillAReaderThatIsRunning() {
+        let reading = DroverReading(state: "buffering", sessionId: "s1")
+        check(!reading.isPaused, "an unknown state is not treated as paused")
+    }
+
+    /// The control is offered on the session being READ and nowhere else. A
+    /// pause pressed on another session's transcript would stop a voice
+    /// reading something he is not looking at.
+    static func theControlBelongsToTheSessionBeingRead() {
+        let following = DroverReading(state: "reading", sessionId: "s1")
+        check(following.applies(to: "s1"), "the read session gets the control")
+        check(!following.applies(to: "s2"), "another session does not")
+        // An older phone sends no session at all. Offering the control
+        // everywhere would steer a reading he never pointed at.
+        let anywhere = DroverReading(state: "reading", sessionId: nil)
+        check(!anywhere.applies(to: "s1"), "a reading with no session offers the control nowhere")
+    }
+
+    /// The press the wrist sends: the kind the phone dispatches on, and a
+    /// DESTINATION rather than a toggle, because the wrist presses off a
+    /// snapshot that may be a minute old.
+    static func aTransportPressCarriesItsKindAndADestination() {
+        let pause = json(DroverTransport(paused: true))
+        check(pause["kind"] as? String == "transport", "a transport press carries its kind")
+        check(pause["action"] as? String == "pause", "a pause names pause")
+        let resume = json(DroverTransport(paused: false))
+        check(resume["action"] as? String == "resume", "a resume names resume")
+        check(pause["allow"] == nil, "a transport press carries no allow to be mistaken for an answer")
+    }
+
     /// The open session's rows (DROVE-91): four kinds, the streaming mark,
     /// and the gate link, all through the same ISO-8601 decoder as the rest.
     static func aTranscriptSurvivesTheWire() {
@@ -207,6 +276,11 @@ struct SharedWireTests {
         aDeltaForAnotherSessionReplacesTheTranscript()
         aRowTheWristNeverGotIsReportedMissing()
         anOpenedMessageCarriesItsKind()
+        theReadingSurvivesTheWire()
+        aSnapshotWithoutAReadingStillDecodes()
+        anUnknownReadingStateIsStillAReaderThatIsRunning()
+        theControlBelongsToTheSessionBeingRead()
+        aTransportPressCarriesItsKindAndADestination()
         everyDemoFixtureIsADemo()
         theDemoFixturesCoverEveryShapeTheWristDraws()
         theDemoPlaysEveryCueLoudestFirst()

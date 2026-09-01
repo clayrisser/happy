@@ -30,6 +30,14 @@ const mocks = vi.hoisted(() => ({
     onSay: null as ((event: { sessionId: string; text: string }) => void) | null,
     onRoute: null as ((event: { headphones: boolean }) => void) | null,
     onSpoken: null as ((event: { id: string; finished: boolean }) => void) | null,
+    /** The wrist pausing or resuming the reading (DROVE-275). */
+    onTransport: null as ((event: { action: string }) => void) | null,
+    /** What the READER says it is doing, which is what the wrist is shown. */
+    reading: { enabled: false, paused: false, focused: null as string | null },
+    /** Pauses and resumes the wrist asked the reader for. */
+    paused: [] as boolean[],
+    /** The feed's own subscription to the reader, so a pause can be raised. */
+    onReadingChanged: null as (() => void) | null,
     /** The wrist's held-open recorder (DROVE-130). */
     onListen: null as
         ((event: { sessionId: string; capture: string; state: string }) => void) | null,
@@ -97,6 +105,17 @@ vi.mock('@/voice/readAloudService', () => ({
         // Sending stops the capture and leaves the narration running
         // (DROVE-122), so the wrist goes through userSent like the composer.
         userSent: () => mocks.interrupted.push('sent'),
+        // The three the wrist reads and the two it drives (DROVE-275). Getters
+        // rather than fields, because the feed reads them at every publish and
+        // a test that flips one is imitating a pause, not rebuilding the mock.
+        get isEnabled() { return mocks.reading.enabled; },
+        get isPaused() { return mocks.reading.paused; },
+        get focusedSessionId() { return mocks.reading.focused; },
+        setPaused: (paused: boolean) => { mocks.paused.push(paused); },
+        addTransportListener: (listener: () => void) => {
+            mocks.onReadingChanged = listener;
+            return () => { mocks.onReadingChanged = null; };
+        },
     },
 }));
 vi.mock('@/voice/watchSpeaker', () => ({
@@ -180,6 +199,10 @@ vi.mock('drover-watch', () => ({
     addDroverSpokenListener: (listener: typeof mocks.onSpoken) => {
         mocks.onSpoken = listener;
         return { remove: () => { mocks.onSpoken = null; } };
+    },
+    addDroverTransportListener: (listener: typeof mocks.onTransport) => {
+        mocks.onTransport = listener;
+        return { remove: () => { mocks.onTransport = null; } };
     },
     sendDroverTranscript: (delta: DroverTranscriptDelta) => {
         if (!mocks.reachable) return Promise.resolve(false);
@@ -314,6 +337,10 @@ beforeEach(() => {
     mocks.onSay = null;
     mocks.onRoute = null;
     mocks.onSpoken = null;
+    mocks.onTransport = null;
+    mocks.onReadingChanged = null;
+    mocks.reading = { enabled: false, paused: false, focused: null };
+    mocks.paused = [];
     mocks.onListen = null;
     mocks.onDictationPartial = null;
     mocks.onDictationEnded = null;
@@ -1932,5 +1959,125 @@ describe('the open session\'s transcript (DROVE-91)', () => {
         expect(mocks.transcripts).toHaveLength(1);
         mocks.onRefresh!();
         expect(mocks.published[mocks.published.length - 1].transcript).toBeUndefined();
+    });
+});
+
+/**
+ * The player's wrist half (DROVE-275).
+ *
+ * Clay: "getting it to stream you know kind of like a live playing video or
+ * something like that where I can play and pause now I've told you this many
+ * times in the past". The lock screen, the headphones and the in-app control
+ * have shared one reader state since DROVE-233; the wrist had NEITHER half —
+ * no reading state on the snapshot and no transport handler in either
+ * direction — so the one surface actually on him while the phone is in a
+ * pocket could not tell him it was reading, let alone stop it.
+ *
+ * These drive the FEED, not the reader: what goes on the wire, when a publish
+ * happens, and what a press off the wrist reaches. The reader's own pause
+ * behaviour is readAloudPause.spec.ts's, and duplicating it here would be a
+ * second definition of what a pause is.
+ */
+describe('the reading, on the wrist (DROVE-275)', () => {
+    it('says nothing at all while read-aloud is off', () => {
+        mocks.sessions = { s1: session({ path: '/a' }) };
+        start();
+        expect(mocks.published.at(-1)!.reading).toBeUndefined();
+    });
+
+    it('carries reading and the session it is following', () => {
+        mocks.sessions = { s1: session({ path: '/a' }) };
+        mocks.reading = { enabled: true, paused: false, focused: 's1' };
+        start();
+        expect(mocks.published.at(-1)!.reading).toEqual({ state: 'reading', sessionId: 's1' });
+    });
+
+    it('carries paused, which is what puts the resume glyph on the wrist', () => {
+        mocks.sessions = { s1: session({ path: '/a' }) };
+        mocks.reading = { enabled: true, paused: true, focused: 's1' };
+        start();
+        expect(mocks.published.at(-1)!.reading).toEqual({ state: 'paused', sessionId: 's1' });
+    });
+
+    // One NSNull fails the WHOLE publish with
+    // WCErrorCodePayloadUnsupportedTypes, so a reader following nothing omits
+    // the key rather than sending a null through it.
+    it('omits the session rather than sending a null when the reader follows none', () => {
+        mocks.sessions = { s1: session({ path: '/a' }) };
+        mocks.reading = { enabled: true, paused: false, focused: null };
+        start();
+        const reading = mocks.published.at(-1)!.reading!;
+        expect(reading).toEqual({ state: 'reading' });
+        expect('sessionId' in reading).toBe(false);
+    });
+
+    // THE ONE THAT WOULD HAVE SHIPPED BROKEN. A pause moves nothing else about
+    // a snapshot — same gates, same sessions, same account rows — so the
+    // change guard would have dropped the publish and the wrist would have sat
+    // on "Reading" until something unrelated happened, up to a heartbeat away.
+    it('publishes on a pause, which changes nothing else about a snapshot', () => {
+        mocks.sessions = { s1: session({ path: '/a' }) };
+        mocks.reading = { enabled: true, paused: false, focused: 's1' };
+        start();
+        const before = mocks.published.length;
+        mocks.reading = { enabled: true, paused: true, focused: 's1' };
+        mocks.onReadingChanged!();
+        expect(mocks.published.length).toBe(before + 1);
+        expect(mocks.published.at(-1)!.reading).toEqual({ state: 'paused', sessionId: 's1' });
+    });
+
+    it('does not publish again when the reading has not moved', () => {
+        mocks.sessions = { s1: session({ path: '/a' }) };
+        mocks.reading = { enabled: true, paused: false, focused: 's1' };
+        start();
+        const before = mocks.published.length;
+        mocks.onReadingChanged!();
+        expect(mocks.published.length).toBe(before);
+    });
+
+    it('drops the key when read-aloud goes off, so the wrist loses the control', () => {
+        mocks.sessions = { s1: session({ path: '/a' }) };
+        mocks.reading = { enabled: true, paused: false, focused: 's1' };
+        start();
+        mocks.reading = { enabled: false, paused: false, focused: null };
+        mocks.onReadingChanged!();
+        expect(mocks.published.at(-1)!.reading).toBeUndefined();
+    });
+
+    it('takes a pause pressed on the wrist to the one reader every surface drives', () => {
+        start();
+        mocks.onTransport!({ action: 'pause' });
+        mocks.onTransport!({ action: 'resume' });
+        expect(mocks.paused).toEqual([true, false]);
+    });
+
+    // Explicit, never a toggle: the wrist presses off a snapshot that can be a
+    // minute old, and a toggle from a stale screen resumes precisely the
+    // reading he had just paused. An action this build does not know is a
+    // press from a newer watch binary, and doing nothing is the right answer.
+    it('drops an action it does not know rather than guessing at a toggle', () => {
+        start();
+        mocks.onTransport!({ action: 'toggle' });
+        mocks.onTransport!({ action: '' });
+        expect(mocks.paused).toEqual([]);
+    });
+
+    // The reading is a few dozen bytes on a wire capped near 64KB, and it
+    // stays that way only while the SENTENCE is not on it: the wrist draws the
+    // transcript already, and a copy of the sentence in flight would be a
+    // second and slower one riding every publish.
+    it('weighs almost nothing, because the sentence stays off the wire', () => {
+        mocks.sessions = { s1: session({ path: '/a' }) };
+        mocks.reading = {
+            enabled: true,
+            paused: false,
+            focused: '3f7c1a52-9d84-4b1e-8f0a-6c2d5e9b71a4',
+        };
+        start();
+        const bytes = Buffer.byteLength(
+            JSON.stringify(mocks.published.at(-1)!.reading),
+            'utf8',
+        );
+        expect(bytes).toBeLessThan(128);
     });
 });

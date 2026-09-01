@@ -525,6 +525,31 @@ final class GateStore: NSObject, ObservableObject {
         addToDraft(session, heard: words)
     }
 
+    /// Pause or resume the phone's reading, from the wrist (DROVE-275).
+    ///
+    /// The wrist is the fourth surface on the ONE state the reader holds
+    /// (DROVE-233), so nothing is decided or mirrored here: the phone applies
+    /// the press and republishes, and the button redraws off the snapshot. An
+    /// optimistic local flip would be a fifth copy of the state, and the one
+    /// that is wrong whenever the press does not land.
+    ///
+    /// SAID OUT LOUD WHEN IT CANNOT GO. `sendMessage` needs a reachable phone
+    /// and there is no queue worth having for this — a pause delivered when
+    /// the pair reconnects would stop a reading he started since. So an
+    /// unreachable press writes `lastError`, which this screen already shows,
+    /// rather than looking exactly like a press that worked.
+    func setReadingPaused(_ paused: Bool) {
+        guard let session, session.activationState == .activated, session.isReachable else {
+            lastError = "The phone is out of reach, so the reading was not \(paused ? "paused" : "resumed")"
+            return
+        }
+        guard let payload = try? JSONEncoder().encode(DroverTransport(paused: paused)),
+              let dict = try? JSONSerialization.jsonObject(with: payload) as? [String: Any] else { return }
+        lastError = nil
+        droverLog.notice("reading transport \(paused ? "pause" : "resume", privacy: .public)")
+        session.sendMessage(dict, replyHandler: nil, errorHandler: nil)
+    }
+
     private func tellPhone(_ sessionId: String, _ capture: String, _ state: String) {
         guard let session, session.activationState == .activated, session.isReachable else { return }
         guard let payload = try? JSONEncoder().encode(

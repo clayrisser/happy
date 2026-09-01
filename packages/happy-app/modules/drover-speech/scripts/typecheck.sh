@@ -14,6 +14,11 @@
 # the module still registers with Expo. It tells you the file compiles, which
 # is the failure that actually kept happening.
 #
+# ANY MODULE SOURCE, not only this one (DROVE-275). DroverWatchModule.swift had
+# the same nothing, and the wrist half of the player is written in it, so the
+# arguments are the files to check and this module's own is the default. The
+# wrapper at modules/drover-watch/scripts/typecheck.sh is the second caller.
+#
 # HOW IT FINDS ExpoModulesCore. The module imports it, so the check needs the
 # compiled `.swiftmodule` plus the Clang headers behind it. Both are dropped by
 # any real build of the app, so this reuses the newest DerivedData for
@@ -63,6 +68,12 @@ for d in "$pods"/Headers/Public/*/; do
 	incs="$incs -Xcc -I$d"
 done
 
+# The files to check. This module's own source unless the caller named others,
+# so `sh typecheck.sh` still means what it always meant.
+if [ "$#" -eq 0 ]; then
+	set -- "$root/ios/DroverSpeechModule.swift"
+fi
+
 # shellcheck disable=SC2086
 swiftc -typecheck -sdk "$sdk" -target arm64-apple-ios15.1 \
 	-I "$products" \
@@ -70,7 +81,7 @@ swiftc -typecheck -sdk "$sdk" -target arm64-apple-ios15.1 \
 	-Xcc -I"$products" \
 	-Xcc -I"$pods/Headers/Public" \
 	$incs \
-	"$root/ios/DroverSpeechModule.swift" 2>&1 |
+	"$@" 2>&1 |
 	grep -v '^ *[0-9]* |' |
 	grep -v "warning: umbrella header" |
 	grep -v '^ *| ' |
@@ -84,9 +95,11 @@ if swiftc -typecheck -sdk "$sdk" -target arm64-apple-ios15.1 \
 	-Xcc -I"$products" \
 	-Xcc -I"$pods/Headers/Public" \
 	$incs \
-	"$root/ios/DroverSpeechModule.swift" >/dev/null 2>&1; then
-	echo "ok: DroverSpeechModule typechecks against $(basename "$sdk")"
+	"$@" >/dev/null 2>&1; then
+	for f in "$@"; do
+		echo "ok: $(basename "$f" .swift) typechecks against $(basename "$sdk")"
+	done
 else
-	echo "FAIL: DroverSpeechModule does not typecheck"
+	echo "FAIL: $* does not typecheck"
 	exit 1
 fi

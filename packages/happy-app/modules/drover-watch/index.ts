@@ -326,6 +326,41 @@ export interface DroverTranscriptDelta {
     updatedAt: string;
 }
 
+/**
+ * What read-aloud is doing, for the wrist (DROVE-275).
+ *
+ * The wrist was the one surface with NO half of the player on it: no reading
+ * state on the wire and no transport handler in either direction. The lock
+ * screen, the headphones and the in-app control have shared one state since
+ * DROVE-233, and this is the fourth reader of it rather than a second copy.
+ *
+ * OMITTED WHEN READ-ALOUD IS OFF, never sent as a false or as an 'off' string.
+ * That is the rule every optional key on this wire follows, and it is what
+ * lets a watch binary that predates the key behave exactly as it does today:
+ * no field, no indicator, no control.
+ *
+ * THE SENTENCE IS NOT ON THE WIRE, deliberately. The wrist already draws the
+ * transcript, so a copy of the sentence in flight would be a second and slower
+ * one — and a snapshot rides `sendMessage` whenever the watch is reachable,
+ * which WatchConnectivity caps near 64KB (pinned by droverWatchTranscript.spec
+ * .ts). This carries the state and the session, which is a few dozen bytes.
+ */
+export interface DroverReading {
+    /**
+     * 'reading' or 'paused'. Off is this whole object being absent, so there
+     * is no third spelling here to keep in step with the native ReadingState.
+     */
+    state: 'reading' | 'paused';
+    /**
+     * The session the reader is following. The wrist offers the control on
+     * that session's screen and nowhere else: a pause pressed on another
+     * session's transcript would stop a voice reading something he is not
+     * looking at, which is the same guard the phone's sentence tap has
+     * (readAloudTap.ts `steers`).
+     */
+    sessionId?: string;
+}
+
 export interface DroverSnapshot {
     gates: DroverGate[];
     /**
@@ -365,6 +400,12 @@ export interface DroverSnapshot {
      * predates the key; the watch treats both as "nothing to show yet".
      */
     transcript?: DroverTranscript;
+    /**
+     * What read-aloud is doing (DROVE-275). Absent when it is off, and absent
+     * from a phone that predates the key; the wrist reads both as "no reader
+     * here", which is what it did before this existed.
+     */
+    reading?: DroverReading;
 }
 
 /**
@@ -451,6 +492,26 @@ export interface DroverSpokenEvent {
 }
 
 /**
+ * The wrist pressing pause or resume on the reading (DROVE-275).
+ *
+ * EXPLICIT, NEVER A TOGGLE. The wrist draws from the last snapshot it was
+ * given, and a snapshot can be a minute old — the phone publishes on change
+ * and heartbeats every 60s, and neither reaches a watch that is out of range.
+ * A toggle sent off a stale screen resumes exactly the reading he had just
+ * paused. Naming the destination makes a stale press a no-op instead, which
+ * is the failure worth having.
+ *
+ * IT NEVER TURNS READ-ALOUD ON. DROVE-189's rule, kept verbatim for a fourth
+ * surface: "a squeeze that turned the voice back on for a session he had
+ * walked away from would be a surprise, and the button is one tap away".
+ * `resume` lifts a pause and does nothing else.
+ */
+export interface DroverTransportEvent {
+    /** 'pause' or 'resume'. */
+    action: string;
+}
+
+/**
  * What the phone sends a reachable watch by `sendMessage` for the voice half
  * (DROVE-92): a sentence to speak with an id to acknowledge, a stop, or the
  * reply-start cue that buzzes the wrist whichever device speaks.
@@ -514,6 +575,7 @@ type DroverWatchModuleType = {
         (eventName: 'onRoute', listener: (event: DroverRouteEvent) => void): EventSubscription;
         (eventName: 'onSpoken', listener: (event: DroverSpokenEvent) => void): EventSubscription;
         (eventName: 'onListen', listener: (event: DroverListenEvent) => void): EventSubscription;
+        (eventName: 'onTransport', listener: (event: DroverTransportEvent) => void): EventSubscription;
     };
 };
 
@@ -735,6 +797,21 @@ export function addDroverSpokenListener(listener: (event: DroverSpokenEvent) => 
     if (!native) return { remove: () => {} };
     try {
         return native.addListener('onSpoken', listener);
+    } catch {
+        return { remove: () => {} };
+    }
+}
+
+/**
+ * The wrist pausing or resuming the reading (DROVE-275). Same guard as the
+ * rest: this file ships OTA and the native binary does not, so a build older
+ * than the event must not throw on subscribing — it simply never fires, and a
+ * watch that old has no control to fire it with.
+ */
+export function addDroverTransportListener(listener: (event: DroverTransportEvent) => void) {
+    if (!native) return { remove: () => {} };
+    try {
+        return native.addListener('onTransport', listener);
     } catch {
         return { remove: () => {} };
     }

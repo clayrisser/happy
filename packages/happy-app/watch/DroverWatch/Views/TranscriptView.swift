@@ -74,6 +74,11 @@ struct TranscriptView: View {
                         // the anchor, so it is the last thing on screen and
                         // the auto-scroll lands on it (DROVE-130).
                         WristHearingBar()
+                        // And what the READING is doing, beside what the
+                        // microphone is doing (DROVE-275). Same place for the
+                        // same reason: it is state the wrist has to be able
+                        // to see without opening anything.
+                        WristReadingBar(session: session)
                         WristDraftBar(session: session)
                         // A zero-height anchor under everything, so scrolling
                         // "to the bottom" is one id whatever the last row is.
@@ -124,6 +129,13 @@ struct TranscriptView: View {
             // gesture.
             ToolbarItem(placement: .bottomBar) {
                 WristMicButton(session: session)
+            }
+            // And pause the reading from the wrist (DROVE-275). Beside the
+            // mic rather than in the scroll view because a transport control
+            // has to be reachable without finding it: this is the surface he
+            // reaches for with a phone in a pocket.
+            ToolbarItem(placement: .bottomBar) {
+                WristReadingButton(session: session)
             }
         }
         .onAppear { store.watchTranscript(of: session.id) }
@@ -211,6 +223,70 @@ struct WristMicButton: View {
             .font(.caption)
         }
         .tint(store.listening ? .red : .green)
+    }
+}
+
+/// Pause and resume the phone's reading, from the wrist (DROVE-275).
+///
+/// Clay: "getting it to stream you know kind of like a live playing video or
+/// something like that where I can play and pause". The lock screen and the
+/// headphones have had this since DROVE-233; the wrist had no half of it at
+/// all — no state on the wire, no handler in either direction — and a wrist
+/// is the surface actually on him while the phone is in a pocket.
+///
+/// PRESENT ONLY WHILE THE READER IS ON, AND ONLY ON ITS SESSION. Read-aloud
+/// off means no `reading` on the snapshot and therefore no button, which is
+/// the same rule as the lock screen's card (`setReadingState`), and it is
+/// what keeps this from being a control that does nothing. It never turns
+/// read-aloud ON either: DROVE-189 settled that a press from a pocket must
+/// not start a voice for a session he walked away from.
+///
+/// UNTINTED, deliberately. WristPalette keeps exactly two signal colours and
+/// says a third is a decision; the glyph itself is the state, which is what a
+/// transport control does everywhere else on the phone.
+struct WristReadingButton: View {
+    let session: DroverSession
+    @EnvironmentObject private var store: GateStore
+
+    var body: some View {
+        if let reading = store.snapshot.reading, reading.applies(to: session.id) {
+            Button {
+                store.setReadingPaused(!reading.isPaused)
+            } label: {
+                Label(
+                    reading.isPaused ? "Resume" : "Pause",
+                    systemImage: reading.isPaused ? "play.fill" : "pause.fill"
+                )
+                .font(.caption)
+            }
+        }
+    }
+}
+
+/// Whether the phone is reading this session out loud, and whether it is held
+/// (DROVE-275).
+///
+/// The button above says which press is OFFERED, which is not the same as
+/// saying what is happening — "Resume" and a reader that is off look identical
+/// if the button is the only evidence. This is the evidence. It is the same
+/// argument WristHearingBar makes for the microphone and it sits next to it.
+struct WristReadingBar: View {
+    let session: DroverSession
+    @EnvironmentObject private var store: GateStore
+
+    var body: some View {
+        if let reading = store.snapshot.reading, reading.applies(to: session.id) {
+            HStack(spacing: 4) {
+                Image(systemName: reading.isPaused ? "pause.fill" : "waveform")
+                    .font(.system(size: 9))
+                Text(reading.isPaused ? "Paused" : "Reading")
+                    .font(.system(size: 9, weight: .semibold))
+                Spacer(minLength: 4)
+            }
+            .foregroundStyle(reading.isPaused ? .secondary : .primary)
+            .padding(6)
+            .background(Color.secondary.opacity(0.15), in: RoundedRectangle(cornerRadius: 8))
+        }
     }
 }
 
