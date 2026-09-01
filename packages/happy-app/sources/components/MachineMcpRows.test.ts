@@ -71,7 +71,7 @@ const now = readAt + 5_000;
 function render(props: Record<string, unknown>) {
     let tree: { root: { findAllByType: (t: string) => { props: Record<string, unknown> }[] } };
     act(() => {
-        tree = create(React.createElement(MachineMcpRows, { readAt, now, expanded: false, onToggle: () => {}, ...props } as never));
+        tree = create(React.createElement(MachineMcpRows, { readAt, now, expanded: false, onToggle: () => {}, onToggleProviders: () => {}, ...props } as never));
     });
     return tree!;
 }
@@ -301,6 +301,121 @@ describe('nothing here is editable, because that was deferred', () => {
         expect(row.showChevron).toBe(false);
         (row.onPress as () => void)();
         expect(toggled).toBe(1);
+    });
+});
+
+describe('the model providers, which is what Clay runs OpenCode FOR (DROVE-296)', () => {
+    const model = (id: string, name = id) => ({ id, name });
+    const provider = (id: string, origin: string, models: ReturnType<typeof model>[]) =>
+        ({ id, name: id, origin, models, modelCount: models.length });
+    const providerReport = (over: Record<string, unknown> = {}) => ({
+        asked: 'opencode models',
+        config: '~/.config/opencode/opencode.jsonc',
+        configMissing: false,
+        configError: null,
+        missing: false,
+        error: null,
+        providers: [
+            provider('google', 'listed', [model('gemini-3.1-pro-preview'), model('gemini-2.5-pro')]),
+            provider('lmstudio', 'listed', [model('qwen/qwen3-coder-30b')]),
+        ],
+        count: 2,
+        modelCount: 3,
+        ...over,
+    });
+    const oc = (over: Record<string, unknown> = {}) => harness({
+        harness: 'opencode',
+        label: 'OpenCode',
+        perAccount: false,
+        scopes: [scope('global', [server('huly')], { source: '~/.config/opencode/opencode.jsonc' })],
+        count: 1,
+        providers: providerReport(),
+        ...over,
+    });
+
+    it('draws nothing at all for a harness that has no provider list', () => {
+        // Claude Code, Cursor and Codex each reach one vendor through one
+        // login. A "None configured" row under them would be inventing a
+        // setting that does not exist.
+        const tree = render({ harness: harness() });
+        expect(titles(tree)).not.toContain('Model providers');
+    });
+
+    it('shows the counts collapsed, because 141 model ids is not a summary', () => {
+        const tree = render({ harness: oc() });
+        const row = items(tree).find((p) => p.title === 'Model providers')!;
+        expect(row.subtitle).toBe('2 providers, 3 models');
+        expect(titles(tree)).not.toContain('gemini-3.1-pro-preview');
+    });
+
+    it('is its own disclosure, so opening the models does not unfold the servers', () => {
+        const tree = render({ harness: oc(), expanded: false, providersExpanded: true });
+        // The servers stayed shut.
+        expect(titles(tree)).not.toContain('huly');
+        expect(titles(tree)).toContain('gemini-3.1-pro-preview');
+    });
+
+    it('names every model in the spelling OpenCode itself takes', () => {
+        const tree = render({ harness: oc(), providersExpanded: true });
+        const row = items(tree).find((p) => p.title === 'qwen/qwen3-coder-30b')!;
+        // The provider/model pair, whole. A prettified label is how DROVE-253
+        // ended up with a model id that did not exist.
+        expect(row.subtitle).toBe('lmstudio/qwen/qwen3-coder-30b');
+    });
+
+    it('calls out a provider the harness did not list, because a pick on it dies at exec', () => {
+        const tree = render({
+            harness: oc({
+                providers: providerReport({
+                    providers: [provider('myrouter', 'declared', [model('kimi-k2')])],
+                    count: 1,
+                    modelCount: 1,
+                }),
+            }),
+            providersExpanded: true,
+        });
+        const head = items(tree).find((p) => p.title === 'Model providers')!;
+        expect(head.subtitle).toBe('1 provider, 1 model, 1 not available');
+        expect(iconName(head)).toBe('warning-outline');
+        const row = items(tree).find((p) => p.title === 'myrouter')!;
+        expect(row.subtitle).toBe('Declared in the config, not listed by OpenCode — usually a missing key');
+    });
+
+    it('says nothing extra about a provider that simply works', () => {
+        const tree = render({ harness: oc(), providersExpanded: true });
+        expect(items(tree).find((p) => p.title === 'google')!.subtitle).toBeUndefined();
+        expect(iconName(items(tree).find((p) => p.title === 'Model providers')!)).toBe('layers-outline');
+    });
+
+    it('tells an uninstalled harness apart from one that would not answer', () => {
+        const gone = render({
+            harness: oc({ providers: providerReport({ missing: true, providers: [], count: 0, modelCount: 0 }) }),
+            providersExpanded: true,
+        });
+        expect(items(gone).find((p) => p.title === 'Model providers')!.subtitle)
+            .toBe('This harness is not installed here');
+        const broken = render({
+            harness: oc({ providers: providerReport({ error: 'exited 3', providers: [], count: 0, modelCount: 0 }) }),
+            providersExpanded: true,
+        });
+        expect(items(broken).find((p) => p.title === 'Model providers')!.subtitle)
+            .toBe('`opencode models` exited 3');
+    });
+
+    it('shows the providers even when the harness configures no MCP server at all', () => {
+        // The early return used to swallow everything after it, and a machine
+        // can perfectly well have providers and no servers.
+        const tree = render({
+            harness: oc({ configured: false, count: 0, scopes: [scope('global', [], { source: '~/.config/opencode/opencode.jsonc' })] }),
+        });
+        expect(titles(tree)).toContain('Model providers');
+        expect(titles(tree)).toContain('Read just now');
+    });
+
+    it('presses nothing but the two disclosures', () => {
+        const tree = render({ harness: oc(), expanded: true, providersExpanded: true });
+        const pressable = items(tree).filter((p) => typeof p.onPress === 'function');
+        expect(pressable.map((p) => p.title)).toEqual(['MCP servers', 'Model providers']);
     });
 });
 

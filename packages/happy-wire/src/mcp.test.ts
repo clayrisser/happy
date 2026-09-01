@@ -4,8 +4,11 @@ import {
     mcpForbiddenKeys,
     mcpReportLeaks,
     mcpServerAllowedKeys,
+    providerAllowedKeys,
+    providerModelAllowedKeys,
     type McpHarnessReport,
     type McpReport,
+    type ProviderReport,
 } from './mcp';
 
 const server = (name: string, transport = 'stdio' as const, enabled = true) => ({ name, transport, enabled });
@@ -102,6 +105,95 @@ describe('what may cross the bus', () => {
         expect(mcpForbiddenKeys).toContain('env');
         expect(mcpForbiddenKeys).toContain('args');
         expect(mcpForbiddenKeys).toContain('url');
+    });
+});
+
+describe('what the PROVIDER half may cross the bus with (DROVE-296)', () => {
+    const providerReport = (): ProviderReport => ({
+        asked: 'opencode models',
+        config: '~/.config/opencode/opencode.jsonc',
+        configMissing: false,
+        configError: null,
+        missing: false,
+        error: null,
+        providers: [
+            {
+                id: 'lmstudio',
+                name: 'lmstudio',
+                origin: 'listed',
+                models: [{ id: 'qwen/qwen3-coder-30b', name: 'Qwen3 Coder 30B' }],
+                modelCount: 1,
+            },
+        ],
+        count: 1,
+        modelCount: 1,
+    });
+
+    const withProviders = (): McpReport => {
+        const report = clean();
+        report.harnesses.push({
+            harness: 'opencode',
+            label: 'OpenCode',
+            perAccount: false,
+            scopes: [scope('global', [])],
+            count: 0,
+            configured: false,
+            diverged: false,
+            providers: providerReport(),
+        });
+        return report;
+    };
+
+    it('passes a provider list carrying only ids, names and model ids', () => {
+        expect(mcpReportLeaks(withProviders())).toEqual([]);
+    });
+
+    it('catches the apiKey, which is the whole reason this half is dangerous', () => {
+        const bad = withProviders();
+        (bad.harnesses[1].providers!.providers[0] as unknown as Record<string, unknown>).apiKey = 'sk-live-leak';
+        expect(mcpReportLeaks(bad).join('\n')).toContain('apiKey');
+    });
+
+    it('catches a base URL, which the url ban alone would have missed', () => {
+        for (const key of ['baseURL', 'base_url', 'endpoint', 'api', 'url']) {
+            const bad = withProviders();
+            (bad.harnesses[1].providers!.providers[0] as unknown as Record<string, unknown>)[key] = 'https://x/?token=leak';
+            expect(mcpReportLeaks(bad).join('\n')).toContain(key);
+        }
+    });
+
+    it('catches a credential hung off a MODEL, one level deeper than the provider', () => {
+        const bad = withProviders();
+        (bad.harnesses[1].providers!.providers[0].models[0] as unknown as Record<string, unknown>).headers = { Authorization: 'Bearer leak' };
+        expect(mcpReportLeaks(bad).join('\n')).toContain('headers');
+    });
+
+    it('catches a key nobody thought of, because the provider check is an allowlist too', () => {
+        const bad = withProviders();
+        (bad.harnesses[1].providers!.providers[0] as unknown as Record<string, unknown>).npmAuthToken = 'leak';
+        expect(mcpReportLeaks(bad).join('\n')).toContain('npmAuthToken');
+    });
+
+    it('names the offending provider and model so a failure is actionable', () => {
+        const bad = withProviders();
+        (bad.harnesses[1].providers!.providers[0].models[0] as unknown as Record<string, unknown>).secret = 'leak';
+        const problems = mcpReportLeaks(bad).join('\n');
+        expect(problems).toContain('lmstudio');
+        expect(problems).toContain('qwen/qwen3-coder-30b');
+    });
+
+    it('says nothing about a harness that reports no providers at all', () => {
+        const report = withProviders();
+        report.harnesses[1].providers = null;
+        expect(mcpReportLeaks(report)).toEqual([]);
+    });
+
+    it('keeps the provider lists in sync with what the interfaces declare', () => {
+        expect([...providerAllowedKeys].sort()).toEqual(['id', 'modelCount', 'models', 'name', 'origin']);
+        expect([...providerModelAllowedKeys].sort()).toEqual(['id', 'name']);
+        for (const key of ['baseurl', 'base_url', 'endpoint', 'api', 'key']) {
+            expect(mcpForbiddenKeys).toContain(key);
+        }
     });
 });
 
