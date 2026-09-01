@@ -7,36 +7,18 @@
  */
 
 
+// DROVE-288: the entry stays import-light on purpose. Every verb dynamic-
+// imports its own arm below the dispatch, so `pick-account` (run before EVERY
+// session start) and `--version` (the daemon's version probe) stop paying ~2s
+// of bundle-wide import cost to read a few JSON files. pkgroll code-splits
+// each `await import()` into its own chunk; only what a verb actually touches
+// is compiled. Keep it that way: a static import added here is paid by every
+// invocation of every verb.
 import chalk from 'chalk'
-import { runClaude, StartOptions } from '@/claude/runClaude'
-import { logger } from './ui/logger'
-import { readCredentials, readSettings } from './persistence'
-import { authAndSetupMachineIfNeeded } from './ui/auth'
-import packageJson from '../package.json'
-import { z } from 'zod'
-import { startDaemon } from './daemon/run'
-import { checkIfDaemonRunningAndCleanupStaleState, isDaemonRunningCurrentlyInstalledHappyVersion, stopDaemon } from './daemon/controlClient'
-import { getLatestDaemonLog } from './ui/logger'
-import { killRunawayHappyProcesses } from './daemon/doctor'
-import { install } from './daemon/install'
-import { uninstall } from './daemon/uninstall'
-import { ApiClient } from './api/api'
-import { runDoctorCommand, runDoctorDaemon } from './ui/doctor'
-import { listDaemonSessions, stopDaemonSession } from './daemon/controlClient'
-import { handleAuthCommand } from './commands/auth'
-import { handleConnectCommand } from './commands/connect'
-import { handleSandboxCommand } from './commands/sandbox'
-import { handleServerCommand } from './commands/server'
-import { spawnHappyCLI } from './utils/spawnHappyCLI'
-import { claudeCliPath } from './claude/claudeLocal'
 import { execFileSync } from 'node:child_process'
+import packageJson from '../package.json'
 import { extractNoSandboxFlag } from './utils/sandboxFlags'
-import { handleResumeCommand } from '@/resume/handleResumeCommand'
-import { resumedClaudeSessionId } from '@/resume/reattachClaudeSession'
-import { pickStartAccount } from '@/drover/flip/accounts'
-import { ensureDaemonRunning } from './daemon/ensureDaemonRunning'
-import { handleCodexCommand } from './commands/codexCommand'
-import { sanitizeSessionEnvironment } from './daemon/sessionEnvironment'
+import type { StartOptions } from '@/claude/runClaude'
 
 
 (async () => {
@@ -49,56 +31,17 @@ import { sanitizeSessionEnvironment } from './daemon/sessionEnvironment'
   // version. pick-account runs before EVERY session start (DROVE-21) and would
   // otherwise leave a one-line log file per start.
   if (!args.includes('--version') && subcommand !== 'pick-account') {
+    const { logger } = await import('./ui/logger')
     logger.debug('Starting drover CLI with args: ', process.argv)
   }
 
   if (subcommand === 'pick-account') {
     // Cattle Drover (DROVE-21): which account should a session START on?
-    // bin/drover asks this before the first spawn — it is the one place the
-    // headroom logic lives, so the shell never grows a second copy — and
-    // execs `drover account use <answer>`. The answer is the name on stdout,
-    // nothing when there is no opinion, and one line on stderr saying why.
-    //
-    // Everything after `--` is the session's own argv, so --resume/--continue
-    // and --model are read by the same parsers the session will use.
-    const own = args.slice(1)
-    const split = own.indexOf('--')
-    const claudeArgs = split >= 0 ? own.slice(split + 1) : []
-    const flags = split >= 0 ? own.slice(0, split) : own
-    let cwd = process.cwd()
-    let asJson = false
-    for (let i = 0; i < flags.length; i++) {
-      if (flags[i] === '--cwd' && flags[i + 1]) cwd = flags[++i]
-      else if (flags[i] === '--json') asJson = true
-      else if (flags[i] === '-h' || flags[i] === '--help') {
-        console.log(`
-${chalk.bold('drover pick-account')} [--cwd <dir>] [--json] [-- <claude args>]
-
-Prints the account a session started with those args, in that directory,
-would open on: where the resumed session was left, else the account last used
-in the directory, else the first one with headroom. Reads only.
-`)
-        process.exit(0)
-      }
-    }
-    const model = (() => {
-      const i = claudeArgs.indexOf('--model')
-      if (i >= 0 && claudeArgs[i + 1]) return claudeArgs[i + 1]
-      const eq = claudeArgs.find((a) => a.startsWith('--model='))
-      return eq ? eq.slice('--model='.length) : undefined
-    })()
-    const pick = pickStartAccount({
-      cwd,
-      sessionId: resumedClaudeSessionId(claudeArgs, cwd),
-      ...(model ? { model } : {}),
-    })
-    if (asJson) {
-      console.log(JSON.stringify({ account: pick.account?.name ?? null, via: pick.via, note: pick.note ?? null }))
-    } else {
-      if (pick.note) console.error(`drover: ${pick.note}`)
-      if (pick.account) console.log(pick.account.name)
-    }
-    process.exit(0)
+    // The verb body lives in commands/pickAccount so this hot path (it runs
+    // before EVERY session start) loads only the registry, the cooldown
+    // ledger and the resume-id parser (DROVE-288).
+    const { handlePickAccountCommand } = await import('./commands/pickAccount')
+    await handlePickAccountCommand(args.slice(1))
   }
 
   if (subcommand === 'doctor') {
@@ -116,6 +59,7 @@ Conversation history is preserved on the server, but in-flight tool calls are in
 `)
         process.exit(0)
       }
+      const { killRunawayHappyProcesses } = await import('./daemon/doctor')
       const result = await killRunawayHappyProcesses()
       console.log(`Cleaned up ${result.killed} runaway processes`)
       if (result.errors.length > 0) {
@@ -123,11 +67,13 @@ Conversation history is preserved on the server, but in-flight tool calls are in
       }
       process.exit(0)
     }
+    const { runDoctorCommand } = await import('./ui/doctor')
     await runDoctorCommand();
     return;
   } else if (subcommand === 'auth') {
     // Handle auth subcommands
     try {
+      const { handleAuthCommand } = await import('./commands/auth')
       await handleAuthCommand(args.slice(1));
     } catch (error) {
       console.error(chalk.red('Error:'), error instanceof Error ? error.message : 'Unknown error')
@@ -140,6 +86,7 @@ Conversation history is preserved on the server, but in-flight tool calls are in
   } else if (subcommand === 'connect') {
     // Handle connect subcommands
     try {
+      const { handleConnectCommand } = await import('./commands/connect')
       await handleConnectCommand(args.slice(1));
     } catch (error) {
       console.error(chalk.red('Error:'), error instanceof Error ? error.message : 'Unknown error')
@@ -151,6 +98,7 @@ Conversation history is preserved on the server, but in-flight tool calls are in
     return;
   } else if (subcommand === 'sandbox') {
     try {
+      const { handleSandboxCommand } = await import('./commands/sandbox')
       await handleSandboxCommand(args.slice(1));
     } catch (error) {
       console.error(chalk.red('Error:'), error instanceof Error ? error.message : 'Unknown error')
@@ -162,6 +110,7 @@ Conversation history is preserved on the server, but in-flight tool calls are in
     return;
   } else if (subcommand === 'server') {
     try {
+      const { handleServerCommand } = await import('./commands/server')
       await handleServerCommand(args.slice(1));
     } catch (error) {
       console.error(chalk.red('Error:'), error instanceof Error ? error.message : 'Unknown error')
@@ -195,6 +144,7 @@ Conversation history is preserved on the server, but in-flight tool calls are in
     process.exit(0);
   } else if (subcommand === 'resume') {
     try {
+      const { handleResumeCommand } = await import('@/resume/handleResumeCommand')
       await handleResumeCommand(args.slice(1));
     } catch (error) {
       console.error(chalk.red('Error:'), error instanceof Error ? error.message : 'Unknown error')
@@ -207,6 +157,7 @@ Conversation history is preserved on the server, but in-flight tool calls are in
   } else if (subcommand === 'codex') {
     // Handle codex command
     try {
+      const { handleCodexCommand } = await import('./commands/codexCommand')
       await handleCodexCommand(args.slice(1));
       // Do not force exit here; allow instrumentation to show lingering handles
     } catch (error) {
@@ -412,10 +363,7 @@ Conversation history is preserved on the server, but in-flight tool calls are in
         }
       }
       
-      const {
-        credentials
-      } = await authAndSetupMachineIfNeeded();
-      await ensureDaemonRunning()
+      const { credentials } = await authAndEnsureDaemon();
 
       await runGemini({credentials, startedBy});
     } catch (error) {
@@ -450,8 +398,7 @@ Conversation history is preserved on the server, but in-flight tool calls are in
       }
 
       const resolved = resolveAcpAgentConfig(acpArgs);
-      const { credentials } = await authAndSetupMachineIfNeeded();
-      await ensureDaemonRunning()
+      const { credentials } = await authAndEnsureDaemon();
 
       await runAcp({
         credentials,
@@ -492,8 +439,7 @@ Conversation history is preserved on the server, but in-flight tool calls are in
         }
       }
 
-      const { credentials } = await authAndSetupMachineIfNeeded();
-      await ensureDaemonRunning()
+      const { credentials } = await authAndEnsureDaemon();
 
       await runOpenClaw({
         credentials,
@@ -540,8 +486,7 @@ Conversation history is preserved on the server, but in-flight tool calls are in
         }
       }
 
-      const { credentials } = await authAndSetupMachineIfNeeded();
-      await ensureDaemonRunning()
+      const { credentials } = await authAndEnsureDaemon();
 
       await runCursor({ credentials, startedBy, model, resumeChatId, permissionMode, gated });
     } catch (error) {
@@ -566,8 +511,7 @@ Conversation history is preserved on the server, but in-flight tool calls are in
         }
       }
 
-      const { credentials } = await authAndSetupMachineIfNeeded();
-      await ensureDaemonRunning()
+      const { credentials } = await authAndEnsureDaemon();
 
       await runAgy({
         credentials,
@@ -586,6 +530,7 @@ Conversation history is preserved on the server, but in-flight tool calls are in
     // Keep for backward compatibility - redirect to auth logout
     console.log(chalk.yellow('Note: "drover logout" is deprecated. Use "drover auth logout" instead.\n'));
     try {
+      const { handleAuthCommand } = await import('./commands/auth')
       await handleAuthCommand(['logout']);
     } catch (error) {
       console.error(chalk.red('Error:'), error instanceof Error ? error.message : 'Unknown error')
@@ -613,6 +558,7 @@ Conversation history is preserved on the server, but in-flight tool calls are in
 
     if (daemonSubcommand === 'list') {
       try {
+        const { listDaemonSessions } = await import('./daemon/controlClient')
         const sessions = await listDaemonSessions()
 
         if (sessions.length === 0) {
@@ -634,6 +580,7 @@ Conversation history is preserved on the server, but in-flight tool calls are in
       }
 
       try {
+        const { stopDaemonSession } = await import('./daemon/controlClient')
         const success = await stopDaemonSession(sessionId)
         console.log(success ? 'Session stopped' : 'Failed to stop session')
       } catch (error) {
@@ -643,6 +590,11 @@ Conversation history is preserved on the server, but in-flight tool calls are in
 
     } else if (daemonSubcommand === 'start') {
       // Spawn detached daemon process
+      const [{ spawnHappyCLI }, { sanitizeSessionEnvironment }, { checkIfDaemonRunningAndCleanupStaleState }] = await Promise.all([
+        import('./utils/spawnHappyCLI'),
+        import('./daemon/sessionEnvironment'),
+        import('./daemon/controlClient'),
+      ])
       const child = spawnHappyCLI(['daemon', 'start-sync'], {
         detached: true,
         stdio: 'ignore',
@@ -668,16 +620,20 @@ Conversation history is preserved on the server, but in-flight tool calls are in
       }
       process.exit(0);
     } else if (daemonSubcommand === 'start-sync') {
+      const { startDaemon } = await import('./daemon/run')
       await startDaemon()
       process.exit(0)
     } else if (daemonSubcommand === 'stop') {
+      const { stopDaemon } = await import('./daemon/controlClient')
       await stopDaemon()
       process.exit(0)
     } else if (daemonSubcommand === 'status') {
+      const { runDoctorDaemon } = await import('./ui/doctor')
       await runDoctorDaemon()
       process.exit(0)
     } else if (daemonSubcommand === 'logs') {
       // Simply print the path to the latest daemon log file
+      const { getLatestDaemonLog } = await import('./ui/logger')
       const latest = await getLatestDaemonLog()
       if (!latest) {
         console.log('No daemon logs found')
@@ -687,6 +643,7 @@ Conversation history is preserved on the server, but in-flight tool calls are in
       process.exit(0)
     } else if (daemonSubcommand === 'install') {
       try {
+        const { install } = await import('./daemon/install')
         await install()
       } catch (error) {
         console.error(chalk.red('Error:'), error instanceof Error ? error.message : 'Unknown error')
@@ -694,6 +651,7 @@ Conversation history is preserved on the server, but in-flight tool calls are in
       }
     } else if (daemonSubcommand === 'uninstall') {
       try {
+        const { uninstall } = await import('./daemon/uninstall')
         await uninstall()
       } catch (error) {
         console.error(chalk.red('Error:'), error instanceof Error ? error.message : 'Unknown error')
@@ -726,6 +684,7 @@ ${chalk.bold('To clean up runaway processes:')} Use ${chalk.cyan('drover doctor 
     }
 
     // Parse command line arguments for main command
+    const { z } = await import('zod')
     const options: StartOptions = {}
     let showHelp = false
     let showVersion = false
@@ -816,6 +775,7 @@ ${chalk.bold('To clean up runaway processes:')} Use ${chalk.cyan('drover doctor 
     }
 
     // Resolve Chrome mode: explicit flag > settings > false
+    const { readSettings } = await import('./persistence')
     const settings = await readSettings()
     const chromeEnabled = chromeOverride ?? settings.chromeMode ?? false
     if (chromeEnabled) {
@@ -882,6 +842,7 @@ ${chalk.bold.cyan('Claude Code Options (from `claude --help`):')}
       // Run claude --help and display its output
       // Use execFileSync directly with claude CLI for runtime-agnostic compatibility
       try {
+        const { claudeCliPath } = await import('./claude/claudeLocal')
         const claudeHelp = execFileSync(claudeCliPath, ['--help'], { encoding: 'utf8', windowsHide: true })
         console.log(claudeHelp)
       } catch (e) {
@@ -898,13 +859,11 @@ ${chalk.bold.cyan('Claude Code Options (from `claude --help`):')}
     }
 
     // Normal flow - auth and machine setup
-    const {
-      credentials
-    } = await authAndSetupMachineIfNeeded();
-    await ensureDaemonRunning()
+    const { credentials } = await authAndEnsureDaemon();
 
     // Start the CLI
     try {
+      const { runClaude } = await import('@/claude/runClaude')
       await runClaude(credentials, options);
     } catch (error) {
       console.error(chalk.red('Error:'), error instanceof Error ? error.message : 'Unknown error')
@@ -968,6 +927,7 @@ ${chalk.bold('Examples:')}
   }
 
   // Load credentials
+  const { readCredentials } = await import('./persistence')
   let credentials = await readCredentials()
   if (!credentials) {
     console.error(chalk.red('Error: Not authenticated. Please run "drover auth login" first.'))
@@ -978,6 +938,7 @@ ${chalk.bold('Examples:')}
 
   try {
     // Create API client and send push notification
+    const { ApiClient } = await import('./api/api')
     const api = await ApiClient.create(credentials);
 
     // Use custom title or default to "Happy"
@@ -1005,4 +966,18 @@ ${chalk.bold('Examples:')}
     console.error(chalk.red('✗ Failed to send push notification'))
     throw error
   }
+}
+
+/**
+ * Auth + machine setup, then make sure the daemon is up — the shared preamble
+ * of every session-starting verb. A function so each branch dynamic-imports
+ * the auth and daemon arms only when a session is actually starting
+ * (DROVE-288).
+ */
+async function authAndEnsureDaemon() {
+  const { authAndSetupMachineIfNeeded } = await import('./ui/auth')
+  const { ensureDaemonRunning } = await import('./daemon/ensureDaemonRunning')
+  const { credentials } = await authAndSetupMachineIfNeeded()
+  await ensureDaemonRunning()
+  return { credentials }
 }
