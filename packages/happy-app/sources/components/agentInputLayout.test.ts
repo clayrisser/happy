@@ -66,7 +66,7 @@ describe('agent input compact mobile layout', () => {
             addIconSize: 26,
             secondaryActionHeight: 40,
             effortWidth: 64,
-            primaryActionSize: 36,
+            primaryActionSize: 39,
             primaryActionSlop: 6,
             attachmentExtraHeight: 72,
             controlGap: 6,
@@ -91,7 +91,9 @@ describe('agent input compact mobile layout', () => {
         // DROVE-236a  85 + 6 + 44 + 8   the bubble's floor gives 5 back
         // DROVE-236b  85         +  8   the row moves INTO the bubble's own
         //                               button row and stops existing
-        expect(agentInputLayout.MOBILE_COMPOSER_BASE_HEIGHT).toBe(93);
+        // DROVE-266   88         +  8   the buttons grow 36 -> 39 and the row
+        //                               with them, on Clay's "a little bigger"
+        expect(agentInputLayout.MOBILE_COMPOSER_BASE_HEIGHT).toBe(96);
         expect(agentInputLayout.MOBILE_COMPOSER_BASE_HEIGHT).toBe(
             agentInputLayout.MOBILE_COMPOSER_BUBBLE_BASE_HEIGHT
             + metrics.controlsBottomGap,
@@ -105,21 +107,26 @@ describe('agent input compact mobile layout', () => {
             .toBe(metrics.controlsBottomGap);
         expect(metrics.controlGap).toBe(6);
         expect(metrics.controlsBottomGap).toBe(8);
-        // The whole 50 is the row plus the gap that held it off the bubble.
+        // The whole 50 was the row plus the gap that held it off the bubble,
+        // and DROVE-266 spends 3 of it back on bigger buttons. Written as the
+        // two terms rather than as 47, so the ledger says who took what.
         expect(143 - agentInputLayout.MOBILE_COMPOSER_BASE_HEIGHT)
-            .toBe(metrics.actionRowHeight + metrics.controlGap);
+            .toBe(metrics.actionRowHeight + metrics.controlGap - 3);
+        expect(metrics.primaryActionSize - 36).toBe(3);
         // And the bubble did NOT grow to take the row's controls: they are
-        // drawn at the button row's own 36 rather than the 44 they wore
+        // drawn at the button row's own size rather than the 44 they wore
         // outside, so the composer is shorter than DROVE-196's while holding
-        // every control DROVE-196 had.
-        expect(agentInputLayout.MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE).toBe(36);
+        // every control DROVE-196 had. The 3 it gains in DROVE-266 is the
+        // buttons growing, which is a thing Clay asked for rather than a cost
+        // the move imposed.
+        expect(agentInputLayout.MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE).toBe(39);
         expect(agentInputLayout.MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE)
             .toBe(agentInputLayout.MOBILE_COMPOSER_BUBBLE_ACTION_ROW_HEIGHT);
         expect(agentInputLayout.MOBILE_COMPOSER_BASE_HEIGHT).toBeLessThan(102);
 
         // The bubble is padding, one line, the gap, the button row, and a
         // shallower floor.
-        expect(agentInputLayout.MOBILE_COMPOSER_BUBBLE_BASE_HEIGHT).toBe(85);
+        expect(agentInputLayout.MOBILE_COMPOSER_BUBBLE_BASE_HEIGHT).toBe(88);
         expect(agentInputLayout.MOBILE_COMPOSER_BUBBLE_BASE_HEIGHT).toBe(
             metrics.bubbleInset
             + agentInputLayout.MOBILE_COMPOSER_TEXT_ROW_BASE_HEIGHT
@@ -128,7 +135,7 @@ describe('agent input compact mobile layout', () => {
             + metrics.bubbleInsetBottom,
         );
         // The text row is the text and nothing else now. 44 was never about
-        // text: it was the height a 36pt disc inset 4 needed.
+        // text: it was the height a disc inset 4 needed.
         expect(agentInputLayout.MOBILE_COMPOSER_TEXT_ROW_BASE_HEIGHT).toBe(30);
         expect(agentInputLayout.MOBILE_COMPOSER_TEXT_ROW_BASE_HEIGHT).toBe(
             metrics.inputLineHeight + metrics.inputPaddingTop + metrics.inputPaddingBottom,
@@ -182,11 +189,16 @@ describe('agent input compact mobile layout', () => {
 
         // `inputHeight` is the TEXT's measured height, so an empty composer is
         // one line box. Both ends of that convention are in one place now.
-        expect(resolveHeight(22)).toBe(93);
-        expect(resolveHeight(44)).toBe(115);
-        expect(resolveHeight(120)).toBe(191);
-        expect(resolveHeight(400)).toBe(191);
-        expect(resolveHeight(22, true)).toBe(171);
+        expect(resolveHeight(22)).toBe(96);
+        expect(resolveHeight(44)).toBe(118);
+        expect(resolveHeight(120)).toBe(194);
+        expect(resolveHeight(400)).toBe(194);
+        expect(resolveHeight(22, true)).toBe(174);
+        // The capsule's own row costs exactly what a row in this column costs:
+        // its height and the gap above it (DROVE-266).
+        expect(resolveHeight(22, false, true) - resolveHeight(22))
+            .toBe(agentInputLayout.MOBILE_COMPOSER_BUBBLE_ACTION_ROW_HEIGHT
+                + agentInputLayout.MOBILE_COMPOSER_METRICS.controlGap);
     });
 
     /**
@@ -243,12 +255,21 @@ describe('agent input compact mobile layout', () => {
             - resolveHeight(metrics.inputLineHeight)).toBe(metrics.inputLineHeight);
     });
 
-    it('opens the same height on a 320pt phone as on a 393pt one', () => {
+    it('reads no screen width itself, and takes the one shape question as an argument', () => {
         const metrics = agentInputLayout.MOBILE_COMPOSER_METRICS;
         const resolveHeight = agentInputLayout.resolveMobileComposerHeight;
-        // Height reads no screen width anywhere, which is why the width gets a
-        // spec of its own below rather than a clause in this one.
+        // It used to be true that the composer opened the same height on a
+        // 320pt phone as on a 393pt one. DROVE-266 makes it one height per
+        // SHAPE rather than one height full stop, because below
+        // COMPOSER_ROW_MIN_MODEL_WIDTH the capsule takes a row of its own.
+        //
+        // What has NOT changed is that this function reads no width. The shape
+        // arrives as an argument decided by `composerCapsuleOwnRow`, so there is
+        // still exactly one place that turns a width into a layout, which is the
+        // property the old test was really protecting.
         expect(resolveHeight(metrics.inputLineHeight))
+            .toBe(agentInputLayout.MOBILE_COMPOSER_BASE_HEIGHT);
+        expect(resolveHeight(metrics.inputLineHeight, false, false))
             .toBe(agentInputLayout.MOBILE_COMPOSER_BASE_HEIGHT);
     });
 
@@ -390,10 +411,12 @@ describe('agent input compact mobile layout', () => {
         expect(agentInputLayout.MOBILE_COMPOSER_BUBBLE_ACTION_ROW_HEIGHT)
             .toBe(metrics.primaryActionSize);
         // And the controls that joined it are drawn at exactly that, which is
-        // the whole reason the bubble did not grow: 85 before, 85 after.
+        // the whole reason the bubble did not grow FOR THEM: 85 before the move
+        // and 85 after it. The 88 is DROVE-266 growing every object on the row
+        // together, which is a different thing being paid for.
         expect(agentInputLayout.MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE)
             .toBe(agentInputLayout.MOBILE_COMPOSER_BUBBLE_ACTION_ROW_HEIGHT);
-        expect(agentInputLayout.MOBILE_COMPOSER_BUBBLE_BASE_HEIGHT).toBe(85);
+        expect(agentInputLayout.MOBILE_COMPOSER_BUBBLE_BASE_HEIGHT).toBe(88);
 
         // The audio button is the same disc as the `+` and send now, not the
         // 44pt icon button it was inside the shared capsule.
@@ -407,18 +430,19 @@ describe('agent input compact mobile layout', () => {
             .toBe(metrics.actionSize);
 
         // Every disc on the bubble's row clears DROVE-153's 44pt floor the
-        // same way: 36 drawn plus 6pt of slop a side is a 48pt target.
+        // same way: 39 drawn plus 6pt of slop a side is a 51pt target.
         const target = metrics.primaryActionSize + metrics.primaryActionSlop * 2;
-        expect(target).toBe(48);
+        expect(target).toBe(51);
         expect(target).toBeGreaterThanOrEqual(44);
 
         // The two GLYPH SEGMENTS are the exception and it is stated rather
         // than buried: they sit against each other inside one capsule, so
-        // there is no horizontal slop to take and their touch box is 36 x 48.
-        // The argument for spending it is on the constant.
+        // there is no horizontal slop to take and their touch box is 39 x 51.
+        // The argument for spending it is on the constant. DROVE-266 narrows
+        // the shortfall from 8pt to 5 without closing it.
         expect(agentInputLayout.MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE).toBeLessThan(44);
         expect(agentInputLayout.MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE
-            + metrics.primaryActionSlop * 2).toBe(48);
+            + metrics.primaryActionSlop * 2).toBe(51);
     });
 
     it('uses identical row and circular-button geometry in both composers', () => {
@@ -448,9 +472,9 @@ describe('agent input compact mobile layout', () => {
         // each of them while all three shared a row. Nothing shares a row with
         // the text now, so the margins are gone and the two are identical.
         const disc = {
-            width: 36,
-            height: 36,
-            borderRadius: 18,
+            width: 39,
+            height: 39,
+            borderRadius: 19.5,
             alignItems: 'center',
             justifyContent: 'center',
             flexShrink: 0,

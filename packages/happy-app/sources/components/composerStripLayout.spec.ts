@@ -72,7 +72,7 @@ describe('the layout does not move when a recording starts', () => {
             MOBILE_COMPOSER_BUBBLE_BASE_HEIGHT
             + MOBILE_COMPOSER_METRICS.controlsBottomGap,
         );
-        expect(composerBlockHeight).toBe(93);
+        expect(composerBlockHeight).toBe(96);
     });
 
     it('opens the strip only when a silent session has a recording to show', () => {
@@ -128,9 +128,10 @@ describe('where the recording banner lives', () => {
         // And the bar is the bubble's own two rims, whatever is inside it.
         // DROVE-214 made the bubble two rows and 46pt taller, DROVE-236 took 5
         // back off its floor and then moved the whole control row inside it,
-        // taking the block from 143 to 93. The strip's box is unchanged
-        // through all three, which is the guarantee this test exists for.
-        expect(MOBILE_COMPOSER_BASE_HEIGHT).toBe(93);
+        // taking the block from 143 to 93, and DROVE-266 grew the buttons and
+        // put it at 96. The strip's box is unchanged through all four, which is
+        // the guarantee this test exists for.
+        expect(MOBILE_COMPOSER_BASE_HEIGHT).toBe(96);
     });
 
     it('leaves the bar tall enough to hold the dot, clock, level and glyph', () => {

@@ -30,7 +30,7 @@ import { t } from '@/text';
 import { Metadata } from '@/sync/storageTypes';
 import { isRunningOnMac } from '@/utils/platform';
 import { MobileGlassSurface } from './MobileGlass';
-import { resolveComposerPressResponse } from './glassInteractionPolicy';
+import { ComposerControlButton } from './ComposerControlButton';
 import { GlassChromeSurface } from './GlassChromeControl';
 import { AnimatedFade } from './AnimatedOverlay';
 import { BubblePressable } from './BubblePressable';
@@ -54,6 +54,7 @@ import {
 } from './agentInputLayout';
 import {
     COMPOSER_BUBBLE_ACTION_ROW_GEOMETRY,
+    COMPOSER_BUBBLE_CAPSULE_ROW_GEOMETRY,
     COMPOSER_BUBBLE_GAP_GEOMETRY,
     COMPOSER_BUBBLE_GEOMETRY,
     COMPOSER_BUBBLE_SESSION_CAPSULE_GEOMETRY,
@@ -65,7 +66,7 @@ import { LiveMicBanner } from './LiveMicBanner';
 import type { MicButtonState } from '@/voice/micButton';
 import type { DictationCaptureState } from '@/voice/dictationCapture';
 import { DroverChannelsSheet } from './DroverChannelsSheet';
-import { buildSessionPillLabel } from './sessionPillLabel';
+import { buildSessionPillLabel, composerCapsuleOwnRow } from './sessionPillLabel';
 import type { AgentModePendingFlags } from '@/sync/useAgentModePending';
 import { permissionModeGlyph } from './sessionControlGlyphs';
 import { ComposerSessionControls, type ComposerSessionPicker } from './ComposerSessionControls';
@@ -273,10 +274,18 @@ const MOBILE_COMPOSER_LINE_GEOMETRY = resolveMobileComposerLineGeometry();
  */
 const PICKER_KEYBOARD_FALLBACK_MS = 420;
 const MOBILE_ICON_ACTION_GEOMETRY = resolveMobileComposerActionGeometry('icon');
-const MOBILE_PRIMARY_ACTION_GEOMETRY = resolveMobileComposerActionGeometry('primary');
-const MOBILE_ADD_ACTION_GEOMETRY = resolveMobileComposerActionGeometry('add');
-const MOBILE_AUDIO_ACTION_GEOMETRY = resolveMobileComposerActionGeometry('audio');
-const MOBILE_MIC_ACTION_GEOMETRY = resolveMobileComposerActionGeometry('mic');
+/*
+ * The four IN-BUBBLE variants are gone from here (DROVE-266). The `+`, the
+ * audio disc, the mic and send are `ComposerControlButton` now, which takes its
+ * size from `MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE` — the same constant those
+ * variants resolve from — so a style holding the geometry a second time would
+ * be a second place for it to drift. `resolveMobileComposerActionGeometry` is
+ * untouched: HomeDock still draws from it, and composerBubbleLayout.spec.ts
+ * still models this row through it.
+ *
+ * `icon` stays because Home's 44pt row is a different size and still reads it
+ * here.
+ */
 
 // Shared with the action-area offset reported to onActionAreaOffsetChange —
 // the Shaker's layout.y is relative to innerContainer, which sits this far
@@ -416,7 +425,14 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     mobileBubbleGap: COMPOSER_BUBBLE_GAP_GEOMETRY,
     /** The session capsule, sized to its content, inside that row. */
     mobileBubbleSessionCapsule: COMPOSER_BUBBLE_SESSION_CAPSULE_GEOMETRY,
-    mobileAddButton: MOBILE_ADD_ACTION_GEOMETRY,
+    /**
+     * THE CAPSULE'S OWN ROW, on the phones too narrow to share one (DROVE-266).
+     *
+     * The action row's shape at the action row's height, so the bubble stays a
+     * column of rows that are the same kind of thing. The argument for when it
+     * is drawn is on `composerCapsuleOwnRow`.
+     */
+    mobileBubbleCapsuleRow: COMPOSER_BUBBLE_CAPSULE_ROW_GEOMETRY,
 
     // Overlay styles
     autocompleteOverlay: {
@@ -530,62 +546,6 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         paddingHorizontal: 0,
     },
     mobileIconButton: MOBILE_ICON_ACTION_GEOMETRY,
-    /**
-     * THE AUDIO BUTTON, a disc on the bubble's own row (DROVE-236).
-     *
-     * It was 44 inside a shared capsule with the mic, on the row under the
-     * bubble. Clay circled it and drew an arrow up to the bubble's right rim,
-     * "beside the mic". So it is a 36pt disc next to two other 36pt discs, and
-     * the capsule it shared has nothing left to share: the mic that was the
-     * other half of it is the primary button now.
-     */
-    mobileAudioButton: MOBILE_AUDIO_ACTION_GEOMETRY,
-    mobileMicButton: MOBILE_MIC_ACTION_GEOMETRY,
-    // Stream-talk on: the surface carries it, not just the glyph, which is
-    // what a blue icon on nothing could never say at a glance.
-    mobileIconButtonOn: {
-        backgroundColor: theme.colors.radio.active,
-    },
-    // A LIVE CALL ON THE SAME DISC (DROVE-236). The waveform wore the recording
-    // red when a turn was live and it kept it through the collapse; this is
-    // `talkButtonHeld`'s surface on the audio-out button, so a live mic looks
-    // the same wherever it is drawn. Not a new hue: `recording` and `accent`
-    // are the two entries composerControlColour.ts already has, and both mean
-    // something is happening now, which is DROVE-215's whole rule.
-    mobileIconButtonCalling: {
-        backgroundColor: composerControlPalette(theme.dark).recording,
-    },
-    /**
-     * A READER HOLDING ITS PLACE (DROVE-258). Clay: "When I long press read and
-     * it pauses color it I dunno pause colour maybe yellow or orange."
-     *
-     * The palette's amber, which already means HELD on this row, and the only
-     * disc here whose glyph is not the white the other two wear: white on this
-     * amber measures about 2:1 on the dark theme, so the tint is derived from
-     * the fill in composerControlColour.ts rather than copied off its
-     * neighbours.
-     */
-    mobileIconButtonPaused: {
-        backgroundColor: composerPausedFill(theme.dark),
-    },
-    // A control whose sheet is showing reads as held down, the same step the
-    // session controls use for an open picker.
-    mobileIconButtonOpen: {
-        backgroundColor: theme.colors.surfaceHighest,
-    },
-    // The talk button's two live states (DROVE-74). Held is a solid red disc
-    // with a white glyph; latched is the resting surface inside a red ring
-    // with a red glyph, so a mic that will stay open after the lift looks
-    // different from one that will not, and both look different from idle.
-    //
-    // The ring and the glyph read the SAME entry (DROVE-176), because the
-    // light theme's recording red is a darker crimson than the banner's
-    // #FF3B30, which is 2.54:1 on the light glass; a ring one shade off its
-    // own glyph is a mistake nobody would make on purpose.
-    talkButtonHeld: {
-        backgroundColor: composerControlPalette(theme.dark).recording,
-        borderRadius: 999,
-    },
     talkButtonLatched: {
         borderWidth: 2,
         borderColor: composerControlPalette(theme.dark).recording,
@@ -620,43 +580,6 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         alignItems: 'center',
         flexShrink: 0,
         marginLeft: 8,
-    },
-    mobilePrimaryButton: MOBILE_PRIMARY_ACTION_GEOMETRY,
-    /**
-     * THE IN-FIELD DISC, worn by BOTH ends of the capsule (DROVE-214).
-     *
-     * Clay: "the plus to add images and stuff should be a circle just like on
-     * the right hand side send button." So this stopped being the send
-     * button's inactive state and became the surface the pair shares: what
-     * send wears with nothing to send, and what the `+` wears always.
-     *
-     * The `+` has no second state to wear, because it is an offer rather than
-     * a thing that becomes live. That is the whole difference between the two
-     * ends now, and it is a difference with something to say: on an empty
-     * composer they are identical discs, and the moment there is something to
-     * send only the trailing one changes.
-     */
-    mobileInFieldDisc: {
-        backgroundColor: theme.dark
-            ? COMPOSER_IN_FIELD_DISC.dark
-            : COMPOSER_IN_FIELD_DISC.light,
-    },
-    /**
-     * The `+` with its sheet open, a step off the resting disc.
-     *
-     * DROVE-206 spent `mobileIconButtonOpen` on this, arguing the `+` had no
-     * resting fill so the fill itself could be the open state. It has one now,
-     * so open needs a surface of its own; this is the value the send button's
-     * live state vacated on each theme. Home's own row keeps
-     * `mobileIconButtonOpen` and is untouched.
-     */
-    mobileInFieldDiscOpen: {
-        backgroundColor: theme.dark
-            ? COMPOSER_IN_FIELD_DISC_OPEN.dark
-            : COMPOSER_IN_FIELD_DISC_OPEN.light,
-    },
-    mobileStopButton: {
-        backgroundColor: theme.dark ? '#F5F5F5' : theme.colors.button.primary.background,
     },
     sendButtonActive: {
         backgroundColor: theme.colors.button.primary.background,
@@ -958,26 +881,32 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     });
     const micSurface = composerMicSurface({ live: micLive });
     /**
-     * WHICH PRESS RESPONSE EACH CONTROL ON THIS ROW GETS (DROVE-266).
+     * EACH CONTROL'S FILL, AS A VALUE RATHER THAN AS A STYLESHEET ENTRY
+     * (DROVE-266).
      *
-     * Clay: "shouldn't all these buttons have the Liquid Glass behavior". The
-     * bubble asks for `UIGlassEffect.isInteractive` now, so the controls whose
-     * glass is EXPOSED get the platform's own lensing and stand their
-     * imitation down. The ones wearing an opaque fill cover the material, so
-     * there is nothing under them to lens and the fade is the only response
-     * they can have. `resolveComposerPressResponse` is the rule and the
-     * argument; this is the one place it is read from.
+     * Clay, for the second time: "stop doing your custom buttons shouldn't they
+     * just be smaller liquid glass buttons". They are `ComposerControlButton`
+     * now, which is `GlassChromeButton` at the composer's size, so the fill is
+     * spent as `UIGlassEffect.tintColor` on the button's own effect rather than
+     * as a `backgroundColor` on a view wrapped round a Pressable. A prop takes a
+     * colour, not a style, which is why these stop being `styles.*` entries.
      *
-     * `compactMobileComposer` gates it because the desktop composer has no
-     * glass under it at all, so nothing there can be answered by the platform.
+     * Every one of them is an OPAQUE hex and `composerGlassTint` refuses
+     * anything else, which is how DROVE-254's measurement survives the control
+     * becoming a real material rather than being replaced by a promise.
      */
-    const pressResponse = (control: 'bare' | 'filled') => resolveComposerPressResponse({
-        surfaceDrawsNativeGlass: compactMobileComposer,
-        control,
-    });
-    const sendPress = pressResponse(sendSurface === 'none' ? 'bare' : 'filled');
-    const micPress = pressResponse(micSurface === 'none' ? 'bare' : 'filled');
-    const filledPress = pressResponse('filled');
+    const composerDiscFill = theme.dark ? COMPOSER_IN_FIELD_DISC.dark : COMPOSER_IN_FIELD_DISC.light;
+    const composerDiscOpenFill = theme.dark ? COMPOSER_IN_FIELD_DISC_OPEN.dark : COMPOSER_IN_FIELD_DISC_OPEN.light;
+    /**
+     * WHETHER THE SESSION CAPSULE HAS TAKEN A ROW OF ITS OWN (DROVE-266).
+     *
+     * Read from the screen's width and nothing else, through the same function
+     * the budget arithmetic and the spec read, so the layout and the model
+     * cannot disagree about which shape the bubble is in. Off the compact
+     * composer there is no bubble to stack, so it is false there whatever the
+     * window is doing.
+     */
+    const capsuleOwnRow = compactMobileComposer && composerCapsuleOwnRow(screenWidth);
     /**
      * The in-field send glyph: the accent once there is something to send, the
      * theme's neutral when there is not (DROVE-176). It no longer wears a
@@ -2035,57 +1964,37 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
      * 44pt floor, which is the same bargain the send button strikes.
      */
     const mobileAddAction = (
-        <View
-            style={[
-                styles.mobileAddButton,
-                // The same disc the send button wears at rest, so the two ends
-                // of the row are one object (DROVE-214). Open still steps off
-                // it: `mobileIconButtonOpen` is a different surface from this
-                // one, so the held-down read survives the control gaining a
-                // resting fill.
-                styles.mobileInFieldDisc,
-                engagedPicker === 'attach' ? styles.mobileInFieldDiscOpen : undefined,
-            ]}
+        <ComposerControlButton
+            // The same disc the send button wears at rest, so the two ends of
+            // the row are one object (DROVE-214). Open still steps off it, so
+            // the held-down read survives the control having a resting fill.
+            //
+            // It is a `GlassChromeButton` now (DROVE-266): the press is UIKit's
+            // own deformation on the button's own effect, not a `withSpring`
+            // scale and a 0.7 fade drawn to look like one.
+            fill={engagedPicker === 'attach' ? composerDiscOpenFill : composerDiscFill}
+            onPress={handleAddContextPress}
+            accessibilityRole="button"
+            accessibilityLabel={t('imageUpload.addContextTitle')}
+            accessibilityState={{ expanded: engagedPicker === 'attach' }}
         >
-                <BubblePressable
-                    // An opaque disc covers the glass, so the platform has
-                    // nothing to lens here and the fade is the response
-                    // (DROVE-266).
-                    nativeGlassPress={filledPress.nativeGlass}
-                    style={(p) => ({
-                        width: '100%',
-                        height: '100%',
-                        // The glyph is centred in the disc by the layout
-                        // engine, which is all it ever needed (DROVE-214).
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        opacity: filledPress.fade && p.pressed ? 0.7 : 1,
-                    })}
-                    hitSlop={MOBILE_COMPOSER_METRICS.primaryActionSlop}
-                    onPress={handleAddContextPress}
-                    accessibilityRole="button"
-                    accessibilityLabel={t('imageUpload.addContextTitle')}
-                    accessibilityState={{ expanded: engagedPicker === 'attach' }}
-                >
-                    <Ionicons
-                        name="add"
-                        size={MOBILE_COMPOSER_METRICS.addIconSize}
-                        // THE FOREGROUND, and this is DROVE-215's exception
-                        // being settled rather than a new ruling (DROVE-214).
-                        // That file left the `+` its accent and said the pair
-                        // was this lane's to decide. The `+` holds no state
-                        // and is never one press from anything: it is always
-                        // available, which under DROVE-215 is exactly the case
-                        // that does NOT earn a colour. Clay has asked twice for
-                        // no coloured icons. So the blue goes, and what it buys
-                        // is that the accent still means something at the other
-                        // rim: on an empty composer both ends are a white glyph
-                        // on the same disc, and the blue appears only when
-                        // there is something to send.
-                        color={composerGlyphColour(composerPalette)}
-                    />
-                </BubblePressable>
-        </View>
+            <Ionicons
+                name="add"
+                size={MOBILE_COMPOSER_METRICS.addIconSize}
+                // THE FOREGROUND, and this is DROVE-215's exception being
+                // settled rather than a new ruling (DROVE-214). That file left
+                // the `+` its accent and said the pair was this lane's to
+                // decide. The `+` holds no state and is never one press from
+                // anything: it is always available, which under DROVE-215 is
+                // exactly the case that does NOT earn a colour. Clay has asked
+                // twice for no coloured icons. So the blue goes, and what it
+                // buys is that the accent still means something at the other
+                // rim: on an empty composer both ends are a white glyph on the
+                // same disc, and the blue appears only when there is something
+                // to send.
+                color={composerGlyphColour(composerPalette)}
+            />
+        </ComposerControlButton>
     );
 
     /**
@@ -2125,57 +2034,49 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
      */
     const mobilePrimaryAction = (
         <Shaker ref={shakerRef}>
-            <View
-                style={[
-                    styles.sendButton,
-                    styles.mobilePrimaryButton,
-                    // THREE FACES NOW, AND TWO OF THEM ARE THE SAME (DROVE-264).
-                    //
-                    // Clay: "the send button shouldn't have a circle around
-                    // it." So there is no resting fill at all, with something to
-                    // send or without — the GLYPH carries that, and always has
-                    // (DROVE-214, DROVE-215). Stop is checked first, because a
-                    // blank composer on a non-steerable agent is both blocked
-                    // and abortable and must not look locked; the gate's lock
-                    // keeps its surface, because a lock with no surface reads as
-                    // decoration rather than as a button refusing.
-                    //
-                    // The mic is not one of these faces any more. It is its own
-                    // button, immediately to the left. `composerSendSurface`
-                    // holds the table and the argument.
-                    sendSurface === 'stop' ? styles.mobileStopButton
-                        : sendSurface === 'locked' ? styles.sendButtonLocked
-                            : undefined,
-                ]}
+            <ComposerControlButton
+                // THREE FACES NOW, AND TWO OF THEM ARE THE SAME (DROVE-264).
+                //
+                // Clay: "the send button shouldn't have a circle around it." So
+                // there is no resting fill at all, with something to send or
+                // without — the GLYPH carries that, and always has (DROVE-214,
+                // DROVE-215). No fill means no glass button of its own either
+                // (DROVE-266): a bare glyph stands on the bubble's own
+                // interactive glass and the platform draws its press from
+                // there, where giving it a surface would be putting back the
+                // circle Clay removed.
+                //
+                // Stop is checked first, because a blank composer on a
+                // non-steerable agent is both blocked and abortable and must
+                // not look locked; the gate's lock keeps its surface, because a
+                // lock with no surface reads as decoration rather than as a
+                // button refusing. Both of those faces ARE glass buttons.
+                //
+                // The mic is not one of these faces any more. It is its own
+                // button, immediately to the left. `composerSendSurface` holds
+                // the table and the argument.
+                fill={sendSurface === 'stop'
+                    ? (theme.dark ? '#F5F5F5' : theme.colors.button.primary.background)
+                    : sendSurface === 'locked' ? theme.colors.surfaceHigh : undefined}
+                // The lock keeps its hairline, which is the one composer
+                // surface that has ever wanted one: it is a REFUSAL drawn on a
+                // near-surface fill, so the edge is what makes it a shape at
+                // all rather than a second answer to a separation the fill
+                // already gives (DROVE-254's rule, and its stated exception).
+                style={sendSurface === 'locked'
+                    ? { borderWidth: 1, borderColor: theme.colors.divider }
+                    : undefined}
+                onPress={handleMobilePrimaryPress}
+                // Long-press: the channel sheet (DROVE-83).
+                onLongPress={handleMobilePrimaryLongPress}
+                disabled={!canPressSendButton}
+                accessibilityRole="button"
+                // It is a send button (DROVE-206). Stop is the one face that is
+                // genuinely another action, and it only appears on an empty
+                // composer while the agent is working.
+                accessibilityLabel={shouldShowStopButton ? 'Stop' : 'Send'}
+                accessibilityState={{ disabled: !canPressSendButton }}
             >
-                <BubblePressable
-                    // A BARE GLYPH LETS THE GLASS ANSWER (DROVE-266), and Stop
-                    // and the lock do not, because those two faces draw a fill
-                    // over it. Read from the same `sendSurface` the fill is, so
-                    // the response and the surface cannot disagree.
-                    nativeGlassPress={sendPress.nativeGlass}
-                    style={(p) => ({
-                        width: '100%',
-                        height: '100%',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        opacity: sendPress.fade && p.pressed ? 0.7 : 1,
-                    })}
-                    // 36 reserved plus 6 a side is a 48pt target, above the
-                    // floor, and it is a target rather than a drawn circle for
-                    // every face but Stop and the lock.
-                    hitSlop={MOBILE_COMPOSER_METRICS.primaryActionSlop}
-                    onPress={handleMobilePrimaryPress}
-                    // Long-press: the channel sheet (DROVE-83).
-                    onLongPress={handleMobilePrimaryLongPress}
-                    disabled={!canPressSendButton}
-                    accessibilityRole="button"
-                    // It is a send button (DROVE-206). Stop is the one face
-                    // that is genuinely another action, and it only appears on
-                    // an empty composer while the agent is working.
-                    accessibilityLabel={shouldShowStopButton ? 'Stop' : 'Send'}
-                    accessibilityState={{ disabled: !canPressSendButton }}
-                >
                     {isAborting ? (
                         <ActivityIndicator
                             size="small"
@@ -2238,9 +2139,8 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                 color: canPressSendButton ? activeSendIconColor : theme.colors.textSecondary,
                             }}
                         />
-                    )}
-                </BubblePressable>
-            </View>
+                )}
+            </ComposerControlButton>
         </Shaker>
     );
 
@@ -2275,45 +2175,33 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
      * refactor. Tap to open the latch, tap to close it.
      */
     const mobileMicAction = canDictateHere ? (
-        <View
-            style={[
-                styles.mobileMicButton,
-                micSurface === 'recording' ? styles.talkButtonHeld : undefined,
-            ]}
+        <ComposerControlButton
+            // NO CIRCLE UNLESS OPEN, which is why `fill` is undefined at rest
+            // (DROVE-254, and Clay's standing instruction). A bare glyph gets no
+            // glass button of its own — that would BE the circle he took off —
+            // and it does not need one: it stands on the bubble's own
+            // interactive glass, so the press it draws is already the
+            // platform's. Open, it is a glass button tinted with the row's
+            // recording red (DROVE-266).
+            fill={micSurface === 'recording' ? composerControlPalette(theme.dark).recording : undefined}
+            onPress={handleMobileMicPress}
+            accessibilityRole="button"
+            accessibilityState={{ selected: micLive }}
+            accessibilityLabel={t(micLive
+                ? 'agentInput.audioOut.micStop'
+                : 'agentInput.audioOut.micStart')}
         >
-            <BubblePressable
-                // Bare at rest, so the glass answers; filled once it is open,
-                // where the red disc covers the material (DROVE-266).
-                nativeGlassPress={micPress.nativeGlass}
-                style={(p) => ({
-                    width: '100%',
-                    height: '100%',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    opacity: micPress.fade && p.pressed ? 0.7 : 1,
-                })}
-                // 36 reserved plus 6 a side, the same bargain every control on
-                // this row strikes.
-                hitSlop={MOBILE_COMPOSER_METRICS.primaryActionSlop}
-                onPress={handleMobileMicPress}
-                accessibilityRole="button"
-                accessibilityState={{ selected: micLive }}
-                accessibilityLabel={t(micLive
-                    ? 'agentInput.audioOut.micStop'
-                    : 'agentInput.audioOut.micStart')}
-            >
-                <Ionicons
-                    name="mic"
-                    size={18}
-                    // White on the red disc while it is open, the row's
-                    // foreground while it is not. `micColour` is the one way to
-                    // either, so the glyph and the fill read the same state.
-                    color={micLive
-                        ? composerFillTint(composerControlPalette(theme.dark).recording)
-                        : micColour(composerPalette, 'idle')}
-                />
-            </BubblePressable>
-        </View>
+            <Ionicons
+                name="mic"
+                size={18}
+                // White on the red disc while it is open, the row's foreground
+                // while it is not. `micColour` is the one way to either, so the
+                // glyph and the fill read the same state.
+                color={micLive
+                    ? composerFillTint(composerControlPalette(theme.dark).recording)
+                    : micColour(composerPalette, 'idle')}
+            />
+        </ComposerControlButton>
     ) : null;
 
     /**
@@ -2408,46 +2296,32 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
      * table in full is in composerAudioOut.ts.
      */
     const mobileAudioAction = audioOut.shown ? (
-        <View
-            style={[
-                styles.mobileAudioButton,
-                styles.mobileInFieldDisc,
-                audioOut.fill === 'paused' && styles.mobileIconButtonPaused,
-                audioOut.fill === 'accent' && styles.mobileIconButtonOn,
-                audioOut.fill === 'recording' && styles.mobileIconButtonCalling,
-            ]}
+        <ComposerControlButton
+            // Always a filled disc, at every one of its four faces, so it is
+            // always a glass button and never a bare glyph (DROVE-266). The
+            // four fills are the state table in composerAudioOut.ts read as
+            // COLOURS rather than as stylesheet entries, because a tint is a
+            // prop and a background was a style.
+            fill={audioOut.fill === 'paused' ? composerPausedFill(theme.dark)
+                : audioOut.fill === 'accent' ? theme.colors.radio.active
+                    : audioOut.fill === 'recording' ? composerControlPalette(theme.dark).recording
+                        : composerDiscFill}
+            onPress={handleAudioOutPress}
+            onLongPress={handleAudioOutLongPress}
+            accessibilityRole="button"
+            accessibilityState={{ selected: audioOut.on }}
+            accessibilityLabel={t(audioOut.labelKey)}
         >
-            <BubblePressable
-                onPress={handleAudioOutPress}
-                onLongPress={handleAudioOutLongPress}
-                // Always a filled disc, at every one of its four faces, so the
-                // fade is always its response (DROVE-266).
-                nativeGlassPress={filledPress.nativeGlass}
-                style={(p) => ({
-                    width: '100%',
-                    height: '100%',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    opacity: filledPress.fade && p.pressed ? 0.7 : 1,
-                })}
-                // 36 drawn plus 6 a side is a 48pt target, the same bargain the
-                // discs either side of it strike.
-                hitSlop={MOBILE_COMPOSER_METRICS.primaryActionSlop}
-                accessibilityRole="button"
-                accessibilityState={{ selected: audioOut.on }}
-                accessibilityLabel={t(audioOut.labelKey)}
-            >
-                <Ionicons
-                    name={audioOut.glyph}
-                    size={16}
-                    color={audioOut.fill === 'none'
-                        ? composerGlyphColour(composerPalette)
-                        : audioOut.fill === 'paused'
-                            ? composerPausedTint(theme.dark)
-                            : theme.colors.button.primary.tint}
-                />
-            </BubblePressable>
-        </View>
+            <Ionicons
+                name={audioOut.glyph}
+                size={16}
+                color={audioOut.fill === 'none'
+                    ? composerGlyphColour(composerPalette)
+                    : audioOut.fill === 'paused'
+                        ? composerPausedTint(theme.dark)
+                        : theme.colors.button.primary.tint}
+            />
+        </ComposerControlButton>
     ) : null;
 
     return (
@@ -2993,14 +2867,30 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         `gap` property, because the row wants a fixed 6 in
                         three places and slack in exactly one. See
                         `resolveComposerBubbleGapGeometry`. */}
+                    {/* THE CAPSULE'S OWN ROW, on the phones too narrow to share
+                        one (DROVE-266). DROVE-264 named this remedy for 320 and
+                        left it unbuilt; growing the buttons made it compulsory,
+                        because six objects take the size and 375 cannot survive
+                        a single point of growth. `composerCapsuleOwnRow` is the
+                        line and sessionPillLabel.ts carries the arithmetic.
+
+                        It goes ABOVE the button row so send stays in the
+                        bubble's bottom-trailing corner, where DROVE-214 put it
+                        and where its clearance from the rounded corner is
+                        measured. */}
+                    {compactMobileComposer && capsuleOwnRow && mobileSessionControls ? (
+                        <View style={styles.mobileBubbleCapsuleRow}>
+                            {mobileSessionControls}
+                        </View>
+                    ) : null}
                     {compactMobileComposer ? (
                         <View style={styles.mobileBubbleActionRow}>
                             {showMobileAddButton ? mobileAddAction : null}
-                            {showMobileAddButton && mobileSessionControls
+                            {showMobileAddButton && mobileSessionControls && !capsuleOwnRow
                                 ? <View style={styles.mobileBubbleGap} />
                                 : null}
-                            {mobileSessionControls}
-                            {mobileSessionControls
+                            {capsuleOwnRow ? null : mobileSessionControls}
+                            {mobileSessionControls && !capsuleOwnRow
                                 ? <View style={styles.mobileBubbleGap} />
                                 : null}
                             <View style={styles.mobileBubbleActionSpacer} />

@@ -158,10 +158,10 @@ describe('every chrome control against Apple’s 44pt floor', () => {
      * The two glyph segments in the session capsule are 36 wide against
      * Apple's 44, because they sit against each other inside one capsule and
      * horizontal slop is not available to them. Keeping them at 44 was
-     * measured and is not affordable: it leaves 66pt for the model's name at
-     * 320, under what the shortest name the picker offers needs at any legible
-     * type size. So the choice was a 36pt-wide segment or no model name, and
-     * DROVE-138 was filed about losing the model name.
+     * measured and is not affordable: it leaves 47pt for the model's name at
+     * 375, under what the longest Claude name needs at any legible type size.
+     * So the choice was a narrower segment or no model name, and DROVE-138 was
+     * filed about losing the model name.
      */
     it('names the capsule segments as the composer\'s one sub-44 target, and why', () => {
         const exempt = controls.filter((control) => control.exemptReason !== undefined);
@@ -169,13 +169,13 @@ describe('every chrome control against Apple’s 44pt floor', () => {
             .toEqual(['permission mode segment', 'effort segment']);
         for (const control of exempt) {
             // Under the floor on ONE axis only, and over it on the other.
-            expect(controlTargetWidth(control), control.name).toBe(36);
-            expect(controlTargetHeight(control), control.name).toBe(48);
+            expect(controlTargetWidth(control), control.name).toBe(39);
+            expect(controlTargetHeight(control), control.name).toBe(51);
             expect(control.horizontalSlop, control.name).toBe(0);
         }
     });
 
-    it('draws every composer control at the bubble row\'s own 36, with the slop', () => {
+    it('draws every composer control at the bubble row\'s own size, with the slop', () => {
         const nested = controls.filter((control) => control.drawnHeight < CHROME_TARGET_MIN);
         // Six now, not two, and they are the whole of the bubble's button row
         // (DROVE-236). Drawing any of them at 44 would touch the field's
@@ -191,7 +191,10 @@ describe('every chrome control against Apple’s 44pt floor', () => {
             'model segment',
         ]);
         for (const control of nested) {
-            expect(control.drawnHeight, control.name).toBe(36);
+            // 39 since DROVE-266, on Clay's "a little bigger". The argument for
+            // the exact number, and for why it is not 40, is on
+            // `MOBILE_COMPOSER_METRICS.primaryActionSize`.
+            expect(control.drawnHeight, control.name).toBe(39);
             expect(control.slop, control.name).toBe(MOBILE_COMPOSER_METRICS.primaryActionSlop);
         }
     });

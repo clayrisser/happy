@@ -5,8 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 import Svg, { Circle, Line, Path } from 'react-native-svg';
 import { Typography } from '@/constants/Typography';
 import { BubblePressable } from './BubblePressable';
-import { getGlassSurfaceOverflow, resolveComposerPressResponse } from './glassInteractionPolicy';
-import { useNativeGlassPress } from './glassPress';
+import { getGlassSurfaceOverflow } from './glassInteractionPolicy';
 import {
     effortAccessibility,
     effortGaugeAngle,
@@ -316,49 +315,49 @@ function Control(props: {
         ? [styles.modelSegment, { height: props.size }]
         : [styles.control, { width: props.size, height: props.size }];
     /**
-     * THE CAPSULE'S OWN FILL IS WHAT DECIDES THIS, NOT THE SURFACE IT SITS IN
-     * (DROVE-266, correcting a stale reading of DROVE-202).
+     * THE FADE IS THIS SEGMENT'S ONLY POSSIBLE RESPONSE, AND THAT FOLLOWS FROM
+     * THE CAPSULE RATHER THAN FROM THE SURFACE (DROVE-266).
      *
      * `useNativeGlassPress()` answers a question about the SURFACE: is the
      * material under this control drawing the press. That was the right
-     * question while the capsule was its own `GlassChromeSurface` (DROVE-153),
-     * and it stopped being the right one when DROVE-254 made the capsule an
-     * OPAQUE fill for the contrast reason. An opaque capsule COVERS the
-     * bubble's glass, so `UIGlassEffect.isInteractive` lenses underneath a view
-     * nothing shows through, and a segment that trusted the context would
-     * simply have no press response.
+     * question while the capsule was its own `GlassChromeSurface` (DROVE-153).
+     * It stopped being the right one when DROVE-254 made the capsule an OPAQUE
+     * fill, because an opaque capsule COVERS the bubble's glass and
+     * `UIGlassEffect.isInteractive` then lenses underneath a view nothing shows
+     * through. A segment that trusted the context would have no press response
+     * at all, which was invisible only because the composer's bubble never
+     * asked for interactive glass until DROVE-266's first half.
      *
-     * That was invisible until DROVE-266, because the composer's bubble never
-     * asked for interactive glass, so the context was false everywhere in here
-     * and the fade always ran. It asks now, so the answer has to come from what
-     * this control is made of rather than from where it is.
+     * SO WHY IS THE CAPSULE NOT A GLASS BUTTON LIKE THE DISCS NOW ARE. Because
+     * DROVE-254 ruled on THIS control by name. Clay filed it on the capsule —
+     * "this blends in which is annoying" — and the fix was to stop it being a
+     * `UIGlassEffect` nested in the bubble's own. Re-glassing it is the one move
+     * that would re-create that ticket, and it would cost the open segment's
+     * wash its clip as well: an interactive surface must not clip (DROVE-202),
+     * and the capsule's `overflow: hidden` is what rounds that wash to its ends.
+     * The discs have neither problem, which is why they moved and this did not.
      *
-     * `resolveComposerPressResponse` is the rule for the whole row; this passes
-     * `filled`, which the capsule is at every state including the open wash.
+     * No `useNativeGlassPress` and no policy call, then: an opaque capsule is
+     * never on the material, so the answer is constant and is written here.
      */
-    const surfaceDrawsNativeGlass = useNativeGlassPress();
-    const press = resolveComposerPressResponse({
-        surfaceDrawsNativeGlass,
-        control: 'filled',
-        disabled: !props.onPress,
-    });
+    const pressable = !!props.onPress;
     return (
         <BubblePressable
             onPress={props.onPress ? () => props.onPress?.(props.picker) : undefined}
-            disabled={!props.onPress}
-            nativeGlassPress={press.nativeGlass}
+            disabled={!pressable}
+            nativeGlassPress={false}
             // Vertical only. See `verticalSlop` on the props for why the other
             // axis is not available inside a shared capsule.
             hitSlop={{ top: props.verticalSlop, bottom: props.verticalSlop, left: 0, right: 0 }}
             style={(p) => [
                 ...segmentStyle,
                 props.open && styles.controlOpen,
-                { opacity: press.fade && p.pressed ? 0.7 : 1 },
+                { opacity: pressable && p.pressed ? 0.7 : 1 },
             ]}
             accessibilityRole="button"
             accessibilityLabel={props.accessibilityLabel}
             accessibilityValue={props.accessibilityValue ? { text: props.accessibilityValue } : undefined}
-            accessibilityState={{ expanded: props.open, disabled: !props.onPress }}
+            accessibilityState={{ expanded: props.open, disabled: !pressable }}
         >
             {props.children}
         </BubblePressable>
@@ -419,12 +418,12 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
         // three discs on this row already are, and the reasoning and the
         // measurement are on `COMPOSER_SESSION_CAPSULE_FILL`.
         //
-        // The press response follows THE CONTROL'S OWN FILL, not the surface
-        // (DROVE-266). An opaque capsule covers the bubble's glass, so the
-        // platform's lensing happens under a view nothing shows through, and
-        // the 0.7 fade is the only response these segments can have. That is
-        // the same answer the discs either side of them get, and for the same
-        // reason. `resolveComposerPressResponse` carries it.
+        // AND IT STAYS ONE, THOUGH THE DISCS EITHER SIDE ARE GLASS BUTTONS NOW
+        // (DROVE-266). Clay asked for the row's buttons to be smaller Liquid
+        // Glass buttons and the four discs are; this is the one control that
+        // does not follow them, because DROVE-254 was filed about THIS shape
+        // being a glass effect inside the bubble's own. The argument is on
+        // `Control` below, with what it would additionally cost the open wash.
         //
         // No rim either. The fallback surface drew a hairline border, and the
         // three discs on this row do not: one separation mechanism, measured,

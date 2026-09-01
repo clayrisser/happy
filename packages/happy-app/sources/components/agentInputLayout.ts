@@ -255,7 +255,36 @@ export const MOBILE_COMPOSER_METRICS = {
      * That is a reason to draw a circle. It is not a number to compute, and
      * every number that used to be computed from it is gone.
      */
-    primaryActionSize: 36,
+    /**
+     * 39, UP FROM 36, WHICH IS THE LARGEST "A LITTLE BIGGER" THIS ROW CAN
+     * AFFORD ON CLAY'S OWN PHONE (DROVE-266).
+     *
+     * Clay: "you can make the buttons in the speech bubble a little bigger".
+     * The size is not taste, it is the last integer that clears an arithmetic
+     * wall, and the wall is worth stating because the next person will want 40.
+     *
+     * Six objects on this row take this size — four discs and the capsule's two
+     * glyph segments — so every point costs the model's name SIX, and the name
+     * is the one thing on the row carrying a value rather than a state
+     * (DROVE-138, DROVE-178). `composerRowFixedWidth` in sessionPillLabel.ts is
+     * the budget and the crossover where the longest name meets the type floor:
+     *
+     *   36   fixed 242   crossover 371   375 and 393 hold the single row
+     *   37   fixed 248   crossover 377   375 already does not
+     *   39   fixed 260   crossover 389   390 and 393 hold it
+     *   40   fixed 266   crossover 395   393 does not, and 393 is the phone
+     *
+     * TWO THINGS FALL OUT OF THAT TABLE. That 375 cannot survive ANY growth,
+     * not even a single point, so the remedy DROVE-264 named for 320 — the
+     * capsule taking a row of its own, vertical space instead of the name — is
+     * no longer optional and is built (`composerCapsuleOwnRow`). And that 40
+     * would put that second row on a 393pt handset, which is undoing
+     * DROVE-236's 50pt of transcript on the screen Clay actually reads. So 39.
+     *
+     * The touch target grows with it: 39 drawn plus `primaryActionSlop` a side
+     * is 51, against DROVE-153's 44pt floor.
+     */
+    primaryActionSize: 39,
     primaryActionSlop: 6,
     attachmentExtraHeight: 72,
     /**
@@ -311,35 +340,38 @@ export const MOBILE_COMPOSER_TEXT_ROW_BASE_HEIGHT = MOBILE_COMPOSER_METRICS.inpu
  * padding rather than a per-control offset. The touch target is the drawn disc
  * plus `primaryActionSlop`, which does not take space.
  *
- * IT DOES NOT GROW FOR THE THREE CONTROLS THAT JOINED IT (DROVE-236). They
- * were drawn at 44 on a row of their own; in here they are drawn at 36, the
- * size the row already is. That is the whole reason the bubble's height did
- * not move: 85 before the move and 85 after it, with a row that holds five
- * things instead of two.
+ * IT DID NOT GROW FOR THE THREE CONTROLS THAT JOINED IT (DROVE-236). They were
+ * drawn at 44 on a row of their own; in here they take the row's own size. That
+ * is the whole reason the bubble's height did not move then: 85 before the move
+ * and 85 after it, with a row that holds five things instead of two. It grows
+ * by 3 in DROVE-266, because Clay asked for bigger buttons and a row as tall as
+ * its buttons is the one honest way to give him them.
  */
 export const MOBILE_COMPOSER_BUBBLE_ACTION_ROW_HEIGHT = MOBILE_COMPOSER_METRICS.primaryActionSize;
 
 /**
  * What a session control is drawn at INSIDE the bubble (DROVE-236).
  *
- * 36, the row's own size, not `COMPOSER_SESSION_CONTROL_SIZE`'s 44. The
+ * 39, the row's own size, not `COMPOSER_SESSION_CONTROL_SIZE`'s 44. The
  * permission glyph, the effort gauge, the model's segment and the audio button
  * are all this tall, so the row is one family of objects rather than a 44pt
- * capsule wedged between two 36pt discs.
+ * capsule wedged between two smaller discs. 36 until DROVE-266 grew every
+ * object on the row together; the argument for the number is on
+ * `primaryActionSize`.
  *
  * IT COSTS A TOUCH TARGET AND THAT IS THE TRADE, stated rather than buried.
- * The two glyph segments are 36 WIDE as well as 36 tall, and they sit against
+ * The two glyph segments are 39 WIDE as well as 39 tall, and they sit against
  * each other inside one capsule, so horizontal slop is not available to them:
  * a segment that claimed 6pt to its right would be claiming its neighbour's
  * ink. Vertically they take `primaryActionSlop` like every other control on
- * the row, so each answers a touch in a 36 x 48 box. That is under Apple's
- * 44pt floor on ONE axis.
+ * the row, so each answers a touch in a 39 x 51 box. That is still under
+ * Apple's 44pt floor on ONE axis, by 5 rather than by 8.
  *
  * The alternative was to keep them at 44 wide, and it is not affordable: the
- * arithmetic is in `sessionPillLabel.ts`, and 44pt segments leave 66pt for the
- * model's name at 320, which is under what `Opus 5` needs at any legible type
- * size. So the choice is a 36pt-wide segment or no model name, and DROVE-138
- * was filed about losing the model name.
+ * arithmetic is in `sessionPillLabel.ts`, and 44pt segments leave 47pt for the
+ * model's name at 375, which is under what `Opus 4.8 1M` needs at any legible
+ * type size. So the choice is a narrower segment or no model name, and
+ * DROVE-138 was filed about losing the model name.
  */
 export const MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE = MOBILE_COMPOSER_METRICS.primaryActionSize;
 
@@ -347,7 +379,7 @@ export const MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE = MOBILE_COMPOSER_METRICS.prima
  * The chat bubble, empty: padding, one line of text, the gap, the button row,
  * padding (DROVE-214).
  *
- * 85, up from 44, AND THE COMPOSER GETS 41PT TALLER. That is the cost of the
+ * 88, up from 44, AND THE COMPOSER GETS 44PT TALLER. That is the cost of the
  * arrangement Clay asked for and it is worth stating plainly rather than
  * burying: "probably we should put everything in the speech bubble with the
  * buttons on the bottom and the text input one row above it?" A button row
@@ -376,7 +408,7 @@ export const MOBILE_COMPOSER_BUBBLE_BASE_HEIGHT = MOBILE_COMPOSER_METRICS.bubble
  * The whole chat composer block, empty: the bubble, and the gap it keeps over
  * the status strip.
  *
- * 93, down from 143. DROVE-214 made it 148 by giving the buttons a row of
+ * 96, down from 143. DROVE-214 made it 148 by giving the buttons a row of
  * their own inside the bubble, DROVE-236 took 5 back off the bubble's floor,
  * and this takes the whole control row away: it is INSIDE the bubble now, on
  * the row the buttons already had. The terms, ticket by ticket:
@@ -394,7 +426,7 @@ export const MOBILE_COMPOSER_BUBBLE_BASE_HEIGHT = MOBILE_COMPOSER_METRICS.bubble
  * to sit beside the mic at the right rim. So there is one bubble and nothing
  * under it, and the 50pt the row and its gap were costing go to the transcript.
  *
- * THE BUBBLE DID NOT GROW TO TAKE THEM. Its button row is 36 tall and the
+ * THE BUBBLE DID NOT GROW TO TAKE THEM. Its button row was 36 tall and the
  * three controls that joined it are drawn at 36 rather than the 44 they wore
  * outside (`MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE`), so 85 is 85. What the move
  * costs is width, not height, and the whole of that cost is the model name's
@@ -452,21 +484,37 @@ export const MOBILE_COMPOSER_CHROME_HEIGHT = MOBILE_COMPOSER_BASE_HEIGHT
  * DROVE-206: it used to be added at both ends and the two conventions were
  * never reconciled because nothing laid out from either.
  */
-export function resolveMobileComposerHeight(inputHeight: number, hasAttachments = false): number {
+export function resolveMobileComposerHeight(
+    inputHeight: number,
+    hasAttachments = false,
+    capsuleOwnRow = false,
+): number {
     return MOBILE_COMPOSER_CHROME_HEIGHT
-        + resolveMobileComposerBubbleHeight(inputHeight, hasAttachments);
+        + resolveMobileComposerBubbleHeight(inputHeight, hasAttachments, capsuleOwnRow);
 }
 
-/** How tall the chat bubble is: its two rows, its padding and any attachments. */
+/** How tall the chat bubble is: its rows, its padding and any attachments. */
 export function resolveMobileComposerBubbleHeight(
     inputHeight: number,
     hasAttachments = false,
+    /**
+     * Whether the session capsule has taken a row of its own (DROVE-266).
+     *
+     * True only below `COMPOSER_ROW_MIN_MODEL_WIDTH`, and it costs exactly what
+     * a row in this column costs: the row's height plus the gap above it, the
+     * same terms the attachment strip is counted on. Defaults to false, which
+     * is every phone at or above the line and every caller before this one.
+     */
+    capsuleOwnRow = false,
 ): number {
     return MOBILE_COMPOSER_METRICS.bubbleInset
         + MOBILE_COMPOSER_METRICS.bubbleInsetBottom
         + resolveMobileComposerTextRowHeight(inputHeight)
         + MOBILE_COMPOSER_METRICS.controlGap
         + MOBILE_COMPOSER_BUBBLE_ACTION_ROW_HEIGHT
+        + (capsuleOwnRow
+            ? MOBILE_COMPOSER_BUBBLE_ACTION_ROW_HEIGHT + MOBILE_COMPOSER_METRICS.controlGap
+            : 0)
         // The strip is a third row in the same column, so it costs the gap as
         // well as its own height. Counted here because the bubble's `gap` is
         // what actually draws it (DROVE-214).
