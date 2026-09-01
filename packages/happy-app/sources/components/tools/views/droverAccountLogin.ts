@@ -59,3 +59,57 @@ export function hostOf(url: string): string {
     const match = /^https:\/\/([^/?#]+)/.exec(url);
     return match ? match[1] : url;
 }
+
+/**
+ * What the clipboard is holding, judged before any of it reaches the Mac
+ * (DROVE-335).
+ *
+ * Clay: "for the login I was kinda expecting a paste and submit button instead
+ * of having to paste in a field and submit." One tap is the feature; this
+ * function is the part that keeps one tap from being worse than four.
+ *
+ * A pasted answer is sent straight to a `claude auth login` that is BLOCKED on
+ * stdin with two tries and no more, so a clipboard holding the sign-in URL, a
+ * paragraph, or whatever was copied an hour ago does not merely fail — it
+ * spends one of Clay's attempts and comes back as "Invalid code". Refusing it
+ * here costs nothing and is undoable; sending it is neither.
+ *
+ * Deliberately NOT a shape test for Claude Code's `<code>#<state>`. That format
+ * is Anthropic's to change, and a validator that knows it too well is a login
+ * that breaks on their next release. What is refused is only what CANNOT be a
+ * code: nothing, a link, more than one word, and lengths no token has.
+ */
+export type ClipboardCode = { code: string } | { refused: string };
+
+/** Shorter than any authorization code, and short enough to be a mis-copy. */
+const minClipboardCodeLength = 8;
+/** Longer than any of them, and about where a paste is really a document. */
+const maxClipboardCodeLength = 512;
+
+export function clipboardCode(raw: string | null | undefined): ClipboardCode {
+    const text = typeof raw === 'string' ? raw.trim() : '';
+    if (!text) {
+        return { refused: 'There is nothing on the clipboard to send.' };
+    }
+    // Checked before the whitespace rule so the commonest wrong paste — the
+    // sign-in link itself, one tap away on the row above — is named for what
+    // it is rather than lumped in with a paragraph.
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(text)) {
+        return { refused: 'That is the sign-in link, not the code. Sign in on that page first, then copy the code it gives you.' };
+    }
+    if (/\s/.test(text)) {
+        return { refused: 'That is more than one word, so it is not the code. Copy just the code the sign-in page shows.' };
+    }
+    if (text.length < minClipboardCodeLength) {
+        return { refused: `That is ${text.length} characters, which is too short to be the code.` };
+    }
+    if (text.length > maxClipboardCodeLength) {
+        return { refused: 'That is far too long to be the code. Copy just the code the sign-in page shows.' };
+    }
+    // The characters a URL-safe token and its state fragment can carry, and no
+    // others. Anything else is a sentence, a filename or a JSON blob.
+    if (!/^[\w.~#%+/=:-]+$/.test(text)) {
+        return { refused: 'That has characters no login code carries, so it was not sent.' };
+    }
+    return { code: text };
+}
