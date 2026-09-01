@@ -136,8 +136,22 @@ export function getGeminiPermissionModes(translate: Translate): PermissionMode[]
 // the model ID Claude Code accepts (`claude --model 'claude-opus-5[1m]'`) and
 // selects the 1M-context variant; unknown bracket models are rejected, so the
 // suffix is honored rather than silently dropped (#1721).
+//
+// FABLE 5.1 IS `claude-fable-5-1`, AND OPUS 5.1 IS DELIBERATELY ABSENT
+// (DROVE-324). The id was NOT recalled from memory — it is the id both sources
+// this ticket names agree on: the `claude-api` skill's model table lists
+// `claude-fable-5-1`, and the installed harness (Claude Code 2.1.257) carries
+// the exact string `claude-fable-5-1` (24 occurrences) plus the display name
+// "Fable 5.1" (18). Clay asked for "Opus 5.1" too, but NEITHER source knows an
+// `claude-opus-5-1`: the harness's highest Opus id is `claude-opus-5` and no
+// "Opus 5.1" string appears anywhere in it, and the skill's table stops at
+// `claude-opus-5`. A row for a model neither source has is exactly the
+// "looks right, fails on the first turn" entry this file's full-ID rule exists
+// to prevent, so Opus 5.1 is left out until an id for it exists to source. The
+// menu still holds current-generation 5s only.
 export function getClaudeModelModes(): ModelMode[] {
     return [
+        { key: 'claude-fable-5-1', name: 'Fable 5.1', description: null },
         { key: 'claude-fable-5', name: 'Fable 5', description: null },
         { key: 'claude-opus-5', name: 'Opus 5', description: null },
         { key: 'claude-opus-5[1m]', name: 'Opus 5 [1M]', description: '1M context' },

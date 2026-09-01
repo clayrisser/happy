@@ -247,3 +247,73 @@ describe('creditsSafeRow', () => {
         expect(creditsSafeRow(paneCreditsDialog(unknown)!)).toBeNull()
     })
 })
+
+/**
+ * DROVE-324. Adding Fable 5.1 to the picker means a switch can now raise the
+ * Fable 5.1 spelling of this dialog, which 2.1.257 templates with the model
+ * name. The detector matches the Fable family by version, so the gate that
+ * keeps the switch from hanging and keeps money unspent covers 5.1 exactly as
+ * it covered 5.
+ */
+describe('the Fable 5.1 credits dialog (DROVE-324)', () => {
+    /** `/model claude-fable-5-1` at an idle prompt. */
+    const picker51 = screen(
+        '❯ Write me a poem',
+        '▔'.repeat(40),
+        '   Switch to Fable 5.1?',
+        '   Fable 5.1 runs on usage credits — you have $4.20 in credits.',
+        '',
+        '   ❯ No, keep my current model',
+        '     Continue with Fable 5.1',
+    )
+
+    /** The week's Fable 5.1 usage ran out mid-session. */
+    const midSession51 = screen(
+        '⏺ Reading the file',
+        '▔'.repeat(40),
+        "   You've reached your Fable 5.1 limit",
+        "   You've used your included Fable 5.1 usage for this week. Continuing on Fable 5.1 uses usage credits, purchased separately from your plan.",
+        "   You don't have usage credits yet.",
+        '',
+        '   ❯ Switch to Opus 5 and continue',
+        '     Yes, buy usage credits',
+    )
+
+    /** The default-consent title, with the upsell row appended. */
+    const withUpsell51 = screen(
+        '   Fable 5.1 now uses usage credits',
+        '   Fable 5.1 runs on usage credits, purchased separately from your plan.',
+        '',
+        '     Not now',
+        '   ❯ Buy usage credits',
+        '     Upgrade to Max and get Fable 5.1 included',
+    )
+
+    it('recognises the Fable 5.1 spelling of all three titles', () => {
+        // The literal-only detector missed every one of these; the version
+        // patterns hand back the actual substring on screen.
+        expect(paneCreditsDialogTitle(picker51)).toBe('Switch to Fable 5.1?')
+        expect(paneCreditsDialogTitle(midSession51)).toBe("You've reached your Fable 5.1 limit")
+        expect(paneCreditsDialogTitle(withUpsell51)).toBe('Fable 5.1 now uses usage credits')
+    })
+
+    it('reads the Fable 5.1 rows so the phone can render the real choice', () => {
+        const dialog = paneCreditsDialog(picker51)!
+        expect(dialog.title).toBe('Switch to Fable 5.1?')
+        expect(dialog.rows).toEqual([
+            { index: 0, label: 'No, keep my current model', focused: true },
+            { index: 1, label: 'Continue with Fable 5.1', focused: false },
+        ])
+        expect(dialog.body).toBe('Fable 5.1 runs on usage credits — you have $4.20 in credits.')
+    })
+
+    it('treats a Fable 5.1 consent row as spending, and takes only the decline', () => {
+        expect(creditsRowSpends('Continue with Fable 5.1')).toBe(true)
+        expect(creditsRowSpends('Yes, buy usage credits')).toBe(true)
+        // Every safe row is a decline; nothing that spends is ever chosen.
+        expect(creditsSafeRow(paneCreditsDialog(picker51)!)!.label).toBe('No, keep my current model')
+        expect(creditsSafeRow(paneCreditsDialog(midSession51)!)!.label).toBe('Switch to Opus 5 and continue')
+        expect(creditsSafeRow(paneCreditsDialog(withUpsell51)!)!.label).toBe('Not now')
+        expect(creditsRowSpends(creditsSafeRow(paneCreditsDialog(picker51)!)!.label)).toBe(false)
+    })
+})

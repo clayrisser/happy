@@ -140,13 +140,17 @@ describe('modelModeOptions', () => {
 
     it('only offers the current-generation claude models', () => {
         const models = getClaudeModelModes();
+        // Fable 5.1 leads as the new most-capable; the id is the one the
+        // claude-api skill and Claude Code 2.1.257 both carry (DROVE-324).
         expect(models.map((model) => model.key)).toEqual([
+            'claude-fable-5-1',
             'claude-fable-5',
             'claude-opus-5',
             'claude-opus-5[1m]',
             'claude-sonnet-5',
         ]);
         expect(models.map((model) => model.name)).toEqual([
+            'Fable 5.1',
             'Fable 5',
             'Opus 5',
             'Opus 5 [1M]',
@@ -156,6 +160,12 @@ describe('modelModeOptions', () => {
         // resolve to an older model than the row claims.
         expect(models.some((model) => model.key === 'default')).toBe(false);
         expect(models.some((model) => ['opus', 'sonnet', 'fable', 'haiku'].includes(model.key))).toBe(false);
+        // Opus 5.1 is NOT offered: no `claude-opus-5-1` exists in the skill
+        // table or the harness, so a row for it would fail on the first turn
+        // (DROVE-324). Only a fabricated id could put it here, which is the one
+        // thing this menu's full-ID rule forbids.
+        expect(models.some((model) => model.key === 'claude-opus-5-1')).toBe(false);
+        expect(models.every((model) => model.key !== 'claude-fable-5-1' || model.name === 'Fable 5.1')).toBe(true);
     });
 
     it('offers every codex model the levels its own registry publishes', () => {
@@ -180,7 +190,7 @@ describe('modelModeOptions', () => {
         // DROVE-164 measured `/effort ultracode` at a real prompt on
         // `claude-opus-5[1m]` and Claude Code took it, so Opus 5 belongs with
         // the models that reach it, not against them.
-        for (const model of ['claude-opus-5', 'claude-opus-5[1m]', 'claude-fable-5', 'claude-sonnet-5', 'claude-opus-4-8', 'claude-opus-4-7']) {
+        for (const model of ['claude-fable-5-1', 'claude-opus-5', 'claude-opus-5[1m]', 'claude-fable-5', 'claude-sonnet-5', 'claude-opus-4-8', 'claude-opus-4-7']) {
             const keys = getEffortLevelsForModel('claude', model).map((level) => level.key);
             expect(keys).toEqual(['low', 'medium', 'high', 'xhigh', 'max', 'ultracode']);
             // Claude's floor is `low`; there is no off.
@@ -426,6 +436,59 @@ describe('modelModeOptions', () => {
         ]);
         expect(filterPermissionModesForCli(modes, '1.2.1-beta.2')).toEqual(modes);
         expect(filterPermissionModesForCli(modes, undefined)).toEqual(modes);
+    });
+});
+
+// DROVE-324. Fable 5.1 joins the picker as `claude-fable-5-1` — the id both
+// the claude-api skill and Claude Code 2.1.257 carry, never recalled from
+// memory. Opus 5.1 is refused because no such id exists in either source.
+describe('the Fable 5.1 picker entry (DROVE-324)', () => {
+    it('offers Fable 5.1 by its sourced id, at the top of the Claude list', () => {
+        const models = getClaudeModelModes();
+        const fable51 = models.find((model) => model.name === 'Fable 5.1');
+        expect(fable51).toEqual({ key: 'claude-fable-5-1', name: 'Fable 5.1', description: null });
+        // Leads the list as the new most-capable, ahead of Fable 5.
+        expect(models[0].key).toBe('claude-fable-5-1');
+        expect(models.findIndex((m) => m.key === 'claude-fable-5-1'))
+            .toBeLessThan(models.findIndex((m) => m.key === 'claude-fable-5'));
+    });
+
+    it('does not invent an Opus 5.1 row', () => {
+        // Neither the skill table nor the 2.1.257 harness has `claude-opus-5-1`;
+        // a row for it is the picker entry that fails on turn one.
+        const keys = getClaudeModelModes().map((model) => model.key);
+        expect(keys).not.toContain('claude-opus-5-1');
+        expect(keys).not.toContain('claude-opus-5.1');
+        // The highest Opus that IS offered is plain `claude-opus-5`.
+        expect(keys).toContain('claude-opus-5');
+    });
+
+    it('carries its OWN effort range, the full Claude scale it can reach', () => {
+        // AC: each new model states its effort range, not inherited by accident.
+        // Fable 5.1 reaches xhigh (it is not on the no-xhigh deny list and is
+        // not a legacy claude-3), so it takes ultracode too — the same range as
+        // Fable 5, arrived at per-model rather than copied.
+        const range = getEffortLevelsForModel('claude', 'claude-fable-5-1').map((l) => l.key);
+        expect(range).toEqual(['low', 'medium', 'high', 'xhigh', 'max', 'ultracode']);
+        expect(range).toEqual(getEffortLevelsForModel('claude', 'claude-fable-5').map((l) => l.key));
+        expect(getClaudeEffortLevelsForModel('claude-fable-5-1').map((l) => l.key)).toEqual(range);
+        // Nothing greyed out, and the slider's top lands on ultracode.
+        expect(getUnreachableClaudeEffortLevels('claude-fable-5-1')).toEqual([]);
+        expect(getEffortLevelsForPicker('claude', 'claude-fable-5-1').some((l) => l.disabled)).toBe(false);
+        expect(getHighestReachableEffortKey('claude', 'claude-fable-5-1')).toBe('ultracode');
+    });
+
+    it('lets the picked id reach the pane and back unchanged (model actually used == pick)', () => {
+        // The key IS the full model id, so `claude --model claude-fable-5-1`
+        // runs it and the transcript reports `claude-fable-5-1`; the reader
+        // believes the pane over a not-yet-landed pick.
+        expect(resolvePaneModelKey('claude-fable-5-1', 'claude-fable-5-1')).toBe('claude-fable-5-1');
+        expect(resolvePaneModelKey('claude-fable-5-1', 'claude-opus-5')).toBe('claude-fable-5-1');
+        // No bracket variant, so nothing to preserve; the pane wins outright.
+        expect(resolvePaneModelKey('claude-fable-5', 'claude-fable-5-1')).toBe('claude-fable-5');
+        // Already an offered row, so it needs no disabled pane fallback.
+        const claudeModels = getClaudeModelModes();
+        expect(includePaneModel(claudeModels, 'claude-fable-5-1')).toBe(claudeModels);
     });
 });
 

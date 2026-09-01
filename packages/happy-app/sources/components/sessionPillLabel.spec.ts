@@ -28,6 +28,9 @@ import { MOBILE_COMPOSER_METRICS } from './agentInputLayout';
 describe('shortModelName', () => {
     it('maps the Claude ids to the names people use', () => {
         expect(shortModelName({ key: 'claude-fable-5' })).toBe('Fable 5');
+        // DROVE-324: the minor version reads as `5.1`, so the pill shows the
+        // model actually picked rather than collapsing it onto Fable 5.
+        expect(shortModelName({ key: 'claude-fable-5-1' })).toBe('Fable 5.1');
         expect(shortModelName({ key: 'claude-opus-5' })).toBe('Opus 5');
         expect(shortModelName({ key: 'claude-sonnet-5' })).toBe('Sonnet 5');
         expect(shortModelName({ key: 'claude-haiku-4-5' })).toBe('Haiku 4.5');
