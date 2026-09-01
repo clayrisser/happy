@@ -37,9 +37,17 @@ import { isDroverBridgeSession } from './droverBridgeSession';
 import { liveStatusSince, liveStatusWatchLine } from '@/utils/liveStatus';
 import { sessionDisplayTitle } from '@/utils/sessionTitle';
 import { deriveSessionTasks } from '@/utils/sessionTasks';
-import { currentDroverAccountRow, droverAccountExpired } from '@/utils/droverUsage';
+import { currentDroverAccountRow, droverAccountExpired, droverAccountsUsage } from '@/utils/droverUsage';
 import type { DroverUsageAccountLike } from '@/utils/droverUsage';
-import { droverBindingLimit, usageFill } from '@/components/agentInputUsage';
+import {
+    droverBindingLimit,
+    usageAccountBarGroup,
+    usageFill,
+    usageMeasures,
+    type DroverBindingLimit,
+    type UsageBarGroup,
+    type UsageMeasure,
+} from '@/components/agentInputUsage';
 import { resolveSessionState } from './sessionState';
 import { sessionDotFacts, sessionDotState } from '@/components/sessionDot';
 import {
@@ -59,6 +67,7 @@ import {
     publishDroverSnapshot,
     sendDroverTranscript,
     type DroverAccountRow,
+    type DroverAccountLimitRow,
     wakeDroverWatch,
     type DroverGate,
     type DroverSession,
@@ -109,6 +118,36 @@ export { collectGates };
 const HEARTBEAT_MS = 60_000;
 
 /**
+ * One account's quota windows, folded to the wire (DROVE-339).
+ *
+ * The rows are the SHEET's, not a second derivation of them: percent, band and
+ * trailing words all come off `usageAccountBarGroup`, so a window that reads
+ * "window reset" on the phone reads "window reset" on the wrist, in the same
+ * words, for the same reason.
+ */
+function wristLimitRows(group: UsageBarGroup, measures: UsageMeasure[]): DroverAccountLimitRow[] {
+    // `usageAccountBarGroup` builds its rows by mapping over `measures`, so
+    // row i is measure i. The id is not on the row itself — nothing on the
+    // phone needs it there — and the wrist needs one to key a list on.
+    return group.rows.map((row, index) => ({
+        id: measures[index]?.id ?? row.key,
+        // The FULL name, never the row's cut one: `truncateUsageName` cuts to
+        // the PHONE's name column, and a wrist's is a different width.
+        label: row.fullName,
+        // The whole-number spelling of the fill the phone drew — the same
+        // number `usageFill` calls percentUsed, since the fraction it returns
+        // is that percentage over 100 (DROVE-230). Omitted where nothing was
+        // measured, never sent as zero: zero used is a FRESH window and a real
+        // reading, and the two must not share a spelling.
+        ...(row.measured ? { used: Math.round(row.fraction * 100) } : {}),
+        tone: row.tone,
+        // Empty is the sheet's "nothing to say here"; the key just goes.
+        ...(row.trailing ? { trailing: row.trailing } : {}),
+        ...(row.binding ? { binding: true } : {}),
+    }));
+}
+
+/**
  * The accounts the wrist can flip ONTO, most headroom first (DROVE-28's watch
  * half).
  *
@@ -145,6 +184,43 @@ export function collectAccountRows(
         }
     }
     if (!freshest) return [];
+    // THE BREAKDOWN, built by the phone's own sheet code (DROVE-339).
+    //
+    // Clay: "when I select a specific account to see the limit, it should
+    // actually show the full breakdown of all the limits, just like it shows
+    // in the mobile app." The wrist cannot build that itself — it is Swift and
+    // `usageAccountBarGroup` is TypeScript — so the rows the sheet draws are
+    // computed here, over this same snapshot, and sent (DROVE-129). One
+    // function, two surfaces, no second ranking and no second set of words for
+    // "window reset".
+    //
+    // No SDK override is passed, and there is nothing to pass: the sheet hands
+    // `usageAccountBarGroup` the live `agentState.usageLimits` for the account
+    // its session is on, and this feed is not scoped to a session. So every
+    // wrist figure comes off the registry snapshot, exactly as `headroom` and
+    // the binding limit already do.
+    const usage = {
+        capturedAt: freshest.capturedAt,
+        modelFamily: freshest.modelFamily,
+        accounts: freshest.accounts as DroverUsageAccountLike[],
+    };
+    const measured = droverAccountsUsage(usage);
+    // Computed across ALL accounts, like the sheet's: the measures decide the
+    // ROWS, and an account whose own windows are a subset still draws them so
+    // two accounts' breakdowns can be read against each other.
+    const measures = usageMeasures(measured);
+    // Ranked over the snapshot's RAW rows, which is the set the CLI computed
+    // `headroom` from — the same reason resolveUsageStrip ranks them there and
+    // not over the mapped windows.
+    const bindings = new Map<string, DroverBindingLimit | null>();
+    for (const raw of usage.accounts) {
+        if (!raw || typeof raw.name !== 'string' || !raw.name) continue;
+        bindings.set(raw.name, droverBindingLimit(raw, freshest.modelFamily, freshest.capturedAt));
+    }
+    const groups = new Map(measured.map((account) => [
+        account.name,
+        usageAccountBarGroup(account, measures, { binding: bindings.get(account.name) ?? null }),
+    ]));
     const rows: DroverAccountRow[] = [];
     for (const entry of freshest.accounts) {
         const account = entry as DroverUsageAccountLike & { cooling?: { until?: unknown } | null };
@@ -173,7 +249,7 @@ export function collectAccountRows(
         // ranking rather than re-derived on the wrist (DROVE-131, DROVE-129).
         // Its percentLeft is the same number `headroom` is — both are 100
         // minus the fullest row — so the bar and the label always agree.
-        const binding = droverBindingLimit(account, freshest.modelFamily, freshest.capturedAt);
+        const binding = bindings.get(account.name) ?? null;
         // A window that had already reset when the cache was read (DROVE-204).
         // The wrist cannot work this out: `droverRowUsable` compares against
         // the clock that was in the room at capture, and the watch has only
@@ -189,6 +265,15 @@ export function collectAccountRows(
         // which is exactly the claim an unusable window must not make.
         const fill = usageFill(headroom === undefined ? null : headroom);
         const used = expired ? null : fill.percentUsed;
+        const group = groups.get(account.name);
+        // Sent only when the CLI actually recorded windows for this account.
+        // The sheet draws bare Session and Week rows either way so its blocks
+        // line up down a column; the wrist opens ONE account at a time and has
+        // no column to keep straight, so two dashes there would be a table
+        // that says nothing the account's own line does not already say.
+        const limits = group && Array.isArray(account.limits) && account.limits.length > 0
+            ? wristLimitRows(group, measures)
+            : [];
         rows.push({
             name: account.name,
             // Omitted, never null: WatchConnectivity payloads take
@@ -216,6 +301,14 @@ export function collectAccountRows(
                     ...(binding.resetsAt ? { resetsAt: new Date(binding.resetsAt).toISOString() } : {}),
                 }
                 : {}),
+            // What SELECTING this account opens (DROVE-339).
+            ...(limits.length ? { limits } : {}),
+            // The sheet's own heading, which is the one line that says which
+            // of the four nothings an account with no figure is in.
+            ...(group?.title ? { title: group.title } : {}),
+            // Offered exactly where the phone offers it, refused exactly where
+            // the phone refuses it.
+            ...(group?.switchable ? { switchable: true } : {}),
         });
     }
     // Most headroom first, logged-out last: the wrist reads top down and the
@@ -439,10 +532,18 @@ function sameAccountRows(a: DroverAccountRow[], b: DroverAccountRow[]): boolean 
     // Fable week, or the current account can move under a flip, with every
     // headroom figure unchanged, and a publish keyed only on the numbers would
     // leave the wrist naming yesterday's limit.
+    // The BREAKDOWN is in the key too (DROVE-339), and for the same reason the
+    // binding limit is: the wrist shows it. A week ticking from 61% to 62%
+    // while the binding session window sits at 100% moves no field above, and
+    // a publish keyed only on those would leave an open account detail reading
+    // yesterday's rows.
+    const limits = (r: DroverAccountRow) => (r.limits ?? [])
+        .map((l) => `${l.id}:${l.used ?? ''}:${l.tone ?? ''}:${l.trailing ?? ''}:${l.binding === true}`)
+        .join(',');
     const key = (r: DroverAccountRow) =>
         `${r.name}|${r.headroom ?? ''}|${r.used ?? ''}|${r.loggedIn}|${r.backAt ?? ''}`
         + `|${r.current === true}|${r.limit ?? ''}|${r.resetsAt ?? ''}|${r.tone ?? ''}`
-        + `|${r.expired === true}`;
+        + `|${r.expired === true}|${r.title ?? ''}|${r.switchable === true}|${limits(r)}`;
     return a.every((row, i) => key(row) === key(b[i]));
 }
 

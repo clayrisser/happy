@@ -24,10 +24,14 @@ import SwiftUI
 ///   ranking. That is "where can I flip to", which is the second question and
 ///   deserves the scroll rather than the glance.
 ///
-///   NOT HERE AT ALL — the other two windows for any account. If Session is
-///   the binding limit, Week being at 38% changes nothing about whether he can
-///   work right now, and it is on the phone a pocket away. The wrist shows the
-///   number that decides; the phone shows the numbers that explain it.
+///   ONE TAP DOWN — the other two windows for any account (DROVE-339). If
+///   Session is the binding limit, Week being at 38% changes nothing about
+///   whether he can work right now, so it stays off this screen; but "why"
+///   is the very next question and it used to be answerable only on the phone.
+///   Selecting a row opens `AccountLimitsView`, which is the phone's whole
+///   block — Session, Week, Fable week, each with its bar, its percentage and
+///   its reset — for that one account. The glance decides; the screen behind
+///   it explains.
 ///
 /// Which limit is most binding is DECIDED BY THE PHONE and sent
 /// (`DroverAccount.limit`, `.tone`), never re-ranked here: the watch is Swift
@@ -58,7 +62,19 @@ struct LimitsView: View {
                         BannerRow(text: message, symbol: "exclamationmark.triangle", tint: .red)
                     }
                     if let current = store.snapshot.currentAccount {
-                        CurrentLimitBlock(account: current, now: context.date)
+                        // EVERY row opens its own breakdown (DROVE-339). The
+                        // current account's too: it is the one whose windows
+                        // Clay is most often asking about, and a block that
+                        // led the screen and alone did nothing when tapped
+                        // would read as broken rather than as final.
+                        //
+                        // `.buttonStyle(.plain)` is load-bearing here for the
+                        // reason it is on `HeadroomLink` (DROVE-228): without
+                        // it watchOS paints an accent capsule under the whole
+                        // row, and that capsule gets read as the bar.
+                        AccountDoor(name: current.name) {
+                            CurrentLimitBlock(account: current, now: context.date)
+                        }
                         let others = store.snapshot.otherAccounts
                         if !others.isEmpty {
                             // No heading over the list, the same call
@@ -67,7 +83,9 @@ struct LimitsView: View {
                             // the wrist does not have.
                             Divider()
                             ForEach(others) { account in
-                                AccountLimitRow(account: account, now: context.date)
+                                AccountDoor(name: account.name) {
+                                    AccountLimitRow(account: account, now: context.date)
+                                }
                             }
                         }
                     } else {
@@ -81,6 +99,24 @@ struct LimitsView: View {
             }
         }
         .navigationTitle("Limits")
+    }
+}
+
+/// A row that opens that account's every window (DROVE-339).
+///
+/// One spelling for both rows on this screen, so the glance block and the list
+/// underneath cannot end up with two different ideas of what a tap does — and
+/// so `.buttonStyle(.plain)` is applied in exactly one place rather than being
+/// remembered twice (DROVE-228).
+private struct AccountDoor<Content: View>: View {
+    let name: String
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        NavigationLink(value: DroverRoute.account(name)) {
+            content
+        }
+        .buttonStyle(.plain)
     }
 }
 

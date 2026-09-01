@@ -334,6 +334,84 @@ enum DroverFreshness: Equatable {
     case stale(reason: String?)
 }
 
+/// ONE quota window on one account, as the phone's sheet draws it (DROVE-339).
+///
+/// The wrist's Limits screen shows one bar per account — the binding limit,
+/// which is the whole of "can I still work" (DROVE-131). SELECTING an account
+/// opens these: Session, Week and every family week, the same rows the phone
+/// gives every account. Clay: "when I select a specific account to see the
+/// limit, it should actually show the full breakdown of all the limits, just
+/// like it shows in the mobile app."
+///
+/// NOTHING IS DECIDED HERE. The percentage, the band and the words behind the
+/// row are `usageAccountBarGroup`'s, evaluated on the phone and sent, for the
+/// reason `DroverAccount.tone`, `.limit` and `.used` are sent (DROVE-129): the
+/// ranking, the fill direction and the four different nothings are TypeScript
+/// the watch cannot import, and this binary ships through TestFlight where a
+/// drift could not be corrected OTA.
+struct DroverAccountLimit: Codable, Identifiable, Equatable, Hashable {
+    /// `five_hour`, `seven_day`, `seven_day_fable` — the sheet's own ids, and
+    /// what a list on this side is keyed on.
+    let id: String
+    /// The window's name in the phone's words: "Session", "Week", "Fable week".
+    let label: String
+    /// Percent USED, which is what the bar FILLS to (DROVE-230). Absent where
+    /// there is no reading — nobody measured it, the window had already reset,
+    /// or a wider window is spent so this one cannot be spent either. Zero is a
+    /// real reading, a fresh window, and never stands for "no reading".
+    let used: Int?
+    /// The band the phone computed, as a String for the reason every other
+    /// band on this wire is one: a band from a newer phone must cost one
+    /// colour, not the whole snapshot.
+    let tone: String?
+    /// What the phone prints behind the row: "Resets 6 PM", "window reset",
+    /// "Week spent". Absent on a row with nothing to say.
+    let trailing: String?
+    /// The window the account's headroom was read off — the one that stops
+    /// work first (DROVE-230). Absent, never false.
+    let binding: Bool?
+
+    /// The same band vocabulary the account rows use, so one screen cannot
+    /// draw two colour schemes.
+    var band: DroverAccount.Tone { DroverAccount.Tone(rawValue: tone ?? "") ?? .unknown }
+
+    /// Is there a figure to print? Absent `used` is the phone withholding one,
+    /// and the trailing line says which nothing it is — in the phone's words,
+    /// never in a second set invented here.
+    var isMeasured: Bool { used != nil }
+
+    var isBinding: Bool { binding == true }
+
+    /// Percent USED, clamped. The phone sends it; nothing computes it.
+    var usedPercent: Int? {
+        guard let used else { return nil }
+        return min(100, max(0, used))
+    }
+
+    /// How much of the track the fill covers, 0...1. Unmeasured returns 0 and
+    /// the views must not draw it — an empty fill is the positive claim
+    /// "nothing used yet" (DROVE-230).
+    var fraction: Double {
+        guard let usedPercent else { return 0 }
+        return Double(usedPercent) / 100
+    }
+
+    /// `79%`, or the dash the phone prints where there is no figure. The same
+    /// spelling `DroverAccount.figure` uses, so a nothing looks like a nothing
+    /// wherever it appears on this wrist.
+    var figure: String {
+        guard let usedPercent else { return "\u{2013}" }
+        return "\(usedPercent)%"
+    }
+
+    /// The figure with its direction said out loud, for VoiceOver: a bar
+    /// carries direction to an eye and to nothing else (DROVE-230).
+    var spokenFigure: String {
+        guard let usedPercent else { return "not measured" }
+        return "\(usedPercent)% used"
+    }
+}
+
 /// One account the wrist may flip a session onto, with the number that decides
 /// which (DROVE-28's watch half).
 ///
@@ -408,6 +486,35 @@ struct DroverAccount: Codable, Identifiable, Equatable, Hashable {
     /// (DROVE-129). Omitted, never false, so a phone that predates the key
     /// reads as not expired, which is what that phone meant.
     let expired: Bool?
+    /// EVERY window this account has, in the phone's own order — Session,
+    /// Week, then one row per model family any account scopes a limit to
+    /// (DROVE-339). This is what selecting the account opens.
+    ///
+    /// Absent when the CLI recorded no windows for it. The phone draws bare
+    /// Session and Week rows anyway so its blocks line up down a column; the
+    /// wrist opens one account at a time and has no column to keep straight,
+    /// so two dashes would be a table saying nothing the account's own line
+    /// does not already say. Absent for a phone that predates the key too,
+    /// which is why the detail still has to stand up with none.
+    let limits: [DroverAccountLimit]?
+    /// The sheet's own heading for this account: "jamrizzi · 51% left on
+    /// Week", "main · not logged in", with the cooling time on the end when it
+    /// is out (DROVE-339).
+    ///
+    /// Sent rather than composed here for the reason everything else is
+    /// (DROVE-129): `usageAccountGroupTitle` decides between four different
+    /// nothings — no login, not measured, window reset, a cursor token's
+    /// deadline — and a Swift copy of that ladder is a second ladder that can
+    /// disagree with the first. `heading(at:)` below is the fallback for a
+    /// phone too old to send one, and it is deliberately the shorter sentence.
+    let title: String?
+    /// A session can be MOVED onto this account: it is not the one in use, it
+    /// is logged in, its config dir has been through Claude Code's first run,
+    /// and it is not a cursor account (DROVE-339).
+    ///
+    /// The phone's own verdict, so the wrist offers a switch exactly where the
+    /// sheet offers one. Absent, never false.
+    let switchable: Bool?
 
     /// Written out rather than synthesised so `expired` can arrive last with a
     /// default. A row this build constructs by hand (GateStore's fallback, the
@@ -422,7 +529,10 @@ struct DroverAccount: Codable, Identifiable, Equatable, Hashable {
         resetsAt: Date?,
         tone: String?,
         expired: Bool? = nil,
-        used: Int? = nil
+        used: Int? = nil,
+        limits: [DroverAccountLimit]? = nil,
+        title: String? = nil,
+        switchable: Bool? = nil
     ) {
         self.name = name
         self.headroom = headroom
@@ -434,6 +544,9 @@ struct DroverAccount: Codable, Identifiable, Equatable, Hashable {
         self.resetsAt = resetsAt
         self.tone = tone
         self.expired = expired
+        self.limits = limits
+        self.title = title
+        self.switchable = switchable
     }
 
     /// The four bands the phone's `usageBarTone` produces, plus the one it
@@ -526,6 +639,37 @@ struct DroverAccount: Codable, Identifiable, Equatable, Hashable {
     func resets(after now: Date) -> Date? {
         guard let resetsAt, resetsAt > now else { return nil }
         return resetsAt
+    }
+
+    /// The windows to draw on the detail, empty when the phone sent none.
+    var limitRows: [DroverAccountLimit] { limits ?? [] }
+
+    /// Whether a session may be moved here. Absent reads as no, which is the
+    /// safe answer: an older phone sending nothing means the wrist offers no
+    /// switch rather than one that bounces on the Mac.
+    var canTakeASession: Bool { switchable == true }
+
+    /// The heading over the breakdown: the phone's sentence, or the shortest
+    /// honest one this build can write without it (DROVE-339).
+    ///
+    /// The fallback is deliberately NOT a reimplementation of
+    /// `usageAccountGroupTitle`. That function chooses between four different
+    /// nothings and the wrist must not own a second copy of that choice
+    /// (DROVE-129), so a phone too old to send a title gets the name, the
+    /// headroom it did send, and the window it named — and the rows below say
+    /// the rest.
+    func heading(at now: Date) -> String {
+        if let title, !title.isEmpty { return title }
+        var parts: [String] = [name]
+        if let left = headroomFigure {
+            parts.append(limit.map { "\(left) on \($0)" } ?? left)
+        } else if loggedIn == false {
+            parts.append("not logged in")
+        }
+        if let back = backAt, back > now {
+            parts.append("back \(back.formatted(date: .omitted, time: .shortened))")
+        }
+        return parts.joined(separator: " · ")
     }
 }
 
