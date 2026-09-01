@@ -24,8 +24,17 @@ import {
     autoStartAddAccount,
     pendingAccountLoginFor,
     pendingAccountLogins,
+    accountCanRun,
+    accountGroupFooter,
+    accountGroupTitle,
     accountHeadroomLabel,
+    accountHarnessOrder,
     accountSubtitle,
+    accountsByHarness,
+    freshCursorAccounts,
+    loginCommand,
+    phaseHarness,
+    staleCursorAccounts,
     type AddAccountPhase,
     type MachineAccount,
 } from './machineAccountsFlow';
@@ -35,8 +44,14 @@ const before = ['main', 'jamrizzi'];
 function waiting(overrides: Partial<Extract<AddAccountPhase, { kind: 'waiting' }>> = {}) {
     return {
         kind: 'waiting' as const,
+        // Claude by default (DROVE-270), so every assertion written before the
+        // harness existed still pins the Claude wording it was written for.
+        harness: 'claude' as const,
         startedAt: 1_000,
         before,
+        // Nothing was due a renewal, which is what every assertion written
+        // before cursor existed assumed (DROVE-270).
+        stale: [] as string[],
         linkReady: false,
         linkLate: false,
         ...overrides,
@@ -45,8 +60,8 @@ function waiting(overrides: Partial<Extract<AddAccountPhase, { kind: 'waiting' }
 
 describe('advanceAddAccount', () => {
     it('starts, then waits once the machine says the login is running', () => {
-        const starting = advanceAddAccount(addAccountIdle, { type: 'start' });
-        expect(starting).toEqual({ kind: 'starting' });
+        const starting = advanceAddAccount(addAccountIdle, { type: 'start', harness: 'claude' });
+        expect(starting).toEqual({ kind: 'starting', harness: 'claude' });
         const next = advanceAddAccount(starting, { type: 'started', at: 1_000, before });
         expect(next).toEqual(waiting());
     });
@@ -56,21 +71,21 @@ describe('advanceAddAccount', () => {
         // so two taps really are two logins — two cards, two URLs, and no way to
         // tell which code belongs to which.
         const phase = waiting();
-        expect(advanceAddAccount(phase, { type: 'start' })).toBe(phase);
-        expect(advanceAddAccount({ kind: 'starting' }, { type: 'start' })).toEqual({ kind: 'starting' });
+        expect(advanceAddAccount(phase, { type: 'start', harness: 'claude' })).toBe(phase);
+        expect(advanceAddAccount({ kind: 'starting', harness: 'claude' }, { type: 'start', harness: 'claude' })).toEqual({ kind: 'starting', harness: 'claude' });
     });
 
     it('starts again after it finished or failed', () => {
-        expect(advanceAddAccount({ kind: 'added', name: 'x' }, { type: 'start' })).toEqual({ kind: 'starting' });
-        expect(advanceAddAccount({ kind: 'failed', reason: 'no' }, { type: 'start' })).toEqual({ kind: 'starting' });
-        expect(advanceAddAccount({ kind: 'stoppedWatching' }, { type: 'start' })).toEqual({ kind: 'starting' });
+        expect(advanceAddAccount({ kind: 'added', harness: 'claude', name: 'x' }, { type: 'start', harness: 'claude' })).toEqual({ kind: 'starting', harness: 'claude' });
+        expect(advanceAddAccount({ kind: 'failed', harness: 'claude', reason: 'no' }, { type: 'start', harness: 'claude' })).toEqual({ kind: 'starting', harness: 'claude' });
+        expect(advanceAddAccount({ kind: 'stoppedWatching', harness: 'claude' }, { type: 'start', harness: 'claude' })).toEqual({ kind: 'starting', harness: 'claude' });
     });
 
     it('fails when the RPC itself was refused', () => {
-        const phase = advanceAddAccount({ kind: 'starting' }, {
+        const phase = advanceAddAccount({ kind: 'starting', harness: 'claude' }, {
             type: 'startFailed', reason: 'the drover wrapper was not found',
         });
-        expect(phase).toEqual({ kind: 'failed', reason: 'the drover wrapper was not found' });
+        expect(phase).toEqual({ kind: 'failed', harness: 'claude', reason: 'the drover wrapper was not found' });
     });
 
     it('records the link arriving, and does not churn when it has not changed', () => {
@@ -89,7 +104,7 @@ describe('advanceAddAccount', () => {
         const next = advanceAddAccount(phase, {
             type: 'accounts', at: 2_000, names: ['main', 'jamrizzi', 'bitspur.com'],
         });
-        expect(next).toEqual({ kind: 'added', name: 'bitspur.com' });
+        expect(next).toEqual({ kind: 'added', harness: 'claude', name: 'bitspur.com' });
     });
 
     it('keeps waiting while the list is unchanged', () => {
@@ -109,7 +124,7 @@ describe('advanceAddAccount', () => {
         const next = advanceAddAccount(phase, {
             type: 'accounts', at: 1_000 + addAccountWatchMs, names: before,
         });
-        expect(next).toEqual({ kind: 'stoppedWatching' });
+        expect(next).toEqual({ kind: 'stoppedWatching', harness: 'claude' });
     });
 
     it('takes a late success over the timeout when both land together', () => {
@@ -117,11 +132,11 @@ describe('advanceAddAccount', () => {
         const next = advanceAddAccount(phase, {
             type: 'accounts', at: 1_000 + addAccountWatchMs, names: [...before, 'late'],
         });
-        expect(next).toEqual({ kind: 'added', name: 'late' });
+        expect(next).toEqual({ kind: 'added', harness: 'claude', name: 'late' });
     });
 
     it('ignores an account list that arrives when nothing is being added', () => {
-        for (const phase of [addAccountIdle, { kind: 'starting' } as const, { kind: 'added', name: 'x' } as const]) {
+        for (const phase of [addAccountIdle, { kind: 'starting', harness: 'claude' } as const, { kind: 'added', harness: 'claude', name: 'x' } as const]) {
             expect(advanceAddAccount(phase, { type: 'accounts', at: 9_000, names: ['brand-new'] })).toBe(phase);
         }
     });
@@ -134,19 +149,19 @@ describe('advanceAddAccount', () => {
     });
 
     it('dismisses back to idle from anywhere', () => {
-        expect(advanceAddAccount({ kind: 'added', name: 'x' }, { type: 'dismiss' })).toEqual(addAccountIdle);
+        expect(advanceAddAccount({ kind: 'added', harness: 'claude', name: 'x' }, { type: 'dismiss' })).toEqual(addAccountIdle);
         expect(advanceAddAccount(waiting(), { type: 'dismiss' })).toEqual(addAccountIdle);
     });
 
     it('runs a whole successful login end to end', () => {
         let phase: AddAccountPhase = addAccountIdle;
-        phase = advanceAddAccount(phase, { type: 'start' });
+        phase = advanceAddAccount(phase, { type: 'start', harness: 'claude' });
         phase = advanceAddAccount(phase, { type: 'started', at: 0, before });
         phase = advanceAddAccount(phase, { type: 'accounts', at: 5_000, names: before });
         phase = advanceAddAccount(phase, { type: 'link', ready: true });
         expect(addAccountStatus(phase)?.hasLink).toBe(true);
         phase = advanceAddAccount(phase, { type: 'accounts', at: 60_000, names: [...before, 'new@x.com'] });
-        expect(phase).toEqual({ kind: 'added', name: 'new@x.com' });
+        expect(phase).toEqual({ kind: 'added', harness: 'claude', name: 'new@x.com' });
         expect(addAccountBusy(phase)).toBe(false);
     });
 
@@ -184,7 +199,7 @@ describe('advanceAddAccount', () => {
     it('a new account still wins over the link being late', () => {
         expect(advanceAddAccount(waiting(), {
             type: 'accounts', at: 1_000 + addAccountLinkWaitMs, names: [...before, 'added@example.com'],
-        })).toEqual({ kind: 'added', name: 'added@example.com' });
+        })).toEqual({ kind: 'added', harness: 'claude', name: 'added@example.com' });
     });
 
     // DROVE-212, the second time. The deadlines used to ride on `accounts`,
@@ -208,7 +223,7 @@ describe('advanceAddAccount', () => {
 
     it('stops watching on time alone', () => {
         expect(advanceAddAccount(waiting(), { type: 'tick', at: 1_000 + addAccountWatchMs }))
-            .toEqual({ kind: 'stoppedWatching' });
+            .toEqual({ kind: 'stoppedWatching', harness: 'claude' });
     });
 
     it('never calls a tick late once the link is already there', () => {
@@ -218,7 +233,7 @@ describe('advanceAddAccount', () => {
     });
 
     it('ignores a tick outside the wait', () => {
-        const added = { kind: 'added' as const, name: 'added@example.com' };
+        const added = { kind: 'added' as const, harness: 'claude' as const, name: 'added@example.com' };
         expect(advanceAddAccount(added, { type: 'tick', at: 9_000_000 })).toBe(added);
     });
 });
@@ -244,8 +259,8 @@ describe('autoOpenLoginUrl (DROVE-212)', () => {
         // arrival at this screen would throw Clay into a dead sign-in page he
         // never asked for.
         expect(autoOpenLoginUrl({ phase: addAccountIdle, url, opened: null })).toBeNull();
-        expect(autoOpenLoginUrl({ phase: { kind: 'starting' }, url, opened: null })).toBeNull();
-        expect(autoOpenLoginUrl({ phase: { kind: 'added', name: 'x' }, url, opened: null })).toBeNull();
+        expect(autoOpenLoginUrl({ phase: { kind: 'starting', harness: 'claude' }, url, opened: null })).toBeNull();
+        expect(autoOpenLoginUrl({ phase: { kind: 'added', harness: 'claude', name: 'x' }, url, opened: null })).toBeNull();
     });
 
     it('opens nothing when there is no link, or the link is not https', () => {
@@ -258,10 +273,10 @@ describe('autoOpenLoginUrl (DROVE-212)', () => {
 describe('addAccountBusy', () => {
     it('is true exactly while a login is in flight', () => {
         expect(addAccountBusy(addAccountIdle)).toBe(false);
-        expect(addAccountBusy({ kind: 'starting' })).toBe(true);
+        expect(addAccountBusy({ kind: 'starting', harness: 'claude' })).toBe(true);
         expect(addAccountBusy(waiting())).toBe(true);
-        expect(addAccountBusy({ kind: 'added', name: 'x' })).toBe(false);
-        expect(addAccountBusy({ kind: 'stoppedWatching' })).toBe(false);
+        expect(addAccountBusy({ kind: 'added', harness: 'claude', name: 'x' })).toBe(false);
+        expect(addAccountBusy({ kind: 'stoppedWatching', harness: 'claude' })).toBe(false);
     });
 });
 
@@ -305,12 +320,12 @@ describe('addAccountStatus', () => {
     });
 
     it('carries the machine’s own refusal, rather than a generic apology', () => {
-        const failed = addAccountStatus({ kind: 'failed', reason: 'DROVER_BIN is not set' })!;
+        const failed = addAccountStatus({ kind: 'failed', harness: 'claude', reason: 'DROVER_BIN is not set' })!;
         expect(failed.detail).toBe('DROVER_BIN is not set');
     });
 
     it('never says the login failed when it only stopped watching', () => {
-        const stopped = addAccountStatus({ kind: 'stoppedWatching' })!;
+        const stopped = addAccountStatus({ kind: 'stoppedWatching', harness: 'claude' })!;
         expect(stopped.title).toBe('Stopped watching');
         expect(stopped.detail).toContain('may still be running');
         expect(stopped.detail.toLowerCase()).not.toContain('failed');
@@ -577,5 +592,285 @@ describe('the quota sheet\'s way into the flow (DROVE-208)', () => {
         expect(autoStartAddAccount({
             requested: 'm-drogon', started: false, online: true, accounts: [],
         })).toEqual([]);
+    });
+});
+
+/* ------------------------------------------------------------------------- *
+ * THE SECOND HARNESS (DROVE-270).
+ *
+ * Clay, with this page open: "Why doesn't it have an option to add a cursor
+ * account". What is pinned here is that adding one does not turn a cursor
+ * account into a Claude account wearing a different word: it is unmeasured for
+ * a structural reason, it is never a flip target, its sixty-day token is
+ * counted down while it still works, and every sentence it is shown is its own.
+ * ------------------------------------------------------------------------- */
+
+function cursor(overrides: Partial<MachineAccount> = {}): MachineAccount {
+    return account({
+        name: 'clay@bitspur.com',
+        harness: 'cursor',
+        // A cursor account has NO directory anywhere: cursor-agent keeps one
+        // machine-wide credential and drover hands each session its own token.
+        configDir: '',
+        // And therefore no `.claude.json`, so no address to read off one. It is
+        // NAMED after the address it signed in as instead.
+        login: null,
+        headroom: null,
+        tokenState: 'live',
+        expiresInDays: 41,
+        ...overrides,
+    });
+}
+
+describe('accountsByHarness', () => {
+    it('draws the cursor group even when it is empty, because the add row lives there', () => {
+        // A row nobody can find is the whole of this ticket.
+        const groups = accountsByHarness([account()]);
+        expect(groups.map((g) => g.harness)).toEqual([...accountHarnessOrder]);
+        expect(groups[1].accounts).toEqual([]);
+    });
+
+    it('files an account with no harness under claude', () => {
+        // A machine whose daemon predates the field lists exactly what it
+        // always did.
+        const groups = accountsByHarness([account({ harness: undefined }), cursor()]);
+        expect(groups[0].accounts.map((a) => a.name)).toEqual(['jamrizzi']);
+        expect(groups[1].accounts.map((a) => a.name)).toEqual(['clay@bitspur.com']);
+    });
+});
+
+describe('accountGroupTitle and accountGroupFooter', () => {
+    it('names the harness on the heading, so a cursor row is never under · Claude', () => {
+        expect(accountGroupTitle('studio.234.bitspur.com', 'claude'))
+            .toBe('studio.234.bitspur.com · Claude');
+        expect(accountGroupTitle('studio.234.bitspur.com', 'cursor'))
+            .toBe('studio.234.bitspur.com · Cursor');
+    });
+
+    it('does not tell the Keychain story over a token', () => {
+        // The Claude explanation is WRONG for cursor, and copying it across is
+        // the bug this ticket exists to avoid: a cursor account is a TOKEN,
+        // which is exactly why two of them run side by side with no flip.
+        const cursorFooter = accountGroupFooter('cursor', true);
+        expect(cursorFooter).toContain('TOKEN');
+        expect(cursorFooter).toContain('nothing to flip');
+        expect(cursorFooter).not.toContain('Keychain');
+    });
+
+    it('leads with offline for both, because that outranks either explanation', () => {
+        for (const harness of accountHarnessOrder) {
+            expect(accountGroupFooter(harness, false)).toContain('offline');
+        }
+    });
+});
+
+describe('a cursor account on the accounts screen', () => {
+    it('is unmeasured and never a healthy percentage', () => {
+        // Cursor publishes no quota anywhere — its accounting is server-side —
+        // so there is no figure late, there is no figure at all. Guessing
+        // either end of the scale would put it in a ranking by headroom.
+        expect(accountHeadroomLabel(cursor())).toBe('no quota published');
+        expect(accountHeadroomLabel(cursor())).not.toContain('%');
+    });
+
+    it('counts the sixty-day token down while it still works', () => {
+        // There is NO refresh flow, so the repair needs Clay at a browser and a
+        // warning that arrives after the token dies has arrived too late.
+        expect(accountHeadroomLabel(cursor({ tokenState: 'renew', expiresInDays: 3 })))
+            .toBe('renew in 3d · no quota published');
+        expect(accountSubtitle(cursor({ tokenState: 'renew', expiresInDays: 3 })))
+            .toBe('renew in 3d · no quota published');
+    });
+
+    it('still runs work while it is counting down', () => {
+        // `renew` is a WORKING token with a deadline. Marking it unusable would
+        // park six perfectly good days.
+        expect(accountCanRun(cursor({ tokenState: 'renew', expiresInDays: 1 }))).toBe(true);
+    });
+
+    it('refuses work on a dead token, and says which death it was', () => {
+        // Three causes, three repairs. Only one of them is the calendar's.
+        expect(accountCanRun(cursor({ tokenState: 'expired' }))).toBe(false);
+        expect(accountHeadroomLabel(cursor({ tokenState: 'expired' })))
+            .toBe('login expired — sign in again');
+        expect(accountHeadroomLabel(cursor({ tokenState: 'tombstone' })))
+            .toBe('signed out of Cursor — sign in again');
+        expect(accountHeadroomLabel(cursor({ tokenState: 'missing', loggedIn: false })))
+            .toBe('no cursor token — sign in again');
+    });
+
+    it('never says "no login yet", which is the Claude sentence', () => {
+        // An expired token is a login that HAPPENED. Sending Clay to log in an
+        // account that is already logged in is what cost him a day on DROVE-246.
+        expect(accountHeadroomLabel(cursor({ tokenState: 'missing', loggedIn: false })))
+            .not.toContain('no login yet');
+    });
+
+    it('never advises drover trust, which would do nothing here', () => {
+        // The first-run theme picker is a Claude Code thing; cursor-agent opens
+        // on no wizard at all.
+        expect(accountHeadroomLabel(cursor({ onboarded: false }))).not.toContain('drover trust');
+    });
+});
+
+describe('the harness on the phase', () => {
+    it('rides every non-idle phase, so a failure lands under the right heading', () => {
+        expect(phaseHarness(addAccountIdle)).toBeNull();
+        expect(phaseHarness({ kind: 'starting', harness: 'cursor' })).toBe('cursor');
+        expect(phaseHarness(waiting({ harness: 'cursor' }))).toBe('cursor');
+        expect(phaseHarness({ kind: 'added', harness: 'cursor', name: 'x' })).toBe('cursor');
+        expect(phaseHarness({ kind: 'failed', harness: 'cursor', reason: 'x' })).toBe('cursor');
+        expect(phaseHarness({ kind: 'stoppedWatching', harness: 'cursor' })).toBe('cursor');
+    });
+
+    it('carries the harness from start to every phase after it', () => {
+        let phase = advanceAddAccount(addAccountIdle, { type: 'start', harness: 'cursor' });
+        expect(phase).toEqual({ kind: 'starting', harness: 'cursor' });
+        phase = advanceAddAccount(phase, { type: 'started', at: 10, before });
+        expect(phaseHarness(phase)).toBe('cursor');
+        phase = advanceAddAccount(phase, { type: 'accounts', at: 20, names: [...before, 'new@x.com'] });
+        expect(phase).toEqual({ kind: 'added', harness: 'cursor', name: 'new@x.com' });
+    });
+
+    it('refuses a second login while either harness is running', () => {
+        // The two share a private tmux server and the session name IS the lock,
+        // so the machine can only run one — and the card is joined to a machine
+        // rather than to a harness, so two would leave the screen unable to say
+        // which link belongs to which.
+        const started = advanceAddAccount(addAccountIdle, { type: 'start', harness: 'claude' });
+        expect(advanceAddAccount(started, { type: 'start', harness: 'cursor' })).toBe(started);
+    });
+});
+
+describe('what a cursor login is told', () => {
+    it('never mentions a code, because a cursor login has none', () => {
+        // `claude auth login` prints a URL and BLOCKS on a code typed back in.
+        // `cursor-agent login` prints a URL and polls its own API until a
+        // browser approves. Telling Clay to paste a code that never appears is
+        // exactly the dead end DROVE-238 was filed about.
+        const status = addAccountStatus(waiting({ harness: 'cursor', linkReady: true }))!;
+        expect(status.detail).toContain('no code');
+        expect(status.hasLink).toBe(true);
+        expect(status.title).toBe('Approve the sign-in in your browser');
+    });
+
+    it('still asks for the code on a claude login', () => {
+        expect(addAccountStatus(waiting({ linkReady: true }))!.detail).toContain('code');
+    });
+
+    it('names the harness while it starts', () => {
+        expect(addAccountStatus({ kind: 'starting', harness: 'cursor' })!.title)
+            .toContain('Cursor');
+        expect(addAccountStatus({ kind: 'starting', harness: 'claude' })!.title)
+            .toContain('Claude');
+    });
+
+    it('does not promise a flip after a cursor account is added', () => {
+        // A cursor account is never flipped onto: it carries a token, so a
+        // session simply starts on it.
+        const detail = addAccountStatus({ kind: 'added', harness: 'cursor', name: 'x' })!.detail;
+        expect(detail).toContain('No flip');
+        expect(addAccountStatus({ kind: 'added', harness: 'claude', name: 'x' })!.detail)
+            .toContain('flip onto it');
+    });
+
+    it('gives the exact line to run at the keyboard, with the flag', () => {
+        // `drover account login` on its own adds a CLAUDE account, so leaving
+        // the flag off a cursor failure sends him to diagnose the wrong login.
+        expect(loginCommand('claude')).toBe('drover account login');
+        expect(loginCommand('cursor')).toBe('drover account login --harness cursor');
+        expect(addAccountStatus({ kind: 'stoppedWatching', harness: 'cursor' })!.detail)
+            .toContain('drover account login --harness cursor');
+    });
+});
+
+describe('renewing a cursor account, which writes no new name (DROVE-270)', () => {
+    const stale = cursor({ name: 'clay@bitspur.com', tokenState: 'renew', expiresInDays: 2 });
+    const dead = cursor({ name: 'ops@bitspur.com', tokenState: 'expired', loggedIn: true });
+    const fine = cursor({ name: 'spare@bitspur.com', tokenState: 'live', expiresInDays: 41 });
+
+    it('picks out the rows that need Clay at a browser, now or within the week', () => {
+        expect(staleCursorAccounts([account(), stale, dead, fine]))
+            .toEqual(['clay@bitspur.com', 'ops@bitspur.com']);
+        expect(freshCursorAccounts([account(), stale, dead, fine]))
+            .toEqual(['spare@bitspur.com']);
+    });
+
+    it('calls a token going from due to fresh a success, not a stopped watch', () => {
+        // A repeat cursor login leaves the registry row STANDING and replaces
+        // only the stored token, so the name set is identical either side of
+        // it. Without this the exact repair the countdown asks for would run,
+        // work, and be reported as "the login may still be running".
+        let phase = advanceAddAccount(addAccountIdle, { type: 'start', harness: 'cursor' });
+        phase = advanceAddAccount(phase, {
+            type: 'started',
+            at: 1_000,
+            before: ['clay@bitspur.com'],
+            stale: ['clay@bitspur.com'],
+        });
+        phase = advanceAddAccount(phase, {
+            type: 'accounts',
+            at: 2_000,
+            names: ['clay@bitspur.com'],
+            fresh: ['clay@bitspur.com'],
+        });
+        expect(phase).toEqual({
+            kind: 'added',
+            harness: 'cursor',
+            name: 'clay@bitspur.com',
+            renewed: true,
+        });
+        const status = addAccountStatus(phase)!;
+        expect(status.title).toBe('Renewed clay@bitspur.com');
+        expect(status.detail).toContain('60 days');
+    });
+
+    it('keeps waiting while the token is still the old one', () => {
+        // The row is there and the name has not changed; only the token would.
+        let phase = advanceAddAccount(addAccountIdle, { type: 'start', harness: 'cursor' });
+        phase = advanceAddAccount(phase, {
+            type: 'started', at: 1_000, before: ['clay@bitspur.com'], stale: ['clay@bitspur.com'],
+        });
+        phase = advanceAddAccount(phase, {
+            type: 'accounts', at: 2_000, names: ['clay@bitspur.com'], fresh: [],
+        });
+        expect(phase.kind).toBe('waiting');
+    });
+
+    it('does not call a healthy account a renewal just because it is listed', () => {
+        // Only a row that was DUE and is now fresh counts. An account nobody
+        // touched must not announce itself.
+        let phase = advanceAddAccount(addAccountIdle, { type: 'start', harness: 'cursor' });
+        phase = advanceAddAccount(phase, {
+            type: 'started', at: 1_000, before: ['spare@bitspur.com'], stale: [],
+        });
+        phase = advanceAddAccount(phase, {
+            type: 'accounts', at: 2_000, names: ['spare@bitspur.com'], fresh: ['spare@bitspur.com'],
+        });
+        expect(phase.kind).toBe('waiting');
+    });
+
+    it('still prefers a genuinely new name when one appears', () => {
+        let phase = advanceAddAccount(addAccountIdle, { type: 'start', harness: 'cursor' });
+        phase = advanceAddAccount(phase, {
+            type: 'started', at: 1_000, before: ['clay@bitspur.com'], stale: ['clay@bitspur.com'],
+        });
+        phase = advanceAddAccount(phase, {
+            type: 'accounts',
+            at: 2_000,
+            names: ['clay@bitspur.com', 'ops@bitspur.com'],
+            fresh: ['clay@bitspur.com', 'ops@bitspur.com'],
+        });
+        expect(phase).toEqual({ kind: 'added', harness: 'cursor', name: 'ops@bitspur.com' });
+        expect(addAccountStatus(phase)!.title).toBe('Added ops@bitspur.com');
+    });
+
+    it('behaves exactly as before for a caller that sends neither field', () => {
+        // A screen that does not read tokens — and every Claude login — keeps
+        // the single "a new name appeared" gate it always had.
+        let phase = advanceAddAccount(addAccountIdle, { type: 'start', harness: 'claude' });
+        phase = advanceAddAccount(phase, { type: 'started', at: 1_000, before });
+        phase = advanceAddAccount(phase, { type: 'accounts', at: 2_000, names: before });
+        expect(phase.kind).toBe('waiting');
     });
 });

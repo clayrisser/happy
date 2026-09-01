@@ -34,7 +34,7 @@
 
 import { spawn } from 'node:child_process'
 
-import { noteCredentialProbe, readAccounts, type DroverAccount } from './accounts'
+import { isClaudeAccount, noteCredentialProbe, readAccounts, type DroverAccount } from './accounts'
 import { claudeBinary, usageRefreshEnv } from './refresh'
 import { logger } from '@/ui/logger'
 
@@ -139,7 +139,11 @@ export async function refreshCredentialState(
     deps: { probe?: (a: DroverAccount) => Promise<CredentialState> } = {},
 ): Promise<void> {
     const probe = deps.probe ?? ((a: DroverAccount) => probeCredential(a))
-    await Promise.all(accounts.map(async (a) => {
+    // Claude rows only (DROVE-270). `claude auth status` asked about a cursor
+    // account would be asked about a config dir that does not exist, and its
+    // answer would be recorded against a name whose credential is a token this
+    // process deliberately never opens.
+    await Promise.all(accounts.filter(isClaudeAccount).map(async (a) => {
         const state = await probe(a).catch(() => 'unknown' as const)
         if (state === 'unknown') return
         noteCredentialProbe(a, state === 'yes')

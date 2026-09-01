@@ -24,7 +24,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { logger } from '@/ui/logger'
-import { accountByNewestTranscript, readAccounts } from '@/drover/flip/accounts'
+import { accountByNewestTranscript, flippableAccounts } from '@/drover/flip/accounts'
 import { getProjectPath, resolveClaudeConfigDir } from './path'
 
 /** Where Claude Code keeps one session's title under a given config dir. */
@@ -83,7 +83,8 @@ export function findCustomTitle(opts: {
         logger.debug('[customTitle] could not read the account registry', err)
     }
     consider(resolveClaudeConfigDir(opts.claudeConfigDir))
-    for (const account of readAccounts()) consider(account.configDir)
+    // Claude rows only: a cursor account has no config dir to consider.
+    for (const account of flippableAccounts()) consider(account.configDir)
 
     for (const configDir of configDirs) {
         const title = readTitleFile(customTitleFile(workingDirectory, sessionId, configDir))

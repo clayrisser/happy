@@ -551,24 +551,42 @@ export async function machineStopSession(
  * Stop the daemon on a specific machine
  */
 /**
- * Add a Claude account on that machine, from here (DROVE-61).
+ * Add a subscription on that machine, from here (DROVE-61, DROVE-270).
  *
- * It only STARTS the login. What comes back is a card: the URL Claude Code
- * printed arrives over the drover bridge as a DroverAccountLogin request, the
- * share sheet opens it, and the code typed into that card finishes the login.
+ * It only STARTS the login. What comes back is a card carrying the URL the
+ * machine printed, over the drover bridge as a DroverAccountLogin request.
  * Nothing about a credential travels through this call.
  *
+ * `harness` picks WHICH subscription, and the two finish differently — which
+ * is why the Accounts screen's wording depends on it. Claude prints a URL and
+ * then blocks on a code typed back into the card; cursor prints a URL and then
+ * polls its own API until a browser approves, so there is no code at all.
+ *
+ * Omitted means claude, so a caller that predates the second harness gets
+ * exactly what it always got, and a daemon that predates it ignores a field it
+ * does not read.
+ *
  * `name` is optional on purpose — left out, the account is named after the
- * address it logs in as, so there is nothing to invent.
+ * address it logs in as, so there is nothing to invent. Clay has said three
+ * times that an account must not be named by typing, and neither login asks.
  */
 export async function machineDroverAccountLogin(
     machineId: string,
-    name?: string,
+    options: { name?: string; harness?: 'claude' | 'cursor' } = {},
 ): Promise<{ started: boolean; name: string | null }> {
-    return await apiSocket.machineRPC<{ started: boolean; name: string | null }, { name?: string }>(
+    return await apiSocket.machineRPC<
+        { started: boolean; name: string | null },
+        { name?: string; harness?: string }
+    >(
         machineId,
         'drover-account-login',
-        name ? { name } : {},
+        {
+            ...(options.name ? { name: options.name } : {}),
+            // Sent only for cursor. A daemon predating DROVE-270 would pass an
+            // unknown `--harness claude` straight to a wrapper that predates
+            // DROVE-256, and the phone cannot see which end it is talking to.
+            ...(options.harness && options.harness !== 'claude' ? { harness: options.harness } : {}),
+        },
     );
 }
 

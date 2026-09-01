@@ -137,9 +137,17 @@ describe('droverOtherAccounts', () => {
             // Code's first run are two different facts, and a row is only
             // switchable when both hold. Absent from the snapshot reads as
             // true, which is what these fixtures are saying.
-            { name: 'main', loggedIn: true, onboarded: true, headroom: 0, back: sep3, family: null },
-            { name: 'bitspur.com', loggedIn: true, onboarded: true, headroom: 0, back: sep3, family: 'Fable' },
-            { name: 'spare', loggedIn: false, onboarded: true, headroom: null, back: null, family: null },
+            //
+            // `harness` rides every row too (DROVE-270), and absent reads as
+            // claude for the same reason: a snapshot written before the field
+            // existed came off a registry that held only Claude accounts. It is
+            // on the row because `headroom: null` alone cannot tell an unread
+            // Claude account from a cursor one, and those want opposite
+            // treatment — the first may be flipped to and will have a figure
+            // later, the second may not and never will.
+            { name: 'main', harness: 'claude', tokenState: null, expiresInDays: null, loggedIn: true, onboarded: true, headroom: 0, back: sep3, family: null },
+            { name: 'bitspur.com', harness: 'claude', tokenState: null, expiresInDays: null, loggedIn: true, onboarded: true, headroom: 0, back: sep3, family: 'Fable' },
+            { name: 'spare', harness: 'claude', tokenState: null, expiresInDays: null, loggedIn: false, onboarded: true, headroom: null, back: null, family: null },
         ]);
     });
 

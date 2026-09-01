@@ -31,6 +31,7 @@ import {
     wristRefusal,
 } from './droverWristRelay';
 import { demoLog, isDroverDemoId } from './droverDemo';
+import { isCursorAccount } from '@/utils/droverAccounts';
 import { isSessionArchived } from './sessionArchive';
 import { isDroverBridgeSession } from './droverBridgeSession';
 import { liveStatusSince, liveStatusWatchLine } from '@/utils/liveStatus';
@@ -146,6 +147,20 @@ export function collectAccountRows(
     for (const entry of freshest.accounts) {
         const account = entry as DroverUsageAccountLike & { cooling?: { until?: unknown } | null };
         if (!account || typeof account.name !== 'string' || !account.name) continue;
+        // CURSOR ACCOUNTS ARE NOT ON THE WRIST (DROVE-270), because this list
+        // is a flip picker and nothing else: a tap on a row sends `/flip
+        // <name>`. A flip is a CLAUDE_CONFIG_DIR swap and a respawn, and a
+        // cursor account has no directory to swap to — it carries a token, so
+        // two cursor accounts already run side by side with no flip at all.
+        //
+        // Dropped rather than shown-and-disabled, and that is the one place
+        // this fork folds something away instead of showing it. A wrist row is
+        // a name and a bar with no room for a reason, and the only unavailable
+        // state it has is `loggedIn: false` — which would read as "this account
+        // is logged out" over an account that is perfectly fine. The phone's
+        // Settings → Accounts lists every cursor account in full, with its own
+        // group and its own explanation.
+        if (isCursorAccount(account)) continue;
         const headroom = typeof account.headroom === 'number' && Number.isFinite(account.headroom)
             ? Math.round(Math.min(100, Math.max(0, account.headroom)))
             : undefined;

@@ -15,6 +15,7 @@
  * scopes. The OTHER accounts become rows for a folded group in the same popup,
  * so the phone answers "where can I flip to" without a terminal.
  */
+import { accountHarness } from './droverAccounts';
 import type { UsageLimitsLike } from './sessionStatusBar';
 
 export type DroverUsageRowLike = {
@@ -40,6 +41,20 @@ export type DroverUsageRowLike = {
 
 export type DroverUsageAccountLike = {
     name: string;
+    /**
+     * Which subscription this account is — 'claude' or 'cursor' (DROVE-270).
+     * Absent means claude, which is what every snapshot written before the
+     * field existed meant.
+     */
+    harness?: string | null;
+    /**
+     * How the cursor token is doing, and how many whole days it has left.
+     * Null on a Claude row; absent from a machine whose daemon predates the
+     * fields. A cursor login runs sixty days and cannot be refreshed, so the
+     * countdown is the only warning there is.
+     */
+    tokenState?: string | null;
+    expiresInDays?: number | null;
     current?: boolean | null;
     loggedIn?: boolean | null;
     /**
@@ -480,6 +495,20 @@ export function droverFamilyRows(usage: DroverUsageLike, droverAccount?: string 
 
 export type DroverOtherAccountRow = {
     name: string;
+    /**
+     * 'claude' or 'cursor' (DROVE-270). Carried onto the row because a cursor
+     * account is UNMEASURED for a structural reason and unswitchable for a
+     * structural reason, and neither can be told from `headroom: null` alone —
+     * an unread Claude account looks identical and is neither.
+     */
+    harness: string;
+    /**
+     * The cursor token's state and its days left, carried through so the sheet
+     * can say `renew in 3d` in the slot a percentage would occupy. Null on a
+     * Claude row and on a machine that reported neither.
+     */
+    tokenState: string | null;
+    expiresInDays: number | null;
     loggedIn: boolean;
     /**
      * Claude Code's one-time first run is settled for that config dir
@@ -532,6 +561,11 @@ function toAccountRow(a: DroverUsageAccountLike, capturedAt = Number.NaN): Drove
         : null;
     return {
         name: a.name,
+        harness: accountHarness(a),
+        tokenState: typeof a.tokenState === 'string' ? a.tokenState : null,
+        expiresInDays: typeof a.expiresInDays === 'number' && Number.isFinite(a.expiresInDays)
+            ? a.expiresInDays
+            : null,
         loggedIn: a.loggedIn !== false,
         // Absent reads as onboarded, which is what an older CLI meant: it did
         // not report the field because nothing had asked the question yet.
@@ -600,5 +634,17 @@ export function currentDroverAccountRow(
     // A session already RUNNING on this account is the proof that it can run,
     // so both gates read true here — there is nothing to warn about on a pane
     // that is answering (DROVE-246).
-    return { name, loggedIn: true, onboarded: true, headroom: null, back: null, family: null };
+    // 'claude' rather than a guess: the only thing known here is a stamped
+    // name, and every session predating the harness field is a Claude one.
+    return {
+        name,
+        harness: 'claude',
+        tokenState: null,
+        expiresInDays: null,
+        loggedIn: true,
+        onboarded: true,
+        headroom: null,
+        back: null,
+        family: null,
+    };
 }

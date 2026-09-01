@@ -15,9 +15,41 @@
  * would offer to flip a session onto an account that does not exist where that
  * session runs. So the machine is the group, the same way the sessions list
  * groups by machine, and the harness is named on the group because an account
- * belongs to one. Claude is the only harness in the registry today: a clone is
- * another harness, not another account, so nothing else has rows to show yet
- * and none are invented.
+ * belongs to one.
+ *
+ * TWO HARNESSES NOW, AND THE SECOND ONE IS NOT SHAPED LIKE THE FIRST
+ * (DROVE-270). Clay, with this page open: "Why doesn't it have an option to
+ * add a cursor account Or a cursor agent whatever thing". It did not, and the
+ * page was already drawn for it — the heading has said `<machine> · CLAUDE`
+ * since DROVE-165 — so what was missing was the second group and the row that
+ * starts it. This file used to say Claude was the only harness in the
+ * registry; `drover account login --harness cursor` (DROVE-256) is what made
+ * that stop being true.
+ *
+ * The difference is worth stating because the ORIGINAL EXPLANATION ON THIS
+ * PAGE IS WRONG FOR CURSOR, and copying it would be the bug:
+ *
+ *   a CLAUDE account is a LOGIN in a CLAUDE_CONFIG_DIR. On a Mac its
+ *     credential is a Keychain item keyed to sha256 of that directory, so it
+ *     is bound to one machine and only ONE of them is in use at a time —
+ *     hence the flip, which is a config-dir swap and a respawn.
+ *   a CURSOR account is a TOKEN. cursor-agent reads CURSOR_AUTH_TOKEN and it
+ *     OUTRANKS both an API key and the machine's own stored login (measured:
+ *     `authSource: r ? "auth-token" : u ? "api-key" : "login"`, and a bogus
+ *     token fails even with a perfectly valid stored login present — which is
+ *     the control that proves it never silently falls back). So drover hands
+ *     each session its own token, two cursor accounts run side by side, and
+ *     there is nothing to take turns over. No flip is offered onto one, here
+ *     or on the quota sheet or the wrist.
+ *
+ * Both are still PER MACHINE, so the page's shape does not move: the token is
+ * stored on the machine that logged in, exactly as the Keychain item is.
+ *
+ * A CURSOR ROW IS UNMEASURED, NEVER A HEALTHY 100%. Cursor publishes no quota
+ * anywhere — no usage cache, no limits, no reset — because its accounting is
+ * server-side. That is structural rather than a reading that has not happened,
+ * so the row says so in the trailing slot instead of showing a percentage, in
+ * DROVE-230's existing vocabulary.
  *
  * WHAT THE PHONE CAN AND CANNOT DO, because that is the whole risk here.
  * Claude Code's login is a browser round trip and this app cannot perform it.
@@ -66,19 +98,27 @@ import {
 } from '@/sync/machineAccounts';
 import {
     accountCanRun,
+    accountGroupFooter,
+    accountGroupTitle,
     accountSubtitle,
+    accountsByHarness,
     addAccountBusy,
+    freshCursorAccounts,
+    staleCursorAccounts,
     addAccountIdle,
     addAccountStatus,
     advanceAddAccount,
     autoOpenLoginUrl,
     autoStartAddAccount,
     pendingAccountLogins,
+    phaseHarness,
+    type AccountHarness,
     type AddAccountEvent,
     type AddAccountPhase,
     type MachineAccount,
     type PendingAccountLogin,
 } from '@/sync/machineAccountsFlow';
+import { harnessName } from '@/utils/harnessName';
 import { DroverAccountLoginBody } from '@/components/tools/views/DroverAccountLoginBody';
 
 /** How often a machine with a login in flight is asked again. */
@@ -147,6 +187,11 @@ export default function AccountsScreen() {
                 type: 'accounts',
                 at: Date.now(),
                 names: result.accounts.filter(accountCanRun).map((a) => a.name),
+                // The other way a cursor login succeeds (DROVE-270): a repeat
+                // one replaces the token under a row that already exists, so no
+                // name appears. A row that was inside its last week — or dead —
+                // and now reads live is that login having landed.
+                fresh: freshCursorAccounts(result.accounts),
             });
         } else {
             // A read that failed still tells the truth about the time. Only
@@ -252,15 +297,29 @@ export default function AccountsScreen() {
     /**
      * Start a login on that machine. Nothing is asked first (DROVE-212).
      *
-     * No name is collected and none is sent. `drover account login` names the
-     * account after the address Claude Code reports once the login succeeds,
-     * which is the only name that is true without asking for one.
+     * No name is collected and none is sent, for EITHER harness (DROVE-270).
+     * `drover account login` names a Claude account after the address Claude
+     * Code reports; the cursor login names one after the address cursor-agent
+     * resolved, falling back to its token's own subject. Both are the only
+     * name that is true without asking for one, and Clay has said three times
+     * that he will not type an account name.
      */
-    const addAccount = React.useCallback(async (machineId: string, existing: string[]) => {
-        dispatch(machineId, { type: 'start' });
+    const addAccount = React.useCallback(async (
+        machineId: string,
+        /** Both halves of "what did this machine look like before", because a
+         *  cursor login can succeed without changing the name set. */
+        existing: { names: string[]; stale: string[] },
+        harness: AccountHarness,
+    ) => {
+        dispatch(machineId, { type: 'start', harness });
         try {
-            await machineDroverAccountLogin(machineId);
-            dispatch(machineId, { type: 'started', at: Date.now(), before: existing });
+            await machineDroverAccountLogin(machineId, { harness });
+            dispatch(machineId, {
+                type: 'started',
+                at: Date.now(),
+                before: existing.names,
+                stale: existing.stale,
+            });
         } catch (error) {
             // Named outright rather than swallowed: the login runs on a Mac
             // nobody is looking at, so a failure that only logs there is a
@@ -296,7 +355,11 @@ export default function AccountsScreen() {
         });
         if (!before) return;
         autoStarted.current = true;
-        void addAccount(requested!, before);
+        // CLAUDE, because the quota sheet that sends people here is a Claude
+        // sheet: it exists to compare headroom and pick somewhere to flip, and
+        // a cursor account has neither. Adding a cursor account is a deliberate
+        // tap on the Cursor group's own row (DROVE-270).
+        void addAccount(requested!, { names: before, stale: [] }, 'claude');
     }, [requested, requestedOnline, requestedState, addAccount]);
 
     const removeAccount = React.useCallback(async (machineId: string, account: MachineAccount) => {
@@ -331,26 +394,43 @@ export default function AccountsScreen() {
                     </ItemGroup>
                 )}
 
-                {machines.map((machine) => {
+                {machines.flatMap((machine) => {
                     const state = loaded[machine.id];
                     const accounts = state?.result?.ok ? state.result.accounts : [];
                     const phase = phases[machine.id] ?? addAccountIdle;
                     const status = addAccountStatus(phase);
                     const card = cardFor(machine.id);
                     const online = machine.active;
-                    return (
+                    /*
+                     * ONE GROUP PER HARNESS, and the empty one is the point
+                     * (DROVE-270).
+                     *
+                     * The heading already named a harness, so a cursor account
+                     * inside a group headed `· Claude` would be the heading
+                     * lying. Splitting also gives each kind its own footer,
+                     * which is what the copy needs: the Keychain sentence is
+                     * true of a Claude login and wrong about a token.
+                     *
+                     * A machine with no cursor account still draws a Cursor
+                     * group, because that group is the only place its add row
+                     * can live — and a row nobody can find is this whole
+                     * ticket.
+                     */
+                    return accountsByHarness(accounts).map(({ harness, accounts: rows }) => (
                         <ItemGroup
-                            key={machine.id}
-                            title={`${machineName(machine)} · Claude`}
-                            footer={online
-                                ? 'These accounts are logged in on this machine and only exist here.'
-                                : 'This machine is offline, so its account list cannot be read or changed.'}
+                            key={`${machine.id}:${harness}`}
+                            title={accountGroupTitle(machineName(machine), harness)}
+                            footer={accountGroupFooter(harness, online)}
                         >
-                            {state?.loading && !state.result && (
+                            {/* The read is per MACHINE, so its loading row and
+                                its error belong to the first group only —
+                                repeated under each harness it would read as two
+                                separate failures. */}
+                            {harness === 'claude' && state?.loading && !state.result && (
                                 <Item title="Reading that machine…" showChevron={false} loading />
                             )}
 
-                            {state?.result && !state.result.ok && (
+                            {harness === 'claude' && state?.result && !state.result.ok && (
                                 <Item
                                     title="Could not read the accounts"
                                     subtitle={state.result.error}
@@ -360,7 +440,7 @@ export default function AccountsScreen() {
                                 />
                             )}
 
-                            {accounts.map((account) => (
+                            {rows.map((account) => (
                                 <Item
                                     key={account.name}
                                     title={account.name}
@@ -389,7 +469,12 @@ export default function AccountsScreen() {
                                 />
                             ))}
 
-                            {status && (
+                            {/* The status row and the card belong to the login
+                                in flight, so they are drawn under the harness
+                                that started it and nowhere else. `phase.kind`
+                                narrows to a phase carrying a harness; idle has
+                                no status at all. */}
+                            {status && phaseHarness(phase) === harness && (
                                 <Item
                                     title={status.title}
                                     subtitle={status.detail || undefined}
@@ -437,7 +522,7 @@ export default function AccountsScreen() {
                               * The answer is addressed to the session HOLDING the card — the
                               * bridge's, never one Clay can see — and it never navigates there.
                               */}
-                            {status?.hasLink && card?.url && (
+                            {status?.hasLink && card?.url && phaseHarness(phase) === harness && (
                                 <View style={styles.loginCard}>
                                     <DroverAccountLoginBody
                                         args={card.args}
@@ -454,26 +539,95 @@ export default function AccountsScreen() {
                                 </View>
                             )}
 
+                            {/*
+                              * THE ROW CLAY ASKED FOR, once per harness
+                              * (DROVE-270). The promise is word for word the
+                              * Claude row's, because it is word for word true
+                              * of both: each login opens a page in HIS browser
+                              * and each names the account after what he signed
+                              * in as. Neither asks him to type a name.
+                              *
+                              * `existing` is every account ON THE MACHINE, not
+                              * just this harness's. "A new name appeared" is
+                              * how the flow decides a login worked, and the two
+                              * harnesses share one registry — so a `before`
+                              * missing the Claude rows would see one of them as
+                              * the cursor account just added.
+                              *
+                              * Both rows go quiet while EITHER login runs: the
+                              * two share a private tmux server whose session
+                              * name is the lock, so the machine can only run
+                              * one, and the card is addressed to a machine
+                              * rather than to a harness.
+                              */}
                             <Item
-                                title="Add a Claude account"
+                                title={`Add a ${harnessName(harness)} account`}
                                 subtitle="Opens the sign-in page in your browser. Named after the address you sign in as."
                                 subtitleLines={0}
                                 icon={<Ionicons name="add-circle-outline" size={29} color="#34C759" />}
                                 disabled={!online || addAccountBusy(phase)}
-                                onPress={() => void addAccount(machine.id, accounts.map((a) => a.name))}
+                                onPress={() => void addAccount(
+                                    machine.id,
+                                    {
+                                        names: accounts.map((a) => a.name),
+                                        stale: staleCursorAccounts(accounts),
+                                    },
+                                    harness,
+                                )}
                             />
                         </ItemGroup>
-                    );
+                    ));
                 })}
 
+                {/*
+                  * THE EXPLANATION, CORRECTED FOR BOTH KINDS (DROVE-270).
+                  *
+                  * What stood here was Claude-shaped and would have been a lie
+                  * over a cursor row: "a login lives on the machine that ran it
+                  * — on a Mac the credential is in that machine's Keychain."
+                  * True of Claude, whose Keychain item is keyed to sha256 of
+                  * its config dir. A cursor account is a TOKEN, which is
+                  * exactly why two of them run at once where two Claude
+                  * accounts cannot.
+                  *
+                  * What both share is the part the heading claims: the
+                  * credential is written by the machine that ran the login and
+                  * stays there. That is still why this page groups by machine,
+                  * and it is still true that this app never holds a credential.
+                  */}
                 <ItemGroup
                     title="Why this is per machine"
-                    footer="A Claude account is a login, and a login lives on the machine that ran it — on a Mac the credential is in that machine’s Keychain. Nothing about an account is copied between machines, and no account, code or token is ever held by this app."
+                    footer="Both kinds are written by the machine that ran the login and stay on it. A Claude account is a LOGIN in a config directory — on a Mac its credential is a Keychain item belonging to that directory — and only one is in use at a time, which is what a flip moves between. A cursor account is a TOKEN this machine holds, handed to each session, so two cursor sessions run side by side and there is nothing to flip. No account, code or token is ever held by this app."
                 >
                     <Item
                         title="Switching account mid-session"
-                        subtitle="Use the quota bars under the composer, which know which session you are in"
+                        subtitle="Use the quota bars under the composer, which know which session you are in. Claude accounts only — a cursor session already has its own token and never needs one."
+                        subtitleLines={0}
                         icon={<Ionicons name="swap-horizontal-outline" size={29} color="#FF9500" />}
+                        showChevron={false}
+                    />
+                    <Item
+                        title="Why a cursor account shows no percentage"
+                        subtitle="Cursor publishes no quota anywhere — its accounting is server-side — so there is nothing to read. The row says so rather than showing a figure nobody measured."
+                        subtitleLines={0}
+                        icon={<Ionicons name="remove-circle-outline" size={29} color="#8E8E93" />}
+                        showChevron={false}
+                    />
+                    {/*
+                      * THE SIXTY-DAY FUSE, said where the countdown is
+                      * explained rather than only where it appears (DROVE-270).
+                      *
+                      * A cursor token cannot be refreshed — cursor-agent has no
+                      * redemption call for one — so the repair is always Clay
+                      * at a browser, and it has to be asked for while the token
+                      * still works. That is why the row starts saying `renew in
+                      * 3d` a week out instead of going quiet until it dies.
+                      */}
+                    <Item
+                        title="Why a cursor account counts down"
+                        subtitle="A cursor login lasts 60 days and cannot renew itself, so the row starts saying “renew in 3d” a week before it expires. Tap Add a Cursor account again to sign in — the account keeps its name."
+                        subtitleLines={0}
+                        icon={<Ionicons name="time-outline" size={29} color="#FF9500" />}
                         showChevron={false}
                     />
                 </ItemGroup>

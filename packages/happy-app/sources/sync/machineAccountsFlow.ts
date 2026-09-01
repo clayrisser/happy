@@ -41,6 +41,15 @@
  * this one.
  */
 
+import {
+    accountHarness,
+    cursorAccountLabel,
+    cursorAccountUsable,
+    cursorRenewLabel,
+    isCursorAccount,
+} from '@/utils/droverAccounts';
+import { harnessName } from '@/utils/harnessName';
+
 /** A pending login card, as the Accounts screen needs to see it. */
 export interface PendingAccountLogin {
     /** The session HOLDING the card. Never navigated to; an answer is
@@ -129,8 +138,17 @@ export function pendingAccountLoginFor(
 
 export type AddAccountPhase =
     | { kind: 'idle' }
-    /** The RPC is in flight. Nothing has happened on the Mac yet. */
-    | { kind: 'starting' }
+    /**
+     * The RPC is in flight. Nothing has happened on the Mac yet.
+     *
+     * `harness` rides every non-idle phase because the SENTENCES differ
+     * (DROVE-270), and getting them wrong is worse here than anywhere else on
+     * the screen: the Claude flow ends with Clay pasting a code back, and the
+     * cursor flow has no code at all — cursor-agent polls its own API until a
+     * browser approves. Telling him to paste a code that will never appear is
+     * exactly the dead end DROVE-238 was filed about, in a new coat.
+     */
+    | { kind: 'starting'; harness: AccountHarness }
     /**
      * The login is running over there and we are watching the registry.
      * `before` is the set of account names that machine had BEFORE the start,
@@ -138,8 +156,25 @@ export type AddAccountPhase =
      */
     | {
         kind: 'waiting';
+        harness: AccountHarness;
         startedAt: number;
         before: string[];
+        /**
+         * THE CURSOR ROWS THAT WERE DUE A RENEWAL when this started
+         * (DROVE-270), which is the second way a cursor login succeeds.
+         *
+         * A repeat cursor login writes no new registry row: the existing row
+         * STANDS and only the stored token is replaced, because a cursor
+         * account has no config dir and logging in again produces a newer token
+         * for the same account and nothing else. So "a new name appeared" — the
+         * only evidence this flow had — never fires on a renewal, and the exact
+         * repair the countdown asks for would have looked like a failure.
+         *
+         * What IS observable is the token getting NEWER: a row inside its last
+         * seven days, or already dead, that is now live again. Nothing but a
+         * login can do that, so it is evidence of the same quality.
+         */
+        stale: string[];
         /** A card with a URL is on the bus, so there is something to open. */
         linkReady: boolean;
         /**
@@ -154,17 +189,21 @@ export type AddAccountPhase =
          */
         linkLate: boolean;
     }
-    | { kind: 'added'; name: string }
-    | { kind: 'failed'; reason: string }
+    /** `renewed` means the row already existed and its token was replaced,
+     *  which is the whole of a repeat cursor login (DROVE-270). */
+    | { kind: 'added'; harness: AccountHarness; name: string; renewed?: boolean }
+    | { kind: 'failed'; harness: AccountHarness; reason: string }
     /** The watch gave up. NOT a failure: we simply stopped looking. */
-    | { kind: 'stoppedWatching' };
+    | { kind: 'stoppedWatching'; harness: AccountHarness };
 
 export type AddAccountEvent =
-    | { type: 'start' }
-    | { type: 'started'; at: number; before: string[] }
+    | { type: 'start'; harness: AccountHarness }
+    | { type: 'started'; at: number; before: string[]; stale?: string[] }
     | { type: 'startFailed'; reason: string }
     | { type: 'link'; ready: boolean }
-    | { type: 'accounts'; at: number; names: string[] }
+    /** `fresh` is the cursor rows whose token is usable AND not due a renewal.
+     *  Optional, so a caller that does not read tokens behaves as it did. */
+    | { type: 'accounts'; at: number; names: string[]; fresh?: string[] }
     /**
      * Wall clock, and nothing else (DROVE-212).
      *
@@ -205,6 +244,18 @@ export const addAccountLinkWaitMs = 60_000;
 export const addAccountIdle: AddAccountPhase = { kind: 'idle' };
 
 /**
+ * Which harness this phase belongs to, or null when nothing is happening.
+ *
+ * Every non-idle phase carries one (DROVE-270) so the screen can draw the
+ * status row, the login card and the "stopped watching" sentence under the
+ * group that started them. A failure shown under the wrong heading is a
+ * failure attributed to the wrong subscription.
+ */
+export function phaseHarness(phase: AddAccountPhase): AccountHarness | null {
+    return phase.kind === 'idle' ? null : phase.harness;
+}
+
+/**
  * The two deadlines, on time alone.
  *
  * Shared by `accounts` and `tick` so there is one place that decides when the
@@ -217,7 +268,7 @@ function elapsed(
     watchMs: number,
     linkWaitMs: number,
 ): AddAccountPhase {
-    if (at - phase.startedAt >= watchMs) return { kind: 'stoppedWatching' };
+    if (at - phase.startedAt >= watchMs) return { kind: 'stoppedWatching', harness: phase.harness };
     if (!phase.linkReady && !phase.linkLate && at - phase.startedAt >= linkWaitMs) {
         return { ...phase, linkLate: true };
     }
@@ -241,22 +292,31 @@ export function advanceAddAccount(
             // ~/.claude-accounts/account-N, so two taps really do make two
             // logins — two cards, two URLs, and no way to tell which code goes
             // with which. One at a time per machine.
+            //
+            // ONE AT A TIME ACROSS BOTH HARNESSES, not one of each (DROVE-270).
+            // The two logins share a private tmux server and the session name
+            // IS the lock, so the machine can only run one anyway — and the
+            // card is joined to a machine, not to a harness, so two in flight
+            // would leave this screen unable to say which link belongs to
+            // which. Both add rows go quiet while either is running.
             if (phase.kind === 'starting' || phase.kind === 'waiting') return phase;
-            return { kind: 'starting' };
+            return { kind: 'starting', harness: event.harness };
 
         case 'started':
             if (phase.kind !== 'starting') return phase;
             return {
                 kind: 'waiting',
+                harness: phase.harness,
                 startedAt: event.at,
                 before: [...event.before],
+                stale: [...(event.stale ?? [])],
                 linkReady: false,
                 linkLate: false,
             };
 
         case 'startFailed':
             if (phase.kind !== 'starting') return phase;
-            return { kind: 'failed', reason: event.reason };
+            return { kind: 'failed', harness: phase.harness, reason: event.reason };
 
         case 'link':
             if (phase.kind !== 'waiting') return phase;
@@ -280,7 +340,17 @@ export function advanceAddAccount(
             // announce itself as added. Two gates for one fact, because
             // "it says it added but it did not work" is the whole ticket.
             const added = event.names.find((name) => !phase.before.includes(name));
-            if (added !== undefined) return { kind: 'added', name: added };
+            if (added !== undefined) return { kind: 'added', harness: phase.harness, name: added };
+            // A RENEWAL IS THE SECOND SUCCESS (DROVE-270), and without it the
+            // exact repair the countdown asks for would run, work, and then be
+            // reported as "stopped watching". A repeat cursor login replaces
+            // the token under a row that already exists, so no name appears —
+            // what appears is a row that was inside its last week, or dead,
+            // reading live again. Only a login can move a token that way.
+            const renewed = (phase.stale ?? []).find((name) => (event.fresh ?? []).includes(name));
+            if (renewed !== undefined) {
+                return { kind: 'added', harness: phase.harness, name: renewed, renewed: true };
+            }
             return elapsed(phase, event.at, watchMs, linkWaitMs);
         }
 
@@ -342,6 +412,23 @@ export interface AddAccountStatus {
 }
 
 /**
+ * The command that runs this login at the keyboard, named exactly (DROVE-270).
+ *
+ * Told to Clay when the phone gives up, so it has to be the line he can paste.
+ * `drover account login` on its own adds a CLAUDE account — the wrapper execs
+ * a sibling script only when `--harness cursor` is on the line — so leaving the
+ * flag off a cursor failure would send him to diagnose the wrong login.
+ */
+export function loginCommand(harness: AccountHarness): string {
+    return harness === 'cursor' ? 'drover account login --harness cursor' : 'drover account login';
+}
+
+/** Whose login is being started, for the sentence while it starts. */
+function loginSubject(harness: AccountHarness): string {
+    return harness === 'cursor' ? 'Cursor’s' : 'Claude Code’s';
+}
+
+/**
  * The words. Kept here rather than in the screen so the specs pin what Clay is
  * told at each step, which is the part of this ticket that can actually be got
  * wrong: every sentence has to describe something that really happened.
@@ -352,7 +439,7 @@ export function addAccountStatus(phase: AddAccountPhase): AddAccountStatus | nul
             return null;
         case 'starting':
             return {
-                title: 'Starting the login on that machine…',
+                title: `Starting the ${harnessName(phase.harness)} login on that machine…`,
                 detail: '',
                 watching: false,
                 hasLink: false,
@@ -360,6 +447,23 @@ export function addAccountStatus(phase: AddAccountPhase): AddAccountStatus | nul
             };
         case 'waiting':
             if (phase.linkReady) {
+                // THERE IS NO CODE IN A CURSOR LOGIN (DROVE-270), and this is
+                // the sentence that must not be copied across. `claude auth
+                // login` prints a URL and then BLOCKS on a code typed back in;
+                // `cursor-agent login` prints a URL and then polls its own API
+                // until a browser approves, so approving IS the whole of the
+                // second half. Telling Clay to paste a code that never appears
+                // would strand him exactly as DROVE-238 did.
+                if (phase.harness === 'cursor') {
+                    return {
+                        title: 'Approve the sign-in in your browser',
+                        detail: 'The sign-in page is open in your browser. Approve it there and the account '
+                            + 'appears in this list — there is no code to send back.',
+                        watching: true,
+                        hasLink: true,
+                        spinner: false,
+                    };
+                }
                 return {
                     // The code box is on THIS screen now (DROVE-238), so the
                     // sentence stops pointing at a row that used to navigate
@@ -379,7 +483,7 @@ export function addAccountStatus(phase: AddAccountPhase): AddAccountStatus | nul
                 return {
                     title: 'No sign-in link came back',
                     detail: 'That machine started the login but has sent no link, so it may have failed '
-                        + 'over there. Try again, or run drover account login on that machine to see why.',
+                        + `over there. Try again, or run ${loginCommand(phase.harness)} on that machine to see why.`,
                     watching: true,
                     hasLink: false,
                     spinner: false,
@@ -387,16 +491,32 @@ export function addAccountStatus(phase: AddAccountPhase): AddAccountStatus | nul
             }
             return {
                 title: 'Waiting for the sign-in link…',
-                detail: 'That machine is starting Claude Code’s login. Your browser opens as soon as '
-                    + 'the link arrives.',
+                detail: `That machine is starting ${loginSubject(phase.harness)} login. Your browser opens as `
+                    + 'soon as the link arrives.',
                 watching: true,
                 hasLink: false,
                 spinner: true,
             };
         case 'added':
+            if (phase.renewed) {
+                return {
+                    title: `Renewed ${phase.name}`,
+                    detail: 'That machine holds a fresh token for it now, good for another 60 days. '
+                        + 'The account kept its name and every session on it carries on.',
+                    watching: false,
+                    hasLink: false,
+                    spinner: false,
+                };
+            }
             return {
                 title: `Added ${phase.name}`,
-                detail: 'It is in that machine’s registry now, so a session can flip onto it.',
+                // "so a session can flip onto it" is a CLAUDE sentence. A
+                // cursor account is never flipped onto: it carries a token, so
+                // a session simply starts on it (DROVE-270).
+                detail: phase.harness === 'cursor'
+                    ? 'It is in that machine’s registry now, so a cursor session can start on it. '
+                        + 'No flip is involved — a cursor account is a token, not a login to take turns with.'
+                    : 'It is in that machine’s registry now, so a session can flip onto it.',
                 watching: false,
                 hasLink: false,
                 spinner: false,
@@ -416,7 +536,7 @@ export function addAccountStatus(phase: AddAccountPhase): AddAccountStatus | nul
             return {
                 title: 'Stopped watching',
                 detail: 'The login may still be running on that machine. Pull to refresh — if it '
-                    + 'finished, the account is in the list.',
+                    + `finished, the account is in the list. At the keyboard: ${loginCommand(phase.harness)}.`,
                 watching: false,
                 hasLink: false,
                 spinner: false,
@@ -443,6 +563,30 @@ export interface MachineAccountLimit {
  */
 export interface MachineAccount {
     name: string;
+    /**
+     * WHICH SUBSCRIPTION this is — 'claude' or 'cursor' (DROVE-270).
+     *
+     * Absent means claude, so a machine whose daemon predates the field lists
+     * exactly what it always did. It decides three things on this screen: which
+     * group the row sits in, that the row is UNMEASURED for a structural reason
+     * rather than a missing reading, and that no flip is offered onto it.
+     */
+    harness?: string | null;
+    /**
+     * HOW THE CURSOR TOKEN IS DOING, null on a Claude row, absent from a
+     * machine whose daemon predates the field (DROVE-270).
+     *
+     * A cursor login is a JWT with a sixty-day life and no refresh flow, so its
+     * expiry is a date rather than a thing to retry — and the only repair is
+     * Clay at a browser. Absent and `missing` are kept apart on purpose: the
+     * first is "nobody looked", the second is "the store holds nothing".
+     */
+    tokenState?: string | null;
+    /** Whole days until that token dies, rounded down. Null when there is no
+     *  date to count to. */
+    expiresInDays?: number | null;
+    /** Where the login lives. EMPTY for a cursor account, which has no
+     *  directory anywhere: it carries a token instead. */
     configDir: string;
     /** The ambient login (~/.claude) — the one the phone must not replace. */
     ambient: boolean;
@@ -478,11 +622,32 @@ export interface MachineAccount {
  * as it did before.
  */
 export function accountCanRun(account: MachineAccount): boolean {
+    // A CURSOR ACCOUNT HAS NO ONBOARDING TO SETTLE (DROVE-270). Claude Code's
+    // one-time first run belongs to a config dir, and a cursor account has no
+    // dir — cursor-agent opens on no wizard at all. What decides it instead is
+    // the TOKEN: an expired one is a row that will refuse work, and a `renew`
+    // one is a row that runs perfectly well today and simply has a deadline.
+    // `loggedIn` alone is not enough, because an expired token IS a login that
+    // happened.
+    if (isCursorAccount(account)) return account.loggedIn && cursorAccountUsable(account);
     return account.loggedIn && account.onboarded !== false;
 }
 
 /** "43% left", or the reason there is no figure. Never an invented number. */
 export function accountHeadroomLabel(account: MachineAccount): string {
+    // A CURSOR ACCOUNT IS PERMANENTLY UNMEASURED, and that is a different
+    // sentence from every other nothing on this screen (DROVE-270). "not
+    // measured yet" promises a figure that is coming; there is none coming.
+    // Cursor publishes no quota anywhere — its accounting is server-side — so
+    // the row shows the reason where a percentage would go, and never a
+    // healthy-looking 100%.
+    //
+    // Ahead of the `loggedIn` test, because "no login yet" is the wrong words
+    // for every way a cursor credential goes wrong: an expired token is a login
+    // that HAPPENED, a tombstone is a deliberate sign-out, and each wants its
+    // own repair rather than the Claude one. It is also where the sixty-day
+    // countdown surfaces — `renew in 3d` — while the account still works.
+    if (isCursorAccount(account)) return cursorAccountLabel(account);
     if (!account.loggedIn) return 'no login yet';
     // Said in the words of what is WRONG and what fixes it. "Not set up" would
     // read as "still finishing", which is the sentence DROVE-237 already had to
@@ -502,6 +667,98 @@ export function accountSubtitle(account: MachineAccount): string {
     if (account.sameLoginAs) parts.push(`same login as ${account.sameLoginAs}`);
     if (account.ambient) parts.push('this Mac’s main login');
     return parts.join(' · ');
+}
+
+/* ------------------------------------------------------------------------- *
+ * TWO KINDS OF ACCOUNT, ON ONE PAGE (DROVE-270).
+ *
+ * Clay, with the Accounts page in front of him: "Why doesn't it have an option
+ * to add a cursor account Or a cursor agent whatever thing". It did not, and
+ * the page was already the right shape for it — the group heading has read
+ * `<machine> · CLAUDE` since DROVE-165, because an account belongs to one
+ * harness. What was missing was the second group and the row that starts it.
+ *
+ * The two are not the same thing wearing different names, and the copy has to
+ * say so, because the Claude explanation is WRONG for a cursor account:
+ *
+ *   CLAUDE — a login in a CLAUDE_CONFIG_DIR. On a Mac the credential is a
+ *     Keychain item keyed to that directory's path, so nothing about it is
+ *     copied between machines, and only one of them is in use at a time. That
+ *     last part is why a flip exists: it is a config-dir swap and a respawn.
+ *   CURSOR — a token. cursor-agent takes CURSOR_AUTH_TOKEN and it outranks
+ *     both an API key and the machine's own stored login (measured: a bogus
+ *     token FAILS even with a valid stored login present, which is what proves
+ *     the per-account token is authoritative and never falls back). So drover
+ *     hands each session its own, two cursor accounts run side by side, and
+ *     there is no flip and no swap because there is nothing to take turns over.
+ *
+ * Both are still PER MACHINE, which is why the page's shape does not change:
+ * the token is stored on the machine that logged in, exactly as the Keychain
+ * item is.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * The cursor rows that need Clay at a browser, or will within the week.
+ *
+ * Captured BEFORE a login starts and compared with `freshCursorAccounts` after,
+ * because that transition is the only thing a renewal changes: the registry
+ * name set is identical on both sides of it (DROVE-270).
+ */
+export function staleCursorAccounts(accounts: MachineAccount[]): string[] {
+    return accounts
+        .filter((a) => isCursorAccount(a)
+            && (!cursorAccountUsable(a) || cursorRenewLabel(a) !== null))
+        .map((a) => a.name);
+}
+
+/** The cursor rows whose token is usable and not due a renewal. */
+export function freshCursorAccounts(accounts: MachineAccount[]): string[] {
+    return accounts
+        .filter((a) => isCursorAccount(a)
+            && cursorAccountUsable(a) && cursorRenewLabel(a) === null)
+        .map((a) => a.name);
+}
+
+/** The harnesses this page draws a group for, in the order it draws them. */
+export const accountHarnessOrder = ['claude', 'cursor'] as const;
+export type AccountHarness = (typeof accountHarnessOrder)[number];
+
+/**
+ * One machine's accounts split by harness, INCLUDING the empty groups.
+ *
+ * Empty on purpose: a machine with no cursor account still gets a Cursor
+ * group, because that group is the only place the add row can live and a row
+ * nobody can find is the whole of this ticket. The Claude group is drawn
+ * whether or not it is empty for the same reason it always was.
+ */
+export function accountsByHarness(
+    accounts: MachineAccount[],
+): { harness: AccountHarness; accounts: MachineAccount[] }[] {
+    return accountHarnessOrder.map((harness) => ({
+        harness,
+        accounts: accounts.filter((a) => accountHarness(a) === harness),
+    }));
+}
+
+/** What the group heading says: `studio.234.bitspur.com · Cursor`. */
+export function accountGroupTitle(machine: string, harness: AccountHarness): string {
+    return `${machine} · ${harnessName(harness)}`;
+}
+
+/**
+ * The sentence under a group, which is where the two kinds actually differ.
+ *
+ * Offline first for both, because a list that cannot be read or changed is the
+ * fact that matters and neither explanation applies while it is true.
+ */
+export function accountGroupFooter(harness: AccountHarness, online: boolean): string {
+    if (!online) return 'This machine is offline, so its account list cannot be read or changed.';
+    if (harness === 'cursor') {
+        return 'Each of these is a TOKEN this machine holds, not a login it takes turns with — so two '
+            + 'cursor sessions run side by side and there is nothing to flip. Cursor publishes no quota, '
+            + 'so no account here shows a percentage.';
+    }
+    return 'These accounts are logged in on this machine and only exist here.';
 }
 
 /* ------------------------------------------------------------------------- *

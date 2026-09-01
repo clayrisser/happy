@@ -39,6 +39,7 @@ import { promisify } from 'node:util';
 import { droverBinExists, droverBinPath } from '@/daemon/tmuxSpawn';
 import {
     isAmbientSpelling,
+    isClaudeAccount,
     loginEmail,
     readAccounts,
     sameLoginAs,
@@ -57,7 +58,13 @@ const execFileAsync = promisify(execFile);
  * than a place a session sits.
  */
 export interface MachineAccountRow extends AccountUsageSnapshot {
-    /** Where the login lives. Absolute; the ambient one is `~/.claude`. */
+    /**
+     * Where the login lives. Absolute; the ambient one is `~/.claude`. EMPTY
+     * for a cursor account, which has no directory anywhere (DROVE-270) —
+     * cursor-agent keeps one machine-wide credential and drover hands each
+     * session its own token, which is why two cursor accounts run side by side
+     * with no flip and no swap.
+     */
     configDir: string;
     /**
      * This is the ambient login — the account every unwrapped `claude` on that
@@ -105,12 +112,20 @@ export function readMachineAccounts(now = Date.now()): { capturedAt: number; acc
 
     const accounts = snapshot.accounts.map((row): MachineAccountRow => {
         const account = byName.get(row.name);
+        // A CURSOR ROW IS NEVER AMBIENT (DROVE-270). `isAmbientSpelling` says
+        // true for a missing configDir, so without the harness test a cursor
+        // subscription came back marked `main` — the one row the phone refuses
+        // to remove and shows as this Mac's own login. It also has no
+        // `.claude.json`, so there is no address to read: a cursor account is
+        // NAMED after the address it logged in as instead.
+        const claude = !account || isClaudeAccount(account);
         return {
             ...row,
-            configDir: account?.configDir ?? '',
-            ambient: account ? account.ambient === true || isAmbientSpelling(account.configDir) : false,
-            login: (account && loginEmail(account)) || null,
-            sameLoginAs: (account && sameLoginAs(account, registry)) || null,
+            configDir: claude ? account?.configDir ?? '' : '',
+            ambient: claude && !!account
+                && (account.ambient === true || isAmbientSpelling(account.configDir)),
+            login: (claude && account && loginEmail(account)) || null,
+            sameLoginAs: (claude && account && sameLoginAs(account, registry)) || null,
         };
     });
 
