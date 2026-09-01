@@ -2,6 +2,7 @@ import AVFoundation
 import ExpoModulesCore
 import MediaPlayer
 import Speech
+import UIKit
 
 /// On-device speech for Cattle Drover (DROVE-30).
 ///
@@ -783,6 +784,10 @@ public final class DroverSpeechModule: Module {
             if self.sessionHeld && !self.isDictating {
                 self.startSilenceKeepalive()
             }
+            // Same reason as the interruption handler: iOS pauses playback on
+            // `oldDeviceUnavailable`, and a paused player is not the Now
+            // Playing app for long (DROVE-275).
+            self.republishNowPlayingIfActive()
             self.sendEvent("onAudioRouteChange", [
                 "outputs": outputs,
                 "reason": Self.routeChangeReasonName(raw)
@@ -861,6 +866,10 @@ public final class DroverSpeechModule: Module {
                     try? self.activatePlayback()
                     self.startSilenceKeepalive()
                 }
+                // The app came back; the card has to come back with it
+                // (DROVE-275). Whatever interrupted us took Now Playing, and
+                // nothing gives it back unasked.
+                self.republishNowPlayingIfActive()
                 self.sendEvent("onSpeechInterruption", [
                     "state": "ended",
                     "resumed": wasPaused && resume
@@ -942,6 +951,7 @@ public final class DroverSpeechModule: Module {
     private func wireRemoteCommands() {
         guard !remoteCommandsWired else { return }
         remoteCommandsWired = true
+        beginReceivingRemoteControlEvents()
         let centre = MPRemoteCommandCenter.shared()
         // Both skip commands stay off. A press falls through to skipForward
         // when nextTrack is disabled and to skipBackward when previousTrack
@@ -978,9 +988,43 @@ public final class DroverSpeechModule: Module {
         }
     }
 
+    /// Apple's documented half of becoming a Now Playing app.
+    ///
+    /// HONEST ABOUT WHAT THIS DID: it is not what fixed the missing card. Held
+    /// against the shipped call sequence on iOS 26.2, adding it alone changed
+    /// nothing measurable — the app was already `canBeNowPlayingApplication=YES`
+    /// without it, with an active session and without one, and SpringBoard
+    /// still resolved the player path to us. `playbackState` in
+    /// `updateNowPlaying` is what moved. It is here because Apple's own
+    /// "Becoming a Now Playable App" sample calls it at session start and its
+    /// absence kept being the first suspect every time the card did not draw;
+    /// one main-thread line ends that argument permanently.
+    ///
+    /// MAIN THREAD, because `AsyncFunction` runs off it. Every caller of
+    /// `wireRemoteCommands` arrives on the module queue, and `UIApplication` is
+    /// main-thread only.
+    ///
+    /// PAIRED, and the pairing is `wireRemoteCommands`/`teardownRemoteCommands`
+    /// rather than the audio session, deliberately: the card's lifetime is
+    /// read-aloud being ON (DROVE-233), not the session's, so ending the
+    /// registration when the session deactivates would withdraw it in every
+    /// gap between two sentences.
+    private func beginReceivingRemoteControlEvents() {
+        DispatchQueue.main.async {
+            UIApplication.shared.beginReceivingRemoteControlEvents()
+        }
+    }
+
+    private func endReceivingRemoteControlEvents() {
+        DispatchQueue.main.async {
+            UIApplication.shared.endReceivingRemoteControlEvents()
+        }
+    }
+
     private func teardownRemoteCommands() {
         guard remoteCommandsWired else { return }
         remoteCommandsWired = false
+        endReceivingRemoteControlEvents()
         let centre = MPRemoteCommandCenter.shared()
         centre.playCommand.removeTarget(nil)
         centre.pauseCommand.removeTarget(nil)
@@ -1009,6 +1053,51 @@ public final class DroverSpeechModule: Module {
         ]
         info[MPNowPlayingInfoPropertyMediaType] = MPNowPlayingInfoMediaType.audio.rawValue
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+        // THE CARD DID NOT DRAW WITHOUT THIS, and the rate alone never said so
+        // (DROVE-275). `MPNowPlayingInfoPropertyPlaybackRate` is a field IN the
+        // dictionary; `playbackState` is what iOS actually answers with when
+        // SpringBoard asks "is this app playing". Publishing rate 1 and leaving
+        // the state unset makes the system answer PAUSED for an app that is
+        // speaking, and MediaRemoteUI — the process that renders the lock
+        // screen and the island — never binds to the player at all.
+        //
+        // Measured on an iPhone 17 Pro simulator, iOS 26.2, same binary, one
+        // flag apart, over the module's own call sequence:
+        //
+        //   shipped today          -> resolved Paused,  MediaRemoteUI:  0 lines
+        //   + beginReceiving...    -> resolved Paused,  MediaRemoteUI:  0 lines
+        //   + playbackState        -> resolved PLAYING, MediaRemoteUI: 34 lines
+        //
+        // So this is the line the card was missing, and the remote-control
+        // registration below is NOT (it moved nothing; it is kept because
+        // Apple's contract asks for it, not because it fixed this).
+        //
+        // Same source as the rate: the READER, never `synthesizer.isSpeaking`,
+        // so waiting for the next reply stays PLAYING and only a real pause is
+        // paused (DROVE-233).
+        MPNowPlayingInfoCenter.default().playbackState = nowPlayingRate > 0 ? .playing : .paused
+    }
+
+    /// Say the card is still ours, after something took the route off us
+    /// (DROVE-275).
+    ///
+    /// A call, an alarm, a Siri question or an AirPod coming out hands Now
+    /// Playing to whatever interrupted, and iOS does not hand it back on its
+    /// own. The keepalive was already restarted on both of those paths, so the
+    /// APP survived the interruption while the CARD did not, and the gap after
+    /// a phone call was the one that looked exactly like the app had died.
+    ///
+    /// `title: nil` keeps the sentence he stopped on rather than reverting to
+    /// the generic "Reading", and the rate and state come off the reader, so
+    /// this re-asserts the same card rather than inventing a new one.
+    ///
+    /// It publishes NOTHING when read-aloud is off and no hold is on, which is
+    /// the same question `speak` asks: a card for a reader that has been
+    /// switched off is worse than no card.
+    private func republishNowPlayingIfActive() {
+        guard readingState != .off || sessionHeld else { return }
+        wireRemoteCommands()
+        updateNowPlaying(title: nil)
     }
 
     /// What the lock screen's play/pause glyph reads as (DROVE-233).
@@ -1031,6 +1120,9 @@ public final class DroverSpeechModule: Module {
     private func clearNowPlaying() {
         lastNowPlayingTitle = nil
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+        // Withdrawing the dictionary without withdrawing the state leaves the
+        // system holding "playing" for an app with nothing to play (DROVE-275).
+        MPNowPlayingInfoCenter.default().playbackState = .stopped
     }
 
     private func stopWatchingAudioRoute() {
