@@ -209,8 +209,11 @@
  * Not a backlog, a list of the swaps that would be honest ones under the rules
  * above: `ConfirmationDialog`, `ShareLink`, `ContentUnavailableView` for empty
  * states, `BottomSheet` alongside the DROVE-147 sheets. All four are
- * label-and-symbol surfaces, so Rule 1 does not stop them. `List`, `Form` and
- * `Picker` are not: our rows draw.
+ * label-and-symbol surfaces, so Rule 1 does not stop them. `List` and `Form`
+ * are not: our rows draw. `Picker` is both: in its menu and wheel styles it
+ * would draw rows, and stays out; in its SEGMENTED style it is a row of
+ * labels, which is `UISegmentedControl`, and DROVE-330 uses exactly that for
+ * the tabs inside a sheet (`SheetTabs.ios.tsx`).
  *
  * One cost is unmeasured and should be measured before anything hosts SwiftUI
  * per row: a `Host` on every message in the transcript is the first place
@@ -243,6 +246,12 @@ export const swiftUiHostSites: readonly SwiftUiHostSite[] = [
     {
         source: 'components/NativeOptionsPicker.ios.tsx',
         mode: 'overlay',
+    },
+    {
+        // A segmented Picker at an explicit height from worktreeSheetLayout,
+        // SwiftUI children only. The first `fixed` site in the tree (DROVE-330).
+        source: 'components/SheetTabs.ios.tsx',
+        mode: 'fixed',
     },
     {
         source: 'components/SessionActionsNativeMenu.ios.tsx',
@@ -284,12 +293,13 @@ export const rawGlassViewExemptions: readonly RawGlassViewExemption[] = [
 /**
  * Files that may import from `@expo/ui/swift-ui`, and what they build with it.
  *
- * `menu` is the only justified use today: SwiftUI `Button` exists in this app
- * as a MENU ITEM, never as a standalone control, because a standalone SwiftUI
- * button cannot hold our content (Rule 2) and draws a second, different glass
- * surface next to the primitives.
+ * `menu` was the only justified use until DROVE-330 added `segmented`: SwiftUI
+ * `Button` exists in this app as a MENU ITEM, never as a standalone control,
+ * because a standalone SwiftUI button cannot hold our content (Rule 2) and
+ * draws a second, different glass surface next to the primitives. A segmented
+ * `Picker` is a row of labels, which is the one shape Rule 1 lets SwiftUI own.
  */
-export type SwiftUiUse = 'menu' | 'context-menu';
+export type SwiftUiUse = 'menu' | 'context-menu' | 'segmented';
 
 export interface SwiftUiImporter {
     source: string;
@@ -300,6 +310,7 @@ export const swiftUiImporters: readonly SwiftUiImporter[] = [
     { source: 'components/NativeSettingsMenu.ios.tsx', use: 'menu' },
     { source: 'components/NativeOptionsPicker.ios.tsx', use: 'menu' },
     { source: 'components/SessionActionsNativeMenu.ios.tsx', use: 'context-menu' },
+    { source: 'components/SheetTabs.ios.tsx', use: 'segmented' },
 ];
 
 /**
@@ -360,6 +371,12 @@ export const controlClasses: readonly ControlClass[] = [
         drawnBy: 'expo-ui',
         source: 'components/NativeSettingsMenu.tsx',
         verdict: 'SwiftUI Menu / Compose DropdownMenu. Rule 1 is its ceiling: rows are labels.',
+    },
+    {
+        name: 'tabs inside a sheet',
+        drawnBy: 'expo-ui',
+        source: 'components/SheetTabs.tsx',
+        verdict: 'SwiftUI Picker in the segmented style is UISegmentedControl with the iOS 26 glass, in a fixed-height Host (Rule 3). Labels only, so Rule 1 holds. Android and web get an RN-drawn sibling at the same height.',
     },
     {
         name: 'session row actions',
