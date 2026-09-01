@@ -120,6 +120,18 @@ export interface GlassChromeSurfaceProps {
     interactive?: boolean;
     /** Corner radius, on the effect view as well as the frame. */
     radius: number;
+    /**
+     * Whether the FALLBACK surface draws its hairline edge (DROVE-266).
+     *
+     * On the material there is no rim to draw either way; this is only about
+     * the flat surface a phone without Liquid Glass gets. Chrome wants it,
+     * because a flat capsule floating over a chat needs an edge. The composer's
+     * controls do not: DROVE-254 settled that they separate by their FILL,
+     * measured against the bubble, and a hairline on top of that is a second
+     * answer to a question already answered. Defaults to true, which is every
+     * caller before this one.
+     */
+    rim?: boolean;
     style?: StyleProp<ViewStyle>;
     children?: React.ReactNode;
     pointerEvents?: ViewStyle['pointerEvents'];
@@ -146,6 +158,7 @@ export function GlassChromeSurface({
     tintColor,
     interactive = false,
     radius,
+    rim = true,
     style,
     children,
     pointerEvents,
@@ -180,7 +193,7 @@ export function GlassChromeSurface({
                 {
                     borderRadius: radius,
                     backgroundColor: tintColor ?? theme.colors.surfaceHigh,
-                    borderWidth: RNStyleSheet.hairlineWidth,
+                    borderWidth: rim ? RNStyleSheet.hairlineWidth : 0,
                     borderColor: theme.colors.glass.border,
                 },
                 style,
@@ -204,6 +217,8 @@ export interface GlassChromeButtonProps extends Omit<PressableProps, 'style' | '
     width?: number;
     radius?: number;
     tintColor?: string;
+    /** Passed through to the surface; see `GlassChromeSurfaceProps.rim`. */
+    rim?: boolean;
     style?: StyleProp<ViewStyle>;
     children?: React.ReactNode;
 }
@@ -220,6 +235,7 @@ export function GlassChromeButton({
     width,
     radius,
     tintColor,
+    rim,
     style,
     children,
     ...pressable
@@ -230,6 +246,7 @@ export function GlassChromeButton({
         <GlassChromeSurface
             radius={cornerRadius}
             tintColor={tintColor}
+            rim={rim}
             interactive={!pressable.disabled}
             style={[{ width: frameWidth, height: size }, style]}
         >

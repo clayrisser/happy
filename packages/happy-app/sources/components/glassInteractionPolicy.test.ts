@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import * as glassPolicy from './glassInteractionPolicy';
 import { resolveBubblePressableFeedback } from './bubblePressableFeedback';
+import {
+    COMPOSER_IN_FIELD_DISC,
+    COMPOSER_IN_FIELD_DISC_OPEN,
+    composerControlPalette,
+    composerGlassTint,
+    composerPausedFill,
+} from './composerControlColour';
 
 describe('native GlassView interaction policy (DROVE-169)', () => {
     it('asks UIGlassEffect for its own press response on an interactive surface', () => {
@@ -80,5 +87,69 @@ describe('pressed state stands down for the material (DROVE-202)', () => {
     it('draws nothing when the control is not pressed or is disabled', () => {
         expect(glassPolicy.shouldDrawPressedFallback(false, false)).toBe(false);
         expect(glassPolicy.shouldDrawPressedFallback(false, true, true)).toBe(false);
+    });
+});
+
+describe('a glass surface that hosts a press without being one (DROVE-266)', () => {
+    it('keeps its clip, so the composer card still rounds what it holds', () => {
+        // DROVE-202 is about a surface that SWELLS under a finger, and the
+        // composer card is not one: nobody presses the card. Conflating the two
+        // would have made asking for the platform's press response cost the
+        // card its shape.
+        expect(glassPolicy.getGlassSurfaceOverflow(true, false)).toBe('hidden');
+    });
+
+    it('leaves every earlier caller exactly as it was', () => {
+        // The default is the pre-DROVE-266 behaviour, so the eight chrome
+        // surfaces DROVE-202 unclipped are untouched by this.
+        expect(glassPolicy.getGlassSurfaceOverflow(true)).toBe('visible');
+        expect(glassPolicy.getGlassSurfaceOverflow(true, true)).toBe('visible');
+        expect(glassPolicy.getGlassSurfaceOverflow(false, false)).toBe('hidden');
+        expect(glassPolicy.getGlassSurfaceOverflow(false, true)).toBe('hidden');
+    });
+});
+
+/**
+ * THE COMPOSER'S DISCS ARE THE PLATFORM'S BUTTON NOW, AND THE FILL IS ITS TINT
+ * (DROVE-266).
+ *
+ * Clay, correcting the first answer: "stop doing your custom buttons shouldn't
+ * they just be smaller liquid glass buttons". They should, so
+ * `resolveComposerPressResponse` is gone along with the split it encoded, and
+ * what is left to hold is the one thing that split was protecting: that no
+ * translucent value can reach `UIGlassEffect.tintColor`, which is exactly how
+ * DROVE-254's bug got in.
+ */
+describe('a composer fill spent as glass tint stays measurable (DROVE-254, DROVE-266)', () => {
+    const fills = (dark: boolean) => [
+        dark ? COMPOSER_IN_FIELD_DISC.dark : COMPOSER_IN_FIELD_DISC.light,
+        dark ? COMPOSER_IN_FIELD_DISC_OPEN.dark : COMPOSER_IN_FIELD_DISC_OPEN.light,
+        composerControlPalette(dark).recording,
+        composerPausedFill(dark),
+    ];
+
+    it('passes every fill the row can wear, on both themes', () => {
+        // The guard throws, so this is also the test that stops it ever firing
+        // on a phone: every value the composer can hand it is a module constant
+        // and every one of them is walked here.
+        for (const dark of [true, false]) {
+            for (const fill of fills(dark)) {
+                expect(composerGlassTint(fill)).toBe(fill);
+            }
+        }
+    });
+
+    it('refuses the translucent tint the capsule used to be drawn in', () => {
+        // `CHROME_GLASS_TINT` is the value that shipped and failed (DROVE-254).
+        // It reached `tintColor` because nothing was in the way; something is
+        // now.
+        expect(() => composerGlassTint('rgba(255, 255, 255, 0.08)')).toThrow(/opaque/);
+        expect(() => composerGlassTint('rgba(0, 0, 0, 0.5)')).toThrow(/DROVE-254/);
+    });
+
+    it('is the only way to the prop, so a fill cannot bypass the check', () => {
+        // A plain hex passes through unchanged, which is what makes routing
+        // every call site through it free rather than a tax somebody removes.
+        expect(composerGlassTint('#282828')).toBe('#282828');
     });
 });

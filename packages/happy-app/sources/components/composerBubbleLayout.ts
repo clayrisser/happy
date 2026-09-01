@@ -155,6 +155,37 @@ export function resolveComposerBubbleActionRowGeometry(): ComposerBubbleStyle {
     };
 }
 
+/**
+ * THE CAPSULE'S OWN ROW, on the phones too narrow to share one (DROVE-266).
+ *
+ * DROVE-196's layout, brought back for the widths that need it, which is what
+ * DROVE-264 named as the remedy and what growing the buttons made unavoidable:
+ * six objects at 39 leave 77pt for the name at 375 and 22 at 320, and the
+ * longest name needs 91. The argument and the crossover are on
+ * `composerCapsuleOwnRow` in sessionPillLabel.ts.
+ *
+ * IT IS THE ACTION ROW'S SHAPE, deliberately. Same height, same centring, same
+ * full interior width, so the bubble is a column of rows that are all the same
+ * kind of thing and the capsule is not centred against anything variable. What
+ * it does NOT take is `flex: 1` on the capsule: the capsule still sizes to its
+ * content and still shrinks through the model segment, so a short name on a
+ * wide-ish phone does not draw a bar of empty glass across the bubble.
+ *
+ * IT SITS ABOVE THE BUTTON ROW, not below it. Send stays in the bubble's
+ * bottom-trailing corner where DROVE-214 put it and where its clearance from
+ * the rounded corner is measured; the capsule takes the new line between the
+ * text and the buttons.
+ */
+export function resolveComposerBubbleCapsuleRowGeometry(): ComposerBubbleStyle {
+    return {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'flex-start',
+        width: '100%',
+        height: MOBILE_COMPOSER_BUBBLE_ACTION_ROW_HEIGHT,
+    };
+}
+
 /** The spacer that holds send against the trailing end whatever else is drawn. */
 export function resolveComposerBubbleSpacerGeometry(): ComposerBubbleStyle {
     return { flex: 1 };
@@ -216,6 +247,7 @@ export function resolveComposerBubbleDiscGeometry(): ComposerBubbleStyle {
 export const COMPOSER_BUBBLE_GEOMETRY = resolveComposerBubbleGeometry();
 export const COMPOSER_BUBBLE_TEXT_ROW_GEOMETRY = resolveComposerBubbleTextRowGeometry();
 export const COMPOSER_BUBBLE_ACTION_ROW_GEOMETRY = resolveComposerBubbleActionRowGeometry();
+export const COMPOSER_BUBBLE_CAPSULE_ROW_GEOMETRY = resolveComposerBubbleCapsuleRowGeometry();
 export const COMPOSER_BUBBLE_SPACER_GEOMETRY = resolveComposerBubbleSpacerGeometry();
 export const COMPOSER_BUBBLE_GAP_GEOMETRY = resolveComposerBubbleGapGeometry();
 export const COMPOSER_BUBBLE_SESSION_CAPSULE_GEOMETRY = resolveComposerBubbleSessionCapsuleGeometry();

@@ -26,6 +26,24 @@ type BubblePressableProps = Omit<PressableProps, 'style'> & {
     pressedStyle?: StyleProp<ViewStyle>;
     bubbleScale?: number;
     scaleFeedback?: boolean;
+    /**
+     * Override the surrounding surface's answer about whether the PLATFORM is
+     * drawing this press (DROVE-266).
+     *
+     * The context is a property of the SURFACE, and it is right for a control
+     * that stands on the material. It is wrong for one whose own opaque fill
+     * COVERS it, because `UIGlassEffect.isInteractive` then lenses under a view
+     * nothing shows through and the spring standing down would leave the
+     * control with no response at all.
+     *
+     * ONE CALLER, which is the point. The composer's discs are
+     * `GlassChromeButton` now and decide this for themselves; the session
+     * capsule is the one control that is still an opaque fill inside the
+     * bubble's glass, for the contrast reason DROVE-254 measured, so it passes
+     * `false` here. If a second caller ever appears, the question to ask first
+     * is whether that control should have been a glass button.
+     */
+    nativeGlassPress?: boolean;
 };
 
 /**
@@ -40,11 +58,13 @@ export const BubblePressable = React.memo(({
     disabled,
     onPressIn,
     onPressOut,
+    nativeGlassPress: nativeGlassPressOverride,
     ...props
 }: BubblePressableProps) => {
     const scale = useSharedValue(1);
     const [pressed, setPressed] = React.useState(false);
-    const nativeGlassPress = useNativeGlassPress();
+    const surfaceGlassPress = useNativeGlassPress();
+    const nativeGlassPress = nativeGlassPressOverride ?? surfaceGlassPress;
     const { animateScale } = resolveBubblePressableFeedback({
         platform: Platform.OS === 'web' ? 'web' : 'native',
         scaleFeedback,

@@ -460,15 +460,20 @@ describe('the bottom row moves into the bubble and nothing else moves', () => {
     const before = 143;
     const after = MOBILE_COMPOSER_BASE_HEIGHT;
 
-    it('shortens the composer by 50, which is the row and the gap above it', () => {
-        expect(after).toBe(93);
-        expect(before - after).toBe(50);
-        expect(beforeAll - after).toBe(55);
-        // The 50 is exactly the row's height plus the one gap that held it off
-        // the bubble. Nothing came out of the bubble itself: it is 85 on both
-        // sides of the move.
+    it('shortens the composer by 47, which is the row and the gap less the bigger buttons', () => {
+        expect(after).toBe(96);
+        expect(before - after).toBe(47);
+        expect(beforeAll - after).toBe(52);
+        // The move itself was worth exactly the row's height plus the one gap
+        // that held it off the bubble, and nothing came out of the bubble: it
+        // was 85 on both sides of it. DROVE-266 then spends 3 of that back,
+        // growing every object on the row 36 -> 39 on Clay's "you can make the
+        // buttons in the speech bubble a little bigger". Both terms are written
+        // out so the ledger says who took what.
         expect(before - after)
-            .toBe(MOBILE_COMPOSER_METRICS.actionRowHeight + MOBILE_COMPOSER_METRICS.controlGap);
+            .toBe(MOBILE_COMPOSER_METRICS.actionRowHeight
+                + MOBILE_COMPOSER_METRICS.controlGap
+                - (MOBILE_COMPOSER_METRICS.primaryActionSize - 36));
     });
 
     it('takes the bottom fade with it, still equal to what the list reserves', () => {
@@ -482,7 +487,7 @@ describe('the bottom row moves into the bubble and nothing else moves', () => {
         // the measured box. Nothing moved out: the row moved further in.
         const scrimBefore = resolveTranscriptBottomScrim(before, safeAreaBottom);
         const scrimAfter = resolveTranscriptBottomScrim(after, safeAreaBottom);
-        expect(scrimBefore.height - scrimAfter.height).toBe(50);
+        expect(scrimBefore.height - scrimAfter.height).toBe(47);
         expect(scrimAfter.overhang).toBe(scrimBefore.overhang);
         expect(scrimAfter.height).toBe(resolveDockInset({
             dockHeight: after,
@@ -523,9 +528,9 @@ describe('the bottom row moves into the bubble and nothing else moves', () => {
         expect(MOBILE_COMPOSER_METRICS.bubbleInsetBottom).toBe(4);
     });
 
-    it('gives the 50pt to the transcript, which is the point of it', () => {
+    it('gives 47 of the 50 to the transcript, which is still the point of it', () => {
         const gradientBefore = resolveTranscriptMask(before, safeAreaBottom).gradientHeight;
         const gradientAfter = resolveTranscriptMask(after, safeAreaBottom).gradientHeight;
-        expect(gradientBefore - gradientAfter).toBe(50);
+        expect(gradientBefore - gradientAfter).toBe(47);
     });
 });

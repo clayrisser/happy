@@ -71,8 +71,32 @@ export function getNativeGlassInteractivity(
  * Off the material the flat fallback still clips, because there it is the only
  * thing rounding the corners of what it holds.
  */
-export function getGlassSurfaceOverflow(drawsNativeGlass: boolean): 'visible' | 'hidden' {
-    return drawsNativeGlass ? 'visible' : 'hidden';
+export function getGlassSurfaceOverflow(
+    drawsNativeGlass: boolean,
+    /**
+     * Whether the surface is the thing being PRESSED, or merely the host of
+     * something that is (DROVE-266).
+     *
+     * DROVE-202's finding is about a surface that SWELLS: a header button, a
+     * FAB, a chrome capsule. `clipsToBounds` pins the swell at the resting
+     * frame, so what you see is the content growing inside a rectangle that
+     * does not move, which is what Clay described. Every caller then was that
+     * kind of surface, so the distinction cost nothing and was not drawn.
+     *
+     * The composer card is the other kind. Nobody presses the card; it holds
+     * controls that are pressed, and what interactive glass is wanted for there
+     * is the LENSING under a finger on a child, which happens inside the card's
+     * own bounds and asks for no swell. That card also has to keep clipping —
+     * its rounded corners are what round the text field and the attachment
+     * strip inside it — so conflating the two would have made asking for the
+     * platform's press response cost the composer its shape.
+     *
+     * Defaults to true, which is every pre-DROVE-266 caller's behaviour
+     * unchanged.
+     */
+    pressTarget = true,
+): 'visible' | 'hidden' {
+    return drawsNativeGlass && pressTarget ? 'visible' : 'hidden';
 }
 
 /**
@@ -91,3 +115,69 @@ export function shouldDrawPressedFallback(
 ): boolean {
     return !nativeGlassPress && pressed && !disabled;
 }
+
+/**
+ * WHAT THE COMPOSER'S CONTROLS ARE MADE OF, AND WHY THAT ANSWERS THE TICKET
+ * (DROVE-266).
+ *
+ * Clay, twice, the second time as a correction: "you can make the buttons in
+ * the speech bubble a little bigger and also make them behave like liquid glass
+ * buttons I already told you that stop doing your custom buttons shouldn't they
+ * just be smaller liquid glass buttons".
+ *
+ * THE FIRST ANSWER WAS THE WRONG SHAPE AND IS GONE. It turned
+ * `UIGlassEffect.isInteractive` on for the BUBBLE — which was right, and stays —
+ * and then reasoned that only the controls showing bare glass could benefit,
+ * because an opaque fill has nothing under it to lens. A function,
+ * `resolveComposerPressResponse`, encoded that split and handed the other four
+ * controls a hand-rolled `withSpring` scale and an `opacity: 0.7`.
+ *
+ * The lensing argument is true and it answers a question nobody asked. What
+ * those controls lacked was not lensing, it was BEING A BUTTON: they were
+ * `View`s with a `backgroundColor` wrapped round a `Pressable`, and a glass
+ * button is a `UIVisualEffectView` that UIKit deforms, brightens, shadows and
+ * springs on its own schedule. None of that arrives from a flag two levels up,
+ * and none of it depends on seeing through the control. So the split was a
+ * careful answer to the wrong question, which is what "stop doing your custom
+ * buttons" was pointing at.
+ *
+ * WHAT REPLACES IT is smaller: the composer's discs are `GlassChromeButton` at
+ * the composer's size, spending their opaque fill as `UIGlassEffect.tintColor`.
+ * `ComposerControlButton.tsx` is the whole of it, and `GlassChromeButtonContent`
+ * was already doing the right thing with the fade — down on the material, kept
+ * off it — so there is nothing left for a policy function to decide.
+ * `resolveComposerPressResponse` and its `ComposerControlSurface` type are
+ * deleted rather than kept "just in case", because a rule with no caller is a
+ * rule nobody maintains.
+ *
+ * TWO CONTROLS ARE STILL NOT GLASS BUTTONS, AND BOTH FOR REASONS THAT ARE ABOUT
+ * THEM RATHER THAN ABOUT THE MATERIAL.
+ *
+ *   send at rest,      They have no surface. DROVE-264 took send's circle off
+ *   the mic at rest    and DROVE-254 took the mic's, on Clay's standing
+ *                      instruction, so giving either a glass button would BE
+ *                      the circle he removed. They are bare glyphs on the
+ *                      bubble, the bubble is interactive, and the press they
+ *                      draw is already the platform's. Their filled faces —
+ *                      Stop, the gate's lock, an open capture — are glass
+ *                      buttons like everything else.
+ *   the session        DROVE-254 was filed about THIS control being a
+ *   capsule            `UIGlassEffect` nested inside the bubble's own, and the
+ *                      fix was to stop it being one. Re-glassing it is the
+ *                      single move that would re-create that ticket. It would
+ *                      also cost the open segment's wash its clip, because an
+ *                      interactive surface must not clip (`getGlassSurfaceOverflow`)
+ *                      and that clip is what rounds the wash to the capsule's
+ *                      ends. It keeps the fade, which is the only response an
+ *                      opaque capsule can have, and `ComposerSessionControls`
+ *                      says so at the point it draws it.
+ *
+ * AND THE CONTRAST GUARANTEE IS NOT TOUCHED. DROVE-254's finding is about a
+ * TRANSLUCENT tint inside the bubble's glass, which has no single value to
+ * measure. Every fill on this row is still an opaque hex, `colorAlpha === 1` is
+ * still asserted on every one of them, and `composerGlassTint` now REFUSES a
+ * translucent value on the way to `tintColor` — which is the step that was
+ * missing when DROVE-254's bug got in. The one thing that needs a device is
+ * whether UIKit renders an opaque tint at full weight; the arithmetic for what
+ * happens if it does not is on `composerGlassTint`.
+ */

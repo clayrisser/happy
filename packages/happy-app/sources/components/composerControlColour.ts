@@ -131,6 +131,7 @@ import {
     CHROME_CONTRAST_FLOOR,
     CHROME_GLASS_TINT,
     CHROME_GROUND,
+    colorAlpha,
     compositeOver,
     compositeSurface,
     contrastRatio,
@@ -813,4 +814,51 @@ export function composerFillTint(fill: string): string {
 /** The pause glyph's colour: whichever foreground reads on the amber. */
 export function composerPausedTint(dark: boolean): string {
     return composerFillTint(composerPausedFill(dark));
+}
+
+/**
+ * THE FILL, HANDED TO A REAL GLASS BUTTON AS ITS TINT (DROVE-266).
+ *
+ * Clay, for the second time: "stop doing your custom buttons shouldn't they
+ * just be smaller liquid glass buttons". They should, and they are now
+ * `GlassChromeButton` at the composer's size, which is the same control the
+ * header draws rather than a View coloured to look like one. What that changes
+ * for THIS file is where the fill is spent: it used to be a `backgroundColor`
+ * on a plain view, and it is now `UIGlassEffect.tintColor` on the button's own
+ * effect.
+ *
+ * WHY THAT DOES NOT REOPEN DROVE-254, which is the one question this function
+ * exists to answer. That ticket's finding is precise and it is about a
+ * TRANSLUCENT tint: `CHROME_GLASS_TINT` inside the bubble's own glass had
+ * nothing left to refract, so what landed on screen depended on a backdrop the
+ * model could not see, and light modelled at 1.222:1, under the floor. An
+ * OPAQUE tint is not that case. Opacity is exactly the property that makes the
+ * backdrop irrelevant, which is why DROVE-254 reached for an opaque fill in the
+ * first place, and whether that one value is painted by a View or handed to the
+ * effect it is the same value and the same measurement.
+ *
+ * SO THE GUARANTEE IS NOT REPLACED, IT IS ENFORCED ONE STEP EARLIER.
+ * `colorAlpha === 1` on the fills is untouched and everything that depends on it
+ * still holds. This adds the step that was missing when DROVE-254's bug got in:
+ * the capsule failed because a translucent tint reached `tintColor` and nothing
+ * refused it. Now nothing can, because this is the only way to that prop and it
+ * throws.
+ *
+ * WHAT STILL NEEDS A DEVICE, said here rather than left to be found. That UIKit
+ * renders a fully opaque `tintColor` at full weight. If it renders it at a
+ * partial weight w, the drawn fill is `w * tint + (1 - w) * bubble` and the
+ * separation falls with it: from 1.36:1 at w = 1, anything under about w = 0.96
+ * drops the capsule and the discs below `COMPOSER_DISC_SEPARATION_FLOOR`. That
+ * is a build to run, not a number to assume.
+ */
+export function composerGlassTint(fill: string): string {
+    if (colorAlpha(fill) !== 1) {
+        throw new Error(
+            `composer glass tint must be opaque (DROVE-254): ${fill} is not. `
+            + 'A translucent tint inside the bubble’s own glass has no single '
+            + 'value to measure, which is the fault this refusal exists to stop '
+            + 'coming back.',
+        );
+    }
+    return fill;
 }
