@@ -231,6 +231,43 @@ describe('the Swift the widget actually renders', () => {
 });
 
 /**
+ * THE WATCH'S OWN PIN (DROVE-260). One signal on every slot the face offers.
+ *
+ * The complication carries the gate count on all four accessory families and
+ * nothing from the `.system*` set, which a watch cannot draw anyway. The pin is
+ * here so "the same count, one more slot" cannot quietly grow a family that
+ * shows something else, or a second set of words for the inline line.
+ */
+const swiftWatchWidget = readFileSync(
+    resolve(__dirname, '../../watch/DroverWatchWidget/DroverWatchWidget.swift'),
+    'utf8',
+);
+
+describe('the watch complication', () => {
+    it('offers the same count on every accessory family, inline included', () => {
+        const families = swiftWatchWidget.match(/supportedFamilies\(\[([^\]]*)\]\)/)?.[1] ?? '';
+        const declared = families.split(',').map((f) => f.trim()).filter(Boolean).sort();
+        expect(declared).toEqual([
+            '.accessoryCircular',
+            '.accessoryCorner',
+            '.accessoryInline',
+            '.accessoryRectangular',
+        ]);
+    });
+
+    /**
+     * The inline branch READS the label and the glyph the circular draws; it
+     * does not carry words of its own. One `label`, one `symbol`, for every
+     * family.
+     */
+    it('draws inline off the same label and glyph the circular draws', () => {
+        expect(swiftWatchWidget).toContain('Label(label, systemImage: symbol)');
+        expect(swiftWatchWidget.match(/private var label: String/g)).toHaveLength(1);
+        expect(swiftWatchWidget.match(/private var symbol: String/g)).toHaveLength(1);
+    });
+});
+
+/**
  * THE ADAPTER. Both writers hand over the same shapes the wrist takes, and
  * this is the one place those shapes become a face — because two call sites
  * mapping the same fields by hand is precisely how the wrist's colour table
