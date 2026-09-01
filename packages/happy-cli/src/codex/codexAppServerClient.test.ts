@@ -1,4 +1,7 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { SandboxConfig } from '@/persistence';
 
 const {
@@ -117,12 +120,29 @@ const sandboxConfig: SandboxConfig = {
     allowLocalBinding: true,
 };
 
+/**
+ * The command the client actually spawns is resolveCodexBin()'s answer, not the
+ * bare name (DROVE-273), so on a machine with `brew install --cask codex` these
+ * cases used to assert 'codex' and receive /opt/homebrew/bin/codex — a test that
+ * passed or failed on whether the developer had Codex installed (DROVE-342).
+ * HAPPY_CODEX_PATH is the documented override and it wins over PATH and every
+ * fallback, so pointing it at a fixture file pins the spawn on every machine.
+ */
+const codexBinFixture = (() => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-appserver-'));
+    const bin = join(dir, 'codex');
+    writeFileSync(bin, '#!/bin/sh\necho codex-cli 0.140.0\n', { mode: 0o755 });
+    return bin;
+})();
+
 describe('CodexAppServerClient sandbox integration', () => {
     const originalRustLog = process.env.RUST_LOG;
+    const originalCodexPath = process.env.HAPPY_CODEX_PATH;
 
     beforeEach(() => {
         vi.clearAllMocks();
         process.env.RUST_LOG = originalRustLog;
+        process.env.HAPPY_CODEX_PATH = codexBinFixture;
         mockExecSync.mockReturnValue('codex-cli 0.107.0');
         mockInitializeSandbox.mockResolvedValue(mockSandboxCleanup);
         mockWrapForMcpTransport.mockResolvedValue({ command: 'sh', args: ['-c', 'wrapped codex app-server'] });
@@ -131,6 +151,8 @@ describe('CodexAppServerClient sandbox integration', () => {
 
     afterAll(() => {
         process.env.RUST_LOG = originalRustLog;
+        if (originalCodexPath === undefined) delete process.env.HAPPY_CODEX_PATH;
+        else process.env.HAPPY_CODEX_PATH = originalCodexPath;
     });
 
     it('reports goal action support for Codex versions with goal action requests', async () => {
@@ -151,7 +173,7 @@ describe('CodexAppServerClient sandbox integration', () => {
         await client.connect();
 
         expect(mockInitializeSandbox).toHaveBeenCalledWith(sandboxConfig, process.cwd());
-        expect(mockWrapForMcpTransport).toHaveBeenCalledWith('codex', ['app-server', '--listen', 'stdio://']);
+        expect(mockWrapForMcpTransport).toHaveBeenCalledWith(codexBinFixture, ['app-server', '--listen', 'stdio://']);
         expect(mockSpawn).toHaveBeenCalledWith(
             'sh',
             ['-c', 'wrapped codex app-server'],
@@ -176,7 +198,7 @@ describe('CodexAppServerClient sandbox integration', () => {
 
         expect(mockWrapForMcpTransport).not.toHaveBeenCalled();
         expect(mockSpawn).toHaveBeenCalledWith(
-            'codex',
+            codexBinFixture,
             ['app-server', '--listen', 'stdio://'],
             expect.objectContaining({
                 env: expect.objectContaining({

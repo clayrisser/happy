@@ -24,17 +24,30 @@ import { carryTranscript, projectDirFor } from './transcript'
 import { parseFlipCommand } from './controller'
 
 let root: string
+let realHome: string | undefined
 
 beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), 'drover-flip-'))
     process.env.XDG_STATE_HOME = join(root, 'state')
     process.env.DROVER_ACCOUNTS = join(root, 'accounts.json')
+    // HOME is the throwaway too (DROVE-342). An AMBIENT registry row — one with
+    // no configDir, which is what `two()` below writes — resolves its login and
+    // its usage cache to join(homedir(), '.claude.json'), so on this machine the
+    // DROVE-31 case read Clay's REAL Claude usage record: `isCooling('main')`
+    // answered true whenever his main account happened to be at its limit and
+    // false the rest of the day. Same disease the DROVE-336 fence cures one
+    // variable over, so the cure is the same: point it at a throwaway and let
+    // writeAccounts plant the fixture record there.
+    realHome = process.env.HOME
+    process.env.HOME = root
     delete process.env.DROVER_FLIP_PROMPT
     delete process.env.DROVER_ACCOUNT
     delete process.env.CLAUDE_CONFIG_DIR
 })
 
 afterEach(() => {
+    if (realHome === undefined) delete process.env.HOME
+    else process.env.HOME = realHome
     rmSync(root, { recursive: true, force: true })
 })
 
@@ -48,9 +61,12 @@ afterEach(() => {
 function writeAccounts(accounts: { name: string; configDir?: string }[]): void {
     writeFileSync(process.env.DROVER_ACCOUNTS!, JSON.stringify(accounts))
     for (const a of accounts) {
-        if (!a.configDir) continue
-        mkdirSync(a.configDir, { recursive: true })
-        writeFileSync(join(a.configDir, '.claude.json'), JSON.stringify({ hasCompletedOnboarding: true, oauthAccount: { emailAddress: `${a.name}@example.com` } }))
+        // No configDir is the AMBIENT account, and its login lives at
+        // ~/.claude.json rather than under a config dir. HOME is the throwaway
+        // above, so this writes the fixture that used to be Clay's real record.
+        const cfg = a.configDir ? join(a.configDir, '.claude.json') : join(homedir(), '.claude.json')
+        mkdirSync(dirname(cfg), { recursive: true })
+        writeFileSync(cfg, JSON.stringify({ hasCompletedOnboarding: true, oauthAccount: { emailAddress: `${a.name}@example.com` } }))
     }
 }
 
