@@ -14,17 +14,17 @@ type MobileGlassMaterial = 'liquid' | 'static' | 'frosted';
 type MobileGlassSurfaceProps = ViewProps & {
     enabled?: boolean;
     intensity?: number;
-    interactive?: boolean;
     /**
-     * Whether this surface is itself the thing being pressed (DROVE-266).
-     *
-     * A press target has to be free to swell past its resting frame, so it
-     * stops clipping; a surface that merely HOSTS interactive material keeps
-     * its clip, because the lensing it wants happens inside its own bounds.
-     * The composer card is the second kind and needs the clip to round the
-     * field it holds. `getGlassSurfaceOverflow` carries the argument.
+     * Ask `UIGlassEffect` for its own press response. An interactive surface
+     * is never clipped, whatever it holds (DROVE-202, DROVE-328): the effect
+     * answers a touch anywhere inside it by swelling past its resting frame,
+     * and `overflow: 'hidden'` on the host turns that swell into a hard edge.
+     * There was a `pressTarget` prop here for one ticket (DROVE-266) that let
+     * the composer card keep its clip on the theory that nobody presses the
+     * card; Clay photographed the card clipped mid-swell, and the prop is
+     * gone. `getGlassSurfaceOverflow` has the argument.
      */
-    pressTarget?: boolean;
+    interactive?: boolean;
     nativeEffect?: boolean;
     material?: MobileGlassMaterial;
     glassEffectStyle?: GlassStyle;
@@ -59,7 +59,6 @@ export function MobileGlassSurface({
     enabled = Platform.OS !== 'web' && !isRunningOnMac(),
     intensity = 72,
     interactive = false,
-    pressTarget = true,
     nativeEffect = interactive,
     material = 'liquid',
     glassEffectStyle = 'clear',
@@ -155,10 +154,12 @@ export function MobileGlassSurface({
                 isInteractive={getNativeGlassInteractivity(interactive, isGlassEffectAPIAvailable())}
                 // An interactive surface has to be free to swell past its
                 // resting frame on press, and a caller that clipped it turned
-                // that swell into an inner zoom (DROVE-202). A surface nothing
-                // lands on keeps whatever clipping it asked for: the composer
-                // card needs it to round the field it holds.
-                style={[style, interactive && { overflow: getGlassSurfaceOverflow(true, pressTarget) }]}
+                // that swell into an inner zoom (DROVE-202). The answer goes
+                // on LAST so the caller's style cannot put the clip back,
+                // which is what the composer card's desktop style tries to do
+                // (DROVE-328). A surface nothing lands on keeps whatever
+                // clipping it asked for.
+                style={[style, interactive && { overflow: getGlassSurfaceOverflow(true) }]}
             >
                 {surfaceOverlay}
                 <GlassPressProvider value={interactive}>

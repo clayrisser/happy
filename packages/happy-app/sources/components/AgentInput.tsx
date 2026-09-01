@@ -61,6 +61,7 @@ import {
     COMPOSER_BUBBLE_GEOMETRY,
     COMPOSER_BUBBLE_SESSION_CAPSULE_GEOMETRY,
     COMPOSER_BUBBLE_SPACER_GEOMETRY,
+    COMPOSER_BUBBLE_SURFACE,
     COMPOSER_BUBBLE_TEXT_ROW_GEOMETRY,
 } from './composerBubbleLayout';
 import { COMPOSER_STRIP_BOX } from './composerStripLayout';
@@ -319,6 +320,11 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     unifiedPanel: {
         backgroundColor: theme.colors.input.background,
         borderRadius: Platform.select({ default: 16, android: 20 }),
+        // The FLAT card's clip: off the material this is what rounds the
+        // field's background. On the material `MobileGlassSurface` overrides
+        // it last with `visible`, because the bubble is interactive glass and
+        // an interactive surface swells past this frame on press (DROVE-202,
+        // DROVE-328). Do not "fix" that by clipping the glass host.
         overflow: 'hidden',
         paddingVertical: 2,
         paddingBottom: 8,
@@ -2951,34 +2957,23 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                             the measured chrome tint (DROVE-171). */}
                         <MobileGlassSurface
                             enabled={compactMobileComposer}
-                            nativeEffect
-                            material="liquid"
-                            glassEffectStyle="regular"
-                            intensity={92}
-                            // ASK THE PLATFORM FOR THE PRESS (DROVE-266). Clay:
+                            // THE MATERIAL, AND THE PRESS, from one object
+                            // (DROVE-328). `interactive` is in there: Clay,
                             // "shouldn't all these buttons have the Liquid
-                            // Glass behavior". They should, and the reason they
-                            // did not is this prop: with it unset,
+                            // Glass behavior" (DROVE-266), and with it unset
                             // `UIGlassEffect.isInteractive` was false, so every
                             // control inside fell back to BubblePressable's
-                            // hand-rolled spring and a 0.7 fade — the same
-                            // three imitations DROVE-169 took out of the header
-                            // and never reached the composer.
-                            //
-                            // It buys the response for the controls whose glass
-                            // is EXPOSED, which is send and the mic at rest.
-                            // The four with opaque fills cover the material and
-                            // keep the fade, because there is nothing under
-                            // them to lens. `resolveComposerPressResponse` is
-                            // that split, with the argument for why the fills
-                            // cannot simply become glass.
-                            interactive
-                            // And the card keeps its clip. It is not a press
-                            // target — nobody presses the card — so DROVE-202's
-                            // "an interactive surface must not clip" does not
-                            // apply to it, and its rounded corners are what
-                            // round the field and the attachment strip inside.
-                            pressTarget={false}
+                            // hand-rolled spring and a 0.7 fade. What is NOT in
+                            // there is the `pressTarget={false}` 266 put beside
+                            // it to keep this card clipped on the theory that
+                            // nobody presses the card. The effect answers a
+                            // touch on anything inside it by swelling the whole
+                            // bubble, and Clay photographed that swell cut at
+                            // the resting frame. `MobileGlassSurface` decides
+                            // last that an interactive surface is never
+                            // clipped (DROVE-202); `unifiedPanel`'s clip below
+                            // is for the flat desktop card and loses to it here.
+                            {...COMPOSER_BUBBLE_SURFACE}
                             style={[
                                 styles.unifiedPanel,
                                 compactMobileComposer && styles.mobileUnifiedPanel,

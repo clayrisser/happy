@@ -231,6 +231,34 @@ export function resolveComposerBubbleDiscGeometry(): ComposerBubbleStyle {
     return resolveMobileComposerActionGeometry('primary') as ComposerBubbleStyle;
 }
 
+/**
+ * The bubble's MATERIAL, as the props `MobileGlassSurface` reads (DROVE-328).
+ *
+ * Beside the geometry for the same reason the geometry is here: so the spec
+ * that mounts the bubble's host (`composerGlassSurfaces.test.ts`) mounts it
+ * with what `AgentInput` draws, rather than a restatement that drifts. It is
+ * real Liquid Glass (DROVE-153), `regular` because `clear` draws close to
+ * nothing over a black chat, and INTERACTIVE (DROVE-266) because that is the
+ * one prop that makes `UIGlassEffect` lens and swell under a finger; without it
+ * every control inside the bubble fakes its press.
+ *
+ * What is NOT here is anything about clipping. An interactive surface swells,
+ * and `MobileGlassSurface` decides last that it is never clipped (DROVE-202).
+ * DROVE-266 threaded a `pressTarget={false}` through to keep the card clipped
+ * anyway, and Clay photographed the result: the bubble mid-swell with its
+ * borders cut at the resting frame. Nothing inside the bubble needs the clip
+ * on the material, and the spec above measures that rather than asserting it.
+ */
+export function resolveComposerBubbleSurface() {
+    return {
+        nativeEffect: true,
+        material: 'liquid',
+        glassEffectStyle: 'regular',
+        intensity: 92,
+        interactive: true,
+    } as const;
+}
+
 export const COMPOSER_BUBBLE_GEOMETRY = resolveComposerBubbleGeometry();
 export const COMPOSER_BUBBLE_TEXT_ROW_GEOMETRY = resolveComposerBubbleTextRowGeometry();
 export const COMPOSER_BUBBLE_ACTION_ROW_GEOMETRY = resolveComposerBubbleActionRowGeometry();
@@ -239,3 +267,4 @@ export const COMPOSER_BUBBLE_GAP_GEOMETRY = resolveComposerBubbleGapGeometry();
 export const COMPOSER_BUBBLE_SESSION_CAPSULE_GEOMETRY = resolveComposerBubbleSessionCapsuleGeometry();
 export const COMPOSER_BUBBLE_SESSION_SEGMENT_GEOMETRY = resolveComposerBubbleSessionSegmentGeometry();
 export const COMPOSER_BUBBLE_DISC_GEOMETRY = resolveComposerBubbleDiscGeometry();
+export const COMPOSER_BUBBLE_SURFACE = resolveComposerBubbleSurface();
