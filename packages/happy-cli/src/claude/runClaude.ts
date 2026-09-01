@@ -44,6 +44,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { RawJSONLinesSchema, type RawJSONLines } from './types';
 import { FlipController, parseFlipCommand } from '@/drover/flip/controller';
+import { modeCarryArgs, type ModeRequest } from './utils/modeCarry';
 import { currentAccount, flippableAccounts, readAccounts } from '@/drover/flip/accounts';
 import { CloneReporter, readSeedPrompt } from '@/drover/flip/clones';
 import { UsageReporter } from '@/drover/flip/usage';
@@ -194,6 +195,24 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
     const startedOnAccount = process.env.DROVER_ACCOUNT || currentAccount()?.name;
     const startingSessionName = defaultSessionName(workingDirectory, startedOnAccount);
 
+    // The picks the command line itself carried (DROVE-278). `--model` and
+    // `--effort` parse into StartOptions and then went NOWHERE for a pane
+    // session: nothing put them on the child's argv and the initial metadata
+    // said nothing, so `drover --model X --effort Y` — the daemon-spawned
+    // shape the phone uses included — quietly booted on defaults. Seeding
+    // metadata below is the fix, because the launcher already routes EVERY
+    // spawn, the first included, through `modeCarryArgs(session.claudeArgs,
+    // requestedModes())`, and requestedModes() reads exactly these two
+    // fields. One seed makes the argv carry, the app's display and
+    // modeReconcileCommands' observed-vs-requested comparison all start
+    // truthful instead of empty. The model skips `default` by the same rule
+    // spawnModeArgs applies on the way in: Claude's "default" means "no
+    // harness override", not a model to pin.
+    const argvModeRequest: ModeRequest = {
+        ...(options.model && options.model !== 'default' ? { modelMode: options.model } : {}),
+        ...(options.effort ? { effortLevel: options.effort } : {}),
+    };
+
     let metadata: Metadata = {
         path: workingDirectory,
         host: os.hostname(),
@@ -224,6 +243,10 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
         ...(forkedFromSessionId ? { parentSessionId: forkedFromSessionId } : {}),
         ...(forkedFromMessageId ? { forkedFromMessageId } : {}),
         ...(isSideChat ? { isSideChat: true } : {}),
+        // Spread as keys-only-when-present, so a reattach below — which lays
+        // this fresh metadata over the stored session's — cannot erase a pick
+        // the app already holds with an absent one (DROVE-278).
+        ...argvModeRequest,
     };
 
     // Check for session reconnection env vars (set by daemon for resume-in-place)
@@ -408,7 +431,10 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
                 onThinkingChange: () => {},
                 abort: new AbortController().signal,
                 claudeEnvVars: options.claudeEnvVars,
-                claudeArgs: options.claudeArgs,
+                // Offline has no session metadata for the launcher's carry to
+                // read, so the argv-borne picks go on here through the same
+                // helper the flip path uses (DROVE-278).
+                claudeArgs: modeCarryArgs(options.claudeArgs, argvModeRequest),
                 mcpServers: {},
                 allowedTools: [],
                 sandboxConfig,

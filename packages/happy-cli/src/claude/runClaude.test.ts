@@ -1234,6 +1234,120 @@ describe('runClaude remote JSONL scanner', () => {
         await finishRun(runPromise, loopDeferred);
     });
 
+    it('puts the argv\'s model and effort in the FIRST metadata publish, for the daemon-shaped start the phone uses (DROVE-278)', async () => {
+        // `drover --model X --effort Y` parsed cleanly into StartOptions and
+        // then reached the claude child not at all: nothing pushed the picks
+        // to claudeArgs and the initial metadata carried no
+        // modelMode/effortLevel, so a pane session booted on defaults. The
+        // launcher's DROVE-232 carry reads exactly those two metadata fields
+        // on every spawn, so seeding them at creation IS the argv fix — and
+        // it is what makes the app's display and the reconcile's
+        // observed-vs-requested comparison start truthful.
+        vi.stubEnv('TMUX_PANE', '%99');
+        try {
+            const { api, loopDeferred } = createReattachHarness();
+
+            const runPromise = runClaude({
+                token: 'token',
+                encryption: { type: 'legacy', secret: new Uint8Array(32) },
+            } as any, {
+                startingMode: 'local',
+                shouldStartDaemon: false,
+                startedBy: 'daemon',
+                model: 'claude-fable-5',
+                effort: 'max',
+            });
+
+            await vi.waitFor(() => {
+                expect(mockLoop).toHaveBeenCalled();
+            });
+
+            expect(api.getOrCreateSession).toHaveBeenCalledWith(expect.objectContaining({
+                metadata: expect.objectContaining({
+                    startedBy: 'daemon',
+                    modelMode: 'claude-fable-5',
+                    effortLevel: 'max',
+                }),
+            }));
+
+            await finishRun(runPromise, loopDeferred);
+        } finally {
+            vi.unstubAllEnvs();
+        }
+    });
+
+    it('seeds no pick the command line did not make, and skips the model "default" (DROVE-278)', async () => {
+        // Absent means "never picked" — inventing a value here would pin
+        // every session to a harness override. And Claude's "default" is not
+        // a model to pin, by the same rule spawnModeArgs applies on the way
+        // in: it means "no override".
+        const { api, loopDeferred } = createReattachHarness();
+
+        const runPromise = runClaude({
+            token: 'token',
+            encryption: { type: 'legacy', secret: new Uint8Array(32) },
+        } as any, {
+            startingMode: 'local',
+            shouldStartDaemon: false,
+            model: 'default',
+        });
+
+        await vi.waitFor(() => {
+            expect(mockLoop).toHaveBeenCalled();
+        });
+
+        const created = (api.getOrCreateSession.mock.calls as unknown as [[{ metadata: Record<string, unknown> }]])[0][0].metadata;
+        expect(created).not.toHaveProperty('modelMode');
+        expect(created).not.toHaveProperty('effortLevel');
+
+        await finishRun(runPromise, loopDeferred);
+    });
+
+    it('keeps the picks a reattached session already stored when the command line says nothing (DROVE-278)', async () => {
+        // The seed is spread keys-only-when-present, so laying the fresh
+        // metadata over the stored session's cannot erase what the app wrote.
+        const claudeId = '9ae61ba4-8a3b-452f-a294-da49d0019c79';
+        mockResumedClaudeSessionId.mockReturnValue(claudeId);
+        mockFindHappySessionForClaudeSession.mockResolvedValue({
+            id: 'happy-existing',
+            active: false,
+            seq: 40,
+            metadataVersion: 7,
+            agentStateVersion: 3,
+            encryptionKey: new Uint8Array(32).fill(7),
+            encryptionVariant: 'legacy',
+            metadata: {
+                path: process.cwd(),
+                claudeSessionId: claudeId,
+                modelMode: 'claude-opus-5[1m]',
+                effortLevel: 'xhigh',
+            },
+        });
+        const { api, loopDeferred } = createReattachHarness();
+
+        const runPromise = runClaude({
+            token: 'token',
+            encryption: { type: 'legacy', secret: new Uint8Array(32) },
+        } as any, {
+            startingMode: 'local',
+            shouldStartDaemon: false,
+            claudeArgs: ['--resume', claudeId],
+        });
+
+        await vi.waitFor(() => {
+            expect(mockLoop).toHaveBeenCalled();
+        });
+
+        expect(api.sessionSyncClient).toHaveBeenCalledWith(expect.objectContaining({
+            metadata: expect.objectContaining({
+                modelMode: 'claude-opus-5[1m]',
+                effortLevel: 'xhigh',
+            }),
+        }));
+
+        await finishRun(runPromise, loopDeferred);
+    });
+
     it('names a fresh session after the project instead of leaving it "New chat"', async () => {
         // The phone's title is metadata.summary.text and nothing on the Claude
         // path ever wrote one: transcript summaries are dropped by
