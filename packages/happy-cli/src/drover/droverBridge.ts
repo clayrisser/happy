@@ -530,6 +530,32 @@ export function busResolutionFor(
  * `text` — so keying "approved" off the allow action alone filed every answered
  * question under denied.
  */
+/**
+ * What a log line may say about an answer coming back from the app.
+ *
+ * THE SECOND LEAK (DROVE-304). This was `JSON.stringify(body)` and it wrote the
+ * WHOLE bus resolution body into `~/.happy/logs/*.log`. `body.text` is the free
+ * text a human typed into the card on their phone, and the case that made it
+ * urgent is DROVE-296 stage 3 -- adding a provider API key from the phone --
+ * where that free text IS the key.
+ *
+ * Everything named here comes from a fixed vocabulary the producer published:
+ * which verb the app answered with, which option id it named, whether there was
+ * text at all, and what the bus said. Nothing the human typed.
+ *
+ * Pulled out as its own function so it can be tested, the same way
+ * `busResolutionFor` above is. A redaction that lives inside a closure inside
+ * `runDroverBridge` is a redaction nothing can assert, and the next edit to
+ * that closure has nothing telling it what the rule was.
+ */
+export function answerLogLine(id: string, body: Record<string, unknown>, status: number): string {
+    const action = typeof body.action === 'string' ? body.action : 'unknown'
+    const option = typeof body.optionId === 'string' ? `/${body.optionId}` : ''
+    const carriedText = typeof body.text === 'string' && body.text.length > 0
+    return `[drover] app answered ${id}: ${action}${option}` +
+        `${carriedText ? ' (with text, not logged)' : ''} (bus ${status})`
+}
+
 export function completedStatusFor(ev: DroverEvent): 'approved' | 'denied' | 'canceled' {
     if (ev.state !== 'resolved') return 'canceled'
     return ev.resolution?.action === 'deny' ? 'denied' : 'approved'
@@ -862,7 +888,7 @@ export async function runDroverBridge(): Promise<void> {
                 return
             }
             const status = await resolveOnBus(message.id, body)
-            logger.debug(`[drover] app answered ${message.id}: ${JSON.stringify(body)} (bus ${status})`)
+            logger.debug(answerLogLine(message.id, body, status))
         }
     )
 

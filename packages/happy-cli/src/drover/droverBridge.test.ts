@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
     announcePlanFor,
+    answerLogLine,
     busResolutionFor,
     completedReasonFor,
     deliveryOf,
@@ -670,5 +671,46 @@ describe('the receipts list is bounded', () => {
         const state = { requests: { 'ev-2': { tool: 'Bash' } }, completedRequests: many }
         const next = retireCard(state, { ...permission, state: 'canceled' })
         expect(Object.keys(next.completedRequests ?? {}).length).toBeLessThanOrEqual(60)
+    })
+})
+
+describe('answerLogLine', () => {
+    // The planted marker, borrowed from the drover's tests/mcp.bats
+    // (DROVE-296) so one grep covers every fixture value in the tree. The real
+    // case this stands for is DROVE-296 stage 3: a provider API key typed into
+    // a card on the phone arrives here as `body.text`.
+    const planted = 'sk-ant-FIXTURESECRET304'
+
+    it('never carries what the human typed', () => {
+        const line = answerLogLine('ev-1', { action: 'text', text: planted, by: 'phone' }, 200)
+        expect(line).not.toContain('FIXTURESECRET')
+    })
+
+    it('says there WAS text, because otherwise the line lies by omission', () => {
+        expect(answerLogLine('ev-1', { action: 'text', text: planted }, 200))
+            .toBe('[drover] app answered ev-1: text (with text, not logged) (bus 200)')
+    })
+
+    it('keeps the option id, which is one of a list the producer published', () => {
+        expect(answerLogLine('ev-2', { action: 'option', optionId: 'allow' }, 200))
+            .toBe('[drover] app answered ev-2: option/allow (bus 200)')
+    })
+
+    it('still says what the bus made of it, 409 included', () => {
+        // A 409 is another surface having won the race, and reading that off
+        // the log is the whole reason the line exists.
+        expect(answerLogLine('ev-3', { action: 'allow' }, 409)).toContain('(bus 409)')
+    })
+
+    it('names an unrecognisable body rather than interpolating it', () => {
+        // `unknown` and not the value: a body shaped wrong is a body whose
+        // fields nobody has vouched for.
+        const line = answerLogLine('ev-4', { action: { nested: planted } }, 400)
+        expect(line).toContain('unknown')
+        expect(line).not.toContain('FIXTURESECRET')
+    })
+
+    it('does not announce text for an empty string', () => {
+        expect(answerLogLine('ev-5', { action: 'text', text: '' }, 200)).not.toContain('with text')
     })
 })

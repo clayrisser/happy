@@ -9,6 +9,7 @@ import chalk from 'chalk'
 import { appendFileSync } from 'fs'
 import { inspect } from 'node:util'
 import { configuration } from '@/configuration'
+import { redactSecrets, redactSecretsInText } from '@slopus/happy-wire'
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import { join, basename } from 'node:path'
 // Note: readDaemonState is imported lazily inside listDaemonLogFiles() to avoid
@@ -179,19 +180,37 @@ class Logger {
     }
   }
 
+  /**
+   * The one thing in this process that sends log lines OFF the machine, and it
+   * sends them unencrypted (DROVE-304).
+   *
+   * The flag's name is honest but its payload was worse than the name suggests.
+   * `apiMachine.ts` was stringifying every spawn's `token` and
+   * `environmentVariables` into a debug line, so with this switched on a
+   * session bearer token and an ANTHROPIC_API_KEY were POSTed in plaintext to
+   * whatever HAPPY_SERVER_URL pointed at, on every spawn.
+   *
+   * REDACTED AGAIN HERE, even though logToFile already redacted what it passed
+   * in. That is deliberate duplication: this method is the boundary where a
+   * value leaves the machine, and a boundary that trusts its only current
+   * caller stops being a boundary the moment somebody adds a second one. The
+   * cost is one pass over a string that is already being JSON-encoded and
+   * posted over the network.
+   */
   private async sendToRemoteServer(level: string, message: string, ...args: unknown[]): Promise<void> {
     if (!this.dangerouslyUnencryptedServerLoggingUrl) return
     
     try {
+      const body = `${message} ${args.map(a => 
+        typeof a === 'object' && a !== null ? JSON.stringify(redactSecrets(a), null, 2) : String(a)
+      ).join(' ')}`
       await fetch(this.dangerouslyUnencryptedServerLoggingUrl + '/logs-combined-from-cli-and-mobile-for-simple-ai-debugging', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           timestamp: new Date().toISOString(),
           level,
-          message: `${message} ${args.map(a => 
-            typeof a === 'object' ? JSON.stringify(a, null, 2) : String(a)
-          ).join(' ')}`,
+          message: redactSecretsInText(body),
           source: 'cli',
           platform: process.platform
         })
@@ -201,8 +220,30 @@ class Logger {
     }
   }
 
+  /**
+   * EVERY line that gets written down goes through here, which is why the
+   * redaction is here and not only at the call sites that leaked (DROVE-304).
+   *
+   * The call sites are fixed too, and that is the real fix: `apiMachine.ts` no
+   * longer builds a line containing a token in the first place. This is the net
+   * under the next one. A redactor that only guards the three call sites
+   * somebody already found guards nothing about the fourth.
+   *
+   * Structural first, textual second, because they catch different things. The
+   * args are still objects at this point, so `redactSecrets` can mask a value
+   * by the key that held it -- a bearer token that looks like nothing in
+   * particular still gets masked because it was under `token`. The message is
+   * already a string, so all `redactSecretsInText` has left to go on is shape.
+   *
+   * Redacted BEFORE `inspect`, never after: inspect truncates and quotes, and a
+   * secret split across an inspect ellipsis is a secret no text pass will find.
+   */
   private logToFile(prefix: string, message: string, ...args: unknown[]): void {
-    const logLine = `${prefix} ${message} ${args.map(arg =>
+    const safeMessage = redactSecretsInText(message)
+    const safeArgs = args.map(arg =>
+      typeof arg === 'string' ? redactSecretsInText(arg) : redactSecrets(arg)
+    )
+    const logLine = `${prefix} ${safeMessage} ${safeArgs.map(arg =>
       typeof arg === 'string' ? arg : inspect(arg, { depth: 5, breakLength: 120 })
     ).join(' ')}\n`
     
@@ -213,8 +254,10 @@ class Logger {
       if (prefix.includes(this.localTimezoneTimestamp())) {
         level = 'debug'
       }
-      // Fire and forget, with explicit .catch to prevent unhandled rejection
-      this.sendToRemoteServer(level, message, ...args).catch(() => {
+      // Fire and forget, with explicit .catch to prevent unhandled rejection.
+      // The ALREADY-REDACTED values, so the off-machine copy can never be
+      // richer than the on-disk one.
+      this.sendToRemoteServer(level, safeMessage, ...safeArgs).catch(() => {
         // Silently ignore remote logging errors to prevent loops
       })
     }

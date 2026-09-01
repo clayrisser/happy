@@ -5,6 +5,7 @@
 
 import { io, Socket } from 'socket.io-client';
 import { logger } from '@/ui/logger';
+import { pickForLog } from '@slopus/happy-wire';
 import { configuration } from '@/configuration';
 import { MachineMetadata, DaemonState, Machine, Update, UpdateMachineBody } from './types';
 import { registerCommonHandlers, SpawnSessionOptions, SpawnSessionResult } from '../modules/common/registerCommonHandlers';
@@ -187,7 +188,37 @@ export class ApiMachineClient {
         // Register spawn session handler
         this.rpcHandlerManager.registerHandler('spawn-happy-session', async (params: any) => {
             const { directory, sessionId, machineId, approvedNewDirectoryCreation, agent, permissionMode, modelMode, effortLevel, environmentVariables, token, resumeClaudeSessionId, resumeCodexThreadId, parentSessionId, forkedFromMessageId, isSideChat } = params || {};
-            logger.debug(`[API MACHINE] Spawning session with params: ${JSON.stringify(params)}`);
+            // THE LEAK (DROVE-304). This line was
+            // `JSON.stringify(params)` and it ran on EVERY spawn, behind no
+            // flag at all. `params.token` is the session's bearer token and
+            // `params.environmentVariables` is whatever the phone sent to run
+            // the harness with, which is where an ANTHROPIC_API_KEY lives. Both
+            // went to `~/.happy/logs/*-daemon.log` in the clear, and with
+            // DANGEROUSLY_LOG_TO_SERVER_FOR_AI_AUTO_DEBUGGING set they went
+            // unencrypted off the machine as well.
+            //
+            // An ALLOWLIST, not a redactor pass over the same object. A
+            // denylist here would be one unfamiliar param name away from
+            // leaking again the next time spawn learns a field, and this is the
+            // one line in the tree that has already proved that can happen.
+            // What is actually wanted from this line when debugging a failed
+            // spawn is which directory, which agent and which mode -- none of
+            // which is a credential.
+            //
+            // The COUNT rather than the names for the env: knowing something
+            // was passed is what tells you the phone sent an override at all,
+            // and the names alone have been enough to identify a private
+            // deployment before now.
+            logger.debug(`[API MACHINE] Spawning session: ${JSON.stringify({
+                ...pickForLog(params ?? {}, [
+                    'directory', 'sessionId', 'machineId', 'agent', 'permissionMode',
+                    'modelMode', 'effortLevel', 'approvedNewDirectoryCreation',
+                    'parentSessionId', 'forkedFromMessageId', 'isSideChat',
+                ]),
+                environmentVariableCount: Object.keys(environmentVariables ?? {}).length,
+                hasToken: Boolean(token),
+                resuming: Boolean(resumeClaudeSessionId || resumeCodexThreadId),
+            })}`);
 
             if (!directory) {
                 throw new Error('Directory is required');

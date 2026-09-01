@@ -5,5 +5,6 @@ export * from './controlMessages';
 export * from './voice';
 export * from './rigMetadata';
 export * from './statusDot';
+export * from './redact';
 export * from './mcp';
 export * from './workflowDetail';

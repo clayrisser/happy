@@ -28,6 +28,8 @@
  * the question that produced this ticket.
  */
 
+import { credentialKeys } from './redact';
+
 /**
  * How the harness reaches the server. `stdio` is a local subprocess; `http`
  * and `sse` are remote. `unknown` is honest rather than defaulted: an entry
@@ -232,14 +234,22 @@ export const providerModelAllowedKeys: readonly string[] = Object.freeze(['id', 
  * The allowlist above already covers the server objects, so this is the second
  * net: it catches a producer that hangs a credential off a SCOPE or a harness
  * rather than off a server, which the per-server check would sail past.
+ *
+ * The credential half is COMPOSED from `redact.ts` rather than repeated here
+ * (DROVE-304), because the log redactor masks values by the same names and two
+ * copies of that list is how one of them goes stale. A name added there is
+ * banned from a report here without anybody remembering to add it twice.
  */
 export const mcpForbiddenKeys: readonly string[] = Object.freeze([
-    'env', 'args', 'command', 'url', 'headers', 'token', 'apiKey', 'api_key',
-    'secret', 'password', 'authorization', 'credential', 'credentials',
-    // Added with the provider half (DROVE-296). `baseurl` and `endpoint` are
-    // how a provider spells the URL that `url` above would have caught, and
-    // `api` is the key OpenCode's own ProviderConfig puts the endpoint under.
-    'baseurl', 'base_url', 'endpoint', 'api', 'key',
+    ...credentialKeys,
+    // Structural, and report-only. These are not secrets in themselves, they
+    // are the SHAPES a credential arrives in -- a token in a query string, a
+    // key pasted onto a command line. A report has no business carrying any of
+    // them. A LOG line legitimately says which url it called, which is why
+    // these are not on the masking list in redact.ts: a redactor that masked
+    // every url leaves a daemon log nobody can debug with, and a redactor
+    // nobody can debug with gets switched off.
+    'args', 'command', 'url', 'baseurl', 'base_url', 'endpoint', 'api', 'key',
 ]);
 
 /**
