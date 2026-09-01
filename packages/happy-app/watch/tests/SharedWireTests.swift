@@ -251,6 +251,8 @@ struct SharedWireTests {
         theBindingLimitSurvivesTheWire()
         anExpiredWindowIsNotAMeasurement()
         anAccountRowWithoutTheLimitKeysStillDecodes()
+        everyWindowOnOneAccountDecodes()
+        anAccountWithNoBreakdownStillDecodes()
         theCurrentAccountIsTheOnePhoneMarked()
         aWristDraftAccumulatesAcrossSheets()
         aWristDraftIgnoresAnEmptySheet()
@@ -1041,6 +1043,96 @@ struct SharedWireTests {
         // reading and a later build may find a use for it. What is settled is
         // that nothing DRAWS it.
         check(dead.headroom == 99, "the figure the phone read is still carried, just not drawn")
+    }
+
+    /// The full breakdown, as the phone's sheet sends it (DROVE-339).
+    ///
+    /// Clay: "when I select a specific account to see the limit, it should
+    /// actually show the full breakdown of all the limits, just like it shows
+    /// in the mobile app." Every figure below was decided by
+    /// `usageAccountBarGroup` on the phone; this is the wrist proving it can
+    /// hold all of it, including the two rows that carry no number and the one
+    /// that says which window is actually stopping the work.
+    static func everyWindowOnOneAccountDecodes() {
+        let payload = """
+        {"gates":[],"updatedAt":"2026-08-31T12:00:00Z","connected":true,
+        "accountRows":[{"name":"promanagerdevteam","headroom":0,"used":100,"loggedIn":true,
+        "current":true,"limit":"Session","tone":"critical","title":"promanagerdevteam · 0% left on Session",
+        "limits":[
+        {"id":"five_hour","label":"Session","used":100,"tone":"critical","trailing":"Resets 6 PM","binding":true},
+        {"id":"seven_day","label":"Week","used":79,"tone":"low","trailing":"Resets Fri"},
+        {"id":"seven_day_fable","label":"Fable week","tone":"unknown","trailing":"window reset"}]},
+        {"name":"jamrizzi","headroom":61,"used":39,"loggedIn":true,"switchable":true,
+        "title":"jamrizzi · 61% left on Week",
+        "limits":[{"id":"five_hour","label":"Session","used":0,"tone":"ample","trailing":"Resets 6 PM"}]}]}
+        """
+        guard let snapshot = try? DroverSnapshot.decoder.decode(
+            DroverSnapshot.self, from: Data(payload.utf8)
+        ) else {
+            check(false, "a snapshot carrying the per-account breakdown decodes")
+            return
+        }
+        let rows = snapshot.accountRows
+        let current = rows[0]
+        check(current.limitRows.count == 3, "every window on the account arrives")
+        check(current.limitRows.map(\.label) == ["Session", "Week", "Fable week"],
+              "in the phone's order, with the phone's words")
+        check(current.limitRows[0].isBinding, "the window that stops the work is marked")
+        check(current.limitRows.filter(\.isBinding).count == 1, "and exactly one is")
+        check(current.limitRows[0].figure == "100%", "a spent window prints as percent USED")
+        check(abs(current.limitRows[0].fraction - 1) < 0.001, "and fills the whole track")
+        check(current.limitRows[0].band == .critical, "with the band the phone computed")
+        check(current.limitRows[0].trailing == "Resets 6 PM", "and the reset time behind it")
+        check(current.limitRows[1].figure == "79%", "the second window keeps its own figure")
+        check(abs(current.limitRows[1].fraction - 0.79) < 0.001, "and its own fill")
+        // The row with no number. Under fill-as-used an empty bar is the claim
+        // "nothing used yet", which is a FRESH window — the opposite of one
+        // that has already reset — so this must not be measured (DROVE-204).
+        let reset = current.limitRows[2]
+        check(!reset.isMeasured, "a window with no reading is not a measurement")
+        check(reset.figure == "\u{2013}", "and prints a dash rather than a zero")
+        check(reset.fraction == 0, "and has no fill for a view to draw")
+        check(reset.trailing == "window reset", "the phone's own words say WHICH nothing it is")
+        check(reset.spokenFigure == "not measured", "and VoiceOver is told the same")
+        // Zero used is a real reading — a fresh window — and must not share a
+        // spelling with "no reading at all" (DROVE-230).
+        let fresh = rows[1].limitRows[0]
+        check(fresh.isMeasured, "a window measured at 0% used is measured")
+        check(fresh.figure == "0%", "and says so")
+        check(fresh.spokenFigure == "0% used", "with the direction said out loud")
+        // The heading is the phone's sentence, taken whole.
+        check(current.heading(at: Date()) == "promanagerdevteam · 0% left on Session",
+              "the account's heading is the phone's own")
+        // Switchable is the phone's verdict, and absent means no.
+        check(!current.canTakeASession, "the account in use cannot be switched to")
+        check(rows[1].canTakeASession, "and one the phone marked switchable can")
+    }
+
+    /// A phone that predates the breakdown, and an account the CLI recorded no
+    /// windows for. Both have to land on a screen that still stands up.
+    static func anAccountWithNoBreakdownStillDecodes() {
+        let payload = """
+        {"gates":[],"updatedAt":"2026-08-31T12:00:00Z","connected":true,
+        "accountRows":[{"name":"spare","headroom":40,"used":60,"loggedIn":true,"limit":"Week"}]}
+        """
+        guard let snapshot = try? DroverSnapshot.decoder.decode(
+            DroverSnapshot.self, from: Data(payload.utf8)
+        ) else {
+            check(false, "an account row with no breakdown decodes")
+            return
+        }
+        guard let row = snapshot.accountRows.first else {
+            check(false, "the row is there")
+            return
+        }
+        check(row.limits == nil, "a missing breakdown is absent, not a decode failure")
+        check(row.limitRows.isEmpty, "and reads as no windows rather than crashing a list")
+        check(!row.canTakeASession, "no switch verdict sent means no switch offered")
+        // The fallback heading, which is deliberately the SHORTER sentence: the
+        // ladder that picks between four different nothings lives on the phone
+        // and the wrist must not own a second copy of it (DROVE-129).
+        check(row.heading(at: Date()) == "spare · 40% left on Week",
+              "a phone too old to send a heading still gets one worth reading")
     }
 
     /// The watch is a TestFlight binary and cannot be updated OTA, so a phone
