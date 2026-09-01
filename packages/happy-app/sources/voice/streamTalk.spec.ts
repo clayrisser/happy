@@ -42,9 +42,12 @@ describe('flipStreamTalk', () => {
     });
 
     it('flips the one local key the sheet and Settings > Voice flip', () => {
-        // The composer button, the channel sheet row and the settings switch
-        // all write localSettings.readAloudEnabled through useLocalSettingMutable;
-        // there is no second key for the composer to drift from.
+        // The channel sheet row and the settings switch write
+        // localSettings.readAloudEnabled through useLocalSettingMutable, and
+        // since DROVE-297 that key is the DEFAULT a session inherits rather
+        // than the switch on any one of them. The composer's control writes
+        // the session's own switch on the reader instead, which is why turning
+        // reading on in one session no longer turns it on in every other.
         expect(localSettingsDefaults.readAloudEnabled).toBe(false);
         const on = applyLocalSettings(localSettingsDefaults, { readAloudEnabled: flipStreamTalk(false).readAloudEnabled });
         expect(on.readAloudEnabled).toBe(true);

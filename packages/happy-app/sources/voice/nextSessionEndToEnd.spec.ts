@@ -15,6 +15,10 @@ import type { Message } from '@/sync/typesMessage';
  * tail). So this file wires the press to a real `ReadAloudReader` with two and
  * three sessions and asserts positions on both sides of every press.
  *
+ * THE CYCLE IS ASKED OF THE REAL READER, not handed in as a literal, so
+ * DROVE-297's per-session switch is in the loop: a session switched off drops
+ * out of the ring here the same way it does on his phone.
+ *
  * NO MOUNTED SCREEN ANYWHERE IN HERE, which is the parity claim stated as a
  * test rather than as a comment. The press stream, the reader and the cycle
  * are all plain objects; there is no react, no navigation and no AppState. If
@@ -61,22 +65,26 @@ async function settle(): Promise<void> {
 describe('a double press hands the voice to the next reading-enabled session', () => {
     let engine: FakeEngine;
     let reader: ReadAloudReader;
-    let cycle: string[];
+    let sessions: string[];
     let press: (command: RemoteCommand) => void;
     let stop: () => void;
 
     beforeEach(() => {
         engine = new FakeEngine();
         reader = new ReadAloudReader(engine);
+        // The master default, which DROVE-297 makes a default rather than a
+        // command: every session is armed until he switches one off.
         reader.setEnabled(true);
-        reader.focus('s1');
-        cycle = ['s1', 's2'];
+        reader.visit('s1');
+        sessions = ['s1', 's2'];
         let listener: ((command: RemoteCommand) => void) | null = null;
         stop = startNextSessionPress({
-            cycle: () => cycle,
-            current: () => reader.focusedSessionId,
-            reading: () => reader.isEnabled,
-            take: (sessionId) => reader.focus(sessionId),
+            // readingCycle.ts's job, with the store's rows stubbed to a plain
+            // list: the ORDER is the list's and the MEMBERSHIP is DROVE-297's,
+            // asked of the real reader.
+            cycle: () => sessions.filter((id) => reader.isSessionEnabled(id)),
+            current: () => reader.readingSessionId,
+            take: (sessionId) => reader.takeVoice(sessionId),
             subscribe: (fn) => {
                 listener = fn;
                 return { remove: () => { listener = null; } };
@@ -101,8 +109,8 @@ describe('a double press hands the voice to the next reading-enabled session', (
         // s1 is holding its place rather than having been stopped.
         expect(engine.spoken.length).toBe(before);
         expect(reader.hasHeldReading('s1')).toBe(true);
-        expect(reader.focusedSessionId).toBe('s2');
-        expect(reader.isEnabled).toBe(true);
+        expect(reader.readingSessionId).toBe('s2');
+        expect(reader.isSessionEnabled('s1')).toBe(true);
     });
 
     it('never has two sessions speaking at once', async () => {
@@ -139,36 +147,40 @@ describe('a double press hands the voice to the next reading-enabled session', (
         // cut in — DROVE-233's granularity, and never at the tail.
         press('next');
         await settle();
-        expect(reader.focusedSessionId).toBe('s1');
+        expect(reader.readingSessionId).toBe('s1');
         expect(engine.spoken).toEqual(['One.', 'Two.', 'Alpha.', 'Three.']);
     });
 
     it('walks the whole ring and wraps at the end', async () => {
-        cycle = ['s1', 's2', 's3'];
+        sessions = ['s1', 's2', 's3'];
         press('next');
         await settle();
-        expect(reader.focusedSessionId).toBe('s2');
+        expect(reader.readingSessionId).toBe('s2');
         press('next');
         await settle();
-        expect(reader.focusedSessionId).toBe('s3');
+        expect(reader.readingSessionId).toBe('s3');
         press('next');
         await settle();
-        expect(reader.focusedSessionId).toBe('s1');
+        expect(reader.readingSessionId).toBe('s1');
     });
 
-    it('skips the sessions that do not have reading enabled', async () => {
-        // s2 is not in the cycle at all, so no number of presses reaches it.
-        cycle = ['s1', 's3'];
+    it('skips the sessions whose reading he switched off (DROVE-297)', async () => {
+        // Not a list this file filters: `setSessionEnabled(false)` is his own
+        // switch, and the ring reads it through `isSessionEnabled`. No number
+        // of presses reaches s2.
+        sessions = ['s1', 's2', 's3'];
+        reader.setSessionEnabled('s2', false);
         press('next');
         await settle();
-        expect(reader.focusedSessionId).toBe('s3');
+        expect(reader.readingSessionId).toBe('s3');
         press('next');
         await settle();
-        expect(reader.focusedSessionId).toBe('s1');
+        expect(reader.readingSessionId).toBe('s1');
     });
 
     it('does nothing at all when only one session has reading enabled', async () => {
-        cycle = ['s1'];
+        sessions = ['s1', 's2'];
+        reader.setSessionEnabled('s2', false);
         reader.onMessages('s1', [prose('m1', 'One. Two. Three.', 10)]);
         await settle();
         expect(engine.spoken).toEqual(['One.']);
@@ -182,9 +194,9 @@ describe('a double press hands the voice to the next reading-enabled session', (
         // still in flight and the reader has not moved.
         expect(engine.stops).toBe(stopsBefore);
         expect(engine.spoken).toEqual(['One.']);
-        expect(reader.focusedSessionId).toBe('s1');
+        expect(reader.readingSessionId).toBe('s1');
         expect(reader.isPaused).toBe(false);
-        expect(reader.isEnabled).toBe(true);
+        expect(reader.isSessionEnabled('s1')).toBe(true);
 
         engine.finish();
         await settle();
@@ -192,10 +204,13 @@ describe('a double press hands the voice to the next reading-enabled session', (
     });
 
     it('does not turn reading on from a pocket', async () => {
+        // Reading switched off everywhere empties the cycle, so the press has
+        // nowhere to go. DROVE-189's rule, structural rather than a flag.
         reader.setEnabled(false);
         press('next');
+        press('next');
         await settle();
-        expect(reader.isEnabled).toBe(false);
+        expect(reader.readingSessionId).toBeNull();
         expect(engine.spoken).toEqual([]);
     });
 
@@ -209,14 +224,24 @@ describe('a double press hands the voice to the next reading-enabled session', (
         await settle();
         // The transport is backgroundAudio.ts's and the mic is
         // useVoiceComposer's. This subscription must not answer either.
-        expect(reader.focusedSessionId).toBe('s1');
+        expect(reader.readingSessionId).toBe('s1');
         expect(reader.isPaused).toBe(false);
+    });
+
+    it('does not claim he navigated anywhere', async () => {
+        // `takeVoice`, not `visit`. The phone is in his pocket: the session he
+        // is LOOKING at has not changed, and a press that moved it would have
+        // the list and the composer draw a screen he never opened.
+        press('next');
+        await settle();
+        expect(reader.readingSessionId).toBe('s2');
+        expect(reader.visitedSessionId).toBe('s1');
     });
 
     it('stops answering once it is torn down', async () => {
         stop();
         press('next');
         await settle();
-        expect(reader.focusedSessionId).toBe('s1');
+        expect(reader.readingSessionId).toBe('s1');
     });
 });

@@ -22,8 +22,10 @@ import { RigGitLineChanges } from './RigGitLineChanges';
 import { ShimmerText } from './ShimmerText';
 import { resolveFlatSessionRowPresentation } from '@/utils/flatSessionRowPresentation';
 import { useAutoAccept } from '@/hooks/useAutoAccept';
+import { useReadingState } from '@/hooks/useReadingState';
 import { AUTO_ACCEPT_GLYPH_ON, AUTO_ACCEPT_TITLE } from './autoAcceptRow';
-import { composerControlPalette } from './composerControlColour';
+import { composerControlPalette, composerAudioOutFill, composerAudioOutTint } from './composerControlColour';
+import { readingRowMark, readingRowMarkLabel } from './readingRowMark';
 
 // Roughly three quarters of the row, the proportion a chat list uses: the row
 // is 10 + 61 + 10, so 60 leaves an even 10 either side of the avatar.
@@ -95,6 +97,12 @@ export const FlatSessionRow = React.memo(({ row, selected, showBorder, archived 
     // be trading one signal for another. This sits where the shortcut hint
     // sits and takes nothing.
     const autoAccept = useAutoAccept(session.id);
+    // Which sessions are reading, and which are armed but have yielded the
+    // voice (DROVE-297). Beside the bolt for the same reason the bolt is
+    // beside the shortcut hint: the right-hand slot already carries unread and
+    // blocked, and a row that stopped showing its unread dot because it was
+    // reading would trade one signal for another.
+    const readingMark = readingRowMark(useReadingState(session.id));
     const presentation = resolveFlatSessionRowPresentation({
         state: session.state,
         hasUnread: showUnreadDot,
@@ -203,6 +211,27 @@ export const FlatSessionRow = React.memo(({ row, selected, showBorder, archived 
                             style={styles.autoAcceptBadge}
                             accessibilityLabel={`${AUTO_ACCEPT_TITLE} on`}
                         />
+                    )}
+                    {readingMark && (
+                        // The glyph says whether it WILL speak, the disc says
+                        // whether it IS speaking. Both are `composerAudioOut`'s
+                        // own carriers, so this mark and the capsule inside the
+                        // session cannot drift into two meanings.
+                        <View
+                            style={[
+                                styles.readingBadge,
+                                { backgroundColor: composerAudioOutFill(theme.dark, readingMark.fill) ?? 'transparent' },
+                            ]}
+                            accessible
+                            accessibilityRole="text"
+                            accessibilityLabel={readingRowMarkLabel(readingMark)}
+                        >
+                            <Ionicons
+                                name={readingMark.glyph}
+                                size={10}
+                                color={composerAudioOutTint(theme.dark, readingMark.fill)}
+                            />
+                        </View>
                     )}
                     <View
                         style={styles.topRightStatus}
@@ -359,6 +388,15 @@ const stylesheet = StyleSheet.create((theme) => ({
     autoAcceptBadge: {
         flexShrink: 0,
         marginLeft: 6,
+    },
+    readingBadge: {
+        flexShrink: 0,
+        marginLeft: 6,
+        width: 16,
+        height: 16,
+        borderRadius: 8,
+        alignItems: 'center',
+        justifyContent: 'center',
     },
     // The dot and time share a Telegram-like right column, so changing status
     // never makes the title jump horizontally. It is only as wide as the

@@ -2,12 +2,22 @@
  * Stream-talk: replies read aloud as they arrive (DROVE-30), and the one
  * switch that turns it on or off.
  *
- * The switch is `localSettings.readAloudEnabled`, nothing else. Three
- * surfaces flip it: the speaker button on the composer's second row
- * (DROVE-98), the "Read replies aloud" row on the channel sheet (DROVE-72)
- * and Settings > Voice. `useVoiceComposer` reads the key once and hands the
- * composer `readAloudEnabled` plus `onReadAloudToggle`; this module says how
- * that value is drawn and announced, so the button, the sheet and the
+ * THE SWITCH IS PER SESSION SINCE DROVE-297, and it lives on the reader:
+ * `readAloud.setSessionEnabled`. The composer's audio-out control writes it,
+ * and so does DROVE-298's `drover read` from a terminal, both through the one
+ * take-the-voice rule in readingVoice.ts.
+ *
+ * `localSettings.readAloudEnabled` is still here and is still persisted, but
+ * it is now the DEFAULT a session nobody has said anything about inherits.
+ * Two surfaces write it: the "Read replies aloud" row on the channel sheet
+ * (DROVE-72) and Settings > Voice. The composer used to be the third, and that
+ * is exactly the bug this ticket fixed — switching reading on in one session
+ * switched it on in every other one, so walking into any of them took the
+ * voice.
+ *
+ * `useVoiceComposer` hands the composer `readAloudEnabled` plus
+ * `onReadAloudToggle` as before; the value is now this session's own. This
+ * module says how it is drawn and announced, so the button, the sheet and the
  * settings row cannot disagree about what "on" looks like.
  *
  * Not the same thing as the drover Audio channel (`droverAnnounceAudio`,

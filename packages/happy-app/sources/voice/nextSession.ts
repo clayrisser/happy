@@ -24,23 +24,27 @@ import { headphoneAction, type RemoteCommand } from './headphonePress';
  * ahead. So the hand-over is one call, `take`, and this file's only real job
  * is deciding WHICH session and refusing when there is nowhere to go.
  *
- * ## Which sessions are in the cycle: the DROVE-297 seam
+ * ## Which sessions are in the cycle: DROVE-297's, consumed whole
  *
  * "The next session that has reading enabled" is DROVE-297's rule, not this
- * ticket's, and there must be exactly one copy of it. So the enabled set
- * arrives through `cycle()` and this file does not compute it, does not
- * filter it, and does not sort it. `cycle()` returns the sessions with reading
- * enabled IN THE ORDER A PRESS WALKS THEM, and the ring step below is all that
- * is added on top.
+ * ticket's, and there is exactly one copy of it. Enablement is per session
+ * there (`readAloud.isSessionEnabled`) and the take is per session too
+ * (`readAloud.takeVoice`, which runs DROVE-297's own `voiceMove` and then
+ * DROVE-289's hold-and-restore). So `cycle()` arrives already filtered, and
+ * this file does not decide membership, does not re-derive it, and does not
+ * sort it. The ring step below is the only rule DROVE-300 owns.
  *
  * ORDER TRAVELS WITH THE SET on purpose. Splitting them — membership from
  * DROVE-297, order invented here — is how the two would come to disagree the
- * first time DROVE-297 decides that, say, an archived session sorts last.
+ * first time one of them changes its mind about an archived session.
  *
- * WHAT TO DO WHEN DROVE-297 LANDS: point `cycle` at its exported policy in
- * nextSessionService.ts and delete the fallback there. Nothing in this file
- * changes, and neither do its tests, which is the whole reason the port is
- * shaped this way.
+ * THAT IS ALSO WHY THERE IS NO "IS READING ON" GUARD. Under DROVE-297 there is
+ * no single answer to that question: the master switch is a DEFAULT and each
+ * session has its own. The guard the old global flag was standing in for —
+ * DROVE-189's "a squeeze must never turn the voice on for a session he walked
+ * away from" — is now structural instead: every id in `cycle()` is a session
+ * whose reading he armed, so there is no press that can start audio he did not
+ * ask for, and an empty cycle is the refusal.
  *
  * ## Pure, because the press arrives with the app in his pocket
  *
@@ -67,13 +71,12 @@ export type NextSessionMove =
 
 export type NextSessionRefusal =
     /**
-     * Read-aloud is off. There is no voice to hand over, and a remote press
-     * must never turn reading ON — DROVE-189's rule, kept verbatim through
-     * DROVE-233 and again here: "a squeeze that turned the voice back on for
-     * a session he had walked away from would be a surprise".
+     * No session has reading enabled, so there is nothing to hand the voice
+     * to and nothing holding it. This is also where DROVE-189's rule lands
+     * now — "a squeeze that turned the voice back on for a session he had
+     * walked away from would be a surprise" — because a phone with reading
+     * switched off everywhere has an empty cycle and every press refuses.
      */
-    | 'not-reading'
-    /** Reading is on and no session has it enabled. Nothing to cycle. */
     | 'empty'
     /**
      * Exactly one session has reading enabled, and it already has the voice.
@@ -108,11 +111,9 @@ export type NextSessionRefusal =
  * failure this ticket exists to avoid.
  */
 export function nextSessionMove(
-    reading: boolean,
     cycle: readonly string[],
     current: string | null,
 ): NextSessionMove {
-    if (!reading) return { kind: 'stay', why: 'not-reading' };
     if (cycle.length === 0) return { kind: 'stay', why: 'empty' };
     const at = current === null ? -1 : cycle.indexOf(current);
     if (at === -1) return { kind: 'move', to: cycle[0] };
@@ -124,16 +125,20 @@ export function nextSessionMove(
 export interface NextSessionDeps {
     /**
      * The sessions with reading enabled, in the order a press walks them.
-     * DROVE-297's exported policy. See the seam note above.
+     * DROVE-297's per-session switch, through readingCycle.ts.
      */
     cycle(): readonly string[];
-    /** Who holds the voice now. `readAloud.focusedSessionId`. */
-    current(): string | null;
-    /** Read-aloud is on at all. `readAloud.isEnabled`. */
-    reading(): boolean;
     /**
-     * Give the voice to this session. `readAloud.focus`, which is DROVE-289's
-     * hold-and-restore and not a stop.
+     * Who holds the voice now. `readAloud.readingSessionId`, which is not the
+     * same as the focused session: a session he switched reading off on keeps
+     * its focus for a moment and has already given the voice up.
+     */
+    current(): string | null;
+    /**
+     * Give the voice to this session. `readAloud.takeVoice`, which is
+     * DROVE-297's `voiceMove` over DROVE-289's hold-and-restore: the yielding
+     * session pauses at its own place and this one resumes at its own. Not a
+     * stop, not a jump ahead, and not a claim that he navigated anywhere.
      */
     take(sessionId: string): void;
     /** The native press stream. `addRemoteCommandListener`. */
@@ -159,7 +164,7 @@ export function startNextSessionPress(deps: NextSessionDeps): () => void {
     const remote = deps.subscribe((command) => {
         if (headphoneAction(command, 'transport') !== 'next-session') return;
         try {
-            const move = nextSessionMove(deps.reading(), deps.cycle(), deps.current());
+            const move = nextSessionMove(deps.cycle(), deps.current());
             if (move.kind !== 'move') return;
             deps.take(move.to);
         } catch {

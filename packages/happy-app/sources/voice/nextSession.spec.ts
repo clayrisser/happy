@@ -9,11 +9,9 @@ function harness(over: Partial<NextSessionDeps> = {}) {
     let removed = false;
     let cycle: string[] = ['a', 'b', 'c'];
     let current: string | null = 'a';
-    let reading = true;
     const deps: NextSessionDeps = {
         cycle: () => cycle,
         current: () => current,
-        reading: () => reading,
         take: (id) => {
             taken.push(id);
             current = id;
@@ -31,7 +29,6 @@ function harness(over: Partial<NextSessionDeps> = {}) {
         press: (command: RemoteCommand) => listener?.(command),
         setCycle: (next: string[]) => { cycle = next; },
         setCurrent: (next: string | null) => { current = next; },
-        setReading: (next: boolean) => { reading = next; },
         wasRemoved: () => removed,
     };
 }
@@ -41,9 +38,9 @@ describe('which session a double press hands the voice to', () => {
         // Clay's own analogy: "it skips to the next track — in this case the
         // next session." A next-track button that stopped at the last track
         // would not be one.
-        expect(nextSessionMove(true, ['a', 'b', 'c'], 'a')).toEqual({ kind: 'move', to: 'b' });
-        expect(nextSessionMove(true, ['a', 'b', 'c'], 'b')).toEqual({ kind: 'move', to: 'c' });
-        expect(nextSessionMove(true, ['a', 'b', 'c'], 'c')).toEqual({ kind: 'move', to: 'a' });
+        expect(nextSessionMove(['a', 'b', 'c'], 'a')).toEqual({ kind: 'move', to: 'b' });
+        expect(nextSessionMove(['a', 'b', 'c'], 'b')).toEqual({ kind: 'move', to: 'c' });
+        expect(nextSessionMove(['a', 'b', 'c'], 'c')).toEqual({ kind: 'move', to: 'a' });
     });
 
     it('walks only the sessions the cycle names', () => {
@@ -55,7 +52,7 @@ describe('which session a double press hands the voice to', () => {
         let at: string | null = 'b';
         const seen: string[] = [];
         for (let i = 0; i < 6; i++) {
-            const move = nextSessionMove(true, cycle, at);
+            const move = nextSessionMove(cycle, at);
             expect(move.kind).toBe('move');
             if (move.kind !== 'move') return;
             at = move.to;
@@ -67,13 +64,13 @@ describe('which session a double press hands the voice to', () => {
     it('lands on the first enabled session when the voice is nowhere', () => {
         // Nothing focused. Refusing here would leave a button that never works
         // until he opens the app, which is the failure the ticket is about.
-        expect(nextSessionMove(true, ['a', 'b'], null)).toEqual({ kind: 'move', to: 'a' });
+        expect(nextSessionMove(['a', 'b'], null)).toEqual({ kind: 'move', to: 'a' });
     });
 
     it('lands on the first enabled session when the current one is not in the cycle', () => {
         // He is listening to a session whose reading has since been turned
         // off. The press still has somewhere honest to go.
-        expect(nextSessionMove(true, ['a', 'b'], 'z')).toEqual({ kind: 'move', to: 'a' });
+        expect(nextSessionMove(['a', 'b'], 'z')).toEqual({ kind: 'move', to: 'a' });
     });
 });
 
@@ -82,39 +79,35 @@ describe('when there is nowhere to go', () => {
         // The decision the ticket asked for out loud. Pausing the only session
         // because there is nobody to hand to would make the double press a
         // second pause he cannot lift with the same gesture.
-        expect(nextSessionMove(true, ['a'], 'a')).toEqual({ kind: 'stay', why: 'alone' });
+        expect(nextSessionMove(['a'], 'a')).toEqual({ kind: 'stay', why: 'alone' });
     });
 
     it('never stops the voice on any refusal', () => {
-        // The one invariant that covers all three. A refusal reaches `take`
-        // never, and `take` is the only thing that can move a playhead.
+        // The one invariant that covers both. A refusal reaches `take` never,
+        // and `take` is the only thing that can move a playhead.
         const rig = harness();
         rig.setCycle(['a']);
         rig.setCurrent('a');
         rig.press('next');
-        rig.setReading(false);
-        rig.setCycle(['a', 'b']);
-        rig.press('next');
-        rig.setReading(true);
         rig.setCycle([]);
         rig.press('next');
         expect(rig.taken).toEqual([]);
     });
 
     it('does not turn reading on from a pocket', () => {
-        // DROVE-189's rule kept verbatim through a third remapping: a squeeze
-        // that started the voice on a session he had walked away from would be
-        // a surprise, and the button is one tap away.
-        expect(nextSessionMove(false, ['a', 'b'], 'a')).toEqual({ kind: 'stay', why: 'not-reading' });
-        expect(nextSessionMove(false, ['a', 'b'], null)).toEqual({ kind: 'stay', why: 'not-reading' });
-        expect(nextSessionMove(false, [], null)).toEqual({ kind: 'stay', why: 'not-reading' });
+        // DROVE-189's rule, kept through a third remapping and now structural
+        // rather than a flag: with reading switched off everywhere the cycle
+        // is empty, so no number of squeezes can start the voice on a session
+        // he walked away from. DROVE-297 owns which sessions are armed; this
+        // only has to refuse when none is.
+        expect(nextSessionMove([], 'a')).toEqual({ kind: 'stay', why: 'empty' });
+        expect(nextSessionMove([], null)).toEqual({ kind: 'stay', why: 'empty' });
     });
 
-    it('says which of the three refusals it was', () => {
+    it('says which of the two refusals it was', () => {
         // So a cue, when it is added, does not have to re-derive it.
-        expect(nextSessionMove(true, [], 'a')).toEqual({ kind: 'stay', why: 'empty' });
-        expect(nextSessionMove(true, ['a'], 'a')).toEqual({ kind: 'stay', why: 'alone' });
-        expect(nextSessionMove(false, ['a', 'b'], 'a')).toEqual({ kind: 'stay', why: 'not-reading' });
+        expect(nextSessionMove([], 'a')).toEqual({ kind: 'stay', why: 'empty' });
+        expect(nextSessionMove(['a'], 'a')).toEqual({ kind: 'stay', why: 'alone' });
     });
 });
 

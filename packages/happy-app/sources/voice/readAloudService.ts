@@ -167,18 +167,23 @@ startBackgroundAudio(readAloud);
  * lock screen's play/pause has worked this way since DROVE-189 and this is
  * the same shape.
  *
- * `focus` is DROVE-289's hold-and-restore: the outgoing session's whole
- * position is stashed and the incoming session's own is resumed. It is not a
- * stop and it is not a jump ahead, which is exactly the verb DROVE-300 asks
- * for, so there is nothing to add on top of it here.
+ * EVERY SEMANTIC HERE IS BORROWED, which is the other half of the point.
+ * `isSessionEnabled` and `takeVoice` are DROVE-297's — one switch per session,
+ * and a take that pauses whoever was holding the voice — and the pause under
+ * that take is DROVE-289's hold-and-restore, so the outgoing session keeps its
+ * whole position and the incoming one resumes at its own. Never a stop, never
+ * a jump ahead. DROVE-300 adds a ring step and nothing else.
  *
- * `readingCycleFrom` is the placeholder for DROVE-297's export. When that
- * lands, this closure points at it and readingCycle.ts is deleted.
+ * `takeVoice` rather than `visit` because he is NOT visiting: the phone is in
+ * his pocket. They differ by one assignment, `visited`, which is the session
+ * he is looking at and must not move for a press he made with the screen off.
  */
 startNextSessionPress({
-    cycle: () => readingCycleFrom(storage.getState().sessions),
-    current: () => readAloud.focusedSessionId,
-    reading: () => readAloud.isEnabled,
-    take: (sessionId) => readAloud.focus(sessionId),
+    cycle: () => readingCycleFrom(
+        storage.getState().sessions,
+        (sessionId) => readAloud.isSessionEnabled(sessionId),
+    ),
+    current: () => readAloud.readingSessionId,
+    take: (sessionId) => readAloud.takeVoice(sessionId),
     subscribe: (listener) => addRemoteCommandListener(listener),
 });

@@ -4,32 +4,18 @@ import { getSessionActivityAt } from '@/utils/sessionActivity';
 import type { Session } from '@/sync/storageTypes';
 
 /**
- * WHICH SESSIONS THE DOUBLE PRESS WALKS, until DROVE-297 says (DROVE-300).
+ * WHICH SESSIONS THE DOUBLE PRESS WALKS (DROVE-300).
  *
- * ## This file is a placeholder, and it says so at the top on purpose
+ * ## Membership is DROVE-297's, and this file does not second-guess it
  *
- * "The next session that has reading enabled" is DROVE-297's rule. That
- * ticket is building per-session enablement and exporting the policy, and
- * nextSession.ts consumes it through one port (`cycle()`) precisely so there
- * is never a second copy of the semantics. DROVE-297 had not landed when this
- * shipped, so this is what fills that port in the meantime.
+ * "Reading enabled" is per session since DROVE-297, and `armed` is that switch
+ * asked one session at a time — `readAloud.isSessionEnabled`, which already
+ * folds in the master default and a boss-mode suspension. Nothing here
+ * re-derives it, which is what keeps the ear and the session list from coming
+ * to different answers about who is armed.
  *
- * WHEN DROVE-297 LANDS: point `cycle` in readAloudService.ts at its export and
- * DELETE THIS FILE. Nothing in nextSession.ts changes and neither do its
- * tests, which is the whole reason the port is shaped the way it is.
- *
- * ## Why this is the honest fallback rather than an invented one
- *
- * Today there is exactly one read-aloud switch and it is GLOBAL:
- * `readAloudEnabled` in localSettings, driven into the reader by
- * `readAloud.setEnabled` from whichever composer has focus. There is no
- * per-session flag anywhere — I grepped for one. So under today's model the
- * true answer to "which sessions have reading enabled" is: with the switch
- * on, every session he could focus, because focusing one is what makes it
- * read.
- *
- * That is what this returns, minus the three kinds of row that are not a
- * conversation he can listen to:
+ * WHAT THIS FILE ADDS is the ORDER, and the three kinds of row that are not a
+ * conversation he can listen to at all:
  *
  *   SIDE CHATS are hidden children of another session and never appear in any
  *   list; handing the voice to one would read a panel he cannot see.
@@ -39,18 +25,31 @@ import type { Session } from '@/sync/storageTypes';
  *   reach the two he is running would make the gesture useless, which is the
  *   one way a next-track button can be worse than no button.
  *
+ * Those three are dropped BEFORE `armed` is consulted rather than after, so a
+ * default-on phone does not walk its whole archive. They are a property of the
+ * row, not of his switch, which is why they live here and not in DROVE-297.
+ *
  * ORDER IS THE CHAT LIST'S OWN, so the ear and the screen agree about what
  * "next" means: active first, then by last meaningful activity, newest first.
  * That is `buildSessionListViewData`'s comparator with the project grouping
  * taken off — the grouping is a layout, not an order, and a press cannot walk
  * a header row.
+ *
+ * Pure, and takes `armed` as an argument rather than reaching for the reader,
+ * so the whole cycle is testable with no reader, no store and no screen — the
+ * same reason nextSession.ts is pure. The press arrives with the phone in his
+ * pocket and nothing on this path may be able to tell.
  */
-export function readingCycleFrom(sessions: Record<string, Session>): string[] {
+export function readingCycleFrom(
+    sessions: Record<string, Session>,
+    armed: (sessionId: string) => boolean,
+): string[] {
     const live: Session[] = [];
     for (const session of Object.values(sessions)) {
         if (session.metadata?.isSideChat) continue;
         if (isDroverBridgeSession(session)) continue;
         if (isSessionArchived(session)) continue;
+        if (!armed(session.id)) continue;
         live.push(session);
     }
     live.sort((a, b) => {
