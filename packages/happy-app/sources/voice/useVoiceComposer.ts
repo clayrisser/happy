@@ -147,26 +147,36 @@ const idleTalk: DictationCaptureState = {
 
 /** Module scope so `useSyncExternalStore` gets a stable pair and never resubscribes. */
 const subscribeReadAloudTransport = (onChange: () => void) => readAloud.addTransportListener(onChange);
-const readReadAloudPaused = () => readAloud.isPaused;
 
 export function useVoiceComposer(options: VoiceComposerOptions): VoiceComposerState {
     const { sessionId, active, sessionDisconnected = false, voiceCallActive, getComposerText, setComposerText, send, onError } = options;
-    const [readAloudEnabled, setReadAloudEnabled] = useLocalSettingMutable('readAloudEnabled');
+    // The persisted setting is only the DEFAULT a session inherits since
+    // DROVE-297. It is read to feed the reader that default, and no longer
+    // written by this composer: the control below writes the session's own
+    // switch, which is the whole point of the ticket.
+    const [readAloudDefault] = useLocalSettingMutable('readAloudEnabled');
     const [dictationEnabled] = useLocalSettingMutable('voiceDictationEnabled');
     const [talk, setTalk] = React.useState<DictationCaptureState>(idleTalk);
     const [talkState, setTalkState] = React.useState<MicButtonState>('idle');
     const [talkCancelArmed, setTalkCancelArmed] = React.useState(false);
     const [talkSendArmed, setTalkSendArmed] = React.useState(false);
     const [dictationSupported, setDictationSupported] = React.useState(false);
-    // The pause lives on the reader, not in local settings, so the button
-    // subscribes to it rather than owning it (DROVE-233). Three surfaces drive
-    // it and only one of them is this button, so a copy in React state would
-    // be a copy that drifts the moment he squeezes a headphone.
-    const readAloudPaused = React.useSyncExternalStore(
+    // This session's reading, as one of four faces (DROVE-297). It lives on the
+    // reader, not in local settings, so the button subscribes to it rather than
+    // owning it (DROVE-233): four surfaces drive it — this button, a headphone
+    // squeeze, the lock screen, the wrist — and a fifth now, the terminal
+    // (DROVE-298), so a copy in React state would be a copy that drifts.
+    const readingState = React.useSyncExternalStore(
         subscribeReadAloudTransport,
-        readReadAloudPaused,
-        readReadAloudPaused,
+        React.useCallback(() => readAloud.readingStateOf(sessionId), [sessionId]),
+        React.useCallback(() => readAloud.readingStateOf(sessionId), [sessionId]),
     );
+    const readAloudEnabled = readingState !== 'off';
+    // Amber covers both ways of holding a place: HIS pause, and the yield to a
+    // session that took the voice (DROVE-297). Both are "on, not speaking,
+    // keeping its sentence", which is exactly what the amber face says, so the
+    // capsule needs no fifth state to tell the truth here.
+    const readAloudPaused = readingState === 'paused' || readingState === 'yielded';
 
     // The callbacks change identity with the screen; the capture does not.
     // Refs keep the one controller pointed at the current ones.
@@ -218,29 +228,42 @@ export function useVoiceComposer(options: VoiceComposerOptions): VoiceComposerSt
         return () => { cancelled = true; };
     }, []);
 
-    // Only one session is ever read. Leaving takes the focus away, which also
-    // cuts whatever was mid-sentence, and, through the interrupt listener
-    // below, whatever was being recorded.
+    // Only one session is ever read, and arriving here is not a claim on it
+    // (DROVE-297). `visit` asks the rule: this session takes the voice if its
+    // own reading is switched on, and otherwise the session he was listening
+    // to carries on talking while he reads this one. Leaving takes the focus
+    // away, which also cuts whatever was mid-sentence, and, through the
+    // interrupt listener below, whatever was being recorded.
     React.useEffect(() => {
         if (!active) {
             readAloud.blur(sessionId, 'left-session');
             return;
         }
-        readAloud.focus(sessionId);
+        readAloud.visit(sessionId);
         return () => { readAloud.blur(sessionId, 'left-session'); };
     }, [sessionId, active]);
 
+    // The persisted setting is the DEFAULT a session inherits (DROVE-297), not
+    // the switch on this one: the composer's control writes the session's own
+    // switch below. Only the surface that FOCUSES may drive it (DROVE-179).
+    // Two of these hooks can be mounted at once, the chat and an embedded side
+    // chat, and the embedded one writing `false` here would silence whatever
+    // the user is actually looking at.
+    React.useEffect(() => {
+        if (!active) return;
+        readAloud.setEnabled(readAloudDefault);
+    }, [active, readAloudDefault]);
+
     // A live boss-mode call wins: two audio consumers arguing over the
     // AVAudioSession category is the pitfall the ticket names, so read-aloud
-    // goes quiet for the duration rather than fighting it.
+    // goes quiet for the duration rather than fighting it. Its own input
+    // rather than an `&&` on the line above, because a call has to silence a
+    // session he switched on by hand even when the default is off — and has to
+    // give it back afterwards rather than making him switch it on again.
     React.useEffect(() => {
-        // Only the surface that FOCUSES may drive the global flag (DROVE-179).
-        // Two of these hooks can be mounted at once, the chat and an embedded
-        // side chat, and the embedded one writing `false` here would silence
-        // whatever the user is actually looking at.
         if (!active) return;
-        readAloud.setEnabled(readAloudEnabled && !voiceCallActive);
-    }, [active, readAloudEnabled, voiceCallActive]);
+        readAloud.setSuspended(voiceCallActive);
+    }, [active, voiceCallActive]);
 
     // The transport dropped, or the app went to the background. Neither takes
     // the audio route away, so neither stops the voice; both end a capture,
@@ -399,19 +422,37 @@ export function useVoiceComposer(options: VoiceComposerOptions): VoiceComposerSt
         clearHoldTimer();
     }, [capture, clearHoldTimer]);
 
+    /**
+     * The tap: THIS SESSION'S reading, on or off (DROVE-297).
+     *
+     * It used to write the persisted global, which is why turning it on in one
+     * session turned it on in every other one and walking into any of them took
+     * the voice. Straight at the reader now, which is also what routes it
+     * through the one take-the-voice rule: switching this session on pauses
+     * whoever was speaking, at their sentence.
+     */
     const onReadAloudToggle = React.useCallback(() => {
-        setReadAloudEnabled(!readAloudEnabled);
-    }, [readAloudEnabled, setReadAloudEnabled]);
+        readAloud.setSessionEnabled(sessionId, !readAloudEnabled);
+    }, [sessionId, readAloudEnabled]);
 
     /**
      * The long press (DROVE-233).
      *
      * Straight at the reader rather than through the local setting, and that
-     * is the point: `readAloudEnabled` is persisted and survives a relaunch,
-     * and a pause must not — coming back to a phone that is silently holding a
-     * place in a session from yesterday is the failure the whole ticket is
-     * about avoiding. It is runtime state on the one reader, which is also
-     * what lets the headphones and the lock screen share it.
+     * is the point: `localSettings.readAloudEnabled` is persisted and survives
+     * a relaunch, and a pause must not — coming back to a phone that is
+     * silently holding a place in a session from yesterday is the failure the
+     * whole ticket is about avoiding. It is runtime state on the one reader,
+     * which is also what lets the headphones and the lock screen share it.
+     * DROVE-297 made the per-session SWITCH runtime for the same reason: a
+     * phone that wakes up armed to read four sessions is that same failure
+     * with more voices.
+     *
+     * It drives THE VOICE, not this screen. The transport is one state that
+     * four surfaces share (DROVE-233), so a long press here while another
+     * session has the voice pauses the voice — which is what a transport
+     * control means everywhere else on the phone, and what the lock screen and
+     * the headphone squeeze already do from outside any session at all.
      */
     const onAudioOutLongPress = React.useCallback((): TransportEffect => {
         const effect = transportEffect(
