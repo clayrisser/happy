@@ -15,15 +15,21 @@ import {
     permissionModeGlyph,
 } from './sessionControlGlyphs';
 import {
+    autoAcceptColour,
     composerCapsuleDivider,
     composerControlPalette,
     composerGaugeTrack,
     composerGlyphColour,
     composerSessionCapsuleFill,
     pendingOrSettled,
-    permissionLockColour,
 } from './composerControlColour';
-import { permissionAccessibilityValue } from './autoAcceptRow';
+import {
+    AUTO_ACCEPT_SUBTITLE,
+    AUTO_ACCEPT_TITLE,
+    autoAcceptGlyph,
+    autoAcceptSegmentValue,
+    permissionAccessibilityValue,
+} from './autoAcceptRow';
 import {
     COMPOSER_MODEL_SEGMENT,
     COMPOSER_SESSION_CONTROL_SIZE,
@@ -111,6 +117,17 @@ import {
 
 export type ComposerSessionPicker = 'permission' | 'model' | 'effort';
 
+/**
+ * What a segment does when it is pressed (DROVE-281).
+ *
+ * Three of the four open a picker; the fourth flips a boolean and opens
+ * nothing. They share `Control` because they share a shape — a 39pt press
+ * inside one capsule — and they are kept apart in the TYPE rather than by a
+ * convention, so a toggle can never be handed to `onPress` and asked for a
+ * sheet.
+ */
+export type ComposerSessionSegment = ComposerSessionPicker | 'autoAccept';
+
 export interface ComposerSessionControlsProps {
     label: SessionPillLabel;
     /**
@@ -170,14 +187,30 @@ export interface ComposerSessionControlsProps {
      */
     pending?: { permission?: boolean; effort?: boolean; model?: boolean } | null;
     /**
-     * Whether this session is auto-accepting its boolean gates (DROVE-277).
+     * Whether this session is auto-accepting its boolean gates (DROVE-277,
+     * moved onto the row by DROVE-281).
      *
-     * On the PADLOCK because auto-accept is a permission posture and the
-     * padlock is the permission control; the switch that changes it is a row
-     * in the padlock's own sheet, so the segment says what the sheet behind it
-     * is set to. Absent is off, which is what every session is at launch.
+     * ITS OWN SEGMENT NOW, second in the capsule, touching the padlock. It was
+     * a switch inside the padlock's sheet, which made the padlock the only
+     * object that could show the state and made changing it two taps. Clay:
+     * "add a button for toggling auto accepting prompts". A toggle he flips
+     * per session, mid-work, from behind a sheet is a toggle he does not flip.
+     *
+     * Absent is off, which is what every session is at launch and after every
+     * relaunch — `autoAcceptSessions.ts` holds why that is the security
+     * property rather than a shortcut.
      */
     autoAccept?: boolean;
+    /**
+     * Flips it. Absent means the segment is not drawn at all (DROVE-281).
+     *
+     * Drawn-and-dead is the wrong shape for this one, though it is the right
+     * one for the three pickers: a picker with nothing to pick still SAYS what
+     * the session is set to, and a bolt that cannot be pressed says only that
+     * something is missing. A session with no id has no auto-accept to hold, so
+     * there is nothing for the segment to say and it is absent.
+     */
+    onToggleAutoAccept?: () => void;
 }
 
 /** What VoiceOver adds while a pick is in flight, since colour reaches nobody there. */
@@ -311,11 +344,28 @@ const styles = StyleSheet.create((theme) => ({
 }));
 
 function Control(props: {
-    picker: ComposerSessionPicker;
+    /** Identity, for reading a tree; the press is bound by the caller. */
+    segment: ComposerSessionSegment;
     accessibilityLabel: string;
     accessibilityValue?: string;
+    accessibilityHint?: string;
     open: boolean;
-    onPress?: (picker: ComposerSessionPicker) => void;
+    /**
+     * A switch rather than a disclosure, for the one segment that opens
+     * nothing (DROVE-281). It changes `accessibilityRole` and drops
+     * `expanded`, so VoiceOver announces a state instead of a sheet that is
+     * not there.
+     */
+    toggled?: boolean;
+    /**
+     * Already bound to what it does (DROVE-281).
+     *
+     * It took the segment id and handed it back to the caller's `onPress`,
+     * which was fine while all four segments did the same thing. One of them
+     * flips a boolean now and never names a picker, so the binding moved to
+     * the call site and this is a plain press.
+     */
+    onPress?: () => void;
     /** The square glyph segment by default; the model segment sizes to its name. */
     wide?: boolean;
     size: number;
@@ -354,7 +404,7 @@ function Control(props: {
     const pressable = !!props.onPress;
     return (
         <BubblePressable
-            onPress={props.onPress ? () => props.onPress?.(props.picker) : undefined}
+            onPress={props.onPress}
             disabled={!pressable}
             nativeGlassPress={false}
             // Vertical only. See `verticalSlop` on the props for why the other
@@ -365,10 +415,13 @@ function Control(props: {
                 props.open && styles.controlOpen,
                 { opacity: pressable && p.pressed ? 0.7 : 1 },
             ]}
-            accessibilityRole="button"
+            accessibilityRole={props.toggled === undefined ? 'button' : 'switch'}
             accessibilityLabel={props.accessibilityLabel}
+            accessibilityHint={props.accessibilityHint}
             accessibilityValue={props.accessibilityValue ? { text: props.accessibilityValue } : undefined}
-            accessibilityState={{ expanded: props.open, disabled: !pressable }}
+            accessibilityState={props.toggled === undefined
+                ? { expanded: props.open, disabled: !pressable }
+                : { checked: props.toggled, disabled: !pressable }}
         >
             {props.children}
         </BubblePressable>
@@ -390,6 +443,7 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
         openPicker,
         pending,
         autoAccept = false,
+        onToggleAutoAccept,
         size = COMPOSER_SESSION_CONTROL_SIZE,
         verticalSlop = 0,
         style,
@@ -399,12 +453,16 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
     const modelPending = !!pending?.model;
     const effortPending = !!pending?.effort;
     const showMode = !!label.mode;
+    // The bolt is drawn when there is something to flip, and not otherwise
+    // (DROVE-281). See `onToggleAutoAccept` for why this one is absent rather
+    // than dead while the three pickers are dead rather than absent.
+    const showAutoAccept = !!onToggleAutoAccept;
     const showEffort = !!label.effort && effortCount > 0 && effortIndex != null && effortIndex >= 0;
     const showModel = !!label.model;
     const canOpenMode = canOpen?.permission !== false;
     const canOpenEffort = canOpen?.effort !== false;
     const canOpenModel = canOpen?.model !== false;
-    if (!showMode && !showEffort && !showModel) {
+    if (!showMode && !showAutoAccept && !showEffort && !showModel) {
         return null;
     }
     const mode = permissionModeAccessibility(label.mode);
@@ -412,8 +470,17 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
     // A divider goes between two drawn segments, never at either end, so a
     // session with no effort scale does not leave a hairline floating in the
     // capsule.
-    const effortNeedsDivider = showEffort && showMode;
-    const modelNeedsDivider = showModel && (showMode || showEffort);
+    //
+    // AND NEVER BETWEEN THE PADLOCK AND THE BOLT (DROVE-281). Those two are the
+    // capsule's permission PAIR and they touch, because a hairline in this
+    // capsule says "a separate thing to press" and the grouping is the whole
+    // answer to Clay's "put the mode button in the group with the rest". The
+    // rules stay where the subject changes: permission -> effort, effort ->
+    // the model's name. That is also why `dividers` in the budget stayed at 2
+    // while `glyphSegments` went to 3.
+    const permissionGroup = showMode || showAutoAccept;
+    const effortNeedsDivider = showEffort && permissionGroup;
+    const modelNeedsDivider = showModel && (permissionGroup || showEffort);
     // One interactive surface for the capsule, not one per segment
     // (DROVE-169). UIGlassEffect follows the touch inside the effect view it
     // is on, so the segment under the finger brightens and its neighbours
@@ -449,46 +516,92 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
         >
             {showMode ? (
                 <Control
-                    picker="permission"
+                    segment="permission"
                     accessibilityLabel={mode.label}
                     accessibilityValue={unconfirmedAccessibilityValue(
                         permissionAccessibilityValue(mode.value, autoAccept),
                         permissionPending,
                     )}
                     open={openPicker === 'permission'}
-                    onPress={canOpenMode ? onPress : undefined}
+                    onPress={canOpenMode && onPress ? () => onPress('permission') : undefined}
                     size={size}
                     verticalSlop={verticalSlop}
                 >
-                    {/* The foreground in every mode (DROVE-215). The mode is
-                        a value the session holds, not a thing it is doing, so
-                        under the rule it earns no colour, and the padlock,
-                        shield, eye and map already separate the modes on
-                        their own (DROVE-141).
+                    {/* The foreground in every mode (DROVE-215), with no
+                        exception left (DROVE-281). The mode is a value the
+                        session holds, not a thing it is doing, so under the
+                        rule it earns no colour, and the padlock, shield, eye
+                        and map already separate the modes on their own
+                        (DROVE-141).
 
-                        The one state that does colour it is AUTO-ACCEPT
-                        (DROVE-277), which is not a value the session holds but
-                        a thing the app is doing to prompts Clay never sees.
-                        The argument, and why it reuses `accent` rather than
-                        widening the palette, is on `permissionLockColour`. The
-                        GLYPH is unchanged either way, so the mode is still
-                        read off the silhouette and the colour adds a state
-                        rather than replacing a value. */}
+                        DROVE-277 made auto-accept the one state that coloured
+                        it, because the switch was inside this control's sheet
+                        and the padlock was the only object that could wear the
+                        state. The bolt beside it wears it now, so the padlock
+                        goes back to the plain rule. `autoAcceptColour` carries
+                        the move and why both are not tinted. */}
                     <Ionicons
                         name={permissionModeGlyph(modeKind, modeKey)}
                         size={20}
-                        color={pendingOrSettled(palette, permissionPending, permissionLockColour(palette, autoAccept))}
+                        color={pendingOrSettled(palette, permissionPending, composerGlyphColour(palette))}
+                    />
+                </Control>
+            ) : null}
+            {/* AUTO-ACCEPT, TOUCHING THE PADLOCK (DROVE-281).
+
+                Clay, with the row photographed: "add a button for toggling
+                auto accepting prompts" and "put the mode button in the group
+                with the rest". The second reads two ways — the padlock leaving
+                the capsule for the loose buttons, or the new control joining
+                the padlock inside it — and the capsule settles it: it already
+                groups the controls that say HOW this session runs, while the
+                four discs below DO things. Answering prompts unasked is how it
+                runs. Rendered side by side the other reading turns the action
+                row into six undifferentiated glyphs with nothing saying which
+                two are settings.
+
+                IT OPENS NOTHING. All three of its neighbours are a press that
+                raises a sheet (DROVE-242); this is a press that flips a
+                boolean, which is the whole point of moving it here, and it is
+                a `switch` to a screen reader rather than a button with an
+                `expanded` state it does not have.
+
+                NO PENDING FACE EITHER, and that is a fact about the state
+                rather than an omission. The other three send a pick to the
+                terminal and wait a median two seconds for it (DROVE-217); this
+                one writes to a set in this process and is true before the
+                finger leaves the glass. */}
+            {showAutoAccept ? (
+                <Control
+                    segment="autoAccept"
+                    accessibilityLabel={AUTO_ACCEPT_TITLE}
+                    accessibilityValue={autoAcceptSegmentValue(autoAccept)}
+                    accessibilityHint={AUTO_ACCEPT_SUBTITLE}
+                    toggled={autoAccept}
+                    open={false}
+                    onPress={onToggleAutoAccept}
+                    size={size}
+                    verticalSlop={verticalSlop}
+                >
+                    {/* The bolt FILLS as well as colouring, so the state has a
+                        silhouette and does not rest on hue alone — the outline
+                        and the solid are the same glyph at two weights, which
+                        is how the row already draws the mic. */}
+                    <Ionicons
+                        name={autoAcceptGlyph(autoAccept)}
+                        size={20}
+                        color={autoAcceptColour(palette, autoAccept)}
                     />
                 </Control>
             ) : null}
             {effortNeedsDivider ? <View style={[styles.segmentDivider, { backgroundColor: divider }]} /> : null}
             {showEffort ? (
                 <Control
-                    picker="effort"
+                    segment="effort"
                     accessibilityLabel={effort.label}
                     accessibilityValue={unconfirmedAccessibilityValue(effort.value, effortPending)}
                     open={openPicker === 'effort'}
-                    onPress={canOpenEffort ? onPress : undefined}
+                    onPress={canOpenEffort && onPress ? () => onPress('effort') : undefined}
                     size={size}
                     verticalSlop={verticalSlop}
                 >
@@ -511,11 +624,11 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
             {modelNeedsDivider ? <View style={[styles.segmentDivider, { backgroundColor: divider }]} /> : null}
             {showModel ? (
                 <Control
-                    picker="model"
+                    segment="model"
                     accessibilityLabel="Model"
                     accessibilityValue={unconfirmedAccessibilityValue(label.model!, modelPending)}
                     open={openPicker === 'model'}
-                    onPress={canOpenModel ? onPress : undefined}
+                    onPress={canOpenModel && onPress ? () => onPress('model') : undefined}
                     size={size}
                     verticalSlop={verticalSlop}
                     wide

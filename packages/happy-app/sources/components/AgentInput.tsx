@@ -763,6 +763,16 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     // disagree about what the session is set to.
     const autoAccept = useAutoAccept(props.sessionId);
     const setAutoAccept = useAutoAcceptToggle(props.sessionId);
+    /**
+     * The bolt's press, which is the sheet's switch with the value read off
+     * the store rather than handed in (DROVE-281).
+     *
+     * Both write through `setAutoAccept`, so the segment and the sheet row
+     * cannot drift: there is one setter and one module-level set behind it.
+     */
+    const toggleAutoAccept = React.useCallback(() => {
+        setAutoAccept(!autoAccept);
+    }, [setAutoAccept, autoAccept]);
     const modelLabel = props.modelMode?.name ?? t('agentInput.model.title');
     const effortLabel = props.effortLevel?.name;
     const isSandboxEnabled = React.useMemo(() => {
@@ -2327,12 +2337,19 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 effortCount={effortScale.keys.length}
                 onPress={handleSessionControlPress}
                 autoAccept={autoAccept}
+                /* THE BOLT'S PRESS (DROVE-281). It is not a picker, so it does
+                   not go through `handleSessionControlPress` and never touches
+                   composerPicker.ts's dismissal machine: there is no sheet to
+                   dismiss. Absent without a session id, because there is then
+                   no session for the toggle to be about — the capsule draws
+                   three segments instead of four and says nothing untrue. */
+                onToggleAutoAccept={props.sessionId ? toggleAutoAccept : undefined}
                 canOpen={{
-                    // The sheet behind the padlock now holds the auto-accept
-                    // switch as well as the mode list (DROVE-277), so a session
-                    // whose harness publishes no modes still has something to
-                    // open — and the one control this ticket adds must not be
-                    // unreachable on exactly the sessions that ask the most.
+                    // The sheet behind the padlock still holds the auto-accept
+                    // switch as well as the mode list (DROVE-277, kept by
+                    // DROVE-281 for the boundary wording the segment has no room
+                    // for), so a session whose harness publishes no modes still
+                    // has something to open.
                     permission: (!!props.onPermissionModeChange && availableModes.length > 0) || !!props.sessionId,
                     effort: availableEffortLevels.length > 0 && !!props.onEffortLevelChange,
                     model: availableModels.length > 0 && !!props.onModelModeChange,
