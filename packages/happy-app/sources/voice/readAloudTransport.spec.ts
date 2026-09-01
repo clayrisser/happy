@@ -32,7 +32,7 @@ describe('readAloudTransport', () => {
     });
 });
 
-describe('the tap keeps its on/off meaning (DROVE-98)', () => {
+describe('the tap is the play button (DROVE-98, DROVE-327)', () => {
     it('turns reading on from off', () => {
         expect(transportEffect('tap', 'off')).toBe('turn-on');
     });
@@ -41,21 +41,34 @@ describe('the tap keeps its on/off meaning (DROVE-98)', () => {
         expect(transportEffect('tap', 'reading')).toBe('turn-off');
     });
 
-    it('turns reading OFF from paused rather than resuming', () => {
-        // One gesture, one axis. A tap that resumed would give the control two
-        // meanings on the same press and leave paused with no way out except
-        // the gesture that made it.
-        expect(transportEffect('tap', 'paused')).toBe('turn-off');
+    it('RESUMES from paused, and never turns it off (DROVE-327)', () => {
+        // Clay, from his phone: "if it's paused and I single tap it should
+        // unpause not end the reading." This cell was 'turn-off' through
+        // DROVE-233 and DROVE-236 on the argument that a tap is one axis. A
+        // switch has one axis; a player's cheapest gesture is "talk".
+        expect(transportEffect('tap', 'paused')).toBe('resume');
+        expect(transportEffect('tap', 'paused')).not.toBe('turn-off');
+    });
+
+    it('never pauses, in any state: the hold owns that (DROVE-327)', () => {
+        // "To go into pause though you hold it in."
+        for (const state of states) {
+            expect(transportEffect('tap', state)).not.toBe('pause');
+        }
     });
 });
 
-describe('the long press is pause and resume (DROVE-233)', () => {
+describe('the long press is pause while reading, off while paused (DROVE-233, DROVE-327)', () => {
     it('pauses while it is reading', () => {
         expect(transportEffect('long-press', 'reading')).toBe('pause');
     });
 
-    it('resumes from paused', () => {
-        expect(transportEffect('long-press', 'paused')).toBe('resume');
+    it('turns reading OFF from paused, which is the way out (DROVE-327)', () => {
+        // The hold used to resume, so the tap could be on/off. With the tap
+        // resuming, the hold is what leaves paused for off, and nothing on
+        // the button leaves paused by accident.
+        expect(transportEffect('long-press', 'paused')).toBe('turn-off');
+        expect(transportEffect('long-press', 'paused')).not.toBe('resume');
     });
 
     it('opens boss mode while read-aloud is off (DROVE-236)', () => {
@@ -66,19 +79,19 @@ describe('the long press is pause and resume (DROVE-233)', () => {
         expect(transportEffect('long-press', 'off')).toBe('boss-mode');
     });
 
-    it("is Clay's four-cell table, cell for cell (DROVE-236)", () => {
+    it("is Clay's table, cell for cell (DROVE-236, DROVE-327)", () => {
         //     state     single press        long press
         //     normal    reading mode on     boss mode
         //     reading   back to normal      pause
+        //     paused    resume              back to normal
         expect(transportEffect('tap', 'off')).toBe('turn-on');
         expect(transportEffect('long-press', 'off')).toBe('boss-mode');
         expect(transportEffect('tap', 'reading')).toBe('turn-off');
         expect(transportEffect('long-press', 'reading')).toBe('pause');
-        // The row his table does not write out, because paused IS reading with
-        // a place held: the tap turns it off like any other on-state, and the
-        // long press is the way back.
-        expect(transportEffect('tap', 'paused')).toBe('turn-off');
-        expect(transportEffect('long-press', 'paused')).toBe('resume');
+        // The row DROVE-236's table did not write out, and the one he wrote
+        // from the phone when the button got it wrong (DROVE-327).
+        expect(transportEffect('tap', 'paused')).toBe('resume');
+        expect(transportEffect('long-press', 'paused')).toBe('turn-off');
     });
 
     it('is the ONLY gesture that can reach boss mode (DROVE-236)', () => {
@@ -103,20 +116,26 @@ describe('the long press is pause and resume (DROVE-233)', () => {
         expect(transportEffect('long-press', 'reading')).toBe('pause');
     });
 
-    it('is a round trip: pause then resume and the state is back', () => {
+    it('is a round trip: hold pauses, TAP resumes, and the state is back (DROVE-327)', () => {
         const paused = transportEffect('long-press', 'reading');
         expect(paused).toBe('pause');
-        expect(transportEffect('long-press', 'paused')).toBe('resume');
+        expect(transportEffect('tap', 'paused')).toBe('resume');
+        // And the hold from there is the exit, not a second resume.
+        expect(transportEffect('long-press', 'paused')).toBe('turn-off');
     });
 });
 
 describe('the headphones and the lock screen drive the same state', () => {
-    it('maps a single headphone press to the same pause the long press makes', () => {
-        // iOS reports a single press as togglePlayPauseCommand (DROVE-225).
+    it('maps a single headphone press to the pause the hold makes and the resume the tap makes', () => {
+        // iOS reports a single press as togglePlayPauseCommand (DROVE-225). It
+        // is a play/pause key: pause is the hold's cell, resume is the tap's
+        // (DROVE-327). It never follows the hold into turn-off, because a
+        // squeeze in a pocket must not end the reading (asserted below).
         expect(transportEffect('remote-toggle', 'reading'))
             .toBe(transportEffect('long-press', 'reading'));
         expect(transportEffect('remote-toggle', 'paused'))
-            .toBe(transportEffect('long-press', 'paused'));
+            .toBe(transportEffect('tap', 'paused'));
+        expect(transportEffect('remote-toggle', 'paused')).toBe('resume');
     });
 
     it('pauses on the lock screen pause button and resumes on its play button', () => {
@@ -151,6 +170,40 @@ describe('the headphones and the lock screen drive the same state', () => {
 });
 
 describe('the table as a whole', () => {
+    /**
+     * EVERY CELL, PINNED (DROVE-327). The tests above each argue one cell;
+     * this is the whole table as a literal, so a change to any of the fifteen
+     * fails here by name whatever the argument for it. Three of these cells
+     * have been changed twice already.
+     */
+    const cells: ReadonlyArray<[TransportGesture, ReadAloudTransport, string]> = [
+        ['tap', 'off', 'turn-on'],
+        ['tap', 'reading', 'turn-off'],
+        ['tap', 'paused', 'resume'],
+        ['long-press', 'off', 'boss-mode'],
+        ['long-press', 'reading', 'pause'],
+        ['long-press', 'paused', 'turn-off'],
+        ['remote-play', 'off', 'nothing'],
+        ['remote-play', 'reading', 'nothing'],
+        ['remote-play', 'paused', 'resume'],
+        ['remote-pause', 'off', 'nothing'],
+        ['remote-pause', 'reading', 'pause'],
+        ['remote-pause', 'paused', 'nothing'],
+        ['remote-toggle', 'off', 'nothing'],
+        ['remote-toggle', 'reading', 'pause'],
+        ['remote-toggle', 'paused', 'resume'],
+    ];
+
+    for (const [gesture, state, effect] of cells) {
+        it(`${gesture} while ${state} → ${effect}`, () => {
+            expect(transportEffect(gesture, state)).toBe(effect);
+        });
+    }
+
+    it('pins all fifteen cells, none twice', () => {
+        expect(new Set(cells.map(([g, s]) => `${g}/${s}`)).size).toBe(gestures.length * states.length);
+    });
+
     it('answers every gesture in every state', () => {
         for (const gesture of gestures) {
             for (const state of states) {

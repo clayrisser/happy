@@ -53,10 +53,12 @@ import { readAloudTransport, type ReadAloudTransport } from '@/voice/readAloudTr
  *
  * THE GLYPH'S CONTRACT MOVED WITH IT, and that is the part worth stating. It
  * used to say what a TAP would do, which is why paused wore the waves. It now
- * says which of the three states you are IN. The tap still means on/off in
- * every one of them (`transportEffect`), so nothing is lost: a pause glyph on a
- * control whose tap turns read-aloud off is the same bargain the reading glyph
- * struck, told more precisely.
+ * says which of the three states you are IN, and the tap is the player's
+ * button in every one of them (`transportEffect`, DROVE-327): off it starts,
+ * reading it stops, and on the pause bars it RESUMES. So the pause glyph is a
+ * promise the tap keeps, which is what a pause icon means on every other
+ * player he owns. It was not, for two tickets: the tap turned a paused reader
+ * off, which is the bug DROVE-327 fixed.
  *
  * A LIVE CALL OUTRANKS READING FOR THE FILL, and it can, because starting a
  * call interrupts read-aloud (`readAloud.interrupt('call-started')`). There is
@@ -73,15 +75,17 @@ import { readAloudTransport, type ReadAloudTransport } from '@/voice/readAloudTr
  * `reading` row's to pause, and a control cannot have three long presses.
  *
  * SO WITH READING ON, A CALL IS TWO GESTURES: tap the button to stop reading,
- * then long press. There is no other entry point in the app today, which is
- * worth writing down rather than leaving to be discovered. It is the price of
- * the collapse and Clay set it; if it turns out to bite, the cell to argue
- * about is `long-press` on `paused`, which currently resumes.
+ * then long press; from paused it is two HOLDS, the first of which is the
+ * exit (DROVE-327 gave that cell to turn-off, so the tap could resume). There
+ * is no other entry point in the app today, which is worth writing down
+ * rather than leaving to be discovered. It is the price of the collapse and
+ * Clay set it.
  *
  * THE GLYPH DOES NOT BECOME A WAVEFORM DURING A CALL. That was the temptation
- * and it is wrong: the glyph's job is to say what a TAP will do, a tap always
- * means read-aloud on or off, and a button that showed a waveform while its tap
- * toggled reading would be the DROVE-206 failure again in a smaller box.
+ * and it is wrong: the glyph's job is to say which read-aloud state you are
+ * in, a tap always acts on read-aloud (start, stop or resume) and never on a
+ * call, and a button that showed a waveform while its tap drove reading would
+ * be the DROVE-206 failure again in a smaller box.
  */
 
 /**
@@ -97,11 +101,14 @@ export type AudioOutFill = 'none' | 'paused' | 'accent' | 'recording';
 export interface AudioOutButton {
     /** Drawn only where there is a reader; an embedded or disconnected chat has none. */
     shown: boolean;
-    /** Read-aloud is enabled, paused included. What a TAP will turn off. */
+    /**
+     * Read-aloud is enabled, paused included. A tap on a reading one turns it
+     * off; on a paused one it resumes (DROVE-327).
+     */
     on: boolean;
     /** On and holding its place (DROVE-233). Never true while `on` is false. */
     paused: boolean;
-    /** Which of Clay's two rows the long press is reading. */
+    /** Which of Clay's three rows a press is reading. */
     state: ReadAloudTransport;
     glyph: AudioOutGlyph;
     fill: AudioOutFill;

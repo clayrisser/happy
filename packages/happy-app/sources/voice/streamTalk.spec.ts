@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { flipStreamTalk, streamTalkIcon, streamTalkPauseToast } from './streamTalk';
+import { audioOutToast, flipStreamTalk, streamTalkIcon, streamTalkPauseToast } from './streamTalk';
+import { transportEffect } from './readAloudTransport';
 import { applyLocalSettings, localSettingsDefaults, localSettingsParse } from '@/sync/localSettings';
 import { settingsDefaults } from '@/sync/settings';
 import { en } from '@/text/_default';
@@ -54,6 +55,46 @@ describe('flipStreamTalk', () => {
         expect(localSettingsParse(on).readAloudEnabled).toBe(true);
         const off = applyLocalSettings(on, { readAloudEnabled: flipStreamTalk(on.readAloudEnabled).readAloudEnabled });
         expect(off.readAloudEnabled).toBe(false);
+    });
+});
+
+/**
+ * ONE TOAST FOR BOTH GESTURES (DROVE-327). The tap goes through the transport
+ * table now, so it can resume as well as start or stop, and the toast is named
+ * from the EFFECT rather than from which gesture it was. A tap on a paused
+ * reader used to toast "Not reading replies aloud" — and meant it.
+ */
+describe('audioOutToast', () => {
+    it('names each read-aloud effect, whichever gesture caused it', () => {
+        expect(audioOutToast('turn-on')).toBe('agentInput.streamTalk.on');
+        expect(audioOutToast('turn-off')).toBe('agentInput.streamTalk.off');
+        expect(audioOutToast('pause')).toBe('agentInput.streamTalk.paused');
+        expect(audioOutToast('resume')).toBe('agentInput.streamTalk.resumed');
+    });
+
+    it('says nothing for a call or a no-op: those are not read-aloud news', () => {
+        expect(audioOutToast('boss-mode')).toBeNull();
+        expect(audioOutToast('nothing')).toBeNull();
+    });
+
+    it('teaches the sentence tap on the way on, once, like the flip did (DROVE-195)', () => {
+        expect(audioOutToast('turn-on', false)).toBe('agentInput.streamTalk.onHint');
+        expect(audioOutToast('turn-on', true)).toBe('agentInput.streamTalk.on');
+        // And only on the way on: resuming is not the moment the gesture
+        // becomes available, it already was.
+        expect(audioOutToast('resume', false)).toBe('agentInput.streamTalk.resumed');
+        expect(audioOutToast('turn-off', false)).toBe('agentInput.streamTalk.off');
+    });
+
+    it('a tap on a paused reader says RESUMED, never off (DROVE-327)', () => {
+        const tapOnPaused = transportEffect('tap', 'paused');
+        expect(audioOutToast(tapOnPaused)).toBe('agentInput.streamTalk.resumed');
+        expect(audioOutToast(tapOnPaused)).not.toBe('agentInput.streamTalk.off');
+    });
+
+    it('agrees with the long press toast it replaced', () => {
+        expect(audioOutToast('pause')).toBe(streamTalkPauseToast(true));
+        expect(audioOutToast('resume')).toBe(streamTalkPauseToast(false));
     });
 });
 

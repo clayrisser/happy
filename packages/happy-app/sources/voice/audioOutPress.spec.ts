@@ -220,8 +220,11 @@ describe('a tap on a paused reader RESUMES, at the sentence it paused on (DROVE-
         pressAudioOut(reader, 'a', 'tap');
         await settle();
         expect(reader.readingStateOf('a')).toBe('reading');
-        // And every sentence came out exactly once, in order.
-        expect(engine.spoken).toEqual(['One.', 'Two.', 'Three.']);
+        // Every sentence came out exactly once, in order. The second hold
+        // landed mid-'Three.', and a sentence that made a sound stays spoken
+        // (DROVE-126, DROVE-233's sentence granularity), so the second resume
+        // carries on at 'Four.' rather than saying 'Three.' twice.
+        expect(engine.spoken).toEqual(['One.', 'Two.', 'Three.', 'Four.']);
     });
 });
 

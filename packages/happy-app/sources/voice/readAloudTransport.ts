@@ -123,16 +123,24 @@ export type TransportEffect =
  * gesture or a new state cannot be added without landing a line here, in front
  * of a reviewer.
  *
- * THE TAP KEEPS ITS MEANING. It is on/off and nothing else, including from
- * paused: a tap while paused turns read-aloud OFF. Anything cleverer would
- * give one control two axes on the same gesture, and it would leave him with
- * no way to get out of paused except by finding the gesture that made it.
+ * THE TAP IS THE PLAY BUTTON (DROVE-327). Off it starts, reading it stops,
+ * and PAUSED IT RESUMES. Clay, from his phone, after two tickets had this
+ * cell the other way: "if it's paused and I single tap it should unpause
+ * not end the reading. To go into pause though you hold it in."
  *
- * THE LONG PRESS IS PAUSE AND RESUME WHILE READ-ALOUD IS ON, and boss mode
- * while it is off (DROVE-236). It still never starts reading: starting is the
- * tap's job, and a long press that started reading would be a second way to
- * start, with no position to hold, which is the confusion DROVE-233 existed to
- * end.
+ * The argument the old cell made was that a tap is on/off and nothing else,
+ * so a tap that resumed would give one control two axes on the same gesture.
+ * That is true of a switch and false of a player, and this is a player: the
+ * cheapest gesture on the button is the one that makes it talk, whatever
+ * state it is in, the way every audio app on the phone works. What a tap
+ * never does is pause, because the hold owns that.
+ *
+ * THE LONG PRESS IS PAUSE WHILE READING, OFF WHILE PAUSED, and boss mode
+ * while off (DROVE-236). Pause and off both live on the hold, which is
+ * what keeps the tap free to mean "read". A hold never starts reading:
+ * starting is the tap's job, and a hold that started reading would be a
+ * second way to start, with no position to hold, which is the confusion
+ * DROVE-233 existed to end.
  *
  * The `off` cell used to be `nothing`. Clay collapsed the waveform and the
  * speaker into one control and gave that cell a job:
@@ -140,10 +148,10 @@ export type TransportEffect =
  *     state     single press        long press
  *     normal    reading mode on     boss mode
  *     reading   back to normal      pause
+ *     paused    resume              back to normal          (DROVE-327)
  *
- * That is his table verbatim, and `paused` is the row it does not write out:
- * paused IS reading with a place held, so its tap turns read-aloud off like
- * any other on-state, and its long press is the way back out.
+ * The first two rows are his table verbatim (DROVE-236); the third is the
+ * row he wrote from the phone when the button got it wrong.
  *
  * BOSS MODE IS NOT READ-ALOUD, and putting it here is a claim worth defending.
  * It earns the cell because the control is now one audio-out button and this
@@ -171,11 +179,16 @@ export function transportEffect(
 ): TransportEffect {
     switch (gesture) {
         case 'tap':
-            return state === 'off' ? 'turn-on' : 'turn-off';
+            switch (state) {
+                case 'off': return 'turn-on';
+                case 'paused': return 'resume';
+                case 'reading': return 'turn-off';
+            }
+            break;
         case 'long-press':
             switch (state) {
                 case 'off': return 'boss-mode';
-                case 'paused': return 'resume';
+                case 'paused': return 'turn-off';
                 case 'reading': return 'pause';
             }
             break;

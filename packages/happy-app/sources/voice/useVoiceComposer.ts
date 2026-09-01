@@ -28,7 +28,8 @@ import {
     type MicGestureEvent,
 } from './micButton';
 import { dictationBlock, unknownBuild } from './dictationCapability';
-import { readAloudTransport, transportEffect, type TransportEffect } from './readAloudTransport';
+import type { TransportEffect } from './readAloudTransport';
+import { audioOutRow, pressAudioOut } from './audioOutPress';
 import { registerDictationSurface } from './dictationSurface';
 
 /**
@@ -83,7 +84,16 @@ export interface VoiceComposerOptions {
 
 export interface VoiceComposerState {
     readAloudEnabled?: boolean;
-    onReadAloudToggle?: () => void;
+    /**
+     * The tap on the one audio-out button (DROVE-327).
+     *
+     * Start from off, stop while reading, RESUME from paused. It goes through
+     * the transport table like the long press does and returns what the table
+     * chose, so the composer can say it. It used to be `onReadAloudToggle`, a
+     * bare flip of this session's switch that never asked the table — which is
+     * how a tap on a paused reader turned it off.
+     */
+    onAudioOutPress?: () => TransportEffect;
     /** On and holding its place (DROVE-233). Only ever true beside `readAloudEnabled`. */
     readAloudPaused?: boolean;
     /**
@@ -166,12 +176,15 @@ export function useVoiceComposer(options: VoiceComposerOptions): VoiceComposerSt
         React.useCallback(() => readAloud.readingStateOf(sessionId), [sessionId]),
         React.useCallback(() => readAloud.readingStateOf(sessionId), [sessionId]),
     );
-    const readAloudEnabled = readingState !== 'off';
     // Amber covers both ways of holding a place: HIS pause, and the yield to a
     // session that took the voice (DROVE-297). Both are "on, not speaking,
     // keeping its sentence", which is exactly what the amber face says, so the
-    // capsule needs no fifth state to tell the truth here.
-    const readAloudPaused = readingState === 'paused' || readingState === 'yielded';
+    // capsule needs no fifth state to tell the truth here. The fold is
+    // `audioOutRow`'s, the same one the two presses below read, so the face
+    // drawn and the row pressed cannot come apart (DROVE-327).
+    const audioOutState = audioOutRow(readingState);
+    const readAloudEnabled = audioOutState !== 'off';
+    const readAloudPaused = audioOutState === 'paused';
 
     // The callbacks change identity with the screen; the capture does not.
     // Refs keep the one controller pointed at the current ones.
@@ -418,20 +431,29 @@ export function useVoiceComposer(options: VoiceComposerOptions): VoiceComposerSt
     }, [capture, clearHoldTimer]);
 
     /**
-     * The tap: THIS SESSION'S reading, on or off (DROVE-297).
+     * The tap: start, stop, or RESUME this session's reading (DROVE-297,
+     * DROVE-327).
      *
-     * It used to write the persisted global, which is why turning it on in one
-     * session turned it on in every other one and walking into any of them took
-     * the voice. Straight at the reader now, which is also what routes it
-     * through the one take-the-voice rule: switching this session on pauses
-     * whoever was speaking, at their sentence.
+     * Through the transport table, which it never was: `onReadAloudToggle`
+     * flipped `setSessionEnabled(sessionId, !enabled)` directly, and paused is
+     * enabled, so a tap on a paused reader switched it off and threw the
+     * position away. Clay: "if it's paused and I single tap it should unpause
+     * not end the reading." `pressAudioOut` reads the row this button DRAWS
+     * and does what the table says there.
+     *
+     * Still straight at the reader and still this session's own switch: it
+     * used to write the persisted global, which is why turning it on in one
+     * session turned it on in every other one and walking into any of them
+     * took the voice. Switching this session on still goes through the one
+     * take-the-voice rule and pauses whoever was speaking, at their sentence.
      */
-    const onReadAloudToggle = React.useCallback(() => {
-        readAloud.setSessionEnabled(sessionId, !readAloudEnabled);
-    }, [sessionId, readAloudEnabled]);
+    const onAudioOutPress = React.useCallback((): TransportEffect => {
+        return pressAudioOut(readAloud, sessionId, 'tap');
+    }, [sessionId]);
 
     /**
-     * The long press (DROVE-233).
+     * The long press (DROVE-233): pause while reading, off from paused
+     * (DROVE-327), boss mode from off (DROVE-236).
      *
      * Straight at the reader rather than through the local setting, and that
      * is the point: `localSettings.readAloudEnabled` is persisted and survives
@@ -443,27 +465,19 @@ export function useVoiceComposer(options: VoiceComposerOptions): VoiceComposerSt
      * phone that wakes up armed to read four sessions is that same failure
      * with more voices.
      *
-     * It drives THE VOICE, not this screen. The transport is one state that
-     * four surfaces share (DROVE-233), so a long press here while another
-     * session has the voice pauses the voice — which is what a transport
-     * control means everywhere else on the phone, and what the lock screen and
-     * the headphone squeeze already do from outside any session at all.
+     * IT READS THE ROW THIS BUTTON DRAWS, not the voice's state (DROVE-327).
+     * The two are the same whenever the session on screen holds the voice,
+     * which is nearly always. They differ when a terminal or a headphone press
+     * has moved the voice to another session: the button is amber then, and a
+     * hold that read the voice would have acted on a session he was not
+     * looking at while the face in front of him said otherwise.
      */
     const onAudioOutLongPress = React.useCallback((): TransportEffect => {
-        const effect = transportEffect(
-            'long-press',
-            readAloudTransport(readAloud.isEnabled, readAloud.isPaused),
-        );
-        if (effect === 'pause') {
-            readAloud.setPaused(true);
-        } else if (effect === 'resume') {
-            readAloud.setPaused(false);
-        }
         // `boss-mode` is returned untouched (DROVE-236). Read-aloud is off in
         // that cell, so there is nothing here to do with it, and the composer
         // starts the call.
-        return effect;
-    }, []);
+        return pressAudioOut(readAloud, sessionId, 'long-press');
+    }, [sessionId]);
 
     /**
      * May this press move the gesture at all? Checked before any state moves,
@@ -577,7 +591,7 @@ export function useVoiceComposer(options: VoiceComposerOptions): VoiceComposerSt
 
     return {
         readAloudEnabled: offersReadAloud ? readAloudEnabled : undefined,
-        onReadAloudToggle: offersReadAloud ? onReadAloudToggle : undefined,
+        onAudioOutPress: offersReadAloud ? onAudioOutPress : undefined,
         readAloudPaused: offersReadAloud ? readAloudPaused : undefined,
         onAudioOutLongPress: offersReadAloud ? onAudioOutLongPress : undefined,
         onTalkPressIn: offersDictation ? onTalkPressIn : undefined,
