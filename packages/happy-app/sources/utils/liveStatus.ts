@@ -31,13 +31,13 @@ export type LiveStatusCompaction = NonNullable<LiveStatus['compacting']>;
 /**
  * How long a snapshot may sit before we stop drawing timers off it.
  *
- * The CLI republishes whenever anything moves and, at the very least, the
- * token counts of a running agent move constantly. A gap this wide means the
- * CLI stopped talking — the process died, the phone lost the socket — and a
- * timer that keeps counting past that is a lie dressed as live data. Same
- * argument as the wrist's own staleness check.
+ * The number and its reasoning moved to `@slopus/happy-wire` with the dot's
+ * vocabulary (DROVE-247), because `DISCONNECT_RECENT_MS` is defined as this
+ * value and happy-cli now resolves the dot too. Re-exported from its old home
+ * so every caller and both specs keep the import they had.
  */
-export const LIVE_STATUS_STALE_MS = 120_000;
+import { LIVE_STATUS_STALE_MS } from '@slopus/happy-wire';
+export { LIVE_STATUS_STALE_MS };
 
 /**
  * What the main thread is called when no tool names it: THINKING (DROVE-244).
