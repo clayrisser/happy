@@ -14,6 +14,7 @@ import { RpcHandlerManager } from './rpc/RpcHandlerManager';
 import { registerDroverPolicyHandler } from '@/drover/flip/policyRpc';
 import { registerListWorktreesHandler } from '@/daemon/listWorktrees';
 import { registerMachineAccountsHandlers } from '@/drover/machineAccounts';
+import { registerMachineMcpsHandlers } from '@/drover/machineMcps';
 import { registerDroverDemoPushHandler } from '@/drover/demo';
 import { PushNotificationClient } from './pushNotifications';
 import { detectCLIAvailability, CLIAvailability } from '@/utils/detectCLI';
@@ -158,6 +159,12 @@ export class ApiMachineClient {
         // reason: an account belongs to the machine, not to a session, and the
         // Accounts screen has to answer with nothing running.
         registerMachineAccountsHandlers(this.rpcHandlerManager);
+
+        // What MCP servers each harness on this machine is configured with
+        // (DROVE-274). On the daemon for the third time and the same reason —
+        // MCP config belongs to the machine, and Claude's is per ACCOUNT, so
+        // it sits beside the accounts handler that already answers for those.
+        registerMachineMcpsHandlers(this.rpcHandlerManager);
         // The channel demo's test push (DROVE-75). On the daemon for the same
         // reason the policy handler is: the phone wants to prove the push path
         // while nothing is running. Its own push client rather than the

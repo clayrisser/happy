@@ -80,6 +80,9 @@ import {
     type PendingAccountLogin,
 } from '@/sync/machineAccountsFlow';
 import { DroverAccountLoginBody } from '@/components/tools/views/DroverAccountLoginBody';
+import { MachineMcpRows } from '@/components/MachineMcpRows';
+import { machineDroverMcps, type MachineMcpsResult } from '@/sync/machineMcps';
+import { mcpSummaryLine } from '@/sync/mcpText';
 
 /** How often a machine with a login in flight is asked again. */
 const watchPollMs = 4_000;
@@ -98,6 +101,17 @@ const watchTickMs = 1_000;
 
 type Loaded = { loading: boolean; result: MachineAccountsResult | null };
 
+/**
+ * A machine's MCP report, held beside its accounts (DROVE-274).
+ *
+ * Its own slot rather than a field on `Loaded`, because the two are fetched on
+ * different schedules and for different reasons. The account list is POLLED
+ * while a login is in flight; the MCP report is read ONCE when the screen
+ * opens, because it is config and config does not move on its own. Folding
+ * them together would put a file read on a four-second timer for nothing.
+ */
+type LoadedMcps = { loading: boolean; result: MachineMcpsResult | null };
+
 function machineName(machine: { id: string; metadata?: { displayName?: string; host?: string } | null }): string {
     return machine.metadata?.displayName || machine.metadata?.host || machine.id.substring(0, 8);
 }
@@ -108,6 +122,11 @@ export default function AccountsScreen() {
     const [phases, setPhases] = React.useState<Record<string, AddAccountPhase>>({});
     const [refreshing, setRefreshing] = React.useState(false);
     const [busyRemove, setBusyRemove] = React.useState<string | null>(null);
+    const [mcps, setMcps] = React.useState<Record<string, LoadedMcps>>({});
+    // Which harness section is open, keyed `machineId:harness`. Collapsed by
+    // default and not remembered between visits: forty rows is a thing you go
+    // and look at, not a thing you want waiting for you.
+    const [openMcp, setOpenMcp] = React.useState<Record<string, boolean>>({});
 
     /**
      * The pending login cards, as a STABLE key.
@@ -156,10 +175,29 @@ export default function AccountsScreen() {
         return result;
     }, [dispatch]);
 
+    /**
+     * Read that machine's MCP config once.
+     *
+     * No polling and no push, deliberately: this is what is in four config
+     * files, and it changes when somebody edits one. The row says when it was
+     * read so the screen is honest about that rather than implying it is live,
+     * and pull-to-refresh is how you ask again.
+     */
+    const loadMcps = React.useCallback(async (machineId: string) => {
+        setMcps((prev) => ({ ...prev, [machineId]: { loading: true, result: prev[machineId]?.result ?? null } }));
+        const result = await machineDroverMcps(machineId);
+        setMcps((prev) => ({ ...prev, [machineId]: { loading: false, result } }));
+        return result;
+    }, []);
+
     const machineIds = machines.map((m) => m.id).join(',');
     React.useEffect(() => {
         for (const id of machineIds ? machineIds.split(',') : []) void load(id);
     }, [machineIds, load]);
+
+    React.useEffect(() => {
+        for (const id of machineIds ? machineIds.split(',') : []) void loadMcps(id);
+    }, [machineIds, loadMcps]);
 
     /**
      * The card for a machine, or null. Only one with a real URL counts, and the
@@ -245,9 +283,9 @@ export default function AccountsScreen() {
 
     const refresh = React.useCallback(async () => {
         setRefreshing(true);
-        await Promise.all(machines.map((m) => load(m.id)));
+        await Promise.all(machines.flatMap((m) => [load(m.id), loadMcps(m.id)]));
         setRefreshing(false);
-    }, [machineIds, load]);
+    }, [machineIds, load, loadMcps]);
 
     /**
      * Start a login on that machine. Nothing is asked first (DROVE-212).
@@ -338,9 +376,48 @@ export default function AccountsScreen() {
                     const status = addAccountStatus(phase);
                     const card = cardFor(machine.id);
                     const online = machine.active;
+                    const mcpState = mcps[machine.id];
+                    const report = mcpState?.result?.ok ? mcpState.result.report : null;
+                    // Claude's section is the group that already exists, so its
+                    // MCP rows go INSIDE it — one heading per harness, not two
+                    // reading the same words. Every other harness gets its own
+                    // group below, which is the first time this screen has had
+                    // a heading for them at all.
+                    const claudeMcp = report?.harnesses.find((h) => h.harness === 'claude') ?? null;
+                    const otherMcp = report?.harnesses.filter((h) => h.harness !== 'claude') ?? [];
+                    const mcpRow = (harness: NonNullable<typeof claudeMcp>) => (
+                        <MachineMcpRows
+                            harness={harness}
+                            readAt={report!.readAt}
+                            expanded={!!openMcp[`${machine.id}:${harness.harness}`]}
+                            onToggle={() => setOpenMcp((prev) => ({
+                                ...prev,
+                                [`${machine.id}:${harness.harness}`]: !prev[`${machine.id}:${harness.harness}`],
+                            }))}
+                        />
+                    );
+                    // One row, used by every harness section, so a machine that
+                    // cannot be read says the same thing under each heading
+                    // rather than three of them silently showing nothing.
+                    const mcpProblem = (
+                        <>
+                            {mcpState?.loading && !mcpState.result && (
+                                <Item title="Reading this machine’s MCP config…" showChevron={false} loading />
+                            )}
+                            {mcpState?.result && !mcpState.result.ok && (
+                                <Item
+                                    title="Could not read the MCP config"
+                                    subtitle={mcpState.result.error}
+                                    subtitleLines={0}
+                                    icon={<Ionicons name="warning-outline" size={29} color="#FF9500" />}
+                                    showChevron={false}
+                                />
+                            )}
+                        </>
+                    );
                     return (
+                        <React.Fragment key={machine.id}>
                         <ItemGroup
-                            key={machine.id}
                             title={`${machineName(machine)} · Claude`}
                             footer={online
                                 ? 'These accounts are logged in on this machine and only exist here.'
@@ -462,7 +539,43 @@ export default function AccountsScreen() {
                                 disabled={!online || addAccountBusy(phase)}
                                 onPress={() => void addAccount(machine.id, accounts.map((a) => a.name))}
                             />
+
+                            {/*
+                              * Claude's MCP servers, under Claude's own heading
+                              * (DROVE-274). Per ACCOUNT, which is why they are
+                              * here and not on their own: the accounts are
+                              * right above, and the thing worth seeing is
+                              * whether they all still carry the same servers.
+                              */}
+                            {mcpProblem}
+                            {claudeMcp && mcpRow(claudeMcp)}
                         </ItemGroup>
+
+                        {/*
+                          * A heading per harness, which is what Clay asked for:
+                          * "under each harness you see the MCPs". Cursor, Codex
+                          * and OpenCode keep ONE config file each rather than
+                          * one per account, so there is nothing above them to
+                          * belong to and the group is the MCP list itself.
+                          *
+                          * A harness with nothing configured still gets its
+                          * heading and says none. Dropping the section would
+                          * read as "this harness cannot have MCPs", which is a
+                          * different and wrong claim — and it is the claim that
+                          * would hide a config file that had gone missing.
+                          */}
+                        {otherMcp.map((harness) => (
+                            <ItemGroup
+                                key={harness.harness}
+                                title={`${machineName(machine)} · ${harness.label}`}
+                                footer={harness.configured
+                                    ? `Configured in one file on this machine, not per account. ${mcpSummaryLine(harness)}.`
+                                    : 'Read-only here. Configuring MCP servers from the phone is not built yet.'}
+                            >
+                                {mcpRow(harness)}
+                            </ItemGroup>
+                        ))}
+                        </React.Fragment>
                     );
                 })}
 
