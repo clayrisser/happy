@@ -55,7 +55,11 @@ import type { ReadAloudDetourSentence } from './readAloud';
  */
 export interface ReadAloudTapTarget {
     readonly isEnabled: boolean;
+    /** He paused it and it is holding its place (DROVE-233). */
+    readonly isPaused: boolean;
     readonly focusedSessionId: string | null;
+    /** A tap is an instruction to read, so it lifts a pause (DROVE-275). */
+    setPaused(paused: boolean): void;
     seekTo(createdAt: number): void;
     /** True when the tapped sentence was found in the queue (DROVE-163). */
     seekToSentence(messageId: string, sentence: string): boolean;
@@ -70,6 +74,34 @@ function steers(target: ReadAloudTapTarget, sessionId: string): boolean {
     return true;
 }
 
+/**
+ * A tap on a sentence LIFTS A PAUSE (DROVE-275).
+ *
+ * What it did before is the bug, and it was silent, which is why it survived:
+ * `steers` asked whether read-aloud was ON and never whether it was PAUSED, so
+ * a double tap while paused ran the whole seek — cleared `spoken` from the
+ * tapped sentence on, moved the cursor, cut the utterance — and then hit
+ * `pump`, which returns immediately while paused. Nothing was said. The
+ * gesture reported success, the tap was banked as used, and the place he had
+ * paused on was gone. Two deliberate taps, no sound, and a lost position.
+ *
+ * Resuming is the answer rather than refusing, because it is what the gesture
+ * MEANS. DROVE-146 settled that a deliberate tap is the one route to the
+ * playhead; a tap is therefore "read from HERE", and a player that seeks on a
+ * tap and then sits there paused is not a player anyone recognises. Every
+ * audio app in the world starts playing when you touch a chapter.
+ *
+ * AFTER THE SEEK, never before. `setPaused(false)` pumps, so lifting the pause
+ * first would speak a sentence from the OLD cursor before the seek moved it —
+ * a word or two of the wrong place on every tap. Seeking first leaves `pump`
+ * to no-op against the pause, and the resume then starts at the sentence he
+ * actually touched.
+ */
+function resumeForTap(target: ReadAloudTapTarget): void {
+    if (!target.isPaused) return;
+    target.setPaused(false);
+}
+
 /** True when the tap moved reading. Resolves to the block (DROVE-146). */
 export function readFromHere(
     target: ReadAloudTapTarget,
@@ -78,6 +110,7 @@ export function readFromHere(
 ): boolean {
     if (!steers(target, sessionId)) return false;
     target.seekTo(createdAt);
+    resumeForTap(target);
     return true;
 }
 
@@ -98,8 +131,12 @@ export function readSentenceFromHere(
     createdAt: number,
 ): boolean {
     if (!steers(target, sessionId)) return false;
-    if (target.seekToSentence(messageId, sentence)) return true;
+    if (target.seekToSentence(messageId, sentence)) {
+        resumeForTap(target);
+        return true;
+    }
     target.seekTo(createdAt);
+    resumeForTap(target);
     return true;
 }
 
@@ -120,5 +157,10 @@ export function readDetourFromHere(
 ): boolean {
     if (!steers(target, sessionId)) return false;
     if (sentences.length === 0) return false;
-    return target.readDetour(sentences);
+    if (!target.readDetour(sentences)) return false;
+    // Same rule as the session's tap, and the same reason: a detour the reader
+    // takes and then does not speak is the paused seek's silence wearing a
+    // different name (DROVE-275).
+    resumeForTap(target);
+    return true;
 }

@@ -15,6 +15,8 @@ import type { ReadAloudDetourSentence } from './readAloud';
 interface Fake extends ReadAloudTapTarget {
     /** createdAts the block-level seek was asked for. */
     sought: number[];
+    /** What `setPaused` was asked for, in order (DROVE-275). */
+    pauses: boolean[];
     /** (messageId, sentence) pairs the sentence-level seek was asked for. */
     soughtSentences: [string, string][];
     /** Borrowed transcripts the reader was handed (DROVE-195). */
@@ -25,10 +27,13 @@ function target(over: Partial<ReadAloudTapTarget> & { hasSentence?: boolean } = 
     const sought: number[] = [];
     const soughtSentences: [string, string][] = [];
     const detours: readonly ReadAloudDetourSentence[][] = [];
+    const pauses: boolean[] = [];
     const { hasSentence = true, ...rest } = over;
     return {
         isEnabled: true,
+        isPaused: false,
         focusedSessionId: 's1',
+        setPaused(paused: boolean) { pauses.push(paused); },
         seekTo(createdAt: number) { sought.push(createdAt); },
         seekToSentence(messageId: string, sentence: string) {
             soughtSentences.push([messageId, sentence]);
@@ -41,6 +46,7 @@ function target(over: Partial<ReadAloudTapTarget> & { hasSentence?: boolean } = 
         sought,
         soughtSentences,
         detours,
+        pauses,
         ...rest,
     };
 }
@@ -141,5 +147,63 @@ describe('double tap a sentence on a subagent screen (DROVE-195)', () => {
         expect(readDetourFromHere(elsewhere, 's1', [line('One.')])).toBe(false);
         expect(off.detours).toEqual([]);
         expect(elsewhere.detours).toEqual([]);
+    });
+});
+
+/**
+ * A tap while PAUSED (DROVE-275).
+ *
+ * The bug this pins was silent in both senses. `steers` asked whether
+ * read-aloud was on and never whether it was paused, so two deliberate taps
+ * ran the entire seek and then died against the pause inside `pump`: no
+ * sound, a `true` return, the tap banked as used, and the position he had
+ * paused on cleared on the way past. Nothing anywhere said so.
+ *
+ * The ORDER is the half worth guarding. `setPaused(false)` pumps, so a resume
+ * before the seek speaks from the old cursor — a word or two of the wrong
+ * sentence every time a paused tap lands. These assert the seek is asked for
+ * first and the resume second.
+ */
+describe('a tap lifts a pause, after it has moved the read head (DROVE-275)', () => {
+    it('resumes when the tapped sentence is in the queue', () => {
+        const it1 = target({ isPaused: true });
+        expect(readSentenceFromHere(it1, 's1', 'm1', 'A sentence.', 42)).toBe(true);
+        expect(it1.soughtSentences).toEqual([['m1', 'A sentence.']]);
+        expect(it1.pauses).toEqual([false]);
+    });
+
+    it('resumes on the block-level fallback too, so a missed hit test still speaks', () => {
+        const it1 = target({ isPaused: true, hasSentence: false });
+        expect(readSentenceFromHere(it1, 's1', 'm1', 'A sentence.', 42)).toBe(true);
+        expect(it1.sought).toEqual([42]);
+        expect(it1.pauses).toEqual([false]);
+    });
+
+    it('resumes a detour, which pumps against the same pause (DROVE-195)', () => {
+        const it1 = target({ isPaused: true });
+        expect(readDetourFromHere(it1, 's1', [{ messageId: 'm1', text: 'A.', createdAt: 1 }])).toBe(true);
+        expect(it1.pauses).toEqual([false]);
+    });
+
+    it('leaves a reading reader alone, so an ordinary tap costs no transport call', () => {
+        const it1 = target();
+        expect(readSentenceFromHere(it1, 's1', 'm1', 'A sentence.', 42)).toBe(true);
+        expect(it1.pauses).toEqual([]);
+    });
+
+    it('does not resume a tap the guards refused, so a background pane cannot start the voice', () => {
+        const off = target({ isPaused: true, isEnabled: false });
+        expect(readSentenceFromHere(off, 's1', 'm1', 'A sentence.', 42)).toBe(false);
+        expect(off.pauses).toEqual([]);
+
+        const elsewhere = target({ isPaused: true, focusedSessionId: 's2' });
+        expect(readSentenceFromHere(elsewhere, 's1', 'm1', 'A sentence.', 42)).toBe(false);
+        expect(elsewhere.pauses).toEqual([]);
+    });
+
+    it('does not resume a detour with nothing under the finger', () => {
+        const it1 = target({ isPaused: true });
+        expect(readDetourFromHere(it1, 's1', [])).toBe(false);
+        expect(it1.pauses).toEqual([]);
     });
 });

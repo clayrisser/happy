@@ -72,15 +72,52 @@ describe('pause and resume', () => {
     });
 
     it('resumes at the sentence it stopped on, not at the top of the reply', async () => {
-        reader.onMessages('s1', [prose('m1', 'One. Two. Three. Four.', 1)]);
+        // THIS TEST WAS VACUOUS UNTIL DROVE-275, and it is worth saying why
+        // rather than quietly fixing it. It read two replies straight through
+        // and never called `setPaused` once, under a comment that claimed "a
+        // second reply, paused after its first sentence". It asserted that
+        // ordinary reading works, wearing the name of the resume position, and
+        // it would have passed with pause deleted from the reader outright.
+        //
+        // That is the exact shape of the thing this ticket exists to end: a
+        // player feature with a green test beside it that Clay had never once
+        // seen work. A test that cannot fail is worse than no test, because it
+        // is counted.
+        //
+        // The engine gates here so a pause can land BETWEEN two sentences of
+        // one reply, which the shared `reader` above cannot do — its `speak`
+        // resolves immediately, so a whole reply is spoken before any pause
+        // could be asked for.
+        const gate: { release: (() => void) | null } = { release: null };
+        const held = new ReadAloudReader({
+            speak(text: string) {
+                said.push(text);
+                return new Promise<void>((resolve) => { gate.release = resolve; });
+            },
+            stop() { stops += 1; },
+        });
+        held.setEnabled(true);
+        held.focus('s1');
+        held.onMessages('s1', [prose('m1', 'One. Two. Three. Four.', 1)]);
         await settle();
-        expect(said).toEqual(['One.', 'Two.', 'Three.', 'Four.']);
+        expect(said).toEqual(['One.']);
 
-        // A second reply, paused after its first sentence.
-        said = [];
-        reader.onMessages('s1', [prose('m2', 'Five. Six. Seven.', 2)]);
+        // Stopped on the SECOND sentence, which is the position both failure
+        // modes miss in opposite directions: a resume that restarted the reply
+        // would say 'One.' twice, and one that behaved like a START would jump
+        // to the newest material and skip 'Three.'.
+        gate.release?.();
         await settle();
-        expect(said).toEqual(['Five.', 'Six.', 'Seven.']);
+        expect(said).toEqual(['One.', 'Two.']);
+
+        held.setPaused(true);
+        gate.release?.();
+        await settle();
+        expect(said).toEqual(['One.', 'Two.']);
+
+        held.setPaused(false);
+        for (let i = 0; i < 12; i++) { gate.release?.(); await settle(); }
+        expect(said).toEqual(['One.', 'Two.', 'Three.', 'Four.']);
     });
 
     it('THE MEASUREMENT: a resume re-reads nothing and skips nothing', async () => {
