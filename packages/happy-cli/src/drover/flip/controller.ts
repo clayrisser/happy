@@ -34,6 +34,7 @@ import {
     currentAccount,
     defaultCooldownMs,
     explicitExhaustion,
+    isBackdoorAccount,
     modelDemand,
     pickTarget,
     readLedger,
@@ -310,6 +311,17 @@ export class FlipController {
     private seenModel: string | undefined
     /** What a limit notice said had run out, when it named a model. */
     private noticedFamily: string | undefined
+
+    /**
+     * The back door has already said it is the back door (DROVE-333).
+     *
+     * A limit notice arrives on every turn that hits the wall, and the answer
+     * on this account never changes — it stays put. Said once and then it is
+     * noise on the surface Clay is actually reading. Per SESSION, so a flip he
+     * makes by hand and a later limit on the account he lands on both speak up
+     * again.
+     */
+    private saidBackdoor = false
 
     /**
      * The Account switching policy, cached from the bus (DROVE-187).
@@ -624,12 +636,44 @@ export class FlipController {
         // means the whole account is out, which is what this always recorded.
         if (current) setCooldown(current.name, until, hit.quote, hit.family ?? undefined)
         logger.debug(`[flip] usage limit detected${hit.family ? ` (${hit.family})` : ''}: ${hit.quote}`)
-        this.announce(
-            `Cattle Drover: ${current?.name ?? 'this account'} hit its ` +
-                `${hit.family ? `${familyLabel(hit.family)} ` : 'usage '}limit` +
-                (hit.resetsAt ? `, resets ${new Date(until).toLocaleTimeString()}` : '') +
-                '. Flipping.',
-        )
+        const limit =
+            `${current?.name ?? 'this account'} hit its ` +
+            `${hit.family ? `${familyLabel(hit.family)} ` : 'usage '}limit` +
+            (hit.resetsAt ? `, resets ${new Date(until).toLocaleTimeString()}` : '')
+
+        // THE BACK DOOR STOPS HERE (DROVE-333). Clay: "when you're in the main
+        // account you don't do any magic flipping / auto flipping. When I get
+        // stuck I'll switch to the main account and from there manually log
+        // into the terminal."
+        //
+        // Refused at the DETECTION, not in apply(), because everything between
+        // the two is already a cost: `request` stops the child, and the
+        // sentence above would have promised a flip that apply is about to
+        // refuse. Nothing moves, nothing is downgraded, nothing parks — so
+        // none of the "still parked, 40m to go" heartbeats either. The session
+        // simply carries on where it is, which is the whole point of the room
+        // he keeps free.
+        //
+        // The cooldown is still written, one line up. That is a FACT about the
+        // account and every other session reads it; suppressing it would make
+        // the back door look like it had headroom to a picker on another pane.
+        if (current && isBackdoorAccount(current)) {
+            logger.debug(`[flip] on the back door (${current.name}) — no automatic flip`)
+            // Once per session. A limit notice arrives on every turn that hits
+            // the wall, and the second telling of a fact that has not changed
+            // is noise on the one surface he is reading.
+            if (!this.saidBackdoor) {
+                this.saidBackdoor = true
+                this.announce(
+                    `Cattle Drover: ${limit}. Staying put: ${current.name} is the back door, so ` +
+                        'nothing flips, downgrades or parks it automatically. Move by hand with ' +
+                        '`/flip <account>` or drop a rung with `/model`.',
+                )
+            }
+            return
+        }
+
+        this.announce(`Cattle Drover: ${limit}. Flipping.`)
         this.request({ account: null, reason: 'usage limit', by: 'auto' })
     }
 
@@ -946,6 +990,33 @@ export class FlipController {
         // alt` do nothing on a setting Clay forgot he had moved.
         const auto = !req.account
 
+        // THE BACK DOOR, BEFORE EVERY OTHER AUTOMATIC ANSWER (DROVE-333).
+        //
+        // A limit hit is caught earlier, in noteTranscriptMessage, so nothing
+        // is torn down for a flip that is not going to happen. This is the same
+        // rule for every OTHER way an automatic request reaches here: a bare
+        // `/flip` frame off the bus, the launcher's `cooldown expired` retry
+        // after a park, an `onLimitTimeout: auto` nobody answered. Each of them
+        // arrives with no account named, which is precisely the machine
+        // choosing, and on this account the machine does not choose.
+        //
+        // Above `policy === 'nothing'` and above the downgrade branch on
+        // purpose: no flip, no downgrade, no park, whatever the setting says.
+        // A downgrade is automatic too, and the back door is the room Clay
+        // keeps for getting a terminal exactly as he left it.
+        //
+        // `req.account` is what lets it through — `/flip main` and the phone's
+        // Switch name an account, so `auto` is false and this never sees them.
+        if (auto && from && isBackdoorAccount(from)) {
+            return {
+                kind: 'refused',
+                note:
+                    `Cattle Drover: staying on ${from.name} — it is the back door, so nothing ` +
+                    'flips, downgrades or parks it automatically. Move by hand with ' +
+                    '`/flip <account>` or drop a rung with `/model`.',
+            }
+        }
+
         // Nothing at all, and say which setting decided that. This is the one
         // value where the session genuinely stops, so it has to be unmistakable
         // rather than silent.
@@ -1082,6 +1153,14 @@ export class FlipController {
                   `${policySuffix(policy)}. Switch models with \`/model\` or the next turn hits the ` +
                   'same wall.'
                 : ''
+        // LANDING ON THE BACK DOOR SAYS SO (DROVE-333). The picker only offers
+        // it once nothing else has headroom for this model or any lower one, and
+        // a landing Clay does not see is how the account he keeps for getting a
+        // terminal gets spent by a flip at 4am.
+        const backdoorHint = choice.backdoorLastResort
+            ? ` ${target.name} is the back door and every other account is out of headroom, so this ` +
+              'is the last stop before parking. Nothing will flip off it automatically.'
+            : ''
         if (downgrade) this.pendingPick = { model: downgrade.model, effort: downgrade.effort }
 
         if (from && target.name === from.name) {
@@ -1192,7 +1271,8 @@ export class FlipController {
                           ? `, with ${stranded.length} subagent${stranded.length === 1 ? '' : 's'} to re-dispatch.`
                           : '.')
                     : `starting fresh in ${basename(this.cwd)} — nothing had been said yet.`) +
-                switchHint,
+                switchHint +
+                backdoorHint,
         }
     }
 

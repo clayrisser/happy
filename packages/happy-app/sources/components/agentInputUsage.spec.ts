@@ -942,6 +942,56 @@ describe('a stale account block', () => {
  * the word `stale` still reads as data. The honest answer is unknown, and
  * unknown has no bar.
  */
+describe('the back door on the composer sheet (DROVE-333)', () => {
+    /**
+     * The sheet the `Switch ›` button lives on, which is the surface DROVE-333
+     * shipped WITHOUT a label because its payload could not say which row was
+     * the back door. It can now: the CLI stamps `backdoor` on the snapshot.
+     *
+     * Clay reserved that account for the moment everything else is wedged. An
+     * automatic pick will not land there and will not move a session off it —
+     * so the one thing a reader of this sheet needs to know about the row is
+     * that the tap is the only way through it.
+     */
+    // Read a moment ago, both windows still open: the label is the ONLY thing
+    // this block is meant to be about, so nothing here is stale or expired.
+    const read = sep3;
+    const withBackdoor: DroverUsageLike = {
+        capturedAt: read,
+        accounts: [
+            {
+                name: 'alt', current: true, loggedIn: true, fetchedAt: read, headroom: 51, cooling: null,
+                limits: [{ kind: 'session', percent: 49, resetsAt: sep5, scope: null, family: null }],
+            },
+            {
+                name: 'main', current: false, loggedIn: true, backdoor: true, fetchedAt: read, headroom: 43, cooling: null,
+                limits: [{ kind: 'session', percent: 57, resetsAt: sep5, scope: null, family: null }],
+            },
+        ],
+    };
+
+    function blockFor(name: string) {
+        return resolveUsageStrip({ usageLimits: null, droverUsage: withBackdoor, droverAccount: 'alt' })
+            .usageBarGroups.find((g) => g.account === name)!;
+    }
+
+    it('says it in the same words the Settings rows use', () => {
+        // One string, two surfaces (utils/droverAccounts.ts). Two spellings of
+        // one fact on two screens is how it comes to look like two facts.
+        expect(blockFor('main').title).toBe('main \u00b7 43% left on Session \u00b7 backdoor \u00b7 manual flips only');
+    });
+
+    it('leaves every other heading alone', () => {
+        expect(blockFor('alt').title).not.toContain('backdoor');
+    });
+
+    it('keeps the block switchable, because BY HAND is the whole point of it', () => {
+        // The machine will not go through this door and Clay always can, so
+        // the one control that still works must stay on the row.
+        expect(blockFor('main').switchable).toBe(true);
+    });
+});
+
 describe('an expired window on the sheet', () => {
     const captured = 10_000;
     const expired: DroverUsageLike = {

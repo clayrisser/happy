@@ -35,6 +35,7 @@ import {
     coolingState,
     cooldownFamily,
     droverStateDir,
+    isBackdoorAccount,
     isClaudeAccount,
     isLoggedIn,
     isOnboarded,
@@ -148,6 +149,27 @@ export interface AccountUsageSnapshot {
     expiresInDays?: number | null
     /** The account this session is on. Exactly one row is, when any is. */
     current: boolean
+    /**
+     * THE BACK DOOR (DROVE-333) — the ambient login, plus every row sharing it.
+     *
+     * Clay reserved that account for the moment everything else is wedged: an
+     * automatic pick will not land there while anything else can take the work,
+     * and a session already there is not flipped, downgraded or parked off it.
+     * The rule itself is `isBackdoorAccount` in accounts.ts; this is only it,
+     * on the wire.
+     *
+     * ON THE WIRE BECAUSE THE COMPOSER SHEET COULD NOT WORK IT OUT. That sheet
+     * is where the `Switch ›` button lives, and its payload is this snapshot —
+     * which carried neither `ambient` nor `login`, so the one surface Clay taps
+     * to move a session was the one surface that could not say which row was
+     * the one the machine leaves alone. Settings › Accounts reads
+     * `MachineAccount`, which has both, and labelled itself already.
+     *
+     * Optional, and absent reads as NOT the back door: a snapshot from an older
+     * CLI never asked the question, and inventing a back door out of a missing
+     * field would put the wrong label on somebody's ordinary account.
+     */
+    backdoor?: boolean
     /** There is a credential here. NOT the same as "a session can start here". */
     loggedIn: boolean
     /**
@@ -318,6 +340,8 @@ function accountSnapshot(
     now: number,
     demand: ModelDemand,
     token: CursorTokenReading = cursorTokenMissing,
+    /** The whole registry, so a back-door twin is recognised (DROVE-333). */
+    all: DroverAccount[] = [a],
 ): AccountUsageSnapshot {
     // A CURSOR ROW IS ASKED NONE OF THE CLAUDE QUESTIONS (DROVE-270), because
     // none of them has an answer here. There is no config dir, so no usage
@@ -376,6 +400,10 @@ function accountSnapshot(
         tokenState: null,
         expiresInDays: null,
         current: a.name === current,
+        // The whole registry, not this row alone: a back-door TWIN is
+        // recognised by sharing the ambient row's login, so the comparison
+        // needs the list (DROVE-333).
+        ...(isBackdoorAccount(a, all) ? { backdoor: true } : {}),
         loggedIn: isLoggedIn(a),
         onboarded: isOnboarded(a),
         fetchedAt: cache?.fetchedAt ?? null,
@@ -416,7 +444,7 @@ export function usageSnapshot(
         capturedAt: now,
         modelFamily: demand.kind === 'family' ? demand.family : null,
         accounts: accounts.map((a) => accountSnapshot(
-            a, ledger, current, now, demand, tokens.get(a.name) ?? cursorTokenMissing,
+            a, ledger, current, now, demand, tokens.get(a.name) ?? cursorTokenMissing, accounts,
         )),
     }
 }

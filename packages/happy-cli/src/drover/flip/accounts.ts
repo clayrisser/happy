@@ -490,6 +490,40 @@ export function sameLoginAs(a: DroverAccount, accounts: DroverAccount[] = readAc
     return undefined
 }
 
+/**
+ * THE BACK DOOR (DROVE-333). Clay: "reserve the main account to be like a back
+ * door account: when you're in the main account you don't do any magic flipping
+ * / auto flipping. When I get stuck I'll switch to the main account and from
+ * there manually log into the terminal."
+ *
+ * So this account is the one the machinery leaves alone, in both directions:
+ * an automatic pick does not LAND here while anything else can take the work,
+ * and a session already here is not flipped, downgraded or parked off it. The
+ * policy half of that lives in cattle-drover's libexec/drover-flip-policy; this
+ * is the half a REAL limit reaches, because a real limit never gets as far as
+ * that script — the fork detects it and calls pickTarget itself (DROVE-4).
+ *
+ * It is the AMBIENT row — ~/.claude, the login every plain `claude` on this Mac
+ * uses — plus every row on the same claude.ai login, because `jamrizzi` is main
+ * under a second name and a flip there spends the same quota through a second
+ * door. Deliberately NOT the string "main": that would break the day Clay
+ * renames the row, and it would fire on somebody else's account called that.
+ *
+ * The same rule, and the same words, as the phone's `isBackdoorAccount`
+ * (happy-app sources/sync/machineAccountsFlow.ts). Two surfaces reading one
+ * fact; if they ever disagree the row Clay is looking at is not the row the
+ * picker is skipping.
+ */
+export function isBackdoorAccount(a: DroverAccount, accounts: DroverAccount[] = readAccounts()): boolean {
+    // A cursor row has no config dir and is never a flip target at all, so it
+    // cannot be the ambient login and must not be dragged in by an address.
+    if (!isClaudeAccount(a)) return false
+    if (a.ambient) return true
+    const ambient = accounts.find((b) => isClaudeAccount(b) && b.ambient)
+    if (!ambient) return false
+    return loginTwins(ambient, accounts).some((b) => b.name === a.name)
+}
+
 // --- what Claude Code already knows about headroom ---------------------------
 //
 // The cooldown ledger below is REACTIVE: it only knows about an account that
@@ -1227,6 +1261,18 @@ export type Pick =
            * the same model, and hits the same wall on its first turn.
            */
           withoutModel?: string
+          /**
+           * THE BACK DOOR, TAKEN BECAUSE THERE WAS NOTHING ELSE (DROVE-333).
+           *
+           * An automatic pick skips the back door while any other account can
+           * take the work. This flag is set on the one case where it takes it
+           * anyway — everything else is out of headroom for the model asked
+           * for and for every lower rung — and it is on the answer so the
+           * sentence can SAY so. Clay reserved that account to be somewhere he
+           * can always get a terminal; landing a session there silently is how
+           * he would find it spent.
+           */
+          backdoorLastResort?: true
       }
     | {
           kind: 'parked'
@@ -1302,16 +1348,70 @@ export function pickTarget(
     // and then park the session waiting for a limit that account never had.
     // "Cannot start" is two things (DROVE-246): no credential, and a config dir
     // that has never been through Claude Code's first run.
-    const usable = accounts.filter(canStartSession)
+    const startable = accounts.filter(canStartSession)
+    // THE BACK DOOR IS NOT AN AUTOMATIC DESTINATION (DROVE-333).
+    //
+    // This is the subtraction cattle-drover's flip-policy already makes, made
+    // again here because a REAL usage limit never reaches that script: the
+    // fork detects the limit and calls this function itself (DROVE-4), so
+    // without this the back door is ranked like any other row the moment it
+    // actually matters. `main` sat top of the registry with headroom and every
+    // limit-hit flip landed straight on it.
+    //
+    // Subtracted from the CHOICE and from nothing else. The rows stay in the
+    // registry, stay in `drover accounts`, stay in the tmux picker and the
+    // limit prompt, and stay flippable by hand — `wanted` above never reaches
+    // this line, which is what keeps `/flip main` and the phone's Switch
+    // working. What changes is only where the machine goes on its own.
+    const backdoor = startable.filter((a) => isBackdoorAccount(a, accounts))
+    const usable = startable.filter((a) => !backdoor.includes(a))
     // A twin of the current account is the same login (DROVE-21): moving
     // there changes nothing but the name and costs a relaunch, so it is no
     // more a target than the account we are on.
     const here = accounts.find((a) => a.name === current)
     const twins = new Set(here ? loginTwins(here, accounts).map((a) => a.name) : [])
-    const others = usable.filter((a) => a.name !== current && !twins.has(a.name))
-    if (others.length === 0) return { kind: 'none' }
+    const elsewhere = (rows: DroverAccount[]) => rows.filter((a) => a.name !== current && !twins.has(a.name))
+    const others = elsewhere(usable)
+    const backdoors = elsewhere(backdoor)
+    // Nothing above the back door and no back door either: there is genuinely
+    // nowhere to go, which is the `none` this always answered. With a back door
+    // still standing the answer is NOT none — it is either the last resort
+    // below or a park until that door opens, and saying "no account a session
+    // can start on" over a logged-in account would be a lie.
+    if (others.length === 0 && backdoors.length === 0) return { kind: 'none' }
 
     const wants = modelDemand(family)
+
+    /**
+     * The back door, and only when everything above it has run out.
+     *
+     * Asked in the same two steps the ordinary choice is: headroom for the
+     * model in use first, then — with a known family — headroom for anything
+     * at all, which is the rung a downgrade would use. Reached only after both
+     * of those passes came back empty for every other account, which is Clay's
+     * condition word for word: the picker lands here when nothing else has
+     * headroom for the requested model or its lower rungs.
+     *
+     * `onlyOption` and `backdoorLastResort` both ride on it so the sentence the
+     * session prints can say WHY it is on the back door. A silent landing is
+     * the failure mode: he keeps that account for the moment everything else
+     * is wedged, and it is no use to him spent by a flip he never saw.
+     */
+    const lastResort = (): Pick | null => {
+        const open =
+            backdoors.find((a) => coolingUntil(a, ledger, now, wants) === 0) ??
+            (wants.kind === 'family'
+                ? backdoors.find((a) => coolingUntil(a, ledger, now, anyModel) === 0)
+                : undefined)
+        if (!open) return null
+        return {
+            kind: 'account',
+            account: open,
+            onlyOption: true,
+            backdoorLastResort: true,
+            ...withoutModelOf(open, ledger, now, wants),
+        }
+    }
 
     // Headroom, not position. Registry order still decides BETWEEN accounts
     // that have headroom, but an account known to be out is skipped whether
@@ -1372,12 +1472,28 @@ export function pickTarget(
         deadline = anyModel
     }
 
+    // NOW the back door, and not one line earlier (DROVE-333). Every other
+    // account has failed both passes above — no headroom for the model in use,
+    // and none for any other model either — so the choice left is the back door
+    // or hours of nothing, and Clay's rule allows the back door there.
+    const opened = lastResort()
+    if (opened) return opened
+
     // Everything is cooling. Park until the soonest one comes back — including
     // the account we are on, which may well be the first to reset. The park is
     // measured against the LOOSEST demand that could still have been satisfied,
     // so we wake at the first moment any model is runnable anywhere rather than
     // sleeping through it waiting for one particular family.
-    const candidates = usable.map((a) => ({ a, ...coolingState(a, ledger, now, deadline) }))
+    //
+    // Over `startable`, back door included, because a park is a DEADLINE and
+    // not a landing (DROVE-333). The back door is the one place this session
+    // can still go once everything else is out, so sleeping through the hour it
+    // frees up would be parking past the answer. Landing on it is still the
+    // last resort above, which stamps itself; a back door that reaches this
+    // line has already failed that check, so `coolingState` puts it in the
+    // future and the zero-length-park escape below cannot hand it back
+    // unstamped.
+    const candidates = startable.map((a) => ({ a, ...coolingState(a, ledger, now, deadline) }))
     candidates.sort((x, y) => x.until - y.until)
     const soonest = candidates[0]
 
@@ -1501,7 +1617,11 @@ export function pickStartAccount(opts: {
                 via: 'picker',
                 note:
                     `${why} Starting on ${choice.account.name} instead` +
-                    (choice.withoutModel ? `, which is out of ${choice.withoutModel} too; switch models with /model` : ''),
+                    (choice.withoutModel ? `, which is out of ${choice.withoutModel} too; switch models with /model` : '') +
+                    // The back door names itself wherever a session lands on it
+                    // (DROVE-333): it is offered only when nothing else has
+                    // headroom, and a silent landing is how it gets spent.
+                    (choice.backdoorLastResort ? ' — the back door, because nothing else has headroom' : ''),
                 ...(choice.withoutModel ? { withoutModel: choice.withoutModel } : {}),
             }
         }
@@ -1558,7 +1678,11 @@ export function pickStartAccount(opts: {
             via: 'picker',
             note:
                 `on ${choice.account.name} — ${memory ? `${memory.name} has no login; ` : 'nothing remembered here; '}` +
-                (choice.onlyOption ? 'the only account with headroom' : 'the first account with headroom') +
+                (choice.backdoorLastResort
+                    ? 'the back door, because nothing else has headroom'
+                    : choice.onlyOption
+                        ? 'the only account with headroom'
+                        : 'the first account with headroom') +
                 (choice.withoutModel ? `, though it is out of ${choice.withoutModel}; switch models with /model` : ''),
             ...(choice.withoutModel ? { withoutModel: choice.withoutModel } : {}),
         }

@@ -24,22 +24,34 @@ import { carryTranscript, projectDirFor } from './transcript'
 import { parseFlipCommand } from './controller'
 
 let root: string
+/** The throwaway this file's HOME points at; see the beforeEach below. */
+let home: string
 let realHome: string | undefined
 
 beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), 'drover-flip-'))
+    // THE AMBIENT ACCOUNT MUST NOT BE CLAY'S OWN (DROVE-342).
+    //
+    // A registry row with no configDir is the AMBIENT one, and `accountConfigFile`
+    // resolves that to `~/.claude.json` — the real file, with Clay's real login
+    // and his real `cachedUsageUtilization`. So `records a limit hit against the
+    // account the unstamped session is on` read a live weekly_all at 100% and
+    // failed on `expect(isCooling('main')).toBe(false)`, which is the assertion
+    // doing its job over a fixture that was never a fixture. It failed or passed
+    // by whatever his quota happened to be that afternoon.
+    //
+    // DROVE-336's fence moves HAPPY_HOME_DIR, XDG_STATE_HOME and the two URLs;
+    // it deliberately does not move HOME, because HOME is where a great deal
+    // that is not state also lives. This file needs the ambient account to be a
+    // FIXTURE, so it moves HOME for itself and `writeAccounts` plants the
+    // ambient `.claude.json` in it. The assertion is unchanged and now measures
+    // something the test wrote.
+    home = join(root, 'home')
+    mkdirSync(join(home, '.claude'), { recursive: true })
+    realHome = process.env.HOME
+    process.env.HOME = home
     process.env.XDG_STATE_HOME = join(root, 'state')
     process.env.DROVER_ACCOUNTS = join(root, 'accounts.json')
-    // HOME is the throwaway too (DROVE-342). An AMBIENT registry row — one with
-    // no configDir, which is what `two()` below writes — resolves its login and
-    // its usage cache to join(homedir(), '.claude.json'), so on this machine the
-    // DROVE-31 case read Clay's REAL Claude usage record: `isCooling('main')`
-    // answered true whenever his main account happened to be at its limit and
-    // false the rest of the day. Same disease the DROVE-336 fence cures one
-    // variable over, so the cure is the same: point it at a throwaway and let
-    // writeAccounts plant the fixture record there.
-    realHome = process.env.HOME
-    process.env.HOME = root
     delete process.env.DROVER_FLIP_PROMPT
     delete process.env.DROVER_ACCOUNT
     delete process.env.CLAUDE_CONFIG_DIR
@@ -61,12 +73,15 @@ afterEach(() => {
 function writeAccounts(accounts: { name: string; configDir?: string }[]): void {
     writeFileSync(process.env.DROVER_ACCOUNTS!, JSON.stringify(accounts))
     for (const a of accounts) {
-        // No configDir is the AMBIENT account, and its login lives at
-        // ~/.claude.json rather than under a config dir. HOME is the throwaway
-        // above, so this writes the fixture that used to be Clay's real record.
-        const cfg = a.configDir ? join(a.configDir, '.claude.json') : join(homedir(), '.claude.json')
-        mkdirSync(dirname(cfg), { recursive: true })
-        writeFileSync(cfg, JSON.stringify({ hasCompletedOnboarding: true, oauthAccount: { emailAddress: `${a.name}@example.com` } }))
+        // NO configDir IS THE AMBIENT ROW, and it is logged in like every other
+        // one (DROVE-342). Its `.claude.json` is `~/.claude.json`, and `~` here
+        // is the throwaway HOME the beforeEach set — so this writes a fixture
+        // where the row used to borrow Clay's live login and live usage cache.
+        // Skipping it left the ambient account looking un-logged-in, which is a
+        // different machine from the one every one of these tests describes.
+        const config = a.configDir ? join(a.configDir, '.claude.json') : join(home, '.claude.json')
+        mkdirSync(dirname(config), { recursive: true })
+        writeFileSync(config, JSON.stringify({ hasCompletedOnboarding: true, oauthAccount: { emailAddress: `${a.name}@example.com` } }))
     }
 }
 
@@ -957,35 +972,6 @@ describe('the arrival prompt', () => {
     })
 })
 
-describe('one name, two harnesses (DROVE-338)', () => {
-    it('accountByName takes the Claude row when a cursor row shares the name, wherever it sits', async () => {
-        // The registry on Clay's Mac held the cursor row FIRST. A first-match
-        // by name would have said this session's account was a token with no
-        // config dir, and every Claude question here — where am I, am I
-        // cooling, what does an explicit flip target — would have been asked
-        // of the wrong account.
-        const { accountByName, currentAccount } = await accountsModule()
-        const rows: { name: string; configDir?: string; harness?: string }[] = [
-            { name: 'main', configDir: join(root, 'd338-main') },
-            { name: 'clay', harness: 'cursor' },
-            { name: 'clay', configDir: join(root, 'd338-clay') },
-        ]
-        writeAccounts(rows)
-        expect(accountByName('clay')).toMatchObject({ name: 'clay', configDir: join(root, 'd338-clay') })
-        expect(accountByName('clay')?.harness).toBeUndefined()
-        process.env.DROVER_ACCOUNT = 'clay'
-        try {
-            expect(currentAccount()).toMatchObject({ name: 'clay', configDir: join(root, 'd338-clay') })
-        } finally {
-            delete process.env.DROVER_ACCOUNT
-        }
-        // A name only a cursor row answers to is still that row: it is not
-        // invented as a Claude account.
-        writeAccounts([{ name: 'main', configDir: join(root, 'd338-main') }, { name: 'tok', harness: 'cursor' }] as typeof rows)
-        expect(accountByName('tok')).toMatchObject({ name: 'tok', harness: 'cursor', configDir: '' })
-    })
-})
-
 describe('where the session actually is', () => {
     it('takes the growing transcript over a whereabouts record left by an old flip', async () => {
         // DROVE-43, Clay's exact case. He flipped to jamrizzi, quit drover,
@@ -1629,6 +1615,270 @@ describe('the controller remembers where a session was seen', () => {
         flip.sessionFound('s2')
         expect(recallWhereabouts('s2', cwd)).toBe('alt')
         expect(readWhereabouts().s2.at).toBeGreaterThanOrEqual(before)
+    })
+})
+
+describe('the back door (DROVE-333)', () => {
+    /**
+     * Clay: "reserve the main account to be like a back door account: when
+     * you're in the main account you don't do any magic flipping / auto
+     * flipping. When I get stuck I'll switch to the main account and from there
+     * manually log into the terminal."
+     *
+     * The policy half of this shipped in cattle-drover's libexec/drover-flip-policy
+     * and is covered by tests/backdoor.bats. THESE are the half that a real
+     * usage limit actually reaches: a limit never gets as far as that script —
+     * the fork detects it and calls pickTarget itself (DROVE-4) — so without
+     * the same subtraction here the back door was ranked like any other row at
+     * exactly the moment it mattered.
+     *
+     * The back door is the AMBIENT row (no configDir → `~/.claude`, and `~` is
+     * this file's throwaway HOME) plus every row on its login. Never the string
+     * "main": every registry below names it something else at least once.
+     */
+    function registry(rows: { name: string; configDir?: string }[]): void {
+        writeAccounts(rows)
+    }
+
+    /** main is the ambient row; twin shares its login; alt and third do not. */
+    function backAndTwo() {
+        registry([
+            { name: 'main' },
+            { name: 'twin', configDir: join(root, 'bd-twin') },
+            { name: 'alt', configDir: join(root, 'bd-alt') },
+            { name: 'third', configDir: join(root, 'bd-third') },
+        ])
+        // `writeAccounts` gives the ambient row main@example.com; twin is the
+        // same login under a second name, which is `jamrizzi` in the real
+        // registry and the reason a name check would not have done.
+        writeFileSync(
+            join(root, 'bd-twin', '.claude.json'),
+            JSON.stringify({ hasCompletedOnboarding: true, oauthAccount: { emailAddress: 'MAIN@example.com' } }),
+        )
+    }
+
+    it('reads the ambient row and its login twin as the back door, and nothing else', async () => {
+        backAndTwo()
+        const { readAccounts, isBackdoorAccount } = await accountsModule()
+        const accounts = readAccounts()
+        const by = (n: string) => accounts.find((a) => a.name === n)!
+        expect(isBackdoorAccount(by('main'), accounts)).toBe(true)
+        expect(isBackdoorAccount(by('twin'), accounts)).toBe(true)
+        expect(isBackdoorAccount(by('alt'), accounts)).toBe(false)
+        expect(isBackdoorAccount(by('third'), accounts)).toBe(false)
+    })
+
+    it('is the ambient row even when it is not called main, and not a row that is', async () => {
+        // The name check this deliberately is not: rename the ambient row and
+        // it is still the back door; call an ordinary row `main` and it is not.
+        registry([
+            { name: 'jamrizzi' },
+            { name: 'main', configDir: join(root, 'bd-named-main') },
+        ])
+        const { readAccounts, isBackdoorAccount } = await accountsModule()
+        const accounts = readAccounts()
+        const by = (n: string) => accounts.find((a) => a.name === n)!
+        expect(isBackdoorAccount(by('jamrizzi'), accounts)).toBe(true)
+        expect(isBackdoorAccount(by('main'), accounts)).toBe(false)
+    })
+
+    it('does not land the LIMIT-HIT pick on the back door while anything else can take it', async () => {
+        // The bug, exactly. Registry order offers main first and main has
+        // headroom, so every automatic flip went straight through the door Clay
+        // keeps shut.
+        backAndTwo()
+        const { pickTarget } = await accountsModule()
+        const choice = pickTarget('alt', null)
+        expect(choice.kind).toBe('account')
+        expect(choice.kind === 'account' && choice.account.name).toBe('third')
+        expect(choice.kind === 'account' && choice.backdoorLastResort).toBeUndefined()
+    })
+
+    it('skips the back door for a session STARTING as well as one flipping', async () => {
+        // `drover` with nothing remembered asks the same picker, so a fresh
+        // start in a new directory used to open on main for the same reason.
+        backAndTwo()
+        const { pickStartAccount } = await accountsModule()
+        const start = pickStartAccount({ cwd: join(root, 'bd-fresh') })
+        expect(start.account?.name).toBe('alt')
+        expect(start.via).toBe('picker')
+    })
+
+    it('does not reach the back door through its TWIN either', async () => {
+        // A twin is the same claude.ai login: landing there spends the same
+        // quota through a second name, which is what makes the twin part of
+        // the door rather than a row that happens to sit next to it.
+        registry([
+            { name: 'main' },
+            { name: 'twin', configDir: join(root, 'bd2-twin') },
+        ])
+        writeFileSync(
+            join(root, 'bd2-twin', '.claude.json'),
+            JSON.stringify({ hasCompletedOnboarding: true, oauthAccount: { emailAddress: 'main@example.com' } }),
+        )
+        const { pickTarget } = await accountsModule()
+        // Nothing is cooling, so this is not a park; there is simply nowhere
+        // automatic to go, and neither row may be offered.
+        const choice = pickTarget(undefined, null)
+        expect(choice.kind === 'account' && choice.backdoorLastResort).toBe(true)
+        // ...and from a session already on the twin, the other half of the same
+        // door is not a destination either.
+        expect(pickTarget('twin', null).kind).toBe('none')
+    })
+
+    it('takes the back door once every other account is out of headroom, and says so', async () => {
+        // The one case Clay allows. Everything else is spent, so the choice is
+        // the back door or hours of nothing — and it has to be SAID, or the
+        // account he keeps for getting a terminal gets spent by a flip at 4am
+        // that he never saw.
+        backAndTwo()
+        const { pickTarget, setCooldown } = await accountsModule()
+        setCooldown('alt', Date.now() + 90 * 60 * 1000, 'usage limit')
+        setCooldown('third', Date.now() + 90 * 60 * 1000, 'usage limit')
+        const choice = pickTarget('alt', null)
+        expect(choice.kind).toBe('account')
+        expect(choice.kind === 'account' && choice.account.name).toBe('main')
+        expect(choice.kind === 'account' && choice.backdoorLastResort).toBe(true)
+        expect(choice.kind === 'account' && choice.onlyOption).toBe(true)
+    })
+
+    it('takes it for a LOWER rung too, not only for the model in use', async () => {
+        // "Out of headroom for the requested model and its lower rungs" is the
+        // whole condition. Every other account is out of Fable AND of
+        // everything else; the back door has Opus, so it is the last stop
+        // before a park and it names the model that ran out.
+        backAndTwo()
+        writeUsage(join(root, 'bd-alt'), [{ kind: 'weekly_all', percent: 100, resets_at: inAnHour() }])
+        writeUsage(join(root, 'bd-third'), [{ kind: 'weekly_all', percent: 100, resets_at: inAnHour() }])
+        writeUsage(home, [
+            { kind: 'weekly', percent: 100, resets_at: inAnHour(), scope: scopedTo('Fable') },
+        ])
+        const { pickTarget } = await accountsModule()
+        const choice = pickTarget('alt', null, Date.now(), 'fable')
+        expect(choice.kind === 'account' && choice.account.name).toBe('main')
+        expect(choice.kind === 'account' && choice.backdoorLastResort).toBe(true)
+        expect(choice.kind === 'account' && choice.withoutModel).toBe('fable')
+    })
+
+    it('parks rather than forcing the door when the back door is out too', async () => {
+        // The last resort is a resort, not an override: a spent back door is
+        // still spent, and the park's deadline counts it because it is the one
+        // place this session can still go once it opens.
+        backAndTwo()
+        const now = Date.now()
+        const { pickTarget, setCooldown } = await accountsModule()
+        setCooldown('alt', now + 90 * 60 * 1000, 'usage limit')
+        setCooldown('third', now + 90 * 60 * 1000, 'usage limit')
+        setCooldown('main', now + 30 * 60 * 1000, 'usage limit')
+        setCooldown('twin', now + 30 * 60 * 1000, 'usage limit')
+        const choice = pickTarget('alt', null, now)
+        expect(choice.kind).toBe('parked')
+        expect(choice.kind === 'parked' && choice.until).toBe(now + 30 * 60 * 1000)
+    })
+
+    it('still flips there when a HUMAN names it — the whole point of the door', async () => {
+        // The `wanted` branch is untouched, and this is the assertion that
+        // keeps it that way: `/flip main` from the pane and `Switch ›` from the
+        // phone both arrive as a named account.
+        backAndTwo()
+        const { pickTarget } = await accountsModule()
+        const named = pickTarget('alt', 'main')
+        expect(named.kind).toBe('account')
+        expect(named.kind === 'account' && named.account.name).toBe('main')
+        expect(named.kind === 'account' && named.backdoorLastResort).toBeUndefined()
+        // Even when it is cooling, exactly as an explicit flip always could.
+        const twinNamed = pickTarget('alt', 'twin')
+        expect(twinNamed.kind === 'account' && twinNamed.account.name).toBe('twin')
+    })
+
+    it('stamps `backdoor` on the usage snapshot so the composer sheet can label it', async () => {
+        // The sheet the `Switch ›` button lives on reads session metadata, not
+        // the machine's account list, and that payload carries neither
+        // `ambient` nor `login` — so the CLI has to say it.
+        backAndTwo()
+        const { usageSnapshot } = await import('./usage')
+        const rows = usageSnapshot('alt').accounts
+        const by = (n: string) => rows.find((r) => r.name === n)!
+        expect(by('main').backdoor).toBe(true)
+        expect(by('twin').backdoor).toBe(true)
+        expect(by('alt').backdoor).toBeUndefined()
+        expect(by('third').backdoor).toBeUndefined()
+    })
+
+    // --- a session already ON the back door ---------------------------------
+
+    async function onTheBackDoor(said: string[]) {
+        process.env.DROVER_ACCOUNT = 'main'
+        const { FlipController } = await import('./controller')
+        return new FlipController(join(root, 'bd-work'), (m: string) => said.push(m), {
+            toTerminal: () => {},
+            toPane: () => {},
+        })
+    }
+
+    /** The harness's own synthetic limit notice, which is the only kind that auto-flips. */
+    function hitTheLimit(flip: { noteTranscriptMessage: (m: unknown) => void }): void {
+        flip.noteTranscriptMessage({
+            type: 'assistant',
+            message: { role: 'assistant', model: '<synthetic>', content: 'Claude usage limit reached.' },
+        })
+    }
+
+    it('does not queue a flip when the session on the back door hits a limit', async () => {
+        backAndTwo()
+        const said: string[] = []
+        const flip = await onTheBackDoor(said)
+        let aborted = 0
+        flip.setAbortHandler(() => { aborted++ })
+        hitTheLimit(flip)
+        // Nothing queued, so the launcher never stops the child: no flip, no
+        // downgrade, no park, and none of the park's heartbeats.
+        expect(flip.hasPending()).toBe(false)
+        expect(aborted).toBe(0)
+        expect(said.join(' ')).toContain('back door')
+        expect(said.join(' ')).not.toContain('Flipping.')
+    })
+
+    it('says it once, however many turns hit the wall', async () => {
+        backAndTwo()
+        const said: string[] = []
+        const flip = await onTheBackDoor(said)
+        hitTheLimit(flip)
+        hitTheLimit(flip)
+        hitTheLimit(flip)
+        expect(said.filter((m) => m.includes('back door')).length).toBe(1)
+    })
+
+    it('still writes the cooldown, because that is a fact other sessions read', async () => {
+        // Staying put is a decision about THIS session. The ledger is what
+        // stops another pane's picker offering a back door with no headroom.
+        backAndTwo()
+        const flip = await onTheBackDoor([])
+        hitTheLimit(flip)
+        const { isCooling } = await accountsModule()
+        expect(isCooling('main')).toBe(true)
+    })
+
+    it('refuses every OTHER automatic request that reaches apply on the back door', async () => {
+        // The bus`s bare `/flip`, and the launcher's `cooldown expired` retry.
+        // Both name no account, which is the machine choosing, and on this
+        // account the machine does not choose.
+        backAndTwo()
+        const flip = await onTheBackDoor([])
+        const result = flip.apply({ account: null, reason: 'usage limit', by: 'auto' }, null)
+        expect(result.kind).toBe('refused')
+        expect(result.note).toContain('back door')
+        expect(result.downgrade).toBeUndefined()
+    })
+
+    it('lets a NAMED flip off the back door through', async () => {
+        // Off it as well as onto it: `/flip alt` is Clay moving, and this is
+        // the escape hatch the whole feature leans on.
+        backAndTwo()
+        const flip = await onTheBackDoor([])
+        const result = flip.apply({ account: 'alt', reason: 'manual', by: 'clay' }, null)
+        expect(result.kind).toBe('flipped')
+        expect(result.kind === 'flipped' && result.account.name).toBe('alt')
     })
 })
 
