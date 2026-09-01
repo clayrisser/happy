@@ -40,6 +40,7 @@ import { ambientDataDir } from '@/drover/flip/accounts'
 import { logger } from '@/ui/logger'
 
 import { paneComposerIsEmpty, paneConfirmDialog } from './paneCommandOutcome'
+import { paneCreditsDialogTitle } from './paneCreditsDialog'
 
 const run = promisify(execFile)
 
@@ -304,10 +305,13 @@ export async function paneIsIdle(gate: PaneGate): Promise<boolean> {
 }
 
 /**
- * Press one named key in `pane` — `Enter`, `Escape`, and nothing else so far.
+ * Press one named key in `pane` — `Enter`, `Escape`, `Down`, `Up`.
  *
  * Only ever for a dialog the caller has already READ and recognised. A blind
- * Enter is how a permission prompt gets answered by accident (DROVE-80).
+ * Enter is how a permission prompt gets answered by accident (DROVE-80), and
+ * the arrows are here for the one dialog a bare Enter must never answer
+ * (DROVE-279): its select is mounted with `hideIndexes`, which turns numeric
+ * selection off, so walking the pointer is the only way to name a row.
  */
 export async function pressPaneKey(pane: string, key: string): Promise<boolean> {
     try {
@@ -375,6 +379,18 @@ export async function paneAcceptsCommand(gate: PaneGate): Promise<boolean> {
     if (capture === null) return false
     if (paneConfirmDialog(capture) !== null) {
         logger.debug('[paneInject] command gate: a confirmation is already on screen')
+        return false
+    }
+    // THE FABLE CREDITS DIALOG IS A DIALOG TOO (DROVE-279). It comes from a
+    // different component with different rows, so `paneConfirmDialog` does not
+    // and must not match it — its rows include "Yes, buy usage credits" and
+    // the one Enter that answers a confirmation would be a purchase. But it
+    // holds the keyboard exactly as hard, so it holds the queue exactly as
+    // hard. The TITLE is enough here: the dialog opens on a "Checking usage
+    // credits…" spinner with no rows to read, and a keystroke sent into that
+    // lands on it just the same.
+    if (paneCreditsDialogTitle(capture) !== null) {
+        logger.debug('[paneInject] command gate: the Fable credits dialog is on screen')
         return false
     }
     if (!paneComposerIsEmpty(capture)) {

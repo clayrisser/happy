@@ -54,6 +54,21 @@ const ultracode = screen(
     '  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents',
 )
 
+/**
+ * The Fable credits dialog (DROVE-279). A different component from the one
+ * above: no numbered rows — its select is mounted with `hideIndexes`, which
+ * turns numeric selection off — and a second row that spends money.
+ */
+const creditsPicker = screen(
+    '❯ Write me a poem',
+    '▔'.repeat(40),
+    '   Switch to Fable 5?',
+    '   Fable 5 runs on usage credits — you have $4.20 in credits.',
+    '',
+    '   ❯ No, keep my current model',
+    '     Yes, buy usage credits',
+)
+
 const confirming = screen(
     '❯ Write 60 haiku about the sea',
     '▔'.repeat(40),
@@ -98,6 +113,42 @@ describe('paneConfirmDialog', () => {
         expect(paneConfirmDialog(confirming)).toBe('effort')
         expect(paneConfirmDialog('   Switch model?\n   ❯ 1. Yes, switch to Fable 5')).toBe('model')
         expect(paneConfirmDialog(idle)).toBeNull()
+    })
+
+    it('does NOT recognise the credits family, because this arm presses Enter', () => {
+        // DROVE-279. These three titles come from a different component whose
+        // second row is "Yes, buy usage credits". Matching them here would put
+        // them on the `confirm` arm, and the confirm arm's whole job is to
+        // press the Enter that answers a two-row yes/no. Money is not a yes/no.
+        expect(paneConfirmDialog(creditsPicker)).toBeNull()
+        expect(paneConfirmDialog("   You've reached your Fable 5 limit")).toBeNull()
+        expect(paneConfirmDialog('   Fable 5 now uses usage credits')).toBeNull()
+    })
+})
+
+describe('paneCommandOutcome and the credits dialog', () => {
+    it('reports `credits`, which nothing answers, rather than `confirm`', () => {
+        const outcome = paneCommandOutcome(idle, creditsPicker, 'model')
+        expect(outcome).toEqual({ state: 'credits' })
+    })
+
+    it('reports it even when it was already on screen before the command', () => {
+        // Deliberately without the "is it new" test the confirmation gets: a
+        // credits dialog that was already up means the command did not land
+        // either, and the one thing this must never do is fall through to a
+        // state whose handler presses a key.
+        expect(paneCommandOutcome(creditsPicker, creditsPicker, 'model')).toEqual({
+            state: 'credits',
+        })
+    })
+
+    it('still answers the ordinary Switch model? confirmation', () => {
+        const switching = screen(
+            '   Switch model?',
+            '   ❯ 1. Yes, switch to Sonnet 5',
+            '     2. No, go back',
+        )
+        expect(paneCommandOutcome(idle, switching, 'model')).toEqual({ state: 'confirm' })
     })
 })
 

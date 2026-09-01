@@ -38,6 +38,8 @@
  * it is testable without a terminal.
  */
 
+import { paneCreditsDialogTitle } from './paneCreditsDialog'
+
 /** A line tmux drew as one of the composer's horizontal rules. */
 function isRule(line: string): boolean {
     const bar = (line.match(/─/g) ?? []).length
@@ -101,6 +103,16 @@ export function paneComposerIsEmpty(capture: string): boolean {
  * model?" : "Change effort level?"`), and both offer the same two rows with
  * "Yes" preselected, so answering either is one Enter.
  */
+/**
+ * The two titles this function answers, and the third family it must NOT
+ * (DROVE-279).
+ *
+ * "Switch to Fable 5?" / "You've reached your Fable 5 limit" / "Fable 5 now
+ * uses usage credits" come from a DIFFERENT component whose second row is
+ * "Yes, buy usage credits". Returning a value for those here would put them on
+ * the `state: 'confirm'` arm below, and that arm presses Enter. They live in
+ * paneCreditsDialog.ts and are answered by a human on the phone.
+ */
 export function paneConfirmDialog(capture: string): 'effort' | 'model' | null {
     if (capture.includes('Change effort level?')) return 'effort'
     if (capture.includes('Switch model?')) return 'model'
@@ -134,6 +146,13 @@ export type PaneCommandOutcome =
     | { state: 'applied'; value: string | null; kept?: boolean }
     /** The confirmation is up and wants an Enter. */
     | { state: 'confirm' }
+    /**
+     * The Fable credits dialog is up (DROVE-279). NOT a confirmation: nothing
+     * on this arm presses anything. The launcher hands it to the drover bus as
+     * a question and a human picks a row, because one of the rows is a
+     * purchase.
+     */
+    | { state: 'credits' }
     /** Claude Code refused, in these words. */
     | { state: 'refused'; message: string }
     /** Nothing has appeared yet. Keep looking. */
@@ -185,6 +204,11 @@ export function paneCommandOutcome(
     after: string,
     kind: 'effort' | 'model',
 ): PaneCommandOutcome {
+    // Checked FIRST, and without the "is it new" test the confirmation gets.
+    // A credits dialog that was already on screen means the command did not
+    // land either, and the one thing this function must never do is fall
+    // through to a state whose handler presses Enter.
+    if (paneCreditsDialogTitle(after) !== null) return { state: 'credits' }
     const dialog = paneConfirmDialog(after)
     if (dialog !== null && paneConfirmDialog(before) === null) return { state: 'confirm' }
 
