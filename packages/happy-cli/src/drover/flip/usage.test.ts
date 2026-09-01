@@ -536,6 +536,18 @@ describe('the active account cadence', () => {
         }
     }
 
+    /**
+     * Let an in-flight look finish.
+     *
+     * `maybeRefreshActive` will not start a second look while one is running,
+     * which is a real gate and not the one these specs are about. Without
+     * this every assertion below would pass for that reason instead of the
+     * one named, and the idle spec in particular would prove nothing at all.
+     * A real look is ~6.5s against a 30s floor, so in production it has
+     * always finished by the time the next tick asks.
+     */
+    const settled = () => new Promise((r) => setTimeout(r, 0))
+
     it('looks every thirty seconds while the transcript is moving', async () => {
         writeAccounts(['main'])
         let clock = Date.parse('2026-09-01T18:00:00Z')
@@ -544,6 +556,7 @@ describe('the active account cadence', () => {
         const reporter = new UsageReporter(reporterWith({ clock: () => clock, asked }))
 
         reporter.tick()
+        await settled()
         expect(asked).toHaveLength(1)
         expect(asked[0].account).toBe('main')
 
@@ -552,13 +565,16 @@ describe('the active account cadence', () => {
         clock += 20_000
         reporter.refresh()
         reporter.tick()
+        await settled()
         expect(asked).toHaveLength(1)
 
         // Past it, with activity since the last look: worth a process.
         clock += 15_000
         reporter.refresh()
         reporter.tick()
+        await settled()
         expect(asked).toHaveLength(2)
+        expect(asked[1].at - asked[0].at).toBe(35_000)
         reporter.stop()
     })
 
@@ -573,10 +589,14 @@ describe('the active account cadence', () => {
         const { UsageReporter } = await usageModule()
         const reporter = new UsageReporter(reporterWith({ clock: () => clock, asked }))
         reporter.tick()
+        await settled()
         expect(asked).toHaveLength(1)
+        // Twenty minutes of polling, every one of them past the floor. The
+        // only thing holding the process back is that nothing has moved.
         for (let i = 0; i < 20; i++) {
             clock += 60_000
             reporter.tick()
+            await settled()
         }
         expect(asked).toHaveLength(1)
         reporter.stop()
@@ -596,6 +616,7 @@ describe('the active account cadence', () => {
             settleMs: 10_000_000,
         })
         reporter.tick()
+        await settled()
         expect(asked).toHaveLength(1)
         // One burst of lines schedules one settle; the rest hit the guard.
         for (let i = 0; i < 5; i++) {
@@ -603,6 +624,7 @@ describe('the active account cadence', () => {
             clock += 10_000
         }
         reporter.tick()
+        await settled()
         expect(asked).toHaveLength(2)
         reporter.stop()
     })
@@ -651,6 +673,104 @@ describe('the active account cadence', () => {
         })
         reporter.tick()
         expect(asked).toEqual([])
+        reporter.stop()
+    })
+})
+
+/**
+ * A turn ending goes and looks (DROVE-340).
+ *
+ * The thirty-second timer covers a long turn; this covers the moment the turn
+ * closes, which is both when the number certainly moved and when the card is
+ * read. Locally it is the ONLY turn boundary there is — a local transcript
+ * carries no record marking a turn closing, so the launcher's working/idle
+ * boolean, which it already computes for the terminal dot, is the signal.
+ */
+describe('a turn ending', () => {
+    const settled = () => new Promise((r) => setTimeout(r, 0))
+
+    function reporterOpts(clock: () => number, asked: number[]) {
+        return {
+            sweep: null as null,
+            current: () => 'main',
+            publish: () => {},
+            now: clock,
+            active: async (now: number) => { asked.push(now); return false },
+        }
+    }
+
+    it('looks on the working-to-idle edge, without waiting out the thirty second floor', async () => {
+        writeAccounts(['main'])
+        let clock = Date.parse('2026-09-01T18:00:00Z')
+        const asked: number[] = []
+        const { UsageReporter } = await usageModule()
+        const reporter = new UsageReporter(reporterOpts(() => clock, asked))
+        reporter.tick()
+        await settled()
+        expect(asked).toHaveLength(1)
+
+        // A turn runs for twelve seconds — nowhere near the thirty second
+        // floor — and ends.
+        reporter.noteLiveStatus(true)
+        await settled()
+        clock += 12_000
+        reporter.noteLiveStatus(false)
+        await settled()
+        expect(asked).toHaveLength(2)
+        reporter.stop()
+    })
+
+    it('is still floored, so a burst of short turns does not stack processes', async () => {
+        // Ten seconds. Without a floor here a session doing many one-second
+        // turns would spawn a six-second process per turn.
+        writeAccounts(['main'])
+        let clock = Date.parse('2026-09-01T18:00:00Z')
+        const asked: number[] = []
+        const { UsageReporter } = await usageModule()
+        const reporter = new UsageReporter(reporterOpts(() => clock, asked))
+        reporter.tick()
+        await settled()
+        expect(asked).toHaveLength(1)
+        for (let i = 0; i < 8; i++) {
+            reporter.noteLiveStatus(true)
+            await settled()
+            clock += 1_000
+            reporter.noteLiveStatus(false)
+            await settled()
+        }
+        // Eight turns in eight seconds bought one extra look, not eight.
+        expect(asked).toHaveLength(1)
+        clock += 5_000
+        reporter.noteLiveStatus(true)
+        await settled()
+        reporter.noteLiveStatus(false)
+        await settled()
+        expect(asked).toHaveLength(2)
+        reporter.stop()
+    })
+
+    it('does not treat a turn STARTING, or a repeated idle report, as an ending', async () => {
+        // The launcher calls this on every live-status update, which is far
+        // more often than a turn changes state. Only the edge counts.
+        writeAccounts(['main'])
+        let clock = Date.parse('2026-09-01T18:00:00Z')
+        const asked: number[] = []
+        const { UsageReporter } = await usageModule()
+        const reporter = new UsageReporter(reporterOpts(() => clock, asked))
+        reporter.tick()
+        await settled()
+        expect(asked).toHaveLength(1)
+        clock += 15_000
+        for (let i = 0; i < 5; i++) {
+            reporter.noteLiveStatus(false)
+            await settled()
+        }
+        expect(asked).toHaveLength(1)
+        for (let i = 0; i < 5; i++) {
+            reporter.noteLiveStatus(true)
+            await settled()
+        }
+        expect(asked).toHaveLength(1)
         reporter.stop()
     })
 })

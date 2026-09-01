@@ -475,6 +475,20 @@ const sweepMs = 10 * 60_000
  */
 const activeMs = activeRefreshFloorMs
 
+/**
+ * How soon after a TURN ENDS the active account is worth a look (DROVE-340).
+ *
+ * A turn ending is not just more activity, it is the one moment the number is
+ * KNOWN to have moved, and the moment Clay looks at the card. So it gets its
+ * own, tighter floor rather than waiting out the thirty-second one.
+ *
+ * Ten seconds and not zero, because a session doing many short turns would
+ * otherwise spawn a six-second process per turn and stack them. Ten is the
+ * point where back-to-back turns cost at most one look each, and a turn of
+ * any normal length always gets one at its end.
+ */
+const turnEndMs = 10_000
+
 export interface UsageReporterOptions {
     /** The account this session is on, asked fresh each time — a flip moves it. */
     current: () => string | undefined
@@ -505,6 +519,8 @@ export interface UsageReporterOptions {
      */
     active?: ((now: number, account: string | undefined) => Promise<boolean>) | null
     activeMs?: number
+    /** The tighter floor a turn ending gets. See `turnEndMs`. */
+    turnEndMs?: number
 }
 
 /**
@@ -527,6 +543,7 @@ export class UsageReporter {
     private readonly sweepEvery: number
     private readonly activeRefresher: ((now: number, account: string | undefined) => Promise<boolean>) | null
     private readonly activeEvery: number
+    private readonly turnEndEvery: number
 
     private stamp = ''
     private signature = ''
@@ -535,6 +552,15 @@ export class UsageReporter {
     private sweeping = false
     private activeAt = 0
     private activeRefreshing = false
+    /**
+     * Whether the main thread was working last time the launcher said. The
+     * EDGE is what matters — working to idle is a turn ending — and holding it
+     * here rather than in the launcher keeps the cadence and its rules in one
+     * file, and lets both be driven by a unit test.
+     */
+    private mainWorking = false
+    /** When a turn last ended, which buys the next look the tighter floor. */
+    private turnEndedAt = 0
     /**
      * When the transcript last moved. A refresh of the live account is worth a
      * process only when something has happened since the last one — see
@@ -570,6 +596,7 @@ export class UsageReporter {
                     refreshActiveAccount(account, { now: () => now }))
             : opts.active
         this.activeEvery = opts.activeMs ?? activeMs
+        this.turnEndEvery = opts.turnEndMs ?? turnEndMs
     }
 
     start(): void {
@@ -602,6 +629,31 @@ export class UsageReporter {
             this.tick()
         }, this.settle)
         this.settleTimer.unref?.()
+    }
+
+    /**
+     * Whether the main thread is working, as the launcher already computes it
+     * for the terminal dot (DROVE-340).
+     *
+     * The working-to-idle edge is a TURN ENDING, and locally that edge is the
+     * only turn boundary there is: the SDK's `result` message exists on the
+     * remote path, and a local transcript carries no record for it — measured
+     * on a real session's JSONL, which holds assistant/user/system records and
+     * nothing that marks a turn closing.
+     *
+     * A turn ending looks straight away rather than waiting out the thirty
+     * second floor, because it is the one moment the number is known to have
+     * moved and the moment the card is read. `turnEndMs` keeps a burst of
+     * short turns from stacking processes.
+     */
+    noteLiveStatus(mainWorking: boolean): void {
+        if (this.stopped) return
+        const was = this.mainWorking
+        this.mainWorking = mainWorking
+        if (mainWorking || !was) return
+        this.turnEndedAt = this.now()
+        this.activityAt = this.turnEndedAt
+        this.tick()
     }
 
     /**
@@ -670,7 +722,8 @@ export class UsageReporter {
      *
      *   - not while one is already running. A refresh is about six seconds and
      *     the poll is thirty, so without this a slow machine would stack them.
-     *   - not more often than `activeEvery`. Thirty seconds.
+     *   - not more often than `activeEvery` — thirty seconds — or, when a
+     *     turn has ended since the last look, `turnEndEvery`, which is ten.
      *   - not unless the TRANSCRIPT MOVED since the last refresh. This is the
      *     one that makes the cadence affordable: a session parked at a prompt
      *     is burning nothing, so its number cannot have changed, so asking is
@@ -683,7 +736,8 @@ export class UsageReporter {
      */
     private maybeRefreshActive(now: number): void {
         if (!this.activeRefresher || this.activeRefreshing) return
-        if (this.activeAt !== 0 && now - this.activeAt < this.activeEvery) return
+        const floor = this.turnEndedAt > this.activeAt ? this.turnEndEvery : this.activeEvery
+        if (this.activeAt !== 0 && now - this.activeAt < floor) return
         if (this.activityAt <= this.activeAt) return
         const account = this.current()
         if (!account) return

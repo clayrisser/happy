@@ -1114,12 +1114,51 @@ export function holdUsageGroupOrder(groups: UsageBarGroup[], held: string[]): Us
     return [...groups].sort((a, b) => at(a) - at(b));
 }
 
+/**
+ * The later of the two readings this account has, or nothing (DROVE-340).
+ *
+ * There are two objects carrying an account's windows and they are not the
+ * same reading. `agentState.usageLimits` is written when the SDK emits a
+ * `rate_limit_event` and then left alone — `mergeUsageLimits` even carries the
+ * previous utilization forward when an event brings none — so between events
+ * it only gets older. `metadata.droverUsage` is a snapshot the CLI re-takes on
+ * its own cadence, thirty seconds on the account a session is running.
+ *
+ * Both stamp `capturedAt`, so the comparison needs no new wire field. The SDK
+ * reading wins only when it is strictly newer; a tie goes to the snapshot,
+ * because that is the object every other surface already reads and reading one
+ * object is the point.
+ *
+ * Returning null rather than the snapshot keeps this a pure "is the override
+ * worth using" question, and leaves each caller to fall back the way it
+ * already did.
+ */
+export function fresherUsageLimits(
+    usageLimits: UsageLimitsLike,
+    droverUsage: DroverUsageLike,
+): UsageLimitsLike {
+    if (!usageLimits) return null;
+    const snapshotAt = droverUsage?.capturedAt;
+    if (typeof snapshotAt !== 'number' || !Number.isFinite(snapshotAt)) return usageLimits;
+    const streamAt = usageLimits.capturedAt;
+    if (typeof streamAt !== 'number' || !Number.isFinite(streamAt)) return null;
+    return streamAt > snapshotAt ? usageLimits : null;
+}
+
 export function resolveUsageStrip(input: UsageStripInput): UsageStrip {
-    // Agent state first, because it is live from the SDK; the drover snapshot
-    // when there is none, which is every pane session.
+    // Whichever of the two readings for THIS account was taken later
+    // (DROVE-340). Agent state used to win outright, on the grounds that it is
+    // live from the SDK; it is live only in the sense that it arrived on a
+    // stream, and nothing updates it between events. Under drover every
+    // session is a local TUI, where `rate_limit_event` never fires at all, so
+    // agent state is whatever was last seen — sometimes nothing, sometimes an
+    // hour old — while the snapshot is re-read every thirty seconds. That
+    // precedence is why the sheet's bars sat minutes behind the wrist, which
+    // reads the snapshot and only the snapshot.
     const droverLimits = usageLimitsFromDroverUsage(input.droverUsage, input.droverAccount);
-    const usageLimits = input.usageLimits ?? droverLimits;
-    const usageFromDrover = !input.usageLimits && !!droverLimits;
+    const live = fresherUsageLimits(input.usageLimits, input.droverUsage);
+    const usageLimits = live ?? droverLimits;
+    const usageFromDrover = !live && !!droverLimits;
     // Only Session and Week are user-meaningful; provider-internal windows
     // (nimbus_quill and friends) stay out of the popup.
     const rows = getUsageLimitRows(usageLimits ?? null);
@@ -1205,9 +1244,13 @@ export function resolveUsageStrip(input: UsageStripInput): UsageStrip {
     // which is what breaks the last tie.
     const groups = rankUsageAccounts(accounts, bindings).map((account) => usageAccountBarGroup(account, measures, {
         binding: bindings.get(account.name) ?? null,
-        // The SDK stream is live and belongs to the session's own account; the
-        // snapshot is the only reading there is for every other one.
-        override: account.current ? input.usageLimits : null,
+        // The SDK stream belongs to the session's own account, and overrides
+        // the snapshot ONLY while it is the later of the two (DROVE-340). The
+        // snapshot is the only reading there is for every other account, and
+        // under drover it is the only fresh one for this account too — which
+        // is what puts these bars, the heading above them, the info screen and
+        // the wrist on one object.
+        override: account.current ? live : null,
     }));
     return {
         weekPercent,
