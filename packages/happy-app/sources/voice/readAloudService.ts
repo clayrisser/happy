@@ -12,6 +12,9 @@ import { readDetourFromHere, readFromHere, readSentenceFromHere } from './readAl
 import { subagentDetourFrom } from './subagentRead';
 import { getSubagentMessages } from '@/sync/subagentMessages';
 import { startBackgroundAudio } from './backgroundAudio';
+import { startNextSessionPress } from './nextSession';
+import { readingCycleFrom } from './readingCycle';
+import { addRemoteCommandListener } from 'drover-speech';
 
 /**
  * The one reader the app owns (DROVE-30).
@@ -151,3 +154,31 @@ function rememberSentenceTap(moved: boolean): boolean {
 
 audioCues.attach(readAloud);
 startBackgroundAudio(readAloud);
+
+/**
+ * The double press skips to the next reading-enabled session (DROVE-300).
+ *
+ * WIRED HERE, BESIDE `startBackgroundAudio`, AND THAT IS THE WHOLE POINT.
+ * Clay's requirement is that the headphone mappings behave the same with the
+ * app in the foreground and with it backgrounded in streaming mode. This
+ * module has no react in it and runs once at import, so the subscription
+ * outlives every screen: the press lands on the one reader whether a
+ * SessionView is mounted, unmounted, or was never opened this launch. The
+ * lock screen's play/pause has worked this way since DROVE-189 and this is
+ * the same shape.
+ *
+ * `focus` is DROVE-289's hold-and-restore: the outgoing session's whole
+ * position is stashed and the incoming session's own is resumed. It is not a
+ * stop and it is not a jump ahead, which is exactly the verb DROVE-300 asks
+ * for, so there is nothing to add on top of it here.
+ *
+ * `readingCycleFrom` is the placeholder for DROVE-297's export. When that
+ * lands, this closure points at it and readingCycle.ts is deleted.
+ */
+startNextSessionPress({
+    cycle: () => readingCycleFrom(storage.getState().sessions),
+    current: () => readAloud.focusedSessionId,
+    reading: () => readAloud.isEnabled,
+    take: (sessionId) => readAloud.focus(sessionId),
+    subscribe: (listener) => addRemoteCommandListener(listener),
+});

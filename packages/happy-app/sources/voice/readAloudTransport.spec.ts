@@ -178,13 +178,16 @@ describe('remoteTransportGesture', () => {
         expect(remoteTransportGesture('toggle')).toBe('remote-toggle');
     });
 
-    it('leaves the double press to the microphone (DROVE-225)', () => {
+    it('leaves the double press to the next session (DROVE-300)', () => {
+        // It reaches the reader, but through nextSession.ts and as a focus
+        // move, not as a play/pause. This file must not claim it.
         expect(remoteTransportGesture('next')).toBeNull();
-        expect(headphoneAction('next', 'transport')).toBe('mic');
+        expect(headphoneAction('next', 'transport')).toBe('next-session');
     });
 
-    it('leaves the triple press reserved (DROVE-73)', () => {
+    it('leaves the triple press to the microphone (DROVE-300)', () => {
         expect(remoteTransportGesture('previous')).toBeNull();
+        expect(headphoneAction('previous', 'transport')).toBe('mic');
     });
 
     it('agrees with the press table about which commands are the transport', () => {

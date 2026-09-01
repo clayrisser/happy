@@ -9,7 +9,7 @@ import {
     dictationReportsProgress,
     getDictationSupport,
     isDroverSpeechAvailable,
-    remoteMicCommandAvailable,
+    remoteTriplePressAvailable,
     startDictation,
     stopDictation,
 } from 'drover-speech';
@@ -508,42 +508,71 @@ export function useVoiceComposer(options: VoiceComposerOptions): VoiceComposerSt
      */
     const micBlocked = React.useCallback(() => {
         if (capture.current.settling) return true;
+        // THE MIC FOLLOWS THE VOICE, NOT THE SCREEN (DROVE-300).
+        //
+        // The double press now moves the voice to another session while this
+        // screen stays mounted and stays subscribed. Without this line the
+        // next triple press would open the mic against THIS session and put
+        // the words in a composer he is not listening to and cannot see, which
+        // is the one dictation mistake that is not recoverable by pressing
+        // anything. Refusing is audible — `micRefused` — so it is a press that
+        // says no rather than a press that lies.
+        //
+        // It costs nothing in the ordinary case: the composer that focused the
+        // reader is the composer that holds the voice, so this is false
+        // whenever he has not skipped away.
+        if (readAloud.isEnabled && readAloud.focusedSessionId !== sessionId) return true;
         return dictationBlock({
             moduleAvailable: isDroverSpeechAvailable(),
             reportsProgress: dictationReportsProgress(),
             build: Application.nativeBuildVersion,
         }) !== null;
-    }, [capture]);
+    }, [capture, sessionId]);
 
     /**
-     * Push to talk from the headphones (DROVE-225).
+     * Push to talk from the headphones (DROVE-225, moved to the TRIPLE press
+     * by DROVE-300).
      *
-     * A DOUBLE press opens the mic and a double press closes it; the single
+     * A TRIPLE press opens the mic and a triple press closes it. The single
      * press stays play/pause, which is what build 13 already does and what the
-     * hardware is labelled with. Press-and-hold is not on offer: there is no
-     * held-button command in MPRemoteCommandCenter at all and AirPods give the
-     * hold to Siri, so the gesture the name asks for cannot be delivered.
-     * headphonePress.ts carries the measurement and the arbitration with
-     * DROVE-73's audio menus; headphoneMic.ts carries the cue-then-open
-     * ordering.
+     * hardware is labelled with, and the double press is now the next
+     * reading-enabled session, which is the job a next-track gesture actually
+     * has. Press-and-hold is not on offer: there is no held-button command in
+     * MPRemoteCommandCenter at all and AirPods give the hold to Siri, so the
+     * gesture the name asks for cannot be delivered. headphonePress.ts carries
+     * the measurement and the arbitration with DROVE-73's audio menus;
+     * headphoneMic.ts carries the cue-then-open ordering.
+     *
+     * NOTHING IN THIS BLOCK MOVED, which is the point of the owner table: the
+     * predicate below still asks for `'mic'` and headphonePress.ts changed
+     * which press answers to it. A remapping that had to be made in two files
+     * is a remapping that gets made in one of them.
      *
      * `onTalkTap` is the join, which means this is not a second capture. It is
      * the same call DROVE-210 gave the composer's primary button, so a latch
      * opened by ear is stopped by the capsule's button, and one opened by
-     * thumb is stopped by a double press.
+     * thumb is stopped by a triple press.
      *
      * The owner is `transport` and nothing else yet: DROVE-73 has not shipped
      * an audio menu, so no press has a second meaning to arbitrate with. When
      * it does, it passes `menu` here while the menu is being read.
      *
-     * Not subscribed at all on a binary that cannot send the double press.
-     * Build 13 disables `nextTrackCommand` outright, so the event never
-     * arrives however long we listen, and a live subscription would only
-     * suggest otherwise.
+     * Not subscribed at all on a binary that cannot send the TRIPLE press.
+     * Build 15 and earlier disable `previousTrackCommand` outright, so the
+     * event never arrives however long we listen, and a live subscription
+     * would only suggest otherwise. The double press needs no new build, so a
+     * bundle sent over the air to build 15 gets the session skip and waits for
+     * a binary for the microphone.
+     *
+     * IT STAYS SUBSCRIBED WHILE BACKGROUNDED, which is what makes the gesture
+     * work in his pocket: react-native does not unmount the tree when the app
+     * leaves the screen, so this effect and its listener outlive the
+     * backgrounding. What it does NOT survive is never being mounted — see the
+     * note on `micBlocked` and DROVE-300's report.
      */
     React.useEffect(() => {
         if (!offersDictation) return;
-        if (!remoteMicCommandAvailable()) return;
+        if (!remoteTriplePressAvailable()) return;
         const mic = new HeadphoneMic({
             capturing: () => capture.current.active,
             blocked: micBlocked,

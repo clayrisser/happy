@@ -585,6 +585,23 @@ public final class DroverSpeechModule: Module {
             true
         }
 
+        /// Whether this binary sends the TRIPLE PRESS up as `previous`
+        /// (DROVE-300).
+        ///
+        /// Its own stamp, and it has to be, because the microphone MOVED
+        /// gestures in this ticket. Build 15 answers `handlesMicCommand` true
+        /// and still sets `previousTrackCommand.isEnabled = false`, so on that
+        /// binary a triple press reaches nothing at all and no amount of JS
+        /// can hear it. A bundle shipped over the air onto build 15 therefore
+        /// gets the new double press — `nextTrackCommand` has been enabled
+        /// since DROVE-225, so the next-session skip works with no new build —
+        /// and no headphone microphone until this binary is installed. That is
+        /// the honest degradation, and it is why the mic's subscription reads
+        /// THIS stamp rather than the older one.
+        Function("handlesTriplePress") { () -> Bool in
+            true
+        }
+
         Function("isSpeaking") { () -> Bool in
             self.synthesizer.isSpeaking
         }
@@ -877,25 +894,41 @@ public final class DroverSpeechModule: Module {
     /// press and not a hold, and the argument is written out in full in
     /// sources/voice/headphonePress.ts.
     ///
-    /// NEXT TRACK IS THE MICROPHONE (DROVE-225), not a sentence skip. A skip
-    /// on the lock screen that jumped a sentence would be a second way to
-    /// move the playhead and DROVE-146 settled that there is exactly one, a
-    /// deliberate tap. The double press was therefore free, and it is the
-    /// only gesture the hardware has left once single press stays play/pause.
+    /// NEXT TRACK IS THE NEXT SESSION (DROVE-300), not a sentence skip and no
+    /// longer the microphone. Clay chose it: "double press would be just like
+    /// playing YouTube, it skips to the next track — in this case the next
+    /// session." A skip that jumped a SENTENCE would be a second way to move
+    /// the playhead and DROVE-146 settled that there is exactly one, a
+    /// deliberate tap; a skip that moves the VOICE to another session is not
+    /// that, and it is what a ⏭ means everywhere else.
     ///
-    /// PREVIOUS TRACK STAYS DISABLED, reserved for DROVE-73's audio menus.
-    /// Enabling a command with nothing behind it would claim the triple press
-    /// while doing nothing with it, which is worse than leaving it to Music.
+    /// PREVIOUS TRACK IS THE MICROPHONE, and it is enabled from this build on.
+    /// DROVE-225 left it disabled and reserved for DROVE-73's audio menus,
+    /// which was right while nothing was behind it. Something is behind it
+    /// now, and DROVE-73 is not harmed: the audio menu is a different OWNER in
+    /// sources/voice/headphonePress.ts and keeps all three presses to itself
+    /// while it is up.
+    ///
+    /// BOTH SKIP COMMANDS STILL STAY OFF, and enabling previousTrack is what
+    /// makes that reasoning stronger rather than weaker. iOS falls a press
+    /// through to skipForward when nextTrack is off, and to skipBackward when
+    /// previousTrack is off. With BOTH track commands enabled and BOTH skip
+    /// commands disabled, each press class has exactly one route to this
+    /// module and cannot arrive twice under two names. Enabling previousTrack
+    /// CLOSES the fallback the triple press would otherwise have had; it does
+    /// not open a second one.
     ///
     /// THE COST, written down rather than discovered: enabling a command IS
-    /// how it appears on the lock screen, so the now-playing card grows a
-    /// next-track arrow that opens the microphone. There is no way to have the
-    /// double press without it. MPRemoteCommandCenter has one switch per
-    /// command and it drives both the hardware press and the on-screen button,
-    /// and MPNowPlayingInfoCenter cannot relabel a glyph. A lock-screen button
-    /// that opens the mic is a fair thing to have on an eyes-free app; it is
-    /// simply wearing the wrong icon, and it is NOT a sentence skip, which
-    /// DROVE-146 settled has exactly one route (a deliberate tap).
+    /// how it appears on the lock screen, so the card carries both arrows and
+    /// there is no way to have either press without its button.
+    /// MPRemoteCommandCenter has one switch per command and it drives both the
+    /// hardware press and the on-screen button, and MPNowPlayingInfoCenter
+    /// cannot relabel a glyph. DROVE-225 had to write the ⏭ off as a button
+    /// "simply wearing the wrong icon"; after DROVE-300 the ⏭ is right — on
+    /// the lock screen and in a CAR it skips to the next session — and the ⏮
+    /// is the one wearing the wrong icon, because it opens the microphone.
+    /// That is the price of having the mic on the headphones at all. Neither
+    /// is a sentence skip, which DROVE-146 settled has exactly one route.
     ///
     /// Nothing here decides anything. The command goes up as an event and JS
     /// decides what it means, so the queue, the buttons and the microphone
@@ -910,17 +943,19 @@ public final class DroverSpeechModule: Module {
         guard !remoteCommandsWired else { return }
         remoteCommandsWired = true
         let centre = MPRemoteCommandCenter.shared()
-        centre.previousTrackCommand.isEnabled = false
-        // Both skip commands stay off. A double press falls through to
-        // skipForward when nextTrack is disabled, so leaving it enabled beside
-        // an enabled nextTrack is a second route for the same press to arrive
-        // by, under a different name.
+        // Both skip commands stay off. A press falls through to skipForward
+        // when nextTrack is disabled and to skipBackward when previousTrack
+        // is, so leaving either enabled beside its enabled track command is a
+        // second route for the same press to arrive by, under a different
+        // name. With both track commands on and both skips off, each press
+        // class has exactly one route.
         centre.skipForwardCommand.isEnabled = false
         centre.skipBackwardCommand.isEnabled = false
         centre.playCommand.isEnabled = true
         centre.pauseCommand.isEnabled = true
         centre.togglePlayPauseCommand.isEnabled = true
         centre.nextTrackCommand.isEnabled = true
+        centre.previousTrackCommand.isEnabled = true
         centre.playCommand.addTarget { [weak self] _ in
             self?.sendEvent("onRemoteCommand", ["command": "play"])
             return .success
@@ -937,6 +972,10 @@ public final class DroverSpeechModule: Module {
             self?.sendEvent("onRemoteCommand", ["command": "next"])
             return .success
         }
+        centre.previousTrackCommand.addTarget { [weak self] _ in
+            self?.sendEvent("onRemoteCommand", ["command": "previous"])
+            return .success
+        }
     }
 
     private func teardownRemoteCommands() {
@@ -948,6 +987,8 @@ public final class DroverSpeechModule: Module {
         centre.togglePlayPauseCommand.removeTarget(nil)
         centre.nextTrackCommand.removeTarget(nil)
         centre.nextTrackCommand.isEnabled = false
+        centre.previousTrackCommand.removeTarget(nil)
+        centre.previousTrackCommand.isEnabled = false
         clearNowPlaying()
     }
 

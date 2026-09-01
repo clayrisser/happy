@@ -1372,7 +1372,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
      * it names its own haptics -- one on the open, one on each crossing, one on
      * the lift -- so a `hapticsLight` here was a second tick on top of the
      * first. `onTalkTap` remains the entry for controls that genuinely have no
-     * touch stream: the headphone double press, the lock screen, the watch.
+     * touch stream: the headphone mic press, the lock screen, the watch.
      * Same reducer, same capture, so a latch opened by ear is still stopped by
      * thumb (DROVE-210).
      */

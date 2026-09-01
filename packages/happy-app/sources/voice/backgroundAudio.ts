@@ -203,10 +203,12 @@ export function startBackgroundAudio(reader: BackgroundReader): () => void {
      * `transportEffect` is where that lives, beside the button's own gestures,
      * so the three surfaces cannot come to disagree.
      *
-     * Only the TRANSPORT presses reach the reader (DROVE-225). A double press
-     * is the microphone and has its own subscription in useVoiceComposer;
-     * `remoteTransportGesture` returning null is what keeps this file about the
-     * transport and nothing else.
+     * Only the TRANSPORT presses reach the reader's play/pause (DROVE-225,
+     * DROVE-300). A triple press is the microphone and has its own
+     * subscription in useVoiceComposer; a double press is the next
+     * reading-enabled session and has its own in readAloudService, beside the
+     * call that starts this one. `remoteTransportGesture` returning null is
+     * what keeps this file about the transport and nothing else.
      */
     const remote = addRemoteCommandListener((command) => {
         const gesture = remoteTransportGesture(command);

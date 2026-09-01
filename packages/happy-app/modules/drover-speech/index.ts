@@ -93,8 +93,22 @@ type DroverSpeechModuleType = {
      * as `next` on `onRemoteCommand` (DROVE-225). Build 13 has
      * `handlesInterruptions` and still disables `nextTrackCommand`, so the two
      * stamps are genuinely different builds and cannot share one.
+     *
+     * The NAME is a fossil. DROVE-300 moved the microphone off the double
+     * press and gave it to the next-session skip, so what this stamp answers
+     * is "does `next` arrive", which is what it always physically meant. It is
+     * not renamed because a build stamp's identity is the thing that has to
+     * survive across binaries; `remoteDoublePressAvailable` is the name to
+     * read it by.
      */
     handlesMicCommand?: () => boolean;
+    /**
+     * Optional: its presence is the build stamp for the TRIPLE PRESS arriving
+     * as `previous` on `onRemoteCommand` (DROVE-300). Build 15 answers
+     * `handlesMicCommand` true and still disables `previousTrackCommand`, so
+     * again the two stamps are different builds and cannot share one.
+     */
+    handlesTriplePress?: () => boolean;
     /** Keep the audio session while nothing is speaking. See DROVE-189. */
     holdSession?: (hold: boolean) => Promise<void>;
     /**
@@ -131,9 +145,12 @@ type DroverSpeechModuleType = {
         (eventName: 'onSpeechInterruption', listener: (event: { state: 'began' | 'ended'; resumed?: boolean }) => void): EventSubscription;
         /**
          * A press on the lock screen or on the headphones. iOS counts the
-         * presses: single is `toggle`, double is `next` (DROVE-225), triple
-         * would be `previous` and is not enabled. `next` arrives only on a
-         * build with `handlesMicCommand`.
+         * presses: single is `toggle`, double is `next`, triple is `previous`.
+         * What each MEANS is sources/voice/headphonePress.ts's, not this
+         * module's: after DROVE-300 the double is the next reading-enabled
+         * session and the triple is the microphone. `next` arrives only on a
+         * build with `handlesMicCommand`, `previous` only on one with
+         * `handlesTriplePress`.
          */
         (eventName: 'onRemoteCommand', listener: (event: { command: RemoteCommandName }) => void): EventSubscription;
     };
@@ -339,16 +356,38 @@ export function addSpeechInterruptionListener(
 }
 
 /**
- * Whether the double press reaches this app at all (DROVE-225).
+ * Whether the DOUBLE press reaches this app at all (DROVE-225, renamed by
+ * DROVE-300).
  *
- * Build 13 sets `nextTrackCommand.isEnabled = false`, so on the binary
- * currently on Clay's phone a double press goes to whatever else is playing
- * and no JS can hear it. Its own stamp rather than `speechInterruptionsHandled`,
- * which build 13 already answers true to.
+ * Build 13 sets `nextTrackCommand.isEnabled = false`, so on that binary a
+ * double press goes to whatever else is playing and no JS can hear it. Its own
+ * stamp rather than `speechInterruptionsHandled`, which build 13 already
+ * answers true to.
+ *
+ * It was called `remoteMicCommandAvailable` while the double press was the
+ * microphone. DROVE-300 moved the mic to the triple press, so the old name
+ * would now point a reader at the wrong gesture; the underlying native stamp
+ * keeps its name because a stamp's identity has to survive across binaries.
  */
-export function remoteMicCommandAvailable(): boolean {
+export function remoteDoublePressAvailable(): boolean {
     if (!native) return false;
     return typeof native.handlesMicCommand === 'function';
+}
+
+/**
+ * Whether the TRIPLE press reaches this app at all (DROVE-300).
+ *
+ * The microphone rides this one now, so this is the question the mic's
+ * subscription asks. False on build 15 and earlier, where
+ * `previousTrackCommand.isEnabled = false` and the press reaches nothing
+ * however long we listen. A bundle shipped over the air onto build 15 gets
+ * the next-session double press and no headphone microphone, and a settings
+ * row can say "needs a newer build" rather than offering a gesture the phone
+ * in his pocket cannot deliver.
+ */
+export function remoteTriplePressAvailable(): boolean {
+    if (!native) return false;
+    return typeof native.handlesTriplePress === 'function';
 }
 
 /** Lock-screen or AirPod press. Nothing arrives on an older build. */
