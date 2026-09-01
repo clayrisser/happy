@@ -25,7 +25,7 @@ import {
  *                     add       the `+`, 39
  *                     gap       6
  *                     capsule   permission | auto-accept ‖ read-aloud ‖
- *                               effort ‖ model, 39 tall, 26 per glyph segment
+ *                               effort ‖ model, 39 tall, 28 per glyph segment
  *                     gap       6
  *                     spacer    flex 1, the row's only slack
  *                     mic       39
@@ -214,9 +214,12 @@ export function resolveComposerBubbleSessionCapsuleGeometry(): ComposerBubbleSty
 export function resolveComposerBubbleSessionSegmentGeometry(): ComposerBubbleStyle {
     return {
         // NOT SQUARE SINCE DROVE-284. The capsule is still the row's height and
-        // a glyph segment is `MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH` wide, which
-        // is the glyph's measured ink plus `controlGap` either side. Four of
-        // them at a disc's width is what forced the second row Clay rejected.
+        // a glyph segment is `MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH` wide —
+        // the widest whole point the 375 floor affords now that the name is
+        // 12pt, never under the glyph's measured ink plus `controlGap` either
+        // side. Four of them at a disc's width is what forced the second row
+        // Clay rejected; DROVE-284 cut them to the ink and Clay has since
+        // ruled that over-tight (“spread them out”).
         width: MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH,
         height: MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE,
         alignItems: 'center',

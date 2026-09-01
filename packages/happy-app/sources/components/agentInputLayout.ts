@@ -397,9 +397,8 @@ export const MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE = MOBILE_COMPOSER_METRICS.prima
  * circle's rim or a disc's edge and needs a rim's clearance, and this one is
  * bounded by two hairlines, which need a gap's."
  *
- * SO IT IS THE GLYPH'S INK PLUS `controlGap` EITHER SIDE, and the ink is
- * MEASURED off Ionicons.ttf the way `IONICON_INK_RATIO` is rather than guessed
- * from the 20pt em box:
+ * THE INK IS MEASURED off Ionicons.ttf the way `IONICON_INK_RATIO` is rather
+ * than guessed from the 20pt em box:
  *
  *   lock-closed   0.6875 of the em   13.75pt at size 20   <- the padlock
  *   flash         0.6867             13.73                <- the bolt
@@ -408,33 +407,91 @@ export const MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE = MOBILE_COMPOSER_METRICS.prima
  *   eye           0.9355             18.71                <- the widest
  *   pause         0.4375              8.75
  *
- * 13.75 + 2 x 6 = 25.75, so 26.
+ * DROVE-284 DERIVED THE WIDTH BOTTOM-UP AND CLAY HAS RULED IT OVER-TIGHT. The
+ * first cut was the padlock's ink plus `controlGap` either side, 13.75 + 2 x 6
+ * = 25.75, so 26 — deliberately the least a segment could be, to win the
+ * one-row fight. Clay, with the shipped row on his phone: "It's a bit crowded
+ * here and you have a little more space to spread them out and you can make
+ * the model text smaller." Both halves of that are one trade: the name drops a
+ * point (13 -> 12, `COMPOSER_MODEL_SEGMENT`), and the width that frees goes to
+ * the segments.
  *
- * THE TWO WIDE GLYPHS SIT CLOSER TO THE RULE AND THAT IS SAID RATHER THAN
- * HIDDEN. `eye` keeps 3.6pt each side and `volume-high` 4.25, against the
- * padlock's 6.1. Both are well over the 2pt DROVE-118 measured as the distance
- * at which two marks read as one blob, and a hairline between them is a
- * stronger separator than air is. Sizing every segment to the WIDEST glyph
- * instead would be 31, which costs 20pt across the four and puts the longest
- * model name under the type floor at 375 — a cut name on a phone people hold,
- * to buy 2pt of air around a glyph only Codex's read-only mode draws.
+ * SO THE WIDTH IS NOW DERIVED TOP-DOWN, from what the narrowest supported
+ * phone affords rather than from the least the glyph needs: the WIDEST whole
+ * point at which the longest name either picker offers still clears the type
+ * floor at 375. The arithmetic, run and asserted in sessionPillLabel.spec.ts:
+ * 375 less the two insets (38) less the discs, gaps and hairlines (138) less
+ * the name's floor width at 12pt (85) leaves 114 for four segments, and
+ * floor(114 / 4) = 28. The ink rule survives as the LOWER bound — 28 never
+ * goes under the 26 the padlock's ink plus `controlGap` demands — and the
+ * spend is Clay's own grant: "you have a little more space."
+ *
+ * WHAT 28 BUYS EACH GLYPH: the padlock keeps 7.1pt a side against 26's 6.1,
+ * `volume-high` 5.25 against 4.25, and `eye`, the widest mark the capsule can
+ * draw, 4.6 against 3.6 — all clear of the 2pt DROVE-118 measured as the
+ * distance at which two marks read as one blob. Sizing every segment to the
+ * widest glyph instead would be 31, which busts the 375 floor outright.
+ *
+ * WHAT IT COSTS, in the same ledger DROVE-284 wrote: the fixed row goes 242 ->
+ * 250, still 49 better than DROVE-281's 299, and the one softening is at 390,
+ * where the three 14-glyph Gemini names now draw at 0.989 rather than full
+ * size — 1.1% under, on the one supported width between the two phones the
+ * tickets name. 393, the width Clay reads, still draws every name whole.
+ * sessionPillLabel.ts carries the full width table.
  *
  * THE TOUCH TARGET IS THE THING THIS SPENDS, and the trade was already made
  * and written down at 39: `MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE` says the
  * segments answer in a 39 x 51 box, "still under Apple's 44pt floor on ONE
- * axis, by 5 rather than by 8". This makes that axis 26 rather than 39, so the
- * box is 26 x 51 and the shortfall on the horizontal is 18. It is spent for the
- * same reason DROVE-236 spent the first 5: horizontal slop is not available
- * inside a shared capsule, because a segment claiming it would be claiming its
+ * axis, by 5 rather than by 8". This makes that axis 28 rather than 39, so the
+ * box is 28 x 51 and the shortfall on the horizontal is 16 — two points BACK
+ * toward the floor from DROVE-284's 18. It is spent for the same reason
+ * DROVE-236 spent the first 5: horizontal slop is not available inside a
+ * shared capsule, because a segment claiming it would be claiming its
  * neighbour's ink, and the alternative is not a bigger target — it is a second
- * row Clay has now rejected by name, or a cut model name.
+ * row Clay has rejected by name, or a cut model name.
  *
  * The VERTICAL axis is untouched, and it is the one a thumb misses on: the
  * capsule is 39 tall with `primaryActionSlop` above and below it, and the
  * segments are stacked side by side rather than one above the other, so a
  * finger landing between two of them lands on one of them.
  */
-export const MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH = 26;
+export const MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH = 28;
+
+/**
+ * READ-ALOUD'S FILL, INSET AS A PILL RATHER THAN BLED TO THE SEGMENT'S BOX
+ * (DROVE-284 refinement).
+ *
+ * The shipped face painted the whole 26 x 39 segment, square to the capsule's
+ * top and bottom rims and hard against the hairlines — sharp corners inside a
+ * rounded shell, which is visible in Clay's own photo of the row. Rendered
+ * side by side at 375 and 393 on both themes, the full-bleed face reads as a
+ * highlighter stripe cut into the capsule; inset, it reads as a BUTTON — a
+ * shape with its own even clearance inside the shape that holds it, which is
+ * DROVE-214's whole argument for discs over bare glyphs, applied to the one
+ * filled state the capsule draws. It is also the vocabulary the control had
+ * until DROVE-284 moved it in: the reading state wore a DISC, and the pill is
+ * that disc at segment scale rather than a rectangle the disc never was.
+ *
+ * THE NUMBERS: 1pt clear of each hairline — enough that the fill and the rule
+ * never touch, and the 13pt height difference keeps them from ever reading as
+ * one mark — and 3pt clear of the capsule's rim above and below, one whole
+ * point over DROVE-118's 2pt blob threshold. The radius is half the pill's
+ * narrower side, so the shape is a stadium at every segment width. At the
+ * chat's 28 x 39 segment that is a 26 x 33 pill, radius 13; `volume-high`,
+ * the widest everyday glyph, keeps 4.25pt of fill beyond its ink.
+ *
+ * NO COLOUR MOVES. The four faces, their fills and their tints are exactly
+ * `composerAudioOutFill` / `composerAudioOutTint`, every fill still opaque and
+ * still measured on the capsule in composerControlColour.spec.ts — the pill
+ * changes where the fill STOPS, not what it is or what it sits on, so the
+ * contrast table stands unchanged.
+ */
+export const MOBILE_COMPOSER_SEGMENT_FILL_INSET = {
+    /** Off each hairline, so the fill never touches a rule. */
+    horizontal: 1,
+    /** Off the capsule's rim, clear of DROVE-118's 2pt blob threshold. */
+    vertical: 3,
+} as const;
 
 /**
  * The chat bubble, empty: padding, one line of text, the gap, the button row,

@@ -65,6 +65,7 @@ vi.mock('@/constants/Typography', () => ({ Typography: { default: () => ({}) } }
 vi.mock('./BubblePressable', () => ({ BubblePressable: host('BubblePressable') }));
 
 const { ComposerSessionControls } = await import('./ComposerSessionControls');
+const { MOBILE_COMPOSER_SEGMENT_FILL_INSET } = await import('./agentInputLayout');
 const {
     COMPOSER_CONTROL_PALETTE,
     composerCapsuleDivider,
@@ -642,23 +643,50 @@ describe('read-aloud as a capsule segment', () => {
      * in the fill and are never confusable anyway: one is silent and the other
      * has a call up.
      */
-    it('draws all four faces, glyph and fill, exactly as the disc did', () => {
+    /**
+     * THE FILL IS AN INSET PILL, NOT THE SEGMENT'S OWN BACKGROUND (DROVE-284
+     * refinement). Clay's photo showed the shipped fill square to the
+     * capsule's rims; the pill is the disc's vocabulary kept at segment
+     * scale, and `MOBILE_COMPOSER_SEGMENT_FILL_INSET` carries the renders
+     * that settled it. So the face's colour is read off the PILL — a child
+     * View of the pressable — and the pressable itself must carry no
+     * backgroundColor at all, which is asserted so the full-bleed fill
+     * cannot quietly come back.
+     */
+    const pillOf = (segment: any) => segment.findAll((node: any) =>
+        node.type === 'View'
+        && (Array.isArray(node.props.style) ? node.props.style : [node.props.style])
+            .some((part: any) => part?.borderRadius !== undefined && part?.backgroundColor !== undefined))[0];
+
+    it('draws all four faces, glyph and pill, exactly as the disc did', () => {
         const faceOf = (fill: string, glyph: string) => {
             const renderer = mount({ readAloud: readAloud({ fill, glyph }) });
             const segment = press(renderer, 'Read aloud');
             const parts = stylePartsOf(segment);
+            const pill = pillOf(segment);
             return {
                 glyph: segment.findByType('Ionicons' as any).props.name,
                 colour: segment.findByType('Ionicons' as any).props.color,
-                fill: parts.reduce((found: any, part: any) => part?.backgroundColor ?? found, undefined),
+                fill: (Array.isArray(pill.props.style) ? pill.props.style : [pill.props.style])
+                    .reduce((found: any, part: any) => part?.backgroundColor ?? found, undefined),
+                // The PRESSABLE never wears the fill: that was the full-bleed
+                // face Clay photographed, and it must fail here if it returns.
+                pressableFill: parts.reduce((found: any, part: any) => part?.backgroundColor ?? found, undefined),
             };
         };
+        // Off, the pill is MOUNTED and transparent rather than absent, so a
+        // face swap under a finger recolours a view instead of mounting one —
+        // DROVE-286's unmount-under-the-finger lesson, honoured before it can
+        // bite on this segment.
         expect(faceOf('none', 'volume-mute'))
-            .toEqual({ glyph: 'volume-mute', colour: palette.foreground, fill: undefined });
+            .toEqual({ glyph: 'volume-mute', colour: palette.foreground,
+                fill: 'transparent', pressableFill: undefined });
         expect(faceOf('accent', 'volume-high'))
-            .toEqual({ glyph: 'volume-high', colour: '#FFFFFF', fill: palette.accent });
+            .toEqual({ glyph: 'volume-high', colour: '#FFFFFF',
+                fill: palette.accent, pressableFill: undefined });
         expect(faceOf('recording', 'volume-high'))
-            .toEqual({ glyph: 'volume-high', colour: '#FFFFFF', fill: palette.recording });
+            .toEqual({ glyph: 'volume-high', colour: '#FFFFFF',
+                fill: palette.recording, pressableFill: undefined });
         // PAUSED IS THE ONE THAT HAD TO SURVIVE THE MOVE (DROVE-258). Clay:
         // "When I long press read and it pauses color it I dunno pause colour
         // maybe yellow or orange and show pause icon." Amber fill, pause bars,
@@ -666,7 +694,37 @@ describe('read-aloud as a capsule segment', () => {
         // measures about 2:1 — the exact bug a copied ternary would have
         // shipped.
         expect(faceOf('paused', 'pause'))
-            .toEqual({ glyph: 'pause', colour: '#000000', fill: palette.pending });
+            .toEqual({ glyph: 'pause', colour: '#000000',
+                fill: palette.pending, pressableFill: undefined });
+    });
+
+    it('insets the pill 1 off each hairline and 3 off the rim, a stadium', () => {
+        // The chat's segment: 28 wide, 39 tall, so the pill is 26 x 33 with a
+        // 13pt radius, and `volume-high`, the widest everyday glyph, keeps
+        // 4.25pt of fill beyond its 17.5pt of ink.
+        const renderer = mount({
+            size: 39, segmentWidth: 28, readAloud: readAloud({ fill: 'accent' }),
+        });
+        const pill = pillOf(press(renderer, 'Read aloud'));
+        const box = (Array.isArray(pill.props.style) ? pill.props.style : [pill.props.style])
+            .reduce((found: any, part: any) => ({
+                width: part?.width ?? found.width,
+                height: part?.height ?? found.height,
+                borderRadius: part?.borderRadius ?? found.borderRadius,
+            }), {});
+        expect(box).toEqual({
+            width: 28 - 2 * MOBILE_COMPOSER_SEGMENT_FILL_INSET.horizontal,
+            height: 39 - 2 * MOBILE_COMPOSER_SEGMENT_FILL_INSET.vertical,
+            borderRadius: 13,
+        });
+        expect(MOBILE_COMPOSER_SEGMENT_FILL_INSET).toEqual({ horizontal: 1, vertical: 3 });
+        // And the glyph is INSIDE the pill, so the pill centres it exactly as
+        // the segment centred it — nothing moved but where the colour stops.
+        expect(pill.findByType('Ionicons' as any).props.name).toBe('volume-high');
+        // The three segments with no fill state mount no pill at all.
+        for (const label of ['Permission mode', 'Reasoning effort', 'Model']) {
+            expect(pillOf(press(renderer, label)), label).toBeUndefined();
+        }
     });
 
     it('keeps the long press, which is pause, resume and boss mode', () => {
@@ -705,17 +763,17 @@ describe('read-aloud as a capsule segment', () => {
         // Home's square 44pt capsule; the chat hands in the narrower value and
         // the segments follow it on one axis only.
         const renderer = mount({
-            size: 39, segmentWidth: 26, onToggleAutoAccept: () => {}, readAloud: readAloud(),
+            size: 39, segmentWidth: 28, onToggleAutoAccept: () => {}, readAloud: readAloud(),
         });
         for (const label of ['Permission mode', 'Auto-accept', 'Read aloud', 'Reasoning effort']) {
             const box = stylePartsOf(press(renderer, label)).reduce((found: any, part: any) => ({
                 width: part?.width ?? found.width, height: part?.height ?? found.height,
             }), { width: undefined, height: undefined });
-            expect(box, label).toEqual({ width: 26, height: 39 });
+            expect(box, label).toEqual({ width: 28, height: 39 });
         }
         // The name sizes to itself and takes only the height.
         const modelParts = stylePartsOf(press(renderer, 'Model'));
-        expect(modelParts.some((part: any) => part?.width === 26)).toBe(false);
+        expect(modelParts.some((part: any) => part?.width === 28)).toBe(false);
         expect(modelParts.some((part: any) => part?.height === 39)).toBe(true);
         // Square by default, which is what Home still draws.
         const homeParts = stylePartsOf(press(mount({ readAloud: readAloud() }), 'Read aloud'));

@@ -58,16 +58,23 @@ export const COMPOSER_SESSION_CONTROL_SIZE = 44;
 /**
  * The model's name inside the capsule (DROVE-178).
  *
- * 13pt, a step up from the 12 the DROVE-111 row squeezed it to, because the
- * name now has DROVE-153's gap to itself rather than 63pt between six
- * buttons. `glyphWidth` is a generous average advance for the system font at
- * 13pt, so the estimate only ever errs toward "does not fit".
- * `paddingHorizontal` is the inset each side of the text: the same air the
- * 44pt glyph segments give their 20pt glyphs.
+ * 12pt AGAIN, AND THIS TIME ON CLAY'S OWN INSTRUCTION (DROVE-284 refinement).
+ * DROVE-111's row squeezed the name to 12 by necessity; DROVE-178 stepped it
+ * up to 13 because the name had DROVE-153's gap to itself. Clay, with
+ * DROVE-284's one-row capsule on his phone: "you can make the model text
+ * smaller" — the second half of "spread them out", because the point the name
+ * gives up is what pays for the segments' air. One step, not a shrink: the
+ * name is the row's one VALUE and stays legible at every width it draws
+ * (worst case 0.824 of 12pt at 375, about 9.9pt).
+ *
+ * `glyphWidth` is a generous average advance for the system font at 12pt —
+ * DROVE-178's 7 at 13pt scaled by 12/13 is 6.46, kept at 6.5 so the estimate
+ * still only ever errs toward "does not fit".
+ * `paddingHorizontal` is the inset each side of the text.
  */
 export const COMPOSER_MODEL_SEGMENT = {
-    fontSize: 13,
-    glyphWidth: 7,
+    fontSize: 12,
+    glyphWidth: 6.5,
     /**
      * The inset each side of the text, and the one thing this segment gives up
      * to pay for DROVE-264's second voice control.
@@ -110,14 +117,22 @@ export const COMPOSER_MODEL_SEGMENT = {
      * last line before a name is cut. It buys the width out of the capsule's
      * SEGMENTS instead (`MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH`), which is a
      * give with a bottom and a measurement. Lowering the floor would not even
-     * buy the width that fails: 320 leaves the name 40pt and the SHORTEST name
-     * in any picker needs 46 at 0.8, so the floor would have to go under 0.6 to
-     * rescue a phone nobody holds, at the cost of type on every phone somebody
-     * does.
+     * buy the width that fails: 320 leaves the name 32pt and the SHORTEST name
+     * in any picker needs 44 at 0.8, so the floor would have to go well under
+     * 0.6 to rescue a phone nobody holds, at the cost of type on every phone
+     * somebody does.
      *
-     * What it is FOR is the widths that scale, and after DROVE-284 there is
-     * exactly one: the three 14-glyph Gemini names land at 0.847 on a 375
-     * phone, and draw WHOLE at full size on 390 and everything above it. The
+     * AND THE 12PT STEP DOES NOT MOVE IT EITHER (DROVE-284 refinement). The
+     * floor is a SCALE, so a smaller base size lowers the smallest type it
+     * permits — 0.8 of 12 is 9.6 where 0.8 of 13 was 10.4. What is actually
+     * DRAWN never reaches it: the worst scale on any supported width is 0.824
+     * at 375, about 9.9pt, and raising the floor to hold the old 10.4pt
+     * minimum (0.87 of 12) would cut the longest names at 375 outright, which
+     * is the DROVE-138 failure the floor exists to prevent.
+     *
+     * What it is FOR is the widths that scale, and there are two: the three
+     * 14-glyph Gemini names land at 0.824 on a 375 phone and 0.989 at 390,
+     * and draw WHOLE at full size on 393 and everything above it. The
      * crossover where they meet this floor is `COMPOSER_ROW_MIN_MODEL_WIDTH`.
      * `composerModelBudget` below has the full table.
      */
@@ -147,7 +162,7 @@ export const COMPOSER_MODEL_SEGMENT = {
  * WHY HIS INSTRUCTION IS THE REMEDY AND NOT JUST THE COMPLAINT. A loose disc
  * costs its own 39pt diameter PLUS a 6pt gap. A capsule segment costs a
  * segment plus a hairline and shares the capsule's ends. Moving read-aloud in
- * takes 45 off the row and puts 27 back (a 26pt segment and a hairline), and the arithmetic of the move is
+ * takes 45 off the row and puts 29 back (a 28pt segment and a hairline), and the arithmetic of the move is
  * only a third of what it buys: the other two thirds is that once the capsule
  * holds FOUR glyph segments, a segment being as wide as a disc stops being a
  * rounding error and becomes 156pt of a 393pt phone. It never needed to be.
@@ -169,44 +184,54 @@ export const COMPOSER_MODEL_SEGMENT = {
  * or resize the box per face and reflow the row every time the agent starts a
  * turn.
  *
- * WHAT THE ROW COSTS, TICKET BY TICKET, AND WHAT IT LEAVES THE NAME:
+ * WHAT THE ROW COSTS, TICKET BY TICKET, AND WHAT IT LEAVES THE NAME. The
+ * last column is DROVE-284's air refinement: Clay looked at the shipped 26pt
+ * segments and said "spread them out", granting the space, and "make the
+ * model text smaller", paying for it — so the segments go 26 -> 28 and the
+ * name 13pt -> 12pt, which SHRINKS what every name needs even as the budget
+ * narrows:
  *
- *   width   -264   +264   +266   +281   +284   what the row draws now
- *   320      82     40     22    -17     40    every name cut; below the floor
- *   375     137     95     77     38     95    every name whole or scaled ≥0.8
- *   390     152    110     92     53    110    every name WHOLE at full size
- *   393     155    113     95     56    113    every name WHOLE at full size
- *   430     192    150    132     93    150    every name WHOLE at full size
+ *   width   -264   +264   +266   +281   +284   +air   what the row draws now
+ *   320      82     40     22    -17     40     32    every name cut; below the floor
+ *   375     137     95     77     38     95     87    every name whole or scaled ≥0.8
+ *   390     152    110     92     53    110    102    whole, except three 14-glyph names at 0.989
+ *   393     155    113     95     56    113    105    every name WHOLE at full size
+ *   430     192    150    132     93    150    142    every name WHOLE at full size
  *
  * SO DROVE-284 HANDS BACK MORE THAN DROVE-281 SPENT: the fixed row goes 299 ->
- * 242, which is 17pt better than the 260 DROVE-266 left, and 393 — the width
- * Clay reads — goes from a second row to drawing `Gemini 3.1 Pro`, the longest
- * name either picker offers, WHOLE at full type size on one line. Nothing on
- * this row was dropped to get there and nothing was cut.
+ * 242 -> 250 with the air, still 49 better than DROVE-281 and 10 better than
+ * the 260 DROVE-266 left, and 393 — the width Clay reads — goes from a second
+ * row to drawing `Gemini 3.1 Pro`, the longest name either picker offers,
+ * WHOLE at full type size on one line. Nothing on this row was dropped to get
+ * there and nothing was cut. The air's one softening is named in the table:
+ * at 390 the three 14-glyph Gemini names draw at 0.989 — 1.1% under full
+ * size — where DROVE-284 drew them whole.
  *
  * WHAT GIVES, IN ORDER, AND WHY IT IS STILL NOT THE NAME.
  *
  *   1. The spacer, which costs nothing and at 320 was already zero.
  *   2. The model segment's own PADDING, 10 to 6 (DROVE-264), argued on
  *      `COMPOSER_MODEL_SEGMENT.paddingHorizontal`.
- *   3. The capsule's glyph SEGMENTS, 39 to 26 (DROVE-284), argued on
+ *   3. The capsule's glyph SEGMENTS, 39 to 26 (DROVE-284) and back to 28 on
+ *      Clay's "spread them out", argued on
  *      `MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH`. This is the new give and it is
- *      52pt across the four, which is what makes the single row affordable
+ *      44pt across the four, which is what makes the single row affordable
  *      again with a fourth control in the capsule.
  *   4. Then the name's TYPE SIZE, down to `minimumFontScale`.
  *
  * AND THE FIFTH IS GONE. DROVE-266's "the capsule stops sharing the row" was
  * the give with no bottom, and Clay has refused it: "I don't like that extra
  * row." So the list has a bottom again, and `COMPOSER_ROW_MIN_MODEL_WIDTH` is
- * where it is, at 371 — below every phone the app supports and above 320.
+ * where it is, at 373 — below every phone the app supports and above 320.
  *
  * 320 IS THE HONEST FAILURE AND IT IS STATED RATHER THAN ROUTED AROUND. On one
- * row a 320pt phone leaves the name 40pt, and the SHORTEST name in any picker,
- * `Opus 5`, needs 46 at the type floor, so every name in every picker is cut
+ * row a 320pt phone leaves the name 32pt, and the SHORTEST name in any picker,
+ * `Opus 5`, needs 44 at the type floor, so every name in every picker is cut
  * there. It is not shavable either, and the spec measures how far it is from
- * being: the segments would have to come down to 24 to buy `Opus 5` and to 13
- * to buy `Gemini 3.1 Pro`, and the capsule draws a 20pt glyph, so neither is a
- * width a segment can be. What would have to go at 320 is a control or the name
+ * being: the segments would have to come down to 25 to buy `Opus 5` — under
+ * the 26 the padlock's ink plus `controlGap` demands — and to 14 to buy
+ * `Gemini 3.1 Pro`, under the 20pt glyph itself, so neither is a width a
+ * segment can be. What would have to go at 320 is a control or the name
  * itself. 320 is below the narrowest phone this app supports — 375, per
  * statusRowLayout.spec.ts — so the trade is named and taken: 320 loses the name
  * rather than 393 gaining a row.
@@ -268,7 +293,10 @@ export const COMPOSER_BUBBLE_ROW_GEOMETRY = {
 
 /**
  * The narrowest width this row still spells the model's name on (DROVE-264,
- * 375 -> 389 by DROVE-266, 389 -> 428 by DROVE-281, and 428 -> 371 here).
+ * 375 -> 389 by DROVE-266, 389 -> 428 by DROVE-281, 428 -> 371 by DROVE-284,
+ * and 371 -> 373 by its air refinement — the segments took two of the four
+ * points the smaller name freed, and this line moved by exactly the other
+ * two the arithmetic says).
  *
  * Not a taste line and not a device list: it is the width at which the budget
  * left over from `composerRowFixedWidth` can still hold the longest name the
@@ -281,13 +309,13 @@ export const COMPOSER_BUBBLE_ROW_GEOMETRY = {
  * — "I don't like that extra row" — so below this width the name is cut, and
  * the number matters again in the way it did originally.
  *
- * WHICH IS WHY IT IS BELOW EVERY PHONE THE APP SUPPORTS. 371 clears 375, the
- * narrowest handset statusRowLayout.spec.ts still supports, with 4pt to spare,
+ * WHICH IS WHY IT IS BELOW EVERY PHONE THE APP SUPPORTS. 373 clears 375, the
+ * narrowest handset statusRowLayout.spec.ts still supports, with 2pt to spare,
  * and clears 390, 393, 430 and 440 by more. It does NOT clear 320, and that is
  * the one honest failure of the single row; the argument is on
  * `COMPOSER_BUBBLE_ROW_GEOMETRY` and it is not fixable by rearranging this row.
  */
-export const COMPOSER_ROW_MIN_MODEL_WIDTH = 371;
+export const COMPOSER_ROW_MIN_MODEL_WIDTH = 373;
 
 
 /** Everything on the row but the name, which is what the name gets the rest of. */
