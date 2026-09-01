@@ -59,26 +59,57 @@
  *
  *   - `transport`, the ordinary state. Single press is play/pause, exactly
  *     what build 13 already does and what AirPods teach every user. DOUBLE
- *     PRESS IS THE MICROPHONE. Triple is left alone.
+ *     PRESS IS THE NEXT SESSION. TRIPLE PRESS IS THE MICROPHONE.
  *   - `menu`, while an audio menu is being read out (DROVE-73). Single press
  *     selects the option being read, double moves to the next option, triple
  *     to the previous. The microphone is NOT reachable then, on purpose: a
  *     question is on the table and answering it is the thing to do. He
- *     answers, the menu closes, and the next double press is the mic again.
+ *     answers, the menu closes, and the next triple press is the mic again.
  *
  * Written down here rather than in either feature so the two cannot both
  * think they have the double press. DROVE-73 has not shipped a gesture yet;
  * when it does, it sets the owner and reads this table.
  *
- * ## Why double press and not something cleverer
+ * ## Why double press is the NEXT SESSION (DROVE-300)
  *
- * Because single press has to stay play/pause. It is the gesture the hardware
- * is labelled with, it is what he already has on build 13, and taking it for
- * the mic would mean he can no longer pause the reader from his ears, which
- * is the control he uses most. Double press is the next one along, it is what
- * AirPods already teach as "the other thing", and it is a deliberate gesture
- * that a jacket pocket does not produce by accident. Triple press is reserved
- * rather than spent, because DROVE-73 needs a third.
+ * Clay, choosing it himself: "double press would be just like playing YouTube,
+ * it skips to the next track — in this case the next session."
+ *
+ * That is the argument, and it is a better one than the one it replaces. The
+ * three presses are not three free slots: they are a TRANSPORT, and every
+ * pair of headphones ever made has taught the same three meanings —
+ * play/pause, next, previous. A double press that opened a microphone was
+ * borrowing the next-track gesture for something that is not a track, and it
+ * had to be learnt because nothing else in the world does it. A double press
+ * that moves the voice to the next session is the gesture doing its own job:
+ * the sessions ARE the tracks, and the reader is the player.
+ *
+ * It also settles the lock screen and the car, which the old mapping could
+ * not. Enabling `nextTrackCommand` puts a ⏭ on the now-playing card and in
+ * every CarPlay head unit, and there is no way to have the press without the
+ * button (MPRemoteCommandCenter has one switch for both and
+ * MPNowPlayingInfoCenter cannot relabel a glyph). DROVE-225 had to write that
+ * off as "a lock-screen button that opens the mic ... simply wearing the wrong
+ * icon". Now the icon is right: ⏭ on the dashboard skips to the next session,
+ * which is what a ⏭ means.
+ *
+ * ## Why the microphone MOVED to the triple press rather than being lost
+ *
+ * Single press cannot be taken. It is the gesture the hardware is labelled
+ * with, it is what build 13 already does, and taking it for the mic would
+ * cost him the control he uses most. Double press now has a job the media
+ * metaphor gives it. That leaves triple, which DROVE-225 deliberately did not
+ * spend: "reserved rather than spent, because DROVE-73 needs a third". It is
+ * spent now, and DROVE-73 is not harmed, because the menu is a different
+ * OWNER and keeps all three presses to itself while it is up. That is exactly
+ * the arbitration this file was written for, and it is the reason the mic had
+ * somewhere to go.
+ *
+ * THE COST, named rather than discovered: the triple press only arrives on a
+ * binary that ENABLES `previousTrackCommand`, and enabling it puts a ⏮ on the
+ * card that opens the microphone. That is DROVE-225's wrong-icon trade paid a
+ * second time, and this time it is on the ⏮ rather than the ⏭. It is the
+ * price of having the mic on the headphones at all; there is no third button.
  *
  * Pure. No device, no timers, no state.
  */
@@ -102,6 +133,13 @@ export type HeadphoneOwner =
 export type HeadphoneAction =
     /** Play/pause the reader, as build 13 already does. */
     | 'transport'
+    /**
+     * Pause the session being read at its held position and give the voice to
+     * the next session that has reading enabled (DROVE-300). Never a stop and
+     * never a jump-ahead: the outgoing session keeps its place and the
+     * incoming one resumes at ITS place, which is DROVE-289's held reading.
+     */
+    | 'next-session'
     /** Open the microphone, or close the one this opened (DROVE-225). */
     | 'mic'
     /** Take the option being read (DROVE-73). */
@@ -133,10 +171,9 @@ export function headphoneAction(command: RemoteCommand, owner: HeadphoneOwner): 
                 case 'toggle':
                     return 'transport';
                 case 'next':
-                    return 'mic';
+                    return 'next-session';
                 case 'previous':
-                    // Reserved for DROVE-73 and unspent until then.
-                    return 'ignore';
+                    return 'mic';
             }
             break;
         case 'menu':
@@ -158,11 +195,15 @@ export function headphoneAction(command: RemoteCommand, owner: HeadphoneOwner): 
 /**
  * Does this command drive the transport, on the ordinary state?
  *
- * `backgroundAudio.ts` is the one place a remote command reaches the READER,
- * and before this ticket it treated every command that was not `play` as a
- * reason to stop reading. A double press would then have turned read-aloud
- * off on its way to opening the mic. This is the guard that keeps that file
- * about the transport and nothing else.
+ * `backgroundAudio.ts` is the one place a remote command reaches the READER's
+ * play/pause, and before DROVE-225 it treated every command that was not
+ * `play` as a reason to stop reading. A double press would then have turned
+ * read-aloud off on its way to doing its own job. This is the guard that
+ * keeps that file about the transport and nothing else.
+ *
+ * `next-session` reaches the reader too (DROVE-300), through its own
+ * subscription in nextSession.ts, and it is NOT the transport: it moves the
+ * focus rather than the play/pause state, so it must stay false here.
  */
 export function isTransportCommand(command: RemoteCommand): boolean {
     return headphoneAction(command, 'transport') === 'transport';

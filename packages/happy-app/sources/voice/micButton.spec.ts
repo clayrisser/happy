@@ -312,7 +312,7 @@ describe('reduceMicGesture', () => {
     });
 
     /**
-     * A control with only a press (DROVE-210): the headphone double press, the
+     * A control with only a press (DROVE-210): the headphone mic press, the
      * lock screen, the watch. One callback, on the lift, with no press-in, no
      * duration and no coordinates. So a tap on it is fed here as a press and a
      * lift at the same instant, and the reducer needs no new event type to

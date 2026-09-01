@@ -12,6 +12,9 @@ import { readDetourFromHere, readFromHere, readSentenceFromHere } from './readAl
 import { subagentDetourFrom } from './subagentRead';
 import { getSubagentMessages } from '@/sync/subagentMessages';
 import { startBackgroundAudio } from './backgroundAudio';
+import { startNextSessionPress } from './nextSession';
+import { readingCycleFrom } from './readingCycle';
+import { addRemoteCommandListener } from 'drover-speech';
 
 /**
  * The one reader the app owns (DROVE-30).
@@ -151,3 +154,36 @@ function rememberSentenceTap(moved: boolean): boolean {
 
 audioCues.attach(readAloud);
 startBackgroundAudio(readAloud);
+
+/**
+ * The double press skips to the next reading-enabled session (DROVE-300).
+ *
+ * WIRED HERE, BESIDE `startBackgroundAudio`, AND THAT IS THE WHOLE POINT.
+ * Clay's requirement is that the headphone mappings behave the same with the
+ * app in the foreground and with it backgrounded in streaming mode. This
+ * module has no react in it and runs once at import, so the subscription
+ * outlives every screen: the press lands on the one reader whether a
+ * SessionView is mounted, unmounted, or was never opened this launch. The
+ * lock screen's play/pause has worked this way since DROVE-189 and this is
+ * the same shape.
+ *
+ * EVERY SEMANTIC HERE IS BORROWED, which is the other half of the point.
+ * `isSessionEnabled` and `takeVoice` are DROVE-297's — one switch per session,
+ * and a take that pauses whoever was holding the voice — and the pause under
+ * that take is DROVE-289's hold-and-restore, so the outgoing session keeps its
+ * whole position and the incoming one resumes at its own. Never a stop, never
+ * a jump ahead. DROVE-300 adds a ring step and nothing else.
+ *
+ * `takeVoice` rather than `visit` because he is NOT visiting: the phone is in
+ * his pocket. They differ by one assignment, `visited`, which is the session
+ * he is looking at and must not move for a press he made with the screen off.
+ */
+startNextSessionPress({
+    cycle: () => readingCycleFrom(
+        storage.getState().sessions,
+        (sessionId) => readAloud.isSessionEnabled(sessionId),
+    ),
+    current: () => readAloud.readingSessionId,
+    take: (sessionId) => readAloud.takeVoice(sessionId),
+    subscribe: (listener) => addRemoteCommandListener(listener),
+});

@@ -1014,6 +1014,27 @@ export class ReadAloudReader {
      */
     visit(sessionId: string, reason: ReadAloudInterruption = 'switched-session'): void {
         this.visited = sessionId;
+        this.takeVoice(sessionId, reason);
+    }
+
+    /**
+     * Give this session the voice WITHOUT claiming he navigated to it
+     * (DROVE-300).
+     *
+     * The headphone double press. He is in the street with the phone in his
+     * pocket, so `visited` must not move: it is the session he is LOOKING at,
+     * and this ticket's whole premise is that he is looking at nothing. A
+     * press that set it would have the composer and the list draw a screen he
+     * never opened, the first time anything reads it.
+     *
+     * Everything ELSE is DROVE-297's, unchanged and not copied: the same
+     * `voiceMove('visit', ...)` call `visit` makes, so an unarmed session is
+     * `keep` here exactly as it is there, and a `take` pauses the yielding
+     * session at its own place through DROVE-289's machinery. The two entry
+     * points differ by one assignment, which is the honest size of the
+     * difference between arriving somewhere and being handed the voice.
+     */
+    takeVoice(sessionId: string, reason: ReadAloudInterruption = 'switched-session'): void {
         this.applyMove(voiceMove('visit', {
             holder: this.readingSessionId,
             session: sessionId,

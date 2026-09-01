@@ -1,9 +1,10 @@
 import type { AudioCueId } from './audioCues';
 
 /**
- * The double press, turned into the ONE capture (DROVE-225).
+ * The triple press, turned into the ONE capture (DROVE-225, moved off the
+ * double press by DROVE-300).
  *
- * `headphonePress.ts` decides that a double press means the microphone. This
+ * `headphonePress.ts` decides that a triple press means the microphone. This
  * decides what happens next, and it is short on purpose: everything about
  * what a capture IS lives in dictationCapture.ts, everything about what a
  * gesture is lives in micButton.ts, and this file adds a third door onto the
@@ -106,7 +107,7 @@ export class HeadphoneMic {
         return this.opening !== null;
     }
 
-    /** A double press arrived. */
+    /** A press that means the microphone arrived. A triple, since DROVE-300. */
     press(): void {
         // A press while the open is still waiting on its cue. `capturing()` is
         // not true yet, so without this the press would ack and schedule a

@@ -198,8 +198,14 @@ export function transportEffect(
  * The gesture a native remote command is, or null when it is not the transport
  * at all.
  *
- * `next` is the microphone (DROVE-225) and `previous` is reserved for
- * DROVE-73; both belong to headphonePress.ts and neither reaches the reader.
+ * `next` is the next reading-enabled session and `previous` is the microphone
+ * (DROVE-300). Both belong to headphonePress.ts and neither is the transport.
+ *
+ * `next` DOES reach the reader, which is the one thing worth saying here: it
+ * moves the focus, through nextSession.ts, and a focus move is not a play/pause
+ * state. Returning a gesture for it would put the session skip through
+ * `transportEffect`, where the only cells it could land in are pause, resume
+ * and nothing — three wrong answers.
  */
 export function remoteTransportGesture(command: string): TransportGesture | null {
     switch (command) {

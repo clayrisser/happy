@@ -49,7 +49,7 @@ function harness(patch: Partial<Pick<Harness, 'capturing' | 'blocked'>> = {}): H
     return state;
 }
 
-describe('the double press opens the mic', () => {
+describe('the mic press opens the mic', () => {
     it('sounds the open cue BEFORE the microphone opens', () => {
         // A tone played into a live recogniser is a tone in the recording:
         // dictation runs the session in .playAndRecord with .defaultToSpeaker,
@@ -78,7 +78,7 @@ describe('the double press opens the mic', () => {
     });
 });
 
-describe('the double press closes what it opened', () => {
+describe('the mic press closes what it opened', () => {
     it('stops a running capture and says so at once', () => {
         // The stop is the slow half; the recogniser takes its time settling.
         // An acknowledgement that waits for it arrives seconds after the
