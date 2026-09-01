@@ -18,6 +18,9 @@ const mocks = vi.hoisted(() => ({
     woken: [] as DroverSnapshot[],
     wakeSpent: true,
     wakes: 12 as number | undefined,
+    publishOk: true,
+    // The phone widget rides this same wake (DROVE-260).
+    widgetFaces: [] as Record<string, unknown>[],
 }));
 
 const disk = new Map<string, string>();
@@ -58,12 +61,20 @@ vi.mock('drover-watch', () => ({
     describeDroverWakeBudget: (status: { wakes?: number }) =>
         typeof status.wakes === 'number' ? `wake budget ${status.wakes}/50 today` : 'wake budget unknown',
     publishDroverSnapshot: (snapshot: DroverSnapshot) => {
-        mocks.published.push(snapshot);
-        return Promise.resolve(true);
+        if (mocks.publishOk) mocks.published.push(snapshot);
+        return Promise.resolve(mocks.publishOk);
     },
     wakeDroverWatch: (snapshot: DroverSnapshot) => {
         if (mocks.wakeSpent) mocks.woken.push(snapshot);
         return Promise.resolve(mocks.wakeSpent);
+    },
+    // The phone widget's half of the same wake (DROVE-260). It is a separate
+    // surface with a separate container, and the point of the tests below is
+    // that it does not depend on the wrist's half succeeding.
+    isDroverWidgetAvailable: () => true,
+    writeDroverWidgetFace: (face: Record<string, unknown>) => {
+        mocks.widgetFaces.push(face);
+        return Promise.resolve(true);
     },
 }));
 
@@ -86,6 +97,8 @@ beforeEach(() => {
     mocks.woken = [];
     mocks.wakeSpent = true;
     mocks.wakes = 12;
+    mocks.publishOk = true;
+    mocks.widgetFaces = [];
 });
 
 describe('the background republish', () => {
@@ -94,6 +107,32 @@ describe('the background republish', () => {
         mocks.sessions = {};
         expect(await republishWatchSnapshot()).toBe(false);
         expect(mocks.published).toHaveLength(0);
+    });
+
+    /**
+     * THE WIDGET DOES NOT DEPEND ON A WATCH (DROVE-260).
+     *
+     * This wake is the push the whole widget freshness argument rests on — the
+     * CLI sends it exactly when the gate set changes — and the two surfaces
+     * share nothing but the wake. A widget that only got written when a WATCH
+     * publish also succeeded would go dark for anyone without one, which is
+     * most people who would install it, and it would go dark silently.
+     */
+    it('writes the widget face even when the watch publish fails', async () => {
+        mocks.publishOk = false;
+        mocks.gates = [{ id: 's1:r1', kind: 'permission' }];
+        expect(await republishWatchSnapshot()).toBe(false);
+        expect(mocks.published).toHaveLength(0);
+        expect(mocks.widgetFaces).toHaveLength(1);
+        expect(mocks.widgetFaces[0].count).toBe(1);
+    });
+
+    // An unhydrated store must not clear the widget for the same reason it
+    // must not clear the wrist: it would wipe the gate the wake announced.
+    it('writes no widget face on a cold launch with no sessions', async () => {
+        mocks.sessions = {};
+        expect(await republishWatchSnapshot()).toBe(false);
+        expect(mocks.widgetFaces).toHaveLength(0);
     });
 
     it('carries a gate nobody has carried yet', async () => {

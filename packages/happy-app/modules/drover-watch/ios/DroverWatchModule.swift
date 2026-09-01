@@ -1,5 +1,8 @@
 import ExpoModulesCore
 import WatchConnectivity
+// The phone half of DROVE-260. Only `WidgetCenter` is used from it, and only
+// to spend a reload the JS side has already decided is worth spending.
+import WidgetKit
 
 /// Phone side of the Cattle Drover wrist surface (BASED-98).
 ///
@@ -391,6 +394,59 @@ public final class DroverWatchModule: Module {
             let budget = session.remainingComplicationUserInfoTransfers
             session.transferCurrentComplicationUserInfo(dict)
             return budget > 0
+        }
+
+        /// Write the PHONE widget's face into the app group, and reload its
+        /// timelines when JS says the change is worth one (DROVE-260).
+        ///
+        /// It lives in this module rather than a second pod because this is
+        /// already the phone's native surface bridge and the app group it
+        /// writes to is the one the wrist half established. A separate podspec
+        /// and autolink entry for one function is more build surface to get
+        /// wrong than the naming is worth — and the naming is the only thing
+        /// wrong with it.
+        ///
+        /// It writes RAW JSON rather than an encoded Swift value on purpose.
+        /// The face's shape is decided in sources/sync/droverWidgetFace.ts and
+        /// read back by DroverWidgetFace.swift in the extension; a third
+        /// definition here, in the middle, is the drift DROVE-257 cost two
+        /// fixes. The bytes pass through untouched, so this file has no
+        /// opinion about any field.
+        ///
+        /// Silent where the app group is unreachable, which is what an
+        /// entitlement that did not make it into the profile looks like: the
+        /// phone app is not worth failing over a home-screen convenience, and
+        /// the widget already says "Not yet synced" when nothing was ever
+        /// written. It resolves false there so JS can tell the two apart.
+        ///
+        /// `reload` is decided in JS because the budget question needs the
+        /// history of what the widget has already been told, which lives in
+        /// the feed. See `shouldReloadWidget`.
+        AsyncFunction("publishWidgetFace") { (json: String, reload: Bool) -> Bool in
+            guard let data = json.data(using: .utf8) else {
+                throw Exception(name: "DroverWatch", description: "widget face was not utf8")
+            }
+            // Parsed only to refuse a payload that is not an object at all. A
+            // widget rendering a decode failure is a widget stuck on its last
+            // face forever, and that is worth catching on this side of the
+            // wire rather than in an extension nobody can attach a debugger to.
+            guard (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] != nil else {
+                throw Exception(name: "DroverWatch", description: "widget face was not a JSON object")
+            }
+            // The suite and the key are literals here and in
+            // widget/DroverPhoneWidget/DroverWidgetFace.swift, which is two
+            // copies of one string. droverWidgetFace.spec.ts pins both against
+            // the TypeScript, the same arrangement sessionStateWire.spec.ts
+            // has with DroverSnapshot.swift — a mismatch fails a test rather
+            // than shipping a widget that reads an empty box.
+            guard let defaults = UserDefaults(suiteName: "group.com.bitspur.drover") else {
+                return false
+            }
+            defaults.set(data, forKey: "drover.widget.face.v1")
+            if reload {
+                WidgetCenter.shared.reloadAllTimelines()
+            }
+            return true
         }
     }
 }

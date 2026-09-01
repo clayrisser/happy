@@ -21,6 +21,8 @@
  * phone's; `droverWidgetFace.spec.ts` pins these numbers the same way.
  */
 
+import type { DroverGate, DroverSession } from 'drover-watch';
+
 import {
     statusDotColors,
     statusDotLabels,
@@ -223,4 +225,131 @@ export function droverWidgetFace(input: WidgetFaceInput): DroverWidgetFace {
         detail: workers === 0 ? '' : workers === 1 ? '1 worker' : `${workers} workers`,
         updatedAt: input.now,
     };
+}
+
+/**
+ * Every dot the phone can resolve, as a set, so a string off the wire can be
+ * checked against it rather than cast into it.
+ *
+ * Built from `statusDotColors` rather than written out, so a seventh state
+ * added to the vocabulary is a state this recognises on the same commit.
+ */
+const knownDots = new Set<string>(Object.keys(statusDotColors));
+
+/**
+ * THE ONE ADAPTER, so both writers build the face the same way.
+ *
+ * The feed and the background task collect gates and sessions in exactly the
+ * shapes the wrist takes, and the face needs three fields out of them. This
+ * is where those two shapes meet, and it exists as one exported function
+ * because two call sites mapping the same fields by hand is how the wrist's
+ * colour table drifted from the phone's (DROVE-257).
+ *
+ * A `dotState` this build has never heard of reads as `disconnected`, not as
+ * a cast. The wire carries it as a bare string — the watch decodes an unknown
+ * one the same way — and a widget from an older build meeting a newer state
+ * should look like a fault rather than like calm, which is the same rule
+ * `DroverWidgetFace.empty` follows in Swift.
+ *
+ * A gate whose `createdAt` will not parse sorts LAST rather than first, so a
+ * malformed timestamp cannot capture the one title the face gets to name.
+ */
+export function widgetFaceForSnapshot(input: {
+    gates: Pick<DroverGate, 'id' | 'title' | 'createdAt'>[];
+    sessions: Pick<DroverSession, 'id' | 'dotState' | 'subagents'>[];
+    now: number;
+}): DroverWidgetFace {
+    return droverWidgetFace({
+        now: input.now,
+        gates: input.gates.map((gate) => {
+            const at = Date.parse(gate.createdAt);
+            return {
+                id: gate.id,
+                title: gate.title,
+                createdAt: Number.isFinite(at) ? at : Number.MAX_SAFE_INTEGER,
+            };
+        }),
+        sessions: input.sessions.map((session) => ({
+            id: session.id,
+            dot: (session.dotState && knownDots.has(session.dotState)
+                ? session.dotState
+                : 'disconnected') as StatusDotState,
+            ...(typeof session.subagents === 'number' ? { subagents: session.subagents } : {}),
+        })),
+    });
+}
+
+/**
+ * HOW OFTEN A RELOAD MAY BE SPENT ON A FACE THAT ONLY DRIFTED. 30 minutes.
+ *
+ * This is the constraint the proposal did not have to answer and the wiring
+ * does. WidgetKit gives a widget roughly 40 to 70 timeline reloads a day and
+ * promises none of them; `WidgetCenter.reloadAllTimelines()` spends one. The
+ * face, meanwhile, is written on every publish the feed makes — a heartbeat a
+ * minute, plus every store change while the app is open. Reloading on each of
+ * those would burn the day's budget inside the hour and leave the widget
+ * frozen for the rest of it, which is the one failure this surface cannot
+ * have.
+ *
+ * 30 minutes is picked against `WIDGET_CLEAR_TRUSTED_MS` rather than by feel:
+ * it is half the window a clear face is trusted for, so a phone being used at
+ * all restamps the widget twice inside every trusted hour and cannot fall out
+ * of trust while it is awake. It also caps the drift path at 48 reloads a day,
+ * near Apple's floor of about 40 before the gate pushes are counted — and
+ * those are the reloads worth having.
+ */
+export const WIDGET_RELOAD_FLOOR_MS = 30 * 60 * 1000;
+
+/**
+ * Whether this dot is a FAULT — the work is gone, rather than busy or idle.
+ *
+ * A predicate over the existing vocabulary, not a seventh state, the same rule
+ * `dotRank` follows. It exists because a fault appearing is worth a reload on
+ * the spot and a session going from working to idle is not.
+ */
+function faultDot(dot: StatusDotState): boolean {
+    return dot === 'disconnected' || dot === 'recentlyDisconnected';
+}
+
+/**
+ * WHETHER THIS CHANGE IS WORTH ONE OF THE DAY'S RELOADS.
+ *
+ * Two things earn one immediately, and they are the two the widget exists for:
+ * the COUNT moved — something is now waiting on him, or he is now clear — and
+ * a FAULT appeared or cleared, because a home screen still saying "Working"
+ * over a machine that died is the same lie in a quieter register.
+ *
+ * Everything else is churn. `working` and `connected` swap on every turn a
+ * session takes and the worker count moves with every subagent; a widget
+ * chasing those would spend the whole budget on a glyph nobody is looking at
+ * and have nothing left for the raise that matters. Those changes are still
+ * WRITTEN — the blob is always current — they just wait for the next reload,
+ * which the floor guarantees inside half an hour.
+ */
+export function widgetReloadWorthIt(
+    previous: DroverWidgetFace | null,
+    next: DroverWidgetFace,
+): boolean {
+    if (!previous) return true;
+    if (previous.count !== next.count) return true;
+    return faultDot(previous.dot) !== faultDot(next.dot);
+}
+
+/**
+ * Whether to spend a reload on this write, given what the widget was last
+ * shown and when it was last told anything at all.
+ *
+ * The floor is measured from the last RELOAD, never the last write: a write
+ * nobody reloaded for did not reach the widget, which goes on rendering
+ * whatever it last drew. Measuring from the write would let an hour of
+ * unreloaded churn look like an hour of keeping the widget current.
+ */
+export function shouldReloadWidget(input: {
+    previous: DroverWidgetFace | null;
+    next: DroverWidgetFace;
+    lastReloadAt: number | null;
+}): boolean {
+    if (widgetReloadWorthIt(input.previous, input.next)) return true;
+    if (input.lastReloadAt === null) return true;
+    return input.next.updatedAt - input.lastReloadAt >= WIDGET_RELOAD_FLOOR_MS;
 }

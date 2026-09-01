@@ -137,6 +137,35 @@ export default {
             // CURRENT_PROJECT_VERSION on both watch targets — cannot disagree
             // with the phone.
             buildNumber: process.env.DROVER_BUILD_NUMBER || "1",
+            // THE PHONE APP JOINS THE APP GROUP (DROVE-260).
+            //
+            // Until now the group belonged to the watch app and its
+            // complication alone, and the phone reached the wrist over
+            // WatchConnectivity, which needs no group at all. A home-screen
+            // widget has no such channel: WidgetKit renders it in a separate
+            // process that cannot reach the store, the socket or the bus, so
+            // the only way the phone can tell it anything is to write into a
+            // container they share. Without this entitlement
+            // `UserDefaults(suiteName:)` on the phone writes into a box the
+            // widget cannot open, and nothing fails loudly — the widget simply
+            // says "Not yet synced" forever.
+            //
+            // Declared here rather than written into ios/<Host>.entitlements
+            // by the graft because EAS reads THIS to decide what capability to
+            // put on the profile it mints, and a profile without App Groups is
+            // refused at signing with "doesn't support the
+            // group.com.bitspur.drover App Group" — the same failure the two
+            // watch targets hit before their appExtensions entries below
+            // carried it.
+            //
+            // The group is a literal, as it is in every .entitlements file in
+            // this tree and in DroverSnapshot.swift. They must all agree, and
+            // droverWidgetFace.spec.ts is what says so.
+            entitlements: {
+                "com.apple.security.application-groups": [
+                    "group.com.bitspur.drover"
+                ]
+            },
             config: {
                 usesNonExemptEncryption: false
             },
@@ -364,6 +393,23 @@ export default {
                                 {
                                     targetName: "DroverWatchWidget",
                                     bundleIdentifier: `${bundleId}.watchkitapp.widget`,
+                                    entitlements: {
+                                        "com.apple.security.application-groups": [
+                                            "group.com.bitspur.drover"
+                                        ]
+                                    }
+                                },
+                                // The iPhone home-screen widget (DROVE-260).
+                                // Grafted by the same script as the two above,
+                                // for the same reason: ios/ is gitignored, so
+                                // there is no committed Xcode state to put a
+                                // target in. Apple imposes no naming rule on
+                                // an iOS extension's id the way it does on a
+                                // watch app's, so `.widget` on the host id is
+                                // a choice — it just has to match the graft.
+                                {
+                                    targetName: "DroverPhoneWidget",
+                                    bundleIdentifier: `${bundleId}.widget`,
                                     entitlements: {
                                         "com.apple.security.application-groups": [
                                             "group.com.bitspur.drover"

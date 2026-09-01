@@ -14,6 +14,8 @@ const mocks = vi.hoisted(() => ({
     published: [] as DroverSnapshot[],
     /** Snapshots sent through the background wake (DROVE-62). */
     woken: [] as DroverSnapshot[],
+    /** Faces written into the app group for the phone widget (DROVE-260). */
+    widgetFaces: [] as Record<string, unknown>[],
     /** The watch app is frontmost, so publish's own sendMessage reaches it. */
     reachable: true,
     /** Background wakes left today; undefined is a native module without the key (DROVE-86). */
@@ -127,6 +129,14 @@ vi.mock('drover-watch', () => ({
     },
     wakeDroverWatch: (snapshot: DroverSnapshot) => {
         mocks.woken.push(snapshot);
+        return Promise.resolve(true);
+    },
+    // The phone widget rides every publish this feed makes (DROVE-260). It is
+    // fed the same gates and sessions and writes into the app group instead of
+    // over WatchConnectivity, so the feed's own tests only need it to exist.
+    isDroverWidgetAvailable: () => true,
+    writeDroverWidgetFace: (face: Record<string, unknown>) => {
+        mocks.widgetFaces.push(face);
         return Promise.resolve(true);
     },
     addDroverAnswerListener: (listener: typeof mocks.onAnswer) => {
@@ -258,6 +268,7 @@ beforeEach(() => {
     mocks.settled = [];
     mocks.published = [];
     mocks.woken = [];
+    mocks.widgetFaces = [];
     mocks.reachable = true;
     mocks.wakes = undefined;
     mocks.appState = 'active';

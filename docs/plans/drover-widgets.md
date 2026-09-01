@@ -1,9 +1,17 @@
 # iPhone and watch widgets for Cattle Drover (DROVE-260)
 
-A proposal, plus a thin proof of concept for the one size it argues for. Nothing
-here is built beyond that one size, on purpose: a widget's whole discipline is
-what it leaves out, and four sizes shipped together is four decisions nobody
-made.
+The argument for one iPhone widget, and the widget. Nothing is built beyond
+that one size, on purpose: a widget's whole discipline is what it leaves out,
+and four sizes shipped together is four decisions nobody made.
+
+The first half of this document was the proposal. It stands as written and the
+build agreed with it, including the two calls most worth arguing with — no
+Lock Screen until someone designs a monochrome vocabulary, and no account
+headroom until there is a row wide enough to date it. The second half, from
+"How it is wired" down, is what the wiring turned out to need, and it is one
+decision the proposal did not have to make: **the reload budget**. A widget's
+freshness is not only what it says, it is how often anyone is allowed to tell
+it anything, and WidgetKit rations that at about 40 to 70 times a day.
 
 ## The recommendation, first
 
@@ -22,11 +30,12 @@ already gets the two hard parts right: it renders from an app-group snapshot,
 and it schedules a second timeline entry at the exact moment that snapshot goes
 stale so it stops saying "clear" the instant it stops knowing.
 
-What does not exist is anything on the phone. `com.bitspur.drover` has no
-app-group entitlement at all — `app.config.js` grants
+What did not exist was anything on the phone. `com.bitspur.drover` had no
+app-group entitlement at all — `app.config.js` granted
 `group.com.bitspur.drover` to `DroverWatch` and `DroverWatchWidget` and to
-nothing else — so today there is no shared container an iOS extension could
-read.
+nothing else — so there was no shared container an iOS extension could read.
+That is the first thing "How it is wired" below changes, and it is the change
+that fails most quietly if it is got wrong.
 
 ## The two constraints this is designed against
 
@@ -47,16 +56,21 @@ content-available push that the CLI sends whenever the set of gates *changes* �
 on a raise and on a dismiss. That handler already rebuilds the whole snapshot
 and hands it to the wrist. Writing the same thing into the app group and calling
 `WidgetCenter.reloadAllTimelines()` is one more line in a path that is already
-running, so the widget costs no new refresh budget and no new wake. Apple
-documents roughly two or three background pushes an hour and promises none of
-them, which is why the staleness policy below is load-bearing rather than
-decorative.
+running, so the widget costs no new wake. Apple documents roughly two or three
+background pushes an hour and promises none of them, which is why the staleness
+policy below is load-bearing rather than decorative.
+
+It does not, as this section originally claimed, cost no new refresh budget.
+That was true of the gate push alone; the build also writes the face on every
+foreground publish, which is what makes it fresh — and the reload that reaches
+the widget is exactly the thing WidgetKit rations. See "The reload budget"
+below, which is the one decision the proposal did not have to make.
 
 ## What each supported size would show, and what it costs
 
 | size | shows | refresh cost | verdict |
 |---|---|---|---|
-| iOS `.systemSmall` | gate count, or the worst dot + workers when zero | free — rides the existing gate push | **build** |
+| iOS `.systemSmall` | gate count, or the worst dot + workers when zero | rides the gate push and every foreground publish; the reload is rationed | **built** |
 | iOS `.systemMedium` | the above plus one account bar, with an "as of" stamp | free for the count, but headroom moves every turn | later, if he asks |
 | iOS `.systemLarge` | a session list | a list is what the app is for | no |
 | iOS `.accessoryRectangular` (Lock Screen) | count + oldest gate title, monochrome | free | blocked on a monochrome vocabulary |
@@ -91,12 +105,18 @@ fails a test rather than eroding.
 But headroom is the wrong fact for a small widget, and the reason is timing, not
 space.
 
-Headroom moves on every turn. The widget's copy is written when the *gate set*
-changes, which is uncorrelated with token spend — a session can burn a whole
-week's window without raising a single gate, and the widget would sit on the
-number from before. A percentage on a home screen with nothing next to it saying
-how old it is reads as live. That is DROVE-255 exactly: the fresh-looking
-session row over a spent week.
+Headroom moves on every turn, and the widget's copy does not. It is refreshed
+while the app is open and when the gate set changes, and the phone is closed
+for most of the hours a home screen is glanced at — so the number on it is
+routinely an hour old and can be a night old, over a window that moved the
+whole time. A percentage on a home screen with nothing beside it saying how old
+it is reads as live. That is DROVE-255 exactly: the fresh-looking session row
+over a spent week.
+
+The build did not change this. It is the one place where writing the face more
+often would have been an argument for putting headroom on the small size, and
+it is not enough: an hour is long enough to burn a session window, so an
+hour-old percentage with no stamp is still a lie, just a fresher one.
 
 `.systemSmall` has no room for an "as of 14:20" stamp beside a bar without
 crowding out the count. `.systemMedium` does. So the rule is: **headroom needs a
@@ -194,61 +214,169 @@ which is the direction that lies.
 timeouts, the fallback hex, and the family list against the TypeScript. Both
 pins were verified to fail when the Swift is edited out of step.
 
-## What it takes to actually ship this
 
-Small, and mostly on rails that already exist.
+## How it is wired
 
-1. **App group on the phone target.** `watch/scripts/add-watch-targets.rb`
-   already creates the host app's entitlements file (empty) and pins
-   `CODE_SIGN_ENTITLEMENTS` to it, for an unrelated reason — see its comment
-   about build 8. Adding `com.apple.security.application-groups` there is a
-   two-line edit to an existing block, plus the matching declaration in
-   `app.config.js` so EAS mints a profile with the capability.
-2. **A widget extension target.** Same graft as `DroverWatchWidget`, `:ios`
-   instead of `:watchos`, bundle id `com.bitspur.drover.widget`, plus its entry
-   in `app.config.js` `appExtensions`.
-3. **Sharing `DroverSnapshot.swift`.** It lives under `watch/DroverWatch/Shared/`
-   and is already app-group aware. The iOS widget target needs the same file
-   references.
-4. **Writing the face.** One call in the existing publish paths
-   (`droverWatchFeed.ts` and `republishWatchSnapshot`) plus a native function
-   beside `publish` in `modules/drover-watch/ios/DroverWatchModule.swift` that
-   writes the JSON to the app group and calls
-   `WidgetCenter.shared.reloadAllTimelines()`.
-5. **A deep link.** `widgetURL` points at `happy://gates`; the route needs to
-   exist and resolve.
+Five pieces, all on rails that already existed.
+
+1. **The app group, on the phone target.** `app.config.js` declares
+   `ios.entitlements` with `com.apple.security.application-groups`, which is
+   what EAS reads to put App Groups on the profile it mints — without it,
+   signing is refused with "doesn't support the group.com.bitspur.drover App
+   Group", which is the same wall the two watch targets hit before their
+   `appExtensions` entries carried it. `add-watch-targets.rb` also **merges**
+   the group into `ios/<Host>/<Host>.entitlements` itself, because that file is
+   written by the graft on a fresh `ios/` and by expo's entitlements base mod
+   afterwards, and merging rather than assigning means the order cannot matter.
+   Checked: `expo config --type introspect` resolves the phone's entitlements
+   to the group *and* `aps-environment`, so the two writers really do compose.
+
+2. **A widget extension target, `DroverPhoneWidget`.** Grafted by the same
+   script as the watch targets, for the same reason — `ios/` is gitignored, so
+   a target that is not in the graft does not exist. It is `:ios`, not
+   `:watchos`, so almost none of the watch targets' shared settings hash
+   applies and it is spelled out instead; the one setting they must NOT share
+   is `TARGETED_DEVICE_FAMILY`, which is `4` there and `1,2` here. The graft
+   asserts its own `SDKROOT`, and `verify-watch-targets.rb` asserts it again
+   afterwards, because a watchOS setting copied onto a phone extension builds,
+   embeds, signs, and then fails on the device saying nothing useful.
+
+3. **`DroverSnapshot.swift`, and only that file out of `Shared/`.** It carries
+   the app-group suite name and the ISO-8601 coders the face rides on. The rest
+   of `Shared/` is the wrist's — cues, reach, drafts, the demo — and an iOS
+   extension compiling them would be carrying watch behaviour it can never run.
+
+4. **Writing the face.** `sources/sync/droverWidgetPublish.ts` builds it and
+   `DroverWatchModule.publishWidgetFace` writes the raw JSON into the group.
+   Two callers: the foreground feed, on every publish it makes, and
+   `republishWatchSnapshot`, on the silent gate push. In the background task it
+   is **awaited, and above the watch publish** — the execution budget ends when
+   that function returns, and a widget that only got written when a WATCH
+   publish also succeeded would go dark for anyone without a watch, silently.
+
+5. **The deep link.** `widgetURL` is `happy://gates`, and `/gates` is a route
+   that already exists (`sources/app/(app)/gates.tsx`, which
+   `PendingGatesBanner` and `HomeHeader` already push). Nothing to add.
+
+## The reload budget, which is the decision the proposal did not have to make
+
+WidgetKit hands out roughly 40 to 70 timeline reloads a day and promises none
+of them. `WidgetCenter.reloadAllTimelines()` spends one. The face, meanwhile,
+is now written on every publish the feed makes — a heartbeat a minute plus
+every store change while the app is open — because that is what makes it fresh.
+Reload on each of those and the day's budget is gone inside the hour, and the
+widget is then frozen for the rest of it. Over a gate raised at four o'clock.
+That is the one failure this surface cannot have, so the write and the telling
+are split.
+
+**The blob is written every time.** It costs nothing and it is what WidgetKit
+reads on its next reload from any cause, including its own `.after(900)`
+policy. Keeping it current can only help.
+
+**The reload is spent on two things.** The COUNT moved — something is now
+waiting on him, or he is now clear — or a FAULT appeared or cleared. Those are
+the two facts the widget exists to carry, and both want the home screen to
+change now rather than within the quarter hour.
+
+**Everything else waits for the floor**, `WIDGET_RELOAD_FLOOR_MS`, 30 minutes.
+`working` and `connected` swap on every turn a session takes and the worker
+count moves with every subagent; a widget chasing those would spend the whole
+budget on a glyph nobody is looking at.
+
+30 minutes is picked against `WIDGET_CLEAR_TRUSTED_MS` rather than by feel: it
+is half the window a clear face is trusted for, so a phone being used at all
+restamps the widget twice inside every trusted hour and cannot fall out of
+trust while it is awake — a widget saying "Not heard from" over a phone in his
+hand is DROVE-22's failure moved to a new surface. `droverWidgetFace.spec.ts`
+asserts that relationship rather than the number, so changing one forces the
+other to be thought about.
+
+**The honest part.** WidgetKit's own timeline policy already asks for a reload
+every 15 minutes, and the two draw on the same budget, so the floor is belt and
+braces: insurance for the case where the system throttles the policy to
+nothing, bought at up to 48 reloads a day. Whether that trade is right can only
+be found out by living with it, exactly like the six-hour count budget above.
+The floor being measured from the last RELOAD rather than the last write is not
+in that category, though — a write nobody reloaded for did not reach the
+widget, so counting writes would let an hour of churn look like an hour of
+keeping it current.
+
+## The watch complication is left exactly as it was
+
+BASED-98 already ships one, and it already answers the question this ticket
+says a wrist complication should answer: how many gates are waiting. It also
+already gets the hard part right, scheduling a second timeline entry at the
+moment its snapshot goes stale so it stops saying "clear" the instant it stops
+knowing.
+
+It draws in SF Symbols and semantic colours rather than `statusDotColors`, and
+that is deliberate rather than drift: complications render in contexts that
+desaturate, which is the same reason the Lock Screen is deferred above.
+Rewriting it to share the phone's hue table would import the exact problem this
+document declines to solve on the phone.
 
 ## What was verified, and what cannot be without a native build
 
-Verified on this branch:
+Verified on this branch, on this machine:
 
-- the derivation and the trust ladder, 15 tests in
-  `sources/sync/droverWidgetFace.spec.ts`.
-- both cross-language pins genuinely fail on drift — checked by editing the
-  Swift out of step and watching the test go red, then restoring it.
-- `tsc --noEmit` clean, and the full app suite green at 4117 tests across 265
-  files, including the 148 `composerControlColour` tests and the 71
-  `agentInputUsage` tests.
-- both new Swift files **type-check** against WidgetKit and SwiftUI:
-  `swiftc -typecheck` against the macOS SDK, together with
-  `DroverSnapshot.swift`. Confirmed meaningful by dropping a file and watching
-  it produce real errors. That is a macOS target, not iOS, so it proves the
-  types and the API use, not the platform availability of every symbol.
+- the derivation, the trust ladder, the wire adapter and the reload policy —
+  31 tests in `sources/sync/droverWidgetFace.spec.ts` and 9 in
+  `sources/sync/droverWidgetPublish.spec.ts`.
+- `tsc --noEmit` clean, and the full app suite green at **4146 tests across 266
+  files**, including the 148 `composerControlColour` tests (DROVE-254's capsule
+  `colorAlpha === 1` among them) and the 90 `droverWatchFeed` tests.
+- the three widget Swift files **type-check against the real iOS SDK**:
+  `swiftc -typecheck -sdk iphonesimulator -target arm64-apple-ios17.0-simulator`
+  over `DroverPhoneWidget.swift`, `DroverWidgetFace.swift` and
+  `DroverSnapshot.swift`. Confirmed meaningful by dropping `DroverSnapshot.swift`
+  and watching it fail on `cannot find 'DroverSnapshot' in scope`. This is a
+  stronger check than the macOS typecheck the proposal ran: it proves platform
+  availability of every symbol on iOS 17, not just the shapes.
+- the body of `publishWidgetFace` type-checks against the same SDK, lifted out
+  of the Expo module DSL so it can be compiled without ExpoModulesCore.
+- **the graft actually runs.** A synthetic `ios/` — one application target and
+  a host Info.plist, built with the xcodeproj gem where a real prebuild would
+  put it — then the real `add-watch-targets.rb` twice and the real
+  `verify-watch-targets.rb`. It produced `DroverPhoneWidget` as
+  `com.apple.product-type.app-extension`, `SDKROOT=iphoneos`, family `1,2`,
+  `SKIP_INSTALL=YES`, id `com.bitspur.drover.widget`, version 22 off the host
+  plist, the three expected sources, an `Embed Foundation Extensions` phase on
+  the HOST with `dst=:plug_ins` and `CodeSignOnCopy`, and the app group merged
+  into the host's entitlements. Idempotent: the second run left exactly one of
+  each phase and dependency.
+- the verifier's two new checks go red and exit 1, checked by breaking each in
+  turn — `SDKROOT` flipped to watchos, and the group removed from the host
+  entitlements.
+- `expo config --type introspect` resolves all three `appExtensions` with the
+  right bundle ids and the phone's own entitlements with the group.
 
-Unverified until a prebuild and a device build:
+Unverified until a prebuild and a real device build — and the honest list is
+longer than the verified one, because none of this has been through a compiler
+that links:
 
-- that the Xcode target graft works — the widget compiled as a real iOS app
-  extension, embedded in the host, signed.
-- that the app group is readable from an iOS extension once the entitlement is
-  added, and that EAS mints a profile carrying it.
-- that `WidgetCenter.reloadAllTimelines()` from a background push actually
-  refreshes the widget within the push's seconds-long execution budget.
+- that the widget **compiles and links** as a real iOS app extension inside the
+  host, and that CocoaPods' `post_integrate` re-graft leaves it intact. The
+  synthetic project proves the pbxproj surgery, not the build.
+- that EAS mints a profile carrying App Groups for `com.bitspur.drover.widget`,
+  and that the phone app's own profile carries it too — the phone has never
+  needed it before, so this is a NEW capability on the main app's profile and
+  the first archive is where that shows.
+- that the phone's write is actually readable from the extension's process.
+- that `reloadAllTimelines()` from the background push lands inside the push's
+  seconds-long budget.
 - that the 44pt count and a two-line title fit `.systemSmall` at the largest
   Dynamic Type setting.
-- the real-world hit rate of the gate push, which is the whole freshness
-  argument, and which can only be measured by living with it.
-- that `.systemSmall` on iOS 18's tinted Home Screen keeps enough of the hue to
-  tell amber from green. This is the risk most likely to change the design: if
-  tinted mode flattens the palette the way the Lock Screen does, the
-  monochrome-vocabulary problem arrives on the Home Screen too and this widget
-  needs the same work the Lock Screen was deferred for.
+- the real hit rate of the gate push, and whether the 30-minute floor is right.
+  Both need a week of living with it.
+- that `.systemSmall` on iOS 18's tinted Home Screen keeps enough hue to tell
+  amber from green. Still the risk most likely to change the design: if tinted
+  mode flattens the palette the way the Lock Screen does, the
+  monochrome-vocabulary problem arrives here too.
+
+Nothing above can ship as an OTA. `publishWidgetFace` is a new native function
+and the widget is a new target, so this needs a prebuild, an archive and a
+TestFlight build — and the runtime version must be bumped past 22 on that
+build, by the same rule the voice lane's pod followed, or an OTA carrying
+`droverWidgetPublish.ts` reaches a binary that has no such function. It
+degrades rather than crashes there (`writeDroverWidgetFace` returns false on a
+module without the function), but the bump is the rule.

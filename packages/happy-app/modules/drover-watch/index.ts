@@ -465,6 +465,14 @@ type DroverWatchModuleType = {
      * nothing, when it is not (DROVE-92).
      */
     sendToWatch?: (json: string) => Promise<boolean>;
+    /**
+     * Optional for the same reason: no build before the one that adds the
+     * phone widget target has it. Writes the widget's face into the app group
+     * and, when told to, reloads the widget's timelines (DROVE-260). An OTA
+     * carrying this file onto an older binary simply never writes a face, and
+     * the widget those builds do not have stays the widget they do not have.
+     */
+    publishWidgetFace?: (json: string, reload: boolean) => Promise<boolean>;
     addListener: {
         (eventName: 'onAnswer', listener: (event: DroverAnswerEvent) => void): EventSubscription;
         (eventName: 'onFlip', listener: (event: DroverFlipEvent) => void): EventSubscription;
@@ -618,6 +626,38 @@ export async function sendDroverWatchVoice(message: DroverWatchVoiceMessage): Pr
     if (!native || typeof native.sendToWatch !== 'function') return false;
     try {
         return await native.sendToWatch(JSON.stringify(message));
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Whether this binary can write the phone widget's face at all (DROVE-260).
+ *
+ * Exported so a caller can tell "no widget on this build" from "the write
+ * failed", which `writeDroverWidgetFace` folds into one false. The two want
+ * different logging: the first is every build before the widget shipped, the
+ * second is an app group the profile did not carry.
+ */
+export const isDroverWidgetAvailable = () =>
+    !!native && typeof native.publishWidgetFace === 'function';
+
+/**
+ * Write the phone widget's face into the app group (DROVE-260).
+ *
+ * `reload` spends one of WidgetKit's roughly 40-70 daily timeline reloads, so
+ * the caller decides — see `shouldReloadWidget`. The write itself is free and
+ * unconditional: the blob is what the widget reads on its NEXT reload from any
+ * cause, so keeping it current costs nothing and keeps a system-scheduled
+ * refresh from drawing something older than the phone knows.
+ *
+ * False on any failure, and never throws. A home-screen convenience must not
+ * be able to take down the publish path it rides on.
+ */
+export async function writeDroverWidgetFace(face: unknown, reload: boolean): Promise<boolean> {
+    if (!native || typeof native.publishWidgetFace !== 'function') return false;
+    try {
+        return await native.publishWidgetFace(JSON.stringify(face), reload);
     } catch {
         return false;
     }
