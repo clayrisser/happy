@@ -279,6 +279,36 @@ export function primaryActionColour(palette: ComposerControlPalette, hasSomethin
 }
 
 /**
+ * The padlock's glyph colour, which is the foreground in every permission mode
+ * and the accent while AUTO-ACCEPT is on (DROVE-277).
+ *
+ * THIS IS THE RULE APPLIED, NOT AN EXCEPTION TO IT, and the distinction is the
+ * whole reason it is written here rather than tinted at the call site. The rule
+ * is that a control holding a VALUE gets no colour and a control that is DOING
+ * something does. A permission mode is a value: yolo, plan and default are true
+ * of the session all of the time, which is why DROVE-215 took their colours
+ * away and why `permissionModeColour` is deleted rather than rewritten.
+ *
+ * Auto-accept is not a value the session holds. It is a thing the app is doing
+ * on Clay's behalf, continuously, to prompts he never sees — the same class as
+ * an open mic and a send with something in it, which are the other two the
+ * accent is spent on. It is also the only state on this row whose cost of being
+ * missed is a command running unasked, so if any state on the composer earns a
+ * colour it is this one.
+ *
+ * It reuses `accent`. No new palette entry, no new hue, and
+ * `ComposerActiveSignal` does not widen — the three signals are still recording,
+ * accent and pending, which is what the spec pins. The mode's own SILHOUETTE is
+ * untouched: the padlock, shield, eye and map still say which mode, so the
+ * colour adds a state rather than replacing the value, and a reader who cannot
+ * see the difference still reads the mode correctly (the sheet and the
+ * accessibility value carry auto-accept in words).
+ */
+export function permissionLockColour(palette: ComposerControlPalette, autoAccept: boolean): string {
+    return composerGlyphColour(palette, autoAccept ? 'accent' : null);
+}
+
+/**
  * The stack a composer glyph actually sits on, per theme, in the order it is
  * painted: the chat (either extreme), the dock scrim, which is opaque at the
  * composer (AgentContentView), then the control's chrome tint (DROVE-171).

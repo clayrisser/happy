@@ -21,7 +21,9 @@ import {
     composerGlyphColour,
     composerSessionCapsuleFill,
     pendingOrSettled,
+    permissionLockColour,
 } from './composerControlColour';
+import { permissionAccessibilityValue } from './autoAcceptRow';
 import {
     COMPOSER_MODEL_SEGMENT,
     COMPOSER_SESSION_CONTROL_SIZE,
@@ -167,6 +169,15 @@ export interface ComposerSessionControlsProps {
      * actually running, which is the ordinary state.
      */
     pending?: { permission?: boolean; effort?: boolean; model?: boolean } | null;
+    /**
+     * Whether this session is auto-accepting its boolean gates (DROVE-277).
+     *
+     * On the PADLOCK because auto-accept is a permission posture and the
+     * padlock is the permission control; the switch that changes it is a row
+     * in the padlock's own sheet, so the segment says what the sheet behind it
+     * is set to. Absent is off, which is what every session is at launch.
+     */
+    autoAccept?: boolean;
 }
 
 /** What VoiceOver adds while a pick is in flight, since colour reaches nobody there. */
@@ -378,6 +389,7 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
         canOpen,
         openPicker,
         pending,
+        autoAccept = false,
         size = COMPOSER_SESSION_CONTROL_SIZE,
         verticalSlop = 0,
         style,
@@ -439,7 +451,10 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                 <Control
                     picker="permission"
                     accessibilityLabel={mode.label}
-                    accessibilityValue={unconfirmedAccessibilityValue(mode.value, permissionPending)}
+                    accessibilityValue={unconfirmedAccessibilityValue(
+                        permissionAccessibilityValue(mode.value, autoAccept),
+                        permissionPending,
+                    )}
                     open={openPicker === 'permission'}
                     onPress={canOpenMode ? onPress : undefined}
                     size={size}
@@ -449,11 +464,20 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                         a value the session holds, not a thing it is doing, so
                         under the rule it earns no colour, and the padlock,
                         shield, eye and map already separate the modes on
-                        their own (DROVE-141). */}
+                        their own (DROVE-141).
+
+                        The one state that does colour it is AUTO-ACCEPT
+                        (DROVE-277), which is not a value the session holds but
+                        a thing the app is doing to prompts Clay never sees.
+                        The argument, and why it reuses `accent` rather than
+                        widening the palette, is on `permissionLockColour`. The
+                        GLYPH is unchanged either way, so the mode is still
+                        read off the silhouette and the colour adds a state
+                        rather than replacing a value. */}
                     <Ionicons
                         name={permissionModeGlyph(modeKind, modeKey)}
                         size={20}
-                        color={pendingOrSettled(palette, permissionPending, composerGlyphColour(palette))}
+                        color={pendingOrSettled(palette, permissionPending, permissionLockColour(palette, autoAccept))}
                     />
                 </Control>
             ) : null}

@@ -312,6 +312,45 @@ describe('busResolutionFor', () => {
         expect(busResolutionFor(undefined, { id: 'gone', approved: true }))
             .toEqual({ action: 'allow', by: 'phone', channel: 'visual' })
     })
+
+    /**
+     * THE AUDIT TRAIL (DROVE-277, keeping DROVE-239's property).
+     *
+     * DROVE-239 found a gate that had resolved `allow` with nobody at the
+     * terminal, and the only reason it was findable is that the ledger names
+     * who answered. The phone can now answer boolean gates by itself, so the
+     * ledger has to be able to say that — and must never be able to say the
+     * opposite.
+     */
+    it('stamps an auto-accepted allow as by auto-accept, never as a thumb', () => {
+        expect(busResolutionFor(permission, {
+            id: 'ev-2',
+            approved: true,
+            updatedInput: { via: 'auto-accept', channel: 'visual' },
+        })).toEqual({ action: 'allow', by: 'auto-accept', channel: 'visual' })
+    })
+
+    it('does not let a stray `via` invent a surface, least of all a human one', () => {
+        // `updatedInput` is whatever the app sent. Echoing it into `by` would
+        // let anything at all appear on the ledger as the answerer, so the
+        // table is an allowlist and everything outside it is a thumb.
+        for (const via of ['tmux-gum', 'cron', 'auto_accept', 'AUTO-ACCEPT', '']) {
+            expect(busResolutionFor(permission, {
+                id: 'ev-2',
+                approved: true,
+                updatedInput: { via },
+            }), via).toEqual({ action: 'allow', by: 'phone', channel: 'visual' })
+        }
+    })
+
+    it('leaves the other two surfaces exactly where they were', () => {
+        expect(busResolutionFor(permission, {
+            id: 'ev-2', approved: true, updatedInput: { via: 'watch' },
+        })).toEqual({ action: 'allow', by: 'watch', channel: 'visual' })
+        expect(busResolutionFor(permission, {
+            id: 'ev-2', approved: true, updatedInput: { via: 'push', channel: 'visual' },
+        })).toEqual({ action: 'allow', by: 'push', channel: 'visual' })
+    })
 })
 
 describe('the push body', () => {

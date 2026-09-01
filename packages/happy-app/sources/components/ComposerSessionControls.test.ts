@@ -289,6 +289,39 @@ describe('the colour each glyph is drawn in (DROVE-176, DROVE-215)', () => {
         }
     });
 
+    /**
+     * AUTO-ACCEPT IS THE ONE STATE THAT COLOURS THE PADLOCK (DROVE-277), and
+     * pinning it in a RENDER matters more here than anywhere else on the row:
+     * the colour is the only sighted carrier of a state whose cost of being
+     * missed is a command running unasked.
+     */
+    it('draws the padlock in the accent while auto-accept is on, and keeps the mode’s own shape', () => {
+        const glyph = (modeKind: string, autoAccept: boolean) =>
+            mount({ modeKind, autoAccept }).root.findByType('Ionicons' as any).props;
+        for (const mode of ['yolo', 'safe-yolo', 'read-only', 'plan', 'acceptEdits', 'default']) {
+            // Off is unchanged: DROVE-215's rule still holds for the mode.
+            expect(glyph(mode, false).color, mode).toBe(palette.foreground);
+            expect(glyph(mode, true).color, mode).toBe(palette.accent);
+            // And the SILHOUETTE is the same either way, so the row never
+            // misreports which mode the session is in to say it is auto-
+            // accepting.
+            expect(glyph(mode, true).name, mode).toBe(glyph(mode, false).name);
+        }
+    });
+
+    it('says auto-accept in words as well as in colour, for the reader the hue never reaches', () => {
+        const value = (autoAccept: boolean) => mount({ modeKind: 'yolo', autoAccept })
+            .root.findAll((node: any) => node.props?.accessibilityLabel === 'Permission mode')[0]
+            .props.accessibilityValue;
+        // The mode is still the subject of the announcement; auto-accept
+        // qualifies it rather than replacing it, so VoiceOver reads
+        // "Permission mode, Yolo, auto-accept on" and not a bare state with
+        // nothing to attach it to.
+        const mode = value(false);
+        expect(mode).toBeTruthy();
+        expect(value(true)).toBe(`${mode}, auto-accept on`);
+    });
+
     it('draws the needle in the foreground at every level, so nothing is a ramp any more', () => {
         const needle = (index: number) => mount({ effortIndex: index }).root
             .findByType('Line' as any).props.stroke;

@@ -21,6 +21,9 @@ import { t } from '@/text';
 import { RigGitLineChanges } from './RigGitLineChanges';
 import { ShimmerText } from './ShimmerText';
 import { resolveFlatSessionRowPresentation } from '@/utils/flatSessionRowPresentation';
+import { useAutoAccept } from '@/hooks/useAutoAccept';
+import { AUTO_ACCEPT_GLYPH_ON, AUTO_ACCEPT_TITLE } from './autoAcceptRow';
+import { composerControlPalette } from './composerControlColour';
 
 // Roughly three quarters of the row, the proportion a chat list uses: the row
 // is 10 + 61 + 10, so 60 leaves an even 10 either side of the avatar.
@@ -85,6 +88,13 @@ export const FlatSessionRow = React.memo(({ row, selected, showBorder, archived 
         return () => clearTimeout(timeout);
     }, [session.hasUnread, showUnreadDot]);
 
+    // Which sessions are answering their own gates, from the home list
+    // (DROVE-277). A BADGE BESIDE the right column rather than a mark inside
+    // it: the dot slot already carries unread and blocked, and a session that
+    // stopped showing you its unread dot because it was auto-accepting would
+    // be trading one signal for another. This sits where the shortcut hint
+    // sits and takes nothing.
+    const autoAccept = useAutoAccept(session.id);
     const presentation = resolveFlatSessionRowPresentation({
         state: session.state,
         hasUnread: showUnreadDot,
@@ -180,6 +190,20 @@ export const FlatSessionRow = React.memo(({ row, selected, showBorder, archived 
                         )}
                     </View>
                     <SessionShortcutHintBadge sessionId={session.id} style={styles.shortcutBadge} />
+                    {autoAccept && (
+                        // The bolt is the carrier and the accent is the
+                        // qualifier, in that order: the SHAPE says which state
+                        // this is without anyone reading a hue, and the accent
+                        // is the same one the padlock wears in the session, so
+                        // the two surfaces cannot drift into two meanings.
+                        <Ionicons
+                            name={AUTO_ACCEPT_GLYPH_ON}
+                            size={13}
+                            color={composerControlPalette(theme.dark).accent}
+                            style={styles.autoAcceptBadge}
+                            accessibilityLabel={`${AUTO_ACCEPT_TITLE} on`}
+                        />
+                    )}
                     <View
                         style={styles.topRightStatus}
                         accessible={topRightAccessibilityLabel !== undefined}
@@ -331,6 +355,10 @@ const stylesheet = StyleSheet.create((theme) => ({
     shortcutBadge: {
         flexShrink: 0,
         marginLeft: 8,
+    },
+    autoAcceptBadge: {
+        flexShrink: 0,
+        marginLeft: 6,
     },
     // The dot and time share a Telegram-like right column, so changing status
     // never makes the title jump horizontally. It is only as wide as the

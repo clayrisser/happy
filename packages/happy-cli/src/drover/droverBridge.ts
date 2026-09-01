@@ -385,14 +385,30 @@ function answerCandidates(answer: PermissionAnswer): string[] {
  * answer; `via: 'push'` is a button on the notification banner itself
  * (DROVE-207), which is neither the app nor the wrist and has to read as its
  * own surface or "who won the race" is unanswerable on the ledger;
+ * `via: 'auto-accept'` is the phone's per-session auto-accept answering a
+ * boolean gate with nobody touching anything (DROVE-277), which is the one
+ * value here that names a MACHINE rather than a place a thumb was;
  * `channel: 'audio'` is what the phone's audio answerer puts on a headphone
  * click or a dictated pick. Anything else is a thumb on the phone.
+ *
+ * AN ALLOWLIST, NOT A PASS-THROUGH. `updatedInput` is whatever the app sent,
+ * so echoing `via` straight into `by` would let any value at all appear on the
+ * ledger as a surface — including 'phone', which is exactly the impersonation
+ * DROVE-277 forbids auto-accept from committing. A stamp this table does not
+ * know is a thumb on the phone, which is what it was before any of these
+ * existed.
  */
+const answerSurfaces: Record<string, string> = {
+    watch: 'watch',
+    push: 'push',
+    'auto-accept': 'auto-accept',
+}
+
 function answererOf(answer: PermissionAnswer): { by: string; channel: 'visual' | 'audio' } {
     const input = answer.updatedInput as { via?: unknown; channel?: unknown } | undefined
-    const by = input?.via === 'watch' ? 'watch' : input?.via === 'push' ? 'push' : 'phone'
+    const via = typeof input?.via === 'string' ? input.via : ''
     return {
-        by,
+        by: answerSurfaces[via] ?? 'phone',
         channel: input?.channel === 'audio' ? 'audio' : 'visual',
     }
 }
