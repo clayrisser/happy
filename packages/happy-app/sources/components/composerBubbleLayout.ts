@@ -1,4 +1,5 @@
-import type { FlexStyle } from './flexFrames';
+import type { FlexFrame, FlexStyle } from './flexFrames';
+import { getGlassSurfaceOverflow } from './glassInteractionPolicy';
 import {
     MOBILE_COMPOSER_BUBBLE_ACTION_ROW_HEIGHT,
     MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE,
@@ -129,6 +130,14 @@ export function resolveComposerBubbleTextRowGeometry(): ComposerBubbleStyle {
         paddingBottom: MOBILE_COMPOSER_METRICS.inputPaddingBottom,
         paddingLeft: 0,
         paddingRight: 0,
+        // THE ROW IS A SURFACE NOW, SO IT HAS A SHAPE (DROVE-343). It is the
+        // bubble's press target, which means it swells, and a rectangle
+        // swelling inside a 30pt-rounded shell would show its corners crossing
+        // the shell's arc. `shellRadius - bubbleInset` is the shell's own arc
+        // offset inward by the padding between them — the concentric radius,
+        // derived rather than picked, so the two curves stay parallel at every
+        // text height.
+        borderRadius: MOBILE_COMPOSER_METRICS.shellRadius - MOBILE_COMPOSER_METRICS.bubbleInset,
         minHeight: MOBILE_COMPOSER_TEXT_ROW_BASE_HEIGHT,
         maxHeight: MOBILE_COMPOSER_METRICS.inputMaxHeight
             + MOBILE_COMPOSER_METRICS.inputPaddingTop
@@ -236,22 +245,38 @@ export function resolveComposerBubbleDiscGeometry(): ComposerBubbleStyle {
 }
 
 /**
- * The bubble's MATERIAL, as the props `MobileGlassSurface` reads (DROVE-328).
+ * THE BUBBLE'S MATERIAL, AND WHAT IT NO LONGER ANSWERS (DROVE-328, DROVE-343).
  *
  * Beside the geometry for the same reason the geometry is here: so the spec
  * that mounts the bubble's host (`composerGlassSurfaces.test.ts`) mounts it
  * with what `AgentInput` draws, rather than a restatement that drifts. It is
  * real Liquid Glass (DROVE-153), `regular` because `clear` draws close to
- * nothing over a black chat, and INTERACTIVE (DROVE-266) because that is the
- * one prop that makes `UIGlassEffect` lens and swell under a finger; without it
- * every control inside the bubble fakes its press.
+ * nothing over a black chat.
  *
- * What is NOT here is anything about clipping. An interactive surface swells,
- * and `MobileGlassSurface` decides last that it is never clipped (DROVE-202).
- * DROVE-266 threaded a `pressTarget={false}` through to keep the card clipped
- * anyway, and Clay photographed the result: the bubble mid-swell with its
- * borders cut at the resting frame. Nothing inside the bubble needs the clip
- * on the material, and the spec above measures that rather than asserting it.
+ * `interactive` IS NOT IN HERE ANY MORE, AND THAT IS THE TICKET. DROVE-266 put
+ * it on this surface so the composer would stop faking its presses, and it
+ * worked: `UIGlassEffect.isInteractive` is a property of the effect VIEW, so
+ * the whole bubble lenses and swells under a finger. It is also why the bubble
+ * swells when the finger is on the `+` or on a segment of the session capsule,
+ * which is what Clay filed: "whenever I push a button from that group, the
+ * input box should not also have that touch effect. The input box should only
+ * get the touch effect when I'm touching where the text is."
+ *
+ * There is no per-region switch on the effect. Its interaction sees every
+ * touch delivered inside its `contentView`, and every control in the composer
+ * mounts there. So the press moved rather than being filtered: the SHELL is
+ * calm glass, and the bubble's press target is the text row, which carries
+ * `COMPOSER_BUBBLE_TEXT_ROW_SURFACE` below. Every other press in the composer
+ * already belongs to a surface of its own — the discs since DROVE-266, the
+ * capsule since DROVE-343 — so nothing is left for the shell to answer.
+ *
+ * WHAT THE BARE GLYPHS LOSE, said plainly. Send and the mic at rest have no
+ * surface (DROVE-254, DROVE-264) and drew the bubble's swell. With the shell
+ * calm they fall back to `BubblePressable`'s own pressed state, which is the
+ * response they have on every phone without the material. That is the cost of
+ * the ruling and it is the right side of it: a press on send is a press on a
+ * CONTROL, and the whole ticket is that a control press must not move the
+ * field.
  */
 export function resolveComposerBubbleSurface() {
     return {
@@ -259,8 +284,151 @@ export function resolveComposerBubbleSurface() {
         material: 'liquid',
         glassEffectStyle: 'regular',
         intensity: 92,
+        interactive: false,
+    } as const;
+}
+
+/**
+ * The bubble shell's OVERFLOW, which is still `visible` (DROVE-202, DROVE-328,
+ * DROVE-343).
+ *
+ * `MobileGlassSurface` forces this on a surface it knows is INTERACTIVE, and
+ * the shell is not one any more, so the composer states it here — through
+ * `getGlassSurfaceOverflow`, the function that owns the rule, never a literal.
+ * This is not the `pressTarget` escape hatch DROVE-328 deleted: that flag asked
+ * the primitive to CLIP a surface on the material, and this asks it to clip
+ * nothing there, which is what DROVE-202 ruled in the first place.
+ *
+ * It matters more now than it did, not less. The shell holds three surfaces
+ * that swell past their resting frames — the text row, the `+`, the capsule —
+ * and `overflow: 'hidden'` on an `ExpoView` becomes `clipsToBounds` on the view
+ * the effect is pinned to, so a clipped shell would cut all three at the
+ * bubble's edge. That is DROVE-328's photograph, one level out.
+ *
+ * AND IT TAKES THE ARGUMENT RATHER THAN ASSUMING IT. Off the material the flat
+ * card is the only thing rounding what it holds, and there is no swell to cut,
+ * so it still clips — the second half of `getGlassSurfaceOverflow` that
+ * DROVE-202 left standing on purpose. The caller reads the material it is
+ * actually on; a resolver that hard-coded `true` here would square the
+ * fallback card's corners on every phone without Liquid Glass.
+ */
+export function resolveComposerBubbleSurfaceStyle(drawsNativeGlass: boolean) {
+    return { overflow: getGlassSurfaceOverflow(drawsNativeGlass) } as const;
+}
+
+/**
+ * THE BUBBLE'S PRESS TARGET: the text row, and only the text row (DROVE-343).
+ *
+ * Clay: "The input box should only get the touch effect when I'm touching
+ * where the text is." So the interactive glass is the frame the text is in.
+ * The material is the same one the shell wears — the same `liquid`, the same
+ * `regular` — because a nested glass effect over the shell's own has nothing
+ * left to refract and draws as nothing, which is exactly what is wanted here:
+ * invisible at rest, and the platform's own lens and swell under a finger.
+ *
+ * That is DROVE-254's finding used rather than fought. It filed "this blends
+ * in which is annoying" about the session capsule, and it was right, because a
+ * capsule has to read as an OBJECT. The text row must not read as an object at
+ * all; it is the field's own area. Blending in is the requirement.
+ */
+export function resolveComposerBubbleTextRowSurface() {
+    return {
+        nativeEffect: true,
+        material: 'liquid',
+        glassEffectStyle: 'regular',
+        intensity: 92,
         interactive: true,
     } as const;
+}
+
+/**
+ * WHAT A FINGER CAN LAND ON IN THE COMPOSER, resolved from the layout rather
+ * than from an offset anybody worked out (DROVE-343).
+ *
+ * Three surfaces answer a touch with the platform's own press, and the whole
+ * of Clay's ticket is which one answers where:
+ *
+ *   `textRow`         the bubble's press target
+ *   `sessionCapsule`  the group, one surface for its four segments (DROVE-169)
+ *   `add`             the `+` disc (DROVE-266)
+ *
+ * They are FRAMES in the resolved tree, so "the bubble's press target excludes
+ * the group's hit rect" is a fact the layout engine produces rather than a
+ * number a spec restates. `composerBubbleLayout.spec.ts` resolves the tree and
+ * asks this function where a point lands; if the text row ever grew under the
+ * capsule, or the capsule moved inside the text row, the three cases would
+ * disagree and the spec would fail. Nothing here computes an offset, which is
+ * DROVE-214's rule reaching the press as well as the geometry.
+ *
+ * Send and the mic are deliberately NOT here. They have no surface of their
+ * own (DROVE-254, DROVE-264), so a press on them reaches no material and the
+ * answer is `null` — a fact worth asserting rather than a gap.
+ */
+export type ComposerPressTarget = 'textRow' | 'sessionCapsule' | 'add';
+
+export const COMPOSER_PRESS_TARGETS: readonly ComposerPressTarget[] = [
+    'textRow',
+    'sessionCapsule',
+    'add',
+];
+
+function containsPoint(frame: FlexFrame, point: { x: number; y: number }): boolean {
+    return point.x >= frame.x
+        && point.x <= frame.x + frame.width
+        && point.y >= frame.y
+        && point.y <= frame.y + frame.height;
+}
+
+/**
+ * Which surface answers a press at this point, or `null` where none does.
+ *
+ * Deepest match wins, so a point inside `modeSegment` reports the capsule that
+ * holds it: one interactive surface for a grouped control (DROVE-169), and the
+ * segment under the finger is a press INSIDE that surface, not a surface of its
+ * own.
+ */
+export function resolveComposerPressTarget(
+    frame: FlexFrame,
+    point: { x: number; y: number },
+): ComposerPressTarget | null {
+    if (!containsPoint(frame, point)) {
+        return null;
+    }
+    for (const child of frame.children) {
+        const deeper = resolveComposerPressTarget(child, point);
+        if (deeper) {
+            return deeper;
+        }
+    }
+    return (COMPOSER_PRESS_TARGETS as readonly string[]).includes(frame.name)
+        ? frame.name as ComposerPressTarget
+        : null;
+}
+
+/**
+ * Whether the three press targets overlap anywhere in the resolved tree.
+ *
+ * The other half of the same guarantee: `resolveComposerPressTarget` says
+ * where a given point lands, and this says that no point can land in two of
+ * them at once. If the bubble's press target ever grew back over the group's
+ * hit rect, this is what would catch it, whatever sample points a spec
+ * happened to pick.
+ */
+export function composerPressTargetsAreDisjoint(frame: FlexFrame): boolean {
+    const found: FlexFrame[] = [];
+    const walk = (node: FlexFrame) => {
+        if ((COMPOSER_PRESS_TARGETS as readonly string[]).includes(node.name)) {
+            found.push(node);
+        }
+        node.children.forEach(walk);
+    };
+    walk(frame);
+    return found.every((a, i) => found.slice(i + 1).every((b) => (
+        a.x + a.width <= b.x
+        || b.x + b.width <= a.x
+        || a.y + a.height <= b.y
+        || b.y + b.height <= a.y
+    )));
 }
 
 export const COMPOSER_BUBBLE_GEOMETRY = resolveComposerBubbleGeometry();
@@ -272,3 +440,4 @@ export const COMPOSER_BUBBLE_SESSION_CAPSULE_GEOMETRY = resolveComposerBubbleSes
 export const COMPOSER_BUBBLE_SESSION_SEGMENT_GEOMETRY = resolveComposerBubbleSessionSegmentGeometry();
 export const COMPOSER_BUBBLE_DISC_GEOMETRY = resolveComposerBubbleDiscGeometry();
 export const COMPOSER_BUBBLE_SURFACE = resolveComposerBubbleSurface();
+export const COMPOSER_BUBBLE_TEXT_ROW_SURFACE = resolveComposerBubbleTextRowSurface();

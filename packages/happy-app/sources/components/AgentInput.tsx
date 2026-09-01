@@ -31,7 +31,7 @@ import { Metadata } from '@/sync/storageTypes';
 import { isRunningOnMac } from '@/utils/platform';
 import { MobileGlassSurface } from './MobileGlass';
 import { ComposerControlButton } from './ComposerControlButton';
-import { GlassChromeSurface } from './GlassChromeControl';
+import { GlassChromeSurface, useGlassChromeMaterial } from './GlassChromeControl';
 import { AnimatedFade } from './AnimatedOverlay';
 import { BubblePressable } from './BubblePressable';
 import { resolveAgentInputPrimaryAction } from './agentInputPrimaryAction';
@@ -63,6 +63,8 @@ import {
     COMPOSER_BUBBLE_SPACER_GEOMETRY,
     COMPOSER_BUBBLE_SURFACE,
     COMPOSER_BUBBLE_TEXT_ROW_GEOMETRY,
+    COMPOSER_BUBBLE_TEXT_ROW_SURFACE,
+    resolveComposerBubbleSurfaceStyle,
 } from './composerBubbleLayout';
 import { COMPOSER_STRIP_BOX } from './composerStripLayout';
 import { LiveMicBanner } from './LiveMicBanner';
@@ -721,6 +723,18 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     // existing composer affordances rather than inheriting it.
     const runningOnMac = isRunningOnMac();
     const compactMobileComposer = Platform.OS !== 'web' && !runningOnMac && screenWidth <= 700;
+    /**
+     * WHICH MATERIAL THE COMPOSER IS ACTUALLY ON (DROVE-343).
+     *
+     * The shell's `overflow` depends on it: on Liquid Glass nothing in the
+     * composer may be clipped, because three surfaces inside it swell past
+     * their resting frames; off it the flat card is the only thing rounding
+     * what it holds. `getGlassSurfaceOverflow` is the rule and this is its
+     * argument. The hook watches Reduce Transparency, so a reader who has
+     * turned the material off gets the clipped card rather than a card
+     * pretending to hold a swell that is not drawn.
+     */
+    const glassChromeMaterial = useGlassChromeMaterial();
     // `useNativeSettingsMenus` was here and is gone (DROVE-242). It sent iOS to
     // a SwiftUI menu for the mode and the model while every other platform used
     // the sheets below. There is no native menu on the composer now, so nothing
@@ -2973,6 +2987,21 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                             style={[
                                 styles.unifiedPanel,
                                 compactMobileComposer && styles.mobileUnifiedPanel,
+                                // NEVER CLIPPED, AND NOW SAID HERE (DROVE-343).
+                                // The primitive forces this on a surface it
+                                // knows is interactive, and the shell stopped
+                                // being one when the press moved to the text
+                                // row. It holds three things that swell — the
+                                // text row, the `+`, the capsule — so a clip
+                                // would cut all three at the bubble's edge,
+                                // which is DROVE-328's photograph one level
+                                // out. `resolveComposerBubbleSurfaceStyle`
+                                // reaches `getGlassSurfaceOverflow` for it
+                                // rather than writing 'visible' down, and takes
+                                // the material as its argument so the flat card
+                                // on a phone without Liquid Glass still clips.
+                                compactMobileComposer
+                                    && resolveComposerBubbleSurfaceStyle(glassChromeMaterial === 'liquid'),
                             ]}
                         >
                     {/* Attachment preview strip */}
@@ -2984,14 +3013,36 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                             />
                         </View>
                     )}
-                    {/* THE TEXT ROW. On mobile it is the bubble's top row and
-                        holds nothing but the field; the `+` and send are on
-                        the row below (DROVE-214). */}
-                    <View style={[
-                        styles.inputContainer,
-                        compactMobileComposer && styles.mobileInputContainer,
-                        props.minHeight ? { minHeight: props.minHeight } : undefined,
-                    ]}>
+                    {/* THE TEXT ROW, AND THE BUBBLE'S PRESS TARGET
+                        (DROVE-214, DROVE-343). On mobile it is the bubble's top
+                        row and holds nothing but the field; the `+` and send
+                        are on the row below.
+
+                        IT IS THE INTERACTIVE SURFACE NOW. Clay: "the input box
+                        should not also have that touch effect [when a control
+                        is pressed]. The input box should only get the touch
+                        effect when I'm touching where the text is."
+                        `UIGlassEffect.isInteractive` is a property of the
+                        effect VIEW and answers every touch delivered inside it,
+                        so there is no per-region switch to reach for — the
+                        press had to MOVE. The shell above is calm glass, this
+                        frame is the one that lenses and swells, and every
+                        control on the row below owns a surface of its own.
+
+                        Nested glass over the shell's own draws as nothing at
+                        rest, which is DROVE-254's finding used rather than
+                        fought: a capsule has to read as an object and this must
+                        not. `enabled` is the mobile gate, so the desktop card
+                        still renders the plain view it always did. */}
+                    <MobileGlassSurface
+                        enabled={compactMobileComposer}
+                        {...COMPOSER_BUBBLE_TEXT_ROW_SURFACE}
+                        style={[
+                            styles.inputContainer,
+                            compactMobileComposer && styles.mobileInputContainer,
+                            props.minHeight ? { minHeight: props.minHeight } : undefined,
+                        ]}
+                    >
                         <MultiTextInput
                             ref={inputRef}
                             defaultValue={props.initialValue}
@@ -3008,7 +3059,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                             maxHeight={Platform.OS === 'web' ? 480 : MOBILE_COMPOSER_METRICS.inputMaxHeight}
                             lineHeight={compactMobileComposer ? MOBILE_COMPOSER_METRICS.inputLineHeight : undefined}
                         />
-                    </View>
+                    </MobileGlassSurface>
 
                     {/* THE BUTTON ROW, inside the bubble and under the text
                         (DROVE-214), and since DROVE-236 it is the ONLY row.
