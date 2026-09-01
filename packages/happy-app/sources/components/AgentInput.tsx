@@ -2237,8 +2237,10 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             // test is this box with slop and no window measuring (DROVE-269).
             // The SURFACE moved into the glass button below (DROVE-266); this
             // View keeps only the geometry the slide test measures.
+            // No style of its own: the glass button below sizes itself (39,
+            // MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE) and this View shrink-wraps
+            // it, so the measured box IS the button's box.
             {...micTouch.view}
-            style={styles.mobileMicButton}
         >
             <ComposerControlButton
                 // NO CIRCLE UNLESS OPEN, which is why `fill` is undefined at
