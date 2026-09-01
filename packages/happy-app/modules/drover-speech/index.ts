@@ -82,6 +82,13 @@ type DroverSpeechModuleType = {
      */
     watchesAudioRoute?: () => boolean;
     /**
+     * Optional: only builds carrying DroverSpeechCueSession.swift have it. Puts
+     * the shared session in read-aloud's category so an audio cue is not left
+     * on the app default, which the Ring/Silent switch mutes (DROVE-341). Sets
+     * the category and does not activate; never throws.
+     */
+    ensureCueSession?: () => boolean;
+    /**
      * Optional: builds up to 12 have neither. Its presence is the build stamp
      * for `holdSession`, `onSpeechInterruption` and `onRemoteCommand`
      * (DROVE-189). A bundle running on an older binary gets false and keeps
@@ -246,6 +253,30 @@ export function audioRoute(): string[] {
         return native.audioRoute();
     } catch {
         return [];
+    }
+}
+
+/**
+ * Route the next audio cue through read-aloud's session (DROVE-341).
+ *
+ * Cues are expo-audio players built with `keepAudioSessionActive: true`, so
+ * nothing in the cue path sets a category: a cue plays under whatever is
+ * current. After the reader has spoken that is `.playback` at `.spokenAudio`
+ * and the cue is level with the voice. Before it has — a microphone
+ * acknowledgement on a press, most of all (DROVE-225) — it is the app default
+ * `.soloAmbient`, which the Ring/Silent switch mutes outright.
+ *
+ * Answers false on a binary without the native function, which is every build
+ * up to the one this shipped in. That is not a failure and nothing branches on
+ * it beyond logging: on those builds the cue plays exactly where it played
+ * before, which is the OTA-safe half of this fix.
+ */
+export function ensureCueSession(): boolean {
+    if (!native || typeof native.ensureCueSession !== 'function') return false;
+    try {
+        return native.ensureCueSession();
+    } catch {
+        return false;
     }
 }
 

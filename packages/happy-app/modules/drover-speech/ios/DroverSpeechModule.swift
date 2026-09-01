@@ -462,6 +462,14 @@ public final class DroverSpeechModule: Module {
             self.updateNowPlaying(title: nil)
         }
 
+        /// Put the shared session in read-aloud's category before a cue plays
+        /// (DROVE-341). One line here; the whole of it is in
+        /// DroverSpeechCueSession.swift. Optional on the JS side, so a build
+        /// without it simply keeps today's behaviour.
+        Function("ensureCueSession") { () -> Bool in
+            self.ensureCueSessionCategory()
+        }
+
         /// Whether this binary owns the card's lifetime (DROVE-233).
         ///
         /// Its own stamp, like `handlesInterruptions` and `handlesMicCommand`,

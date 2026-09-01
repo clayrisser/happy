@@ -222,7 +222,7 @@ describe('settings', () => {
                 audioCues: {
                     on: true,
                     heartbeat: true,
-                    volume: 0.35,
+                    volume: 1,
                     workingIntervalSeconds: 6,
                     waitingIntervalSeconds: 3,
                     muted: [],

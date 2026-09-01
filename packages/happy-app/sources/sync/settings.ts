@@ -144,7 +144,18 @@ export const AudioCuesSchema = z.object({
 });
 export type AudioCues = z.infer<typeof AudioCuesSchema>;
 
-/** Cue loudness, on top of each cue's own gain in the table. */
+/**
+ * Cue loudness AS A FRACTION OF THE VOICE (DROVE-341).
+ *
+ * 1 is the top because 1 means "as loud as a spoken sentence", which is what
+ * Clay asked for and is also the sensible ceiling: a beep that shouts over the
+ * voice is the opposite bug. Each cue then sits at its own level under that,
+ * pinned in dB in sources/voice/cueLoudness.ts.
+ *
+ * This used to be described as sitting "on top of each cue's own gain", and it
+ * was doing worse than that: the setting was multiplied into the rendered
+ * samples AND into the player's volume, so the level came out squared.
+ */
 export const audioCueVolumeRange = { min: 0, max: 1 } as const;
 /**
  * How often the ordinary WORKING pulse repeats. The floor is two seconds
@@ -178,7 +189,12 @@ export const audioCueRateRange = { min: 0, max: 240 } as const;
 export const audioCuesDefaults: Required<AudioCues> = {
     on: true,
     heartbeat: true,
-    volume: 0.35,
+    // Level with the voice (DROVE-341). It was 0.35, and with the squared-gain
+    // bug on top of it the heartbeat played about sixteen dB under a spoken
+    // sentence -- Clay's "I have to blast the audio just to hear the beeping".
+    // A default that means "the same level as the voice" is the only one that
+    // answers the complaint out of the box.
+    volume: 1,
     workingIntervalSeconds: 6,
     waitingIntervalSeconds: 3,
     muted: [],

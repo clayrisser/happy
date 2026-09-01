@@ -38,8 +38,8 @@ describe('the cue table', () => {
         // under a sentence.
         const mic: AudioCueId[] = ['micOpen', 'micClosed', 'micRefused'];
         for (const id of mic) {
-            expect(cueSpec(id).gain, id).toBeGreaterThanOrEqual(cueSpec('waitingNeedsYou').gain);
-            expect(cueSpec(id).gain, id).toBeGreaterThan(cueSpec('toolCall').gain);
+            expect(cueSpec(id).amplitude, id).toBeGreaterThan(cueSpec('waitingNeedsYou').amplitude);
+            expect(cueSpec(id).amplitude, id).toBeGreaterThan(cueSpec('toolCall').amplitude);
         }
     });
 

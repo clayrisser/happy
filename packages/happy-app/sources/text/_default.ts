@@ -967,7 +967,7 @@ export const en = {
         },
         cues: {
             title: 'Audio cues',
-            footer: 'Eyes-free sounds. A slow low thump while something is running, a faster bright pulse while a prompt is waiting on you, and silence when nothing is happening. Speech always wins: a cue never plays over a spoken sentence.',
+            footer: 'Eyes-free sounds. A slow low thump while something is running, a faster bright pulse while a prompt is waiting on you, and silence when nothing is happening. Speech always wins: a cue never plays over a spoken sentence. Volume is measured against the voice, so 100% is a beep as loud as a spoken sentence.',
             on: 'Audio cues',
             onSubtitle: 'The heartbeat and the one-shot sounds.',
             heartbeat: 'Heartbeat',
