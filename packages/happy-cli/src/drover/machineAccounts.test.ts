@@ -16,6 +16,12 @@ vi.mock('@/drover/flip/accounts', () => ({
     loginEmail: (a: { name: string }) => emails[a.name],
     sameLoginAs: (a: { name: string }) => twins[a.name],
     isAmbientSpelling: (dir: unknown) => dir === 'default' || dir === '~/.claude',
+    // The real predicate, spelled out rather than imported, because the whole
+    // point of the mock is that this file does not read a registry (DROVE-270).
+    // Absent means claude: a row written before the field existed came off a
+    // registry that held only Claude accounts.
+    isClaudeAccount: (a: { harness?: string }) =>
+        ((a.harness ?? '').trim().toLowerCase() || 'claude') === 'claude',
 }));
 
 // The credential probe spawns Claude Code, and this file is about the JOIN.
@@ -29,8 +35,12 @@ vi.mock('@/drover/flip/usage', () => ({
         capturedAt: now,
         accounts: registry.map((a) => ({
             name: a.name,
+            harness: a.harness ?? 'claude',
+            tokenState: a.harness === 'cursor' ? 'live' : null,
+            expiresInDays: a.harness === 'cursor' ? 41 : null,
             current: a.name === current,
-            loggedIn: emails[a.name] !== undefined,
+            loggedIn: a.harness === 'cursor' || emails[a.name] !== undefined,
+            onboarded: true,
             fetchedAt: null,
             headroom: headroom[a.name] ?? null,
             cooling: null,
@@ -39,7 +49,7 @@ vi.mock('@/drover/flip/usage', () => ({
     }),
 }));
 
-type Row = { name: string; configDir: string; ambient?: boolean };
+type Row = { name: string; configDir: string; ambient?: boolean; harness?: string };
 
 let registry: Row[] = [];
 let emails: Record<string, string | undefined> = {};

@@ -94,6 +94,11 @@ import {
     type DroverUsageLike,
 } from '@/utils/droverUsage';
 import {
+    cursorAccountTrailing,
+    cursorAccountUsable,
+    isCursorAccount,
+} from '@/utils/droverAccounts';
+import {
     formatUsageLimitResetTime,
     getUsageLimitRows,
     usageLimitZoneLabel,
@@ -604,6 +609,26 @@ export function usageAccountBarRow(a: DroverOtherAccountRow): UsageBarRow {
     // trailing slot. With no figure at all the trailing text is the reason
     // there is none, so the bare track is explained.
     const back = usageAccountBackLabel(a);
+    // A CURSOR ROW ANSWERS NONE OF THE QUESTIONS BELOW (DROVE-270), so it is
+    // taken out first rather than threaded through them. It has no headroom to
+    // read, no window to expire and no cooldown to come back from — and every
+    // way its credential goes wrong wants a different sentence from Claude's
+    // "no login": an expired token is a login that HAPPENED, and a tombstone is
+    // a deliberate sign-out. The mark is the same hollow track with a dash that
+    // an unmeasured Claude row draws, because that mark is honest here too; it
+    // is the words that differ.
+    if (isCursorAccount(a)) {
+        return usageBarRowFrom({
+            key: `account:${a.name}`,
+            name: a.name,
+            percentLeft: null,
+            trailing: cursorAccountTrailing(a),
+            // `renew` is NOT disabled. The token works today and simply has a
+            // deadline; greying it out for the last week of sixty days would
+            // hide a working account.
+            disabled: !cursorAccountUsable(a),
+        });
+    }
     if (!a.loggedIn) {
         return usageBarRowFrom({
             key: `account:${a.name}`,
@@ -620,6 +645,11 @@ export function usageAccountBarRow(a: DroverOtherAccountRow): UsageBarRow {
         // track, and the second one is a FRESH window — the most misleading
         // thing this sheet could say. `measured: false` is what keeps them
         // apart in the mark; the trailing word says which nothing it is.
+        //
+        // A cursor row is a THIRD nothing and the only permanent one, and it
+        // never reaches here: it is answered above, because "not measured"
+        // would read as "not measured YET" over a figure that is never coming
+        // (DROVE-270).
         return usageBarRowFrom({
             key: `account:${a.name}`,
             name: a.name,
@@ -669,6 +699,13 @@ export function usageMeasures(accounts: DroverAccountUsageRow[]): UsageMeasure[]
 /** "jamrizzi · 51% left on Week", or the reason there is no figure. */
 export function usageAccountGroupTitle(a: DroverOtherAccountRow, bindingLabel?: string | null): string {
     if (!a.name) return '';
+    // A cursor account before every Claude question, including "no login"
+    // (DROVE-270). It is none of the nothings below: nobody failed to measure
+    // it, no reading expired, and it publishes no quota at all. When its
+    // sixty-day token is inside the last week the heading says THAT instead —
+    // the deadline is the only thing on this row Clay can act on, and it cannot
+    // be refreshed without him.
+    if (isCursorAccount(a)) return `${a.name} · ${cursorAccountTrailing(a)}`;
     if (!a.loggedIn) return `${a.name} · ${t('agentInput.usagePopup.noLogin')}`;
     // Two different nothings, and saying the wrong one is the bug (DROVE-204).
     // "not measured" means nobody ever asked. This means somebody asked, and
@@ -816,9 +853,17 @@ export function usageAccountBarGroup(
         // Code's first run opens on the theme picker, so tapping it moves the
         // session nowhere and leaves a pane nobody can answer. Absent means
         // fine, so an older machine behaves as it did before.
+        //
+        // A CURSOR ACCOUNT IS NOT SWITCHABLE, ever (DROVE-270). A flip is a
+        // CLAUDE_CONFIG_DIR swap and a respawn, and a cursor account has no
+        // directory to swap to — it carries a token, which is exactly why two
+        // cursor accounts run side by side and need no flip at all. Offering
+        // one here would send `/flip <cursor account>` to a CLI that would
+        // rightly refuse it, after Clay had already watched his session stop.
         switchable:
             !!account.name &&
             !account.current &&
+            !isCursorAccount(account) &&
             account.loggedIn !== false &&
             account.onboarded !== false,
         rows,
@@ -1121,6 +1166,12 @@ export function resolveUsageStrip(input: UsageStripInput): UsageStrip {
         const stamped = currentDroverAccountRow(null, input.droverAccount);
         accounts.unshift({
             name: stamped?.name ?? '',
+            // SDK usage windows are Claude Code's, so this block is a Claude
+            // one by construction: a cursor session has no such stream — and a
+            // Claude login carries no token and no expiry.
+            harness: 'claude',
+            tokenState: null,
+            expiresInDays: null,
             loggedIn: true,
             // The session is running here, so it demonstrably can (DROVE-246).
             onboarded: true,

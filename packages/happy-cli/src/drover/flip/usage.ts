@@ -23,9 +23,18 @@ import { statSync } from 'node:fs'
 
 import { logger } from '@/ui/logger'
 import {
+    cursorTokenMissing,
+    cursorTokenUsable,
+    readCursorTokens,
+    type CursorTokenReading,
+    type CursorTokenState,
+} from '@/drover/cursorToken'
+import {
     accountConfigFile,
+    accountHarness,
     coolingState,
     cooldownFamily,
+    isClaudeAccount,
     isLoggedIn,
     isOnboarded,
     ledgerPath,
@@ -104,6 +113,37 @@ export function rowUsable(row: Pick<UsageRowSnapshot, 'resetsAt'>, now: number):
 
 export interface AccountUsageSnapshot {
     name: string
+    /**
+     * Which harness this subscription is for — 'claude' or 'cursor'
+     * (DROVE-270).
+     *
+     * On the wire so the phone and the wrist can tell the two apart without
+     * guessing from a missing number. A cursor row is UNMEASURED, and
+     * unmeasured is also what a Claude row looks like when nobody has read its
+     * cache yet — but the two want opposite treatment: the Claude one may be
+     * flipped to and will have a figure later, the cursor one may not be
+     * flipped to and never will.
+     */
+    harness: string
+    /**
+     * HOW THE CURSOR TOKEN IS DOING, and null on every Claude row (DROVE-270).
+     *
+     * A cursor login is a JWT with a sixty-day life and NO refresh flow, so the
+     * only repair is Clay at a browser — which means the warning has to reach
+     * him while the token still WORKS. `renew` is that warning and it is a
+     * working state, not a broken one.
+     *
+     * Absent means "this machine's daemon predates the field", which is not the
+     * same as `missing` ("the store has nothing for this account"), so the two
+     * are kept apart rather than collapsed to one falsy.
+     */
+    tokenState?: CursorTokenState | null
+    /**
+     * Whole days until that token dies, rounded DOWN. Null when there is no
+     * date to count to — a Claude row, a missing token, or one whose claims
+     * would not parse.
+     */
+    expiresInDays?: number | null
     /** The account this session is on. Exactly one row is, when any is. */
     current: boolean
     /** There is a credential here. NOT the same as "a session can start here". */
@@ -275,7 +315,51 @@ function accountSnapshot(
     current: string | undefined,
     now: number,
     demand: ModelDemand,
+    token: CursorTokenReading = cursorTokenMissing,
 ): AccountUsageSnapshot {
+    // A CURSOR ROW IS ASKED NONE OF THE CLAUDE QUESTIONS (DROVE-270), because
+    // none of them has an answer here. There is no config dir, so no usage
+    // cache to read, no `.claude.json`, no onboarding stamp. Its headroom is
+    // null and its limits are empty — the same "nobody has measured this" an
+    // unread Claude account already produces, and deliberately NOT zero and
+    // deliberately not a hundred. Cursor publishes no quota anywhere; its
+    // accounting is server-side, so this is structural rather than a reading
+    // that has not happened yet.
+    //
+    // The one thing this must never do is fall through to the code below:
+    // `readUsageCache` on a row with no config dir reads the AMBIENT account's
+    // cache, and a cursor subscription would then wear Clay's main Claude
+    // quota.
+    if (!isClaudeAccount(a)) {
+        return {
+            name: a.name,
+            harness: accountHarness(a),
+            current: a.name === current,
+            tokenState: token.state,
+            expiresInDays: token.daysLeft,
+            // THE TOKEN IS THE LOGIN, so its state is the answer here — there
+            // is no `.credentials.json` to test and no `claude auth status` to
+            // ask. `missing` means the store holds nothing under this name,
+            // which is a row whose login never landed or whose token was
+            // forgotten. Every other state is a credential of some sort,
+            // INCLUDING the expired one: an expired token is a login that
+            // happened, and "no login yet" over it would send Clay to fix the
+            // wrong thing.
+            loggedIn: token.state !== 'missing',
+            // No wizard to settle: the first-run theme picker is a Claude Code
+            // thing, and cursor-agent has no equivalent. So this field carries
+            // the other half of the same question instead — can work go here —
+            // which is what every caller was really asking of the pair, and
+            // what turns an expired cursor token into an unswitchable row
+            // rather than a healthy-looking one. `renew` is YES: it works, it
+            // simply has a deadline.
+            onboarded: cursorTokenUsable(token.state),
+            fetchedAt: null,
+            headroom: null,
+            cooling: null,
+            limits: [],
+        }
+    }
     const cache = readUsageCache(a)
     const limits = (cache?.rows ?? [])
         .map((row) => rowSnapshot(row, now))
@@ -284,6 +368,11 @@ function accountSnapshot(
     const family = cooling.until > 0 ? coolingFamilyOf(limits, ledger, a.name, now) : undefined
     return {
         name: a.name,
+        harness: accountHarness(a),
+        // Null rather than absent: a Claude login has no token and no expiry,
+        // and saying so beats leaving the phone to read a gap.
+        tokenState: null,
+        expiresInDays: null,
         current: a.name === current,
         loggedIn: isLoggedIn(a),
         onboarded: isOnboarded(a),
@@ -313,10 +402,20 @@ export function usageSnapshot(
 ): DroverUsage {
     const ledger = readLedger()
     const demand = modelDemand(family)
+    const accounts = readAccounts()
+    // Read ONCE for the whole list, and only when there is a cursor row to read
+    // it for: that file holds live credentials, so the fewer moments it spends
+    // in this process's memory the better. A registry of Claude accounts never
+    // opens it at all.
+    const tokens = accounts.some((a) => !isClaudeAccount(a))
+        ? readCursorTokens(now)
+        : new Map<string, CursorTokenReading>()
     return {
         capturedAt: now,
         modelFamily: demand.kind === 'family' ? demand.family : null,
-        accounts: readAccounts().map((a) => accountSnapshot(a, ledger, current, now, demand)),
+        accounts: accounts.map((a) => accountSnapshot(
+            a, ledger, current, now, demand, tokens.get(a.name) ?? cursorTokenMissing,
+        )),
     }
 }
 

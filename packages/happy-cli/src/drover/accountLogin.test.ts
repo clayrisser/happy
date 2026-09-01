@@ -37,6 +37,9 @@ describe('buildAccountLoginArgv', () => {
         expect(buildAccountLoginArgv('/d/bin/drover')).toEqual([
             '/d/bin/drover', 'account', 'login',
         ])
+        expect(buildAccountLoginArgv('/d/bin/drover', undefined, 'cursor')).toEqual([
+            '/d/bin/drover', 'account', 'login', '--harness', 'cursor',
+        ])
         expect(buildAccountLoginArgv('/d/bin/drover', 'alt')).toEqual([
             '/d/bin/drover', 'account', 'login', 'alt',
         ])
@@ -53,7 +56,7 @@ describe('startAccountLogin', () => {
             { name: 'alt' },
             { droverBin: '/d/bin/drover', exists: () => true, launch },
         )
-        expect(result).toEqual({ started: true, name: 'alt' })
+        expect(result).toEqual({ started: true, name: 'alt', harness: 'claude' })
         expect(launch).toHaveBeenCalledWith(
             ['/d/bin/drover', 'account', 'login', 'alt'],
             'login-alt',
@@ -66,11 +69,65 @@ describe('startAccountLogin', () => {
             {},
             { droverBin: '/d/bin/drover', exists: () => true, launch },
         )
-        expect(result).toEqual({ started: true, name: null })
+        expect(result).toEqual({ started: true, name: null, harness: 'claude' })
         expect(launch).toHaveBeenCalledWith(
             ['/d/bin/drover', 'account', 'login'],
             'login-new',
         )
+    })
+
+    /* --------------------------------------------------------------------- *
+     * The second harness (DROVE-270).
+     * --------------------------------------------------------------------- */
+
+    it('passes --harness only for cursor, so an older wrapper still works', async () => {
+        // `drover account login --harness claude` means the same as no flag on
+        // a wrapper that has DROVE-256, and exits 2 on one that does not — into
+        // a tmux pane nobody is looking at. The phone cannot see which end it
+        // is talking to, so it sends the flag only when it must.
+        const launch = vi.fn()
+        const result = await startAccountLogin(
+            { harness: 'cursor' },
+            { droverBin: '/d/bin/drover', exists: () => true, launch },
+        )
+        expect(result).toEqual({ started: true, name: null, harness: 'cursor' })
+        expect(launch).toHaveBeenCalledWith(
+            ['/d/bin/drover', 'account', 'login', '--harness', 'cursor'],
+            // The slug libexec/drover-cursor-login computes for itself: a cursor
+            // account cannot be named after a config dir because it has none.
+            'login-cursor',
+        )
+    })
+
+    it('keeps the name in front of the flag, which the wrapper accepts either way', async () => {
+        const launch = vi.fn()
+        await startAccountLogin(
+            { name: 'jam', harness: 'cursor' },
+            { droverBin: '/d/bin/drover', exists: () => true, launch },
+        )
+        expect(launch).toHaveBeenCalledWith(
+            ['/d/bin/drover', 'account', 'login', 'jam', '--harness', 'cursor'],
+            'login-jam',
+        )
+    })
+
+    it('refuses a harness it cannot log in, with a sentence rather than an exit 2', async () => {
+        const launch = vi.fn()
+        await expect(startAccountLogin(
+            { harness: 'gemini' },
+            { droverBin: '/d/bin/drover', exists: () => true, launch },
+        )).rejects.toThrow(/claude or cursor/)
+        expect(launch).not.toHaveBeenCalled()
+    })
+
+    it('reads an absent harness as claude, so an older app gets what it always got', async () => {
+        const launch = vi.fn()
+        const result = await startAccountLogin(
+            { name: 'alt', harness: undefined },
+            { droverBin: '/d/bin/drover', exists: () => true, launch },
+        )
+        expect(result.harness).toBe('claude')
+        expect(launch.mock.calls[0][0]).not.toContain('--harness')
     })
 
     it('refuses a name that would break, before anything is spawned', async () => {
@@ -115,6 +172,11 @@ describe('accountLoginSessionName', () => {
         expect(accountLoginSessionName()).toBe('login-new')
         expect(accountLoginSessionName('')).toBe('login-new')
         expect(accountLoginSessionName('   ')).toBe('login-new')
+        // A nameless CURSOR add is `login-cursor`, matching the slug the cursor
+        // login script computes for itself, so the session this daemon opens is
+        // already the name the script wants (DROVE-270).
+        expect(accountLoginSessionName(null, 'cursor')).toBe('login-cursor')
+        expect(accountLoginSessionName('jam', 'cursor')).toBe('login-jam')
     })
 })
 

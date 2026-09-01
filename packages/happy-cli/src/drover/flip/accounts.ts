@@ -54,8 +54,22 @@ export function modelDemand(family: string | undefined): ModelDemand {
 export interface DroverAccount {
     name: string
     /**
+     * WHICH HARNESS this subscription is for (DROVE-270, registry side of
+     * DROVE-256).
+     *
+     * Absent means `claude`, so every registry Clay already has reads exactly
+     * as it did. It is not decoration: a cursor row has NO config dir, and
+     * `isAmbientSpelling(undefined)` is true, so without this field a cursor
+     * account read back as the AMBIENT Claude login — same path, same
+     * `.claude.json`, same quota, marked `main` and unremovable on the phone.
+     * Every reader below that touches `configDir` tests the harness first.
+     */
+    harness?: string
+    /**
      * Where this account's transcripts live: `$configDir/projects/<munged-cwd>`.
-     * Always a real path, even for the ambient account.
+     * Always a real path for a Claude account, even the ambient one. EMPTY for
+     * a cursor account, which has no directory anywhere: cursor-agent keeps one
+     * machine-wide credential and drover hands each session its own token.
      */
     configDir: string
     /**
@@ -107,6 +121,40 @@ export function isAmbientSpelling(configDir: unknown): boolean {
 /** The data dir the ambient account keeps its transcripts in. */
 export function ambientDataDir(): string {
     return join(homedir(), '.claude')
+}
+
+/** The harness a registry row is for. Absent means claude, always. */
+export function accountHarness(a: { harness?: string }): string {
+    const raw = typeof a.harness === 'string' ? a.harness.trim().toLowerCase() : ''
+    return raw || 'claude'
+}
+
+/**
+ * Is this a CLAUDE account — the only kind that has a config dir, a login in
+ * the Keychain, an onboarding wizard, a usage cache, or a flip?
+ *
+ * The predicate every reader below the registry asks before it touches a path.
+ * Written as "is claude" rather than "is not cursor" so a third harness
+ * arriving later is excluded by default instead of silently inheriting Claude
+ * Code's file layout.
+ */
+export function isClaudeAccount(a: { harness?: string }): boolean {
+    return accountHarness(a) === 'claude'
+}
+
+/**
+ * The rows a FLIP may land on (DROVE-270).
+ *
+ * A flip is a CLAUDE_CONFIG_DIR swap and a respawn, and a cursor account has no
+ * directory to swap to. It also has no measurable headroom, so left in the list
+ * it would rank as "unmeasured" — the eligible-but-unknown bucket — which is
+ * exactly the wrong answer: it is not unknown whether a flip can go there, it
+ * is known that it cannot. Dropped before the ranking rather than ranked and
+ * then skipped, so it never appears in a picker either. Same rule as
+ * libexec/drover-flip-policy's, on the same registry.
+ */
+export function flippableAccounts(accounts: DroverAccount[] = readAccounts()): DroverAccount[] {
+    return accounts.filter(isClaudeAccount)
 }
 
 export interface Cooldown {
@@ -165,13 +213,26 @@ export function readAccounts(): DroverAccount[] {
             .filter((a) => a && typeof a.name === 'string' &&
                 (typeof a.configDir === 'string' || a.configDir === undefined || a.configDir === null))
             .map((a) => {
-                const ambient = isAmbientSpelling(a.configDir)
+                const harness = accountHarness(a)
+                // A CURSOR ROW IS NEVER THE AMBIENT ACCOUNT (DROVE-270). It
+                // carries no configDir, and `isAmbientSpelling(undefined)` is
+                // true, so the plain reading below would resolve it to
+                // ~/.claude — Clay's own main Claude login — and the phone
+                // would list a cursor subscription as `main`, with main's
+                // quota, unremovable. The harness is tested before the
+                // spelling, exactly as libexec/drover-accounts tests it.
+                const ambient = harness === 'claude' && isAmbientSpelling(a.configDir)
                 return {
                     name: a.name,
+                    ...(harness === 'claude' ? {} : { harness }),
                     // The ambient account still HAS a data dir — that is where
                     // its transcripts are, and carrying one is the whole flip.
-                    // What it does not have is a CLAUDE_CONFIG_DIR to set.
-                    configDir: ambient ? ambientDataDir() : expandTilde(a.configDir),
+                    // What it does not have is a CLAUDE_CONFIG_DIR to set. A
+                    // cursor account has neither, and '' is the honest answer:
+                    // any path at all would be a directory somebody then reads.
+                    configDir: harness !== 'claude' ? ''
+                        : ambient ? ambientDataDir()
+                            : expandTilde(a.configDir),
                     ...(ambient ? { ambient: true } : {}),
                     ...(typeof a.flipPrompt === 'string' ? { flipPrompt: a.flipPrompt } : {}),
                 }
@@ -182,8 +243,16 @@ export function readAccounts(): DroverAccount[] {
     }
 }
 
-/** The .claude.json holding an account's onboarding state and OAuth identity. */
+/**
+ * The .claude.json holding an account's onboarding state and OAuth identity.
+ *
+ * Claude accounts only. A cursor row has `configDir: ''`, and `join('',
+ * '.claude.json')` is a RELATIVE path that resolves against whatever cwd the
+ * daemon happens to have — so callers test `isClaudeAccount` first, and this
+ * returns '' rather than a path that would sometimes exist.
+ */
 export function accountConfigFile(a: DroverAccount): string {
+    if (!isClaudeAccount(a)) return ''
     return a.ambient ? join(homedir(), '.claude.json') : join(a.configDir, '.claude.json')
 }
 
@@ -260,6 +329,23 @@ export function forgetCredentialProbes(): void {
  * wins over the file — otherwise this is the same read it always was.
  */
 export function isLoggedIn(a: DroverAccount): boolean {
+    // A CURSOR ACCOUNT HAS NO FILE THIS FUNCTION CAN READ (DROVE-270). Its
+    // credential is a token in drover's own store, and the answer must not be
+    // faked from ~/.claude's — that would report Clay's main Claude login as
+    // the cursor account's.
+    //
+    // True, not a token read, and the split is deliberate. This function is on
+    // the FLIP path: it is asked of the rows a flip may land on, and
+    // `flippableAccounts` has already dropped every cursor row before it gets
+    // here. The one caller left that could reach it is a name typed by hand, so
+    // the honest cheap answer is "the registry row exists, and `drover account
+    // login --harness cursor` writes one only after the token it got back
+    // passed an expiry check". The real state — including a token that expired
+    // AFTER that — is read by drover/cursorToken.ts and reported on the usage
+    // snapshot, which is the surface the phone and `drover accounts` render.
+    // Opening the store here as well would put a live credential on the flip
+    // path for a question the flip path never asks.
+    if (!isClaudeAccount(a)) return true
     if (credentialDeniedRecently(a)) return false
     try {
         if (existsSync(join(a.configDir, '.credentials.json'))) return true
@@ -304,6 +390,10 @@ export function isLoggedIn(a: DroverAccount): boolean {
  * that is the account this function exists to catch.
  */
 export function isOnboarded(a: DroverAccount): boolean {
+    // Nothing to settle: the first-run theme picker is a Claude Code thing and
+    // cursor-agent has no equivalent. Saying false would make every cursor row
+    // advise `drover trust`, which would do nothing at all.
+    if (!isClaudeAccount(a)) return true
     try {
         const cfg = accountConfigFile(a)
         if (!existsSync(cfg)) return true
@@ -359,6 +449,10 @@ function loginEmailOf(configFile: string): string | undefined {
 
 /** The address an account is logged in as, from the same key isLoggedIn tests. */
 export function loginEmail(a: DroverAccount): string | undefined {
+    // No config dir, so no .claude.json, so no address here. A cursor account
+    // is usually NAMED after the address it logged in as, which is where that
+    // identity lives instead.
+    if (!isClaudeAccount(a)) return undefined
     return loginEmailOf(accountConfigFile(a))
 }
 
@@ -958,7 +1052,10 @@ export function accountByNewestTranscript(
     // different paths — a symlinked projects/ is exactly that, and so is the
     // hard link the sharing migration leaves behind.
     const byFile = new Map<string, { accounts: DroverAccount[], mtime: number }>()
-    for (const a of readAccounts()) {
+    // Claude rows only: a cursor account has no config dir, so `projectDirFor('')`
+    // would build a RELATIVE path and stat whatever the daemon's cwd happens to
+    // hold.
+    for (const a of flippableAccounts()) {
         const file = join(projectDirFor(a.configDir, cwd), `${claudeSessionId}.jsonl`)
         let st
         try {
@@ -1149,7 +1246,11 @@ export function pickTarget(
     now = Date.now(),
     family?: string,
 ): Pick {
-    const accounts = readAccounts()
+    // FLIPPABLE, not every row (DROVE-270). A cursor account has no config dir
+    // to swap to, so it is not a target — named explicitly or picked
+    // automatically. Filtered here rather than skipped later so it cannot
+    // reach a ranking that would call it "headroom unmeasured" and prefer it.
+    const accounts = flippableAccounts()
     if (accounts.length === 0) return { kind: 'none' }
 
     if (wanted) {
@@ -1341,7 +1442,7 @@ export function pickStartAccount(opts: {
     now?: number
 }): StartPick {
     const now = opts.now ?? Date.now()
-    const accounts = readAccounts()
+    const accounts = flippableAccounts()
     if (accounts.length === 0) return { via: 'none' }
 
     let via: StartPick['via'] = 'none'

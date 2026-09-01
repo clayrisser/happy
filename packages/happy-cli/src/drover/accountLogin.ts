@@ -68,11 +68,28 @@ export interface AccountLoginRequest {
      *  it logs in as, which is the shorter path and the one with nothing to
      *  invent. */
     name?: string
+    /**
+     * WHICH SUBSCRIPTION to add — 'claude' (the default) or 'cursor'
+     * (DROVE-270).
+     *
+     * The wrapper takes `--harness cursor` and execs a sibling script for it,
+     * because the two logins are not the same shape: `claude auth login`
+     * prints a URL and then BLOCKS on a code typed back in, while
+     * `cursor-agent login` prints a URL and then polls its own API until a
+     * browser approves it. There is no code in a cursor login and nothing to
+     * send back, which is why the phone's status wording is harness-aware.
+     *
+     * Absent means claude, so an older app asking for a login gets exactly
+     * what it always got.
+     */
+    harness?: string
 }
 
 export interface AccountLoginResult {
     started: true
     name: string | null
+    /** Which subscription was started, echoed so the phone can be sure. */
+    harness: AccountLoginHarness
 }
 
 /** The tmux server the login runs on, and never the default one. */
@@ -94,10 +111,41 @@ export function validAccountName(name: string): boolean {
     return /^[A-Za-z0-9._@+-]+$/.test(name)
 }
 
-/** The argv, split out so the shape is testable without spawning anything. */
-export function buildAccountLoginArgv(droverBin: string, name?: string): string[] {
+/**
+ * The harnesses this can log in. Anything else is refused with a sentence
+ * rather than handed to the wrapper, which would exit 2 into a pane nobody is
+ * looking at.
+ */
+export const accountLoginHarnesses = ['claude', 'cursor'] as const
+export type AccountLoginHarness = (typeof accountLoginHarnesses)[number]
+
+/** The harness asked for, defaulting to claude. Null when it is not one. */
+export function accountLoginHarness(raw: unknown): AccountLoginHarness | null {
+    if (raw === undefined || raw === null) return 'claude'
+    if (typeof raw !== 'string') return null
+    const key = raw.trim().toLowerCase()
+    if (!key) return 'claude'
+    return (accountLoginHarnesses as readonly string[]).includes(key)
+        ? key as AccountLoginHarness
+        : null
+}
+
+/**
+ * The argv, split out so the shape is testable without spawning anything.
+ *
+ * `--harness` is passed only for cursor. `drover account login --harness
+ * claude` is accepted by the wrapper and means the same as no flag, but a
+ * daemon that always sent it would fail against a wrapper predating DROVE-256
+ * — and the phone cannot see which wrapper is on the other end.
+ */
+export function buildAccountLoginArgv(
+    droverBin: string,
+    name?: string,
+    harness: AccountLoginHarness = 'claude',
+): string[] {
     const argv = [droverBin, 'account', 'login']
     if (name) argv.push(name)
+    if (harness !== 'claude') argv.push('--harness', harness)
     return argv
 }
 
@@ -117,9 +165,18 @@ export function buildAccountLoginArgv(droverBin: string, name?: string): string[
  * racing for one directory. `login-new` still does the job here, because two
  * nameless adds from the app both want it and tmux refuses the second.
  */
-export function accountLoginSessionName(name?: string | null): string {
+export function accountLoginSessionName(
+    name?: string | null,
+    harness: AccountLoginHarness = 'claude',
+): string {
     const spelling = (name ?? '').trim()
-    if (!spelling) return 'login-new'
+    // A NAMELESS CURSOR ADD IS `login-cursor`, not `login-new` (DROVE-270),
+    // because that is the slug libexec/drover-cursor-login computes for itself
+    // — a cursor account cannot be named after a config dir, since it has
+    // none, so `cursor` is its placeholder where `new` is Claude's. Matching
+    // it means the session this daemon opens is already the name the script
+    // wants, instead of one it has to rename on the way past.
+    if (!spelling) return harness === 'cursor' ? 'login-cursor' : 'login-new'
     return `login-${spelling.replace(/[^A-Za-z0-9_-]+/g, '-')}`
 }
 
@@ -262,6 +319,13 @@ export async function startAccountLogin(
     request: AccountLoginRequest,
     deps: AccountLoginDeps = {},
 ): Promise<AccountLoginResult> {
+    const harness = accountLoginHarness(request?.harness)
+    if (!harness) {
+        throw new Error(
+            `'${String(request?.harness)}' is not a subscription this can log in. `
+            + `It adds ${accountLoginHarnesses.join(' or ')} accounts.`,
+        )
+    }
     const name = typeof request?.name === 'string' ? request.name.trim() : ''
     if (name && !validAccountName(name)) {
         throw new Error(
@@ -282,9 +346,9 @@ export async function startAccountLogin(
         )
     }
 
-    const argv = buildAccountLoginArgv(droverBin, name || undefined)
-    const session = accountLoginSessionName(name)
+    const argv = buildAccountLoginArgv(droverBin, name || undefined, harness)
+    const session = accountLoginSessionName(name, harness)
     const launch = deps.launch ?? launchInTmux
     launch(argv, session)
-    return { started: true, name: name || null }
+    return { started: true, name: name || null, harness }
 }

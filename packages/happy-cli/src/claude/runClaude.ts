@@ -44,7 +44,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { RawJSONLinesSchema, type RawJSONLines } from './types';
 import { FlipController, parseFlipCommand } from '@/drover/flip/controller';
-import { currentAccount, readAccounts } from '@/drover/flip/accounts';
+import { currentAccount, flippableAccounts, readAccounts } from '@/drover/flip/accounts';
 import { CloneReporter, readSeedPrompt } from '@/drover/flip/clones';
 import { UsageReporter } from '@/drover/flip/usage';
 import { PolicyReporter } from '@/drover/flip/policy';
@@ -1314,7 +1314,7 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
     // actually names more than one account: with one account there is nowhere
     // to flip to, and an idle bus subscription per session would be cost for
     // nothing. Everything it does is local — the server is never involved.
-    const flipController = readAccounts().length > 1
+    const flipController = flippableAccounts().length > 1
         ? new FlipController(workingDirectory, (message) => {
             session.sendSessionEvent({ type: 'message', message });
         })
