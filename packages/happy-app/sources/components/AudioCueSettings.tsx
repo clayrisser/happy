@@ -219,8 +219,7 @@ export const AudioCueSettings = React.memo(function AudioCueSettings() {
                 />
                 <Item
                     title="Read thinking"
-                    subtitle="The model's reasoning, read in its place before the reply it precedes, lower and a shade slower so it never sounds like the answer."
-                    subtitleLines={0}
+                    subtitle="read in place, lower and slower"
                     icon={<Ionicons name="bulb-outline" size={29} color="#FFCC00" />}
                     rightElement={
                         <Switch
@@ -231,8 +230,7 @@ export const AudioCueSettings = React.memo(function AudioCueSettings() {
                 />
                 <Item
                     title="Read questions and permissions"
-                    subtitle="A gate waiting on you is spoken ahead of the transcript, once, with one reminder after a minute."
-                    subtitleLines={0}
+                    subtitle="spoken ahead of the transcript"
                     icon={<Ionicons name="help-circle-outline" size={29} color="#FF3B30" />}
                     rightElement={
                         <Switch
@@ -262,7 +260,7 @@ export const AudioCueSettings = React.memo(function AudioCueSettings() {
               */}
             <ItemGroup
                 title="Sound rate"
-                footer="Off means every tool call and every agent event sounds. A sound is still dropped rather than played late if it cannot be heard within four seconds, and it never plays over the voice."
+                footer="Off means every event sounds."
             >
                 <SliderRow
                     label="Tool ticks a minute"

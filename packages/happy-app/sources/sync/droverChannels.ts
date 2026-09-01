@@ -83,9 +83,9 @@ export const BUILT_IN_MODES: Record<string, ChannelToggles> = Object.freeze({
 export const BUILT_IN_MODE_ORDER = ['silent-haptic', 'eyes-free-audio', 'direct', 'hands-free-voice'] as const;
 
 export const MODE_COPY: Record<string, { title: string; subtitle: string }> = {
-    'silent-haptic': { title: 'Silent haptic', subtitle: 'The wrist buzzes; you answer with a tap, without looking or listening.' },
-    'eyes-free-audio': { title: 'Eyes-free audio', subtitle: 'Options are read aloud; you answer with a headphone click.' },
-    'direct': { title: 'Direct', subtitle: 'The phone or the watch shows it; you tap.' },
+    'silent-haptic': { title: 'Silent haptic', subtitle: 'The wrist buzzes; you tap.' },
+    'eyes-free-audio': { title: 'Eyes-free audio', subtitle: 'Read aloud; you click.' },
+    'direct': { title: 'Direct', subtitle: 'Phone or watch shows it; you tap.' },
     'hands-free-voice': { title: 'Hands-free voice', subtitle: 'Spoken to you, and you speak back.' },
 };
 

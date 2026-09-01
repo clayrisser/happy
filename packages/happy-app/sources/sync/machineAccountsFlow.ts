@@ -863,17 +863,24 @@ export function accountGroupTitle(machine: string, harness: AccountHarness): str
 /**
  * The sentence under a group, which is where the two kinds actually differ.
  *
+ * ONE LINE EACH (DROVE-346). The cursor footer ran to four lines of mechanics
+ * — token versus login, why nothing flips, why no percentage — and Clay
+ * scribbled the whole block out. The Claude footer beside it was already one
+ * line, which is the length that reads as a caption rather than a lecture.
+ *
+ * The quota half is gone because it was never the footer's to say: an account
+ * with no published figure already says `no quota published` on its own row,
+ * where the reader is looking when the question occurs to them.
+ *
  * Offline first for both, because a list that cannot be read or changed is the
  * fact that matters and neither explanation applies while it is true.
  */
 export function accountGroupFooter(harness: AccountHarness, online: boolean): string {
-    if (!online) return 'This machine is offline, so its account list cannot be read or changed.';
+    if (!online) return 'Offline, so this list cannot be changed.';
     if (harness === 'cursor') {
-        return 'Each of these is a TOKEN this machine holds, not a login it takes turns with — so two '
-            + 'cursor sessions run side by side and there is nothing to flip. Cursor publishes no quota, '
-            + 'so no account here shows a percentage.';
+        return 'These are tokens, so they never flip.';
     }
-    return 'These accounts are logged in on this machine and only exist here.';
+    return 'These accounts only exist on this machine.';
 }
 
 /* ------------------------------------------------------------------------- *

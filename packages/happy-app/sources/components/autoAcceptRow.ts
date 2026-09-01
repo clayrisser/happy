@@ -37,12 +37,17 @@ export const AUTO_ACCEPT_TITLE = 'Auto-accept';
 /**
  * The boundary, in the place the switch is thrown.
  *
- * Two sentences, and the second is the one that matters: it is the promise the
- * classifier keeps, so a question, a login code or a to-do arriving while this
- * is on is expected behaviour rather than a bug report.
+ * ONE FRAGMENT, because the rows under it are fragments (DROVE-346). Clay, with
+ * the sheet photographed: the handcrafted modes read "asks when unsure", "edits,
+ * no asking", "plan first", and this toggle answered them with three sentences.
+ * A paragraph sitting on top of a fragment list is what he scribbled out.
+ *
+ * What survives the cut is the promise the classifier keeps — prompts yes,
+ * questions no — because that is the half a surprise would be reported against.
+ * The session scope and the reset on restart are real and are not said here:
+ * both fail SAFE, so a reader who does not know them is never over-trusting.
  */
-export const AUTO_ACCEPT_SUBTITLE =
-    'Answers Allow / Deny prompts in this session with Allow. Questions, logins and to-dos still ask. Off again when the app restarts.';
+export const AUTO_ACCEPT_SUBTITLE = 'allows prompts, not questions';
 
 /** The sheet row's glyph, so the switch's own state reads without the switch. */
 export function autoAcceptGlyph(on: boolean): typeof AUTO_ACCEPT_GLYPH | typeof AUTO_ACCEPT_GLYPH_ON {

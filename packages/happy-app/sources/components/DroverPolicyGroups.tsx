@@ -216,8 +216,8 @@ export function DroverPolicyGroups(props: RowsProps) {
             <ItemGroup
                 title="When this account runs out"
                 footer={scope === 'session'
-                    ? 'Applies to this session only. Everything else follows the Mac default.'
-                    : 'Every new session on this Mac starts here. A session that sets its own wins.'}
+                    ? 'This session only.'
+                    : 'Every new session on this Mac starts here.'}
             >
                 <InForce policy={policy} policyKey="onLimit" scope={scope} choices={onLimitChoices} />
                 <ChoiceRows {...props} policyKey="onLimit" choices={onLimitChoices} />
@@ -225,7 +225,7 @@ export function DroverPolicyGroups(props: RowsProps) {
 
             <ItemGroup
                 title="When no account has your model"
-                footer="Whatever it does, the session says which of these chose and what it changed. A family with no chain below it cannot drop, so it behaves as Switch account only."
+                footer="A family with no chain below it cannot drop."
             >
                 <InForce policy={policy} policyKey="onFamilyExhausted" scope={scope} choices={onFamilyExhaustedChoices} />
                 <ChoiceRows {...props} policyKey="onFamilyExhausted" choices={onFamilyExhaustedChoices} />
@@ -233,22 +233,21 @@ export function DroverPolicyGroups(props: RowsProps) {
 
             <ItemGroup
                 title="If nobody answers the question"
-                footer="Only reached when the setting above is Ask me and the question stands unanswered."
+                footer="Only when the setting above is Ask me."
             >
                 <InForce policy={policy} policyKey="onLimitTimeout" scope={scope} choices={onLimitTimeoutChoices} />
                 <ChoiceRows {...props} policyKey="onLimitTimeout" choices={onLimitTimeoutChoices} />
                 <Item
                     title="How long it stands"
                     detail={ttl == null ? '—' : `${Math.round(Number(ttl) / 60000)} min`}
-                    subtitle="Set from the terminal: drover settings set onLimitPromptTtlMs"
-                    subtitleLines={0}
+                    subtitle="set from the terminal"
                     showChevron={false}
                 />
             </ItemGroup>
 
             <ItemGroup
                 title="The fallback chain"
-                footer="Edited from the terminal: drover settings fallback fable opus,sonnet"
+                footer="Edited from the terminal."
             >
                 {fallback && Object.keys(fallback).length > 0 ? (
                     Object.entries(fallback).map(([family, chain]) => (

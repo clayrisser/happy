@@ -282,7 +282,7 @@ export default function MachineDetailScreen() {
                 {/* Cattle Drover accounts (DROVE-61) */}
                 <ItemGroup
                     title="Claude accounts"
-                    footer="Adding one needs no keyboard on that machine: the sign-in page opens in your browser and the code goes back on the card."
+                    footer="The sign-in page opens in your browser."
                 >
                     {/*
                       * Clay's ask (DROVE-61): "I push a button to add an account or to
@@ -314,7 +314,7 @@ export default function MachineDetailScreen() {
                         machine's group is the same one, reached from here. */}
                     <Item
                         title="This machine’s accounts"
-                        subtitle="See what is logged in here, and remove one"
+                        subtitle="what is logged in here"
                         icon={<Ionicons name="people-circle-outline" size={29} color="#007AFF" />}
                         onPress={() => router.push('/settings/accounts' as any)}
                     />

@@ -117,8 +117,7 @@ export default function DroverDemoScreen() {
                 >
                     <Item
                         title={onboarding ? 'Learn the signals' : 'Every channel, on demand'}
-                        subtitle="Haptic, audio and visual announce; push proves the path from the Mac"
-                        subtitleLines={0}
+                        subtitle="every channel, on demand"
                         icon={<Ionicons name="pulse-outline" size={29} color={glyph} />}
                         showChevron={false}
                     />
@@ -446,7 +445,7 @@ function PhoneTapticSection() {
     return (
         <ItemGroup
             title="Phone taptics"
-            footer="What the app itself taps for. Different engine from the wrist, listed so a composer tick is never mistaken for a gate."
+            footer="What the app itself taps for."
         >
             {phoneTaptics.map((spec) => (
                 <Item
@@ -622,7 +621,7 @@ function PushSection() {
     return (
         <ItemGroup
             title="Push"
-            footer="The Mac sends one message to this phone's own token through the same push client a gate uses. That is the DROVE-70 path, proven without waiting for a to-do."
+            footer="Sent from the Mac to this phone."
         >
             <Item
                 title="Send a test push to this phone"
@@ -715,7 +714,7 @@ function CardsSection() {
         <>
             <ItemGroup
                 title="Cards, as the transcript shows them"
-                footer="Every button is the real one. Answers land in the demo sink and in the log, never on the Mac."
+                footer="Answers never reach the Mac."
             >
                 <Item
                     title="Reset the cards"
@@ -742,7 +741,7 @@ function CardsSection() {
             </View>
             <ItemGroup
                 title="Cards, as the inbox shows them"
-                footer="The same three kinds the inbox groups: prompts that block a session, and a to-do that never expires. A card leaves when it is answered, the way the inbox does it."
+                footer="The same three kinds the inbox groups."
             >
                 <Item
                     title={inbox.length === 0 ? 'All answered' : `${inbox.length} in the demo inbox`}
