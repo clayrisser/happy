@@ -94,6 +94,24 @@ describe('reduceMicGesture', () => {
                 outcome: ['open', 'latch'],
                 ends: 'idle',
             },
+            {
+                name: 'a tap whose lift was lost still stops on the closing tap, and sends nothing (DROVE-286)',
+                events: [press(0), press(5000), lift(5080)],
+                outcome: ['open', 'latch', 'stop'],
+                ends: 'idle',
+            },
+            {
+                name: 'even confirmed as a hold, a lift nobody saw cannot send (DROVE-286)',
+                events: [press(0), holdConfirm, press(5000), lift(5080)],
+                outcome: ['open', 'latch', 'stop'],
+                ends: 'idle',
+            },
+            {
+                name: 'the closing press after a lost lift can still slide off and cancel (DROVE-286)',
+                events: [press(0), press(5000), slideOff, lift(5600)],
+                outcome: ['open', 'latch', 'cancel'],
+                ends: 'idle',
+            },
         ];
 
         for (const row of table) {
@@ -126,10 +144,51 @@ describe('reduceMicGesture', () => {
             expect(run.effects).not.toContain('latch');
         });
 
-        it('ignores a duplicate pressIn while held', () => {
-            const run = drive([press(0), press(50)]);
-            expect(run.gesture).toEqual(gestureAt({ state: 'held', pressedAt: 0 }));
-            expect(run.effects).toEqual(['open', 'watchHold', 'tick']);
+    });
+
+    /**
+     * A pressIn while 'held' used to be read as a duplicate and ignored, and
+     * that reading is what let a latched mic send (DROVE-286). One finger
+     * cannot press twice without lifting, so a second pressIn is not a
+     * duplicate: it is PROOF the first press's lift was lost -- on the phone,
+     * the press-in re-renders the mic from bare glyph to red disc, the
+     * pressable is remounted under the finger, and React Native fires no
+     * onPressOut for a press whose responder was unmounted. Ignoring the
+     * evidence left the reducer 'held' over a phantom finger, and the closing
+     * tap's lift then read as a push-to-talk release and SENT.
+     *
+     * The rule that resolves it is DROVE-105's own: only a hold's release,
+     * WITNESSED as a pressOut on the button, sends. A lift nobody saw settled
+     * nothing, so the capture it left open defaults to the ergonomic that
+     * cannot send -- a latch -- and the new press is a press on a latched
+     * mic: its lift stops, with the words kept. The two failures are not
+     * symmetrical (the argument on HOLD_MIN_MS): a lost send costs one tap of
+     * the send button; an unmeant send cannot be taken back.
+     */
+    describe('a lift the platform never delivered (DROVE-286)', () => {
+        it('reads a second pressIn while held as a lost lift: the capture is a latch now', () => {
+            const run = drive([press(0), press(5000)]);
+            expect(run.gesture).toEqual(gestureAt({ state: 'latched', pressedAt: 5000 }));
+            // 'latch' moves the capture to latch mode and starts its idle
+            // clock, so a mic nobody is holding cannot sit hot forever.
+            expect(run.effects).toEqual(['open', 'watchHold', 'tick', 'latch']);
+        });
+
+        it('so the closing tap stops, and the lift that was never seen can never send', () => {
+            const run = drive([press(0), press(5000), lift(5080)]);
+            expect(outcome(run.effects)).toEqual(['open', 'latch', 'stop']);
+            expect(run.gesture.state).toBe('idle');
+        });
+
+        it('drops a confirm the old press earned: the phantom finger is not a hold', () => {
+            // The hold timer from the lost press may already have fired, or
+            // may still be pending and fire after the recovery. Neither may
+            // arm a send: the first is cleared by the conversion, the second
+            // lands on a latched gesture and is inert.
+            const confirmedFirst = drive([press(0), holdConfirm, press(5000), lift(5080)]);
+            expect(outcome(confirmedFirst.effects)).toEqual(['open', 'latch', 'stop']);
+            const confirmedLate = drive([press(0), press(5000), holdConfirm, lift(5080)]);
+            expect(outcome(confirmedLate.effects)).toEqual(['open', 'latch', 'stop']);
         });
     });
 

@@ -359,6 +359,94 @@ describe('a tap still latches, and the next tap still stops (DROVE-269 adds, it 
     });
 });
 
+describe('a lift the platform never delivers cannot arm a send (DROVE-286)', () => {
+    /**
+     * THE PHONE'S OWN EVENT STREAM, not the spec's ideal one. Clay: "not if I
+     * tap and then talk and then tap again" -- and the app was sending exactly
+     * there. The tap-latch-tap case above PASSES, and the phone still
+     * misbehaved, which is the DROVE-263 trap a third time: the spec drove a
+     * PAIRED press the device does not always deliver.
+     *
+     * WHERE THE LIFT GOES. The mic's press-in turns the bare glyph into the
+     * red disc, and ComposerControlButton answered that by swapping component
+     * type -- BubblePressable out, GlassChromeButton in -- which unmounts the
+     * pressable UNDER THE FINGER. React Native fires no onPressOut for a
+     * press whose responder was unmounted, so the opening tap's lift dies
+     * with the old view. The reducer is left in 'held' over a phantom finger,
+     * the hold timer confirms a hold nobody is making, and the CLOSING tap's
+     * lift then reads as a push-to-talk release and SENDS. The same stream
+     * describes a lost push-to-talk lift, so this one test covers both ways
+     * the phone can eat a release.
+     *
+     * So this test replays what the device actually sends: a pressIn, NO
+     * pressOut, the hold timer firing, then one whole closing tap.
+     */
+    it('the closing tap stops and keeps the words when the opening lift was eaten', async () => {
+        const h = harness();
+        h.down();
+        await flush();
+        // No h.up(): that is the event the remount ate. The hold timer fires
+        // over a finger that is long gone, and with the lift lost nothing
+        // contradicts it.
+        h.advance(HOLD_MIN_MS + 100);
+        h.capture.partial('read this back before it goes anywhere');
+        h.advance(3_000);
+        // The closing tap, delivered whole: the face does not change on this
+        // press, so nothing remounts under the finger.
+        h.down();
+        h.advance(tapFor);
+        h.up();
+        await flush();
+        h.engine.settle('read this back before it goes anywhere');
+        await flush();
+
+        // The contract, in his words: "not if I tap and then talk and then
+        // tap again". Nothing sent, every word kept (DROVE-263: stopping may
+        // never shorten what was heard), mic closed.
+        expect(h.sends).toBe(0);
+        expect(h.composer).toBe('read this back before it goes anywhere');
+        expect(h.micState).toBe('idle');
+        expect(h.capture.current.active).toBe(false);
+    });
+
+    it('the recovery press itself turns the capture into a latch, idle clock running', async () => {
+        // The press-in is the moment the reducer learns the first lift was
+        // lost, and the capture must become a LATCH there and then: the mode
+        // flips and the idle clock starts, so a mic nobody is holding cannot
+        // sit hot forever (DROVE-74's deadline applies to it).
+        const h = harness();
+        h.down();
+        await flush();
+        h.advance(HOLD_MIN_MS + 100);
+        h.capture.partial('still being said');
+        h.advance(1_000);
+        h.down();
+        expect(h.capture.current.mode).toBe('latch');
+        expect(h.capture.current.idleAt).not.toBeNull();
+        expect(h.micState).toBe('latched');
+    });
+
+    it('a closing tap that slides off still cancels, lost lift or not', async () => {
+        // The slide-off promise holds on the recovery path too: the closing
+        // press dragged off the button is the voice-note cancel, not a stop.
+        const h = harness();
+        h.down();
+        await flush();
+        h.advance(HOLD_MIN_MS + 100);
+        h.capture.partial('thrown away on purpose');
+        h.advance(1_000);
+        h.down();
+        h.move({ x: micBox.width + 40, y: micBox.height / 2 });
+        h.advance(tapFor);
+        h.up();
+        await flush();
+
+        expect(h.sends).toBe(0);
+        expect(h.composer).toBe('');
+        expect(h.micState).toBe('idle');
+    });
+});
+
 describe('sliding off before the lift cancels (DROVE-269)', () => {
     it('throws the recording away and puts the composer back', async () => {
         const h = harness('half a sentence');
@@ -600,5 +688,26 @@ describe('the composer hands the mic the touch stream (DROVE-269)', () => {
         const talkButton = read('components/TalkButton.tsx');
         expect(talkButton).toContain('{...stream.view}');
         expect(talkButton).toContain('{...stream.press}');
+    });
+
+    it('owns the gesture on a pressable the face flip cannot unmount (DROVE-286)', () => {
+        // ComposerControlButton swaps component type with its fill, and the
+        // mic's press-in is what turns the fill red: a press stream spread on
+        // that control is unmounted mid-press, and the opening lift dies with
+        // it, which is how the closing tap came to send. The stream must sit
+        // on a plain Pressable that outlives the face, with the face behind
+        // pointerEvents="none" so no press ever rides on the part that
+        // remounts.
+        const mic = agentInput.slice(
+            agentInput.indexOf('const mobileMicAction'),
+            agentInput.indexOf('const mobileSessionControls'),
+        );
+        expect(mic).toContain('<Pressable');
+        expect(mic).toContain('{...micTouch.press}');
+        expect(mic).toContain('<View pointerEvents="none"');
+        // The press lands on the Pressable, before the decoration ever
+        // appears; nothing presses the face itself any more.
+        expect(mic.indexOf('{...micTouch.press}')).toBeGreaterThan(mic.indexOf('<Pressable'));
+        expect(mic.indexOf('{...micTouch.press}')).toBeLessThan(mic.indexOf('<ComposerControlButton'));
     });
 });

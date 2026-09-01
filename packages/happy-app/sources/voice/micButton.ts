@@ -243,8 +243,36 @@ export function reduceMicGesture(gesture: MicGesture, event: MicGestureEvent): M
                     effects: [],
                 };
             }
-            // Already held: a second pressIn is a duplicate, nothing changes.
-            return { next: gesture, effects: [] };
+            // A second pressIn while 'held' is NOT a duplicate (DROVE-286).
+            // One finger cannot press twice without lifting, so this event is
+            // proof the previous press's LIFT WAS LOST: on the phone, the
+            // press-in re-renders the mic from bare glyph to red disc, and a
+            // pressable remounted under the finger fires no onPressOut.
+            // Reading it as a duplicate left this reducer 'held' over a
+            // phantom finger, the hold timer confirmed a hold nobody was
+            // making, and the CLOSING tap's lift read as a push-to-talk
+            // release and sent a latch he opened to think in.
+            //
+            // Only a hold's release WITNESSED as a pressOut on the button may
+            // send (DROVE-105). A lift nobody saw settled nothing, so the
+            // capture it left open resolves to the ergonomic that cannot
+            // send: a LATCH, idle clock and all, which is what remembering
+            // how a capture was opened means once the opening press's end is
+            // unknowable. This press is then a press on a latched mic, and
+            // its lift stops -- or cancels, if it slides off -- exactly as if
+            // the latch had closed properly. The two failures are not
+            // symmetrical (see HOLD_MIN_MS): a lost send costs one tap of the
+            // send button; an unmeant send cannot be taken back.
+            return {
+                next: {
+                    state: 'latched',
+                    pressedAt: event.at,
+                    pressedTouchAt: event.touchAt ?? null,
+                    outside: false,
+                    confirmed: false,
+                },
+                effects: ['latch'],
+            };
 
         case 'holdConfirm':
             // Only a press that is still down, on a mic that is not latched,
