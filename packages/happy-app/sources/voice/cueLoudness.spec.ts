@@ -58,6 +58,8 @@ describe('cue loudness', () => {
             micOpen: 0,
             micClosed: 0,
             micRefused: 0,
+            sessionSkipped: 0,
+            skipRefused: 0,
             waitingNeedsYou: -1,
             waitingQuestion: -1,
             waitingPermission: -1,
@@ -85,13 +87,18 @@ describe('cue loudness', () => {
     });
 
     it('answers a press at the very top of the table', () => {
-        // DROVE-225's rule, now sayable: the mic cues are the only rows at
+        // DROVE-225's rule, now sayable, and DROVE-300's two skip answers hold
+        // to it as well: the cues that reply to a press are the only rows at
         // 0 dB, so nothing in the table is louder than the answer to a press.
-        for (const id of ['micOpen', 'micClosed', 'micRefused'] as const) {
+        const pressAnswers: CueGainKey[] = [
+            'micOpen', 'micClosed', 'micRefused', 'sessionSkipped', 'skipRefused',
+        ];
+        for (const id of pressAnswers) {
             expect(cueGainDb[id], id).toBe(0);
         }
+        const answering = new Set<string>(pressAnswers);
         for (const [id, db] of Object.entries(cueGainDb)) {
-            if (id.startsWith('mic')) continue;
+            if (answering.has(id)) continue;
             expect(db, id).toBeLessThan(0);
         }
     });

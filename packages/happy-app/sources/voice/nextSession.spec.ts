@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { nextSessionMove, startNextSessionPress, type NextSessionDeps } from './nextSession';
 import type { RemoteCommand } from './headphonePress';
+import { cueSpec } from './audioCues';
 
 /** The press stream, driven by hand. */
 function harness(over: Partial<NextSessionDeps> = {}) {
     const taken: string[] = [];
+    const cued: string[] = [];
+    const named: string[] = [];
+    /** Every side effect of one press, in the order it happened. */
+    const order: string[] = [];
     let listener: ((command: RemoteCommand) => void) | null = null;
     let removed = false;
     let cycle: string[] = ['a', 'b', 'c'];
@@ -14,7 +19,16 @@ function harness(over: Partial<NextSessionDeps> = {}) {
         current: () => current,
         take: (id) => {
             taken.push(id);
+            order.push(`take:${id}`);
             current = id;
+        },
+        ack: (id) => {
+            cued.push(id);
+            order.push(`cue:${id}`);
+        },
+        announce: (id) => {
+            named.push(id);
+            order.push(`named:${id}`);
         },
         subscribe: (fn) => {
             listener = fn;
@@ -25,6 +39,9 @@ function harness(over: Partial<NextSessionDeps> = {}) {
     const stop = startNextSessionPress(deps);
     return {
         taken,
+        cued,
+        named,
+        order,
         stop,
         press: (command: RemoteCommand) => listener?.(command),
         setCycle: (next: string[]) => { cycle = next; },
@@ -163,5 +180,80 @@ describe('the press, wired to the reader', () => {
         const rig = harness();
         rig.stop();
         expect(rig.wasRemoved()).toBe(true);
+    });
+});
+
+describe('the press is never silent', () => {
+    it('cues the skip, names the session, then takes it, in that order', () => {
+        // The cue leads so it plays into the gap the take opens rather than
+        // over the incoming session's first sentence, and the name leads the
+        // take so a real sentence can overwrite it the moment there is one.
+        const rig = harness();
+        rig.press('next');
+        expect(rig.order).toEqual(['cue:sessionSkipped', 'named:b', 'take:b']);
+    });
+
+    it('cues a refusal instead of doing nothing quietly', () => {
+        // headphonePress.ts's doctrine, applied to the one gesture that was
+        // still exempt from it: a press with no sound is indistinguishable
+        // from a press that did nothing.
+        const rig = harness();
+        rig.setCycle(['a']);
+        rig.setCurrent('a');
+        rig.press('next');
+        expect(rig.cued).toEqual(['skipRefused']);
+        expect(rig.taken).toEqual([]);
+        expect(rig.named).toEqual([]);
+    });
+
+    it('cues the same refusal with reading off everywhere', () => {
+        // Two refusals, one sound. From his ear `empty` and `alone` are the
+        // same fact — the press landed and there was nowhere to go — and the
+        // `why` exists so a caller can say them differently later, not
+        // because they must be said differently now.
+        const rig = harness();
+        rig.setCycle([]);
+        rig.press('next');
+        expect(rig.cued).toEqual(['skipRefused']);
+    });
+
+    it('says nothing at all on a press that is not its own', () => {
+        // A cue on the single or triple press would be this subscription
+        // answering a gesture the table gave to somebody else.
+        const rig = harness();
+        rig.press('toggle');
+        rig.press('play');
+        rig.press('pause');
+        rig.press('previous');
+        expect(rig.cued).toEqual([]);
+        expect(rig.named).toEqual([]);
+    });
+
+    it('never names a session it did not move to', () => {
+        // The card is a claim about where the voice IS. A name written on a
+        // refusal would put the wrong conversation on the lock screen and
+        // leave it there.
+        const rig = harness();
+        rig.press('next');
+        rig.setCycle([]);
+        rig.press('next');
+        expect(rig.named).toEqual(['b']);
+    });
+
+    it('survives a cue player that throws', () => {
+        // Same rule as the reader: a dead beeper is not worth a dead skip.
+        const rig = harness({ ack: () => { throw new Error('no audio'); } });
+        expect(() => rig.press('next')).not.toThrow();
+    });
+
+    it('tells the skip and its refusal apart by shape', () => {
+        // Rhythm, not pitch: three notes climbing against the same low note
+        // three times. A pocket flattens pitch and the contour survives.
+        const skipped = cueSpec('sessionSkipped');
+        const refused = cueSpec('skipRefused');
+        expect(skipped.beats.map((beat) => beat.hz)).toEqual(
+            [...skipped.beats].map((beat) => beat.hz).sort((a, b) => a - b),
+        );
+        expect(new Set(refused.beats.map((beat) => beat.hz)).size).toBe(1);
     });
 });

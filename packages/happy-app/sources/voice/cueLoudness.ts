@@ -60,7 +60,8 @@ export const cueUnityAmplitude = 10 ** ((voiceReferenceLufs - sineFullScaleLufs)
  * The ordering is the argument, and it is the same argument the old
  * multipliers were making, now in a unit that can be checked:
  *
- *   - The MIC answers (DROVE-225) are the loudest, alone at 0. They are the
+ *   - The PRESS answers are the loudest, and they are the only rows at 0. The
+ *     mic's three (DROVE-225) and the double press's two (DROVE-300) are the
  *     only cues that reply to something Clay just did, and a press with no
  *     audible answer is indistinguishable from a press that did nothing.
  *   - The WAITING pulses sit one dB under. They are meant to be found in a
@@ -80,6 +81,8 @@ export const cueGainDb = {
     micOpen: 0,
     micClosed: 0,
     micRefused: 0,
+    sessionSkipped: 0,
+    skipRefused: 0,
     waitingNeedsYou: -1,
     waitingQuestion: -1,
     waitingPermission: -1,

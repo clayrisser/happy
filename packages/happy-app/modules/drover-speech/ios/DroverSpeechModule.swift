@@ -470,6 +470,37 @@ public final class DroverSpeechModule: Module {
             self.ensureCueSessionCategory()
         }
 
+        /// Name the card after the session that just took the voice
+        /// (DROVE-300).
+        ///
+        /// THE CARD FOLLOWS THE SENTENCE, and that is the gap this closes. The
+        /// title is set at the synthesiser — `String(text.prefix(60))` on every
+        /// utterance — which is right while a session is talking and wrong the
+        /// moment the voice MOVES. A double press pauses one session and hands
+        /// the voice to another, and until the new one says its first sentence
+        /// the lock screen and the CarPlay head unit still name the old one.
+        /// The new session may be waiting on a reply, so "until" is not a
+        /// flicker; it can be a minute of the dashboard naming a conversation
+        /// he skipped away from.
+        ///
+        /// So JS says who has the voice now, and the next sentence overwrites
+        /// it in the ordinary way. A session NAME rather than a sentence, on
+        /// purpose: in the gap there is no sentence to show, and the one thing
+        /// the surface has to answer is which conversation the press landed
+        /// on.
+        ///
+        /// GUARDED BY THE CARD'S OWN LIFETIME, the same condition the
+        /// synthesiser's title update carries. Publishing a title while
+        /// read-aloud is off would CREATE a card for a reader that has been
+        /// switched off, which is the one thing `setReadingState(.off)` exists
+        /// to prevent.
+        AsyncFunction("setNowPlayingTitle") { (title: String) -> Void in
+            guard self.readingState != .off || self.sessionHeld else { return }
+            let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return }
+            self.updateNowPlaying(title: String(trimmed.prefix(60)))
+        }
+
         /// Whether this binary owns the card's lifetime (DROVE-233).
         ///
         /// Its own stamp, like `handlesInterruptions` and `handlesMicCommand`,
