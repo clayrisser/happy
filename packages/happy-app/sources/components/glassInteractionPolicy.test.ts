@@ -90,22 +90,49 @@ describe('pressed state stands down for the material (DROVE-202)', () => {
     });
 });
 
-describe('a glass surface that hosts a press without being one (DROVE-266)', () => {
-    it('keeps its clip, so the composer card still rounds what it holds', () => {
-        // DROVE-202 is about a surface that SWELLS under a finger, and the
-        // composer card is not one: nobody presses the card. Conflating the two
-        // would have made asking for the platform's press response cost the
-        // card its shape.
-        expect(glassPolicy.getGlassSurfaceOverflow(true, false)).toBe('hidden');
+/**
+ * THE COMPOSER CARD IS A PRESS TARGET THE MOMENT IT IS INTERACTIVE
+ * (DROVE-328, reversing the split DROVE-266 drew here).
+ *
+ * Clay, from his phone with the bubble mid-press: "This behaves like Liquid
+ * Glass but when it zooms its borders are clipped." DROVE-266 turned
+ * `isInteractive` on for the card and, in the same commit, gave this function
+ * a second argument so the card could keep `overflow: 'hidden'`, on the theory
+ * that nobody presses the card and the lensing it wanted "happens inside its
+ * own bounds". That is not how the effect works. `UIGlassEffect.isInteractive`
+ * is a property of the effect VIEW, and the view answers a touch on anything
+ * mounted in its `contentView` (the field, the capsule, a disc) by deforming
+ * the whole material, which is the swell DROVE-202 diagnosed. So the card
+ * swells, `clipsToBounds` pins it at the resting frame, and Clay photographed
+ * the hard edge. 266 said "NOT VERIFIED ON A DEVICE"; this is the device.
+ *
+ * The argument is gone rather than defaulted, because a switch that puts the
+ * clip back on the material is the exact escape hatch DROVE-202 moved the
+ * decision in here to close. The call below still passes it, through a widened
+ * type, to hold that a caller reaching for it gets nothing.
+ */
+describe('an interactive glass surface swells whatever it holds (DROVE-328)', () => {
+    const overflowOf = glassPolicy.getGlassSurfaceOverflow as (
+        drawsNativeGlass: boolean,
+        ...legacy: unknown[]
+    ) => 'visible' | 'hidden';
+
+    it('never clips the composer card: the material answers a touch on anything inside it', () => {
+        // This is the assertion DROVE-266 wrote the other way round, and the
+        // one Clay's screenshot falsified.
+        expect(overflowOf(true, false)).toBe('visible');
     });
 
-    it('leaves every earlier caller exactly as it was', () => {
-        // The default is the pre-DROVE-266 behaviour, so the eight chrome
-        // surfaces DROVE-202 unclipped are untouched by this.
-        expect(glassPolicy.getGlassSurfaceOverflow(true)).toBe('visible');
-        expect(glassPolicy.getGlassSurfaceOverflow(true, true)).toBe('visible');
-        expect(glassPolicy.getGlassSurfaceOverflow(false, false)).toBe('hidden');
-        expect(glassPolicy.getGlassSurfaceOverflow(false, true)).toBe('hidden');
+    it('offers a caller no argument that puts the clip back', () => {
+        // A second argument, in either polarity, changes nothing on the
+        // material and nothing off it. The eight surfaces DROVE-202 unclipped
+        // and the flat fallback it left clipped are all exactly as they were.
+        expect(overflowOf(true)).toBe('visible');
+        expect(overflowOf(true, true)).toBe('visible');
+        expect(overflowOf(true, false)).toBe('visible');
+        expect(overflowOf(false)).toBe('hidden');
+        expect(overflowOf(false, false)).toBe('hidden');
+        expect(overflowOf(false, true)).toBe('hidden');
     });
 });
 

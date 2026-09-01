@@ -70,33 +70,28 @@ export function getNativeGlassInteractivity(
  *
  * Off the material the flat fallback still clips, because there it is the only
  * thing rounding the corners of what it holds.
+ *
+ * ONE ARGUMENT, AND THE SECOND ONE IS GONE (DROVE-328). DROVE-266 added a
+ * `pressTarget` flag here so the composer card could turn `isInteractive` on
+ * and keep `overflow: 'hidden'`, on the theory that nobody presses the card:
+ * that a surface which merely HOSTS pressed controls wants the lensing under a
+ * finger and no swell, and that its corners were what rounded the field and the
+ * attachment strip. Clay, from his phone with the bubble mid-press: "This
+ * behaves like Liquid Glass but when it zooms its borders are clipped." The
+ * theory was wrong on both counts. `isInteractive` is a property of the effect
+ * VIEW, and the view answers a touch on anything mounted in its `contentView`,
+ * the field and the capsule included, by deforming the whole material; there
+ * is no "host without being a target" for it to be. And on the material the
+ * card was rounding nothing: the field is transparent on iOS, the strip clips
+ * itself inside the 9pt inset, and `composerBubbleLayout.spec.ts` measures
+ * every disc clear of the drawn corner. So the flag's only effect was to put
+ * back, on the one surface 266 also made swell, the exact clip this function
+ * exists to refuse. 266 said "NOT VERIFIED ON A DEVICE"; the photo is the
+ * device, and the flag is deleted rather than defaulted so no caller can reach
+ * for it again.
  */
-export function getGlassSurfaceOverflow(
-    drawsNativeGlass: boolean,
-    /**
-     * Whether the surface is the thing being PRESSED, or merely the host of
-     * something that is (DROVE-266).
-     *
-     * DROVE-202's finding is about a surface that SWELLS: a header button, a
-     * FAB, a chrome capsule. `clipsToBounds` pins the swell at the resting
-     * frame, so what you see is the content growing inside a rectangle that
-     * does not move, which is what Clay described. Every caller then was that
-     * kind of surface, so the distinction cost nothing and was not drawn.
-     *
-     * The composer card is the other kind. Nobody presses the card; it holds
-     * controls that are pressed, and what interactive glass is wanted for there
-     * is the LENSING under a finger on a child, which happens inside the card's
-     * own bounds and asks for no swell. That card also has to keep clipping —
-     * its rounded corners are what round the text field and the attachment
-     * strip inside it — so conflating the two would have made asking for the
-     * platform's press response cost the composer its shape.
-     *
-     * Defaults to true, which is every pre-DROVE-266 caller's behaviour
-     * unchanged.
-     */
-    pressTarget = true,
-): 'visible' | 'hidden' {
-    return drawsNativeGlass && pressTarget ? 'visible' : 'hidden';
+export function getGlassSurfaceOverflow(drawsNativeGlass: boolean): 'visible' | 'hidden' {
+    return drawsNativeGlass ? 'visible' : 'hidden';
 }
 
 /**
