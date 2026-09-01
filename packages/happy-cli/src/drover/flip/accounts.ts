@@ -1383,8 +1383,47 @@ export function pickStartAccount(opts: {
         // Nowhere better: pickTarget parked, or settled on the account we
         // remembered. Staying is the honest answer — the memory is still where
         // the work is, and a park with no child is not a session start.
-        const back = choice.kind === 'parked' ? ` Every account is cooling; ${choice.account.name} is back first.` : ''
-        return { account: memory, via, note: `${why}${back} Starting there anyway` }
+        //
+        // DROVE-262. The sentence has to NAME the account it is starting, and
+        // this one named a different account last:
+        //
+        //   jam@codejam.ninja is cooling: Fable weekly limit at 100% (...),
+        //   back Wed 14:59. Every account is cooling; tekpioneer.us@gmail.com
+        //   is back first. Starting there anyway
+        //
+        // "there" is jam, jam is what stdout returns, and every reader takes
+        // it for tekpioneer — the account named one clause earlier. The pick
+        // was right; only the sentence was wrong.
+        //
+        // "Back first" is the other half of the misreading, and it answers a
+        // different question from the one the pick answers: it ranks time to
+        // FULL recovery, while the pick ranks what can run RIGHT NOW. Those
+        // two orders disagree exactly when the account we are keeping is only
+        // partly out — which is the case Clay hit, jam out of Fable alone
+        // against a tekpioneer out of everything — so naming the winner of
+        // the recovery race there is a fact about an account nothing is going
+        // to start, printed next to the one we are. It is kept only where it
+        // is the whole story: nothing anywhere can run anything, and the next
+        // reset is then the one useful number on the line.
+        //
+        // What replaces it is the reason this account beat the others, which
+        // is a question `anyModel` can answer whatever the session runs: if
+        // no limit here blocks every model, then some model still runs here,
+        // and that is why staying wins.
+        const runsSomething = coolingUntil(memory, ledger, now, anyModel) === 0
+        const all = choice.kind === 'parked' ? ' Every account is cooling.' : ''
+        const rest = runsSomething
+            ? `, where only model-scoped limits are out, so it still runs the rest; switch models with /model`
+            : '.'
+        const next =
+            choice.kind === 'parked' && !runsSomething
+                ? ` ${choice.account.name} is the first to reset, at ${whenBack(choice.until, now)}.`
+                : ''
+        return {
+            account: memory,
+            via,
+            note: `${why}${all} Starting on ${memory.name} (${where})${rest}${next}`,
+        }
     }
 
     const choice = pickTarget(undefined, null, now, family)
