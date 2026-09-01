@@ -494,7 +494,7 @@ export const pl: TranslationStructure = {
             onHint: 'Czytam odpowiedzi na głos. Dotknij zdania, aby czytać od niego',
             paused: 'Wstrzymano. Przytrzymaj, aby kontynuować od miejsca zatrzymania',
             resumed: 'Czytam dalej od miejsca zatrzymania',
-            headphonesOff: 'Słuchawki odłączone, teraz przez głośnik',
+            headphonesOff: 'Słuchawki odłączone, czytanie wstrzymane',
         },
         audioOut: {
             boss: 'Trwa rozmowa głosowa',

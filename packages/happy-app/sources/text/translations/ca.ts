@@ -478,7 +478,7 @@ export const ca: TranslationStructure = {
             onHint: "Llegint les respostes en veu alta. Toca una frase per llegir des d'allà",
             paused: "En pausa. Mantén premut per continuar on s'ha quedat",
             resumed: "Continuant la lectura des d'on s'havia quedat",
-            headphonesOff: 'Auriculars desconnectats, ara per l\'altaveu',
+            headphonesOff: 'Auriculars desconnectats, lectura en pausa',
         },
         audioOut: {
             boss: 'Trucada de veu en curs',

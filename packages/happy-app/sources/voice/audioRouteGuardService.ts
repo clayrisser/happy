@@ -89,6 +89,12 @@ const guard = new AudioRouteGuard({
     isSpeaking: () => readAloud.isSpeaking,
     isEnabled: () => readAloud.isEnabled && storage.getState().localSettings.readAloudEnabled,
     speaker: () => resolveSpeaker(),
+    // THE pause of DROVE-233, on purpose: the same state and position the
+    // long press, the headphone press and the lock screen use, so an unplug
+    // pause resumes from any of them at the same sentence (DROVE-294). The
+    // keepalive and session posture while paused are therefore identical to
+    // a long-press pause — nothing new is invented for the unplugged case.
+    pause: () => readAloud.setPaused(true),
     interrupt: () => readAloud.interrupt('headphones-unplugged'),
     announce,
 });

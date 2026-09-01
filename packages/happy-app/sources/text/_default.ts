@@ -505,7 +505,7 @@ export const en = {
             // thing anyone finds twice by accident.
             paused: 'Paused. Long press to carry on where it stopped',
             resumed: 'Reading on from where it stopped',
-            headphonesOff: 'Headphones disconnected, now on speaker',
+            headphonesOff: 'Headphones disconnected, reading paused',
         },
         audioOut: {
             // DROVE-236. The one audio-out button's fourth face, and the two

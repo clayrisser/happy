@@ -479,7 +479,7 @@ export const ja: TranslationStructure = {
             onHint: '返信を読み上げています。文をタップするとそこから読みます',
             paused: '一時停止しました。長押しすると止まったところから続きます',
             resumed: '止まったところから読み上げを再開します',
-            headphonesOff: 'ヘッドホンが切断されました。スピーカーで再生します',
+            headphonesOff: 'ヘッドホンが切断されました。読み上げを一時停止しました',
         },
         audioOut: {
             boss: '音声通話中',
