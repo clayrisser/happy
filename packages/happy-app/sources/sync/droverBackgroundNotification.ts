@@ -47,6 +47,7 @@ import {
     wakeDroverWatch,
 } from 'drover-watch';
 import { collectAccounts, collectGates, collectSessions } from './droverWatchFeed';
+import { publishDroverWidgetFace } from './droverWidgetPublish';
 import { storage } from './storage';
 import {
     claimWristCues,
@@ -102,6 +103,16 @@ export async function republishWatchSnapshot(): Promise<boolean> {
         updatedAt: new Date().toISOString(),
         connected: !!status.activated && status.paired && status.installed,
     };
+    // THE HOME SCREEN FIRST, and above the watch publish rather than below it
+    // (DROVE-260). This is the push the whole widget freshness argument rests
+    // on — the CLI sends it exactly when the gate set changes — and a widget
+    // that only got written when a WATCH was also reachable would be a widget
+    // that goes dark for anyone without one. The two surfaces share the wake
+    // and nothing else. It is awaited because the background execution budget
+    // ends when this function returns, and a write left in flight is a write
+    // that did not happen.
+    await publishDroverWidgetFace({ gates: snapshot.gates, sessions: watchSessions });
+
     const published = await publishDroverSnapshot(snapshot);
     if (!published) return false;
 

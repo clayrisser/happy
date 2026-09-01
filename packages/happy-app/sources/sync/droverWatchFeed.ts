@@ -62,6 +62,7 @@ import {
     type DroverSession,
     type DroverTranscript,
 } from 'drover-watch';
+import { publishDroverWidgetFace, resetDroverWidgetMemory } from './droverWidgetPublish';
 import { buildWristRows, createWristCoalescer, rowKey, transcriptDelta } from './droverWatchTranscript';
 import { readAloud } from '@/voice/readAloudService';
 import { setWatchRoute, settleWatchUtterance } from '@/voice/watchSpeaker';
@@ -549,6 +550,16 @@ export function startDroverWatchFeed(): () => void {
             connected: !!status.activated && status.paired && status.installed,
         };
         void publishDroverSnapshot(snapshot);
+        // The home screen gets the same facts, resolved into the one line a
+        // widget has room for (DROVE-260). It rides HERE rather than on the
+        // gate push alone, and that is the whole freshness argument: the
+        // heartbeat forces this every 60s while the app is up, so a widget
+        // glanced at during a working session is at most a minute old, and the
+        // hour it is allowed to claim "clear" for is an hour of the phone
+        // being genuinely away. Only the BLOB is written that often — the
+        // reload that actually costs budget is rationed inside
+        // publishDroverWidgetFace.
+        void publishDroverWidgetFace({ gates, sessions });
         // The wake is a SECOND delivery of the SAME snapshot, and deliberately
         // so: the watch runs both through one apply and works out the buzz from
         // the snapshot diff, so there is no cue format on the wire to keep in
@@ -839,6 +850,10 @@ export function startDroverWatchFeed(): () => void {
         // So a restarted feed does not wake the wrist for gates that were
         // already on the wall when it restarted (DROVE-62).
         publishedOnce = false;
+        // And so it does not inherit a reload decision from a run that is over
+        // (DROVE-260). A restarted feed tells the widget once on its first
+        // publish, which is the same rule the line above applies to the wrist.
+        resetDroverWidgetMemory();
         answers.remove();
         flips.remove();
         refreshes.remove();
