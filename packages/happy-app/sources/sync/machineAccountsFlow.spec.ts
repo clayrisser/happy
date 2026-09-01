@@ -32,6 +32,7 @@ import {
     accountSubtitle,
     accountsByHarness,
     freshCursorAccounts,
+    isBackdoorAccount,
     loginCommand,
     phaseHarness,
     staleCursorAccounts,
@@ -510,8 +511,36 @@ describe('accountSubtitle', () => {
             .toContain('same login as main');
     });
 
-    it('marks the ambient login, which is the one that cannot be removed here', () => {
-        expect(accountSubtitle(account({ ambient: true }))).toContain('main login');
+    it('marks the ambient login as the BACK DOOR, which is what it means for a flip', () => {
+        // DROVE-333. The row used to say "this Mac's main login", which is the
+        // same fact without the consequence: an auto-flip will not land here
+        // and will not move a session off it, so the only way on or off is by
+        // hand. That is what Clay is reading this row to find out.
+        expect(accountSubtitle(account({ ambient: true })))
+            .toBe('jamrizzi@gmail.com · 43% left · backdoor · manual flips only');
+    });
+
+    it('marks a row on the ambient login as the back door too, given the list', () => {
+        // jamrizzi is main under a second name and shares its quota, so a flip
+        // there lands on the back door through a different door.
+        const main = account({ name: 'main', ambient: true });
+        const twin = account({ name: 'jamrizzi', sameLoginAs: 'main' });
+        expect(accountSubtitle(twin, [main, twin]))
+            .toBe('jamrizzi@gmail.com · 43% left · same login as main · backdoor · manual flips only');
+    });
+
+    it('does not mark an ordinary account, and does not need the list to say so', () => {
+        const other = account({ name: 'desibox', login: 'desibox.food@gmail.com' });
+        expect(accountSubtitle(other, [account({ name: 'main', ambient: true }), other]))
+            .not.toContain('backdoor');
+        expect(accountSubtitle(other)).not.toContain('backdoor');
+    });
+
+    it('recognises the ambient row itself with no list at all', () => {
+        // The degradation that matters: a caller holding one account still gets
+        // the ambient row right, and only the twins go unrecognised.
+        expect(isBackdoorAccount(account({ ambient: true }))).toBe(true);
+        expect(isBackdoorAccount(account({ name: 'jamrizzi' }))).toBe(false);
     });
 
     it('drops the address when there is none rather than printing an empty field', () => {

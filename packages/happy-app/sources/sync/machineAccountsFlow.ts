@@ -659,13 +659,45 @@ export function accountHeadroomLabel(account: MachineAccount): string {
     return `${Math.round(account.headroom)}% left`;
 }
 
-/** The line under an account name: the address, and who it shares a quota with. */
-export function accountSubtitle(account: MachineAccount): string {
+/**
+ * THE BACK DOOR (DROVE-333). Clay: "reserve the main account to be like a back
+ * door account: when you're in the main account you don't do any magic flipping
+ * / auto flipping. When I get stuck I'll switch to the main account and from
+ * there manually log into the terminal."
+ *
+ * It is the AMBIENT row — ~/.claude, the login every plain `claude` on that Mac
+ * uses — plus every row on the same claude.ai login, because `jamrizzi` is main
+ * under a second name and a flip there lands on the same quota. Not the string
+ * "main": that would break the day Clay renames the row and would fire on
+ * somebody else's account that happens to be called that.
+ *
+ * `accounts` is the machine's own list. Without it only the ambient row itself
+ * can be recognised, which is the honest degradation for a caller that has one
+ * account and no list to compare it against.
+ */
+export function isBackdoorAccount(account: MachineAccount, accounts?: MachineAccount[]): boolean {
+    if (account.ambient) return true;
+    // A cursor row is never a Claude flip target and never the ambient login,
+    // so it is not dragged in by an address that happens to match.
+    if (!account.login || isCursorAccount(account) || !accounts) return false;
+    return accounts.some((a) => a.ambient && !isCursorAccount(a) && a.login === account.login);
+}
+
+/**
+ * The line under an account name: the address, who it shares a quota with, and
+ * whether it is the back door.
+ *
+ * The back door label replaces the old "this Mac's main login" rather than
+ * joining it. Both said the same fact and only one of them said what it MEANS
+ * for a flip, which is the thing Clay is reading this row to find out. The row
+ * already carries `main` in its detail slot, so the identity is not lost.
+ */
+export function accountSubtitle(account: MachineAccount, accounts?: MachineAccount[]): string {
     const parts: string[] = [];
     if (account.login) parts.push(account.login);
     parts.push(accountHeadroomLabel(account));
     if (account.sameLoginAs) parts.push(`same login as ${account.sameLoginAs}`);
-    if (account.ambient) parts.push('this Mac’s main login');
+    if (isBackdoorAccount(account, accounts)) parts.push('backdoor · manual flips only');
     return parts.join(' · ');
 }
 
