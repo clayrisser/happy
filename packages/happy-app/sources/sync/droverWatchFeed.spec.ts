@@ -1,3 +1,4 @@
+import type { DroverUsageLike } from '../utils/droverUsage';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DroverGate, DroverSession, DroverSnapshot, DroverTranscriptDelta } from 'drover-watch';
 
@@ -1490,7 +1491,7 @@ describe('collectAccountRows', () => {
         // What the phone's sheet renders from the identical snapshot. No
         // `usageLimits`, because the wrist has no SDK stream to override with
         // either — both surfaces are reading the registry.
-        const phone = () => resolveUsageStrip({ usageLimits: null, droverUsage });
+        const phone = () => resolveUsageStrip({ usageLimits: null, droverUsage: droverUsage as DroverUsageLike });
 
         it('sends the same rows the phone draws, window for window', () => {
             const rows = wrist();
