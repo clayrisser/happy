@@ -678,6 +678,26 @@ ${chalk.bold('To clean up runaway processes:')} Use ${chalk.cyan('drover doctor 
     return;
   } else {
 
+    // DROVE-315: a drover verb that has moved into node. bin/drover routes the
+    // live name to libexec/ until that verb's arm is flipped there (other lanes
+    // own the flip), so in production this branch is not reached for a ported
+    // verb yet; `drover.mjs <verb>` reaches it directly, which is how the port
+    // is run and tested. Lazy on purpose (DROVE-288/314): the table is its own
+    // chunk that loads only after every fork subcommand above has declined, and
+    // the verb's module loads only when the name is one the table carries — so a
+    // bare `drover` session start (no subcommand) and a `drover claude ...` or a
+    // flag never touch either. flushExit drains stdout first, because a big
+    // `--json` is written past node's 64KiB pipe buffer and process.exit drops
+    // the rest (engine/mcp.js learned this the hard way).
+    if (subcommand && !subcommand.startsWith('-') && subcommand !== 'claude') {
+      const { runDroverVerb } = await import('./drover/cli')
+      const code = await runDroverVerb(subcommand, args.slice(1))
+      if (code !== null) {
+        const { flushExit } = await import('./drover/cli/exit')
+        await flushExit(code)
+      }
+    }
+
     // If the first argument is claude, remove it
     if (args.length > 0 && args[0] === 'claude') {
       args.shift()
