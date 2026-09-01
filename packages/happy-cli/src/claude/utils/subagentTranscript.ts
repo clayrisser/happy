@@ -36,11 +36,11 @@
  * liveStatus.ts was written to avoid.
  */
 
-import { readdirSync, readFileSync, statSync } from 'node:fs'
+import { closeSync, openSync, readSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { parseAgentNotifications } from './agentNotification'
-import { readNewLines, parseTimestamp, type Tail } from './liveStatus'
+import { promptLabel, readNewLines, parseTimestamp, type Tail } from './liveStatus'
 
 export type SubagentState = 'running' | 'done' | 'failed'
 
@@ -54,7 +54,7 @@ export interface SubagentTranscriptRequest {
 
 export interface SubagentTranscriptAgent {
     id: string
-    /** The Task's description, else the agent type, else the id. */
+    /** The Task's description, else its prompt's opening line, else the agent type, else the id. */
     label: string
     agentType?: string
     /** The Agent tool_use that launched it. */
@@ -150,7 +150,7 @@ function readMeta(path: string): { label?: string, agentType?: string, toolId?: 
         const description = typeof meta.description === 'string' ? meta.description.trim() : ''
         const agentType = typeof meta.agentType === 'string' ? meta.agentType.trim() : ''
         return {
-            ...(description || agentType ? { label: description || agentType } : {}),
+            ...(description ? { label: description } : {}),
             ...(agentType ? { agentType } : {}),
             ...(typeof meta.toolUseId === 'string' ? { toolId: meta.toolUseId } : {}),
         }
@@ -158,6 +158,45 @@ function readMeta(path: string): { label?: string, agentType?: string, toolId?: 
         return {}
     }
 }
+
+/**
+ * The opening line of the prompt this agent was given (DROVE-268).
+ *
+ * The SAME fallback the live-status row uses, so the name on the row Clay taps
+ * and the name at the top of the screen it opens are one string. A workflow's
+ * agents carry no `description` — measured, 152 of them, not one has it — so
+ * without this the row would say `Merge the stranded harness lanes` and the
+ * screen would say `workflow-subagent`.
+ *
+ * Only the head of the file is read. Record one is the prompt, transcripts run
+ * to megabytes, and this is called on every page of a paged read, so it must
+ * not depend on where that page starts or on how big the file is.
+ */
+function readPromptLabel(path: string): string | undefined {
+    let fd: number
+    try {
+        fd = openSync(path, 'r')
+    } catch {
+        return undefined
+    }
+    try {
+        const buffer = Buffer.allocUnsafe(promptHeadBytes)
+        const read = readSync(fd, buffer, 0, buffer.length, 0)
+        if (read <= 0) return undefined
+        const text = buffer.subarray(0, read).toString('utf8')
+        const end = text.indexOf('\n')
+        // A first record longer than the head is not a record we can parse.
+        if (end < 0) return undefined
+        return promptLabel(JSON.parse(text.slice(0, end)) as Record<string, unknown>)
+    } catch {
+        return undefined
+    } finally {
+        closeSync(fd)
+    }
+}
+
+/** Enough of a transcript to hold its first record. Prompts run long. */
+const promptHeadBytes = 256 * 1024
 
 /**
  * The agent's transcript, wherever Claude Code put it: beside the session's
@@ -398,8 +437,12 @@ export function createSubagentTranscriptReader(opts: {
                 cursor: since + consumed,
                 ...(more ? { more: true } : {}),
                 agent: {
+                    // Description, then the prompt's opening line, then the
+                    // type, then the id — the SAME order liveStatus.ts builds
+                    // a row's label with (DROVE-268), so the screen's title and
+                    // the row that opened it are one string.
                     id: agentId,
-                    label: meta.label ?? agentId,
+                    label: meta.label ?? readPromptLabel(path) ?? meta.agentType ?? agentId,
                     ...(meta.agentType ? { agentType: meta.agentType } : {}),
                     ...(meta.toolId ? { toolId: meta.toolId } : {}),
                     updatedAt: Math.floor(updatedAt),

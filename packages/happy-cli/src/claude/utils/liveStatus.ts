@@ -95,9 +95,55 @@ export interface LiveStatusAgent {
      * invites them to disagree. The app rebuilds depth by walking these links.
      */
     parentId?: string
+    /**
+     * The workflow run this agent belongs to, absent when the pane launched it
+     * (DROVE-268).
+     *
+     * A workflow's agents are in THIS array, beside the pane's own, because it
+     * is the only array any surface counts. They used to be read and thrown
+     * away — `readWorkflows` pumped them solely to derive a phase label and a
+     * token subtotal — so five agents writing flat out published as one row
+     * reading `0/5`, and on the night this was measured, as nothing at all.
+     */
+    runId?: string
 }
 
-/** One workflow run, from its journal. */
+/**
+ * One workflow run, from its journal and its agents' transcripts.
+ *
+ * The counts are four buckets over the SAME set — the agents the journal says
+ * were started — and they are published apart because collapsing them is how
+ * the row lies. Measured over the 13 runs this session has on disk:
+ *
+ *   running  writing to its transcript inside the stale window. The only
+ *            bucket that is evidence of work; the rest are ledger entries.
+ *   done     a `result` line in the journal.
+ *   failed   a `failed` line. NOT the same as done, and not rare: one run here
+ *            is 5 started / 5 failed, another 21 started / 1 result / 19
+ *            failed. Both drew as `0/5` and `1/21` before this, because only
+ *            `result` counted, so a run that had entirely died read as a run
+ *            barely under way.
+ *   quiet    started, never reported, and not writing. TWO different things
+ *            wear this and the count deliberately does not guess which: an
+ *            agent that went down with its session (a drover restart kills
+ *            them silently — one run here has ten of those), and an agent
+ *            blocked on a long tool call, which writes nothing to its
+ *            transcript for the length of it. Calling either one "running" is
+ *            the lie; calling it "dead" is the other lie. It is work this
+ *            reader cannot see, and that is what the word says.
+ *
+ * `quiet` is why `running` is measured off transcripts and never as
+ * `total - done`: that subtraction calls those ten dead agents busy for the
+ * rest of the session.
+ *
+ * THERE IS NO `queued`. Clay asked for running-vs-queued and the honest answer
+ * is that queued is not on disk: across these runs, every journal `started`
+ * line is followed by that agent's first transcript record within
+ * milliseconds (83/83, 21/21 and 5/5 checked on three runs). Claude Code
+ * writes `started` when an agent SPAWNS, not when it is scheduled, so a queued
+ * count would be invented. The risk he named — ten agents drawn busy while
+ * four really run — is real, and `quiet` is the shape it takes here.
+ */
 export interface LiveStatusWorkflow {
     /** The run id, e.g. `wf_f7b09017-045`. */
     id: string
@@ -106,8 +152,38 @@ export interface LiveStatusWorkflow {
     phase?: string
     /** Agents that have reported a result. */
     done: number
+    /** Agents that reported a failure (DROVE-268). Settled, and not `done`. */
+    failed?: number
+    /** Agents writing right now (DROVE-268). The length of `agentIds`. */
+    running?: number
+    /** Started, unsettled, and not writing (DROVE-268). Not running, not settled. */
+    quiet?: number
     /** Agents it has launched so far. Not the eventual total — nothing on disk knows that. */
     total: number
+    /**
+     * The running agents' ids, so a surface can group this run's rows without
+     * scanning every agent for a `runId` (DROVE-268). The agents themselves
+     * are in `LiveStatus.agents`, once, and are never repeated here.
+     */
+    agentIds?: string[]
+    /**
+     * The phase titles the workflow SCRIPT declares, in order (DROVE-268).
+     *
+     * Read from `workflows/scripts/<name>-<runId>.js`, which Claude Code
+     * writes at launch and which states `export const meta = { phases: [...] }`
+     * near the top. It is the only statement of the plan that exists while a
+     * run is going: `workflows/<runId>.json` carries `phases`, a per-agent
+     * `phaseTitle` and a whole `workflowProgress`, and is written when the run
+     * ENDS — 0 of the 6 live-or-killed runs on this machine have one, against
+     * 7 of the 7 that finished.
+     *
+     * WHICH phase each agent is in is deliberately absent. Nothing live maps
+     * an agentId to a phase, so `Build 4/5 · Verify 1/5` cannot be derived
+     * without guessing, and a guessed phase on the row is the same class of
+     * lie as a guessed agent count. The titles alone still say what the run is
+     * made of.
+     */
+    phaseNames?: string[]
     startedAt: number
     tokens?: number
 }
@@ -489,6 +565,51 @@ export function workflowNameFromScript(scriptPath: string): string {
     return cut > 0 ? file.slice(0, cut) : file
 }
 
+/**
+ * A label for an agent whose meta.json named nothing, from its prompt
+ * (DROVE-268).
+ *
+ * Record one of an agent transcript IS the prompt, as a plain string, and the
+ * terminal previews the same text. Only the first non-empty line is taken and
+ * it is shortened to the width a phone row can hold, so a 16KB brief becomes
+ * `Work in ~/Projects/bitspur/cattle-drover, branch lane/DROVE-251…`. Undefined
+ * when the record is not a string prompt, which leaves the caller on its
+ * existing fallbacks rather than putting a fragment of JSON on the row.
+ */
+export function promptLabel(record: Record<string, unknown>): string | undefined {
+    if (record.type !== 'user') return undefined
+    const message = record.message
+    if (!message || typeof message !== 'object') return undefined
+    const content = (message as Record<string, unknown>).content
+    if (typeof content !== 'string') return undefined
+    for (const line of content.split('\n')) {
+        const trimmed = line.trim()
+        if (trimmed.length > 0) return shorten(trimmed)
+    }
+    return undefined
+}
+
+/**
+ * The phase titles a workflow script declares, in order (DROVE-268).
+ *
+ * The scripts on this machine all open with
+ * `export const meta = { name, description, phases: [{ title: 'Work' }, …] }`,
+ * so the titles are pulled straight out of that literal rather than by
+ * evaluating a file this process must never run. Anything unrecognisable
+ * yields nothing, which reads the same as an older Claude Code writing no
+ * script at all: the run keeps its name and loses only the phase list.
+ */
+export function phaseNamesFromScript(source: string): string[] {
+    const block = /phases\s*:\s*\[([\s\S]{0,2000}?)\]/.exec(source)
+    if (!block) return []
+    const titles: string[] = []
+    for (const match of block[1].matchAll(/title\s*:\s*(['"`])((?:\\.|(?!\1)[^\\])*)\1/g)) {
+        const title = match[2].trim()
+        if (title.length > 0 && titles.length < 12) titles.push(title)
+    }
+    return titles
+}
+
 /** A `user` record that is a real prompt rather than a tool result. */
 function isPrompt(record: Record<string, unknown>): boolean {
     if (record.type !== 'user') return false
@@ -530,8 +651,40 @@ interface AgentState {
     toolId?: string
     /** The agent that spawned it, read once off meta.json (DROVE-185). */
     parentId?: string
+    /** Its category, the last thing tried before the id (DROVE-268). */
+    agentType?: string
+    /**
+     * The opening line of its prompt, kept only when meta.json named nothing
+     * better (DROVE-268).
+     *
+     * A workflow's agents have no `description` and no `toolUseId` at all —
+     * measured across 152 of them on this machine, 138 carry exactly
+     * `{agentType, spawnDepth}` and 14 add the worktree pair — so the label
+     * chain used to bottom out at `agentType` and drew five identical rows
+     * saying `workflow-subagent`. The prompt is the same text the terminal
+     * previews, and it is record one of a file this already reads to the end.
+     */
+    prompt?: string
     /** mtime of the last stat, so a file nothing writes drops out. */
     mtimeMs: number
+}
+
+/** The workflow run an agent directory belongs to, absent for the pane's own. */
+interface AgentScope {
+    runId?: string
+}
+
+/** What one workflow journal has said so far, accumulated as it is tailed. */
+interface JournalState {
+    tail: Tail
+    /** Agent ids the run has spawned. */
+    started: Set<string>
+    /** Agent ids that reported a result. */
+    done: Set<string>
+    /** Agent ids that reported a failure. Settled, and not `done`. */
+    failed: Set<string>
+    /** The journal's birthtime: the run's start, for a run with nothing running. */
+    birth: number
 }
 
 export interface LiveStatusReader {
@@ -596,6 +749,14 @@ export function createLiveStatusReader(opts: {
     let lastRecordAt = 0
     let lastKind: RecordKind = 'other'
     let agents = new Map<string, AgentState>()
+    /**
+     * One workflow journal's ledger so far, keyed by the journal's path
+     * (DROVE-268). Append-only on disk, so it is tailed from a remembered
+     * offset like everything else here and the sets only ever grow.
+     */
+    let journals = new Map<string, JournalState>()
+    /** A run's phase titles, read once off its script. An empty array is a cached miss. */
+    let phaseNames = new Map<string, string[]>()
 
     const resetTranscript = () => {
         transcript = { offset: 0, carry: '' }
@@ -610,6 +771,8 @@ export function createLiveStatusReader(opts: {
         lastRecordAt = 0
         lastKind = 'other'
         agents = new Map()
+        journals = new Map()
+        phaseNames = new Map()
     }
 
     /** Fold the transcript's new lines into the open-tool set and turn state. */
@@ -740,15 +903,24 @@ export function createLiveStatusReader(opts: {
      * `parentAgentId` is trimmed and dropped when empty, and dropped when it
      * names the agent itself, so a malformed file cannot hand the app a row
      * that is its own parent.
+     *
+     * THE DESCRIPTION AND THE TYPE COME BACK APART (DROVE-268), because they
+     * sit on opposite sides of the prompt in the label order. A Task's
+     * `description` is what Clay wrote and beats everything. `agentType` is a
+     * category — `general-purpose`, `workflow-subagent` — and a workflow's
+     * agents carry nothing else, so five of them collapsed onto one string and
+     * drew five identical rows. It is now the LAST resort, under the prompt's
+     * opening line, which at least says what each agent was sent to do.
      */
-    const readAgentMeta = (path: string, id: string): { label?: string, toolId?: string, parentId?: string } => {
+    const readAgentMeta = (path: string, id: string): { label?: string, agentType?: string, toolId?: string, parentId?: string } => {
         try {
             const meta = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
             const description = typeof meta.description === 'string' ? meta.description.trim() : ''
             const agentType = typeof meta.agentType === 'string' ? meta.agentType.trim() : ''
             const parent = typeof meta.parentAgentId === 'string' ? meta.parentAgentId.trim() : ''
             return {
-                label: description || agentType || undefined,
+                ...(description ? { label: description } : {}),
+                ...(agentType ? { agentType } : {}),
                 toolId: typeof meta.toolUseId === 'string' ? meta.toolUseId : undefined,
                 ...(parent && parent !== id ? { parentId: parent } : {}),
             }
@@ -765,7 +937,7 @@ export function createLiveStatusReader(opts: {
      * never collide — a workflow agent and a direct agent can share an id
      * across sessions.
      */
-    const pumpAgents = (dir: string, now: number): LiveStatusAgent[] => {
+    const pumpAgents = (dir: string, now: number, scope: AgentScope = {}): LiveStatusAgent[] => {
         let entries: string[]
         try {
             entries = readdirSync(dir)
@@ -812,6 +984,13 @@ export function createLiveStatusReader(opts: {
                     }
                     if (state.startedAt === 0) {
                         state.startedAt = parseTimestamp(record.timestamp)
+                        // Record one is the prompt, and it is the only label a
+                        // workflow's agent has (DROVE-268). Taken here rather
+                        // than in a second pass because this is the one place
+                        // that record is ever parsed, and only when meta.json
+                        // gave nothing — a Task with a description keeps it and
+                        // the pane's own agents read exactly as they did.
+                        if (!state.label) state.prompt = promptLabel(record)
                     }
                     // One addition, three buckets (DROVE-184). The card's
                     // cumulative count and the two tallies are made of the
@@ -826,24 +1005,52 @@ export function createLiveStatusReader(opts: {
             }
             out.push({
                 id,
-                label: state.label ?? id,
+                // Description, then the prompt's opening line, then the type,
+                // then the id (DROVE-268). The pane's own agents almost always
+                // have a description and read exactly as they did; a
+                // workflow's have none, and this is what stops five of them
+                // sharing one string.
+                label: state.label ?? state.prompt ?? state.agentType ?? id,
                 startedAt: state.startedAt || mtimeMs,
                 ...(state.tokens > 0 ? { tokens: state.tokens } : {}),
                 ...(state.toolId ? { toolId: state.toolId } : {}),
                 ...(state.parentId ? { parentId: state.parentId } : {}),
+                ...(scope.runId ? { runId: scope.runId } : {}),
             })
         }
         return out
     }
 
     /**
-     * Workflows with a journal that has more starts than results.
+     * The workflow runs that still have work out, and the agents doing it.
      *
-     * `total` is what the workflow has LAUNCHED, not what it will eventually
-     * launch: the journal is append-only and nothing on disk states the plan.
-     * The terminal's "3/5 agents done" is the same reading.
+     * LIVENESS COMES OFF THE AGENTS, NOT THE JOURNAL, and that is the whole of
+     * DROVE-268. This used to open with
+     *
+     *     if (now - statSync(journal).mtimeMs > agentStaleMs) continue
+     *
+     * which is a heartbeat read off a file that has no pulse. The journal gets
+     * one line when an agent starts and one when it stops; between those a run
+     * can go for hours writing nothing to it at all. Measured on Clay's live
+     * session at the moment he asked why nothing was happening: two runs, one
+     * with five agents whose transcripts had been written 0.9 seconds earlier
+     * and one with an agent written 7 seconds earlier, both journals last
+     * touched 467 and 458 seconds before — so both were skipped by that line
+     * and the whole snapshot published `agents: 1, workflows: 0`. Eight agents
+     * flat out, reported as nothing. The transcripts move continuously and are
+     * already stat'd by `pumpAgents`, so they are the pulse and the journal is
+     * only the ledger.
+     *
+     * `total` is what the run has LAUNCHED, not what it will eventually launch:
+     * the journal is append-only and nothing on disk states the plan. The
+     * terminal counts it the same way.
+     *
+     * The journal is TAILED rather than re-read, for the reason every other
+     * file here is: it is append-only, and re-parsing it on every tick for
+     * every run in a long session is the cost this module was written to
+     * avoid.
      */
-    const readWorkflows = (sessionDir: string, now: number): LiveStatusWorkflow[] => {
+    const readWorkflows = (sessionDir: string, now: number, agentsOut: LiveStatusAgent[]): LiveStatusWorkflow[] => {
         const root = join(sessionDir, 'subagents', 'workflows')
         let entries: string[]
         try {
@@ -856,19 +1063,21 @@ export function createLiveStatusReader(opts: {
             if (!id.startsWith('wf_')) continue
             const dir = join(root, id)
             const journal = join(dir, 'journal.jsonl')
-            let text: string
-            let startedAt = 0
-            try {
-                const st = statSync(journal)
-                if (now - st.mtimeMs > agentStaleMs) continue
-                startedAt = st.birthtimeMs || st.mtimeMs
-                text = readFileSync(journal, 'utf8')
-            } catch {
-                continue
+            let state = journals.get(journal)
+            if (!state) {
+                let birth = 0
+                try {
+                    const st = statSync(journal)
+                    birth = st.birthtimeMs || st.mtimeMs
+                } catch {
+                    continue
+                }
+                state = { tail: { offset: 0, carry: '' }, started: new Set(), done: new Set(), failed: new Set(), birth }
+                journals.set(journal, state)
             }
-            const started = new Set<string>()
-            const done = new Set<string>()
-            for (const line of text.split('\n')) {
+            const lines = readNewLines(journal, state.tail, 0)
+            if (lines === null) continue
+            for (const line of lines) {
                 if (line.length === 0) continue
                 let record: Record<string, unknown>
                 try {
@@ -876,19 +1085,41 @@ export function createLiveStatusReader(opts: {
                 } catch {
                     continue
                 }
-                const key = typeof record.key === 'string' ? record.key : null
-                if (!key) continue
-                if (record.type === 'started') started.add(key)
-                else if (record.type === 'result') done.add(key)
+                // `agentId` is the join to the transcripts and the id every
+                // surface addresses an agent by; `key` is the workflow's own
+                // content hash and is on every line too. Prefer the agentId
+                // and fall back, so a run from a Claude Code that wrote only
+                // the key still counts correctly even though its agents can
+                // no longer be named.
+                const who = typeof record.agentId === 'string' && record.agentId.length > 0
+                    ? record.agentId
+                    : (typeof record.key === 'string' ? record.key : null)
+                if (!who) continue
+                if (record.type === 'started') state.started.add(who)
+                // FAILED IS SETTLED. Counting only `result` is what drew a run
+                // of 5 started and 5 failed as `0/5` and one of 21 started, 1
+                // result and 19 failed as `1/21` — both read as barely begun
+                // when both were finished. They are kept apart rather than
+                // merged because "4 done, 1 failed" and "5 done" are different
+                // pieces of news.
+                else if (record.type === 'result') state.done.add(who)
+                else if (record.type === 'failed') state.failed.add(who)
             }
-            if (started.size === 0) continue
-            const running = pumpAgents(dir, now).sort((a, b) => a.startedAt - b.startedAt)
-            // Every launched agent has reported AND none is writing: the run
-            // is between phases or over. Either way there is nothing to show,
-            // and the journal's own freshness is not enough to tell them
-            // apart — a finished workflow's journal was written seconds ago
-            // too.
-            if (done.size >= started.size && running.length === 0) continue
+            if (state.started.size === 0) continue
+            const running = pumpAgents(dir, now, { runId: id }).sort((a, b) => a.startedAt - b.startedAt)
+            const settled = new Set([...state.done, ...state.failed])
+            const live = new Set(running.map((agent) => agent.id))
+            // Started, unsettled, and not writing: work this reader cannot
+            // see. The number exists so no surface is tempted to derive
+            // "running" as `total - done` and call ten dead agents busy.
+            let quiet = 0
+            for (const who of state.started) {
+                if (!settled.has(who) && !live.has(who)) quiet += 1
+            }
+            // Nothing is writing and nothing is left to write: the run is over,
+            // or it died. Either way it leaves the list, which is what makes a
+            // finished workflow's agents disappear with it.
+            if (running.length === 0 && settled.size + quiet >= state.started.size) continue
             const tokens = running.reduce((sum, a) => sum + (a.tokens ?? 0), 0)
             out.push({
                 id,
@@ -899,13 +1130,53 @@ export function createLiveStatusReader(opts: {
                 // because a fan-out leaves several running at once and the one
                 // it started last is the one it has just moved on to.
                 ...(running.length > 0 ? { phase: running[running.length - 1].label } : {}),
-                done: done.size,
-                total: started.size,
-                startedAt: running.reduce((min, a) => (a.startedAt > 0 && a.startedAt < min ? a.startedAt : min), startedAt),
+                done: state.done.size,
+                ...(state.failed.size > 0 ? { failed: state.failed.size } : {}),
+                running: running.length,
+                ...(quiet > 0 ? { quiet } : {}),
+                total: state.started.size,
+                ...(running.length > 0 ? { agentIds: running.map((agent) => agent.id) } : {}),
+                ...(phaseNamesOf(sessionDir, id).length > 0
+                    ? { phaseNames: phaseNamesOf(sessionDir, id) }
+                    : {}),
+                startedAt: running.reduce((min, a) => (a.startedAt > 0 && a.startedAt < min ? a.startedAt : min), state.birth),
                 ...(tokens > 0 ? { tokens } : {}),
             })
+            // The agents go into the SESSION's one agent array, not into the
+            // workflow (DROVE-268). Every count on every surface is taken off
+            // that array, and an agent filed inside a workflow object is an
+            // agent that stops being counted — the exact way these five went
+            // missing in the first place.
+            for (const agent of running) agentsOut.push(agent)
         }
         return out
+    }
+
+    /**
+     * The phase titles this run declares, read once off its script and kept.
+     *
+     * The script is written at launch and never rewritten, so this is a
+     * one-time read per run — and a miss is cached as a miss, so a run whose
+     * script cannot be found does not re-scan the scripts directory on every
+     * tick for the rest of the session.
+     */
+    const phaseNamesOf = (sessionDir: string, id: string): string[] => {
+        const cached = phaseNames.get(id)
+        if (cached) return cached
+        let titles: string[] = []
+        try {
+            const dir = join(sessionDir, 'workflows', 'scripts')
+            for (const file of readdirSync(dir)) {
+                if (!file.includes(`-${id}.`)) continue
+                titles = phaseNamesFromScript(readFileSync(join(dir, file), 'utf8'))
+                break
+            }
+        } catch {
+            // No scripts directory, or a script this build cannot read. The
+            // run keeps its name and loses only the phase list.
+        }
+        phaseNames.set(id, titles)
+        return titles
     }
 
     /** The workflow's name, from its run record when it exists and its script otherwise. */
@@ -934,8 +1205,13 @@ export function createLiveStatusReader(opts: {
             if (!sessionId) return null
             pumpTranscript()
             const sessionDir = join(projectDir, sessionId)
+            // ONE array, the pane's own agents and every workflow's together
+            // (DROVE-268). `readWorkflows` appends the running agents it finds,
+            // each stamped with its `runId`, so `agents` is what "how much is
+            // out" is counted from and a workflow row is a group header rather
+            // than a worker.
             const agentRows = pumpAgents(join(sessionDir, 'subagents'), now)
-            const workflows = readWorkflows(sessionDir, now)
+            const workflows = readWorkflows(sessionDir, now, agentRows)
             const tool = openTools.size > 0 ? Array.from(openTools.values()).pop() : undefined
 
             const thinking = opts.isThinking?.() === true

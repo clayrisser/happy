@@ -501,13 +501,34 @@ export const MetadataSchema = z.object({
             // none and every agent reads as top level, which is exactly the
             // flat list the app drew before.
             parentId: z.string().optional(),
+            // The workflow run that launched it (DROVE-268). Absent means the
+            // pane did. A workflow's agents are in THIS array now — they used
+            // to be collapsed into a done/total on the workflow and counted as
+            // one, which is how five running agents reached the phone as a
+            // single row, and on the night it was measured, as nothing.
+            runId: z.string().optional(),
         }).passthrough()).optional(),
         workflows: z.array(z.object({
             id: z.string(),
             name: z.string(),
             phase: z.string().optional(),
             done: z.number(),
+            // Settled the other way (DROVE-268). Optional because an older CLI
+            // sends none, and omitted at zero. Counting only `done` drew a run
+            // of 5 started and 5 failed as `0/5`.
+            failed: z.number().optional(),
+            // Agents of this run writing right now, the same agents this
+            // snapshot carries in `agents` with a matching `runId`.
+            running: z.number().optional(),
+            // Started, unsettled, and not writing: killed with a session, or
+            // blocked on a long tool call. Never counted as running.
+            quiet: z.number().optional(),
             total: z.number(),
+            agentIds: z.array(z.string()).optional(),
+            // The titles the workflow script declares, in order. There is no
+            // per-agent phase: nothing live maps an agent to one, so the app
+            // must never place an agent in a phase.
+            phaseNames: z.array(z.string()).optional(),
             startedAt: z.number(),
             tokens: z.number().optional(),
         }).passthrough()).optional(),
