@@ -193,9 +193,13 @@ function SessionInfoContent({ session }: { session: Session }) {
     // The same derivation the sheet and the wrist read (DROVE-167).
     const sessionTasks = useSessionTasks(session.id);
     const {
+        canClone,
         canFlipAccount,
         canShowResume,
         canFork,
+        cloneRefusal,
+        cloneSession,
+        cloning,
         flipAccount,
         forking,
         forkSession,
@@ -707,6 +711,22 @@ function SessionInfoContent({ session }: { session: Session }) {
                             onPress={openDuplicateSheet}
                         />
                     )}
+                    {/*
+                        Clone, beside fork and never instead of it (DROVE-337).
+                        The subtitle carries the difference that matters: a
+                        fork continues this conversation, a clone RETELLS it to
+                        a harness that cannot read it. When the session cannot
+                        be cloned at all the row still shows, with the refusal
+                        as its subtitle, because "only a Claude session can be
+                        cloned" is worth reading and a missing row is not.
+                    */}
+                    <Item
+                        title={t('session.cloneAction')}
+                        subtitle={canClone ? t('session.cloneSubtitle') : (cloneRefusal ?? t('session.cloneSubtitle'))}
+                        icon={<Ionicons name="swap-vertical-outline" size={29} color={canClone ? '#007AFF' : '#8E8E93'} />}
+                        onPress={cloneSession}
+                        loading={cloning}
+                    />
                     {session.metadata?.parentSessionId && (
                         <Item
                             title={t('session.forkedFromLabel')}

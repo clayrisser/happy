@@ -363,6 +363,15 @@ export const pl: TranslationStructure = {
         forkErrorMissingMetadata: 'Brak metadanych sesji wymaganych do rozwidlenia.',
         forkErrorGeneric: 'Nie udało się rozwidlić sesji.',
         forkClaudeOnly: 'Rozwidlenie jest obecnie obsługiwane tylko dla sesji Claude.',
+        forkErrorDirectoryMissing: ({ directory }: { directory: string }) =>
+            `Katalog ${directory} już nie istnieje na tej maszynie, więc nie ma gdzie uruchomić nowej sesji.`,
+        cloneAction: 'Sklonuj do innego środowiska…',
+        cloneSubtitle: 'Opowiedz tę rozmowę Cursorowi, Pi albo nowemu Claude',
+        cloneSheetTitle: 'Sklonuj do innego środowiska',
+        cloneSheetSubtitle: 'Nowa sesja w tym samym katalogu, uruchomiona z tą rozmową opowiedzianą jako pierwszy prompt. Oryginał pozostaje nietknięty.',
+        cloneErrorGeneric: 'Nie udało się sklonować sesji.',
+        cloneErrorNotClaude: 'Tylko sesję Claude można sklonować do innego środowiska — to jej rozmowę drover potrafi wyeksportować.',
+        cloneHarnessUnavailable: 'Nie zainstalowano na tej maszynie',
     },
 
     commandPalette: {

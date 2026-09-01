@@ -345,6 +345,15 @@ export const pt: TranslationStructure = {
         forkErrorMissingMetadata: 'Faltam metadados da sessão necessários para bifurcar.',
         forkErrorGeneric: 'Não foi possível bifurcar a sessão.',
         forkClaudeOnly: 'A bifurcação atualmente só é suportada para sessões Claude.',
+        forkErrorDirectoryMissing: ({ directory }: { directory: string }) =>
+            `A pasta ${directory} já não existe nessa máquina, por isso não há onde iniciar a nova sessão.`,
+        cloneAction: 'Clonar noutro ambiente…',
+        cloneSubtitle: 'Reconta esta conversa ao Cursor, ao Pi ou a um Claude novo',
+        cloneSheetTitle: 'Clonar noutro ambiente',
+        cloneSheetSubtitle: 'Uma sessão nova na mesma pasta, iniciada com esta conversa recontada como a primeira mensagem. A original fica intacta.',
+        cloneErrorGeneric: 'Não foi possível clonar a sessão.',
+        cloneErrorNotClaude: 'Só uma sessão Claude pode ser clonada noutro ambiente: a conversa dela é a que o drover sabe exportar.',
+        cloneHarnessUnavailable: 'Não está instalado nesta máquina',
     },
 
     commandPalette: {

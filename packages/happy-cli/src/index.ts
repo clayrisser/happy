@@ -494,6 +494,9 @@ Conversation history is preserved on the server, but in-flight tool calls are in
       // ~/.cursor/hooks.json and belong to the whole machine, so their
       // presence says nothing about whether THIS session put them there.
       let gated = false;
+      // `drover clone --to cursor` and the phone's clone action both land
+      // here (DROVE-337). The FILE travels, never its contents.
+      let seedFile: string | null = null;
       for (let i = 1; i < args.length; i++) {
         if (args[i] === '--started-by') {
           startedBy = args[++i] as 'daemon' | 'terminal';
@@ -505,12 +508,16 @@ Conversation history is preserved on the server, but in-flight tool calls are in
           permissionMode = args[++i] ?? null;
         } else if (args[i] === '--gated') {
           gated = true;
+        } else if (args[i] === '--seed') {
+          seedFile = args[++i] ?? null;
+        } else if (args[i]?.startsWith('--seed=')) {
+          seedFile = args[i].slice('--seed='.length);
         }
       }
 
       const { credentials } = await authAndEnsureDaemon();
 
-      await runCursor({ credentials, startedBy, model, resumeChatId, permissionMode, gated });
+      await runCursor({ credentials, startedBy, model, resumeChatId, permissionMode, gated, seedFile });
     } catch (error) {
       console.error(chalk.red('Error:'), error instanceof Error ? error.message : 'Unknown error')
       if (process.env.DEBUG) {
