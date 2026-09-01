@@ -107,6 +107,17 @@ struct SpeakOptions: Record {
 }
 
 public final class DroverSpeechModule: Module {
+    /// How the watch bridge hands this module a chunk of wrist audio
+    /// (DROVE-130). `userInfo` carries `capture: String`, `seq: Int` and
+    /// `pcm: Data` (16 kHz mono Int16).
+    ///
+    /// THE NAME IS THE CONTRACT and it is written down in exactly two places:
+    /// here and in `DroverWatchModule.swift`, which posts it. They are
+    /// separate pods, so a shared constant would mean a dependency between
+    /// them; a mistyped string would mean a microphone that records and is
+    /// never transcribed, so it is spelled out at both ends on purpose.
+    static let wristAudioNotification = Notification.Name("DroverWristAudio")
+
     private let synthesizer = AVSpeechSynthesizer()
     private let speechDelegate = DroverSpeechDelegate()
 
@@ -147,6 +158,24 @@ public final class DroverSpeechModule: Module {
     /// finalises instantly over silence would otherwise be restarted forever.
     private var emptyRestarts = 0
     private var pendingStop: Promise?
+    /// Whether THIS capture took the audio session over (DROVE-130).
+    ///
+    /// A capture from the WRIST never does: the watch holds its own
+    /// microphone and the phone only recognises, so there is nothing here to
+    /// claim and nothing to hand back. Releasing a session it never took would
+    /// deactivate one that read-aloud is using, which is a phone that goes
+    /// silent because a watch stopped listening.
+    private var sessionClaimedForDictation = false
+    /// The wrist capture this recogniser is transcribing, or nil when the
+    /// audio is coming from the phone's own microphone (DROVE-130).
+    private var wristCapture: String?
+    /// The wrist-audio observer, held so teardown can remove it.
+    private var wristAudioObserver: NSObjectProtocol?
+    /// The next chunk number expected from the wrist, and the ones that
+    /// arrived early. `sendMessage` gives no ordering promise, and audio fed
+    /// out of order is not merely late — it is transcribed as different words.
+    private var wristExpectedSeq = 0
+    private var wristHeld: [Int: Data] = [:]
     /// When the last `onDictationLevel` went out. The tap fires around ninety
     /// times a second; JS wants at most twenty (DROVE-74).
     private var lastLevelSentAt: TimeInterval = 0
@@ -631,6 +660,32 @@ public final class DroverSpeechModule: Module {
             }
         }
 
+        /// Recognise audio captured on the WRIST (DROVE-130).
+        ///
+        /// `stopDictation` and `cancelDictation` end it, exactly as they end a
+        /// capture from this phone's microphone: from here on it IS an
+        /// ordinary capture, and the only difference is where the buffers come
+        /// from. No microphone permission is asked for, because this phone
+        /// does not record.
+        AsyncFunction("startWristDictation") { (capture: String, localeTag: String?, promise: Promise) in
+            if self.isDictating {
+                promise.reject("DroverSpeech", "dictation is already running")
+                return
+            }
+            SFSpeechRecognizer.requestAuthorization { status in
+                DispatchQueue.main.async {
+                    guard status == .authorized else {
+                        promise.reject(
+                            "DroverSpeech",
+                            "speech recognition is not authorised (\(status.rawValue))"
+                        )
+                        return
+                    }
+                    self.beginWristDictation(capture: capture, localeTag: localeTag, promise: promise)
+                }
+            }
+        }
+
         /// Stop listening and resolve with what was heard. The final result
         /// lands slightly after the audio ends, so this waits for it and falls
         /// back to the last partial after two seconds rather than hanging.
@@ -1073,6 +1128,7 @@ public final class DroverSpeechModule: Module {
         if sessionBeforeDictation == nil {
             sessionBeforeDictation = (session.category, session.mode, session.categoryOptions)
         }
+        sessionClaimedForDictation = true
         // The loop is playback, and the microphone is about to take the
         // session to `.playAndRecord` at `.measurement`. Something for the
         // recogniser to hear is the last thing it needs (DROVE-259);
@@ -1087,6 +1143,7 @@ public final class DroverSpeechModule: Module {
     private func releaseSession() {
         let previous = sessionBeforeDictation
         sessionBeforeDictation = nil
+        sessionClaimedForDictation = false
         let resume = speechPausedForDictation
         speechPausedForDictation = false
 
@@ -1264,6 +1321,145 @@ public final class DroverSpeechModule: Module {
         promise.resolve(true)
     }
 
+    /// Recognise audio captured on the WRIST instead of by this phone's
+    /// microphone (DROVE-130).
+    ///
+    /// Clay asked for one press on the watch to open the recorder and hold it
+    /// open across pauses. watchOS cannot do the recognising — `Speech.framework`
+    /// is absent from the watchOS SDK entirely — so the watch captures and
+    /// this transcribes.
+    ///
+    /// WHAT THIS DELIBERATELY DOES NOT DO IS RECOGNISE DIFFERENTLY. It builds
+    /// the same `SFSpeechAudioBufferRecognitionRequest` through the same
+    /// `startRecognitionTask`, so the buffers land in the same `absorb()` and
+    /// the same `startsNewUtterance()` that DROVE-263 fixed. A pause on the
+    /// wrist is therefore the pause this module already handles: the on-device
+    /// recogniser opens a new result sequence from empty, `absorb` banks what
+    /// came before it, and nothing said before the pause is lost. Transcribing
+    /// a recorded FILE instead would have meant a second recognition path with
+    /// its own boundary rules — a second place for that bug to come back.
+    ///
+    /// NO AUDIO SESSION IS CLAIMED. Nothing here records; the microphone is on
+    /// the other device. That is why this can run while the phone is reading
+    /// a reply aloud without the two fighting over the session.
+    private func beginWristDictation(capture: String, localeTag: String?, promise: Promise) {
+        if isDictating {
+            promise.reject("DroverSpeech", "dictation is already running")
+            return
+        }
+        let locale = localeTag.map { Locale(identifier: $0) } ?? Locale.current
+        guard let recognizer = SFSpeechRecognizer(locale: locale) else {
+            promise.reject("DroverSpeech", "no speech recogniser for \(locale.identifier)")
+            return
+        }
+        guard recognizer.isAvailable else {
+            promise.reject("DroverSpeech", "speech recogniser is not available right now")
+            return
+        }
+        // The same refusal as the phone's own capture: no silent fallback to
+        // the network recogniser. The watch's audio is no less private for
+        // having crossed the wrist.
+        guard recognizer.supportsOnDeviceRecognition else {
+            promise.reject(
+                "DroverSpeech",
+                "this device has no on-device model for \(locale.identifier), "
+                    + "so dictation would have to upload your audio"
+            )
+            return
+        }
+
+        resetTranscript()
+        wristCapture = capture
+        wristExpectedSeq = 0
+        wristHeld = [:]
+        dictationRecognizer = recognizer
+        guard startRecognitionTask(recognizer) else {
+            teardownDictation()
+            promise.reject("DroverSpeech", "the speech recogniser refused to start a task")
+            return
+        }
+        startTakingWristAudio()
+        promise.resolve(true)
+    }
+
+    /// Listen for chunks the watch bridge posts (DROVE-130).
+    ///
+    /// A NotificationCenter post rather than a direct call because the watch
+    /// bridge and this module are separate Expo modules in separate pods, and
+    /// making one depend on the other to move a buffer is a build-system
+    /// change for no gain. The audio never reaches JS: five messages a second
+    /// of PCM across the bridge would be pure overhead, and JS has no use for
+    /// samples. Only the CONTROL — which session, start, stop — goes through
+    /// JS, where it can be changed without a native build.
+    private func startTakingWristAudio() {
+        stopTakingWristAudio()
+        wristAudioObserver = NotificationCenter.default.addObserver(
+            forName: Self.wristAudioNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            guard let self else { return }
+            guard let capture = note.userInfo?["capture"] as? String,
+                  let seq = note.userInfo?["seq"] as? Int,
+                  let pcm = note.userInfo?["pcm"] as? Data else { return }
+            self.takeWristAudio(capture: capture, seq: seq, pcm: pcm)
+        }
+    }
+
+    private func stopTakingWristAudio() {
+        if let wristAudioObserver { NotificationCenter.default.removeObserver(wristAudioObserver) }
+        wristAudioObserver = nil
+        wristCapture = nil
+        wristHeld = [:]
+        wristExpectedSeq = 0
+    }
+
+    /// One chunk from the wrist, put back in order before it is recognised.
+    ///
+    /// Out-of-order audio is not merely late: the recogniser hears the
+    /// syllables in the wrong order and reports different words, which would
+    /// look exactly like it mishearing him. So a chunk that arrives early
+    /// waits, and one that arrives after its slot has passed is dropped rather
+    /// than fed in the wrong place.
+    private func takeWristAudio(capture: String, seq: Int, pcm: Data) {
+        // A chunk from a capture that has ended, or from one this module is
+        // not transcribing. Same structural guard as the recognition task id.
+        guard capture == wristCapture else { return }
+        guard seq >= wristExpectedSeq else { return }
+        wristHeld[seq] = pcm
+        // A gap that never fills would stall the capture forever, so after
+        // about a second and a half of waiting the missing chunk is written
+        // off and the queue moves on. A syllable lost beats a microphone that
+        // has silently stopped transcribing.
+        if wristHeld.count > 8, wristHeld[wristExpectedSeq] == nil, let earliest = wristHeld.keys.min() {
+            wristExpectedSeq = earliest
+        }
+        while let next = wristHeld.removeValue(forKey: wristExpectedSeq) {
+            wristExpectedSeq += 1
+            if let buffer = Self.buffer(from: next) { tapTarget.append(buffer) }
+        }
+    }
+
+    /// Rebuild one chunk as the buffer the recogniser takes.
+    ///
+    /// 16 kHz mono Int16, which is what `WristAudio` on the watch converts to.
+    /// The two constants have to agree and a disagreement is SILENT — the
+    /// recogniser returns nonsense rather than failing — which is why the
+    /// watch asserts its own numbers in `watch/tests/SharedWireTests.swift`.
+    private static func buffer(from pcm: Data) -> AVAudioPCMBuffer? {
+        guard !pcm.isEmpty, pcm.count % 2 == 0 else { return nil }
+        guard let format = AVAudioFormat(
+            commonFormat: .pcmFormatInt16, sampleRate: 16_000, channels: 1, interleaved: true
+        ) else { return nil }
+        let frames = AVAudioFrameCount(pcm.count / 2)
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames) else { return nil }
+        buffer.frameLength = frames
+        guard let channel = buffer.int16ChannelData else { return nil }
+        pcm.withUnsafeBytes { raw in
+            guard let base = raw.bindMemory(to: Int16.self).baseAddress else { return }
+            channel[0].update(from: base, count: Int(frames))
+        }
+        return buffer
+    }
+
     /// Open one recognition task on the request the tap will feed, and report
     /// its id with every partial (DROVE-140).
     ///
@@ -1379,6 +1575,9 @@ public final class DroverSpeechModule: Module {
             removeInputTap()
         }
         audioEngine = nil
-        releaseSession()
+        stopTakingWristAudio()
+        // Only hand back a session this capture took. A wrist capture never
+        // took one (DROVE-130).
+        if sessionClaimedForDictation { releaseSession() }
     }
 }

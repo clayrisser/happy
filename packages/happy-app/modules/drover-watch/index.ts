@@ -410,6 +410,27 @@ export interface DroverSayEvent {
 }
 
 /**
+ * The wrist opening or closing its held-open recorder (DROVE-130).
+ *
+ * ONLY THE CONTROL COMES THROUGH JS. The audio itself goes straight from the
+ * watch bridge to the speech module inside the native process: it arrives
+ * about five times a second and JS has no use for PCM. What JS decides is
+ * which session the words are for and whether the recogniser should be
+ * running, which is the part worth being able to change without a native
+ * build.
+ *
+ * `capture` identifies one press-to-press recording. It is echoed back on
+ * every `heard` so the wrist can drop a straggler from a capture that has
+ * already ended.
+ */
+export interface DroverListenEvent {
+    sessionId: string;
+    capture: string;
+    /** 'start', 'stop' or 'cancel'. */
+    state: string;
+}
+
+/**
  * Whether the wrist's own audio route has headphones on it (DROVE-92). Sent
  * when a transcript is opened and on every route change, so the phone can
  * pick which device speaks a reply.
@@ -437,7 +458,18 @@ export interface DroverSpokenEvent {
 export type DroverWatchVoiceMessage =
     | { kind: 'speak'; id: string; text: string }
     | { kind: 'speak'; stop: true }
-    | { kind: 'cue'; cue: 'reply' };
+    | { kind: 'cue'; cue: 'reply' }
+    /**
+     * What the phone has heard so far on an open wrist capture (DROVE-130).
+     *
+     * `text` is the WHOLE transcript since the recorder opened, not a delta:
+     * the phone's `absorb()` has already banked the utterances before any
+     * pause, so the wrist draws this rather than accumulating it. `seq` is
+     * monotonic within a capture because `sendMessage` promises no ordering
+     * and the wrist cannot tell a stale duplicate from a legitimate revision
+     * by reading the words — a revision is often shorter and correct.
+     */
+    | { kind: 'heard'; capture: string; seq: number; text: string; final: boolean };
 
 // The emitter members are declared explicitly rather than by extending
 // NativeModule<…>: that generic resolves to a stub without them under this
@@ -473,6 +505,7 @@ type DroverWatchModuleType = {
         (eventName: 'onSay', listener: (event: DroverSayEvent) => void): EventSubscription;
         (eventName: 'onRoute', listener: (event: DroverRouteEvent) => void): EventSubscription;
         (eventName: 'onSpoken', listener: (event: DroverSpokenEvent) => void): EventSubscription;
+        (eventName: 'onListen', listener: (event: DroverListenEvent) => void): EventSubscription;
     };
 };
 
@@ -624,6 +657,20 @@ export async function sendDroverWatchVoice(message: DroverWatchVoiceMessage): Pr
 }
 
 /** A message dictated on the wrist (DROVE-92). Same guard as onRefresh. */
+/**
+ * The wrist's recorder opening or closing (DROVE-130). Wrapped like the rest:
+ * a build older than this feature has no such event and must not throw on
+ * subscribing, because this file ships OTA and the native binary does not.
+ */
+export function addDroverListenListener(listener: (event: DroverListenEvent) => void) {
+    if (!native) return { remove: () => {} };
+    try {
+        return native.addListener('onListen', listener);
+    } catch {
+        return { remove: () => {} };
+    }
+}
+
 export function addDroverSayListener(listener: (event: DroverSayEvent) => void) {
     if (!native) return { remove: () => {} };
     try {

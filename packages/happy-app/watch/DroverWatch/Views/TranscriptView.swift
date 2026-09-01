@@ -69,10 +69,11 @@ struct TranscriptView: View {
                         } else {
                             WaitingForRows(connected: store.snapshot.connected, freshness: freshness)
                         }
-                        // What the wrist has said and not yet sent, under the
-                        // conversation and above the anchor, so it is the last
-                        // thing on screen and the auto-scroll lands on it
-                        // (DROVE-130).
+                        // What the wrist is hearing now, and what it has said
+                        // and not yet sent, under the conversation and above
+                        // the anchor, so it is the last thing on screen and
+                        // the auto-scroll lands on it (DROVE-130).
+                        WristHearingBar()
                         WristDraftBar(session: session)
                         // A zero-height anchor under everything, so scrolling
                         // "to the bottom" is one id whatever the last row is.
@@ -109,17 +110,20 @@ struct TranscriptView: View {
                     Label("Session", systemImage: "info.circle")
                 }
             }
-            // Talk to the session from the wrist (DROVE-92). Tap to dictate:
-            // `TextFieldLink` opens watchOS's own input sheet, where
-            // dictation is one tap away beside the keyboard and Scribble, the
-            // same path GateDetailView answers a question by (DROVE-55).
-            // watchOS gives no hold gesture on that control and no in-app
-            // recogniser to hold open, so there is no push-to-talk here. What
-            // there IS, since DROVE-130, is a LATCH: the sheet closes on Done
-            // and the phrase joins a draft that stays open, so the next thing
-            // said is added rather than replacing what came before.
+            // Talk to the session from the wrist. ONE PRESS OPENS THE
+            // RECORDER AND HOLDS IT OPEN (DROVE-130): Clay talks, pauses,
+            // thinks, keeps talking, and presses again to stop with every word
+            // still there. The watch captures and the phone transcribes,
+            // because `Speech.framework` does not exist on watchOS — see
+            // `WristHearing` for the check and `WristRecorder` for the wire.
+            //
+            // The one-shot input sheet has NOT been removed. It is how
+            // Scribble and the keyboard get in, and it is the only path that
+            // works with the phone out of reach, so it sits in the voice bar
+            // below as `SayLink`. What changed is which one is the primary
+            // gesture.
             ToolbarItem(placement: .bottomBar) {
-                SayLink(session: session)
+                WristMicButton(session: session)
             }
         }
         .onAppear { store.watchTranscript(of: session.id) }
@@ -128,35 +132,38 @@ struct TranscriptView: View {
         // "closed" and then "opened" around it. Cheap: an open costs one
         // round of rows, and it keeps the rule one line long.
         .onDisappear {
+            // A LATCH MUST NOT OUTLIVE THE SCREEN THAT SHOWS IT (DROVE-130).
+            // The listening bar lives on this view, so a push to a gate or a
+            // pop back to the wall would leave the microphone open with
+            // nothing on screen saying so — a hot mic, which is the one real
+            // hazard a latch has. Stopping KEEPS every word: they go to the
+            // draft, which survives the screen going away.
+            store.stopListening()
             if store.openedSessionId == session.id { store.watchTranscript(of: nil) }
         }
         // Reachability comes back with the foreground, and the phone sends
         // every row afresh on an open, so say it again.
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { store.watchTranscript(of: session.id) }
+            // The wrist dropped, or a notification took the front. watchOS is
+            // about to take the microphone away anyway; stopping here means
+            // the button says so, rather than sitting on "Stop" over a
+            // recorder the OS already closed.
+            if phase != .active { store.stopListening() }
         }
     }
 }
 
-/// The mic, latched (DROVE-130).
+/// The one-shot input sheet, kept as the SECOND way in (DROVE-130).
 ///
-/// A tap opens watchOS's input sheet and what comes back is KEPT rather than
-/// sent: the draft stays on the wrist with the mic still armed, another tap
-/// appends the next phrase, Send sends the lot, Clear throws it away. That is
-/// the phone's gesture table (DROVE-105, DROVE-140) as far as watchOS allows
-/// it — see WristDraft for why the recorder itself cannot be held open, which
-/// comes down to Speech.framework not existing in the watchOS SDK at all.
+/// This was the primary gesture until the wrist got a real recorder, and it is
+/// still the only one that works with the phone out of reach, because the
+/// phone is what does the transcribing now. It is also the only way to
+/// Scribble or type, which dictation cannot replace: a word the recogniser
+/// keeps getting wrong has to be spellable.
 ///
-/// The important half is the append. DROVE-140's second fault was that
-/// speaking again after a silence OVERWROTE what came before, and that is
-/// exactly what the wrist did: every sheet started from empty and the last
-/// phrase was the whole message. Every sheet return is its own recognition, so
-/// every return appends — the same rule, keyed on the task rather than on
-/// comparing strings, with the sheet standing in for the task.
-///
-/// One control, used from the transcript's bottom bar and from the session's
-/// facts screen, so both places accumulate into the one draft on the store
-/// rather than each holding their own.
+/// What it hands back joins the SAME draft the recorder banks into, so Send,
+/// Clear and Undo do not care which way the words arrived.
 struct SayLink: View {
     let session: DroverSession
     @EnvironmentObject private var store: GateStore
@@ -174,6 +181,99 @@ struct SayLink: View {
             store.addToDraft(session, heard: said)
         }
         .tint(draft.isEmpty ? .green : .orange)
+    }
+}
+
+/// The recorder, held open by one press (DROVE-130).
+///
+/// The whole point of the ticket, and the thing the first pass could not do.
+/// Tap once and the microphone opens and STAYS open; tap again and it stops
+/// with every word kept. There is no hold-to-talk because a watch offers no
+/// gesture that survives the wrist dropping, and no press-and-hold on a
+/// toolbar button; the latch is the ergonomic that suits a wrist anyway, and
+/// it is the one the phone already has (DROVE-105).
+///
+/// STOPPING NEVER SENDS. It banks the words into the draft to be read and sent
+/// deliberately, which is the phone's rule that only a lift sends — and the
+/// wrist has no lift, so nothing here sends by itself.
+struct WristMicButton: View {
+    let session: DroverSession
+    @EnvironmentObject private var store: GateStore
+
+    var body: some View {
+        Button {
+            store.toggleMic(session)
+        } label: {
+            Label(
+                store.listening ? "Stop" : "Listen",
+                systemImage: store.listening ? "stop.circle.fill" : "mic.fill"
+            )
+            .font(.caption)
+        }
+        .tint(store.listening ? .red : .green)
+    }
+}
+
+/// What the phone is hearing while the recorder is open (DROVE-130).
+///
+/// A latch can be left hot, so this is deliberately unmissable: the words as
+/// they arrive, a level meter that proves the microphone is live rather than
+/// merely believed to be, and a Cancel. Without it the wrist would be
+/// recording with nothing on screen saying so, which is the failure the
+/// phone's live banner exists to prevent.
+struct WristHearingBar: View {
+    @EnvironmentObject private var store: GateStore
+
+    var body: some View {
+        if store.listening {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 4) {
+                    Image(systemName: "mic.fill")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.red)
+                    Text("Listening")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(.red)
+                    Spacer(minLength: 4)
+                    MicLevel(level: store.micLevel)
+                }
+                // Before the first partial there is nothing to draw, and a
+                // blank box reads as a microphone that is not working. Say
+                // which it is.
+                Text(store.hearing.isEmpty ? "Say something…" : store.hearing.text)
+                    .font(.caption2)
+                    .foregroundStyle(store.hearing.isEmpty ? .secondary : .primary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .lineLimit(4)
+                Button(role: .destructive) {
+                    store.cancelListening()
+                } label: {
+                    Label("Discard", systemImage: "xmark")
+                        .font(.system(size: 10))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.red)
+            }
+            .padding(6)
+            .background(Color.red.opacity(0.15), in: RoundedRectangle(cornerRadius: 8))
+        }
+    }
+}
+
+/// Five bars that fill with the input level. Not decoration: it is the only
+/// evidence on the wrist that the microphone is open and hearing, since there
+/// is no system sheet and no waveform.
+private struct MicLevel: View {
+    let level: Double
+
+    var body: some View {
+        HStack(spacing: 1) {
+            ForEach(0..<5, id: \.self) { step in
+                Capsule()
+                    .fill(level * 5 > Double(step) ? Color.red : Color.secondary.opacity(0.3))
+                    .frame(width: 2, height: 4 + CGFloat(step) * 2)
+            }
+        }
     }
 }
 
@@ -235,6 +335,9 @@ struct WristDraftBar: View {
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
+                // Scribble and the keyboard, for the word the recogniser keeps
+                // getting wrong. Adds to this same draft.
+                SayLink(session: session)
             }
             .padding(6)
             .background(Color.orange.opacity(0.15), in: RoundedRectangle(cornerRadius: 8))
