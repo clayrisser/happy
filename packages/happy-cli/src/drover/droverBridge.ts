@@ -26,6 +26,15 @@ import { getOrCreateBridgeSession } from './bridgeSession'
 import { gateActionsFor, legendFor, overflowNoteFor, type GateActionPlan } from './gateActions'
 import { createOriginRegistry } from './originSession'
 import { isDroverDemoId } from './demo'
+import {
+    ackReadingOnBus,
+    isReadingCommandFrame,
+    readingCommandExpired,
+    reportReadingOnBus,
+    toDroverIds,
+    type ReadingCommandFrame,
+    type ReadingReport,
+} from './readingBridge'
 import packageJson from '../../package.json'
 
 const DROVER_URL = process.env.DROVER_URL || 'http://127.0.0.1:7970'
@@ -893,6 +902,102 @@ export async function runDroverBridge(): Promise<void> {
         }
     )
 
+    /**
+     * The phone answering a terminal, and telling the bus what it is reading
+     * (DROVE-298).
+     *
+     * Two shapes on one handler, because they are one fact arriving for two
+     * reasons. WITH an id it is the verdict on a command `drover read` is
+     * still long-polling for, so it goes to the ack route and settles that
+     * wait. WITHOUT one it is the phone volunteering its state because
+     * something moved — a thumb, the wrist, the headphones, an unplug — which
+     * is what lets `drover read` show something true about a phone too busy to
+     * answer a round trip.
+     *
+     * Every id is put back into the TERMINAL's id space first. The phone
+     * answers in happy session ids and `drover read` prints names a human
+     * typed at `drover sessions`; a row the join cannot name is dropped rather
+     * than printed under an id from the wrong space.
+     */
+    client.rpcHandlerManager.registerHandler<ReadingReport, { ok: boolean }>(
+        'drover-reading',
+        async (message) => {
+            if (!message?.state) return { ok: false }
+            const seen = new Map<string, string | null>()
+            const ids = new Set<string>(message.state.sessions?.map((r) => r.sessionId) ?? [])
+            if (message.state.sessionId) ids.add(message.state.sessionId)
+            for (const id of ids) seen.set(id, await originRegistry.claudeSessionIdFor(id))
+            const state = toDroverIds(message.state, (id) => seen.get(id) ?? null)
+            if (typeof message.id === 'string') {
+                const status = await ackReadingOnBus(DROVER_URL, message.id, {
+                    applied: message.applied === true,
+                    reason: message.reason,
+                    state,
+                })
+                // The command is done either way, so the card comes off the
+                // session. Leaving it there is how the app would re-apply it on
+                // its next reconnect, which for `pause` is silent and for `on`
+                // moves the voice under him.
+                clearReadingCommand(message.id)
+                logger.debug(
+                    `[drover] phone answered reading ${message.id}: ${message.applied ? 'applied' : `refused (${message.reason ?? 'no reason'})`} (bus ${status})`
+                )
+                return { ok: status === 200 }
+            }
+            const status = await reportReadingOnBus(DROVER_URL, state)
+            return { ok: status === 200 }
+        }
+    )
+
+    /**
+     * The command, put where the phone already looks (DROVE-298).
+     *
+     * Onto the bridge session's agent state, beside the gate cards, because
+     * that is the channel the app already subscribes to and acts on — this is
+     * another command kind, not a new channel. The background wake is the same
+     * one a gate sends: it shows nothing on its own and exists so a suspended
+     * app has its JS running when the command is sitting there.
+     */
+    const carryReadingCommand = async (cmd: ReadingCommandFrame) => {
+        // Dropped rather than delivered late. Its life is the terminal's own
+        // patience, so an expired one is an ask nobody is waiting for, and the
+        // bus has already told that terminal nothing happened.
+        if (readingCommandExpired(cmd)) {
+            logger.debug(`[drover] reading ${cmd.id} arrived past its ${cmd.ttlMs}ms life; dropped`)
+            return
+        }
+        let sessionId: string | null = null
+        if (cmd.sessionId) {
+            sessionId = await originRegistry.happySessionIdFor(cmd.sessionId)
+            if (!sessionId) {
+                // REFUSED BY NAME, here, rather than sent to the phone as an id
+                // it cannot match. The app's shrug would be indistinguishable
+                // from a phone that is switched off, and those two have
+                // different fixes.
+                await ackReadingOnBus(DROVER_URL, cmd.id, {
+                    applied: false,
+                    reason: `the phone has never seen session ${cmd.sessionId}`,
+                })
+                return
+            }
+        }
+        client.updateAgentState((s) => ({
+            ...s,
+            droverReading: { command: { ...cmd, sessionId } },
+        }))
+        api.push().sendBackgroundWake('reading-command')
+        logger.debug(`[drover] carried reading ${cmd.verb} ${cmd.id} to the phone`)
+    }
+
+    /** Off the session once it is answered, so a reconnect cannot re-apply it. */
+    const clearReadingCommand = (id: string) => {
+        client.updateAgentState((s) => {
+            const held = (s as { droverReading?: { command?: { id?: string } } }).droverReading
+            if (held?.command?.id !== id) return s
+            return { ...s, droverReading: { command: null } }
+        })
+    }
+
     const addCard = (ev: DroverEvent) => {
         if (mirrored.has(ev.id)) return
         mirrored.set(ev.id, ev)
@@ -1058,6 +1163,16 @@ export async function runDroverBridge(): Promise<void> {
                         if (eventType === 'snapshot') {
                             const frame = ev as unknown as { pending?: DroverEvent[] }
                             applySnapshot(Array.isArray(frame.pending) ? frame.pending : [])
+                            continue
+                        }
+                        // A terminal steering this phone's voice (DROVE-298).
+                        // Carried, never applied here: the Mac makes no sound
+                        // and decides nothing about the voice.
+                        if (eventType === 'reading-command') {
+                            const frame = ev as unknown
+                            if (isReadingCommandFrame(frame) && frame.state === 'pending') {
+                                void carryReadingCommand(frame)
+                            }
                             continue
                         }
                         if (eventType === 'settings') {

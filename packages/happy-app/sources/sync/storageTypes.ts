@@ -678,6 +678,32 @@ export const AgentStateSchema = z.object({
     droverSettings: z.object({
         capturedAt: z.number(),
     }).passthrough().nullish(),
+    // A TERMINAL steering this phone's voice (DROVE-298). The drover bridge
+    // writes one command here — `drover read pause`, `drover read <session>` —
+    // and sync/droverReading applies it and answers over the `drover-reading`
+    // RPC. It is a command KIND on the channel gates already use, which is why
+    // it lives beside them in the bridge session's agent state rather than in
+    // a channel of its own.
+    //
+    // IT MUST BE IN THIS SCHEMA OR IT DOES NOT EXIST. Agent state is parsed
+    // here on the way in, so a field the schema does not name is stripped
+    // before any subscriber sees it — the command would leave the Mac, cross
+    // the wire, and vanish at the door with nothing anywhere saying so.
+    //
+    // `ttlMs` and `at` are required, not nullish, on purpose: they are the
+    // command's LIFE, and a command that arrives without one must be rejected
+    // rather than treated as immortal. A phone that starts talking in a pocket
+    // long after somebody gave up is what this whole field is careful about.
+    droverReading: z.object({
+        command: z.object({
+            id: z.string(),
+            verb: z.enum(['status', 'on', 'off', 'pause', 'resume']),
+            sessionId: z.string().nullish(),
+            by: z.string().nullish(),
+            at: z.number(),
+            ttlMs: z.number(),
+        }).nullish(),
+    }).nullish(),
     // Ephemeral runtime state. A malformed snapshot must not invalidate
     // permission requests or the rest of the agent state.
     usageLimits: UsageLimitsSchema,

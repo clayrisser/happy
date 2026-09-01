@@ -49,6 +49,16 @@ export type RegistryReader = () => Promise<RegistryRow[]>
 export interface OriginRegistry {
     /** The happy session id for a Claude session uuid, or null when unknown. */
     happySessionIdFor(claudeSessionId: string | null | undefined): Promise<string | null>
+    /**
+     * The other direction, off the SAME rows (DROVE-298).
+     *
+     * The phone answers a reading command in its own ids and `drover read`
+     * prints session names a human typed, so the report has to come back into
+     * the terminal's id space. Reading it off this cache rather than a second
+     * one is the whole point: two joins over the same fact drift, and a name
+     * from the wrong id space is worse than no name.
+     */
+    claudeSessionIdFor(happySessionId: string | null | undefined): Promise<string | null>
 }
 
 type ServerSession = {
@@ -114,6 +124,9 @@ export function createOriginRegistry(
     const lookup = (claudeSessionId: string): string | null =>
         rows.find((row) => row.claudeSessionId === claudeSessionId)?.id ?? null
 
+    const reverse = (happySessionId: string): string | null =>
+        rows.find((row) => row.id === happySessionId)?.claudeSessionId ?? null
+
     // One read at a time. A burst of gates while the first read is in flight
     // waits on that read rather than starting its own.
     const refresh = (): Promise<void> => {
@@ -143,6 +156,17 @@ export function createOriginRegistry(
             }
             await refresh()
             return lookup(claudeSessionId)
+        },
+        async claudeSessionIdFor(happySessionId) {
+            if (!happySessionId) return null
+            const age = now() - fetchedAt
+            if (age < ttlMs) {
+                const hit = reverse(happySessionId)
+                if (hit) return hit
+                if (age < missGraceMs) return null
+            }
+            await refresh()
+            return reverse(happySessionId)
         },
     }
 }
