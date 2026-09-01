@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-import { droverEnv, parseLocalEnv } from './env';
+import { droverEnv, droverVar, parseLocalEnv } from './env';
 
 describe('parseLocalEnv — only the plain assignments a shell would set', () => {
     it('takes a bare assignment and an exported one alike', () => {
@@ -78,5 +78,22 @@ describe('droverEnv — defaults, then precedence', () => {
 
         expect(e.droverUrl).toBe('http://local:1'); // local.env beats the exported var
         expect(e.stateDir).toBe(join(xdg, 'cattle-drover')); // ...but not STATE_DIR itself
+    });
+});
+
+describe('droverVar — a name drover.env does not define, read with its precedence', () => {
+    it('takes the default, then the exported var, then local.env over both', () => {
+        const xdg = mkdtempSync(join(tmpdir(), 'drover-env-'));
+        mkdirSync(join(xdg, 'cattle-drover'));
+
+        expect(droverVar('DROVER_SHARED_STORE', '/dflt', { XDG_STATE_HOME: xdg }, '/home/me')).toBe('/dflt');
+        expect(
+            droverVar('DROVER_SHARED_STORE', '/dflt', { XDG_STATE_HOME: xdg, DROVER_SHARED_STORE: '/exported' }, '/home/me'),
+        ).toBe('/exported');
+
+        writeFileSync(join(xdg, 'cattle-drover', 'local.env'), 'DROVER_SHARED_STORE=/local\n');
+        expect(
+            droverVar('DROVER_SHARED_STORE', '/dflt', { XDG_STATE_HOME: xdg, DROVER_SHARED_STORE: '/exported' }, '/home/me'),
+        ).toBe('/local');
     });
 });

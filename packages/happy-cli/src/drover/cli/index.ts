@@ -49,6 +49,11 @@ export const droverVerbs: readonly DroverVerb[] = [
         summary: 'Every prompt still waiting for an answer, anywhere, including the ones no session owns.',
         load: () => import('./questions'),
     },
+    {
+        name: 'share-sessions',
+        summary: 'One session store for every account, so a flip stops copying transcripts. Dry run unless --apply.',
+        load: () => import('./share-sessions'),
+    },
 ];
 
 /** Is this a verb the node CLI carries? */

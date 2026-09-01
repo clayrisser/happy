@@ -108,3 +108,23 @@ export function droverEnv(env: Env = process.env, home: string = homedir()): Dro
         relayUrl: pick('DROVER_RELAY_URL', `http://127.0.0.1:${relayPort}`),
     };
 }
+
+/**
+ * One variable the way a shell verb reads it right after `. etc/drover.env`:
+ * the local.env line, else the exported var, else the default. For a name the
+ * env file does not define itself but that still rides on local.env because
+ * the file sources it — DROVER_SHARED_STORE, which share-sessions reads as
+ * `${DROVER_SHARED_STORE:-$HOME/.claude-shared}` on the line after the source.
+ */
+export function droverVar(name: string, fallback: string, env: Env = process.env, home: string = homedir()): string {
+    const localFile = join(droverEnv(env, home).stateDir, 'local.env');
+    let local: Record<string, string> = {};
+    if (existsSync(localFile)) {
+        try {
+            local = parseLocalEnv(readFileSync(localFile, 'utf8'));
+        } catch {
+            // Unreadable is the same as absent, as above.
+        }
+    }
+    return local[name] ?? env[name] ?? fallback;
+}
