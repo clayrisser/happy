@@ -25,6 +25,14 @@ describe('clone lineage rows', () => {
         expect(rows[0].subtitle).toBe('bbbbbbbb in OpenCode');
     });
 
+    it('names a pi clone Pi, not the lowercase slug', () => {
+        // DROVE-295. `drover clone <session> --to pi` is a real lane, so this
+        // row is one a human will see; "pi" beside "Claude Code" reads as a
+        // typo rather than as a product.
+        const rows = cloneLineageRows({ to: [{ session: dst, harness: 'pi' }] });
+        expect(rows[0].subtitle).toBe('bbbbbbbb in Pi');
+    });
+
     it('keeps a clone that has not started yet instead of dropping it', () => {
         // The ledger row exists before the window opens. Dropping this entry
         // would make a session that was just cloned read as un-cloned.

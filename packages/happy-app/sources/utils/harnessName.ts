@@ -26,6 +26,10 @@ const names: Record<string, string> = {
     // opencode`, whose runAcp already stamps it, and a `drover opencode` pane.
     // Both are the same agent, so both read as one name here.
     opencode: 'OpenCode',
+    // DROVE-295, the LOCAL-model harness. Two lowercase letters, and the
+    // project spells itself lowercase, but a name beside "Claude" and "Cursor"
+    // on the same row reads as a typo unless it is capitalised.
+    pi: 'Pi',
 };
 
 /**

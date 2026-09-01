@@ -46,6 +46,7 @@ const harnessName = (harness: string | null | undefined): string => {
         case 'claude': return 'Claude Code';
         case 'opencode': return 'OpenCode';
         case 'cursor': return 'Cursor';
+        case 'pi': return 'Pi';
         default: return harness ? harness : 'another harness';
     }
 };

@@ -12,6 +12,9 @@ describe('harnessName', () => {
         // lowercase and was rendering as "opencode" beside "Claude" and
         // "Cursor" on the same screen (DROVE-56).
         expect(harnessName('opencode')).toBe('OpenCode');
+        // Same reason, one harness over (DROVE-295): the slug is lowercase and
+        // "pi" beside "Claude" and "Cursor" reads as a typo.
+        expect(harnessName('pi')).toBe('Pi');
     });
 
     it('keeps both codex slugs, because both are on real sessions', () => {

@@ -12,6 +12,14 @@ const VOICE_SOFT_PAYWALL_SHOWN_KEY = 'voice-soft-paywall-shown';
 const VOICE_ONBOARDING_PROMPT_LOAD_COUNT_KEY = 'voice-onboarding-prompt-load-count';
 const VOICE_MESSAGE_COUNT_KEY = 'voice-message-count';
 
+// `pi` is deliberately ABSENT (DROVE-295). This union is what the app may ask a
+// machine to SPAWN, and it flows straight into SpawnSessionOptions.agent — so a
+// harness listed here is one the daemon promises it can start. pi has no
+// happy-cli runner yet; its sessions reach the phone over the drover bus.
+// Naming it here would make a spawn request type-check and then fail after the
+// tmux window opened. Its display name lives in harnessCatalog's
+// NON_SPAWNABLE_HARNESS_NAMES instead, and its per-agent defaults in
+// sync/agentDefaults, both of which a terminal-started pi session does use.
 export type NewSessionAgentType = 'claude' | 'codex' | 'cursor' | 'gemini' | 'openclaw' | 'agy' | 'rig';
 export type NewSessionSessionType = 'simple' | 'worktree';
 

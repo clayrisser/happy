@@ -331,12 +331,39 @@ export function getCursorPermissionModes(): PermissionMode[] {
     ];
 }
 
+/**
+ * pi has one permission posture, and drover owns it (DROVE-295).
+ *
+ * Every tool call a pi session makes is brokered on the drover bus by an
+ * extension that BLOCKS the call until a surface answers, and an unanswered
+ * gate denies. That is not a mode the session can be switched between: the
+ * three settings that do exist (broker everything / broker the writes / broker
+ * nothing) are read from the environment when the pane starts and there is no
+ * route that changes them on a running session.
+ *
+ * So one option, which means the picker does not appear — the same shape as
+ * Cursor above and for the same reason. A mode picker whose picks land nowhere
+ * is answered by waiting.
+ */
+export function getPiPermissionModes(): PermissionMode[] {
+    return [
+        {
+            key: 'default',
+            name: 'brokered',
+            description: 'every tool call is gated on the drover bus; an unanswered gate denies',
+        },
+    ];
+}
+
 export function getHardcodedPermissionModes(flavor: AgentFlavor, translate: Translate): PermissionMode[] {
     if (!harnessHasModeControls(flavor)) {
         return [];
     }
     if (flavor === 'cursor') {
         return getCursorPermissionModes();
+    }
+    if (flavor === 'pi') {
+        return getPiPermissionModes();
     }
     if (flavor === 'codex') {
         return getCodexPermissionModes(translate);
@@ -386,7 +413,16 @@ export function getHardcodedModelModes(flavor: AgentFlavor, _translate: Translat
     // ships models faster than this file can be edited, and a stale key is a
     // turn that fails at exec. No published list means no picker, which is the
     // honest reading of "this login's models are unknown".
-    if (!harnessHasModeControls(flavor) || flavor === 'cursor') {
+    //
+    // pi lands here for a THIRD reason, and it is the strongest of the three:
+    // its models are per MACHINE, not per login. pi fronts whatever local
+    // runtime is being served — LM Studio on :1234, a local GLM on :8420 — and
+    // that list is different on every machine and changes when a model is
+    // loaded or unloaded. There is no list to hardcode that would be true
+    // anywhere but the machine it was typed on. The session publishes what
+    // `pi --list-models` actually reports, which the picker already prefers,
+    // and that is the whole of DROVE-253's rule applied here.
+    if (!harnessHasModeControls(flavor) || flavor === 'cursor' || flavor === 'pi') {
         return [];
     }
     if (flavor === 'codex') {
@@ -700,9 +736,29 @@ export function getCodexEffortLevels(modelKey?: string | null): EffortLevel[] {
     );
 }
 
+/**
+ * pi's thinking scale, which is pi's own and not the model's (DROVE-295).
+ *
+ * `--thinking off|minimal|low|medium|high|xhigh` is a flag on the pi CLI and an
+ * rpc command (`set_thinking_level`), so unlike the model list this really is
+ * fixed and knowable without asking the machine — it is a lookup over what pi
+ * itself publishes, not free text.
+ *
+ * `xhigh` is deliberately absent. pi's own rpc documentation says it is
+ * accepted only by OpenAI codex-max models, and pi here is the LOCAL harness
+ * fronting LM Studio and a local GLM. Offering a level nothing on this machine
+ * can run is the present-and-inert control this file exists to stop.
+ */
+const PI_THINKING = ['off', 'minimal', 'low', 'medium', 'high'] as const;
+
+export function getPiEffortLevels(): EffortLevel[] {
+    return effortLevels(PI_THINKING);
+}
+
 export function getHardcodedEffortLevels(flavor: AgentFlavor): EffortLevel[] {
     if (flavor === 'claude') return getClaudeEffortLevels();
     if (flavor === 'codex') return getCodexEffortLevels();
+    if (flavor === 'pi') return getPiEffortLevels();
     return [];
 }
 
@@ -748,6 +804,13 @@ export function getEffortLevelsForModel(
             key: option.key,
             name: option.name,
         }));
+    }
+    // pi is the opposite case to Cursor: its MODELS are per machine and only
+    // the session knows them, but its thinking scale is pi's own flag and the
+    // same on every machine. So the model picker is published and the effort
+    // picker is not.
+    if (flavor === 'pi') {
+        return getPiEffortLevels();
     }
     return [];
 }
