@@ -346,6 +346,15 @@ export const zhHant: TranslationStructure = {
         forkErrorMissingMetadata: '缺少分叉所需的會話元資料。',
         forkErrorGeneric: '分叉會話失敗。',
         forkClaudeOnly: '目前僅支援 Claude 會話的分叉。',
+        forkErrorDirectoryMissing: ({ directory }: { directory: string }) =>
+            `目錄 ${directory} 在那台機器上已不存在，因此沒有地方啟動新工作階段。`,
+        cloneAction: '複製到其他工具…',
+        cloneSubtitle: '把這段對話複述給 Cursor、Pi 或一個全新的 Claude',
+        cloneSheetTitle: '複製到其他工具',
+        cloneSheetSubtitle: '在同一個目錄下新建一個工作階段，把這段對話複述後作為它的第一則提示。原本的不受影響。',
+        cloneErrorGeneric: '複製工作階段失敗。',
+        cloneErrorNotClaude: '只有 Claude 工作階段能複製到其他工具，drover 只會匯出它的對話。',
+        cloneHarnessUnavailable: '這台機器上未安裝',
     },
 
     commandPalette: {

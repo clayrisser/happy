@@ -3,9 +3,26 @@
  *
  * We only build the CLI here. Integration suites now provision their own
  * isolated environments so each suite can get a fresh lab-rat project copy.
+ *
+ * And one check across the whole run (DROVE-336): the real
+ * ~/.happy/sessions.json must not gain a session from this checkout. The unit
+ * project's setup file keeps every test, and every child a test spawns, off
+ * the real home; that guard is per file, and this is the backstop that fails
+ * the run, loudly, if anything got past it. Counted by the session's cwd and
+ * happyLibDir under this repo, so a real session started elsewhere while the
+ * suite runs is not blamed. A throw from teardown is a vitest startup error
+ * and a nonzero exit.
  */
 
 import { spawnSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+
+import { realSessionsFile, sessionsUnder } from './testing/leakedSessions'
+
+/** The repo this checkout is: a leaked session's cwd or happyLibDir is under it. */
+const repoRoot = fileURLToPath(new URL('../../..', import.meta.url)).replace(/\/$/, '')
+
+let sessionsBefore = new Set<string>()
 
 export async function setup() {
     process.env.VITEST_POOL_TIMEOUT = '60000'
@@ -20,8 +37,19 @@ export async function setup() {
             throw new Error(`Build failed STDERR: ${errorOutput}`)
         }
     }
+
+    sessionsBefore = new Set(sessionsUnder(repoRoot))
 }
 
 export async function teardown() {
     // Per-suite integration environments clean themselves up.
+    const leaked = sessionsUnder(repoRoot).filter((id) => !sessionsBefore.has(id))
+    if (leaked.length > 0) {
+        throw new Error(
+            `DROVE-336: this run leaked ${leaked.length} session(s) from ${repoRoot} into the real ${realSessionsFile}: `
+            + `${leaked.slice(0, 5).join(', ')}${leaked.length > 5 ? ', …' : ''}.\n`
+            + '  Something ran the CLI, or a child of it, with the real HAPPY_HOME_DIR and the real server. '
+            + 'Every unit test runs under src/testing/noRealState.setup.ts; find the process that did not inherit that env.',
+        )
+    }
 }

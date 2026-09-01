@@ -32,6 +32,7 @@ import {
     accountSubtitle,
     accountsByHarness,
     freshCursorAccounts,
+    isBackdoorAccount,
     loginCommand,
     phaseHarness,
     staleCursorAccounts,
@@ -53,6 +54,10 @@ function waiting(overrides: Partial<Extract<AddAccountPhase, { kind: 'waiting' }
         // before cursor existed assumed (DROVE-270).
         stale: [] as string[],
         linkReady: false,
+        // No link has ever come back, which is what every assertion written
+        // before DROVE-334 assumed. `linkReady` is whether a card is open NOW;
+        // this is whether one ever was, and only this one ends the wait.
+        linkSeen: false,
         linkLate: false,
         ...overrides,
     };
@@ -91,7 +96,7 @@ describe('advanceAddAccount', () => {
     it('records the link arriving, and does not churn when it has not changed', () => {
         const phase = waiting();
         const ready = advanceAddAccount(phase, { type: 'link', ready: true });
-        expect(ready).toEqual(waiting({ linkReady: true }));
+        expect(ready).toEqual(waiting({ linkReady: true, linkSeen: true }));
         // Identity, not equality: a new object every poll would re-render the
         // screen for nothing.
         expect(advanceAddAccount(ready, { type: 'link', ready: true })).toBe(ready);
@@ -100,7 +105,7 @@ describe('advanceAddAccount', () => {
     it('adds the account when a NEW name appears in that machine list', () => {
         // The registry row is written by the shell only after Claude Code says
         // it is logged in, so a name that was not there before IS the success.
-        const phase = waiting({ linkReady: true });
+        const phase = waiting({ linkReady: true, linkSeen: true });
         const next = advanceAddAccount(phase, {
             type: 'accounts', at: 2_000, names: ['main', 'jamrizzi', 'bitspur.com'],
         });
@@ -120,7 +125,7 @@ describe('advanceAddAccount', () => {
     it('stops watching, and never calls it a failure', () => {
         // The phone cannot see a browser. It has no idea whether the login is
         // still going, so it says only what it knows: it stopped looking.
-        const phase = waiting({ linkReady: true });
+        const phase = waiting({ linkReady: true, linkSeen: true });
         const next = advanceAddAccount(phase, {
             type: 'accounts', at: 1_000 + addAccountWatchMs, names: before,
         });
@@ -186,11 +191,11 @@ describe('advanceAddAccount', () => {
     it('a link that turns up late takes the sentence saying there was none with it', () => {
         const late = waiting({ linkLate: true });
         expect(advanceAddAccount(late, { type: 'link', ready: true }))
-            .toEqual(waiting({ linkReady: true, linkLate: false }));
+            .toEqual(waiting({ linkReady: true, linkSeen: true, linkLate: false }));
     });
 
     it('never calls it late once the link is already there', () => {
-        const ready = waiting({ linkReady: true });
+        const ready = waiting({ linkReady: true, linkSeen: true });
         expect(advanceAddAccount(ready, {
             type: 'accounts', at: 1_000 + addAccountLinkWaitMs, names: before,
         })).toBe(ready);
@@ -227,9 +232,90 @@ describe('advanceAddAccount', () => {
     });
 
     it('never calls a tick late once the link is already there', () => {
-        const ready = waiting({ linkReady: true });
+        const ready = waiting({ linkReady: true, linkSeen: true });
         expect(advanceAddAccount(ready, { type: 'tick', at: 1_000 + addAccountLinkWaitMs }))
             .toBe(ready);
+    });
+
+    /**
+     * DROVE-334, and it is the whole ticket. Wall-clock timings are tonight's,
+     * off ~/.local/state/cattle-drover/logs/bus.log:
+     *
+     *   +0s   the phone's drover-account-login RPC (22:16:22Z)
+     *   +10s  event 6e0a598b created — the card, with the authorize URL
+     *   +32s  event 6e0a598b resolved: text by phone — Clay sent his code
+     *   +60s  the link-wait deadline, which told him no link came back
+     */
+    it('never says no link came back once the code has been sent', () => {
+        const started = advanceAddAccount(
+            advanceAddAccount(addAccountIdle, { type: 'start', harness: 'claude' }),
+            { type: 'started', at: 1_000, before },
+        );
+        // +10s: the card lands.
+        const withLink = advanceAddAccount(started, { type: 'link', ready: true });
+        expect(addAccountStatus(withLink)!.hasLink).toBe(true);
+        // +32s: Clay answers it, so the bridge retires the request and the
+        // screen's `cardFor` goes null — a link event with ready false.
+        const answered = advanceAddAccount(withLink, { type: 'link', ready: false });
+        expect(answered).toEqual(waiting({ linkReady: false, linkSeen: true }));
+        // +60s: the deadline. It must not fire on a login that had its link.
+        const atDeadline = advanceAddAccount(answered, { type: 'tick', at: 1_000 + addAccountLinkWaitMs });
+        expect(atDeadline).toBe(answered);
+        expect(addAccountStatus(atDeadline)!.title).not.toContain('No sign-in link');
+        // And it is still watching, because the Mac is still finishing.
+        expect(addAccountBusy(atDeadline)).toBe(true);
+    });
+
+    it('says the machine is finishing once the card is spent', () => {
+        const spent = waiting({ linkReady: false, linkSeen: true });
+        const status = addAccountStatus(spent)!;
+        expect(status.title).toBe('Finishing the login on that machine\u2026');
+        expect(status.hasLink).toBe(false);
+        expect(status.spinner).toBe(true);
+        expect(status.watching).toBe(true);
+    });
+
+    it('a link that arrives while the RPC is still in flight is not lost', () => {
+        // The card can beat `started` — the RPC took 3s tonight and 4.2s an
+        // hour earlier, and the shell can have the URL out in less. Dropping
+        // the event left the screen with no link it would ever notice again.
+        const starting = advanceAddAccount(addAccountIdle, { type: 'start', harness: 'claude' });
+        const early = advanceAddAccount(starting, { type: 'link', ready: true });
+        expect(early).toEqual({ kind: 'starting', harness: 'claude', linkSeen: true });
+        const waitingNow = advanceAddAccount(early, { type: 'started', at: 1_000, before });
+        expect(waitingNow).toEqual(waiting({ linkReady: true, linkSeen: true }));
+        expect(addAccountStatus(waitingNow)!.hasLink).toBe(true);
+        // ...and the deadline it used to dead-end at now passes it by.
+        expect(advanceAddAccount(waitingNow, { type: 'tick', at: 1_000 + addAccountLinkWaitMs }))
+            .toBe(waitingNow);
+    });
+
+    it('ignores a link that has not arrived while the RPC is in flight', () => {
+        const starting = advanceAddAccount(addAccountIdle, { type: 'start', harness: 'claude' });
+        expect(advanceAddAccount(starting, { type: 'link', ready: false })).toBe(starting);
+    });
+
+    it('a link arriving AFTER the deadline still flips the screen to hasLink', () => {
+        const late = advanceAddAccount(waiting(), { type: 'tick', at: 1_000 + addAccountLinkWaitMs });
+        expect(addAccountStatus(late)!.title).toBe('No sign-in link came back');
+        const arrived = advanceAddAccount(late, { type: 'link', ready: true });
+        expect(arrived).toEqual(waiting({ linkReady: true, linkSeen: true, linkLate: false }));
+        expect(addAccountStatus(arrived)!.hasLink).toBe(true);
+        // And once seen it stays seen: answering it cannot put the sentence back.
+        const answered = advanceAddAccount(arrived, { type: 'link', ready: false });
+        expect(addAccountStatus(answered)!.title).not.toContain('No sign-in link');
+        expect(advanceAddAccount(answered, { type: 'tick', at: 1_000 + 2 * addAccountLinkWaitMs }))
+            .toBe(answered);
+    });
+
+    it('a fresh login starts with no link seen, whatever the last one saw', () => {
+        const done = advanceAddAccount(waiting({ linkReady: true, linkSeen: true }), {
+            type: 'accounts', at: 2_000, names: [...before, 'added@example.com'],
+        });
+        const again = advanceAddAccount(done, { type: 'start', harness: 'claude' });
+        expect(again).toEqual({ kind: 'starting', harness: 'claude' });
+        expect(advanceAddAccount(again, { type: 'started', at: 9_000, before }))
+            .toEqual(waiting({ startedAt: 9_000 }));
     });
 
     it('ignores a tick outside the wait', () => {
@@ -242,16 +328,16 @@ describe('autoOpenLoginUrl (DROVE-212)', () => {
     const url = 'https://claude.com/cai/oauth/authorize?code=true';
 
     it('opens the sign-in page the moment the machine sends it', () => {
-        expect(autoOpenLoginUrl({ phase: waiting({ linkReady: true }), url, opened: null })).toBe(url);
+        expect(autoOpenLoginUrl({ phase: waiting({ linkReady: true, linkSeen: true }), url, opened: null })).toBe(url);
     });
 
     it('opens one link exactly once, however often the screen re-renders', () => {
-        expect(autoOpenLoginUrl({ phase: waiting({ linkReady: true }), url, opened: url })).toBeNull();
+        expect(autoOpenLoginUrl({ phase: waiting({ linkReady: true, linkSeen: true }), url, opened: url })).toBeNull();
     });
 
     it('opens a second, different link after a retry', () => {
         const retry = 'https://claude.com/cai/oauth/authorize?code=true&try=2';
-        expect(autoOpenLoginUrl({ phase: waiting({ linkReady: true }), url: retry, opened: url })).toBe(retry);
+        expect(autoOpenLoginUrl({ phase: waiting({ linkReady: true, linkSeen: true }), url: retry, opened: url })).toBe(retry);
     });
 
     it('opens nothing when no login of ours is in flight', () => {
@@ -293,7 +379,7 @@ describe('addAccountStatus', () => {
     });
 
     it('tells him the three steps once the link is there', () => {
-        const ready = addAccountStatus(waiting({ linkReady: true }))!;
+        const ready = addAccountStatus(waiting({ linkReady: true, linkSeen: true }))!;
         expect(ready.hasLink).toBe(true);
         expect(ready.detail).toContain('Sign in');
         expect(ready.detail).toContain('code');
@@ -303,7 +389,7 @@ describe('addAccountStatus', () => {
         // DROVE-212: the link used to be two taps away behind a share sheet,
         // so the words pointed at a card. They point at his browser now.
         expect(addAccountStatus(waiting())!.detail).toContain('browser');
-        expect(addAccountStatus(waiting({ linkReady: true }))!.detail).toContain('browser');
+        expect(addAccountStatus(waiting({ linkReady: true, linkSeen: true }))!.detail).toContain('browser');
     });
 
     it('says no link came back without calling the login failed', () => {
@@ -510,8 +596,36 @@ describe('accountSubtitle', () => {
             .toContain('same login as main');
     });
 
-    it('marks the ambient login, which is the one that cannot be removed here', () => {
-        expect(accountSubtitle(account({ ambient: true }))).toContain('main login');
+    it('marks the ambient login as the BACK DOOR, which is what it means for a flip', () => {
+        // DROVE-333. The row used to say "this Mac's main login", which is the
+        // same fact without the consequence: an auto-flip will not land here
+        // and will not move a session off it, so the only way on or off is by
+        // hand. That is what Clay is reading this row to find out.
+        expect(accountSubtitle(account({ ambient: true })))
+            .toBe('jamrizzi@gmail.com · 43% left · backdoor · manual flips only');
+    });
+
+    it('marks a row on the ambient login as the back door too, given the list', () => {
+        // jamrizzi is main under a second name and shares its quota, so a flip
+        // there lands on the back door through a different door.
+        const main = account({ name: 'main', ambient: true });
+        const twin = account({ name: 'jamrizzi', sameLoginAs: 'main' });
+        expect(accountSubtitle(twin, [main, twin]))
+            .toBe('jamrizzi@gmail.com · 43% left · same login as main · backdoor · manual flips only');
+    });
+
+    it('does not mark an ordinary account, and does not need the list to say so', () => {
+        const other = account({ name: 'desibox', login: 'desibox.food@gmail.com' });
+        expect(accountSubtitle(other, [account({ name: 'main', ambient: true }), other]))
+            .not.toContain('backdoor');
+        expect(accountSubtitle(other)).not.toContain('backdoor');
+    });
+
+    it('recognises the ambient row itself with no list at all', () => {
+        // The degradation that matters: a caller holding one account still gets
+        // the ambient row right, and only the twins go unrecognised.
+        expect(isBackdoorAccount(account({ ambient: true }))).toBe(true);
+        expect(isBackdoorAccount(account({ name: 'jamrizzi' }))).toBe(false);
     });
 
     it('drops the address when there is none rather than printing an empty field', () => {
@@ -755,7 +869,7 @@ describe('what a cursor login is told', () => {
     });
 
     it('still asks for the code on a claude login', () => {
-        expect(addAccountStatus(waiting({ linkReady: true }))!.detail).toContain('code');
+        expect(addAccountStatus(waiting({ linkReady: true, linkSeen: true }))!.detail).toContain('code');
     });
 
     it('names the harness while it starts', () => {

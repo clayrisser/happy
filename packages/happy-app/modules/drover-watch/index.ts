@@ -178,6 +178,50 @@ export interface DroverSession {
 }
 
 /**
+ * ONE quota window on one account, as the phone's own sheet draws it
+ * (DROVE-339).
+ *
+ * The wrist's first cut carried the binding limit and nothing else
+ * (DROVE-131), which is the right glance and a dead end the moment Clay wants
+ * to know why: "on the watch app, when I select a specific account to see the
+ * limit, it should actually show the full breakdown of all the limits, just
+ * like it shows in the mobile app."
+ *
+ * Every figure here is the phone's, evaluated by `usageAccountBarGroup` — the
+ * same function that builds the sheet's rows — and sent, for the reason
+ * `tone`, `limit` and `used` are sent (DROVE-129). The watch is Swift and
+ * cannot import it, and this binary ships through TestFlight where a drift
+ * could not be corrected OTA. So the wrist draws these; it decides nothing
+ * about them.
+ */
+export interface DroverAccountLimitRow {
+    /** `five_hour`, `seven_day`, `seven_day_fable` — the sheet's own ids. */
+    id: string;
+    /** The window's name in the phone's words: "Session", "Week", "Fable week". */
+    label: string;
+    /**
+     * Percent USED, which is what the bar FILLS to (DROVE-230). Omitted when
+     * there is no reading — nobody measured it, the window had already reset,
+     * or a wider window is spent and this one cannot be spent either. Never
+     * zero-for-nothing: a window measured at 0% used is a FRESH window and a
+     * real reading, so the two must not share a spelling.
+     */
+    used?: number;
+    /** The fill band for that figure, as the phone's own bars compute it. */
+    tone?: 'ample' | 'low' | 'critical' | 'unknown';
+    /**
+     * What the phone prints behind the row: "Resets 6 PM", "window reset",
+     * "Week spent". Empty on a row with nothing to say, and omitted then.
+     */
+    trailing?: string;
+    /**
+     * This is the window the account's `headroom` was read off — the one that
+     * stops work first (DROVE-230). Omitted, never false.
+     */
+    binding?: boolean;
+}
+
+/**
  * An account the wrist may flip a session ONTO, with the figure that decides
  * which (DROVE-28's watch half).
  *
@@ -260,6 +304,44 @@ export interface DroverAccountRow {
      * decodes the row unchanged and simply keeps the behaviour it had.
      */
     expired?: boolean;
+    /**
+     * Every window this account has, in the phone's own order — Session, Week,
+     * then one row per model family any account scopes a limit to (DROVE-339).
+     *
+     * The wrist's Limits screen still shows one bar per account, because a
+     * glance is over before you scroll. This is what SELECTING one opens: the
+     * same three rows the phone's sheet draws, so the answer to "why is this
+     * account nearly out" is on the wrist rather than a pocket away.
+     *
+     * Omitted when the CLI recorded no windows for the account at all. The
+     * phone draws its bare Session and Week rows anyway so its blocks line up
+     * in a column; the wrist shows one account at a time and has no column to
+     * keep straight, so two dashes would be a table saying nothing.
+     */
+    limits?: DroverAccountLimitRow[];
+    /**
+     * The sheet's own heading for this account: "jamrizzi - 51% left on Week",
+     * "main - not logged in", with the cooling time on the end when it is out
+     * (DROVE-339).
+     *
+     * Sent rather than composed on the wrist for the reason everything else
+     * here is (DROVE-129) — `usageAccountGroupTitle` decides between four
+     * different nothings (no login, not measured, window reset, a cursor
+     * token's deadline) and a Swift copy of that ladder is a second ladder.
+     * The wrist keeps its own one-line fallback for a phone that predates the
+     * key.
+     */
+    title?: string;
+    /**
+     * A session can be MOVED onto this account: it is not the one in use, it
+     * is logged in, its config dir has been through Claude Code's first run,
+     * and it is not a cursor account (DROVE-339).
+     *
+     * The phone's own `switchable`, so the wrist offers a switch exactly where
+     * the sheet offers one and refuses it exactly where the sheet refuses it.
+     * Omitted, never false.
+     */
+    switchable?: boolean;
 }
 
 /**

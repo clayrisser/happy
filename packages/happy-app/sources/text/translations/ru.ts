@@ -481,6 +481,15 @@ export const ru: TranslationStructure = {
         forkErrorMissingMetadata: 'Не хватает метаданных сессии для форка.',
         forkErrorGeneric: 'Не удалось форкнуть сессию.',
         forkClaudeOnly: 'Форк сейчас поддерживается только для Claude-сессий.',
+        forkErrorDirectoryMissing: ({ directory }: { directory: string }) =>
+            `Каталог ${directory} больше не существует на той машине, поэтому новую сессию негде запустить.`,
+        cloneAction: 'Клонировать в другой харнесс…',
+        cloneSubtitle: 'Пересказать этот разговор Cursor, Pi или новому Claude',
+        cloneSheetTitle: 'Клонировать в другой харнесс',
+        cloneSheetSubtitle: 'Новая сессия в той же папке, начатая с пересказа этого разговора в качестве первого запроса. Оригинал не трогается.',
+        cloneErrorGeneric: 'Не удалось клонировать сессию.',
+        cloneErrorNotClaude: 'Клонировать в другой харнесс можно только Claude-сессию: именно её разговор drover умеет экспортировать.',
+        cloneHarnessUnavailable: 'Не установлено на этой машине',
     },
 
     commandPalette: {

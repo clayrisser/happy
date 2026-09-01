@@ -367,7 +367,19 @@ export const en = {
         forkErrorMissingUuid: 'The chosen rewind point is no longer present in the source session — try forking without truncation.',
         forkErrorMissingMetadata: 'Missing session metadata required to fork.',
         forkErrorGeneric: 'Failed to fork the session.',
+        forkErrorDirectoryMissing: ({ directory }: { directory: string }) =>
+            `The directory ${directory} no longer exists on that machine, so there is nowhere to start the new session.`,
         forkClaudeOnly: 'Fork is currently only supported for Claude sessions.',
+        // Clone into another harness (DROVE-58, DROVE-337). A fork carries the
+        // transcript; a clone cannot, because no harness but Claude Code can
+        // read a Claude Code transcript. So it says "retold", not "continued".
+        cloneAction: 'Clone into another harness…',
+        cloneSubtitle: 'Retell this conversation to Cursor, Pi or a fresh Claude',
+        cloneSheetTitle: 'Clone into another harness',
+        cloneSheetSubtitle: 'A new session in the same folder, started with this conversation retold as its first prompt. The original is untouched.',
+        cloneErrorGeneric: 'Failed to clone the session.',
+        cloneErrorNotClaude: 'Only a Claude session can be cloned into another harness — its conversation is the one drover knows how to export.',
+        cloneHarnessUnavailable: 'Not installed on this machine',
     },
 
     commandPalette: {
@@ -967,7 +979,7 @@ export const en = {
         },
         cues: {
             title: 'Audio cues',
-            footer: 'Eyes-free sounds. A slow low thump while something is running, a faster bright pulse while a prompt is waiting on you, and silence when nothing is happening. Speech always wins: a cue never plays over a spoken sentence.',
+            footer: 'Eyes-free sounds. A slow low thump while something is running, a faster bright pulse while a prompt is waiting on you, and silence when nothing is happening. Speech always wins: a cue never plays over a spoken sentence. Volume is measured against the voice, so 100% is a beep as loud as a spoken sentence.',
             on: 'Audio cues',
             onSubtitle: 'The heartbeat and the one-shot sounds.',
             heartbeat: 'Heartbeat',

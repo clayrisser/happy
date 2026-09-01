@@ -401,7 +401,7 @@ export const MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE = MOBILE_COMPOSER_METRICS.prima
  * than guessed from the 20pt em box:
  *
  *   lock-closed   0.6875 of the em   13.75pt at size 20   <- the padlock
- *   flash         0.6867             13.73                <- the bolt
+ *   flash         0.6867             13.73                <- the bolt, gone since DROVE-331
  *   volume-high   0.8750             17.50                <- read-aloud
  *   shield / map  0.8750             17.50
  *   eye           0.9355             18.71                <- the widest
@@ -419,11 +419,12 @@ export const MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE = MOBILE_COMPOSER_METRICS.prima
  * SO THE WIDTH IS DERIVED TOP-DOWN, from what the narrowest supported phone
  * affords rather than from the least the glyph needs: the WIDEST whole point
  * at which the longest name either picker offers still clears the type floor
- * at 375. The arithmetic, run and asserted in sessionPillLabel.spec.ts: 375
- * less the two insets (38) less the discs, gaps and hairlines (138) less the
- * name's floor width (89) leaves 110 for four segments, and floor(110 / 4) =
- * 27. The ink rule survives as the LOWER bound — 27 never goes under the 26
- * the padlock's ink plus `controlGap` demands.
+ * at 375. The arithmetic, run and asserted in sessionPillLabel.spec.ts, with
+ * DROVE-281's bolt still on the row: 375 less the two insets (38) less the
+ * discs, gaps and hairlines (138) less the name's floor width (89) leaves 110
+ * for four segments, and floor(110 / 4) = 27. The ink rule survives as the
+ * LOWER bound — 27 never goes under the 26 the padlock's ink plus
+ * `controlGap` demands.
  *
  * 27, DOWN FROM 28, BECAUSE CLAY TOOK BACK WHAT PAID FOR THE 28 (DROVE-320).
  * "I told you to make this bigger" is the model name, and the name's point of
@@ -433,6 +434,22 @@ export const MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE = MOBILE_COMPOSER_METRICS.prima
  * (`COMPOSER_MODEL_SEGMENT.paddingHorizontal`, 6 -> 5, re-derived there). The
  * formula did not change; the name's floor width changed under it, 85 -> 89,
  * and 27 is what it now returns. Nothing here is a number anybody picked.
+ *
+ * AND 27 STAYS WHEN THE BOLT LEAVES (DROVE-331), THOUGH THE CEILING SAYS 36.
+ * Clay: "because of the toggles in the sheet for auto-accept, we don't need
+ * it also in the bar group." Three glyph segments where there were four, so
+ * the same 110 is shared three ways and floor(110 / 3) = 36: the ceiling has
+ * moved up by nine and stopped binding. It is asserted at 36 in
+ * sessionPillLabel.spec.ts so it cannot quietly move again, and the segment
+ * does not follow it, for two reasons on the record. The width the bolt held
+ * is the model NAME's, not the other segments' — DROVE-138 is the ticket about
+ * the name being cut, and DROVE-331's own criterion says where the 27 goes.
+ * And 27 is already Clay's ruling twice over, "spread them out" to 28 and
+ * "make this bigger" back to 27, which nobody has reopened. So the number now
+ * stands on its LOWER bound alone: the padlock's ink plus `controlGap` either
+ * side (26) plus the one point of granted air DROVE-320 left, and the 3 x 9 =
+ * 27 the ceiling would allow goes to the name instead. That is one segment's
+ * width exactly, which is the bolt's, which is the point.
  *
  * WHAT 27 BUYS EACH GLYPH: the padlock keeps 6.6pt a side against 26's 6.1 and
  * 28's 7.1, `volume-high` 4.75, and `eye`, the widest mark the capsule can
@@ -444,11 +461,10 @@ export const MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE = MOBILE_COMPOSER_METRICS.prima
  * clearance in the capsule is the rule the whole capsule's ink is held to.
  *
  * WHAT IT COSTS, in the same ledger DROVE-284 wrote: the fixed row goes 242 ->
- * 250 -> 246, now 53 better than DROVE-281's 299, and the one softening is
- * still at 390, where the three 14-glyph Gemini names draw at 0.980 rather
- * than full size — 2% under, on the one supported width between the two phones
- * the tickets name, though at 13pt that is 12.73pt of type against the 11.87
- * the 0.989 bought. 393, the width Clay reads, still draws every name whole.
+ * 250 -> 246 -> 219 with the bolt gone (DROVE-331), now 80 better than
+ * DROVE-281's 299. The one softening — 390 drawing the three 14-glyph Gemini
+ * names at 0.980 rather than full size — stood until DROVE-331 and is gone
+ * with the bolt: every supported width draws every name whole at 13pt.
  * sessionPillLabel.ts carries the full width table.
  *
  * THE TOUCH TARGET IS THE THING THIS SPENDS, and the trade was already made

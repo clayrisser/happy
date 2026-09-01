@@ -8,7 +8,7 @@ import { AudioCueMixer } from './audioCueMixer';
 import { playCue, releaseCuePlayers, warmCuePlayers } from './cuePlayer';
 import { SpokenTitleTracker } from './spokenTitles';
 import { GateSpeechTracker } from './gateSpeech';
-import { audioCues as cueTable, cueSpec, workingCueFor, type AudioCueId } from './audioCues';
+import { audioCues as cueTable, workingCueFor, type AudioCueId } from './audioCues';
 
 /**
  * The one audio cue system the app owns (DROVE-112).
@@ -151,7 +151,7 @@ class AudioCueService {
     preview(id: AudioCueId): void {
         const resolved = settings();
         try {
-            playCue(id, Math.max(0, Math.min(1, resolved.volume * cueSpec(id).gain)));
+            playCue(id, resolved.volume);
         } catch {
             // A device that cannot make the sound simply does not.
         }
@@ -178,7 +178,7 @@ class AudioCueService {
             const resolved = settings();
             if (!resolved.on) return;
             if (resolved.muted.includes(id)) return;
-            playCue(id, Math.max(0, Math.min(1, resolved.volume * cueSpec(id).gain)));
+            playCue(id, resolved.volume);
         } catch {
             // A device that cannot make the sound simply does not, and the
             // mic press goes ahead regardless: a missing beep is bad, a

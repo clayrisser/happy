@@ -1,3 +1,4 @@
+import type { DroverUsageLike } from '../utils/droverUsage';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DroverGate, DroverSession, DroverSnapshot, DroverTranscriptDelta } from 'drover-watch';
 
@@ -258,6 +259,7 @@ import {
 import { claimWristCues, resetWristRelay, wristRelayLine, wristRelayState } from './droverWristRelay';
 import { getSessionName } from '@/utils/sessionUtils';
 import { currentDroverAccountRow } from '@/utils/droverUsage';
+import { resolveUsageStrip } from '@/components/agentInputUsage';
 import { resolveSessionState } from './sessionState';
 
 /** Only the fields the feed reads; the real sessions are built in storage.ts. */
@@ -1211,8 +1213,13 @@ describe('collectAccountRows', () => {
                 ]),
             }),
         })).toEqual([
-            { name: 'jamrizzi', headroom: 65, used: 35, loggedIn: true },
-            { name: 'main', headroom: 4, used: 96, loggedIn: true },
+            // `title` and `switchable` are about the ACCOUNT rather than its
+            // windows, so they ride even on a row the CLI recorded no limits
+            // for (DROVE-339): the heading is the one line that says which of
+            // the four nothings an account with no figure is in, and whether a
+            // session can move here does not depend on having read its quota.
+            { name: 'jamrizzi', headroom: 65, used: 35, loggedIn: true, title: 'jamrizzi · 65% left', switchable: true },
+            { name: 'main', headroom: 4, used: 96, loggedIn: true, title: 'main · 4% left', switchable: true },
         ]);
     });
 
@@ -1430,7 +1437,153 @@ describe('collectAccountRows', () => {
         const [row] = collectAccountRows({
             s1: session({ droverUsage: usage(10, [{ name: 'spare', headroom: 40, loggedIn: true }]) }),
         });
-        expect(row).toEqual({ name: 'spare', headroom: 40, used: 60, loggedIn: true });
+        expect(row).toEqual({
+            name: 'spare',
+            headroom: 40,
+            used: 60,
+            loggedIn: true,
+            // Not limit keys: the account's own heading, and whether a session
+            // may be moved onto it (DROVE-339). `limits` itself is absent,
+            // which is the claim this test is making.
+            title: 'spare · 40% left',
+            switchable: true,
+        });
+        expect('limits' in row).toBe(false);
+    });
+
+    /**
+     * THE BREAKDOWN, and the one fixture that proves it is the phone's
+     * (DROVE-339).
+     *
+     * Clay: "when I select a specific account to see the limit, it should
+     * actually show the full breakdown of all the limits, just like it shows
+     * in the mobile app." "Just like" is the whole ticket, so this runs ONE
+     * snapshot through both surfaces — `resolveUsageStrip`, which is what the
+     * phone's sheet renders, and `collectAccountRows`, which is what the wrist
+     * receives — and pins every figure, word and band against each other,
+     * account by account and window by window.
+     *
+     * The wrist cannot compute any of it: the ranking, the four nothings and
+     * the fill direction are all TypeScript the watch cannot import
+     * (DROVE-129), and this binary ships through TestFlight where a drift
+     * could not be corrected OTA. So a divergence has to fail here.
+     */
+    describe('the full breakdown, against the phone that owns it', () => {
+        const droverUsage = usage(10_000, [
+            {
+                name: 'promanagerdevteam', headroom: 0, loggedIn: true, current: true,
+                limits: [
+                    { kind: 'session', percent: 100, resetsAt: 90_000, scope: null, family: null },
+                    { kind: 'weekly_all', percent: 79, resetsAt: 900_000, scope: null, family: null },
+                    { kind: 'weekly_scoped', percent: 88, resetsAt: 900_000, scope: 'Fable', family: 'fable' },
+                ],
+            },
+            {
+                name: 'jamrizzi', headroom: 61, loggedIn: true,
+                limits: [
+                    { kind: 'session', percent: 12, resetsAt: 90_000, scope: null, family: null },
+                    { kind: 'weekly_all', percent: 39, resetsAt: 900_000, scope: null, family: null },
+                ],
+            },
+            { name: 'spare', loggedIn: false, limits: [] },
+        ]);
+        const wrist = () => collectAccountRows({ s1: session({ droverUsage }) });
+        // What the phone's sheet renders from the identical snapshot. No
+        // `usageLimits`, because the wrist has no SDK stream to override with
+        // either — both surfaces are reading the registry.
+        const phone = () => resolveUsageStrip({ usageLimits: null, droverUsage: droverUsage as DroverUsageLike });
+
+        it('sends the same rows the phone draws, window for window', () => {
+            const rows = wrist();
+            for (const group of phone().usageBarGroups) {
+                const row = rows.find((r) => r.name === group.account);
+                expect(row, `no wrist row for ${group.account}`).toBeDefined();
+                // An account with no windows carries no breakdown at all; the
+                // phone draws its bare rows to keep a column straight and the
+                // wrist has no column (DROVE-339).
+                if (group.account === 'spare') {
+                    expect('limits' in row!).toBe(false);
+                    continue;
+                }
+                expect(row!.limits).toBeDefined();
+                expect(row!.limits!.length).toBe(group.rows.length);
+                group.rows.forEach((drawn, i) => {
+                    const sent = row!.limits![i];
+                    expect(sent.label).toBe(drawn.fullName);
+                    // Percent USED, the one direction (DROVE-230). A row with
+                    // no reading sends no figure at all rather than a zero.
+                    expect(sent.used === undefined ? null : `${sent.used}%`).toBe(drawn.percentText);
+                    expect(sent.used !== undefined).toBe(drawn.measured);
+                    expect(sent.tone).toBe(drawn.tone);
+                    expect(sent.trailing ?? '').toBe(drawn.trailing);
+                    expect(sent.binding === true).toBe(drawn.binding === true);
+                });
+            }
+        });
+
+        it("sends the phone's own heading and the phone's own switch verdict", () => {
+            const rows = wrist();
+            for (const group of phone().usageBarGroups) {
+                const row = rows.find((r) => r.name === group.account)!;
+                expect(row.title).toBe(group.title);
+                expect(row.switchable === true).toBe(group.switchable === true);
+            }
+            // Pinned literally as well, so a change that broke BOTH surfaces
+            // at once could not pass by agreeing with itself.
+            expect(rows.find((r) => r.name === 'jamrizzi')!.title).toBe('jamrizzi · 61% left on Week');
+            // The account in use cannot be switched to, and a logged-out one
+            // cannot take a session at all.
+            expect('switchable' in rows.find((r) => r.name === 'promanagerdevteam')!).toBe(false);
+            expect('switchable' in rows.find((r) => r.name === 'spare')!).toBe(false);
+        });
+
+        it('carries Session, Week and Fable week, each with a figure and a reset', () => {
+            const row = wrist().find((r) => r.name === 'promanagerdevteam')!;
+            expect(row.limits!.map((l) => l.label)).toEqual(['Session', 'Week', 'Fable week']);
+            expect(row.limits!.map((l) => l.id)).toEqual(['five_hour', 'seven_day', 'seven_day_fable']);
+            const [sessionWindow, week, fable] = row.limits!;
+            // The spent five-hour window: full bar, and the reset that turns a
+            // dead end into a wait.
+            expect(sessionWindow).toMatchObject({ used: 100, tone: 'critical', binding: true });
+            expect(sessionWindow.trailing).toMatch(/^Resets /);
+            expect(week).toMatchObject({ used: 79, tone: 'low' });
+            expect(fable).toMatchObject({ used: 88, tone: 'low' });
+            // Only ONE window is the binding one, and it is the one the
+            // account's own headroom and label already name.
+            expect(row.limits!.filter((l) => l.binding === true)).toHaveLength(1);
+            expect(row.limit).toBe('Session');
+        });
+
+        /**
+         * A window nobody re-read is not a measurement, and a window under a
+         * spent wider one cannot be spent either (DROVE-204, DROVE-255). Both
+         * lose their figures on the phone; both have to lose them here, in the
+         * phone's own words, or the wrist draws a fresh-looking bar over a
+         * window that is gone.
+         */
+        it("drops the figure on an expired window and on a mooted one, with the phone's reason", () => {
+            const rows = collectAccountRows({
+                s1: session({
+                    droverUsage: usage(10_000, [{
+                        name: 'main', headroom: 0, loggedIn: true, current: true,
+                        limits: [
+                            // Fresh five-hour window under a spent week: not
+                            // capacity, because the week is gone.
+                            { kind: 'session', percent: 0, resetsAt: 90_000, scope: null, family: null },
+                            { kind: 'weekly_all', percent: 100, resetsAt: 900_000, scope: null, family: null },
+                            // Reset long before the snapshot was read.
+                            { kind: 'weekly_scoped', percent: 4, resetsAt: 1_000, scope: 'Fable', family: 'fable' },
+                        ],
+                    }]),
+                }),
+            });
+            const [five, week, fable] = rows[0].limits!;
+            expect('used' in five).toBe(false);
+            expect(five.trailing).toBe('Week spent');
+            expect(week).toMatchObject({ used: 100, tone: 'critical' });
+            expect('used' in fable).toBe(false);
+            expect(fable.trailing).toBe('window reset');
+        });
     });
 
     it('is empty when no session has ever carried the registry', () => {

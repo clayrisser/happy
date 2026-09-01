@@ -346,6 +346,15 @@ export const es: TranslationStructure = {
         forkErrorMissingMetadata: 'Faltan metadatos de la sesión necesarios para bifurcar.',
         forkErrorGeneric: 'No se pudo bifurcar la sesión.',
         forkClaudeOnly: 'La bifurcación actualmente solo se admite para sesiones de Claude.',
+        forkErrorDirectoryMissing: ({ directory }: { directory: string }) =>
+            `El directorio ${directory} ya no existe en esa máquina, así que no hay dónde iniciar la nueva sesión.`,
+        cloneAction: 'Clonar en otro entorno…',
+        cloneSubtitle: 'Vuelve a contar esta conversación a Cursor, Pi o a un Claude nuevo',
+        cloneSheetTitle: 'Clonar en otro entorno',
+        cloneSheetSubtitle: 'Una sesión nueva en la misma carpeta, iniciada con esta conversación recontada como su primer mensaje. La original no se toca.',
+        cloneErrorGeneric: 'No se pudo clonar la sesión.',
+        cloneErrorNotClaude: 'Solo una sesión de Claude puede clonarse en otro entorno: su conversación es la que drover sabe exportar.',
+        cloneHarnessUnavailable: 'No está instalado en esta máquina',
     },
 
     commandPalette: {

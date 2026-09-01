@@ -98,6 +98,20 @@ export interface DroverPaneLaunch {
     modeArgs?: string[];
     /** Provider conversation to attach to, for a fork or a duplicate. */
     resumeId?: string;
+    /**
+     * A file whose contents become the session's FIRST PROMPT (DROVE-337).
+     *
+     * This is how a CLONE lands. A fork carries a conversation because the
+     * target reads the same transcript; a clone across harnesses cannot, so
+     * the conversation is exported to a file and retold to the new session.
+     * The path travels, never the text: a seed runs to tens of kilobytes and
+     * a command line is not where that belongs, quoting aside.
+     *
+     * Mutually exclusive with `resumeId` in practice, and the two are never
+     * both set by the daemon: resuming a conversation the harness can already
+     * read makes the retelling redundant.
+     */
+    seedFile?: string;
 }
 
 /**
@@ -119,6 +133,11 @@ export function buildDroverPaneArgv(launch: DroverPaneLaunch): string[] {
     ];
     if (launch.resumeId) {
         argv.push('--resume', launch.resumeId);
+    }
+    // Last, so it reads the way `drover clone` writes it by hand, and so a
+    // harness that takes the flag positionally still sees it after its own.
+    if (launch.seedFile) {
+        argv.push('--seed', launch.seedFile);
     }
     return argv;
 }

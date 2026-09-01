@@ -22,6 +22,11 @@ enum DroverRoute: Hashable {
     /// What is left: the current account's binding limit, then every other
     /// account (DROVE-131).
     case limits
+    /// ONE account's every window — Session, Week, Fable week — off a tap on
+    /// its row in Limits (DROVE-339). Carries the NAME rather than the row, so
+    /// the screen re-reads the account on every publish instead of freezing at
+    /// the figures it was opened with.
+    case account(String)
     /// Every session's unfinished task list (DROVE-167).
     case tasks
     /// One session's list, off its own detail screen.
@@ -150,6 +155,7 @@ struct GateListView: View {
                 case let .detail(session): SessionDetailView(session: session)
                 case .demo: DemoView()
                 case .limits: LimitsView()
+                case let .account(name): AccountLimitsView(name: name)
                 case .tasks: TasksView()
                 case let .sessionTasks(session): SessionTasksView(session: session)
                 }

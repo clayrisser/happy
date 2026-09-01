@@ -25,13 +25,7 @@ import {
     composerSessionCapsuleFill,
     pendingOrSettled,
 } from './composerControlColour';
-import {
-    AUTO_ACCEPT_SUBTITLE,
-    AUTO_ACCEPT_TITLE,
-    autoAcceptGlyph,
-    autoAcceptSegmentValue,
-    permissionAccessibilityValue,
-} from './autoAcceptRow';
+import { permissionAccessibilityValue } from './autoAcceptRow';
 import { MOBILE_COMPOSER_SEGMENT_FILL_INSET } from './agentInputLayout';
 import {
     COMPOSER_MODEL_SEGMENT,
@@ -117,20 +111,35 @@ import type { AudioOutFill, AudioOutGlyph } from './composerAudioOut';
  * three segments, one rule — model and permission mode lag exactly as effort
  * does. The rule for WHEN a pick is pending is in sync/agentModeRequests.ts;
  * this file only draws it.
+ *
+ * AND THE AUTO-ACCEPT BOLT IS GONE AGAIN (DROVE-331). DROVE-281 drew it as a
+ * fourth segment touching the padlock, on Clay's "add a button for toggling
+ * auto accepting prompts", and kept the switch in the padlock's sheet for the
+ * boundary wording a 39pt segment has no room for. Two controls for one bit.
+ * Clay, with both on his phone: "because of the toggles in the sheet for
+ * auto-accept, we don't need it also in the bar group." So the sheet's switch
+ * is the one control and the capsule is lock, speaker, effort, model. The
+ * 27pt the bolt held goes to the model's name through the budget in
+ * sessionPillLabel.ts rather than to the segments beside it, and the padlock
+ * wears the accent while auto-accept is on, which is DROVE-277's carrier back
+ * for DROVE-277's reason: with no bolt, the padlock is again the one object on
+ * the row that can show the state, and it is the control that opens the sheet
+ * where the state is set.
  */
 
 export type ComposerSessionPicker = 'permission' | 'model' | 'effort';
 
 /**
- * What a segment does when it is pressed (DROVE-281).
+ * What a segment does when it is pressed (DROVE-281, DROVE-284).
  *
- * Three of the four open a picker; the fourth flips a boolean and opens
+ * Three of the four open a picker; read-aloud flips a state and opens
  * nothing. They share `Control` because they share a shape — a 39pt press
  * inside one capsule — and they are kept apart in the TYPE rather than by a
  * convention, so a toggle can never be handed to `onPress` and asked for a
- * sheet.
+ * sheet. `'autoAccept'` was a member from DROVE-281 until DROVE-331 took the
+ * bolt off the row.
  */
-export type ComposerSessionSegment = ComposerSessionPicker | 'autoAccept' | 'readAloud';
+export type ComposerSessionSegment = ComposerSessionPicker | 'readAloud';
 
 /**
  * READ-ALOUD, AS A SEGMENT OF THIS CAPSULE (DROVE-284).
@@ -235,14 +244,16 @@ export interface ComposerSessionControlsProps {
      */
     pending?: { permission?: boolean; effort?: boolean; model?: boolean } | null;
     /**
-     * Whether this session is auto-accepting its boolean gates (DROVE-277,
-     * moved onto the row by DROVE-281).
+     * Whether this session is auto-accepting its boolean gates (DROVE-277).
      *
-     * ITS OWN SEGMENT NOW, second in the capsule, touching the padlock. It was
-     * a switch inside the padlock's sheet, which made the padlock the only
-     * object that could show the state and made changing it two taps. Clay:
-     * "add a button for toggling auto accepting prompts". A toggle he flips
-     * per session, mid-work, from behind a sheet is a toggle he does not flip.
+     * NOT A SEGMENT ANY MORE (DROVE-331). DROVE-281 gave it a bolt of its own
+     * beside the padlock; Clay has since ruled the bolt redundant with the
+     * switch in the padlock's sheet, so the switch is the one control and this
+     * prop is what the PADLOCK reads: the accent while it is on
+     * (`autoAcceptColour`), and "auto-accept on" in its accessibility value.
+     * The padlock is the control that opens the sheet where the bit is set, so
+     * it is the right object to wear the state, and it is the only one on the
+     * row that can.
      *
      * Absent is off, which is what every session is at launch and after every
      * relaunch — `autoAcceptSessions.ts` holds why that is the security
@@ -250,23 +261,14 @@ export interface ComposerSessionControlsProps {
      */
     autoAccept?: boolean;
     /**
-     * Flips it. Absent means the segment is not drawn at all (DROVE-281).
-     *
-     * Drawn-and-dead is the wrong shape for this one, though it is the right
-     * one for the three pickers: a picker with nothing to pick still SAYS what
-     * the session is set to, and a bolt that cannot be pressed says only that
-     * something is missing. A session with no id has no auto-accept to hold, so
-     * there is nothing for the segment to say and it is absent.
-     */
-    onToggleAutoAccept?: () => void;
-    /**
-     * Read-aloud, drawn as a segment between the permission pair and the
-     * effort gauge (DROVE-284).
+     * Read-aloud, drawn as a segment between the padlock and the effort gauge
+     * (DROVE-284).
      *
      * Absent means there is no reader on this surface and the segment is not
-     * drawn — the same shape as the bolt's `onToggleAutoAccept`, and for the
-     * same reason: a speaker with nothing behind it says only that something is
-     * missing. `audioOutButton`'s `shown` is what the caller reads to decide.
+     * drawn — absent rather than drawn-and-dead, because a speaker with nothing
+     * behind it says only that something is missing, where a picker with
+     * nothing to pick still says what the session is set to. `audioOutButton`'s
+     * `shown` is what the caller reads to decide.
      */
     readAloud?: ComposerReadAloudSegment | null;
 }
@@ -362,7 +364,9 @@ const styles = StyleSheet.create((theme) => ({
      * The model's name: as wide as the name, and the only thing in the capsule
      * that can give way, after the spacer beside it has (DROVE-178).
      * `flexShrink: 1` with `minWidth: 0` is what lets the text inside scale
-     * rather than push the audio button off the row.
+     * rather than push the audio button off the row — and, past the type
+     * floor, be cut at its tail (DROVE-331). The glyph segments keep
+     * `flexShrink: 0`, so a name that runs under never squeezes them.
      */
     modelSegment: {
         paddingHorizontal: COMPOSER_MODEL_SEGMENT.paddingHorizontal,
@@ -418,19 +422,19 @@ function Control(props: {
     accessibilityHint?: string;
     open: boolean;
     /**
-     * A switch rather than a disclosure, for the one segment that opens
-     * nothing (DROVE-281). It changes `accessibilityRole` and drops
-     * `expanded`, so VoiceOver announces a state instead of a sheet that is
-     * not there.
+     * A switch rather than a disclosure, for a segment that opens nothing
+     * (DROVE-281; read-aloud's alone since DROVE-331 took the bolt). It
+     * changes `accessibilityRole` and drops `expanded`, so VoiceOver announces
+     * a state instead of a sheet that is not there.
      */
     toggled?: boolean;
     /**
      * Already bound to what it does (DROVE-281).
      *
      * It took the segment id and handed it back to the caller's `onPress`,
-     * which was fine while all four segments did the same thing. One of them
-     * flips a boolean now and never names a picker, so the binding moved to
-     * the call site and this is a plain press.
+     * which was fine while every segment did the same thing. Read-aloud flips
+     * a state and never names a picker, so the binding moved to the call site
+     * and this is a plain press.
      */
     onPress?: () => void;
     /**
@@ -580,7 +584,6 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
         openPicker,
         pending,
         autoAccept = false,
-        onToggleAutoAccept,
         readAloud,
         size = COMPOSER_SESSION_CONTROL_SIZE,
         // Square unless the caller says otherwise, which is Home's 44pt capsule
@@ -594,10 +597,6 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
     const modelPending = !!pending?.model;
     const effortPending = !!pending?.effort;
     const showMode = !!label.mode;
-    // The bolt is drawn when there is something to flip, and not otherwise
-    // (DROVE-281). See `onToggleAutoAccept` for why this one is absent rather
-    // than dead while the three pickers are dead rather than absent.
-    const showAutoAccept = !!onToggleAutoAccept;
     // Drawn where there is a reader, absent where there is not (DROVE-284).
     const showReadAloud = !!readAloud;
     const showEffort = !!label.effort && effortCount > 0 && effortIndex != null && effortIndex >= 0;
@@ -605,7 +604,7 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
     const canOpenMode = canOpen?.permission !== false;
     const canOpenEffort = canOpen?.effort !== false;
     const canOpenModel = canOpen?.model !== false;
-    if (!showMode && !showAutoAccept && !showReadAloud && !showEffort && !showModel) {
+    if (!showMode && !showReadAloud && !showEffort && !showModel) {
         return null;
     }
     const mode = permissionModeAccessibility(label.mode);
@@ -614,17 +613,16 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
     // session with no effort scale does not leave a hairline floating in the
     // capsule.
     //
-    // AND NEVER BETWEEN THE PADLOCK AND THE BOLT (DROVE-281). Those two are the
-    // capsule's permission PAIR and they touch, because a hairline in this
-    // capsule says "a separate thing to press" and the grouping is the whole
-    // answer to Clay's "put the mode button in the group with the rest". The
-    // rules stay where the subject changes: permission -> effort, effort ->
-    // the model's name. That is also why `dividers` in the budget stayed at 2
-    // while `glyphSegments` went to 3.
-    const permissionGroup = showMode || showAutoAccept;
-    const readAloudNeedsDivider = showReadAloud && permissionGroup;
-    const effortNeedsDivider = showEffort && (permissionGroup || showReadAloud);
-    const modelNeedsDivider = showModel && (permissionGroup || showReadAloud || showEffort);
+    // ONE BETWEEN EVERY PAIR SINCE DROVE-331. The padlock and the bolt were
+    // the one pair that touched (DROVE-281: a hairline in this capsule says "a
+    // separate thing to press", and those two were the permission pair). The
+    // bolt is gone, so every boundary left is a change of subject —
+    // permission -> read-aloud -> effort -> the model's name — and every one
+    // gets its rule. `dividers` in the budget is still 3, for four segments
+    // now rather than five.
+    const readAloudNeedsDivider = showReadAloud && showMode;
+    const effortNeedsDivider = showEffort && (showMode || showReadAloud);
+    const modelNeedsDivider = showModel && (showMode || showReadAloud || showEffort);
     const readAloudFill = readAloud ? composerAudioOutFill(theme.dark, readAloud.fill) : null;
     // One interactive surface for the capsule, not one per segment
     // (DROVE-169). UIGlassEffect follows the touch inside the effect view it
@@ -673,83 +671,46 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                     segmentWidth={segmentWidth}
                     verticalSlop={verticalSlop}
                 >
-                    {/* The foreground in every mode (DROVE-215), with no
-                        exception left (DROVE-281). The mode is a value the
-                        session holds, not a thing it is doing, so under the
-                        rule it earns no colour, and the padlock, shield, eye
-                        and map already separate the modes on their own
-                        (DROVE-141).
+                    {/* The foreground in every mode (DROVE-215), and the
+                        accent while auto-accept is on (DROVE-277, back since
+                        DROVE-331). The mode is a value the session holds, not
+                        a thing it is doing, so under the rule it earns no
+                        colour, and the padlock, shield, eye and map already
+                        separate the modes on their own (DROVE-141).
 
-                        DROVE-277 made auto-accept the one state that coloured
-                        it, because the switch was inside this control's sheet
-                        and the padlock was the only object that could wear the
-                        state. The bolt beside it wears it now, so the padlock
-                        goes back to the plain rule. `autoAcceptColour` carries
-                        the move and why both are not tinted. */}
+                        Auto-accept IS a thing the app is doing, and it is the
+                        one state on this row whose cost of being missed is a
+                        command running unasked. DROVE-277 put its colour on
+                        this glyph because the switch was inside this control's
+                        sheet and nothing else on the row could wear it;
+                        DROVE-281 moved the colour to a bolt beside it;
+                        DROVE-331 took the bolt away on Clay's word, so the
+                        padlock is the one carrier again, for the reason it was
+                        the first time. `autoAcceptColour` carries the rule. The
+                        SILHOUETTE never changes with it: a reader who cannot
+                        tell accent from foreground still reads the mode, and
+                        hears the state in the accessibility value. */}
                     <Ionicons
                         name={permissionModeGlyph(modeKind, modeKey)}
                         size={20}
-                        color={pendingOrSettled(palette, permissionPending, composerGlyphColour(palette))}
+                        color={pendingOrSettled(palette, permissionPending, autoAcceptColour(palette, autoAccept))}
                     />
                 </Control>
             ) : null}
-            {/* AUTO-ACCEPT, TOUCHING THE PADLOCK (DROVE-281).
-
-                Clay, with the row photographed: "add a button for toggling
-                auto accepting prompts" and "put the mode button in the group
-                with the rest". The second reads two ways — the padlock leaving
-                the capsule for the loose buttons, or the new control joining
-                the padlock inside it — and the capsule settles it: it already
-                groups the controls that say HOW this session runs, while the
-                four discs below DO things. Answering prompts unasked is how it
-                runs. Rendered side by side the other reading turns the action
-                row into six undifferentiated glyphs with nothing saying which
-                two are settings.
-
-                IT OPENS NOTHING. All three of its neighbours are a press that
-                raises a sheet (DROVE-242); this is a press that flips a
-                boolean, which is the whole point of moving it here, and it is
-                a `switch` to a screen reader rather than a button with an
-                `expanded` state it does not have.
-
-                NO PENDING FACE EITHER, and that is a fact about the state
-                rather than an omission. The other three send a pick to the
-                terminal and wait a median two seconds for it (DROVE-217); this
-                one writes to a set in this process and is true before the
-                finger leaves the glass. */}
-            {showAutoAccept ? (
-                <Control
-                    segment="autoAccept"
-                    accessibilityLabel={AUTO_ACCEPT_TITLE}
-                    accessibilityValue={autoAcceptSegmentValue(autoAccept)}
-                    accessibilityHint={AUTO_ACCEPT_SUBTITLE}
-                    toggled={autoAccept}
-                    open={false}
-                    onPress={onToggleAutoAccept}
-                    size={size}
-                    segmentWidth={segmentWidth}
-                    verticalSlop={verticalSlop}
-                >
-                    {/* The bolt FILLS as well as colouring, so the state has a
-                        silhouette and does not rest on hue alone — the outline
-                        and the solid are the same glyph at two weights, which
-                        is how the row already draws the mic. */}
-                    <Ionicons
-                        name={autoAcceptGlyph(autoAccept)}
-                        size={20}
-                        color={autoAcceptColour(palette, autoAccept)}
-                    />
-                </Control>
-            ) : null}
+            {/* NO BOLT HERE SINCE DROVE-331. DROVE-281 drew the auto-accept
+                toggle as a segment touching the padlock; the switch in the
+                padlock's sheet is the one control now. The state is still on
+                the row: the padlock above wears it. */}
             {readAloudNeedsDivider ? <View style={[styles.segmentDivider, { backgroundColor: divider }]} /> : null}
             {/* READ-ALOUD, IN THE GROUP (DROVE-284).
 
                 Clay, rejecting the second row DROVE-281 bought: "Add the
                 reading mode whatever thing to the group and keep it all on the
-                same row as send and +." It sits third, after the permission
-                pair and before the effort gauge, with a rule either side
-                because the subject changes at both: permission -> how the
-                agent talks back -> how hard it thinks -> which model.
+                same row as send and +." It sits second, after the padlock and
+                before the effort gauge — third while DROVE-281's bolt was on
+                the row — with a rule either side because the subject changes
+                at both: permission -> how the agent talks back -> how hard it
+                thinks -> which model.
 
                 IT IS THE SAME CONTROL. `audioOutButton` still decides all four
                 faces, `handleAudioOutPress` and `handleAudioOutLongPress` are
@@ -838,6 +799,20 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                         // failure DROVE-138 was filed about (DROVE-178).
                         adjustsFontSizeToFit
                         minimumFontScale={COMPOSER_MODEL_SEGMENT.minimumFontScale}
+                        // AND SHORTER LAST (DROVE-331). Clay, with the bolt's
+                        // width in hand: "you can even make the model text a
+                        // bit smaller and truncate if it ends up running
+                        // under." At the floor a name that still does not fit
+                        // is cut at its tail rather than pushing send off the
+                        // rim or squeezing the three glyph segments, which
+                        // keep their width (`flexShrink: 0`); this segment is
+                        // the one that gives (`flexShrink: 1, minWidth: 0`).
+                        // Stated, though it is the platform's default, so the
+                        // ruling is on the control and the render test holds
+                        // it. `composerModelPresentation` says which of whole
+                        // / scaled / truncated a phone draws, and on every
+                        // supported width it is whole.
+                        ellipsizeMode="tail"
                     >
                         {label.model}
                     </Text>

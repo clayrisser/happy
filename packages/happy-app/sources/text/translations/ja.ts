@@ -347,6 +347,15 @@ export const ja: TranslationStructure = {
         forkErrorMissingMetadata: 'フォークに必要なセッションのメタデータがありません。',
         forkErrorGeneric: 'セッションのフォークに失敗しました。',
         forkClaudeOnly: 'フォークは現在 Claude セッションのみ対応しています。',
+        forkErrorDirectoryMissing: ({ directory }: { directory: string }) =>
+            `ディレクトリ ${directory} はそのマシンにもう存在しないため、新しいセッションを開始する場所がありません。`,
+        cloneAction: '別のハーネスにクローン…',
+        cloneSubtitle: 'この会話を Cursor、Pi、または新しい Claude に語り直します',
+        cloneSheetTitle: '別のハーネスにクローン',
+        cloneSheetSubtitle: '同じフォルダーで新しいセッションを開始し、この会話を語り直したものを最初のプロンプトにします。元のセッションはそのままです。',
+        cloneErrorGeneric: 'セッションをクローンできませんでした。',
+        cloneErrorNotClaude: '別のハーネスにクローンできるのは Claude セッションだけです。drover が書き出せるのはその会話だけだからです。',
+        cloneHarnessUnavailable: 'このマシンにインストールされていません',
     },
 
     commandPalette: {

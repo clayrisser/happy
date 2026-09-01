@@ -347,6 +347,15 @@ export const zhHans: TranslationStructure = {
         forkErrorMissingMetadata: '缺少分叉所需的会话元数据。',
         forkErrorGeneric: '分叉会话失败。',
         forkClaudeOnly: '目前仅支持 Claude 会话的分叉。',
+        forkErrorDirectoryMissing: ({ directory }: { directory: string }) =>
+            `目录 ${directory} 在那台机器上已不存在，因此没有地方启动新会话。`,
+        cloneAction: '克隆到其他工具…',
+        cloneSubtitle: '把这段对话复述给 Cursor、Pi 或一个全新的 Claude',
+        cloneSheetTitle: '克隆到其他工具',
+        cloneSheetSubtitle: '在同一个目录下新建一个会话，把这段对话复述后作为它的第一条提示。原会话不受影响。',
+        cloneErrorGeneric: '克隆会话失败。',
+        cloneErrorNotClaude: '只有 Claude 会话能克隆到其他工具，drover 只会导出它的对话。',
+        cloneHarnessUnavailable: '这台机器上未安装',
     },
 
     commandPalette: {

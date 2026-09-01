@@ -505,7 +505,13 @@ export async function startDaemon(): Promise<void> {
         // than "headless".
         return openDroverWindow(windowDeps, {
           directory,
-          paneCommand: (droverBin) => formatDroverPaneCommand({ droverBin, agent, modeArgs, resumeId }),
+          paneCommand: (droverBin) => formatDroverPaneCommand({
+            droverBin,
+            agent,
+            modeArgs,
+            resumeId,
+            seedFile: options.seedFile,
+          }),
           extraEnv,
           unsetKeys: account.unset,
           tmuxSessionName: extraEnv.TMUX_SESSION_NAME ?? '',

@@ -40,6 +40,10 @@ struct DroverProvider: TimelineProvider {
 
 struct DroverWidgetView: View {
     var entry: DroverEntry
+    /// Which slot on the face this is drawing into. Inline is the one family
+    /// that is a line rather than a shape, so it is the one that lays the
+    /// same two things out differently (DROVE-260).
+    @Environment(\.widgetFamily) private var family
 
     private var count: Int { entry.snapshot.gates.count }
 
@@ -49,14 +53,26 @@ struct DroverWidgetView: View {
     private var stale: Bool { entry.snapshot.isStale(at: entry.date) }
 
     var body: some View {
-        VStack(spacing: 2) {
-            Image(systemName: symbol)
-                .font(.title3)
-                .foregroundStyle(tint)
-            Text(label)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+        Group {
+            if family == .accessoryInline {
+                // ONE LINE BESIDE THE TIME (DROVE-260). The same glyph and the
+                // same word the circular draws, laid flat instead of stacked:
+                // inline is the settled signal on one more face slot, not a
+                // second vocabulary. Untinted on purpose, because the inline
+                // slot renders monochrome and a colour here would be a claim
+                // the face cannot show.
+                Label(label, systemImage: symbol)
+            } else {
+                VStack(spacing: 2) {
+                    Image(systemName: symbol)
+                        .font(.title3)
+                        .foregroundStyle(tint)
+                    Text(label)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
         }
         .containerBackground(.fill.tertiary, for: .widget)
     }
@@ -95,6 +111,9 @@ struct DroverWatchWidget: Widget {
         }
         .configurationDisplayName("Drover")
         .description("Gates waiting on you.")
-        .supportedFamilies([.accessoryCircular, .accessoryRectangular, .accessoryCorner])
+        // Every accessory slot a watch face offers, carrying the one signal
+        // (DROVE-260). Inline was the slot Drover did not fill, and it needed
+        // no new decision: the same count, one more place to read it.
+        .supportedFamilies([.accessoryCircular, .accessoryRectangular, .accessoryCorner, .accessoryInline])
     }
 }

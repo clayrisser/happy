@@ -140,6 +140,15 @@ export interface SpawnSessionOptions {
      * session attaches to a forked Codex app-server thread.
      */
     resumeCodexThreadId?: string;
+    /**
+     * A file whose contents become the spawned session's FIRST PROMPT
+     * (DROVE-337). Set by the app's CLONE flow: no harness but Claude Code can
+     * read a Claude Code transcript, so a clone across harnesses exports the
+     * conversation to a seed and the new session is told it rather than
+     * handed it. The daemon passes the PATH into the pane argv as `--seed`;
+     * the text never rides on a command line.
+     */
+    seedFile?: string;
     /** Happy session id this fork was branched from (lineage). */
     parentSessionId?: string;
     /** Happy message id used as the rewind point (only set for "duplicate"). */

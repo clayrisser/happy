@@ -361,6 +361,15 @@ export const en: TranslationStructure = {
         forkErrorMissingMetadata: 'Missing session metadata required to fork.',
         forkErrorGeneric: 'Failed to fork the session.',
         forkClaudeOnly: 'Fork is currently only supported for Claude sessions.',
+        forkErrorDirectoryMissing: ({ directory }: { directory: string }) =>
+            `The directory ${directory} no longer exists on that machine, so there is nowhere to start the new session.`,
+        cloneAction: 'Clone into another harness…',
+        cloneSubtitle: 'Retell this conversation to Cursor, Pi or a fresh Claude',
+        cloneSheetTitle: 'Clone into another harness',
+        cloneSheetSubtitle: 'A new session in the same folder, started with this conversation retold as its first prompt. The original is untouched.',
+        cloneErrorGeneric: 'Failed to clone the session.',
+        cloneErrorNotClaude: 'Only a Claude session can be cloned into another harness — its conversation is the one drover knows how to export.',
+        cloneHarnessUnavailable: 'Not installed on this machine',
     },
 
     commandPalette: {

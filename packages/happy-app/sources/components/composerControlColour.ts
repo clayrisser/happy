@@ -280,8 +280,9 @@ export function primaryActionColour(palette: ComposerControlPalette, hasSomethin
 }
 
 /**
- * The auto-accept BOLT's glyph colour: the foreground while it is off, the
- * accent while it is on (DROVE-277, moved off the padlock by DROVE-281).
+ * The auto-accept colour on the PADLOCK: the foreground while it is off, the
+ * accent while it is on (DROVE-277; the bolt's from DROVE-281 to DROVE-331;
+ * the padlock's again).
  *
  * THIS IS THE RULE APPLIED, NOT AN EXCEPTION TO IT, and the distinction is the
  * whole reason it is written here rather than tinted at the call site. The rule
@@ -297,26 +298,24 @@ export function primaryActionColour(palette: ComposerControlPalette, hasSomethin
  * missed is a command running unasked, so if any state on the composer earns a
  * colour it is this one.
  *
- * IT WAS THE PADLOCK'S COLOUR UNTIL DROVE-281 AND IT IS THE BOLT'S NOW, which
- * is a move rather than an addition. DROVE-277 had no control to colour: the
- * switch was a row inside the padlock's sheet, so the padlock was the only
- * object on the row that could wear the state at all, and tinting it was the
- * only way the session could visibly wear it. DROVE-281 puts the bolt on the
- * row as its own segment, so the state now has the control that owns it to sit
- * on, and the padlock goes back to the foreground in every mode.
- *
- * TINTING BOTH WAS THE OTHER OPTION AND IS REFUSED. Two accent glyphs touching
- * inside one capsule say the same thing twice on the row with the least width
- * on the phone, and the second one says it about a control that is not the one
- * you press to change it. One state, one coloured glyph, and it is the glyph
- * that toggles it.
+ * IT HAS MOVED TWICE AND IS BACK WHERE IT STARTED, and each move had the same
+ * reason. DROVE-277 had no control to colour: the switch was a row inside the
+ * padlock's sheet, so the padlock was the only object on the row that could
+ * wear the state at all. DROVE-281 put a bolt on the row as its own segment,
+ * so the state moved to the control that owned it and the padlock went back
+ * to the foreground. DROVE-331 took the bolt off again on Clay's "we don't
+ * need it also in the bar group", so the sheet's switch is the one control,
+ * the padlock is once more the only object on the row that can show the
+ * state — and it is the control that opens the sheet where the state is set,
+ * which is as close to "the glyph that toggles it" as the row now has.
  *
  * It reuses `accent`. No new palette entry, no new hue, and
- * `ComposerActiveSignal` does not widen — the three signals are still recording,
- * accent and pending, which is what the spec pins. The bolt also FILLS when it
- * is on (`autoAcceptGlyph`), so the state is carried by the silhouette as well
- * as by the hue and a reader who cannot see the difference still reads it; the
- * accessibility value carries it in words on top of that.
+ * `ComposerActiveSignal` does not widen — the three signals are still
+ * recording, accent and pending, which is what the spec pins. The padlock's
+ * SILHOUETTE does not change with the state, so a reader who cannot tell the
+ * accent from the foreground still reads the mode, and hears auto-accept in
+ * the accessibility value (`permissionAccessibilityValue`). The sheet's own
+ * bolt still fills when it is on (`autoAcceptGlyph`), where the switch is.
  */
 export function autoAcceptColour(palette: ComposerControlPalette, autoAccept: boolean): string {
     return composerGlyphColour(palette, autoAccept ? 'accent' : null);
@@ -873,8 +872,8 @@ export function composerPausedTint(dark: boolean): string {
  * WHAT CHANGED IS THE OFF FACE AND NOTHING ELSE. On the row it wore the
  * in-field disc at rest, because DROVE-266 ruled that a bare glyph between two
  * discs reads as decoration rather than as a button. Inside the capsule the
- * question does not arise: the padlock, the bolt and the gauge all sit on the
- * capsule's own fill with nothing of their own, and a fifth surface among them
+ * question does not arise: the padlock and the gauge both sit on the
+ * capsule's own fill with nothing of their own, and a fourth surface among them
  * would be the odd object rather than the button. So off is `null` — no fill —
  * and the three live faces keep the colours DROVE-258 and DROVE-236 measured.
  *

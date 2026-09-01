@@ -2,7 +2,9 @@ import * as React from 'react';
 import { useHappyAction } from '@/hooks/useHappyAction';
 import { useNavigateToSession } from '@/hooks/useNavigateToSession';
 import { Modal } from '@/modal';
-import { machineResumeSession, sessionArchive, sessionKill, sessionSetAgentModes, forkAndSpawn, type ForkSource } from '@/sync/ops';
+import { machineResumeSession, sessionArchive, sessionKill, sessionSetAgentModes, forkAndSpawn, cloneIntoHarness, type CloneTargetHarness, type ForkSource } from '@/sync/ops';
+import { cloneRefusal, cloneTargetOptions, type CloneRefusal } from '@/utils/cloneTargets';
+import { spawnFailureMessage } from '@/utils/spawnFailure';
 import { maybeCleanupWorktree } from '@/hooks/useWorktreeCleanup';
 import { storage, useLocalSetting, useMachine, useSetting } from '@/sync/storage';
 import { useShallow } from 'zustand/react/shallow';
@@ -24,11 +26,35 @@ import { collectDroverAccountsFromSessions } from '@/utils/droverAccounts';
 import { confirmDroverSwitch } from '@/utils/droverAccountSwitch';
 
 /**
- * Menu rows are keyed by their keyboard shortcut where one exists. `flip-account`
- * has none — it is a Cattle Drover action, not part of the stock shortcut set —
- * so surfaces that render a chord must treat the lookup as optional.
+ * Menu rows are keyed by their keyboard shortcut where one exists.
+ * `flip-account` and `clone-harness` have none — both are Cattle Drover
+ * actions, not part of the stock shortcut set — so surfaces that render a
+ * chord must treat the lookup as optional.
  */
-export type SessionActionId = SessionActionShortcutId | 'flip-account';
+export type SessionActionId = SessionActionShortcutId | 'flip-account' | 'clone-harness';
+
+/**
+ * The sentences the failure helper needs, built here because `@/text` cannot
+ * be imported by a module a vitest spec loads (DROVE-337).
+ */
+const forkCopy = () => ({
+    generic: t('session.forkErrorGeneric'),
+    directoryMissing: (directory: string) => t('session.forkErrorDirectoryMissing', { directory }),
+});
+
+const cloneCopy = () => ({
+    generic: t('session.cloneErrorGeneric'),
+    directoryMissing: (directory: string) => t('session.forkErrorDirectoryMissing', { directory }),
+});
+
+/** One refusal code, said out loud. */
+function cloneRefusalMessage(refusal: CloneRefusal): string {
+    switch (refusal) {
+        case 'not-claude': return t('session.cloneErrorNotClaude');
+        case 'no-conversation': return t('session.forkErrorMissingMetadata');
+        case 'machine-offline': return t('session.forkErrorOffline');
+    }
+}
 
 export interface SessionActionItem {
     id: SessionActionId;
@@ -333,7 +359,12 @@ export function useSessionQuickActions(
         }
         const result = await forkAndSpawn(forkSource as ForkSource);
         if (result.type !== 'success') {
-            throw new HappyError(result.type === 'error' ? result.errorMessage : t('session.forkErrorGeneric'), false);
+            // The daemon's own sentence, whenever it gave one. Before
+            // DROVE-337 anything that was not a tagged `error` -- including
+            // the `{ error }` envelope a THROWN daemon handler answers with --
+            // landed on "Failed to fork the session." and Clay was left
+            // guessing at a tmux failure the log had already named.
+            throw new HappyError(spawnFailureMessage(result, forkCopy()), false);
         }
         navigateToSession(result.sessionId);
     });
@@ -349,6 +380,70 @@ export function useSessionQuickActions(
             props: { sessionId: session.id },
         } as any);
     }, [canFork, session.id]);
+
+    // CLONE into another harness (DROVE-58, DROVE-337).
+    //
+    // Not a second spelling of fork. A fork copies the transcript and resumes
+    // it, which only works while the target harness reads the same file; no
+    // harness but Claude Code can read a Claude Code transcript. So a clone
+    // exports the conversation and starts a NEW session that is told it. Two
+    // sessions, both real, and the menu says "clone" so nobody expects the
+    // source to move.
+    const refusal = React.useMemo(() => cloneRefusal({
+        flavor: session.metadata?.flavor,
+        claudeSessionId: session.metadata?.claudeSessionId,
+        machineOnline: Boolean(machine && isMachineOnline(machine)),
+    }), [machine, session.metadata?.claudeSessionId, session.metadata?.flavor]);
+    const canClone = refusal === null;
+    const cloneRefusalText = refusal === null ? null : cloneRefusalMessage(refusal);
+
+    // The chosen harness rides in a ref because `useHappyAction` takes no
+    // arguments -- it exists to own the loading flag and the error alert, and
+    // widening its signature for one caller would touch every action in the
+    // app for no gain.
+    const cloneTargetRef = React.useRef<CloneTargetHarness>('cursor');
+    const [cloning, performClone] = useHappyAction(async () => {
+        const harness = cloneTargetRef.current;
+        if (refusal !== null) {
+            throw new HappyError(cloneRefusalMessage(refusal), false);
+        }
+        const source = forkSource;
+        if (!source || source.kind !== 'claude') {
+            throw new HappyError(t('session.cloneErrorNotClaude'), false);
+        }
+        const result = await cloneIntoHarness(source, harness);
+        if (result.type !== 'success') {
+            throw new HappyError(spawnFailureMessage(result, cloneCopy()), false);
+        }
+        navigateToSession(result.sessionId);
+    });
+
+    const cloneSession = React.useCallback(() => {
+        if (cloneRefusalText !== null) {
+            // The refusal is the useful half. A row that does nothing when
+            // tapped teaches nothing; a row that says "only a Claude session
+            // can be cloned" is an answer.
+            Modal.alert(t('common.error'), cloneRefusalText);
+            return;
+        }
+        // One alert with the harnesses on it, the same shape the account
+        // switch uses. A target this machine cannot run stays ON the list and
+        // says why when tapped, rather than vanishing: a missing row reads as
+        // a broken app, and "Not installed on this machine" reads as a thing
+        // to go and fix.
+        const options = cloneTargetOptions(machine?.metadata?.cliAvailability);
+        const buttons: Array<{ text: string; onPress?: () => void; style?: 'cancel' | 'destructive' | 'default' }> =
+            options.map((option) => ({
+                text: option.available
+                    ? option.name
+                    : `${option.name} — ${t('session.cloneHarnessUnavailable')}`,
+                onPress: option.available
+                    ? () => { cloneTargetRef.current = option.key; performClone(); }
+                    : () => Modal.alert(option.name, t('session.cloneHarnessUnavailable')),
+            }));
+        buttons.push({ text: t('common.cancel'), style: 'cancel' });
+        Modal.alert(t('session.cloneSheetTitle'), t('session.cloneSheetSubtitle'), buttons);
+    }, [cloneRefusalText, machine?.metadata?.cliAvailability, performClone]);
 
     const canCopySessionMetadata = __DEV__ || devModeEnabled;
 
@@ -366,6 +461,10 @@ export function useSessionQuickActions(
             items.push({ id: 'duplicate', icon: 'time-outline', label: t('session.duplicateAction'), onPress: openDuplicateSheet });
         }
 
+        if (canClone) {
+            items.push({ id: 'clone-harness', icon: 'swap-vertical-outline', label: t('session.cloneAction'), onPress: cloneSession });
+        }
+
         if (canFlipAccount) {
             items.push({ id: 'flip-account', icon: 'swap-horizontal-outline', label: 'Switch account', onPress: flipAccount });
         }
@@ -380,9 +479,11 @@ export function useSessionQuickActions(
         return items;
     }, [
         archiveSession,
+        canClone,
         canCopySessionMetadata,
         canFlipAccount,
         canFork,
+        cloneSession,
         copySessionMetadata,
         copySessionMetadataAndLogs,
         flipAccount,
@@ -413,8 +514,12 @@ export function useSessionQuickActions(
         canCopySessionMetadata,
         canResume: resumeAvailability.canResume,
         canShowResume: resumeAvailability.canShowResume,
+        canClone,
         canFlipAccount,
         canFork,
+        cloneRefusal: cloneRefusalText,
+        cloneSession,
+        cloning,
         copySessionMetadata,
         copySessionMetadataAndLogs,
         droverAccounts,

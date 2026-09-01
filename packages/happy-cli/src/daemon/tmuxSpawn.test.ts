@@ -48,6 +48,36 @@ describe('the pane command a phone-started session runs', () => {
         expect(argv.slice(-2)).toEqual(['--resume', '11111111-2222-4333-8444-555555555555']);
     });
 
+    // DROVE-337: a CLONE lands here too. A fork resumes a conversation the
+    // target can read; a clone cannot, so the conversation is exported to a
+    // file and the pane is told to start from it. The PATH travels, never the
+    // text: a seed runs to tens of kilobytes.
+    it('hands a clone its seed file, and never the seed itself', () => {
+        const argv = buildDroverPaneArgv({
+            droverBin: '/d/bin/drover',
+            agent: 'cursor',
+            seedFile: '/state/cattle-drover/clones/20260901T231800Z-4242.md',
+        });
+
+        expect(argv.slice(-2)).toEqual(['--seed', '/state/cattle-drover/clones/20260901T231800Z-4242.md']);
+    });
+
+    it('leaves --seed off a spawn that has no seed', () => {
+        const argv = buildDroverPaneArgv({ droverBin: '/d/bin/drover', agent: 'cursor' });
+
+        expect(argv).not.toContain('--seed');
+    });
+
+    it('quotes a seed path with a space, so a clone under "My Projects" starts', () => {
+        const command = formatDroverPaneCommand({
+            droverBin: '/d/bin/drover',
+            agent: 'cursor',
+            seedFile: '/Users/clay/My State/clones/seed one.md',
+        });
+
+        expect(command.endsWith("'--seed' '/Users/clay/My State/clones/seed one.md'")).toBe(true);
+    });
+
     it('quotes every word, so a checkout path with a space still starts', () => {
         const command = formatDroverPaneCommand({
             droverBin: "/Users/clay/My Projects/cattle-drover/bin/drover",

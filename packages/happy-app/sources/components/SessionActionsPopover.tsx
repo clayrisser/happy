@@ -41,9 +41,10 @@ interface SessionActionsPopoverProps {
 
 
 /**
- * Not every menu row has a keyboard chord — `flip-account` deliberately has
- * none — so the lookup is optional and the shortcut column stays blank rather
- * than reading an undefined chord.
+ * Not every menu row has a keyboard chord — `flip-account` and
+ * `clone-harness` deliberately have none, being Cattle Drover actions rather
+ * than part of the stock shortcut set — so the lookup is optional and the
+ * shortcut column stays blank rather than reading an undefined chord.
  */
 function shortcutFor(id: SessionActionItem['id']): ShortcutChord | undefined {
     return (SESSION_ACTION_SHORTCUTS as Partial<Record<string, ShortcutChord>>)[id];

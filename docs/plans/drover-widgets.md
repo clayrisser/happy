@@ -76,6 +76,7 @@ below, which is the one decision the proposal did not have to make.
 | iOS `.accessoryRectangular` (Lock Screen) | count + oldest gate title, monochrome | free | blocked on a monochrome vocabulary |
 | iOS `.accessoryCircular` / `.accessoryInline` | count alone | free | same block, less value |
 | watchOS `.accessoryCircular` / `.accessoryCorner` / `.accessoryRectangular` | gate count | already shipped (BASED-98) | leave it |
+| watchOS `.accessoryInline` | the same count, one line beside the time | rides the watch app's existing reload | **built** (second pass) |
 
 ### Why `.systemSmall` and not the Lock Screen
 
@@ -301,19 +302,38 @@ in that category, though — a write nobody reloaded for did not reach the
 widget, so counting writes would let an hour of churn look like an hour of
 keeping it current.
 
-## The watch complication is left exactly as it was
+## The watch, per family (second pass, 2026-09-01)
 
-BASED-98 already ships one, and it already answers the question this ticket
-says a wrist complication should answer: how many gates are waiting. It also
-already gets the hard part right, scheduling a second timeline entry at the
-moment its snapshot goes stale so it stops saying "clear" the instant it stops
-knowing.
+BASED-98's complication answers the question this ticket says a wrist should:
+how many gates are waiting. It schedules a second timeline entry at the moment
+its snapshot goes stale, so it stops saying "clear" the instant it stops
+knowing. And it draws in SF Symbols and semantic colours rather than
+`statusDotColors` on purpose: complications desaturate, so the glyph's shape
+carries the state and the hue never has to. Rewriting it onto the phone's hue
+table would import the exact problem this document declines to solve on the
+Lock Screen.
 
-It draws in SF Symbols and semantic colours rather than `statusDotColors`, and
-that is deliberate rather than drift: complications render in contexts that
-desaturate, which is the same reason the Lock Screen is deferred above.
-Rewriting it to share the phone's hue table would import the exact problem this
-document declines to solve on the phone.
+One rule for every slot on the face: the count, and the same glyph. Per family:
+
+| family | shows | tap | leaves out | state |
+|---|---|---|---|---|
+| `.accessoryCorner` | the count | the wall | names, reading, headroom | shipped (BASED-98) |
+| `.accessoryCircular` | the count | the wall | the same | shipped (BASED-98) |
+| `.accessoryRectangular` | the count; proposed: the oldest gate's title on the second line | the wall | headroom, tasks | count shipped; the title waits on Clay |
+| `.accessoryInline` | the count and glyph as one line beside the time | the wall | everything else | **built here** |
+
+Inline was the one slot the face offered that Drover did not fill, and it is
+the settled signal on one more family with no new words and no new data, so it
+needed no answer from anyone. It reads the same `label` and `symbol` the
+circular reads; the watch pin in `droverWidgetFace.spec.ts` holds it to that.
+
+Waiting on Clay, as posted on DROVE-260: whether rectangular names the oldest
+gate (the ticket says "not a miniature of the phone widget"); whether the
+session actually READING (DROVE-297, already on the snapshot) takes the second
+rung on rectangular and inline while nothing waits; whether a tap should open
+the gate rather than the wall when one is waiting, since the notification tap's
+route already exists; and how the corner draws on his Ultra, because it puts
+the caption inside the small circle rather than on the curve.
 
 ## What was verified, and what cannot be without a native build
 

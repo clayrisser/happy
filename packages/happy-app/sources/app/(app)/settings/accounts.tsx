@@ -524,7 +524,12 @@ export default function AccountsScreen() {
                                 <Item
                                     key={account.name}
                                     title={account.name}
-                                    subtitle={accountSubtitle(account)}
+                                    // The MACHINE's whole list, not this
+                                    // harness group, because a back-door twin
+                                    // is recognised by sharing the ambient
+                                    // row's login and the two can be grouped
+                                    // apart (DROVE-333).
+                                    subtitle={accountSubtitle(account, accounts)}
                                     subtitleLines={0}
                                     // Amber for BOTH dead ends, not just the
                                     // one with no credential (DROVE-246): an

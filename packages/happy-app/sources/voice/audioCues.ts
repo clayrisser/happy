@@ -1,3 +1,5 @@
+import { cueAmplitudeFor, dbToAmplitude, morseTickDb } from './cueLoudness';
+
 /**
  * The eyes-free audio cue vocabulary (DROVE-112).
  *
@@ -33,7 +35,9 @@ export interface CueBeat {
     hz: number;
     ms: number;
     /**
-     * Loudness of THIS beat relative to the cue's own gain, 0 to 1, 1 unasked.
+     * Loudness of THIS beat relative to the cue's own amplitude, 0 to 1, 1
+     * unasked. Still a bare multiplier, and correctly so: it says how one beat
+     * sits against the beat beside it, which is a question inside one sound.
      *
      * Added by DROVE-182, which needs one figure to hold two loudnesses: the
      * heartbeat's thump is the marker and the ticks after it are the count,
@@ -116,10 +120,16 @@ export interface AudioCueSpec {
     /** Silence between beats. Long enough that two beats are two sounds. */
     gapMs: number;
     /**
-     * Loudness relative to the volume setting, 0 to 1. A tool tick is meant to
-     * sit under a sentence; a waiting pulse is meant to be found.
+     * PEAK AMPLITUDE the cue's samples are rendered at, 0 to 1, calibrated
+     * against the voice in cueLoudness.ts (DROVE-341).
+     *
+     * Not a fraction of the volume setting, which is what the old `gain` was
+     * and what made every cue play at the square of its intended level. The
+     * setting is applied ONCE, by the player, and this is the whole of the
+     * rest. Read cueGainDb for what each number claims and
+     * scripts/measure-cue-loudness.sh for the check that it is true.
      */
-    gain: number;
+    amplitude: number;
     /** Higher wins when two ambient states hold at once. Mirrors WristCue.rank. */
     rank: number;
     /** The settings row. */
@@ -192,7 +202,7 @@ const countMarker: CueBeat = { hz: 196, ms: 190 };
 const afterMarker: CueBeat = { hz: 0, ms: 200 };
 /** The digits are quieter and shorter than the marker, as the ticket requires. */
 const morseHz = 880;
-const morseGain = 0.45;
+const morseTickLevel = dbToAmplitude(morseTickDb);
 
 /** Morse for one digit, `.` and `-`. Five symbols each, which is the point. */
 export const morseDigits: Readonly<Record<string, string>> = {
@@ -225,7 +235,7 @@ export function morseBeats(count: number): CueBeat[] {
             beats.push({
                 hz: morseHz,
                 ms: symbols[i] === '-' ? morseDah : morseDit,
-                gain: morseGain,
+                gain: morseTickLevel,
             });
         }
     }
@@ -272,7 +282,7 @@ function workingRow(id: AudioCueId): AudioCueSpec {
         // The rests inside the figure carry the spacing, so there is no
         // uniform gap on top of them.
         gapMs: 0,
-        gain: 0.45,
+        amplitude: cueAmplitudeFor('working'),
         rank: 0,
         title: 'Working',
         meaning: 'Something is running and nothing needs you. One low thump, then how many subagents are out, in Morse. The same number the status row shows. No subagents is the thump on its own.',
@@ -301,7 +311,7 @@ export const audioCues: readonly AudioCueSpec[] = [
         kind: 'ambient',
         beats: [{ hz: 740, ms: 70 }, { hz: 740, ms: 70 }, { hz: 740, ms: 70 }],
         gapMs: cueBeatGap,
-        gain: 0.9,
+        amplitude: cueAmplitudeFor('waitingNeedsYou'),
         rank: 4,
         title: 'Waiting: do something',
         meaning: 'An agent asked you to do something. Three short beeps, over and over.',
@@ -311,7 +321,7 @@ export const audioCues: readonly AudioCueSpec[] = [
         kind: 'ambient',
         beats: [{ hz: 660, ms: 70 }, { hz: 880, ms: 70 }],
         gapMs: cueBeatGap,
-        gain: 0.9,
+        amplitude: cueAmplitudeFor('waitingQuestion'),
         rank: 3,
         title: 'Waiting: question',
         meaning: 'A session is blocked on an answer. Two beeps, the second higher.',
@@ -321,7 +331,7 @@ export const audioCues: readonly AudioCueSpec[] = [
         kind: 'ambient',
         beats: [{ hz: 660, ms: 70 }],
         gapMs: cueBeatGap,
-        gain: 0.85,
+        amplitude: cueAmplitudeFor('waitingPermission'),
         rank: 2,
         title: 'Waiting: permission',
         meaning: 'A yes/no gate on an action. One short beep on the fast clock.',
@@ -331,7 +341,7 @@ export const audioCues: readonly AudioCueSpec[] = [
         kind: 'ambient',
         beats: [{ hz: 392, ms: 90 }, { hz: 294, ms: 130 }],
         gapMs: cueBeatGap,
-        gain: 0.85,
+        amplitude: cueAmplitudeFor('waitingExpiry'),
         rank: 1,
         title: 'Waiting: account limit',
         meaning: 'An account is running out of usage or auth. Two beeps, falling.',
@@ -342,7 +352,7 @@ export const audioCues: readonly AudioCueSpec[] = [
         kind: 'event',
         beats: [{ hz: 523, ms: 70 }, { hz: 784, ms: 90 }],
         gapMs: 40,
-        gain: 0.8,
+        amplitude: cueAmplitudeFor('agentStart'),
         rank: 0,
         title: 'Agent spawned',
         meaning: 'A subagent started. Two notes, rising.',
@@ -352,7 +362,7 @@ export const audioCues: readonly AudioCueSpec[] = [
         kind: 'event',
         beats: [{ hz: 784, ms: 70 }, { hz: 523, ms: 90 }],
         gapMs: 40,
-        gain: 0.7,
+        amplitude: cueAmplitudeFor('agentDone'),
         rank: 0,
         title: 'Agent finished',
         meaning: 'A subagent came back. The same two notes, falling.',
@@ -362,7 +372,7 @@ export const audioCues: readonly AudioCueSpec[] = [
         kind: 'event',
         beats: [{ hz: 233, ms: 90 }, { hz: 175, ms: 140 }],
         gapMs: 60,
-        gain: 0.8,
+        amplitude: cueAmplitudeFor('agentFailed'),
         rank: 0,
         title: 'Agent failed',
         meaning: 'A subagent came back an error. Two low notes, falling further.',
@@ -375,7 +385,7 @@ export const audioCues: readonly AudioCueSpec[] = [
         // well under a second of air between them and rattle (DROVE-174).
         beats: [{ hz: 1046, ms: 28 }],
         gapMs: 40,
-        gain: 0.3,
+        amplitude: cueAmplitudeFor('toolCall'),
         rank: 0,
         title: 'Tool call',
         meaning: 'A tool call started. One short quiet tick, one per call.',
@@ -387,7 +397,7 @@ export const audioCues: readonly AudioCueSpec[] = [
         // tick, so the three are told apart by register as well as by shape.
         beats: [{ hz: 349, ms: 55 }, { hz: 440, ms: 70 }],
         gapMs: 45,
-        gain: 0.5,
+        amplitude: cueAmplitudeFor('reply'),
         rank: 0,
         title: 'Reply arrived',
         meaning: 'A reply landed. Two soft low notes, played before its first sentence.',
@@ -397,7 +407,7 @@ export const audioCues: readonly AudioCueSpec[] = [
         kind: 'event',
         beats: [{ hz: 1046, ms: 55 }, { hz: 1568, ms: 65 }],
         gapMs: 35,
-        gain: 0.6,
+        amplitude: cueAmplitudeFor('skipAhead'),
         rank: 0,
         title: 'Skipped ahead',
         meaning: 'Reading was behind and jumped to the newest sentence. A quick blip up.',
@@ -408,16 +418,17 @@ export const audioCues: readonly AudioCueSpec[] = [
     // These three are the only cues that are a REPLY TO CLAY rather than news
     // about the agent, and they are shaped accordingly. Long beats and an
     // octave apart, so they are not mistaken for agentStart's third or
-    // reply's fourth in a pocket, and the loudest gains in the table, because
-    // an acknowledgement he does not hear is the failure the ticket exists to
-    // prevent. Rhythm still carries it with the pitch thrown away: up, down,
-    // or the same note twice going nowhere.
+    // reply's fourth in a pocket, and the only rows in the table at 0 dB, level
+    // with the voice itself (DROVE-341), because an acknowledgement he does not
+    // hear is the failure the ticket exists to prevent. Rhythm still carries it
+    // with the pitch thrown away: up, down, or the same note twice going
+    // nowhere.
     {
         id: 'micOpen',
         kind: 'event',
         beats: [{ hz: 392, ms: 90 }, { hz: 784, ms: 110 }],
         gapMs: 30,
-        gain: 0.95,
+        amplitude: cueAmplitudeFor('micOpen'),
         rank: 0,
         title: 'Microphone opened',
         meaning: 'The mic is listening. Two notes an octave apart, rising. Played before the mic opens, so it is never in the recording.',
@@ -427,7 +438,7 @@ export const audioCues: readonly AudioCueSpec[] = [
         kind: 'event',
         beats: [{ hz: 784, ms: 90 }, { hz: 392, ms: 110 }],
         gapMs: 30,
-        gain: 0.95,
+        amplitude: cueAmplitudeFor('micClosed'),
         rank: 0,
         title: 'Microphone closed',
         meaning: 'The mic stopped and the words are in the composer. The same octave, falling.',
@@ -437,7 +448,7 @@ export const audioCues: readonly AudioCueSpec[] = [
         kind: 'event',
         beats: [{ hz: 196, ms: 120 }, { hz: 196, ms: 120 }],
         gapMs: 90,
-        gain: 0.95,
+        amplitude: cueAmplitudeFor('micRefused'),
         rank: 0,
         title: 'Microphone refused',
         meaning: 'A press that could not open the mic. The same low note twice, going nowhere.',
@@ -445,7 +456,8 @@ export const audioCues: readonly AudioCueSpec[] = [
     //
     // The double press answers too (DROVE-300).
     //
-    // Replies to Clay like the three above, so the same loud gain, and told
+    // Replies to Clay like the three above, so the same 0 dB level with the
+// voice (DROVE-341), and told
     // apart from them by BEAT COUNT: the mic speaks in twos, the skip in
     // threes. That is deliberate and it is the whole trick. A pocket flattens
     // pitch, so a fourth and a fifth two-note cue would be four and five ways
@@ -459,7 +471,7 @@ export const audioCues: readonly AudioCueSpec[] = [
         kind: 'event',
         beats: [{ hz: 523, ms: 60 }, { hz: 659, ms: 60 }, { hz: 784, ms: 80 }],
         gapMs: 30,
-        gain: 0.95,
+        amplitude: cueAmplitudeFor('sessionSkipped'),
         rank: 0,
         title: 'Skipped to the next session',
         meaning: 'A double press moved the voice to the next session with reading on. Three notes, climbing.',
@@ -469,7 +481,7 @@ export const audioCues: readonly AudioCueSpec[] = [
         kind: 'event',
         beats: [{ hz: 196, ms: 120 }, { hz: 196, ms: 120 }, { hz: 196, ms: 120 }],
         gapMs: 90,
-        gain: 0.95,
+        amplitude: cueAmplitudeFor('skipRefused'),
         rank: 0,
         title: 'Nowhere to skip to',
         meaning: 'A double press with only one session reading, or none. The same low note three times, going nowhere.',
