@@ -78,7 +78,7 @@ export default function ChannelsScreen() {
 
                 <ItemGroup
                     title="Announce"
-                    footer="Which channels tell you about a prompt. Any combination, all at once. These are this phone's switches and they are mirrored to every connected Mac, where the bus stamps them on each prompt for the terminal, the push and the wrist. The audio channel has its own group below. Every channel off still leaves the card in the inbox and the popup in the terminal."
+                    footer="Any combination. Mirrored to every Mac."
                 >
                     <Item
                         title="Visual"
@@ -138,7 +138,7 @@ export default function ChannelsScreen() {
 
                 <ItemGroup
                     title={t('agentInput.channels.audioTitle')}
-                    footer="Two settings, and they are not the same one. The first is the drover audio channel: a prompt that arrives is read out, and the switch is mirrored to every connected Mac. The second is stream-talk: the assistant's replies are spoken as they stream, on this device only. Turning one on does nothing to the other."
+                    footer="The channel is mirrored; stream-talk is not."
                 >
                     {rows.map((row) => (
                         <Item
@@ -164,7 +164,7 @@ export default function ChannelsScreen() {
 
                 <ItemGroup
                     title="Answer by audio"
-                    footer="Haptic cannot answer: you cannot reply with a buzz. A screen can always answer, whatever is set here. The click and dictation listeners are DROVE-73's lane; until they land, this only changes what the bus allows."
+                    footer="A screen can always answer."
                 >
                     {answerAudioChoices.map((choice) => (
                         <Item
@@ -180,11 +180,10 @@ export default function ChannelsScreen() {
                     ))}
                 </ItemGroup>
 
-                <ItemGroup footer={channels.mirroredTo ? `Changes are ${channels.mirroredTo}.` : 'No Mac is online. The switches stay on this phone and reach the next Mac that connects when you open this screen again.'}>
+                <ItemGroup footer={channels.mirroredTo ? `Changes are ${channels.mirroredTo}.` : 'No Mac is online. Saved on this phone.'}>
                     <Item
                         title="Boss mode is the other axis"
-                        subtitle="Who you talk to (a session, or the boss that talks about sessions) combines with any mode here."
-                        subtitleLines={0}
+                        subtitle="combines with any mode here"
                         icon={<Ionicons name="megaphone-outline" size={29} color="#AF52DE" />}
                         showChevron={false}
                     />

@@ -105,8 +105,7 @@ export default function SessionPolicyScreen() {
                     <ItemGroup title="Account switching">
                         <Item
                             title="Nothing reported yet"
-                            subtitle="This session has not sent a policy. It only does when Cattle Drover has a registry of accounts on that machine."
-                            subtitleLines={0}
+                            subtitle="no policy sent yet"
                             showChevron={false}
                         />
                     </ItemGroup>
@@ -148,7 +147,7 @@ export default function SessionPolicyScreen() {
                         />
                         <Item
                             title="Defaults for new sessions"
-                            subtitle="What every session on this Mac starts with."
+                            subtitle="what every session starts with"
                             icon={<Ionicons name="options-outline" size={29} color="#5AC8FA" />}
                             onPress={() => router.push(session.metadata?.machineId
                                 ? `/settings/flip-policy?machineId=${session.metadata.machineId}`

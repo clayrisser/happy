@@ -763,17 +763,25 @@ describe('accountGroupTitle and accountGroupFooter', () => {
 
     it('does not tell the Keychain story over a token', () => {
         // The Claude explanation is WRONG for cursor, and copying it across is
-        // the bug this ticket exists to avoid: a cursor account is a TOKEN,
+        // the bug this ticket exists to avoid: a cursor account is a token,
         // which is exactly why two of them run side by side with no flip.
+        //
+        // DROVE-346 cut the footer from four lines to one, so this asserts the
+        // two CLAIMS rather than the sentences that used to carry them. It is
+        // the same bar: shouting TOKEN in capitals was the old prose's way of
+        // marking the distinction, and `tokens` plus `never flip` is the new
+        // one. Nothing here got easier to pass.
         const cursorFooter = accountGroupFooter('cursor', true);
-        expect(cursorFooter).toContain('TOKEN');
-        expect(cursorFooter).toContain('nothing to flip');
+        expect(cursorFooter).toContain('tokens');
+        expect(cursorFooter).toContain('never flip');
         expect(cursorFooter).not.toContain('Keychain');
     });
 
     it('leads with offline for both, because that outranks either explanation', () => {
         for (const harness of accountHarnessOrder) {
-            expect(accountGroupFooter(harness, false)).toContain('offline');
+            // Case-insensitive since DROVE-346: the one-line footer opens on
+            // the word, so it is `Offline, ...` rather than mid-sentence.
+            expect(accountGroupFooter(harness, false)).toMatch(/offline/i);
         }
     });
 });

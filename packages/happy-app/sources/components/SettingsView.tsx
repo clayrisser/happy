@@ -232,7 +232,7 @@ export const SettingsView = React.memo(function SettingsView({
                     which of them it picks. */}
                 <Item
                     title="Accounts"
-                    subtitle="Claude accounts, per machine, and adding one"
+                    subtitle="Claude accounts on each machine"
                     icon={<Ionicons name="people-circle-outline" size={29} color="#007AFF" />}
                     onPress={() => router.push('/settings/accounts' as any)}
                 />
@@ -241,7 +241,7 @@ export const SettingsView = React.memo(function SettingsView({
                     is setting what the NEXT session starts with. */}
                 <Item
                     title="Account switching"
-                    subtitle="What a session does when an account runs out"
+                    subtitle="When an account runs out"
                     icon={<Ionicons name="swap-horizontal-outline" size={29} color="#FF9500" />}
                     onPress={() => router.push('/settings/flip-policy' as any)}
                 />
@@ -250,7 +250,7 @@ export const SettingsView = React.memo(function SettingsView({
                     shortcut; this is the page. */}
                 <Item
                     title="Channels"
-                    subtitle="Visual, audio, haptic, and the mode they spell"
+                    subtitle="Visual, audio, and haptic feedback"
                     icon={<Ionicons name="notifications-outline" size={29} color="#AF52DE" />}
                     onPress={() => router.push('/settings/channels' as any)}
                 />
@@ -259,7 +259,7 @@ export const SettingsView = React.memo(function SettingsView({
                     for a gate. Shown once on first run; this is the way back. */}
                 <Item
                     title="Demo every channel"
-                    subtitle="Feel each buzz, hear each voice, see each card"
+                    subtitle="Try every cue on demand"
                     icon={<Ionicons name="pulse-outline" size={29} color="#AF52DE" />}
                     onPress={() => router.push('/settings/demo' as any)}
                 />

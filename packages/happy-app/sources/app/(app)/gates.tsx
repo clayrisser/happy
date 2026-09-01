@@ -142,7 +142,7 @@ export default function GatesScreen() {
                     <SectionHeading
                         icon="checkbox-outline"
                         label={todos.length === 1 ? '1 to-do' : `${todos.length} to-dos`}
-                        note="Nothing is blocked; these wait until you do them"
+                        note="these wait until you do them"
                         loud={false}
                     />
                 )}
@@ -151,7 +151,7 @@ export default function GatesScreen() {
                     <SectionHeading
                         icon="list-outline"
                         label={sessionTasksSectionLabel(taskCards)}
-                        note="What each session is still working through"
+                        note="what each session is working through"
                         loud={false}
                     />
                 )}

@@ -64,10 +64,24 @@ export function mcpEmptyReason(harness: {
  * The footer under a harness that has no account group of its own — Codex and
  * OpenCode, today.
  *
- * It states what was found and then what cannot be done from here, and the
- * second half changed with DROVE-296: OpenCode now shows the providers as
- * well, and "Configuring MCP servers from the phone is not built yet" read as
- * though the providers above it were editable.
+ * ONE LINE (DROVE-346). It used to run four: where the config lives, then the
+ * counts again, then read-only, then an apology that editing "is not built
+ * yet". Clay scribbled all of it out.
+ *
+ * Every piece that went is said better somewhere else on the same screen. The
+ * counts are already ON the row: `MachineMcpRows` draws `harness.count` as the
+ * badge beside the chevron, and each scope's own count on the row below, so
+ * saying "42 servers, 1 disabled" in prose underneath was the second telling of
+ * a number the eye had just read. And the apology described a ROADMAP, not this
+ * screen: a reader learns there is nothing to edit from there being nothing to
+ * tap, without being told what we have not got round to building.
+ *
+ * `mcpSummaryLine` is left exported and unused by this function on purpose —
+ * it is the pure phrasing of that count and the row may want it back.
+ *
+ * What is left is the fact a reader cannot get anywhere else, and it is the
+ * one that answers "why is this not under an account?" — the file is the
+ * machine's, not an account's.
  */
 export function mcpOnlyFooter(harness: {
     configured: boolean;
@@ -75,16 +89,8 @@ export function mcpOnlyFooter(harness: {
     scopes: { servers: { enabled: boolean }[] }[];
     providers?: { count: number; modelCount: number } | null;
 }): string {
-    const parts: string[] = [];
-    if (harness.configured) {
-        parts.push(`Configured in one file on this machine, not per account. ${mcpSummaryLine(harness)}.`);
-    }
-    const p = harness.providers;
-    if (p?.count) {
-        parts.push(`${p.count} model provider${p.count === 1 ? '' : 's'}, asked of the harness itself.`);
-    }
-    parts.push('Read-only here. Editing any of this from the phone is not built yet.');
-    return parts.join(' ');
+    if (!harness.configured) return 'Read-only here.';
+    return 'One file on this machine. Read-only here.';
 }
 
 /**

@@ -86,7 +86,7 @@ export default function FlipPolicyDefaultsScreen() {
                 <ItemList containerStyle={{ paddingTop: Platform.OS === 'ios' ? MOBILE_GLASS_HEADER_HEIGHT : 0 }}>
                     <ItemGroup
                         title="Which machine"
-                        footer="The policy store is a file on one Mac, so the default belongs to that Mac."
+                        footer="The policy lives on that Mac."
                     >
                         {machines.length === 0 ? (
                             <Item title="No machines connected" showChevron={false} />

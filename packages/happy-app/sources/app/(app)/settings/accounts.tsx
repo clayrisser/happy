@@ -428,7 +428,7 @@ export default function AccountsScreen() {
                 refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} />}
             >
                 {machines.length === 0 && (
-                    <ItemGroup footer="An account is a login on a machine, so there is nothing to list until a machine is connected.">
+                    <ItemGroup footer="Nothing to list until a machine is connected.">
                         <Item title="No machines connected" showChevron={false} />
                     </ItemGroup>
                 )}
@@ -648,8 +648,7 @@ export default function AccountsScreen() {
                               */}
                             <Item
                                 title={`Add a ${harnessName(harness)} account`}
-                                subtitle="Opens the sign-in page in your browser. Named after the address you sign in as."
-                                subtitleLines={0}
+                                subtitle="signs in through your browser"
                                 icon={<Ionicons name="add-circle-outline" size={29} color="#34C759" />}
                                 disabled={!online || addAccountBusy(phase)}
                                 onPress={() => void addAccount(
@@ -714,19 +713,17 @@ export default function AccountsScreen() {
                   */}
                 <ItemGroup
                     title="Why this is per machine"
-                    footer="Both kinds are written by the machine that ran the login and stay on it. A Claude account is a LOGIN in a config directory — on a Mac its credential is a Keychain item belonging to that directory — and only one is in use at a time, which is what a flip moves between. A cursor account is a TOKEN this machine holds, handed to each session, so two cursor sessions run side by side and there is nothing to flip. No account, code or token is ever held by this app."
+                    footer="No credential is ever held by this app."
                 >
                     <Item
                         title="Switching account mid-session"
-                        subtitle="Use the quota bars under the composer, which know which session you are in. Claude accounts only — a cursor session already has its own token and never needs one."
-                        subtitleLines={0}
+                        subtitle="use the quota bars under the composer"
                         icon={<Ionicons name="swap-horizontal-outline" size={29} color="#FF9500" />}
                         showChevron={false}
                     />
                     <Item
                         title="Why a cursor account shows no percentage"
-                        subtitle="Cursor publishes no quota anywhere — its accounting is server-side — so there is nothing to read. The row says so rather than showing a figure nobody measured."
-                        subtitleLines={0}
+                        subtitle="cursor publishes no quota"
                         icon={<Ionicons name="remove-circle-outline" size={29} color="#8E8E93" />}
                         showChevron={false}
                     />
@@ -742,8 +739,7 @@ export default function AccountsScreen() {
                       */}
                     <Item
                         title="Why a cursor account counts down"
-                        subtitle="A cursor login lasts 60 days and cannot renew itself, so the row starts saying “renew in 3d” a week before it expires. Tap Add a Cursor account again to sign in — the account keeps its name."
-                        subtitleLines={0}
+                        subtitle="lasts 60 days, then sign in again"
                         icon={<Ionicons name="time-outline" size={29} color="#FF9500" />}
                         showChevron={false}
                     />
