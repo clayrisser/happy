@@ -20,6 +20,7 @@ import { basename, join } from 'node:path'
 import { logger } from '@/ui/logger'
 import { droverStateDir, type DroverAccount } from './accounts'
 import { buildHandover, handoverNote, type HandoverEntry, type StrandedAgent } from './handover'
+import { restoreNote, type RestorePlan } from './restore'
 
 export type { StrandedAgent }
 
@@ -51,6 +52,13 @@ export interface FlipPromptContext {
     configDir?: string
     /** The account being left, read when the carried copy is not there yet. */
     fromConfigDir?: string
+    /**
+     * What the session was set to and what it is coming up on (DROVE-272).
+     * Says something only when those two differ -- the account being joined
+     * cannot run the model Clay picked -- because a restore that put back
+     * exactly what he chose is not news.
+     */
+    restore?: RestorePlan
 }
 
 /**
@@ -114,8 +122,14 @@ export function resolveFlipPrompt(ctx: FlipPromptContext): string {
     // Appended rather than substituted, so it survives every override: a
     // per-account or per-session prompt that never heard of subagents still
     // gets told where the stranded ones left their work.
+    //
+    // The restore goes FIRST and the handover second. The restore is one
+    // sentence about the session it is arriving as; the handover can be a
+    // hundred lines about other agents' work, and a substituted model buried
+    // under that is a substitution nobody read.
+    const swap = restoreNote(ctx.restore, ctx.to)
     const note = handoverFor(ctx)
-    return note ? rendered + note : rendered
+    return rendered + (swap ?? '') + (note ?? '')
 }
 
 /**

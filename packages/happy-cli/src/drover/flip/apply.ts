@@ -37,6 +37,7 @@ import { remoteControlWarning, type BusSession } from './remoteControl'
 
 import { ambientDataDir } from './accounts'
 import type { DowngradePlan } from './downgrade'
+import type { RestorePlan } from './restore'
 import { projectDirFor } from './transcript'
 
 /**
@@ -127,6 +128,42 @@ function applyDowngrade(session: Session, downgrade: DowngradePlan): void {
     logger.debug(
         `[flip] downgraded ${downgrade.from} -> ${downgrade.to} (${downgrade.model})` +
             (downgrade.effort ? ` and effort ${downgrade.previousEffort} -> ${downgrade.effort}` : ''),
+    )
+}
+
+/**
+ * Record a restore-substitution the same way, and for the same reason
+ * (DROVE-272).
+ *
+ * The session was set to a model the account it just landed on cannot run, so
+ * something else was taken. `modelMode` is where the replacement child's argv
+ * is read from (`modeCarryArgs`) and where the phone's picker draws from, so
+ * writing it here is what stops the flip pinning the session to the one model
+ * its new account is out of -- and what stops the launcher's own reconcile
+ * typing that model back at the pane on every observation for the rest of the
+ * session.
+ *
+ * `effort` null means the model taken holds the effort we were on, so it is
+ * left standing: that is the half of the ticket that says KEEP THE EFFORT.
+ *
+ * Like applyDowngrade, this write does not come back through the client's own
+ * `metadata` event, so the pane is told separately by takeDowngradePick().
+ */
+function applyRestore(session: Session, restore: RestorePlan): void {
+    if (!restore.rewrite || !restore.model) return
+    session.client.updateMetadata((metadata) => ({
+        ...metadata,
+        modelMode: restore.model,
+        ...(restore.effort ? { effortLevel: restore.effort } : {}),
+    }))
+    logger.debug(
+        `[flip] restored onto ${restore.model}` +
+            (restore.substitution ? ` instead of ${restore.substitution.instead}` : '') +
+            (restore.effort
+                ? `, effort ${restore.keptEffort} -> ${restore.effort}`
+                : restore.keptEffort
+                    ? `, keeping effort ${restore.keptEffort}`
+                    : ''),
     )
 }
 
@@ -307,6 +344,7 @@ export async function applyPendingFlip(opts: ApplyPendingFlipOptions): Promise<b
     }))
     flip.say(result.note)
     if (result.downgrade) applyDowngrade(session, result.downgrade)
+    else if (result.restore) applyRestore(session, result.restore)
 
     // DROVE-47: the strip has to say the NEW account's headroom, and say it
     // now rather than after the settle delay, so the metadata update carrying
