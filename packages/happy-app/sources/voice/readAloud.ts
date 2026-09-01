@@ -216,6 +216,33 @@ import { stopsSpeech, type ReadAloudInterruption } from './readAloudGate';
  * (which the paragraph above places at new content) nor a TAP (which clears
  * spoken marks and reads from a chosen point), and it is spelled as its own
  * case for exactly that reason. readAloudTransport.ts holds the model.
+ *
+ * A SESSION SWITCH IS A PAUSE, PER SESSION (DROVE-289). Clay: "whichever
+ * session I switch to, it starts reading from where IT left off — that's the
+ * ideal. If I'm switching I don't wanna jump ahead... it's like when you press
+ * on the audio, it pauses." His analogy is the design. `focus` used to throw
+ * the whole reading away — timeline, cursor, marks — so coming back to a
+ * session resumed at its TAIL: everything unread when he left was re-fed as
+ * history, marked spoken, and never said. That is the "jumping ahead" he
+ * named.
+ *
+ * Now the reader keeps one held reading PER SESSION (`held`). Switching away
+ * stashes the whole position exactly as a pause holds it: nothing advances,
+ * nothing is dropped, the sentence that was cut mid-word keeps its spoken mark
+ * (DROVE-233's sentence granularity), and — the pause analogy carried all the
+ * way — the timeline KEEPS FILLING while he is elsewhere: arrivals for a held
+ * session go into its held timeline unspoken (`fillHeld`), so a resume reads
+ * on THROUGH what landed while he was away rather than skipping it. Switching
+ * back restores that session's own position and resumes from it, and only
+ * from it: never the tail, never the previous session's place. A session with
+ * no held reading starts exactly as before — silent until something arrives
+ * (DROVE-226), reading arrivals because the reader follows him (DROVE-179's
+ * written-down decision in readAloudNeverSilent.spec.ts).
+ *
+ * HIS pause survives the round trip: a session paused when he left it is
+ * paused when he returns, amber face and all (DROVE-233/258), and only his
+ * gesture lifts it. Turning read-aloud OFF still throws every position away,
+ * the held ones included — off subsumes pause, per session too.
  */
 
 /**
@@ -490,6 +517,41 @@ interface HeldTail {
 }
 
 /**
+ * One session's reading, held across a switch away (DROVE-289).
+ *
+ * The exact fields a pause preserves, because a switch IS a pause taken per
+ * session: the position (`timeline`, `cursor`, every spoken mark inside the
+ * sentences), the bookkeeping that stops a redelivery re-reading a reply
+ * (`queuedChunks`), the turn the session was on, and whether HE had paused it.
+ * The arrival stamps are deliberately NOT held: a restored reading is never
+ * "falling behind", so it resumes at the normal rate until its own live
+ * stream re-establishes itself (DROVE-177's question answered fresh).
+ */
+interface HeldReading {
+    timeline: QueuedSentence[];
+    cursor: number;
+    queuedChunks: Map<string, number>;
+    pendingTails: Map<string, HeldTail>;
+    latestCreatedAt: number;
+    turn: number;
+    turnOpenedAt: number;
+    markerDue: boolean;
+    /** He paused it before he left; it is still his to lift (DROVE-233). */
+    paused: boolean;
+    lastPosition: number | null;
+    urgent: { key: string; text: string }[];
+    detour: QueuedSentence[];
+}
+
+/**
+ * How many switched-away sessions keep their reading. Beyond this the one
+ * held longest ago is let go and falls back to the old behaviour (silent
+ * until something arrives). A bound because a held timeline is the whole
+ * transcript's sentences, and he rotates a handful of sessions, not dozens.
+ */
+export const maxHeldReadings = 8;
+
+/**
  * One sentence out of a transcript the reader is NOT following (DROVE-195).
  *
  * A subagent's transcript is fetched by its own screen and never reaches
@@ -671,6 +733,11 @@ export class ReadAloudReader {
      * app and end reading for good.
      */
     private backgrounded = false;
+    /**
+     * Every switched-away session's reading, keyed by sessionId (DROVE-289).
+     * Insertion order is hold order, which is what the eviction walks.
+     */
+    private heldReadings = new Map<string, HeldReading>();
 
     constructor(engine: SpeechEngine, options: ReadAloudOptions = {}) {
         this.engine = engine;
@@ -755,6 +822,10 @@ export class ReadAloudReader {
         // and a pause cannot survive as a state nothing can see.
         this.setPausedSilently(false);
         if (!enabled) {
+            // Off throws EVERY position away, the held ones included
+            // (DROVE-289): a held reading is a pause taken per session, and
+            // off subsumes pause. Coming back on is a START wherever he is.
+            this.heldReadings.clear();
             this.interrupt('toggled-off');
             this.notifyTransport();
             return;
@@ -822,11 +893,16 @@ export class ReadAloudReader {
     }
 
     /**
-     * On, paused or off has changed (DROVE-233).
+     * On, paused or off has changed — or the reading moved to another session
+     * (DROVE-233, DROVE-289).
      *
-     * No payload: the listener reads `isEnabled` and `isPaused`, which is what
-     * `useSyncExternalStore` wants and what keeps the button and the lock
-     * screen reading the same two fields rather than a copy that can drift.
+     * No payload: the listener reads `isEnabled`, `isPaused` and
+     * `focusedSessionId`, which is what `useSyncExternalStore` wants and what
+     * keeps the button and the lock screen reading the same fields rather
+     * than a copy that can drift. A focus move fires it because the wrist's
+     * reading names the session (DROVE-275) and its publish rides these
+     * listeners; without it a switch would sit on the wire until the next
+     * heartbeat.
      */
     private notifyTransport(): void {
         for (const listener of this.transportListeners) {
@@ -838,7 +914,7 @@ export class ReadAloudReader {
         }
     }
 
-    /** Told when on/paused/off changes. Returns the unsubscribe. */
+    /** Told when on/paused/off changes, and on a focus move. Returns the unsubscribe. */
     addTransportListener(listener: () => void): () => void {
         this.transportListeners.add(listener);
         return () => { this.transportListeners.delete(listener); };
@@ -908,6 +984,12 @@ export class ReadAloudReader {
     /** Un-say a gate that was answered, dismissed or expired before its turn. */
     cancelUrgent(key: string): void {
         this.urgent = this.urgent.filter((line) => line.key !== key);
+        // A gate answered while its session's reading is HELD must not be
+        // read on his return (DROVE-289): the line is stale the moment the
+        // gate stops being pending, wherever its session's reading lives.
+        for (const held of this.heldReadings.values()) {
+            held.urgent = held.urgent.filter((line) => line.key !== key);
+        }
     }
 
     /** Lines still waiting to jump the queue. For the tests. */
@@ -1015,30 +1097,142 @@ export class ReadAloudReader {
     /**
      * Which session is being READ. Only one, ever: four sessions finishing a
      * turn at once would have the phone narrating four replies over each other.
+     *
+     * A SWITCH HOLDS AND RESUMES, PER SESSION (DROVE-289). Leaving stashes the
+     * outgoing session's whole reading exactly as a pause holds it — nothing
+     * advances, nothing is dropped. Arriving restores the target's own held
+     * reading, if it has one, and resumes FROM IT: never the tail, never the
+     * previous session's place. A target with no held reading starts from
+     * nothing, as before: silent until something arrives (DROVE-226). The
+     * captures are told either way — the mic that was dictating into the old
+     * session must not land words in the new one — and the transport listeners
+     * fire so the button, the card and the wrist follow the switch.
      */
     focus(sessionId: string | null, reason: ReadAloudInterruption = 'switched-session'): void {
         if (this.focused === sessionId) return;
-        // Moving the focus throws a transcript away, so it may only ever be
-        // driven by a reason the gate calls a real stop (DROVE-179). A caller
-        // that means "this surface went away" wants `blur`.
+        // Moving the focus moves the reading, so it may only ever be driven
+        // by a reason the gate calls a real stop (DROVE-179). A caller that
+        // means "this surface went away" wants `blur`.
         if (!stopsSpeech(reason)) {
             this.notifyInterrupted(reason);
             return;
         }
+        this.holdFocused();
         this.focused = sessionId;
-        this.queuedChunks.clear();
+        const restored = sessionId !== null ? this.heldReadings.get(sessionId) : undefined;
+        if (restored !== undefined) {
+            this.heldReadings.delete(sessionId as string);
+            this.restoreHeld(restored);
+        } else {
+            this.freshFocus();
+        }
+        this.notifyInterrupted(reason);
+        // The wire and the button follow the switch even when on/paused did
+        // not change: the wrist's reading carries the sessionId (DROVE-275),
+        // and its publish rides these listeners.
+        this.notifyTransport();
+        // AUTO-RESUME (DROVE-289): his words — "it starts reading from where
+        // it left off". A restored PAUSE does not resume — `pump` defers to
+        // it — because that pause is his and only his gesture lifts it.
+        if (restored !== undefined) this.pump();
+    }
+
+    /**
+     * Stash the focused session's reading before the focus moves
+     * (DROVE-289).
+     *
+     * The switch-away half of "a switch is a pause": the utterance in flight
+     * is cut (it keeps its spoken mark, DROVE-233's sentence granularity), the
+     * held tails are flushed into the timeline — the reply as it stands is the
+     * end of the reply for now, exactly as `onHistory` treats a tail — and the
+     * whole position goes into `heldReadings` untouched. The transient
+     * machinery (timers, the refusal stall) is reset either way: timers firing
+     * into another session's timeline is cross-session corruption.
+     */
+    private holdFocused(): void {
+        const leaving = this.focused;
+        const stash = leaving !== null && this.enabled;
+        if (stash) this.flushTails();
+        this.cutCurrentUtterance();
+        this.clearHold();
+        this.clearRetry();
+        this.stalled = false;
+        this.refusals = 0;
+        if (!stash) return;
+        this.heldReadings.set(leaving as string, {
+            timeline: this.timeline,
+            cursor: this.cursor,
+            queuedChunks: this.queuedChunks,
+            pendingTails: this.pendingTails,
+            latestCreatedAt: this.latestCreatedAt,
+            turn: this.turn,
+            turnOpenedAt: this.turnOpenedAt,
+            markerDue: this.markerDue,
+            paused: this.paused,
+            lastPosition: this.lastPosition,
+            urgent: this.urgent,
+            detour: this.detour,
+        });
+        while (this.heldReadings.size > maxHeldReadings) {
+            const oldest = this.heldReadings.keys().next().value;
+            if (oldest === undefined) break;
+            this.heldReadings.delete(oldest);
+        }
+    }
+
+    /**
+     * Take a held reading back as the live one (DROVE-289).
+     *
+     * The restore adopts the held objects outright — the map entry is deleted
+     * by the caller, so nothing aliases. The arrival stamps start from
+     * nothing on purpose: a restored reading is not "falling behind" whatever
+     * the clock says, so it reads at the normal rate until its own live
+     * stream re-establishes itself (DROVE-177).
+     */
+    private restoreHeld(s: HeldReading): void {
+        this.timeline = s.timeline;
+        this.cursor = s.cursor;
+        this.queuedChunks = s.queuedChunks;
+        this.pendingTails = s.pendingTails;
+        this.latestCreatedAt = s.latestCreatedAt;
+        this.turn = s.turn;
+        this.turnOpenedAt = s.turnOpenedAt;
+        this.markerDue = s.markerDue;
+        this.lastPosition = s.lastPosition;
+        this.urgent = s.urgent;
+        this.detour = s.detour;
+        this.setPausedSilently(s.paused);
+        this.arrivalTurn = -1;
+        this.previousArrivalAt = Number.NEGATIVE_INFINITY;
+        this.previousSayableArrivalAt = Number.NEGATIVE_INFINITY;
+        this.armHold();
+    }
+
+    /** A session the reader has never held: the playhead starts from nothing. */
+    private freshFocus(): void {
+        this.queuedChunks = new Map();
+        this.pendingTails = new Map();
         this.latestCreatedAt = 0;
         this.turnOpenedAt = 0;
         // Another session's arrival stamps say nothing about this one's, and
-        // neither does its transcript: the playhead starts from nothing.
+        // neither does its transcript.
         this.arrivalTurn = -1;
+        this.previousArrivalAt = Number.NEGATIVE_INFINITY;
         this.previousSayableArrivalAt = Number.NEGATIVE_INFINITY;
         this.timeline = [];
         this.cursor = 0;
         this.lastPosition = null;
         this.urgent = [];
         this.detour = [];
-        this.interrupt(reason);
+        this.markerDue = false;
+        // A fresh session was never paused; the outgoing one's pause, if any,
+        // went into its held reading and is still its own.
+        this.setPausedSilently(false);
+    }
+
+    /** Is this switched-away session holding its place? For the tests. */
+    hasHeldReading(sessionId: string): boolean {
+        return this.heldReadings.has(sessionId);
     }
 
     /**
@@ -1241,7 +1435,15 @@ export class ReadAloudReader {
 
     onMessages(sessionId: string, messages: Message[]): void {
         if (!this.enabled) return;
-        if (this.focused === null || sessionId !== this.focused) return;
+        if (this.focused === null || sessionId !== this.focused) {
+            // A held session's timeline KEEPS FILLING, exactly as a paused
+            // one's does (DROVE-233, taken per session by DROVE-289): what
+            // arrives while he is elsewhere queues unspoken, so a resume
+            // reads on through it instead of skipping it.
+            const held = this.heldReadings.get(sessionId);
+            if (held !== undefined) this.fillHeld(held, messages);
+            return;
+        }
 
         const ordered = [...messages].sort((a, b) => a.createdAt - b.createdAt);
         let added = false;
@@ -1340,6 +1542,92 @@ export class ReadAloudReader {
         if (added) this.noteArrival(proseAdded);
         this.armHold();
         if (added) this.pump();
+    }
+
+    /**
+     * Arrivals for a session whose reading is HELD (DROVE-289).
+     *
+     * The paused half of `onMessages`, run against the held state instead of
+     * the live fields: prose is chunked and queued unspoken with the same
+     * dedupe, a user message opens the next turn, and DROVE-108's rule runs
+     * here exactly as it runs while paused — a new turn steps the held cursor
+     * past the older turn's unspoken tail and owes the marker once. Nothing
+     * is spoken and no clock moves: there is no utterance to cut, the
+     * arrival stamps belong to the live session, and a backlog gathered while
+     * he was away is not a stream he is falling behind — it is read out at
+     * the normal rate on resume, or cut by the live rules once its stream
+     * picks back up.
+     *
+     * Not offered to `asideFor` or `thinkingFor`, for `onHistory`'s reason: a
+     * title is a thing to SAY as a tool call happens, and nothing is live
+     * about a session he is not in. Tails are held without a timer — the
+     * next message flushes them, and `restoreHeld` arms the hold for
+     * whatever is left.
+     */
+    private fillHeld(state: HeldReading, messages: Message[]): void {
+        for (const message of [...messages].sort((a, b) => a.createdAt - b.createdAt)) {
+            if (message.kind === 'user-text' && message.createdAt > state.turnOpenedAt) {
+                state.turn += 1;
+                state.turnOpenedAt = message.createdAt;
+                // He asked the session something new; a borrowed transcript
+                // he was part way through is no longer wanted (DROVE-195).
+                state.detour = [];
+                while (state.cursor < state.timeline.length && state.timeline[state.cursor].turn < state.turn) {
+                    state.cursor += 1;
+                }
+                for (const [id, tail] of [...state.pendingTails]) {
+                    if (tail.turn < state.turn) state.pendingTails.delete(id);
+                }
+                state.markerDue = true;
+            }
+            if (message.kind !== 'agent-text' || message.isThinking) continue;
+            if (typeof message.text !== 'string' || message.text.length === 0) continue;
+
+            // A newer message ends every older one's tail, exactly as live.
+            if (message.createdAt > state.latestCreatedAt) {
+                for (const [id, tail] of [...state.pendingTails]) {
+                    if (id === message.id) continue;
+                    state.pendingTails.delete(id);
+                    this.pushHeld(state, [tail.text], tail.turn, id, tail.createdAt);
+                    state.queuedChunks.set(id, (state.queuedChunks.get(id) ?? 0) + 1);
+                }
+                state.latestCreatedAt = message.createdAt;
+            }
+
+            const { complete, pending } = chunkStreamed(stripToSpeakableProse(message.text), false);
+            const already = state.queuedChunks.get(message.id) ?? 0;
+            if (complete.length > already) {
+                this.pushHeld(state, complete.slice(already), state.turn, message.id, message.createdAt);
+                state.queuedChunks.set(message.id, complete.length);
+            }
+            if (pending !== null) {
+                state.pendingTails.set(message.id, { text: pending, turn: state.turn, createdAt: message.createdAt });
+            } else {
+                state.pendingTails.delete(message.id);
+            }
+        }
+    }
+
+    /** Append sentences, unspoken, to a held session's timeline (DROVE-289). */
+    private pushHeld(
+        state: HeldReading,
+        sentences: string[],
+        turn: number,
+        messageId: string,
+        createdAt: number,
+    ): void {
+        for (const text of sentences) {
+            state.timeline.push({
+                text,
+                words: countWords(text),
+                turn,
+                messageId,
+                createdAt,
+                spoken: false,
+                aside: false,
+                thinking: false,
+            });
+        }
     }
 
     /**
