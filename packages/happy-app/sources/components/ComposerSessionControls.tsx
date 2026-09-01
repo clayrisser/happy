@@ -32,6 +32,7 @@ import {
     autoAcceptSegmentValue,
     permissionAccessibilityValue,
 } from './autoAcceptRow';
+import { MOBILE_COMPOSER_SEGMENT_FILL_INSET } from './agentInputLayout';
 import {
     COMPOSER_MODEL_SEGMENT,
     COMPOSER_SESSION_CONTROL_SIZE,
@@ -397,6 +398,15 @@ const styles = StyleSheet.create((theme) => ({
         width: RNStyleSheet.hairlineWidth,
         height: 20,
     },
+    /**
+     * Read-aloud's fill, inset from the segment's box (DROVE-284 refinement).
+     * Size, radius and colour come from the call site; this only centres the
+     * glyph inside the pill the way the segment centres the pill.
+     */
+    fillPill: {
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
 }));
 
 function Control(props: {
@@ -434,12 +444,27 @@ function Control(props: {
     /**
      * An OPAQUE fill behind this one segment, or nothing (DROVE-284).
      *
-     * Read-aloud's live states. It is a rectangle rather than a disc because a
-     * segment is a rectangle; the capsule's `overflow: hidden` rounds it at
-     * whichever end it lands on, which is what already clips `controlOpen`'s
-     * wash. Opaque for DROVE-254's reason — a translucent fill inside the
-     * bubble's own glass has no single value to measure — and every value handed
-     * here is asserted at `colorAlpha === 1` in composerControlColour.spec.ts.
+     * Read-aloud's live states. DROVE-284 bled it to the segment's whole box
+     * and Clay's photo shows what that draws: a colour square to the capsule's
+     * rims, sharp-cornered inside a rounded shell. It is an INSET PILL now —
+     * `MOBILE_COMPOSER_SEGMENT_FILL_INSET` holds the numbers and the renders
+     * that settled it — so the filled state nests inside the capsule the way
+     * every other filled object on this row nests inside the bubble
+     * (DROVE-214's argument for discs over bare glyphs, at segment scale). It
+     * is also the disc the control wore before the move, kept at this size
+     * rather than traded for a rectangle the disc never was.
+     *
+     * Opaque for DROVE-254's reason — a translucent fill inside the bubble's
+     * own glass has no single value to measure — and every value handed here
+     * is asserted at `colorAlpha === 1` in composerControlColour.spec.ts. The
+     * pill moves where the fill STOPS, not what it is: the fills and tints are
+     * the same measured values on the same capsule.
+     *
+     * `undefined` means this segment has no fill state at all; `null` means it
+     * has one and it is off. The distinction is what keeps the pill MOUNTED on
+     * every face (transparent when off), so the face swap under a finger never
+     * changes the tree the press is riding on — DROVE-286's lesson, honoured
+     * here before it can bite.
      */
     fill?: string | null;
     /** The glyph segment's own width by default; the model segment sizes to its name. */
@@ -479,6 +504,23 @@ function Control(props: {
      * never on the material, so the answer is constant and is written here.
      */
     const pressable = !!props.onPress;
+    /**
+     * THE FILL IS A PILL INSIDE THE SEGMENT, NOT THE SEGMENT'S OWN BACKGROUND
+     * (DROVE-284 refinement). The numbers and the side-by-side renders that
+     * settled it are on `MOBILE_COMPOSER_SEGMENT_FILL_INSET`.
+     *
+     * The pill is a CHILD of the pressable and is mounted on every face —
+     * transparent when the state is off — so a face swap recolours a view that
+     * is already there rather than mounting one. The gesture stays on the one
+     * BubblePressable for the life of the control, which is DROVE-286's rule:
+     * the press stream must never ride a view the state can unmount.
+     */
+    const pill = props.fill !== undefined
+        ? {
+            width: props.segmentWidth - 2 * MOBILE_COMPOSER_SEGMENT_FILL_INSET.horizontal,
+            height: props.size - 2 * MOBILE_COMPOSER_SEGMENT_FILL_INSET.vertical,
+        }
+        : null;
     return (
         <BubblePressable
             onPress={props.onPress}
@@ -490,7 +532,6 @@ function Control(props: {
             hitSlop={{ top: props.verticalSlop, bottom: props.verticalSlop, left: 0, right: 0 }}
             style={(p) => [
                 ...segmentStyle,
-                props.fill ? { backgroundColor: props.fill } : null,
                 props.open && styles.controlOpen,
                 { opacity: pressable && p.pressed ? 0.7 : 1 },
             ]}
@@ -502,7 +543,23 @@ function Control(props: {
                 ? { expanded: props.open, disabled: !pressable }
                 : { checked: props.toggled, disabled: !pressable }}
         >
-            {props.children}
+            {pill ? (
+                <View
+                    style={[
+                        styles.fillPill,
+                        {
+                            width: pill.width,
+                            height: pill.height,
+                            // A stadium at every segment width: half the
+                            // pill's narrower side.
+                            borderRadius: Math.min(pill.width, pill.height) / 2,
+                            backgroundColor: props.fill ?? 'transparent',
+                        },
+                    ]}
+                >
+                    {props.children}
+                </View>
+            ) : props.children}
         </BubblePressable>
     );
 }
@@ -699,15 +756,18 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                 mode from off, pause and resume while reading — comes with it,
                 because a press was never a property of the disc.
 
-                THE FILL IS A RECTANGLE NOW AND SAYS THE SAME THING. Off it
+                THE FILL IS AN INSET PILL AND SAYS THE SAME THING. Off it
                 wears the capsule like the padlock does; paused it is the
                 palette's amber (DROVE-258), reading the accent, on a call the
-                recording red. The capsule's `overflow: hidden` rounds it if it
-                ever lands on an end. The glyph is `composerFillTint`'s answer
-                over whichever fill it is on, which is white everywhere except
-                the amber, where white measures about 2:1 and the tint flips —
-                the same rule the disc used, reached through the same
-                function. */}
+                recording red. DROVE-284 first drew it as the segment's own
+                rectangle, square to the capsule's rims; Clay's photo showed
+                the sharp corners inside the rounded shell, and the pill —
+                `MOBILE_COMPOSER_SEGMENT_FILL_INSET`, with the renders that
+                settled it — is the disc's vocabulary kept at segment scale.
+                The glyph is `composerFillTint`'s answer over whichever fill
+                it is on, which is white everywhere except the amber, where
+                white measures about 2:1 and the tint flips — the same rule
+                the disc used, reached through the same function. */}
             {readAloud ? (
                 <Control
                     segment="readAloud"
