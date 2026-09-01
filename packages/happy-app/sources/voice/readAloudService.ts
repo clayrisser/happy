@@ -13,8 +13,24 @@ import { subagentDetourFrom } from './subagentRead';
 import { getSubagentMessages } from '@/sync/subagentMessages';
 import { startBackgroundAudio } from './backgroundAudio';
 import { startNextSessionPress } from './nextSession';
+import { startMicPress } from './micPress';
+import { HeadlessDictation } from './headlessDictation';
 import { readingCycleFrom } from './readingCycle';
-import { addRemoteCommandListener } from 'drover-speech';
+import { mountedDictationSurface, onDictationSurfaceChange } from './dictationSurface';
+import { dictationBlock } from './dictationCapability';
+import { cueDurationMs, cueSpec } from './audioCues';
+import * as Application from 'expo-application';
+import {
+    addDictationEndedListener,
+    addDictationPartialListener,
+    addRemoteCommandListener,
+    cancelDictation,
+    dictationReportsProgress,
+    isDroverSpeechAvailable,
+    remoteTriplePressAvailable,
+    startDictation,
+    stopDictation,
+} from 'drover-speech';
 
 /**
  * The one reader the app owns (DROVE-30).
@@ -185,5 +201,78 @@ startNextSessionPress({
     ),
     current: () => readAloud.readingSessionId,
     take: (sessionId) => readAloud.takeVoice(sessionId),
+    subscribe: (listener) => addRemoteCommandListener(listener),
+});
+
+/**
+ * The triple press opens the microphone, mounted screen or not (DROVE-302).
+ *
+ * WIRED HERE FOR THE SAME REASON THE DOUBLE PRESS IS. Clay: "the headphone
+ * mappings should work the same if the app is in the foreground or if the app
+ * is background and we are in streaming mode." Two of the three presses met
+ * that because both are subscribed at module scope; the mic did not, because
+ * it lived in `useVoiceComposer` and only `SessionView` mounts that. Background
+ * the app from the session LIST and the press reached no subscription at all.
+ * This module has no react in it and runs once at import, so the press lands
+ * whether a SessionView is mounted, unmounted, or was never opened this launch.
+ *
+ * WHERE THE WORDS GO when nothing is mounted is the session DRAFT, which the
+ * store already keeps per session and `ChatComposer` hydrates from on open. So
+ * a sentence said into a pocket is waiting in the composer of the session he
+ * was listening to. It is never SENT: only a lift sends (DROVE-105) and a
+ * headphone press has no lift.
+ *
+ * EVERY DICTATION SEMANTIC IS BORROWED. `HeadlessDictation` runs the same
+ * `DictationCapture` over the same recogniser with the same
+ * `dictationComposerEvents` the screen uses, so DROVE-140's pause handling,
+ * DROVE-120's "a capture ending never costs words" and DROVE-263's restart
+ * guard are inherited rather than restated.
+ */
+const headlessDictation = new HeadlessDictation({
+    engine: {
+        start: () => startDictation(),
+        stop: () => stopDictation(),
+        cancel: () => cancelDictation(),
+    },
+    draft: (session) => storage.getState().sessions[session]?.draft ?? '',
+    setDraft: (session, text) => storage.getState().updateSessionDraft(session, text),
+    micHeld: (held) => readAloud.setMicHeld(held),
+    cutReading: () => readAloud.interrupt('mic'),
+    // Nobody can read an alert from a pocket, so a microphone that would not
+    // open says so with the one sound that exists for it (DROVE-174).
+    onError: () => audioCues.ack('micRefused'),
+    onInterrupt: (listener) => readAloud.addInterruptListener(listener),
+    onPartial: (listener) => {
+        const subscription = addDictationPartialListener(listener);
+        return () => subscription.remove();
+    },
+    onEnded: (listener) => {
+        const subscription = addDictationEndedListener(listener);
+        return () => subscription.remove();
+    },
+    interval: (run, ms) => {
+        const timer = setInterval(run, ms);
+        return () => clearInterval(timer);
+    },
+    now: () => Date.now(),
+});
+
+startMicPress({
+    available: () => remoteTriplePressAvailable(),
+    holder: () => readAloud.readingSessionId,
+    mounted: () => mountedDictationSurface(),
+    onSurfaceChange: (listener) => onDictationSurfaceChange(listener),
+    headless: headlessDictation,
+    blocked: () => dictationBlock({
+        moduleAvailable: isDroverSpeechAvailable(),
+        reportsProgress: dictationReportsProgress(),
+        build: Application.nativeBuildVersion,
+    }) !== null,
+    ack: (id) => audioCues.ack(id),
+    duration: (id) => cueDurationMs(cueSpec(id)),
+    delay: (run, ms) => {
+        const timer = setTimeout(run, ms);
+        return () => clearTimeout(timer);
+    },
     subscribe: (listener) => addRemoteCommandListener(listener),
 });
