@@ -9,10 +9,11 @@ import {
     TouchableOpacity,
     View,
 } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 import { Ionicons } from '@expo/vector-icons';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
-import { accountLoginCard, codeToSend, hostOf, type AccountLoginCard } from './droverAccountLogin';
+import { accountLoginCard, clipboardCode, codeToSend, hostOf, type AccountLoginCard } from './droverAccountLogin';
 
 /**
  * The account-login card's BODY, with no idea where it is drawn (DROVE-212).
@@ -37,6 +38,20 @@ import { accountLoginCard, codeToSend, hostOf, type AccountLoginCard } from './d
  *   THE CODE COMES BACK. It is typed here and sent as the question's text
  *   answer, which lands on the waiting `claude auth login`'s stdin. Nothing
  *   stores it, nothing else is sent it, and the field is cleared on submit.
+ *
+ * ONE TAP FOR THE CODE (DROVE-335). Clay: "for the login I was kinda expecting
+ * a paste and submit button instead of having to paste in a field and submit."
+ * He is right — the code is already on the clipboard when he comes back from
+ * the browser, and long-press, wait, Paste, Send is four gestures to move a
+ * string the phone is already holding. Paste and send does it in one. The field
+ * stays exactly as it was, because a code read aloud or typed from a laptop has
+ * nowhere else to go.
+ *
+ * What the button does NOT do is send whatever it finds. The answer goes to a
+ * `claude auth login` blocked on stdin with two tries, so a clipboard holding
+ * the sign-in link — one tap away on the row above, and what was on the
+ * clipboard a minute ago — would spend one of them and come back "Invalid
+ * code". `clipboardCode` judges it first and says why in a sentence.
  */
 export interface DroverAccountLoginBodyProps {
     /** The mirrored card's arguments, straight off the request. */
@@ -58,6 +73,8 @@ export const DroverAccountLoginBody = React.memo<DroverAccountLoginBodyProps>((
     const [code, setCode] = React.useState('');
     const [busy, setBusy] = React.useState(false);
     const [sent, setSent] = React.useState<'code' | 'cancel' | null>(null);
+    /** Why the last one-tap paste was not sent, in one sentence (DROVE-335). */
+    const [refused, setRefused] = React.useState<string | null>(null);
 
     const answer = React.useCallback(async (input: Record<string, unknown>, kind: 'code' | 'cancel') => {
         if (busy) return;
@@ -92,8 +109,41 @@ export const DroverAccountLoginBody = React.memo<DroverAccountLoginBodyProps>((
         const value = code && codeToSend(code);
         if (!value) return;
         setCode('');
+        setRefused(null);
         await answer({ code: value }, 'code');
     }, [answer, code]);
+
+    /**
+     * The clipboard, read and sent in one tap (DROVE-335).
+     *
+     * A refusal fills the field rather than throwing the paste away, so the bad
+     * value is visible, fixable and sendable by hand — Clay can see what his
+     * clipboard actually had instead of being told no by a button.
+     *
+     * A clipboard that cannot be read at all (web without permission, a
+     * platform that refuses) is refused in the same place and the same voice,
+     * because from where he is standing it is the same thing: the tap did not
+     * send a code.
+     */
+    const pasteAndSend = React.useCallback(async () => {
+        if (busy) return;
+        let raw: string | null = null;
+        try {
+            raw = await Clipboard.getStringAsync();
+        } catch {
+            setRefused('The clipboard could not be read here, so paste the code into the box below instead.');
+            return;
+        }
+        const judged = clipboardCode(raw);
+        if ('refused' in judged) {
+            setRefused(judged.refused);
+            setCode(typeof raw === 'string' ? raw.trim() : '');
+            return;
+        }
+        setRefused(null);
+        setCode('');
+        await answer({ code: judged.code }, 'code');
+    }, [answer, busy]);
 
     // Null rather than a fallback: the bridge only mints this card from a bus
     // event whose preview is already an https link, so anything else here is a
@@ -141,10 +191,22 @@ export const DroverAccountLoginBody = React.memo<DroverAccountLoginBodyProps>((
                 <Text style={styles.reasonText}>Login cancelled.</Text>
             ) : (
                 <>
+                    <TouchableOpacity
+                        style={styles.pasteButton}
+                        onPress={pasteAndSend}
+                        disabled={!live || busy}
+                        activeOpacity={0.7}
+                        accessibilityRole="button"
+                        accessibilityLabel="Paste the code from the clipboard and send it"
+                    >
+                        <Ionicons name="clipboard-outline" size={18} color={theme.colors.text} />
+                        <Text style={styles.pasteButtonText}>Paste and send</Text>
+                    </TouchableOpacity>
+                    {refused ? <Text style={styles.refusedText}>{refused}</Text> : null}
                     <TextInput
                         style={styles.codeInput}
                         value={code}
-                        onChangeText={setCode}
+                        onChangeText={(next) => { setCode(next); setRefused(null); }}
                         editable={live}
                         placeholder="Paste the code from that page"
                         placeholderTextColor={theme.colors.textSecondary}
@@ -255,6 +317,28 @@ const styles = StyleSheet.create((theme) => ({
         borderWidth: 1,
         borderColor: theme.colors.divider,
         backgroundColor: Platform.select({ web: 'transparent', default: theme.colors.surface }),
+    },
+    pasteButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        paddingVertical: 12,
+        paddingHorizontal: 12,
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: theme.colors.divider,
+        backgroundColor: Platform.select({ web: 'transparent', default: theme.colors.surface }),
+        minHeight: 44,
+    },
+    pasteButtonText: {
+        fontSize: 14,
+        fontWeight: '500',
+        color: theme.colors.text,
+    },
+    refusedText: {
+        fontSize: 13,
+        color: theme.colors.textDestructive,
     },
     codeInput: {
         borderWidth: 1,
