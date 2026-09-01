@@ -43,6 +43,15 @@
  *    second route to the same conclusion, so a jammed thread that swallows
  *    the timer still classifies a two-second hold correctly.
  *
+ *    AND THE TIMER IS FEEDBACK, NOT VERDICT (DROVE-293). The timer cannot
+ *    see the finger; it only knows no lift has been PROCESSED yet, and on
+ *    the phone a tap's lift is routinely processed late -- press-in's own
+ *    work (the red disc, the banner, the audio session's category change)
+ *    sits on the main thread that delivers touchesEnded. So at the lift,
+ *    when both edges carry the OS touch clock, that clock decides alone and
+ *    a fired timer cannot overrule it. `confirmed` decides only where no
+ *    touch clock exists.
+ *
  * Nothing here schedules, records or vibrates. The reducer names EFFECTS and
  * the hook carries them out, which is what makes tap-versus-hold timing a
  * table of cases in a spec rather than a thing to feel for on a phone.
@@ -160,12 +169,30 @@ export function isInsideTalkButton(
 }
 
 /**
+ * The press's duration on the OS's touch clock ALONE, or null when either
+ * edge went unstamped (DROVE-293).
+ *
+ * This is the one measurement no jam can inflate: both stamps are written
+ * when the finger actually moved (BaseTouch.cpp puts UITouch's own time into
+ * `nativeEvent.timestamp`), so a lift the main thread sat on for half a
+ * second still says how long the finger was really down. The two clocks have
+ * different epochs, so they are never mixed: both touch timestamps or null.
+ */
+export function touchElapsed(
+    gesture: MicGesture,
+    event: { touchAt?: number },
+): number | null {
+    if (gesture.pressedTouchAt === null || event.touchAt === undefined) return null;
+    return event.touchAt - gesture.pressedTouchAt;
+}
+
+/**
  * How long the finger has been down, in milliseconds (DROVE-140).
  *
  * The OS's touch clock wins whenever BOTH the press and the lift carry one,
  * because it is stamped when the finger actually moved rather than when the
- * JS thread got round to the callback. The two clocks have different epochs,
- * so they are never mixed: it is both touch timestamps or neither.
+ * JS thread got round to the callback. The wall-clock difference is the
+ * fallback for platforms and tests that stamp nothing.
  *
  * Infinity when no finger is down, so a lift with no press behind it can
  * never be mistaken for a tap.
@@ -175,9 +202,8 @@ export function pressElapsed(
     event: { at: number; touchAt?: number },
 ): number {
     if (gesture.pressedAt === null) return Infinity;
-    if (gesture.pressedTouchAt !== null && event.touchAt !== undefined) {
-        return event.touchAt - gesture.pressedTouchAt;
-    }
+    const finger = touchElapsed(gesture, event);
+    if (finger !== null) return finger;
     return event.at - gesture.pressedAt;
 }
 
@@ -304,12 +330,34 @@ export function reduceMicGesture(gesture: MicGesture, event: MicGestureEvent): M
                     // off a button they meant to latch.
                     return { next: idleMicGesture, effects: ['cancel', 'tick'] };
                 }
-                // Two routes to the same conclusion (DROVE-140): the timer
-                // that already fired under the finger, or the elapsed time on
-                // the OS's touch clock. Either one alone is enough, so a
-                // jammed thread that swallowed the timer still reads a long
-                // hold as a hold.
-                const held = gesture.confirmed || pressElapsed(gesture, event) >= HOLD_MIN_MS;
+                // WHICH CLOCK DECIDES THE LIFT (DROVE-140, DROVE-293). The
+                // hold timer runs on real time; the lift's stamp is the
+                // finger's own. They can disagree, and on the phone they do:
+                // press-in is the busiest moment the composer has -- it
+                // mounts the red disc, the banner and the waveform, and the
+                // recogniser's start flips the audio session's category --
+                // and that work sits on the very main thread that delivers
+                // touchesEnded. A tap's lift then reaches this reducer AFTER
+                // the timer confirmed a hold, with its stamp still saying
+                // 80ms. Before DROVE-286 that lift never arrived at all (the
+                // remount ate it), which is the only reason this never
+                // showed; the hoist made releases arrive, and the first
+                // thing a late one met was `confirmed ||`, which read the
+                // tap as a zero-length push-to-talk and sent a capture he
+                // had opened to think in. "It just doesn't activate."
+                //
+                // So when BOTH edges carry the OS's touch clock, the finger
+                // decides ALONE: a timer's guess about a finger it cannot
+                // see loses to the finger's own testimony, in either
+                // direction -- a stamped tap latches past a fired timer, and
+                // a stamped hold sends past a swallowed one (DROVE-140's
+                // jammed-thread case). `confirmed` and the wall-clock
+                // difference remain the two routes for the platforms that
+                // stamp nothing (web).
+                const finger = touchElapsed(gesture, event);
+                const held = finger !== null
+                    ? finger >= HOLD_MIN_MS
+                    : gesture.confirmed || pressElapsed(gesture, event) >= HOLD_MIN_MS;
                 if (!held) {
                     return {
                         next: {

@@ -439,7 +439,35 @@ describe('reduceMicGesture', () => {
         });
 
         it('a confirmed press sends even when the clocks say it was brief', () => {
+            // No touch clock on either edge: the timer is the best evidence
+            // there is, and the wall clock lies in both directions
+            // (DROVE-140). This is the stamp-less fallback, web's case.
             const run = drive([press(1000), holdConfirm, lift(1001)]);
+            expect(outcome(run.effects)).toEqual(['open', 'send']);
+        });
+
+        it('but the finger clock, when stamped, outranks a fired timer (DROVE-293)', () => {
+            // The phone's tap: the lift is PROCESSED after the hold timer
+            // fired -- press-in's own work jammed the main thread that
+            // delivers touchesEnded -- but its stamp says the finger rose at
+            // 80ms. The timer cannot see a finger; the stamp is the finger.
+            // Reading `confirmed` first here is what turned a tap into a
+            // zero-length push-to-talk and closed the mic under him.
+            const run = drive([
+                { type: 'pressIn', at: 1_000, touchAt: 700_000 },
+                holdConfirm,
+                { type: 'pressOut', at: 1_650, touchAt: 700_080 },
+            ]);
+            expect(run.gesture.state).toBe('latched');
+            expect(outcome(run.effects)).toEqual(['open', 'latch']);
+        });
+
+        it('and a stamped hold still sends past a fired timer, same clock both ways', () => {
+            const run = drive([
+                { type: 'pressIn', at: 1_000, touchAt: 700_000 },
+                holdConfirm,
+                { type: 'pressOut', at: 2_000, touchAt: 700_000 + HOLD_MIN_MS + 200 },
+            ]);
             expect(outcome(run.effects)).toEqual(['open', 'send']);
         });
 
