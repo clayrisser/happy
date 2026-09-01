@@ -344,6 +344,15 @@ export const it: TranslationStructure = {
         forkErrorMissingMetadata: 'Mancano i metadati della sessione necessari per biforcare.',
         forkErrorGeneric: 'Impossibile biforcare la sessione.',
         forkClaudeOnly: 'La biforcazione è attualmente supportata solo per le sessioni Claude.',
+        forkErrorDirectoryMissing: ({ directory }: { directory: string }) =>
+            `La cartella ${directory} non esiste più su quella macchina, quindi non c'è dove avviare la nuova sessione.`,
+        cloneAction: 'Clona in un altro ambiente…',
+        cloneSubtitle: 'Racconta di nuovo questa conversazione a Cursor, Pi o a un Claude nuovo',
+        cloneSheetTitle: 'Clona in un altro ambiente',
+        cloneSheetSubtitle: "Una nuova sessione nella stessa cartella, avviata con questa conversazione raccontata come primo messaggio. L'originale resta intatta.",
+        cloneErrorGeneric: 'Impossibile clonare la sessione.',
+        cloneErrorNotClaude: 'Solo una sessione Claude può essere clonata in un altro ambiente: la sua conversazione è quella che drover sa esportare.',
+        cloneHarnessUnavailable: 'Non installato su questa macchina',
     },
 
     commandPalette: {

@@ -14,6 +14,7 @@ import {
     type ForkSource,
 } from '@/sync/ops';
 import { getSessionForkSource } from '@/utils/sessionFork';
+import { spawnFailureMessage } from '@/utils/spawnFailure';
 import { MobileGlassSurface } from './MobileGlass';
 
 export interface DuplicateSheetProps {
@@ -158,8 +159,13 @@ export const DuplicateSheet = React.memo(function DuplicateSheet(props: Duplicat
             return;
         }
 
-        const message = result.type === 'error' ? result.errorMessage : t('session.forkErrorGeneric');
-        Modal.alert(t('common.error'), message);
+        // The daemon's own sentence whenever it gave one (DROVE-337). The
+        // generic fallback is for a result with nothing in it, not for every
+        // shape this branch did not name.
+        Modal.alert(t('common.error'), spawnFailureMessage(result, {
+            generic: t('session.forkErrorGeneric'),
+            directoryMissing: (directory) => t('session.forkErrorDirectoryMissing', { directory }),
+        }));
     });
 
     return (

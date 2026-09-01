@@ -3,6 +3,8 @@
  * Similar to ApiSessionClient but for machine-scoped connections
  */
 
+import { join } from 'node:path';
+
 import { io, Socket } from 'socket.io-client';
 import { logger } from '@/ui/logger';
 import { pickForLog } from '@slopus/happy-wire';
@@ -36,6 +38,7 @@ import {
     listCodexRewindPoints,
 } from '@/codex/codexThreadFork';
 import { startAccountLogin, type AccountLoginRequest } from '@/drover/accountLogin';
+import { exportCloneSeed, isCloneTargetHarness, cloneTargetHarnesses } from '@/drover/cloneSeed';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -187,7 +190,7 @@ export class ApiMachineClient {
 
         // Register spawn session handler
         this.rpcHandlerManager.registerHandler('spawn-happy-session', async (params: any) => {
-            const { directory, sessionId, machineId, approvedNewDirectoryCreation, agent, permissionMode, modelMode, effortLevel, environmentVariables, token, resumeClaudeSessionId, resumeCodexThreadId, parentSessionId, forkedFromMessageId, isSideChat } = params || {};
+            const { directory, sessionId, machineId, approvedNewDirectoryCreation, agent, permissionMode, modelMode, effortLevel, environmentVariables, token, resumeClaudeSessionId, resumeCodexThreadId, seedFile, parentSessionId, forkedFromMessageId, isSideChat } = params || {};
             // THE LEAK (DROVE-304). This line was
             // `JSON.stringify(params)` and it ran on EVERY spawn, behind no
             // flag at all. `params.token` is the session's bearer token and
@@ -214,6 +217,10 @@ export class ApiMachineClient {
                     'directory', 'sessionId', 'machineId', 'agent', 'permissionMode',
                     'modelMode', 'effortLevel', 'approvedNewDirectoryCreation',
                     'parentSessionId', 'forkedFromMessageId', 'isSideChat',
+                    // A path this daemon wrote itself, under the drover state
+                    // dir. Not a credential, and the one thing worth having in
+                    // the log when a clone starts with no context in it.
+                    'seedFile',
                 ]),
                 environmentVariableCount: Object.keys(environmentVariables ?? {}).length,
                 hasToken: Boolean(token),
@@ -224,7 +231,7 @@ export class ApiMachineClient {
                 throw new Error('Directory is required');
             }
 
-            const result = await spawnSession({ directory, sessionId, machineId, approvedNewDirectoryCreation, agent, permissionMode, modelMode, effortLevel, environmentVariables, token, resumeClaudeSessionId, resumeCodexThreadId, parentSessionId, forkedFromMessageId, isSideChat });
+            const result = await spawnSession({ directory, sessionId, machineId, approvedNewDirectoryCreation, agent, permissionMode, modelMode, effortLevel, environmentVariables, token, resumeClaudeSessionId, resumeCodexThreadId, seedFile, parentSessionId, forkedFromMessageId, isSideChat });
 
             switch (result.type) {
                 case 'success':
@@ -337,6 +344,49 @@ export class ApiMachineClient {
                 }
                 throw error;
             }
+        });
+
+        // Export a Claude conversation as a SEED for another harness (DROVE-337).
+        //
+        // The app's fork is same-harness by construction, because a fork
+        // carries the transcript and only Claude Code can read a Claude Code
+        // transcript. Crossing harnesses is a CLONE: the conversation is
+        // exported and RETOLD. This handler is the export half, and it does
+        // not start anything -- the caller then spawns the target harness with
+        // `seedFile` set, so a clone takes the same window path, the same
+        // precondition checks and the same account decision as every other
+        // session started from the phone.
+        //
+        // Errors THROW rather than returning an error shape, which is what
+        // every other handler on this class does. The app normalises the
+        // daemon's `{ error }` envelope back into a result it can print
+        // (`machineRpcResult.ts`), so the sentence `drover clone` wrote is
+        // what Clay reads on the phone. Before DROVE-337 it was swallowed and
+        // replaced with "Failed to fork the session."
+        this.rpcHandlerManager.registerHandler('drover-clone-seed', async (params: any) => {
+            const { directory, claudeSessionId, harness, turns } = params || {};
+            if (typeof directory !== 'string' || directory.length === 0) {
+                throw new Error('directory is required');
+            }
+            if (typeof claudeSessionId !== 'string' || !UUID_RE.test(claudeSessionId)) {
+                throw new Error('claudeSessionId must be a valid UUID');
+            }
+            if (!isCloneTargetHarness(harness)) {
+                throw new Error(
+                    `Cannot clone into '${harness}'. Known harnesses: ${cloneTargetHarnesses.join(', ')}.`,
+                );
+            }
+            const result = await exportCloneSeed({
+                transcriptPath: join(getProjectPath(directory), `${claudeSessionId}.jsonl`),
+                sessionId: claudeSessionId,
+                directory,
+                harness,
+                turns: typeof turns === 'number' ? turns : undefined,
+            });
+            if (result.type === 'error') {
+                throw new Error(result.errorMessage);
+            }
+            return { type: 'success', seedPath: result.seedPath };
         });
 
         this.rpcHandlerManager.registerHandler('codex-fork-thread', async (params: any) => {

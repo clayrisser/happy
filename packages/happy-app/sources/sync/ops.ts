@@ -4,6 +4,7 @@
  */
 
 import { apiSocket } from './apiSocket';
+import { machineRpcCatchMessage, normalizeMachineRpcResult } from './machineRpcResult';
 import { sync } from './sync';
 import { storage } from './storage';
 import { describeDemoInput, isDroverDemoId, recordDemoAnswer } from './droverDemo';
@@ -208,6 +209,13 @@ export interface SpawnSessionOptions {
      * session attaches to an app-server thread created by fork / duplicate.
      */
     resumeCodexThreadId?: string;
+    /**
+     * A file on the machine whose contents become the new session's first
+     * prompt (DROVE-337). This is how a CLONE lands: a fork carries the
+     * transcript, which only works while the target harness can read it, so
+     * crossing harnesses exports the conversation and retells it instead.
+     */
+    seedFile?: string;
     /** Happy session id this fork was branched from (lineage). */
     parentSessionId?: string;
     /** Happy message id used as the rewind point (only set for "duplicate"). */
@@ -273,7 +281,7 @@ export interface ResumeSessionOptions {
  */
 export async function machineSpawnNewSession(options: SpawnSessionOptions): Promise<SpawnSessionResult> {
 
-    const { machineId, directory, approvedNewDirectoryCreation = false, token, agent, permissionMode, modelMode, effortLevel, clientRequestId, providerId, modelId, effort, resumeClaudeSessionId, resumeCodexThreadId, parentSessionId, forkedFromMessageId, isSideChat } = options;
+    const { machineId, directory, approvedNewDirectoryCreation = false, token, agent, permissionMode, modelMode, effortLevel, clientRequestId, providerId, modelId, effort, resumeClaudeSessionId, resumeCodexThreadId, seedFile, parentSessionId, forkedFromMessageId, isSideChat } = options;
 
     try {
         if (agent === 'rig' && !clientRequestId) {
@@ -294,6 +302,7 @@ export async function machineSpawnNewSession(options: SpawnSessionOptions): Prom
             effort?: string,
             resumeClaudeSessionId?: string,
             resumeCodexThreadId?: string,
+            seedFile?: string,
             parentSessionId?: string,
             forkedFromMessageId?: string,
             isSideChat?: boolean,
@@ -310,18 +319,23 @@ export async function machineSpawnNewSession(options: SpawnSessionOptions): Prom
                 ...(modelId ? { modelId } : {}),
                 ...((effort ?? effortLevel) ? { effort: effort ?? effortLevel } : {}),
             }
-            : { type: 'spawn-in-directory', directory, approvedNewDirectoryCreation, token, agent, permissionMode, modelMode, effortLevel, resumeClaudeSessionId, resumeCodexThreadId, parentSessionId, forkedFromMessageId, isSideChat };
+            : { type: 'spawn-in-directory', directory, approvedNewDirectoryCreation, token, agent, permissionMode, modelMode, effortLevel, resumeClaudeSessionId, resumeCodexThreadId, seedFile, parentSessionId, forkedFromMessageId, isSideChat };
         const result = await apiSocket.machineRPC<SpawnSessionResult, SpawnRequest>(
             machineId,
             'spawn-happy-session',
             request,
         );
-        return result;
+        // The daemon answers a THROWN handler with `{ error: '<reason>' }` and
+        // no `type` at all, and that shape used to fall through every caller's
+        // `result.type === 'error'` test straight into a generic sentence
+        // (DROVE-337). Normalised here, once, so a spawn that could not open a
+        // tmux window says so on the phone.
+        return normalizeMachineRpcResult<SpawnSessionResult>(result, 'Failed to spawn session');
     } catch (error) {
         // Handle RPC errors
         return {
             type: 'error',
-            errorMessage: error instanceof Error ? error.message : 'Failed to spawn session'
+            errorMessage: machineRpcCatchMessage(error, 'Failed to spawn session'),
         };
     }
 }
@@ -343,11 +357,11 @@ export async function claudeForkSession(options: ClaudeForkSessionOptions): Prom
             'claude-fork-session',
             { directory, claudeSessionId },
         );
-        return result;
+        return normalizeMachineRpcResult<ClaudeForkSessionResult>(result, 'Failed to fork session');
     } catch (error) {
         return {
             type: 'error',
-            errorMessage: error instanceof Error ? error.message : 'Failed to fork session',
+            errorMessage: machineRpcCatchMessage(error, 'Failed to fork session'),
         };
     }
 }
@@ -372,11 +386,11 @@ export async function claudeListRewindPoints(
             'claude-list-rewind-points',
             { directory, claudeSessionId },
         );
-        return result;
+        return normalizeMachineRpcResult<ClaudeListRewindPointsResult>(result, 'Failed to list rewind points');
     } catch (error) {
         return {
             type: 'error',
-            errorMessage: error instanceof Error ? error.message : 'Failed to list rewind points',
+            errorMessage: machineRpcCatchMessage(error, 'Failed to list rewind points'),
         };
     }
 }
@@ -403,11 +417,11 @@ export async function claudeDuplicateSession(
             'claude-duplicate-session',
             { directory, claudeSessionId, cutAfterUuid },
         );
-        return result;
+        return normalizeMachineRpcResult<ClaudeForkSessionResult>(result, 'Failed to duplicate session');
     } catch (error) {
         return {
             type: 'error',
-            errorMessage: error instanceof Error ? error.message : 'Failed to duplicate session',
+            errorMessage: machineRpcCatchMessage(error, 'Failed to duplicate session'),
         };
     }
 }
@@ -423,11 +437,11 @@ export async function codexForkThread(options: CodexForkThreadOptions): Promise<
             'codex-fork-thread',
             { directory, codexThreadId },
         );
-        return result;
+        return normalizeMachineRpcResult<CodexForkThreadResult>(result, 'Failed to fork Codex thread');
     } catch (error) {
         return {
             type: 'error',
-            errorMessage: error instanceof Error ? error.message : 'Failed to fork Codex thread',
+            errorMessage: machineRpcCatchMessage(error, 'Failed to fork Codex thread'),
         };
     }
 }
@@ -446,11 +460,11 @@ export async function codexDuplicateThread(
             'codex-duplicate-thread',
             { directory, codexThreadId, cutAfterItemId },
         );
-        return result;
+        return normalizeMachineRpcResult<CodexForkThreadResult>(result, 'Failed to duplicate Codex thread');
     } catch (error) {
         return {
             type: 'error',
-            errorMessage: error instanceof Error ? error.message : 'Failed to duplicate Codex thread',
+            errorMessage: machineRpcCatchMessage(error, 'Failed to duplicate Codex thread'),
         };
     }
 }
@@ -468,11 +482,11 @@ export async function codexListRewindPoints(
             'codex-list-rewind-points',
             { directory, codexThreadId },
         );
-        return result;
+        return normalizeMachineRpcResult<CodexListRewindPointsResult>(result, 'Failed to list Codex rewind points');
     } catch (error) {
         return {
             type: 'error',
-            errorMessage: error instanceof Error ? error.message : 'Failed to list Codex rewind points',
+            errorMessage: machineRpcCatchMessage(error, 'Failed to list Codex rewind points'),
         };
     }
 }
@@ -486,11 +500,11 @@ export async function machineResumeSession(options: ResumeSessionOptions & { mod
             'resume-happy-session',
             { sessionId, model, permissionMode },
         );
-        return result;
+        return normalizeMachineRpcResult<SpawnSessionResult>(result, 'Failed to resume session');
     } catch (error) {
         return {
             type: 'error',
-            errorMessage: error instanceof Error ? error.message : 'Failed to resume session',
+            errorMessage: machineRpcCatchMessage(error, 'Failed to resume session'),
         };
     }
 }
@@ -1412,6 +1426,104 @@ export async function forkAndSpawn(
         } catch {
             // Refresh is best-effort; the broadcast will still hydrate the
             // session shortly even if this fetch flaked.
+        }
+    }
+
+    return spawnResult;
+}
+
+/**
+ * Harnesses a clone STARTED FROM THE PHONE can land in.
+ *
+ * The intersection of two lists, not either one alone. `drover clone --to`
+ * also accepts `opencode`, but the daemon has no runner for it
+ * (`daemonAgents` in the CLI's tmuxSpawn.ts), so a phone clone into OpenCode
+ * would open a tmux window and then wait forever for a Happy session that
+ * never registers. Same rule the harness picker follows: a name offered here
+ * is a promise that the whole path exists behind it. OpenCode stays a
+ * terminal clone (`drover clone --to opencode`) until it has a runner.
+ */
+export type CloneTargetHarness = 'claude' | 'cursor' | 'pi';
+
+export type CloneSeedResult =
+    | { type: 'success'; seedPath: string }
+    | { type: 'error'; errorMessage: string };
+
+/**
+ * Export the source conversation on the machine and return the seed's path.
+ *
+ * Nothing is started by this call. `drover clone --seed-only` writes the file
+ * and prints where it went; the caller then spawns the target harness with
+ * `seedFile` set, so a clone takes the ordinary window path.
+ */
+export async function droverCloneSeed(options: {
+    machineId: string;
+    directory: string;
+    claudeSessionId: string;
+    harness: CloneTargetHarness;
+    turns?: number;
+}): Promise<CloneSeedResult> {
+    const { machineId, directory, claudeSessionId, harness, turns } = options;
+    try {
+        const result = await apiSocket.machineRPC<CloneSeedResult, {
+            directory: string;
+            claudeSessionId: string;
+            harness: string;
+            turns?: number;
+        }>(
+            machineId,
+            'drover-clone-seed',
+            { directory, claudeSessionId, harness, turns },
+        );
+        return normalizeMachineRpcResult<CloneSeedResult>(result, 'Failed to export the conversation.');
+    } catch (error) {
+        return {
+            type: 'error',
+            errorMessage: machineRpcCatchMessage(error, 'Failed to export the conversation.'),
+        };
+    }
+}
+
+/**
+ * CLONE this session into another harness (DROVE-58, DROVE-337).
+ *
+ * Not a fork, and the app must not call it one. A fork copies the transcript
+ * and resumes it, which works only while the target reads the same file. No
+ * harness but Claude Code can read a Claude Code transcript, so crossing
+ * harnesses exports the conversation and starts a NEW session that is TOLD
+ * it. Two sessions, both real, lineage kept through `parentSessionId`.
+ *
+ * Same cwd as the source, deliberately: the clone is a second opinion on the
+ * same work, and a worktree it cannot see is not that.
+ */
+export async function cloneIntoHarness(
+    source: ClaudeForkSource,
+    harness: CloneTargetHarness,
+): Promise<SpawnSessionResult> {
+    const seed = await droverCloneSeed({
+        machineId: source.machineId,
+        directory: source.directory,
+        claudeSessionId: source.claudeSessionId,
+        harness,
+    });
+    if (seed.type !== 'success') {
+        return { type: 'error', errorMessage: seed.errorMessage };
+    }
+
+    const spawnResult = await machineSpawnNewSession({
+        machineId: source.machineId,
+        directory: source.directory,
+        agent: harness,
+        approvedNewDirectoryCreation: false,
+        seedFile: seed.seedPath,
+        parentSessionId: source.sessionId,
+    });
+
+    if (spawnResult.type === 'success') {
+        try {
+            await sync.refreshSessions();
+        } catch {
+            // Best-effort, same as the fork path: the broadcast hydrates it.
         }
     }
 

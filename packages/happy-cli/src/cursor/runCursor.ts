@@ -56,6 +56,7 @@ import { createSessionMetadata } from '@/utils/createSessionMetadata';
 import { setupOfflineReconnection } from '@/utils/setupOfflineReconnection';
 import { MessageQueue2 } from '@/utils/MessageQueue2';
 import { CursorBackend } from './CursorBackend';
+import { readCursorSeed } from './cursorSeed';
 import { prepareSessionCursorConfigDir } from './cursorConfig';
 import {
     listCursorModels,
@@ -87,11 +88,30 @@ export interface RunCursorOptions {
      * that mode is a twenty-second pause and then yes, so it is not offered.
      */
     gated?: boolean;
+    /**
+     * A file whose contents become this session's FIRST TURN (DROVE-337).
+     *
+     * This is the lane a CLONE lands in. `drover clone --to cursor` exports
+     * the source conversation and hands the FILE over, never the text: a seed
+     * runs to tens of kilobytes and one stray quote on a command line would
+     * turn a clone into a syntax error.
+     *
+     * Read ONCE, here, and submitted through the same queue a message from
+     * the phone goes through, so the seed is an ordinary turn rather than a
+     * second way to talk to the backend.
+     */
+    seedFile?: string | null;
 }
+
 
 export async function runCursor(opts: RunCursorOptions): Promise<void> {
     const sessionTag = randomUUID();
     connectionState.setBackend('cursor');
+
+    // Before the API call, before the window has anything in it: a seed that
+    // cannot be read must not cost a registered session that the phone then
+    // shows as a working clone.
+    const seed = opts.seedFile ? readCursorSeed(opts.seedFile) : null;
 
     const api = await ApiClient.create(opts.credentials);
     const settings = await readSettings();
@@ -331,6 +351,21 @@ export async function runCursor(opts: RunCursorOptions): Promise<void> {
             `\ncursor session ${response?.id ?? sessionTag} — chat ${started.sessionId}\n`
             + `type here or send from the phone; ctrl-c ends it\n\n`,
         );
+
+        // The clone's first turn (DROVE-337). Echoed as a user envelope for
+        // the same reason a line typed into the pane is: a half of the
+        // conversation the app cannot see is two conversations, not one
+        // session, and the seed is the only thing this session knows.
+        //
+        // Queued rather than sent straight to the backend, so it is an
+        // ordinary turn: it takes the turn markers, the keepAlive and the
+        // failure handling every other turn takes. And queued AFTER the
+        // banner, so the pane says what session this is before it fills with
+        // a retold conversation.
+        if (seed) {
+            sendEnvelopes([createEnvelope('user', { t: 'text', text: seed })]);
+            messageQueue.push(seed, {});
+        }
 
         while (!shouldExit) {
             const waitSignal = abortController.signal;
