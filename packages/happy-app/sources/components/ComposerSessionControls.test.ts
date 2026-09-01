@@ -57,21 +57,37 @@ vi.mock('@expo/vector-icons', () => ({ Ionicons: host('Ionicons') }));
 // light theme too, where "white" is #000000 (DROVE-215).
 const { themeState } = vi.hoisted(() => ({ themeState: { dark: true } }));
 
+// `backgroundSubtle` is the open segment's wash and is now read at the call
+// site rather than through a stylesheet entry (DROVE-343), so the fixture has
+// to carry a value for it or every wash assertion reads `undefined`.
+const glassColours = { backgroundSubtle: 'wash' };
+
 vi.mock('react-native-unistyles', () => ({
-    useUnistyles: () => ({ theme: { dark: themeState.dark, colors: { text: 'text', divider: 'divider', glass: {} } } }),
-    StyleSheet: { create: (factory: any) => factory({ colors: { text: 'text', divider: 'divider', glass: {} } }) },
+    useUnistyles: () => ({ theme: { dark: themeState.dark, colors: { text: 'text', divider: 'divider', glass: glassColours } } }),
+    StyleSheet: { create: (factory: any) => factory({ colors: { text: 'text', divider: 'divider', glass: glassColours } }) },
 }));
 
 vi.mock('@/constants/Typography', () => ({ Typography: { default: () => ({}) } }));
 vi.mock('./BubblePressable', () => ({ BubblePressable: host('BubblePressable') }));
+// The capsule is a real glass surface again (DROVE-343). Hosting it keeps its
+// props readable — the tint, the radius, and whether it asked UIGlassEffect for
+// the press — without pulling `expo-glass-effect` into a runner with no iOS
+// bridge.
+vi.mock('./GlassChromeControl', () => ({ GlassChromeSurface: host('GlassChromeSurface') }));
+// Inside that surface the material draws the press, so the glyph fade stands
+// down. `composerGlassSurfaces.test.ts` is where the surface itself is mounted
+// and the provider's value is measured.
+vi.mock('./glassPress', () => ({ useNativeGlassPress: () => true }));
 
 const { ComposerSessionControls } = await import('./ComposerSessionControls');
 const { MOBILE_COMPOSER_SEGMENT_FILL_INSET, MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH } = await import('./agentInputLayout');
+const { COMPOSER_MODEL_SEGMENT } = await import('./sessionPillLabel');
 const {
     COMPOSER_CONTROL_PALETTE,
     autoAcceptColour,
     composerCapsuleDivider,
     composerGaugeTrack,
+    composerGlassTint,
     composerSessionCapsuleFill,
 } = await import('./composerControlColour');
 
@@ -131,24 +147,57 @@ describe('the session capsule', () => {
     });
 
     /**
-     * THE CAPSULE IS AN OPAQUE FILL, NOT GLASS (DROVE-254).
+     * THE CAPSULE IS ONE INTERACTIVE GLASS SURFACE, TINTED WITH THE ROW'S FILL
+     * (DROVE-343, reversing DROVE-254).
      *
-     * DROVE-153 gave it a `GlassChromeSurface`, which was right while it sat
-     * outside the bubble on the dock scrim. DROVE-236 moved it inside the
-     * bubble, which is itself a `UIGlassEffect`, and glass nested in glass has
-     * nothing left to refract. Clay: "This blends in which is annoying."
-     * composerControlColour.spec.ts measures the value; this is the half only
-     * a render can show, that the call site does not put the glass back.
+     * DROVE-153 gave it a `GlassChromeSurface` while it sat outside the bubble.
+     * DROVE-236 moved it inside, DROVE-254 found glass nested in glass had
+     * nothing left to refract — "This blends in which is annoying" — and made
+     * it a plain view. DROVE-266 then made the discs beside it real glass
+     * buttons spending their opaque fills as `tintColor`, and Clay's verdict is
+     * what settles it: "I love the liquid glass experience I'm getting with the
+     * plus button, but the group of buttons should also have that same glass
+     * thing."
+     *
+     * The tint is what answers 254. composerControlColour.spec.ts measures the
+     * value and `composerGlassTint` refuses anything translucent; this is the
+     * half only a render can show — that the fill is spent as the EFFECT'S
+     * colour and not as a lid over it.
      */
-    it('draws itself on the row\u2019s own fill rather than on a second glass surface', () => {
+    it('is one interactive glass surface tinted with the row\u2019s own fill', () => {
         const renderer = mount();
-        expect(renderer.root.findAllByType('GlassChromeSurface' as any)).toEqual([]);
-        const capsule = renderer.root.findAllByType('View' as any)
+        const surfaces = renderer.root.findAllByType('GlassChromeSurface' as any);
+        expect(surfaces).toHaveLength(1);
+        expect(surfaces[0].props.tintColor).toBe(composerGlassTint(composerSessionCapsuleFill(true)));
+        // ONE SURFACE FOR THE GROUP, NOT ONE PER SEGMENT (DROVE-169).
+        // `UIGlassEffect` follows the touch inside the effect view it is on, so
+        // the segment under the finger brightens and its neighbours answer with
+        // it. That is the whole reason the count above is 1.
+        expect(surfaces[0].props.interactive).toBe(true);
+        // One separation mechanism, measured: the fill, never a fill plus an
+        // edge covering for it (DROVE-254).
+        expect(surfaces[0].props.rim).toBe(false);
+        // AND NO VIEW WEARS THE FILL. A `backgroundColor` anywhere in the
+        // capsule would be the opaque lid back over the material, which is the
+        // one way to get 254's blend without getting 266's press.
+        const lid = renderer.root.findAllByType('View' as any)
             .find((node: any) => {
                 const parts = Array.isArray(node.props.style) ? node.props.style : [node.props.style];
                 return parts.some((part: any) => part?.backgroundColor === composerSessionCapsuleFill(true));
             });
-        expect(capsule).toBeTruthy();
+        expect(lid).toBeUndefined();
+    });
+
+    it('is never clipped, so its press swell is not cut at its resting frame', () => {
+        // DROVE-202/DROVE-328's rule, at the control DROVE-343 turned back into
+        // a surface. `GlassChromeSurface` decides `overflow` last off
+        // `getGlassSurfaceOverflow`, so the assertion is that the capsule's own
+        // style does not try to say otherwise.
+        const [surface] = mount().root.findAllByType('GlassChromeSurface' as any);
+        const parts = (Array.isArray(surface.props.style) ? surface.props.style : [surface.props.style]);
+        for (const part of parts) {
+            expect(part?.overflow).toBeUndefined();
+        }
     });
 
     it('draws its dividers in the measured hairline, never the list rule (DROVE-254)', () => {
@@ -647,6 +696,8 @@ describe('read-aloud as a capsule segment', () => {
      * backgroundColor at all, which is asserted so the full-bleed fill
      * cannot quietly come back.
      */
+    const fillOf = (pill: any) => (Array.isArray(pill.props.style) ? pill.props.style : [pill.props.style])
+        .reduce((found: any, part: any) => part?.backgroundColor ?? found, undefined);
     const pillOf = (segment: any) => segment.findAll((node: any) =>
         node.type === 'View'
         && (Array.isArray(node.props.style) ? node.props.style : [node.props.style])
@@ -661,8 +712,7 @@ describe('read-aloud as a capsule segment', () => {
             return {
                 glyph: segment.findByType('Ionicons' as any).props.name,
                 colour: segment.findByType('Ionicons' as any).props.color,
-                fill: (Array.isArray(pill.props.style) ? pill.props.style : [pill.props.style])
-                    .reduce((found: any, part: any) => part?.backgroundColor ?? found, undefined),
+                fill: fillOf(pill),
                 // The PRESSABLE never wears the fill: that was the full-bleed
                 // face Clay photographed, and it must fail here if it returns.
                 pressableFill: parts.reduce((found: any, part: any) => part?.backgroundColor ?? found, undefined),
@@ -733,10 +783,60 @@ describe('read-aloud as a capsule segment', () => {
         // And the glyph is INSIDE the pill, so the pill centres it exactly as
         // the segment centred it — nothing moved but where the colour stops.
         expect(pill.findByType('Ionicons' as any).props.name).toBe('volume-high');
-        // The three segments with no fill state mount no pill at all.
+        // EVERY SEGMENT MOUNTS ONE NOW (DROVE-343). They mounted no pill at all
+        // while the open wash was a full-bleed background on the pressable and
+        // the capsule's clip rounded it; the capsule is interactive glass again
+        // and must not clip, so the wash borrows this shape and the pill is
+        // mounted on every face — transparent when there is neither a fill nor
+        // an open picker, so opening a picker recolours a view instead of
+        // mounting one under a finger (DROVE-286).
         for (const label of ['Permission mode', 'Reasoning effort', 'Model']) {
-            expect(pillOf(press(renderer, label)), label).toBeUndefined();
+            const segmentPill = pillOf(press(renderer, label));
+            expect(segmentPill, label).toBeDefined();
+            expect(fillOf(segmentPill), label).toBe('transparent');
         }
+    });
+
+    /**
+     * THE OPEN WASH IS THAT SAME PILL (DROVE-343).
+     *
+     * It was `styles.controlOpen` on the pressable's own box: square to the
+     * capsule's rims, and rounded only because the capsule clipped. The capsule
+     * is a `UIGlassEffect` again and an interactive surface is never clipped
+     * (DROVE-202), so a full-bleed wash would draw its square corners inside the
+     * rounded ends — which is the shape of Clay's DROVE-284 photograph, at the
+     * other end of the capsule.
+     */
+    it('washes an open segment through the pill, at both segment shapes', () => {
+        const renderer = mount({
+            size: 39,
+            segmentWidth: MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH,
+            openPicker: 'permission',
+        });
+        expect(fillOf(pillOf(press(renderer, 'Permission mode')))).toBe('wash');
+        // Its neighbours stay clear, so "open" still reads as one segment.
+        expect(fillOf(pillOf(press(renderer, 'Reasoning effort')))).toBe('transparent');
+        // THE MODEL SEGMENT IS THE SHAPE THAT NEEDED THE SECOND ANSWER. It is
+        // the one thing in the composer with no width of its own, so its pill
+        // takes the segment's interior rather than a computed box, and carries
+        // the name's own air as its padding. Same drawn inset either side
+        // (`paddingHorizontal - horizontal` in here plus `horizontal` on the
+        // segment), so `composerModelBudget` does not move.
+        const model = pillOf(press(mount({
+            size: 39,
+            segmentWidth: MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH,
+            openPicker: 'model',
+        }), 'Model'));
+        expect(fillOf(model)).toBe('wash');
+        const box = (Array.isArray(model.props.style) ? model.props.style : [model.props.style])
+            .reduce((found: any, part: any) => ({ ...found, ...part }), {});
+        expect(box.alignSelf).toBe('stretch');
+        expect(box.flexGrow).toBe(1);
+        expect(box.paddingHorizontal).toBe(
+            COMPOSER_MODEL_SEGMENT.paddingHorizontal - MOBILE_COMPOSER_SEGMENT_FILL_INSET.horizontal,
+        );
+        // A stadium off the one axis it knows: half the pill's height.
+        expect(box.borderRadius).toBe((39 - 2 * MOBILE_COMPOSER_SEGMENT_FILL_INSET.vertical) / 2);
     });
 
     it('keeps the long press, which is pause, resume and boss mode', () => {

@@ -145,27 +145,35 @@ export function shouldDrawPressedFallback(
  * deleted rather than kept "just in case", because a rule with no caller is a
  * rule nobody maintains.
  *
- * TWO CONTROLS ARE STILL NOT GLASS BUTTONS, AND BOTH FOR REASONS THAT ARE ABOUT
- * THEM RATHER THAN ABOUT THE MATERIAL.
+ * ONE CONTROL IS STILL NOT A GLASS BUTTON, AND THE OTHER STOPPED BEING THE
+ * EXCEPTION (DROVE-343).
  *
  *   send at rest,      They have no surface. DROVE-264 took send's circle off
  *   the mic at rest    and DROVE-254 took the mic's, on Clay's standing
  *                      instruction, so giving either a glass button would BE
  *                      the circle he removed. They are bare glyphs on the
- *                      bubble, the bubble is interactive, and the press they
- *                      draw is already the platform's. Their filled faces —
- *                      Stop, the gate's lock, an open capture — are glass
- *                      buttons like everything else.
- *   the session        DROVE-254 was filed about THIS control being a
- *   capsule            `UIGlassEffect` nested inside the bubble's own, and the
- *                      fix was to stop it being one. Re-glassing it is the
- *                      single move that would re-create that ticket. It would
- *                      also cost the open segment's wash its clip, because an
- *                      interactive surface must not clip (`getGlassSurfaceOverflow`)
- *                      and that clip is what rounds the wash to the capsule's
- *                      ends. It keeps the fade, which is the only response an
- *                      opaque capsule can have, and `ComposerSessionControls`
- *                      says so at the point it draws it.
+ *                      bubble. They drew the bubble's own press until DROVE-343
+ *                      moved that press to the text row, and they draw
+ *                      `BubblePressable`'s pressed state now — the response
+ *                      they have on any phone without the material. That is the
+ *                      cost of "a control press must not move the field", and
+ *                      it is the right side of it. Their filled faces — Stop,
+ *                      the gate's lock, an open capture — are glass buttons
+ *                      like everything else.
+ *   the session        WAS the second exception, on DROVE-254's ruling that a
+ *   capsule            `UIGlassEffect` nested in the bubble's own has nothing
+ *                      left to refract. DROVE-343 reverses it on Clay's word,
+ *                      the same way DROVE-266 reversed it for the discs: "the
+ *                      group of buttons should also have that same glass
+ *                      thing." The TINT is what 254 was missing — an opaque
+ *                      `tintColor` draws a prominent glass control rather than
+ *                      a translucent smear over another material — and
+ *                      `composerGlassTint` refuses anything else on the way in.
+ *                      The clip it lost with the change was rounding the open
+ *                      segment's wash to the capsule's ends; the wash is an
+ *                      inset pill now (DROVE-284's shape, reused) and rounds
+ *                      itself, so nothing is owed to `overflow: 'hidden'` any
+ *                      more.
  *
  * AND THE CONTRAST GUARANTEE IS NOT TOUCHED. DROVE-254's finding is about a
  * TRANSLUCENT tint inside the bubble's glass, which has no single value to

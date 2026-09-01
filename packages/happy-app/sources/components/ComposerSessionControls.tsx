@@ -5,7 +5,9 @@ import { Ionicons } from '@expo/vector-icons';
 import Svg, { Circle, Line, Path } from 'react-native-svg';
 import { Typography } from '@/constants/Typography';
 import { BubblePressable } from './BubblePressable';
-import { getGlassSurfaceOverflow } from './glassInteractionPolicy';
+import { GlassChromeSurface } from './GlassChromeControl';
+import { useNativeGlassPress } from './glassPress';
+import { shouldDrawPressedFallback } from './glassInteractionPolicy';
 import {
     effortAccessibility,
     effortGaugeAngle,
@@ -21,6 +23,7 @@ import {
     composerCapsuleDivider,
     composerControlPalette,
     composerGaugeTrack,
+    composerGlassTint,
     composerGlyphColour,
     composerSessionCapsuleFill,
     pendingOrSettled,
@@ -53,14 +56,23 @@ import type { AudioOutFill, AudioOutGlyph } from './composerAudioOut';
  * between them. Each segment is its own 44pt-tall, 44pt-wide press target with
  * its own picker, so pressing effort cannot open the mode list.
  *
- * AND SINCE DROVE-254 IT IS AN OPAQUE FILL RATHER THAN GLASS. DROVE-153 gave
- * it a `GlassChromeSurface` because it sat outside the bubble on the dock
- * scrim, where glass over the chat was the right material. DROVE-236 moved it
- * inside the bubble, which is itself a `UIGlassEffect`, and a glass effect
- * nested in a glass effect has nothing left to refract. Clay: "This blends in
- * which is annoying." It wears the same fill as the three discs on the row now
- * and the hairlines inside it are measured against that fill;
- * composerControlColour.ts holds both numbers and the argument.
+ * IT WAS AN OPAQUE FILL FROM DROVE-254 TO DROVE-343, AND IT IS GLASS AGAIN.
+ * DROVE-153 gave it a `GlassChromeSurface` because it sat outside the bubble on
+ * the dock scrim. DROVE-236 moved it inside the bubble, which is itself a
+ * `UIGlassEffect`, and a glass effect nested in a glass effect has nothing left
+ * to refract: Clay, "This blends in which is annoying." So 254 made it a plain
+ * view wearing the discs' fill.
+ *
+ * DROVE-266 then made those discs REAL glass buttons inside the same bubble,
+ * spending their opaque fills as `UIGlassEffect.tintColor`, and Clay's verdict
+ * on the result is the one that settles this: "I love the liquid glass
+ * experience I'm getting with the plus button, but the group of buttons should
+ * also have that same glass thing." The tint is what 254 was missing — an
+ * opaque `tintColor` draws a prominent glass control rather than a translucent
+ * smear over another material — so the capsule takes the same route the discs
+ * took, with the same fill, through the same `composerGlassTint` guard.
+ * composerControlColour.ts still holds the fill and the hairlines measured
+ * against it; only the layer they are spent on changed.
  *
  * AND THE MODEL IS THE THIRD SEGMENT (DROVE-178). It was here, DROVE-138 took
  * it to the status row because six 63pt buttons were cutting `Opus 5 1M` to
@@ -348,12 +360,17 @@ const styles = StyleSheet.create((theme) => ({
         alignItems: 'center',
         flexShrink: 1,
         minWidth: 0,
-        // An open segment's wash is clipped to the capsule's round ends, which
-        // is what `GlassChromeSurface` did for this off the material
-        // (`getGlassSurfaceOverflow(false)`). There is no press swell to clip
-        // any more, because there is no material to swell (DROVE-202,
-        // DROVE-254).
-        overflow: getGlassSurfaceOverflow(false),
+        // NO `overflow` HERE ANY MORE (DROVE-343). The capsule is an
+        // interactive surface again, and an interactive surface is never
+        // clipped (DROVE-202, DROVE-328) — `GlassChromeSurface` decides that
+        // last, off `getGlassSurfaceOverflow`, so a style here could only put
+        // the clip back. The clip is not missed: it was rounding the open
+        // segment's wash to the capsule's ends, and the wash is an inset pill
+        // now, which rounds itself.
+        //
+        // NO `backgroundColor` EITHER. The fill is the effect's `tintColor`,
+        // which is how the system draws a prominent glass control and is the
+        // same move the discs made in DROVE-266.
     },
     control: {
         alignItems: 'center',
@@ -369,7 +386,17 @@ const styles = StyleSheet.create((theme) => ({
      * `flexShrink: 0`, so a name that runs under never squeezes them.
      */
     modelSegment: {
-        paddingHorizontal: COMPOSER_MODEL_SEGMENT.paddingHorizontal,
+        // THE SEGMENT'S PADDING IS THE PILL'S INSET NOW (DROVE-343), and the
+        // model's own air moved INSIDE the pill with the text. The drawn width
+        // is unchanged — `MOBILE_COMPOSER_SEGMENT_FILL_INSET.horizontal` out
+        // here plus `paddingHorizontal - horizontal` in there is still
+        // `COMPOSER_MODEL_SEGMENT.paddingHorizontal` either side of the name —
+        // so `composerModelBudget` and the 320 overflow measurement do not
+        // move. What it buys is that this segment's open wash insets off the
+        // capsule's rim exactly as every other segment's does, which is what
+        // lets the capsule stop clipping.
+        paddingHorizontal: MOBILE_COMPOSER_SEGMENT_FILL_INSET.horizontal,
+        paddingVertical: MOBILE_COMPOSER_SEGMENT_FILL_INSET.vertical,
         alignItems: 'center',
         justifyContent: 'center',
         flexShrink: 1,
@@ -379,14 +406,6 @@ const styles = StyleSheet.create((theme) => ({
         fontSize: COMPOSER_MODEL_SEGMENT.fontSize,
         color: theme.colors.text,
         ...Typography.default('semiBold'),
-    },
-    // Pressed and open read as a WASH over the capsule's fill rather than as a
-    // second fill, so the segment lightens where a finger is instead of
-    // becoming a different object. Unchanged by DROVE-254 taking the glass
-    // away: it composites over an opaque fill now, and the gauge's floors are
-    // asserted on that washed surface too.
-    controlOpen: {
-        backgroundColor: theme.colors.glass.backgroundSubtle,
     },
     /**
      * The hairline between segments. Apple's grouped capsules separate their
@@ -413,6 +432,28 @@ const styles = StyleSheet.create((theme) => ({
         justifyContent: 'center',
     },
 }));
+
+/**
+ * THE OPEN SEGMENT'S WASH (DROVE-343).
+ *
+ * Open reads as a WASH over the capsule's fill rather than as a second fill, so
+ * the segment lightens where its picker is instead of becoming a different
+ * object. It was a full-bleed background on the pressable, square to the
+ * capsule's rims and rounded only by the capsule's `overflow: 'hidden'`. The
+ * capsule is interactive glass again and an interactive surface must not clip
+ * (DROVE-202), so a full-bleed wash would have shown its square corners inside
+ * the rounded ends. Read-aloud's fill already solved that shape at this scale
+ * (DROVE-284), so the wash borrows the same inset pill rather than inventing a
+ * second answer.
+ *
+ * Read here rather than through a stylesheet entry, because the pill's colour
+ * has three sources — a fill, this wash, or nothing — and one object deciding
+ * between them is what keeps the pill a single style a render can read.
+ */
+function segmentPillFill(theme: { colors: { glass: { backgroundSubtle: string } } },
+    fill: string | null | undefined, open: boolean): string {
+    return fill ?? (open ? theme.colors.glass.backgroundSubtle : 'transparent');
+}
 
 function Control(props: {
     /** Identity, for reading a tree; the press is bound by the caller. */
@@ -479,34 +520,30 @@ function Control(props: {
     verticalSlop: number;
     children: React.ReactNode;
 }) {
+    const { theme } = useUnistyles();
+    const nativeGlassPress = useNativeGlassPress();
     const segmentStyle = props.wide
         ? [styles.modelSegment, { height: props.size }]
         : [styles.control, { width: props.segmentWidth, height: props.size }];
     /**
-     * THE FADE IS THIS SEGMENT'S ONLY POSSIBLE RESPONSE, AND THAT FOLLOWS FROM
-     * THE CAPSULE RATHER THAN FROM THE SURFACE (DROVE-266).
+     * THE MATERIAL DRAWS THE PRESS AGAIN, AND THE FADE STANDS DOWN WHERE IT
+     * DOES (DROVE-343).
      *
-     * `useNativeGlassPress()` answers a question about the SURFACE: is the
-     * material under this control drawing the press. That was the right
-     * question while the capsule was its own `GlassChromeSurface` (DROVE-153).
-     * It stopped being the right one when DROVE-254 made the capsule an OPAQUE
-     * fill, because an opaque capsule COVERS the bubble's glass and
-     * `UIGlassEffect.isInteractive` then lenses underneath a view nothing shows
-     * through. A segment that trusted the context would have no press response
-     * at all, which was invisible only because the composer's bubble never
-     * asked for interactive glass until DROVE-266's first half.
+     * This used to say that an opaque capsule COVERS the bubble's glass, so
+     * `UIGlassEffect.isInteractive` would lens under a view nothing shows
+     * through, so a hand-rolled `opacity: 0.7` was the segment's only possible
+     * response. Every step of that was true of an opaque capsule. The capsule
+     * is not one any more: Clay, with the `+` mid-press, "the group of buttons
+     * should also have that same glass thing", which overrides DROVE-254 for
+     * this control exactly as it overrode it for the discs in DROVE-266.
      *
-     * SO WHY IS THE CAPSULE NOT A GLASS BUTTON LIKE THE DISCS NOW ARE. Because
-     * DROVE-254 ruled on THIS control by name. Clay filed it on the capsule —
-     * "this blends in which is annoying" — and the fix was to stop it being a
-     * `UIGlassEffect` nested in the bubble's own. Re-glassing it is the one move
-     * that would re-create that ticket, and it would cost the open segment's
-     * wash its clip as well: an interactive surface must not clip (DROVE-202),
-     * and the capsule's `overflow: hidden` is what rounds that wash to its ends.
-     * The discs have neither problem, which is why they moved and this did not.
-     *
-     * No `useNativeGlassPress` and no policy call, then: an opaque capsule is
-     * never on the material, so the answer is constant and is written here.
+     * So the answer is the context's again, not a constant written here.
+     * `GlassChromeSurface` publishes whether the material is drawing the press
+     * (`GlassPressProvider`), `shouldDrawPressedFallback` turns that into
+     * whether a glyph fade is still wanted, and off the material — an older
+     * phone, Reduce Transparency — the fade is still the only pressed state
+     * there is, so it stays. That is DROVE-169's rule reaching the last control
+     * on the row that was reasoning around it.
      */
     const pressable = !!props.onPress;
     /**
@@ -520,25 +557,63 @@ function Control(props: {
      * BubblePressable for the life of the control, which is DROVE-286's rule:
      * the press stream must never ride a view the state can unmount.
      */
-    const pill = props.fill !== undefined
+    /**
+     * THE PILL, ON EVERY SEGMENT (DROVE-343).
+     *
+     * It was read-aloud's alone, mounted only where `fill` was passed. It is
+     * every segment's now, because the open wash needs the same shape and the
+     * capsule has stopped clipping: a pill rounds itself, a full-bleed
+     * background needed the clip to be rounded for it. Mounted on every face,
+     * transparent when there is neither a fill nor an open picker, so a state
+     * change recolours a view rather than mounting one under a finger
+     * (DROVE-286).
+     *
+     * A GLYPH segment's pill is its box less the inset, which is what
+     * DROVE-284's renders settled. The MODEL segment has no width of its own —
+     * it is the one thing in the composer that sizes to its content — so its
+     * pill takes the segment's interior instead (`flexGrow` down the padded
+     * box, `alignSelf: 'stretch'` across it) and carries the name's air as its
+     * own padding. Same drawn inset, same stadium, one mechanism.
+     */
+    const pillHeight = props.size - 2 * MOBILE_COMPOSER_SEGMENT_FILL_INSET.vertical;
+    const pillFill = segmentPillFill(theme as never, props.fill, props.open);
+    const pill: Record<string, unknown> = props.wide
         ? {
-            width: props.segmentWidth - 2 * MOBILE_COMPOSER_SEGMENT_FILL_INSET.horizontal,
-            height: props.size - 2 * MOBILE_COMPOSER_SEGMENT_FILL_INSET.vertical,
+            backgroundColor: pillFill,
+            flexGrow: 1,
+            flexShrink: 1,
+            minWidth: 0,
+            alignSelf: 'stretch',
+            paddingHorizontal: COMPOSER_MODEL_SEGMENT.paddingHorizontal
+                - MOBILE_COMPOSER_SEGMENT_FILL_INSET.horizontal,
+            // A stadium, off the one axis this segment knows.
+            borderRadius: pillHeight / 2,
         }
-        : null;
+        : {
+            backgroundColor: pillFill,
+            width: props.segmentWidth - 2 * MOBILE_COMPOSER_SEGMENT_FILL_INSET.horizontal,
+            height: pillHeight,
+            // A stadium at every segment width: half the pill's narrower side.
+            borderRadius: Math.min(
+                props.segmentWidth - 2 * MOBILE_COMPOSER_SEGMENT_FILL_INSET.horizontal,
+                pillHeight,
+            ) / 2,
+        };
     return (
         <BubblePressable
             onPress={props.onPress}
             onLongPress={props.onLongPress}
             disabled={!pressable}
-            nativeGlassPress={false}
             // Vertical only. See `verticalSlop` on the props for why the other
             // axis is not available inside a shared capsule.
             hitSlop={{ top: props.verticalSlop, bottom: props.verticalSlop, left: 0, right: 0 }}
             style={(p) => [
                 ...segmentStyle,
-                props.open && styles.controlOpen,
-                { opacity: pressable && p.pressed ? 0.7 : 1 },
+                {
+                    opacity: shouldDrawPressedFallback(nativeGlassPress, pressable && p.pressed, !pressable)
+                        ? 0.7
+                        : 1,
+                },
             ]}
             accessibilityRole={props.toggled === undefined ? 'button' : 'switch'}
             accessibilityLabel={props.accessibilityLabel}
@@ -548,23 +623,9 @@ function Control(props: {
                 ? { expanded: props.open, disabled: !pressable }
                 : { checked: props.toggled, disabled: !pressable }}
         >
-            {pill ? (
-                <View
-                    style={[
-                        styles.fillPill,
-                        {
-                            width: pill.width,
-                            height: pill.height,
-                            // A stadium at every segment width: half the
-                            // pill's narrower side.
-                            borderRadius: Math.min(pill.width, pill.height) / 2,
-                            backgroundColor: props.fill ?? 'transparent',
-                        },
-                    ]}
-                >
-                    {props.children}
-                </View>
-            ) : props.children}
+            <View style={[styles.fillPill, pill]}>
+                {props.children}
+            </View>
         </BubblePressable>
     );
 }
@@ -632,30 +693,37 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
     // needing a press animation of its own (DROVE-178).
     const divider = composerCapsuleDivider(theme.dark);
     return (
-        // AN OPAQUE FILL, NOT GLASS (DROVE-254). It was a `GlassChromeSurface`
-        // while it lived outside the bubble, which is where DROVE-153 put it.
-        // Inside the bubble that is a glass effect nested in a glass effect,
-        // and the inner one has nothing left to refract, which is Clay's "this
-        // blends in". It is the same plain view with the same opaque fill the
-        // three discs on this row already are, and the reasoning and the
-        // measurement are on `COMPOSER_SESSION_CAPSULE_FILL`.
+        // ONE INTERACTIVE GLASS SURFACE, THE SAME MATERIAL THE `+` IS
+        // (DROVE-343). Clay, with the `+` mid-press: "I love the liquid glass
+        // experience I'm getting with the plus button, but the group of buttons
+        // should also have that same glass thing."
         //
-        // AND IT STAYS ONE, THOUGH THE DISCS EITHER SIDE ARE GLASS BUTTONS NOW
-        // (DROVE-266). Clay asked for the row's buttons to be smaller Liquid
-        // Glass buttons and the four discs are; this is the one control that
-        // does not follow them, because DROVE-254 was filed about THIS shape
-        // being a glass effect inside the bubble's own. The argument is on
-        // `Control` below, with what it would additionally cost the open wash.
+        // THAT REVERSES DROVE-254, DELIBERATELY, AND ON THE SAME AUTHORITY THAT
+        // REVERSED IT FOR THE DISCS. 254 filed this control as a glass effect
+        // nested in the bubble's own — "this blends in which is annoying" — and
+        // the fix was to stop it being one. DROVE-266 then made the four discs
+        // real glass buttons inside the same bubble, tinted with their opaque
+        // fills, and Clay loves those. The tint is what answers 254: a
+        // `UIGlassEffect` with an opaque `tintColor` is a PROMINENT glass
+        // control, not a translucent smear over another material, so it reads
+        // as its own object and still deforms under a finger. `composerGlassTint`
+        // refuses anything translucent on the way in, which is the step that
+        // was missing when 254's bug got in.
         //
-        // No rim either. The fallback surface drew a hairline border, and the
-        // three discs on this row do not: one separation mechanism, measured,
-        // rather than a fill plus an edge covering for it.
-        <View
-            style={[
-                styles.capsule,
-                { height: size, borderRadius: size / 2, backgroundColor: composerSessionCapsuleFill(theme.dark) },
-                style,
-            ]}
+        // AND THE SURFACE IS THE CAPSULE, NOT THE SEGMENT (DROVE-169).
+        // `UIGlassEffect` follows the touch inside the effect view it is on, so
+        // one interactive capsule is how the system draws a grouped control:
+        // the segment under the finger brightens and its neighbours answer with
+        // it. Four surfaces would be four buttons that happen to touch.
+        //
+        // No rim: the fallback surface draws a hairline border and the discs on
+        // this row do not. One separation mechanism, measured (DROVE-254).
+        <GlassChromeSurface
+            interactive
+            rim={false}
+            radius={size / 2}
+            tintColor={composerGlassTint(composerSessionCapsuleFill(theme.dark))}
+            style={[styles.capsule, { height: size }, style]}
         >
             {showMode ? (
                 <Control
@@ -818,6 +886,6 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                     </Text>
                 </Control>
             ) : null}
-        </View>
+        </GlassChromeSurface>
     );
 });

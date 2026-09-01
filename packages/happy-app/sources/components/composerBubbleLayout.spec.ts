@@ -12,6 +12,9 @@ import {
     resolveMobileComposerBubbleHeight,
 } from './agentInputLayout';
 import {
+    COMPOSER_PRESS_TARGETS,
+    composerPressTargetsAreDisjoint,
+    resolveComposerPressTarget,
     COMPOSER_BUBBLE_ACTION_ROW_GEOMETRY,
     COMPOSER_BUBBLE_DISC_GEOMETRY,
     COMPOSER_BUBBLE_GAP_GEOMETRY,
@@ -793,5 +796,105 @@ describe('the composer bubble, resolved rather than restated', () => {
             MOBILE_COMPOSER_METRICS.shellRadius,
             { x: inset, y: inset, width: size, height: size },
         )).toBe(4);
+    });
+});
+
+/**
+ * THE THREE PRESS CASES, RESOLVED FROM THE TREE (DROVE-343).
+ *
+ * Clay, with the `+` mid-press: "whenever I push a button from that group, the
+ * input box should not also have that touch effect. The input box should only
+ * get the touch effect when I'm touching where the text is, not one of the
+ * buttons on top of it."
+ *
+ * `UIGlassEffect.isInteractive` is a property of the effect VIEW and its
+ * interaction sees every touch delivered inside it, so while the shell carried
+ * it there was no per-region switch to reach for: a press on the `+` swelled the
+ * whole bubble because the `+` mounts inside the shell's `contentView`. The
+ * press had to MOVE, and where it moved to is a fact about the LAYOUT — which
+ * frame is the bubble's press target and which is the group's.
+ *
+ * So this asks the resolver, at every text height, rather than restating an
+ * offset. If the text row ever grew under the capsule, or the capsule moved
+ * inside the text row, the cases would disagree here before anyone saw it on a
+ * phone. That is DROVE-214's rule reaching the press as well as the geometry.
+ */
+describe('a press lands on exactly one surface (DROVE-343)', () => {
+    const centre = (f: { x: number; y: number; width: number; height: number }) => ({
+        x: centreX(f), y: centreY(f),
+    });
+
+    it('sends the text area to the bubble, a segment to the capsule, the + to the +', () => {
+        for (const text of textHeights) {
+            const frames = layout(text);
+            // THE TEXT AREA -> THE BUBBLE. Its press target is the text row,
+            // which is the frame the interactive surface is on.
+            expect(resolveComposerPressTarget(frames, centre(findFrame(frames, 'textRow'))))
+                .toBe('textRow');
+            // A SEGMENT OF THE CAPSULE -> THE CAPSULE, and never the bubble.
+            // Every segment reports the capsule that holds it: one interactive
+            // surface for a grouped control (DROVE-169), so the segment under
+            // the finger is a press INSIDE that surface rather than a surface
+            // of its own.
+            for (const segment of ['modeSegment', 'readAloudSegment', 'effortSegment', 'modelSegment']) {
+                expect(
+                    resolveComposerPressTarget(frames, centre(findFrame(frames, segment))),
+                    segment,
+                ).toBe('sessionCapsule');
+            }
+            // THE + -> THE +. It is a glass button of its own since DROVE-266,
+            // and Clay's "I love the liquid glass experience I'm getting with
+            // the plus button" is about that button, not about the bubble
+            // answering under it.
+            expect(resolveComposerPressTarget(frames, centre(findFrame(frames, 'add'))))
+                .toBe('add');
+        }
+    });
+
+    it('gives the bubble\'s press target no share of the group\'s hit rect', () => {
+        // The acceptance criterion, stated as the geometric fact it is: no
+        // point can land in two press targets at once, at any text height. A
+        // sample of centres could pass while the rects overlapped at an edge;
+        // this cannot.
+        for (const text of textHeights) {
+            expect(composerPressTargetsAreDisjoint(layout(text)), String(text)).toBe(true);
+        }
+        // And the corners agree with the middles: every corner of the capsule
+        // reports the capsule, so the bubble's target does not reach under its
+        // edges either.
+        const frames = layout(22);
+        const capsule = findFrame(frames, 'sessionCapsule');
+        for (const point of [
+            { x: capsule.x, y: capsule.y },
+            { x: capsule.x + capsule.width, y: capsule.y },
+            { x: capsule.x, y: capsule.y + capsule.height },
+            { x: capsule.x + capsule.width, y: capsule.y + capsule.height },
+        ]) {
+            expect(resolveComposerPressTarget(frames, point)).toBe('sessionCapsule');
+        }
+    });
+
+    it('gives send and the mic no material press at all, which is the cost of the ruling', () => {
+        // They have no surface of their own (DROVE-254, DROVE-264) and drew the
+        // shell's swell. With the shell calm they fall back to
+        // `BubblePressable`'s own pressed state — what they have on any phone
+        // without the material. Asserted rather than left as a gap, because it
+        // is the one thing DROVE-343 takes away.
+        const frames = layout(22);
+        for (const name of ['mic', 'send', 'spacer']) {
+            expect(resolveComposerPressTarget(frames, centre(findFrame(frames, name))), name)
+                .toBeNull();
+        }
+        expect([...COMPOSER_PRESS_TARGETS]).toEqual(['textRow', 'sessionCapsule', 'add']);
+    });
+
+    it('still answers when zen mode draws neither the + nor the capsule', () => {
+        // Nothing in the composer then owns a press but the text row, and the
+        // resolver has to say so rather than throw on the frames that are not
+        // there.
+        const frames = layout(22, { withAdd: false, withControls: false });
+        expect(resolveComposerPressTarget(frames, centre(findFrame(frames, 'textRow'))))
+            .toBe('textRow');
+        expect(composerPressTargetsAreDisjoint(frames)).toBe(true);
     });
 });
