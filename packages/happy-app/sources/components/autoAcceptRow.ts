@@ -9,26 +9,23 @@
  * the boundary rather than selling the feature, and it names the two halves
  * the classifier actually keeps apart.
  *
- * IT IS ON THE ROW SINCE DROVE-281, AND IT WAS IN THE LOCK'S SHEET BEFORE
- * THAT. The original reasoning was a real measurement and it is worth keeping
- * because it is what the move had to answer: DROVE-264's budget table left the
- * model segment 22pt at 320, DROVE-266 spent 18 more growing every object
+ * IT IS IN THE LOCK'S SHEET, AND THAT IS THE ONE PLACE IT IS (DROVE-331).
+ * DROVE-277 put it there on a real measurement: DROVE-264's budget table left
+ * the model segment 22pt at 320, DROVE-266 spent 18 more growing every object
  * 36 -> 39, so a new 39pt control had nothing left in the give-way order to
  * take. The sheet had room and was one tap from where Clay pointed.
  *
- * That was sound and the answer was still wrong, which is the useful thing on
- * the record here. Clay, with the row photographed: "add a button for toggling
- * auto accepting prompts". A posture he changes per session, mid-work, from
- * behind two taps is one he does not change. So DROVE-281 spends the width
- * instead of routing around it — the bolt is a segment of the session capsule
- * and the capsule takes a row of its own on every phone, which is DROVE-264's
- * own named remedy: vertical space, which a phone has.
- *
- * THE SUBTITLE IS STILL WHERE THE SWITCH IS. It could not follow the control
- * onto a 39pt segment, so the sheet's row is KEPT rather than deleted: both
- * drive the same set and cannot disagree, the boundary stays spelled out in
- * the place it was argued for, and the row is the one-tap path. On the segment
- * the same sentence is the accessibility hint.
+ * DROVE-281 then spent the width anyway. Clay, with the row photographed:
+ * "add a button for toggling auto accepting prompts" — so a bolt went on the
+ * session capsule beside the padlock, and this row was KEPT rather than
+ * deleted, because the boundary wording could not follow the control onto a
+ * 39pt segment. Two controls for one bit, writing through one setter. Clay,
+ * with both on his phone: "because of the toggles in the sheet for
+ * auto-accept, we don't need it also in the bar group." So the bolt is gone
+ * and this row is the control. The padlock on the row still wears the state
+ * in colour (`autoAcceptColour`) and still says it in words
+ * (`permissionAccessibilityValue`), and it is the one tap that opens this
+ * sheet.
  */
 
 /** Ionicons name for the row. A bolt: it goes through without stopping. */
@@ -53,26 +50,14 @@ export function autoAcceptGlyph(on: boolean): typeof AUTO_ACCEPT_GLYPH | typeof 
 }
 
 /**
- * What VoiceOver hears on the BOLT, which is the control itself (DROVE-281).
- *
- * The sighted carriers are a hue and a fill, and neither reaches a screen
- * reader, so the state is in the words as well. `accessibilityState.checked`
- * says it too; this says it in the value so it survives a reader that
- * announces the value and not the state.
- */
-export function autoAcceptSegmentValue(on: boolean): string {
-    return on ? 'On' : 'Off';
-}
-
-/**
  * What VoiceOver hears on the padlock.
  *
- * KEPT AFTER DROVE-281 MOVED THE COLOUR OFF IT. The padlock no longer carries
- * the state to the eye, but auto-accept still qualifies what the mode means —
- * "Yolo, auto-accept on" is a different situation from "Yolo" — and the
- * announcement costs nothing on a control the reader is already on. Named
- * after the mode so it stays "Permission mode, Yolo, auto-accept on" rather
- * than losing the mode it is qualifying.
+ * The padlock wears the state in colour (DROVE-277; off it for DROVE-281's
+ * bolt; back since DROVE-331), and colour reaches no screen reader, so it says
+ * it in words as well: "Yolo, auto-accept on" is a different situation from
+ * "Yolo", and the announcement costs nothing on a control the reader is
+ * already on. Named after the mode so it stays "Permission mode, Yolo,
+ * auto-accept on" rather than losing the mode it is qualifying.
  */
 export function permissionAccessibilityValue(
     modeValue: string | undefined,

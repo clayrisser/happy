@@ -26,6 +26,7 @@ import {
     COMPOSER_MODEL_SEGMENT,
     composerModelBudget,
     composerModelFits,
+    composerModelPresentation,
     composerModelScaleFor,
     composerModelSegmentWidth,
     composerRowFixedWidth,
@@ -82,29 +83,30 @@ const phones = [320, 375, 393];
  * cannot draw "type a bit, dictate the rest, then send"; read-aloud left in
  * DROVE-284, because Clay asked for it to join "the group".
  *
- * The capsule's own FIVE segments are modelled too, because the model's name is
- * the only variable width in the whole composer and the row's give-way order is
- * decided by exactly that measurement.
+ * The capsule's own FOUR segments are modelled too, because the model's name
+ * is the only variable width in the whole composer and the row's give-way
+ * order is decided by exactly that measurement. FIVE from DROVE-284 to
+ * DROVE-331: the auto-accept bolt sat second, touching the padlock with no
+ * hairline (DROVE-281), until Clay ruled it redundant with the switch in the
+ * padlock's sheet. Its 27 is the name's now, and the one asymmetry the tree
+ * had to carry for it — `glyphSegments` 4 against `dividers` 3 — is gone with
+ * it: three glyph segments, one rule at every boundary, three rules.
  *
- * TWO ASYMMETRIES ARE MODELLED RATHER THAN TRUSTED, because both are the kind
- * of thing a budget can restate correctly while the drawn row disagrees:
- *
- *  1. `glyphSegments` 4 against `dividers` 3. The bolt touches the padlock with
- *     no hairline between them (DROVE-281), because those two are the permission
- *     pair and a hairline in this capsule reads as a separate press.
- *  2. A glyph segment is NOT square (DROVE-284). It is the capsule's height
- *     tall and `MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH` wide, which is what
- *     `COMPOSER_BUBBLE_SESSION_SEGMENT_GEOMETRY` now resolves to.
+ * ONE ASYMMETRY IS STILL MODELLED RATHER THAN TRUSTED, because it is the kind
+ * of thing a budget can restate correctly while the drawn row disagrees: a
+ * glyph segment is NOT square (DROVE-284). It is the capsule's height tall
+ * and `MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH` wide, which is what
+ * `COMPOSER_BUBBLE_SESSION_SEGMENT_GEOMETRY` resolves to.
  */
-function sessionCapsule(model: string, fontScale = 1): FlexNode {
+function sessionCapsule(model: string, fontScale = 1, modelWidth?: number): FlexNode {
     const divider: FlexNode = { name: 'divider', style: { width: 1, height: 20 } };
     return {
         name: 'sessionCapsule',
         style: COMPOSER_BUBBLE_SESSION_CAPSULE_GEOMETRY,
         children: [
             { name: 'modeSegment', style: COMPOSER_BUBBLE_SESSION_SEGMENT_GEOMETRY },
-            // No divider here. The pair, touching (DROVE-281).
-            { name: 'autoAcceptSegment', style: COMPOSER_BUBBLE_SESSION_SEGMENT_GEOMETRY },
+            // A rule here since DROVE-331. The bolt that touched the padlock
+            // is gone, so this boundary is a change of subject like the others.
             divider,
             { name: 'readAloudSegment', style: COMPOSER_BUBBLE_SESSION_SEGMENT_GEOMETRY },
             { ...divider, name: 'divider2' },
@@ -113,7 +115,12 @@ function sessionCapsule(model: string, fontScale = 1): FlexNode {
             {
                 name: 'modelSegment',
                 style: {
-                    width: composerModelSegmentWidth(model, fontScale),
+                    // The name's own width by default, so a row that is too
+                    // narrow OVERFLOWS and the failure is measured. Handed
+                    // `composerModelPresentation`'s width instead, it is the
+                    // segment `flexShrink: 1, minWidth: 0` resolves to on the
+                    // phone (DROVE-331), and the row holds.
+                    width: modelWidth ?? composerModelSegmentWidth(model, fontScale),
                     height: MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE,
                 },
             },
@@ -126,18 +133,20 @@ interface TreeOptions {
     withControls?: boolean;
     model?: string;
     fontScale?: number;
+    /** The model segment's resolved width, when the presentation decides it (DROVE-331). */
+    modelWidth?: number;
 }
 
 function bubbleTree(textIntrinsic: number, options: TreeOptions = {}): FlexNode {
     const {
-        withAdd = true, withControls = true, model = 'Opus 5', fontScale = 1,
+        withAdd = true, withControls = true, model = 'Opus 5', fontScale = 1, modelWidth,
     } = options;
     const gap: FlexNode = { name: 'gap', style: COMPOSER_BUBBLE_GAP_GEOMETRY };
     const actions: FlexNode[] = [];
     if (withAdd) actions.push({ name: 'add', style: COMPOSER_BUBBLE_DISC_GEOMETRY });
     if (withControls) {
         if (withAdd) actions.push({ ...gap, name: 'gapAddCapsule' });
-        actions.push(sessionCapsule(model, fontScale));
+        actions.push(sessionCapsule(model, fontScale, modelWidth));
         actions.push({ ...gap, name: 'gapCapsuleSpacer' });
     }
     actions.push({ name: 'spacer', style: COMPOSER_BUBBLE_SPACER_GEOMETRY });
@@ -298,16 +307,18 @@ describe('the composer bubble, resolved rather than restated', () => {
         // still RETURNS this number rather than being handed it.
         expect(COMPOSER_BUBBLE_ROW_GEOMETRY.segment).toBe(MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH);
         expect(MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH).toBe(27);
-        // 3 discs, 3 gaps, 4 glyph segments, 3 hairlines counted whole. 246,
-        // which is 53 back on DROVE-281's 299 and 14 back on DROVE-266's 260 —
-        // with one more control in the capsule than either of them had.
-        expect(composerRowFixedWidth()).toBe(246);
-        expect(299 - composerRowFixedWidth()).toBe(53);
+        // 3 discs, 3 gaps, 3 glyph segments, 3 hairlines counted whole. 219,
+        // which is 80 back on DROVE-281's 299 and 41 back on DROVE-266's 260.
+        // 246 until DROVE-331 took the auto-accept bolt out of the capsule;
+        // the 27 it held is the difference, and it is the name's.
+        expect(composerRowFixedWidth()).toBe(219);
+        expect(299 - composerRowFixedWidth()).toBe(80);
+        expect(246 - composerRowFixedWidth()).toBe(MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH);
         // And the capsule the row DRAWS agrees with the budget that counts it.
-        // Five segments, THREE hairlines, which is the permission pair touching.
-        const capsuleParts = ['modeSegment', 'autoAcceptSegment', 'readAloudSegment',
-            'effortSegment', 'modelSegment'];
-        for (const name of capsuleParts.slice(0, 4)) {
+        // Four segments, THREE hairlines: one at every boundary now that the
+        // permission pair is a padlock alone.
+        const capsuleParts = ['modeSegment', 'readAloudSegment', 'effortSegment', 'modelSegment'];
+        for (const name of capsuleParts.slice(0, 3)) {
             expect(findFrame(frames, name).width, name)
                 .toBe(MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH);
             // Full height though it is not full width: the touch target this
@@ -320,12 +331,20 @@ describe('the composer bubble, resolved rather than restated', () => {
         const parts = capsuleParts.map((n) => findFrame(frames, n));
         expect(parts.reduce((w, f) => w + f.width, 0) + COMPOSER_BUBBLE_ROW_GEOMETRY.dividers)
             .toBe(capsule.width);
-        // The padlock and the bolt TOUCH: nothing between their frames.
-        expect(parts[1].x).toBe(parts[0].x + parts[0].width);
-        // And the other three do not: one hairline each.
+        // One hairline between every pair, and NOTHING touching: the bolt was
+        // the one segment that did (DROVE-281), and a segment that touched
+        // the padlock again would be it coming back.
+        expect(parts[1].x - (parts[0].x + parts[0].width)).toBe(1);
         expect(parts[2].x - (parts[1].x + parts[1].width)).toBe(1);
         expect(parts[3].x - (parts[2].x + parts[2].width)).toBe(1);
-        expect(parts[4].x - (parts[3].x + parts[3].width)).toBe(1);
+        expect(parts.length - 1).toBe(COMPOSER_BUBBLE_ROW_GEOMETRY.dividers);
+        // And no node by the bolt's name is in the modelled tree at all.
+        const names: string[] = [];
+        const walk = (node: FlexNode) => { names.push(node.name); (node.children ?? []).forEach(walk); };
+        walk(bubbleTree(22));
+        expect(names).not.toContain('autoAcceptSegment');
+        expect(names.filter((n) => n.endsWith('Segment')))
+            .toEqual(['modeSegment', 'readAloudSegment', 'effortSegment', 'modelSegment']);
     });
 
     /**
@@ -338,10 +357,13 @@ describe('the composer bubble, resolved rather than restated', () => {
      * it reaches zero the row is full.
      */
     it('fits the row on every supported phone, and says what the name has left', () => {
-        // Four wider at every width since DROVE-320: one point off each of the
-        // four glyph segments, handed to the name so it can draw at 13pt.
-        expect(phones.map(composerModelBudget)).toEqual([36, 91, 109]);
-        expect([430, 440].map(composerModelBudget)).toEqual([146, 156]);
+        // 27 wider at every width since DROVE-331: the auto-accept bolt's
+        // whole segment, handed to the name. Four wider before that since
+        // DROVE-320, one point off each of what were then four glyph segments.
+        expect(phones.map(composerModelBudget)).toEqual([63, 118, 136]);
+        expect([430, 440].map(composerModelBudget)).toEqual([173, 183]);
+        expect(phones.map((phone, i) => composerModelBudget(phone) - [36, 91, 109][i]))
+            .toEqual([27, 27, 27]);
         for (const phone of [375, 390, 393, 430, 440]) {
             const frames = layout(22, {}, widthOf(phone));
             const row = findFrame(frames, 'actionRow');
@@ -371,43 +393,40 @@ describe('the composer bubble, resolved rather than restated', () => {
                 expect(composerModelFits(name, phone), `${name} at ${phone}`).toBe(true);
             }
         }
-        // The names that DO need the scale, and where. 375 and 390 are still
-        // the two supported widths where anything scales after DROVE-320 —
-        // 390's 0.980 on the three 14-glyph names is the air refinement's one
-        // named softening, deepened by the bigger type and asserted in
-        // sessionPillLabel.spec.ts. 375's scale goes UP while its type does
-        // too, because the budget grew by more than the extra ink costs.
-        expect(composerModelScaleFor('Gemini 3.1 Pro', 375)).toBeCloseTo(0.827, 3);
-        expect(composerModelScaleFor('GPT-5.6 Luna', 375)).toBeCloseTo(0.964, 3);
-        expect(composerModelScaleFor('Gemini 3.1 Pro', 390)).toBeCloseTo(0.980, 3);
-        expect(composerModelScaleFor('Gemini 3.1 Pro', 375))
-            .toBeGreaterThan(COMPOSER_MODEL_SEGMENT.minimumFontScale);
-        for (const phone of [393, 430, 440]) {
+        // NOTHING SCALES ON A SUPPORTED WIDTH SINCE DROVE-331. 375 and 390
+        // were the two that did — 0.827 and 0.980 on the three 14-glyph names
+        // after DROVE-320 — and the bolt's 27 clears both: the longest name in
+        // either picker draws WHOLE at 13pt on every phone the app supports.
+        for (const phone of [375, 390, 393, 430, 440]) {
             expect(composerModelScaleFor('Gemini 3.1 Pro', phone), `${phone}`).toBe(1);
+            expect(composerModelScaleFor('GPT-5.6 Luna', phone), `${phone}`).toBe(1);
         }
         expect(COMPOSER_MODEL_SEGMENT.minimumFontScale).toBe(0.8);
-        // AND 320 IS PAST THE END OF THE ORDER, which is this ticket's one
-        // honest failure rather than a fault it can fix. Clay asked for one row
-        // and one row is what a 320pt screen cannot spell a name on: no name of
-        // any length at the floor fits, `Opus 5` included.
-        for (const name of names) {
-            expect(
-                composerModelSegmentWidth(name, COMPOSER_MODEL_SEGMENT.minimumFontScale),
-                `${name} at 320`,
-            ).toBeGreaterThan(composerModelBudget(320));
-        }
-        // The spacer really does go first: at 375, the narrowest supported
-        // width, with the longest name in either picker at the floor there are
-        // 2pt of it left — the same 2 the crossover clears 375 by, and STILL
-        // 2 after DROVE-320 because the 13pt name's 4 extra points at the floor
-        // were paid for rather than borrowed from here. A bigger name that had
-        // simply been asked for would have eaten this and then the name.
-        const frames = layout(22, {
+        // AND 320 IS HALF PAST THE END OF THE ORDER, which is the honest
+        // failure narrowed rather than fixed. Clay asked for one row and one
+        // row at 320 leaves the name 63: the short Claude names fit at the
+        // floor now, the long ones still do not, and which is which is
+        // asserted rather than smoothed over.
+        const at320 = (name: string) =>
+            composerModelSegmentWidth(name, COMPOSER_MODEL_SEGMENT.minimumFontScale)
+            <= composerModelBudget(320);
+        expect(names.filter(at320)).toEqual(['Haiku 4.5', 'Opus 5 1M', 'Sonnet 5', 'Fable 5', 'Opus 5']);
+        expect(names.filter((name) => !at320(name))).toEqual(['Opus 4.8 1M', 'Sonnet 4.5']);
+        // The spacer really does go first, and now it never runs out: at 375,
+        // the narrowest supported width, with the longest name in either
+        // picker at the size it is actually drawn (full), 10pt of it are left.
+        // At the type floor it would be 29 — the 2 DROVE-320 left plus the
+        // bolt's 27 — which is the ledger of this ticket in one number.
+        const drawn = layout(22, { model: 'Gemini 3.1 Pro', fontScale: 1 }, widthOf(375));
+        expect(findFrame(drawn, 'spacer').width).toBe(10);
+        expect(findFrame(drawn, 'spacer').width)
+            .toBe(composerModelBudget(375) - composerModelSegmentWidth('Gemini 3.1 Pro'));
+        const floor = layout(22, {
             model: 'Gemini 3.1 Pro',
             fontScale: COMPOSER_MODEL_SEGMENT.minimumFontScale,
         }, widthOf(375));
-        expect(findFrame(frames, 'spacer').width).toBe(2);
-        expect(findFrame(frames, 'spacer').width).toBeLessThanOrEqual(MOBILE_COMPOSER_METRICS.controlGap);
+        expect(findFrame(floor, 'spacer').width).toBe(29);
+        expect(findFrame(floor, 'spacer').width).toBe(2 + MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH);
     });
 
     /**
@@ -421,12 +440,16 @@ describe('the composer bubble, resolved rather than restated', () => {
      * the scale the name is actually drawn at, and 320 is the one that does not.
      */
     it('holds on one row at every supported phone, at the scale the name is drawn', () => {
+        // 390 drew the 14-glyph names at 0.980 until DROVE-331; the row is
+        // resolved at the scale the phone actually draws, which is the
+        // assertion's own rule, and that scale is 1 on every member now.
+        expect(composerModelScaleFor('Gemini 3.1 Pro', 390)).toBe(1);
         for (const [phone, model, fontScale] of [
+            // 375 draws the longest name WHOLE since DROVE-331; the floor
+            // scale stays in the list because the row must hold there too.
+            [375, 'Gemini 3.1 Pro', 1],
             [375, 'Gemini 3.1 Pro', COMPOSER_MODEL_SEGMENT.minimumFontScale],
             [375, 'Opus 4.8 1M', 1],
-            // 390 draws the 14-glyph names at 0.989 since the air refinement,
-            // so the row is resolved at the scale the phone actually draws —
-            // which is the assertion's own rule, now with a second member.
             [390, 'Gemini 3.1 Pro', composerModelScaleFor('Gemini 3.1 Pro', 390)],
             [393, 'Gemini 3.1 Pro', 1],
             [430, 'Gemini 3.1 Pro', 1],
@@ -445,25 +468,90 @@ describe('the composer bubble, resolved rather than restated', () => {
         }
     });
 
-    it('overflows at 320 and nowhere else, even at the type floor', () => {
-        // The failure, measured rather than described. The shortest name in any
-        // picker at the smallest type the segment will draw still overruns the
-        // rim by 8pt at 320 — DROVE-320's 4pt narrows a failure that was
-        // already total, on a width below the supported floor, and no scale
-        // rescues it. sessionPillLabel.ts carries what would have to give.
-        const frames = layout(22, {
+    it('overflows at 320 for the long names only, and nowhere else', () => {
+        // The failure, measured rather than described, and halved by
+        // DROVE-331. The shortest name in any picker at the smallest type the
+        // segment will draw overran the rim by 8pt at 320 after DROVE-320; the
+        // bolt's 27 turns that into 19pt of spacer, so `Opus 5` holds there
+        // now. The LONGEST name at the floor still overruns by 26, on a width
+        // below the supported floor, and no scale rescues it.
+        // sessionPillLabel.ts carries what would have to give.
+        const short = layout(22, {
             model: 'Opus 5', fontScale: COMPOSER_MODEL_SEGMENT.minimumFontScale,
         }, widthOf(320));
-        const send = findFrame(frames, 'send');
-        const rim = frames.width - MOBILE_COMPOSER_METRICS.bubbleInset;
-        expect(send.x + send.width - rim).toBe(8);
-        // And 375, the narrowest phone the app supports, does not: it is the
-        // first supported width above `COMPOSER_ROW_MIN_MODEL_WIDTH`'s 373.
+        const shortSend = findFrame(short, 'send');
+        const rim = short.width - MOBILE_COMPOSER_METRICS.bubbleInset;
+        expect(shortSend.x + shortSend.width).toBe(rim);
+        expect(findFrame(short, 'spacer').width).toBe(19);
+        expect(findFrame(short, 'spacer').width).toBe(MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH - 8);
+        const long = layout(22, {
+            model: 'Gemini 3.1 Pro', fontScale: COMPOSER_MODEL_SEGMENT.minimumFontScale,
+        }, widthOf(320));
+        const longSend = findFrame(long, 'send');
+        expect(longSend.x + longSend.width - rim).toBe(26);
+        expect(longSend.x + longSend.width - rim)
+            .toBe(composerModelSegmentWidth('Gemini 3.1 Pro', COMPOSER_MODEL_SEGMENT.minimumFontScale)
+                - composerModelBudget(320));
+        // And 375, the narrowest phone the app supports, does not: it is 29
+        // above `COMPOSER_ROW_MIN_MODEL_WIDTH`'s 346.
         const ok = layout(22, {
             model: 'Gemini 3.1 Pro', fontScale: COMPOSER_MODEL_SEGMENT.minimumFontScale,
         }, widthOf(375));
         const okSend = findFrame(ok, 'send');
         expect(okSend.x + okSend.width).toBe(ok.width - MOBILE_COMPOSER_METRICS.bubbleInset);
+    });
+
+    /**
+     * THE CUT, RESOLVED THROUGH THE ENGINE (DROVE-331).
+     *
+     * Clay: "you can even make the model text a bit smaller and truncate if it
+     * ends up running under." The test above lets the unshrunk name overrun
+     * the rim so the failure is measured; this one lays the segment out at the
+     * width `composerModelPresentation` says it takes, which is what
+     * `flexShrink: 1, minWidth: 0` on the model segment does on the phone, and
+     * asserts what the ellipsis buys: send on the rim, the three glyph
+     * segments at their 27, and the cut exactly the overrun.
+     */
+    it('cuts the name rather than the row or the other segments, at the width the presentation resolves (DROVE-331)', () => {
+        const drawn = composerModelPresentation('Gemini 3.1 Pro', 320);
+        expect(drawn.outcome).toBe('truncated');
+        const frames = layout(22, { model: 'Gemini 3.1 Pro', modelWidth: drawn.width }, widthOf(320));
+        const rim = frames.width - MOBILE_COMPOSER_METRICS.bubbleInset;
+        const send = findFrame(frames, 'send');
+        expect(send.x + send.width).toBe(rim);
+        expect(findFrame(frames, 'spacer').width).toBe(0);
+        for (const name of ['modeSegment', 'readAloudSegment', 'effortSegment']) {
+            expect(findFrame(frames, name).width, name).toBe(MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH);
+        }
+        const model = findFrame(frames, 'modelSegment');
+        expect(model.width).toBe(composerModelBudget(320));
+        expect(model.width).toBe(63);
+        expect(findFrame(frames, 'sessionCapsule').width)
+            .toBe(3 * MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH + COMPOSER_BUBBLE_ROW_GEOMETRY.dividers + 63);
+        // What the ellipsis stands in for is the overrun the unshrunk name
+        // measures, to the point.
+        const unshrunk = layout(22, {
+            model: 'Gemini 3.1 Pro', fontScale: COMPOSER_MODEL_SEGMENT.minimumFontScale,
+        }, widthOf(320));
+        const unshrunkSend = findFrame(unshrunk, 'send');
+        expect(drawn.cut).toBe(unshrunkSend.x + unshrunkSend.width - rim);
+        expect(drawn.cut).toBe(26);
+        // Scaled, one step up the order: at the crossover the segment is the
+        // whole budget, nothing is cut, and the row holds the same way.
+        const scaled = composerModelPresentation('Gemini 3.1 Pro', 346);
+        expect(scaled.outcome).toBe('scaled');
+        const atCrossover = layout(22, { model: 'Gemini 3.1 Pro', modelWidth: scaled.width }, widthOf(346));
+        const crossoverSend = findFrame(atCrossover, 'send');
+        expect(crossoverSend.x + crossoverSend.width).toBe(atCrossover.width - MOBILE_COMPOSER_METRICS.bubbleInset);
+        expect(findFrame(atCrossover, 'spacer').width).toBe(0);
+        expect(findFrame(atCrossover, 'modelSegment').width).toBe(89);
+        // And on a supported phone the same call draws the name WHOLE, at the
+        // name's own width, with the spacer holding the rest.
+        const whole = composerModelPresentation('Gemini 3.1 Pro', 375);
+        expect(whole.outcome).toBe('whole');
+        const ok = layout(22, { model: 'Gemini 3.1 Pro', modelWidth: whole.width }, widthOf(375));
+        expect(findFrame(ok, 'modelSegment').width).toBe(108);
+        expect(findFrame(ok, 'spacer').width).toBe(10);
     });
 
     it('opens at one height on every phone again, which is what the row buys back', () => {
@@ -484,7 +572,7 @@ describe('the composer bubble, resolved rather than restated', () => {
             .toBe(bubble.height - MOBILE_COMPOSER_METRICS.bubbleInsetBottom);
     });
 
-    it('hands the name back 53pt, which is still more than DROVE-281 spent', () => {
+    it('hands the name back 80pt, which is still more than DROVE-281 spent', () => {
         // The row DROVE-281 shipped, reconstructed from its own terms rather
         // than from constants that have since moved: four discs, four gaps,
         // three 39pt glyph segments, two hairlines.
@@ -495,22 +583,26 @@ describe('the composer bubble, resolved rather than restated', () => {
             - (4 * g.disc + 4 * g.gap + 3 * MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE + 2);
         expect(phones.map(before284)).toEqual([-17, 38, 56]);
         for (const phone of phones) {
-            expect(composerModelBudget(phone) - before284(phone), `${phone}`).toBe(53);
+            expect(composerModelBudget(phone) - before284(phone), `${phone}`).toBe(80);
         }
-        // THE LEDGER, IN TWO NAMED TERMS, IN THE ORDER THEY HAPPEN. Clay's
+        // THE LEDGER, IN THREE NAMED TERMS, IN THE ORDER THEY HAPPEN. Clay's
         // DROVE-284 instruction is the first: a loose disc and its gap leave
         // the row (45), and a segment and a hairline join the capsule at the
-        // width a segment was then (40), which is 5 on its own. The second is
-        // the one that has now moved three times: four glyph segments that were
-        // only square because one prop set both axes went to the ink-tight 26,
-        // Clay's "spread them out" brought them to 28, and DROVE-320 took one
-        // point back to pay for the 13pt name — 12pt off each against the disc
-        // they were.
+        // width a segment was then (40), which is 5 on its own. The second
+        // moved three times: four glyph segments that were only square because
+        // one prop set both axes went to the ink-tight 26, Clay's "spread them
+        // out" brought them to 28, and DROVE-320 took one point back to pay
+        // for the 13pt name — 12pt off each against the disc they were, four
+        // of them at the time. The third is DROVE-331: the auto-accept bolt
+        // leaves the capsule at the 27 it had reached, and no hairline goes
+        // with it because it never had one (it touched the padlock).
         const discAndGap = g.disc + g.gap;
         const segmentThen = MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE + 1;
         const narrowing = 4 * (MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE - g.segment);
-        expect([discAndGap, segmentThen, narrowing]).toEqual([45, 40, 48]);
+        const boltGone = g.segment;
+        expect([discAndGap, segmentThen, narrowing, boltGone]).toEqual([45, 40, 48, 27]);
         expect(discAndGap - segmentThen + narrowing).toBe(53);
+        expect(discAndGap - segmentThen + narrowing + boltGone).toBe(80);
         // And the padding hands back 10 on top of it, 8 of which was
         // DROVE-264's give and the last 2 DROVE-320's. THE TWO GIVES DO NOT
         // ADD UP TO THE AIR ANY MORE, and that is the ticket: the air
@@ -519,8 +611,9 @@ describe('the composer bubble, resolved rather than restated', () => {
         // padding — leaving 4 of Clay's granted air still on the row.
         expect(COMPOSER_MODEL_SEGMENT.paddingHorizontal).toBe(5);
         expect(2 * (10 - COMPOSER_MODEL_SEGMENT.paddingHorizontal)).toBe(10);
-        // What is still standing of Clay's granted air: 4pt, one per segment.
-        expect(4 * (g.segment - 26)).toBe(4);
+        // What is still standing of Clay's granted air: one point per glyph
+        // segment, and there are three of them now, so 3.
+        expect(g.glyphSegments * (g.segment - 26)).toBe(3);
         // And what DROVE-320 took to pay for the 13pt name: 4 off the four
         // segments and 2 off the two sides of the padding, which is exactly
         // the 6 more points the longest name needs at the type floor

@@ -174,18 +174,20 @@ describe.each(themes)('the rule on the $name theme: the foreground unless it is 
      * value the session holds, and auto-accept is the app answering prompts on
      * Clay's behalf while he is not looking. Same class as an open mic.
      *
-     * IT IS THE BOLT'S COLOUR SINCE DROVE-281, not the padlock's. DROVE-277
-     * had no control to colour — the switch was inside the padlock's sheet, so
-     * the padlock was the only object that could carry the state. The bolt is
-     * a segment of the capsule now, so the state sits on the control that
-     * changes it and the padlock goes back to the rule with no exception.
+     * IT IS THE PADLOCK'S COLOUR AGAIN SINCE DROVE-331. DROVE-277 had no
+     * control to colour — the switch was inside the padlock's sheet, so the
+     * padlock was the only object that could carry the state. DROVE-281 made
+     * the bolt a segment of the capsule and moved the state onto it; DROVE-331
+     * took the bolt back off on Clay's word, so the padlock is the one object
+     * on the row that can carry the state and it does, with the sheet it opens
+     * holding the switch.
      */
-    it('leaves the bolt on the foreground while auto-accept is off', () => {
+    it('leaves the padlock on the foreground while auto-accept is off', () => {
         expect(autoAcceptColour(palette, false)).toBe(palette.foreground);
         expect(autoAcceptColour(palette, false)).toBe(composerGlyphColour(palette));
     });
 
-    it('colours the bolt with the accent while auto-accept is on, and spends no new hue on it', () => {
+    it('colours the padlock with the accent while auto-accept is on, and spends no new hue on it', () => {
         expect(autoAcceptColour(palette, true)).toBe(palette.accent);
         // The same accent the send button wears when it has something to send:
         // one colour, one meaning, "something is about to happen".
@@ -196,7 +198,7 @@ describe.each(themes)('the rule on the $name theme: the foreground unless it is 
 
     it('does it on both themes, so the state is legible wherever Clay is reading', () => {
         // The accent is a different hex per theme and the same ROLE, which is
-        // the property that matters: the bolt separates from the capsule's
+        // the property that matters: the padlock separates from the capsule's
         // fill on dark and on light, measured below against
         // `COMPOSER_DISC_SEPARATION_FLOOR`, and it is never the foreground
         // while it is on.
@@ -625,10 +627,11 @@ describe.each(themes)('the session capsule on the $name theme', ({ name, dark })
     });
 
     /**
-     * THE BOLT AGAINST THE CAPSULE IT SITS IN, ON BOTH THEMES (DROVE-281).
+     * THE AUTO-ACCEPT PADLOCK AGAINST THE CAPSULE IT SITS IN, ON BOTH THEMES
+     * (DROVE-281, and the padlock's since DROVE-331).
      *
      * DROVE-254 and DROVE-264 measured every new object on this row against
-     * what is behind it, and the bolt is a new object. It is a graphical
+     * what is behind it, and a padlock in the accent is one. It is a graphical
      * control rather than text, so the floor that applies is WCAG 1.4.11's
      * 3:1, and both states clear it on both themes with the ON state — the one
      * whose cost of being missed is a command running unasked — clearing it by
@@ -640,7 +643,7 @@ describe.each(themes)('the session capsule on the $name theme', ({ name, dark })
      * `COMPOSER_DISC_SEPARATION_FLOOR`, which is the bar the row already uses
      * for "these two are different objects".
      */
-    it('draws the bolt clear of the capsule in both states, measured (DROVE-281)', () => {
+    it('draws the auto-accept padlock clear of the capsule in both states, measured (DROVE-281, DROVE-331)', () => {
         const p = composerControlPalette(dark);
         const bed = parseColor(fill);
         const on = contrastRatio(parseColor(autoAcceptColour(p, true)), bed);

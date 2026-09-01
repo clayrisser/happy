@@ -24,8 +24,8 @@ import {
  *     actionRow     row, alignItems centre:
  *                     add       the `+`, 39
  *                     gap       6
- *                     capsule   permission | auto-accept ‖ read-aloud ‖
- *                               effort ‖ model, 39 tall, 28 per glyph segment
+ *                     capsule   permission ‖ read-aloud ‖ effort ‖ model,
+ *                               39 tall, 27 per glyph segment
  *                     gap       6
  *                     spacer    flex 1, the row's only slack
  *                     mic       39
@@ -185,8 +185,9 @@ export function resolveComposerBubbleGapGeometry(): ComposerBubbleStyle {
 }
 
 /**
- * The session capsule inside the row: permission, effort and the model's name
- * (DROVE-236).
+ * The session capsule inside the row: permission, read-aloud, effort and the
+ * model's name (DROVE-236, DROVE-284). DROVE-281's auto-accept bolt sat in it
+ * too, touching the padlock, until DROVE-331 sent it back to the sheet.
  *
  * It sizes to its CONTENT and shrinks through the model segment, which is the
  * one part of it with a width of its own. It does not take `flex: 1`: a
@@ -215,11 +216,14 @@ export function resolveComposerBubbleSessionSegmentGeometry(): ComposerBubbleSty
     return {
         // NOT SQUARE SINCE DROVE-284. The capsule is still the row's height and
         // a glyph segment is `MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH` wide —
-        // the widest whole point the 375 floor affords now that the name is
-        // 12pt, never under the glyph's measured ink plus `controlGap` either
-        // side. Four of them at a disc's width is what forced the second row
-        // Clay rejected; DROVE-284 cut them to the ink and Clay has since
-        // ruled that over-tight (“spread them out”).
+        // 27, the glyph's measured ink plus `controlGap` either side plus the
+        // one point of air Clay granted that DROVE-320 left standing. It was
+        // the widest whole point the 375 floor afforded while four of them
+        // shared the row; DROVE-331 took the bolt and handed its 27 to the
+        // name, so the floor affords more than this now and this is the ink
+        // rule, not the ceiling. Four of them at a disc's width is what forced
+        // the second row Clay rejected; DROVE-284 cut them to the ink and Clay
+        // has since ruled that over-tight (“spread them out”).
         width: MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH,
         height: MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE,
         alignItems: 'center',
