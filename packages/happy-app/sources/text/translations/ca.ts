@@ -1118,6 +1118,23 @@ export const ca: TranslationStructure = {
         retrying: 'Reintentant…',
     },
 
+    workflowWaves: {
+        title: 'Onades',
+        loading: 'Carregant onades…',
+        unavailable: 'Encara no hi ha res al disc per a aquesta execució.',
+        unattributed: 'A l\'espera d\'onada',
+        unattributedFootnote: 'El registre que assigna cada agent a la seva onada s\'escriu quan l\'execució acaba o s\'atura; fins llavors els agents es compten aquí, mai s\'endevinen.',
+        current: 'actual',
+        notStarted: 'sense començar',
+        running: 'en curs',
+        queued: 'a la cua',
+        done: 'fet',
+        failed: 'fallit',
+        quiet: 'silenciós',
+        agentsElided: ({ count }: { count: number }) => `${count} més no mostrats`,
+    },
+
+
     codex: {
         // Codex permission dialog buttons
         permissions: {

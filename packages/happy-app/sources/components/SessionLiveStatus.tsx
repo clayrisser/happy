@@ -48,6 +48,20 @@ const rowIcon: Record<LiveStatusRow['kind'], React.ComponentProps<typeof Octicon
     workflow: 'workflow',
 };
 
+/**
+ * Which WORKFLOW groups each session has unfolded, for the life of the app
+ * (DROVE-290).
+ *
+ * Component state alone survives the once-a-second republish but not the
+ * sheet closing, so a workflow Clay had opened snapped shut on every reopen.
+ * Workflow keys only: an agent parent's fold keeps DROVE-185's per-mount
+ * life, which its tests pin. Rows that leave the snapshot simply stop
+ * consulting their entry, so a stale key costs bytes, never a wrong fold.
+ */
+const rememberedWorkflowFolds = new Map<string, ReadonlySet<string>>();
+
+const isWorkflowGroup = (groupKey: string) => groupKey.startsWith('workflow:');
+
 function LiveStatusTreeRow(props: {
     sessionId: string,
     row: LiveStatusRow,
@@ -85,15 +99,15 @@ function LiveStatusTreeRow(props: {
             </Text>
             {row.childCount && props.onToggle ? (
                 // Its OWN hit target, not the row's (DROVE-185). Tapping the
-                // row still opens the agent, which is what it has always done
-                // and what Clay reaches for most; unfolding is the second
-                // action and gets the second target.
+                // row still opens the agent or the workflow's wave screen,
+                // which is the first thing Clay reaches for; unfolding is the
+                // second action and gets the second target.
                 <Pressable
                     onPress={props.onToggle}
                     hitSlop={8}
                     accessibilityRole="button"
                     accessibilityState={{ expanded: !!props.expanded }}
-                    accessibilityLabel={`${props.expanded ? 'Hide' : 'Show'} ${row.childCount} nested ${row.childCount === 1 ? 'agent' : 'agents'}`}
+                    accessibilityLabel={`${props.expanded ? 'Hide' : 'Show'} ${row.childCount} ${row.kind === 'workflow' ? 'workflow' : 'nested'} ${row.childCount === 1 ? 'agent' : 'agents'}`}
                     style={({ pressed }) => ({
                         flexDirection: 'row',
                         alignItems: 'center',
@@ -140,6 +154,24 @@ function LiveStatusTreeRow(props: {
         </View>
     );
 
+    // A workflow row opens the run's wave screen (DROVE-290): the phases the
+    // terminal's /workflows panel shows, with counts per wave and the failed
+    // agents findable inside each.
+    if (row.kind === 'workflow' && row.runId) {
+        const runId = row.runId;
+        return (
+            <Pressable
+                onPress={() => leave(() => router.push({
+                    pathname: '/session/[id]/workflow/[runId]',
+                    params: { id: props.sessionId, runId, name: row.title },
+                }))}
+                style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
+            >
+                {body}
+            </Pressable>
+        );
+    }
+
     // An agent row opens the agent's own transcript (DROVE-93): its prompt,
     // its tool calls, its result. Not the Task card, which for a background
     // agent holds the name and a check mark and nothing else.
@@ -183,19 +215,27 @@ export const SessionLiveStatusTree = React.memo(function SessionLiveStatusTree(p
     maxHeight?: number | null;
 }) {
     const capped = props.maxHeight !== null;
-    // Which parents are unfolded. Collapsed is the default (DROVE-185): the
-    // top level stays the readable list it has always been, and a parent's
-    // child count is the thing that opens it. Held here rather than in the
-    // sheet so it survives the once-a-second republish that reconciles the
-    // rows underneath it.
-    const [expanded, setExpanded] = React.useState<ReadonlySet<string>>(() => new Set());
-    const toggle = React.useCallback((agentId: string) => {
+    // Which parents are unfolded. Collapsed is the default (DROVE-185 for
+    // agent parents, DROVE-290 for workflow groups): the top level stays the
+    // readable list it has always been, and a parent's child count is the
+    // thing that opens it. Held in state so it survives the once-a-second
+    // republish, and mirrored into the module map so closing and reopening
+    // the sheet does not snap every group shut again (DROVE-290).
+    const sessionKey = props.sessionId;
+    const [expanded, setExpanded] = React.useState<ReadonlySet<string>>(
+        () => new Set(rememberedWorkflowFolds.get(sessionKey) ?? []),
+    );
+    const toggle = React.useCallback((groupKey: string) => {
         setExpanded((current) => {
             const next = new Set(current);
-            if (!next.delete(agentId)) next.add(agentId);
+            if (!next.delete(groupKey)) next.add(groupKey);
+            rememberedWorkflowFolds.set(
+                sessionKey,
+                new Set([...next].filter(isWorkflowGroup)),
+            );
             return next;
         });
-    }, []);
+    }, [sessionKey]);
     const drawn = React.useMemo(() => visibleRows(props.rows, expanded), [props.rows, expanded]);
     return (
         <ScrollView
@@ -214,8 +254,8 @@ export const SessionLiveStatusTree = React.memo(function SessionLiveStatusTree(p
                         key={row.key}
                         sessionId={props.sessionId}
                         row={row}
-                        expanded={row.agentId ? expanded.has(row.agentId) : false}
-                        onToggle={row.agentId && row.childCount ? () => toggle(row.agentId!) : undefined}
+                        expanded={row.groupKey ? expanded.has(row.groupKey) : false}
+                        onToggle={row.groupKey && row.childCount ? () => toggle(row.groupKey!) : undefined}
                     />
                 ))}
             </View>

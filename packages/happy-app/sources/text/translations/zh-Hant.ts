@@ -1118,6 +1118,23 @@ export const zhHant: TranslationStructure = {
         retrying: '仍在重試…',
     },
 
+    workflowWaves: {
+        title: '波次',
+        loading: '正在載入波次…',
+        unavailable: '磁碟上還沒有此次執行的資料。',
+        unattributed: '等待分配波次',
+        unattributedFootnote: '將代理歸入波次的紀錄會在執行結束或被終止時寫入；在此之前代理在這裡計數，絕不猜測其所屬階段。',
+        current: '目前',
+        notStarted: '未開始',
+        running: '執行中',
+        queued: '排隊中',
+        done: '完成',
+        failed: '失敗',
+        quiet: '靜默',
+        agentsElided: ({ count }: { count: number }) => `還有 ${count} 個未顯示`,
+    },
+
+
     codex: {
         // Codex permission dialog buttons
         permissions: {

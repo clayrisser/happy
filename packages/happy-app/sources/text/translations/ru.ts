@@ -1122,6 +1122,23 @@ export const ru: TranslationStructure = {
         retrying: 'Пробуем снова…',
     },
 
+    workflowWaves: {
+        title: 'Волны',
+        loading: 'Загрузка волн…',
+        unavailable: 'На диске пока нет данных об этом запуске.',
+        unattributed: 'Ожидает волны',
+        unattributedFootnote: 'Запись, связывающая агентов с волнами, создаётся при завершении или остановке запуска; до этого агенты считаются здесь и не приписываются к фазе наугад.',
+        current: 'текущая',
+        notStarted: 'не начата',
+        running: 'выполняется',
+        queued: 'в очереди',
+        done: 'готово',
+        failed: 'сбой',
+        quiet: 'тихо',
+        agentsElided: ({ count }: { count: number }) => `ещё ${count} не показано`,
+    },
+
+
     codex: {
         // Codex permission dialog buttons
         permissions: {

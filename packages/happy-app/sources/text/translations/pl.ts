@@ -1134,6 +1134,23 @@ export const pl: TranslationStructure = {
         retrying: 'Ponawianie…',
     },
 
+    workflowWaves: {
+        title: 'Fale',
+        loading: 'Wczytywanie fal…',
+        unavailable: 'Brak danych o tym przebiegu na dysku.',
+        unattributed: 'Oczekuje na falę',
+        unattributedFootnote: 'Zapis przypisujący agentów do fal powstaje, gdy przebieg się kończy lub zostaje przerwany; do tego czasu agenci są liczeni tutaj, nigdy nie są zgadywani.',
+        current: 'bieżąca',
+        notStarted: 'nie rozpoczęta',
+        running: 'w toku',
+        queued: 'w kolejce',
+        done: 'gotowe',
+        failed: 'błąd',
+        quiet: 'cisza',
+        agentsElided: ({ count }: { count: number }) => `${count} więcej nie pokazano`,
+    },
+
+
     codex: {
         // Codex permission dialog buttons
         permissions: {

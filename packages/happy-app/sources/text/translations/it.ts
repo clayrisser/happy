@@ -1116,6 +1116,23 @@ export const it: TranslationStructure = {
         retrying: 'Nuovo tentativo…',
     },
 
+    workflowWaves: {
+        title: 'Ondate',
+        loading: 'Caricamento ondate…',
+        unavailable: 'Nessun dato su disco per questa esecuzione.',
+        unattributed: 'In attesa di ondata',
+        unattributedFootnote: 'Il registro che assegna ogni agente alla sua ondata viene scritto quando l\'esecuzione termina o viene interrotta; fino ad allora gli agenti sono contati qui, mai indovinati.',
+        current: 'corrente',
+        notStarted: 'non iniziata',
+        running: 'in corso',
+        queued: 'in coda',
+        done: 'fatto',
+        failed: 'fallito',
+        quiet: 'silenzioso',
+        agentsElided: ({ count }: { count: number }) => `${count} altri non mostrati`,
+    },
+
+
     codex: {
         // Codex permission dialog buttons
         permissions: {

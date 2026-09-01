@@ -323,6 +323,11 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
     session.client.rpcHandlerManager.registerHandler('subagentTranscript', async (params: unknown) =>
         scanner.readSubagentTranscript((params ?? {}) as Parameters<typeof scanner.readSubagentTranscript>[0]));
 
+    // DROVE-290: the wave view of one workflow run, same channel, same
+    // flip-following scanner.
+    session.client.rpcHandlerManager.registerHandler('workflowDetail', async (params: unknown) =>
+        scanner.readWorkflowDetail((params ?? {}) as Parameters<typeof scanner.readWorkflowDetail>[0]));
+
     // Register callback to notify scanner when session ID is found via hook
     // This is important for --continue/--resume where session ID is not known upfront
     //

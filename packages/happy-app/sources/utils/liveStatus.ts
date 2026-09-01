@@ -175,6 +175,18 @@ export interface LiveStatusRow {
      * before nesting existed.
      */
     childCount?: number;
+    /**
+     * What toggling this row's fold is keyed on (DROVE-185, DROVE-290). An
+     * agent parent's is its agentId, a workflow's is `workflow:<runId>`;
+     * children carry it as their `parentId`. Absent on rows with nothing to
+     * fold.
+     */
+    groupKey?: string;
+    /**
+     * The workflow run this row heads, so a tap can open the wave screen
+     * (DROVE-290). Workflow rows only.
+     */
+    runId?: string;
 }
 
 /**
@@ -419,7 +431,7 @@ function agentRow(
         agentId: agent.id,
         depth,
         ...(parentId ? { parentId } : {}),
-        ...(childCount > 0 ? { childCount } : {}),
+        ...(childCount > 0 ? { childCount, groupKey: agent.id } : {}),
     };
 }
 
@@ -540,6 +552,7 @@ function workflowRow(workflow: LiveStatusWorkflow, now: number): LiveStatusRow {
         kind: 'workflow',
         key: `workflow:${workflow.id}`,
         title: workflow.name,
+        runId: workflow.id,
         ...(detail ? { detail } : {}),
         progress: workflowProgress(workflow),
         elapsed: formatElapsed(now - workflow.startedAt),
@@ -678,15 +691,17 @@ export function summarizeLiveStatus(status: LiveStatus, now: number): LiveStatus
             depth: 0,
         });
     }
-    // A workflow, then ITS agents, indented one step under it (DROVE-268).
+    // A workflow, then ITS agents, indented one step under it (DROVE-268) and
+    // folded behind the workflow row by default (DROVE-290).
     //
-    // The same sheet, the same row shape, the same tap: this is what "folded,
-    // not dropped" means for a fan-out that used to arrive as a single line
-    // saying `0/5`. They are indented but NOT foldable — a workflow agent has
-    // no `parentId`, so `visibleRows` can never hide it. That is deliberate.
-    // The complaint being answered is that they were invisible, and a fold
-    // that defaults to shut reproduces it exactly. Their own children still
-    // fold, because those were always behind a chevron.
+    // DROVE-268 made these rows deliberately unfoldable, because the
+    // complaint it answered was invisibility and a silent fold reproduces it.
+    // Then Clay, at a workflow drawing six open rows with one truncated label
+    // between them: "Shouldn't you be able to collapse this?" The fold is not
+    // silent now — the workflow row wears the same chevron-and-count an agent
+    // parent wears (DROVE-185), its summary line still carries every count,
+    // and the wave screen behind a tap carries the detail — so collapsed is
+    // the default, and nothing is hidden without a number saying so.
     const byRun = new Map<string, LiveStatusAgent[]>();
     const paneAgents: LiveStatusAgent[] = [];
     for (const agent of agents) {
@@ -699,11 +714,21 @@ export function summarizeLiveStatus(status: LiveStatus, now: number): LiveStatus
         else byRun.set(agent.runId, [agent]);
     }
     for (const workflow of workflows) {
-        rows.push(workflowRow(workflow, now));
+        const header = workflowRow(workflow, now);
         const mine = byRun.get(workflow.id);
-        if (!mine) continue;
+        if (!mine) {
+            rows.push(header);
+            continue;
+        }
         byRun.delete(workflow.id);
-        for (const row of indented(orderAgentRows(mine, now), 1)) rows.push(row);
+        const groupKey = `workflow:${workflow.id}`;
+        rows.push({ ...header, groupKey, childCount: mine.length });
+        for (const row of indented(orderAgentRows(mine, now), 1)) {
+            // The run's own agents hang off the workflow's fold; an agent
+            // nested under one of them keeps its real parent, and collapses
+            // with it the way any nested agent does.
+            rows.push(row.parentId ? row : { ...row, parentId: groupKey });
+        }
     }
     // An agent whose run is not in this snapshot is NOT dropped: it is drawn at
     // top level beside the pane's own, the same promotion `orderAgentRows`

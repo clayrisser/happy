@@ -684,6 +684,11 @@ export async function runClaude(credentials: Credentials, options: StartOptions 
     session.rpcHandlerManager.registerHandler('subagentTranscript', async (params: unknown) =>
         remoteScanner.readSubagentTranscript((params ?? {}) as Parameters<typeof remoteScanner.readSubagentTranscript>[0]));
 
+    // DROVE-290: the wave view of one workflow run, answered off the same
+    // scanner until a local launch registers its own.
+    session.rpcHandlerManager.registerHandler('workflowDetail', async (params: unknown) =>
+        remoteScanner.readWorkflowDetail((params ?? {}) as Parameters<typeof remoteScanner.readWorkflowDetail>[0]));
+
     // DROVE-170: what THIS session can be asked to run. registerCommonHandlers
     // already answered it from the ambient environment; this replaces it with
     // one that reads the account the session is on right now. A drover flip

@@ -1119,6 +1119,23 @@ export const zhHans: TranslationStructure = {
         retrying: '仍在重试…',
     },
 
+    workflowWaves: {
+        title: '波次',
+        loading: '正在加载波次…',
+        unavailable: '磁盘上还没有此次运行的数据。',
+        unattributed: '等待分配波次',
+        unattributedFootnote: '将代理归入波次的记录在运行结束或被终止时写入；在此之前代理在这里计数，绝不猜测其所属阶段。',
+        current: '当前',
+        notStarted: '未开始',
+        running: '运行中',
+        queued: '排队中',
+        done: '完成',
+        failed: '失败',
+        quiet: '静默',
+        agentsElided: ({ count }: { count: number }) => `还有 ${count} 个未显示`,
+    },
+
+
     codex: {
         // Codex permission dialog buttons
         permissions: {
