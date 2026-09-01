@@ -21,7 +21,7 @@ import type { McpReport, McpReportResult } from '@slopus/happy-wire';
 
 import { apiSocket } from './apiSocket';
 
-export type { McpReport, McpHarnessReport, McpScope, McpServerSummary, McpTransport } from '@slopus/happy-wire';
+export type { McpReport, McpHarnessReport, McpScope, McpServerSummary, McpTransport, ProviderReport, ProviderSummary, ProviderModelSummary } from '@slopus/happy-wire';
 
 export type MachineMcpsResult = McpReportResult;
 
@@ -50,4 +50,13 @@ export async function machineDroverMcps(machineId: string): Promise<MachineMcpsR
 
 // The wording lives in mcpText.ts (pure, and testable without a renderer);
 // re-exported here so a caller needs one import for the whole surface.
-export { harnessesToRender, mcpEmptyReason, mcpReadAgo, mcpSummaryLine } from './mcpText';
+export {
+    harnessesToRender,
+    mcpEmptyReason,
+    mcpOnlyFooter,
+    mcpReadAgo,
+    mcpSummaryLine,
+    providerEmptyReason,
+    providerOriginLine,
+    providerSummaryLine,
+} from './mcpText';

@@ -89,6 +89,76 @@ export interface McpScope {
     divergence: McpDivergence | null;
 }
 
+/**
+ * One model a provider offers (DROVE-296).
+ *
+ * Two fields, and the count is not an accident either. A model's full record
+ * in OpenCode's catalog carries `api.url`, `headers` and `options` — a base
+ * URL and whatever was pasted next to it — and none of that is needed to
+ * answer "which model" or to make a pick the harness will accept.
+ */
+export interface ProviderModelSummary {
+    /** The id the harness itself named, e.g. `gemini-3.1-pro-preview`. */
+    id: string;
+    /** Display name. Equal to `id` when nothing gave it another one. */
+    name: string;
+}
+
+/**
+ * One configured model provider.
+ *
+ * Clay: "I typically use opencode for custom 3rd party model providers." A
+ * provider is a NAME and a list of MODEL IDS here — never its base URL, never
+ * its key, and never the environment variable the key is read from.
+ */
+export interface ProviderSummary {
+    /** `google`, `lmstudio`, `gitlab`, or whatever a custom one was called. */
+    id: string;
+    name: string;
+    /**
+     * Where the machine learnt about it, and it changes what a pick will do:
+     *
+     *   `listed`    the harness named it; it will run
+     *   `declared`  the config declares it and the harness did NOT name it,
+     *               which usually means the credential never arrived — a pick
+     *               here fails at exec, so the app shows it differently
+     *   `both`      declared and named
+     *
+     * Open, so a fourth origin needs no wire change.
+     */
+    origin: string;
+    models: ProviderModelSummary[];
+    modelCount: number;
+}
+
+/**
+ * One harness's provider list, or the reason there is none.
+ *
+ * NULL on a harness that has no provider list at all — Claude Code, Cursor and
+ * Codex each reach one vendor through one login. Null and empty are different
+ * answers: null is "there is nothing of this kind here", empty is "you have
+ * configured none", and collapsing them sends somebody looking for a setting
+ * that does not exist.
+ */
+export interface ProviderReport {
+    /** How the machine asked, in the words a person would type: `opencode models`. */
+    asked: string;
+    /** The config file the declared half came from, `$HOME` collapsed to `~`. */
+    config: string | null;
+    /** That config file is not there. */
+    configMissing: boolean;
+    /** That config file is there and could not be read. */
+    configError: string | null;
+    /** The harness binary is not on this machine. */
+    missing: boolean;
+    /** The harness is here and would not answer. Never its stderr — see below. */
+    error: string | null;
+    providers: ProviderSummary[];
+    count: number;
+    /** Models across every provider. Saves the app summing to draw a header. */
+    modelCount: number;
+}
+
 /** One harness's section on the machine page. */
 export interface McpHarnessReport {
     /** `claude` | `cursor` | `codex` | `opencode`. Open, so a fifth needs no wire change. */
@@ -109,6 +179,13 @@ export interface McpHarnessReport {
     configured: boolean;
     /** Any scope differs from the default. Saves the app walking every scope to find out. */
     diverged: boolean;
+    /**
+     * The model providers this harness is configured with (DROVE-296), or null
+     * when the harness has no provider list. Optional on the type as well as
+     * nullable, because a drover from before this landed sends no such key and
+     * a missing section must read as "that machine is older", not as an error.
+     */
+    providers?: ProviderReport | null;
 }
 
 /** Everything one machine reports. */
@@ -137,6 +214,19 @@ export type McpReportResult =
 export const mcpServerAllowedKeys: readonly string[] = Object.freeze(['name', 'transport', 'enabled']);
 
 /**
+ * Every key that may appear on a provider summary (DROVE-296), and on one of
+ * its models.
+ *
+ * The same allowlist argument as the servers above, and the risk is if
+ * anything higher. OpenCode's own provider record holds `options.apiKey` and
+ * `options.baseURL`; a producer that spread a ProviderConfig into the summary
+ * would carry both, and `baseURL` is not a name the forbidden list below would
+ * catch on its own.
+ */
+export const providerAllowedKeys: readonly string[] = Object.freeze(['id', 'name', 'origin', 'models', 'modelCount']);
+export const providerModelAllowedKeys: readonly string[] = Object.freeze(['id', 'name']);
+
+/**
  * Names that must never appear as a key anywhere in a report, at any depth.
  *
  * The allowlist above already covers the server objects, so this is the second
@@ -146,6 +236,10 @@ export const mcpServerAllowedKeys: readonly string[] = Object.freeze(['name', 't
 export const mcpForbiddenKeys: readonly string[] = Object.freeze([
     'env', 'args', 'command', 'url', 'headers', 'token', 'apiKey', 'api_key',
     'secret', 'password', 'authorization', 'credential', 'credentials',
+    // Added with the provider half (DROVE-296). `baseurl` and `endpoint` are
+    // how a provider spells the URL that `url` above would have caught, and
+    // `api` is the key OpenCode's own ProviderConfig puts the endpoint under.
+    'baseurl', 'base_url', 'endpoint', 'api', 'key',
 ]);
 
 /**
@@ -165,6 +259,8 @@ export function mcpReportLeaks(report: unknown): string[] {
     const problems: string[] = [];
     const forbidden = new Set(mcpForbiddenKeys.map((k) => k.toLowerCase()));
     const allowed = new Set(mcpServerAllowedKeys);
+    const providerKeys = new Set(providerAllowedKeys);
+    const providerModelKeys = new Set(providerModelAllowedKeys);
     const seen = new Set<unknown>();
 
     const walk = (value: unknown, path: string): void => {
@@ -196,6 +292,27 @@ export function mcpReportLeaks(report: unknown): string[] {
                         if (!allowed.has(key)) {
                             problems.push(
                                 `${h?.harness}/${s?.id}/${(srv as McpServerSummary)?.name}.${key} is not one of ${mcpServerAllowedKeys.join(', ')}`,
+                            );
+                        }
+                    }
+                }
+            }
+            // The provider half (DROVE-296), checked the same way and for the
+            // same reason: the failure being guarded against is an EXTRA key,
+            // and only an allowlist can see one.
+            for (const provider of h?.providers?.providers ?? []) {
+                for (const key of Object.keys(provider ?? {})) {
+                    if (!providerKeys.has(key)) {
+                        problems.push(
+                            `${h?.harness}/providers/${(provider as ProviderSummary)?.id}.${key} is not one of ${providerAllowedKeys.join(', ')}`,
+                        );
+                    }
+                }
+                for (const model of provider?.models ?? []) {
+                    for (const key of Object.keys(model ?? {})) {
+                        if (!providerModelKeys.has(key)) {
+                            problems.push(
+                                `${h?.harness}/providers/${(provider as ProviderSummary)?.id}/${(model as ProviderModelSummary)?.id}.${key} is not one of ${providerModelAllowedKeys.join(', ')}`,
                             );
                         }
                     }

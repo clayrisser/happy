@@ -459,6 +459,43 @@ describe('harnesses with no mode controls', () => {
         expect(getAvailableModels('opencode', metadata, translate).map((m) => m.key)).toEqual(['anthropic/claude']);
     });
 
+    // DROVE-296. The rule DROVE-253 landed for Cursor, pinned for OpenCode:
+    // the sheet may offer a model ONLY if the harness itself named it. These
+    // codes are real — read off opencode 1.18.20's own ACP `configOptions`
+    // select, which answers 141 of them in `provider/model` spelling with
+    // currentValue `opencode/big-pickle`. The harness refuses anything else
+    // outright (`-32602 Invalid params: model not found`), so a spelling this
+    // file invented would be a pick that dies at exec.
+    it('passes OpenCode\'s own provider/model spelling through untouched', () => {
+        const metadata = {
+            models: [
+                { code: 'opencode/big-pickle', value: 'Big Pickle' },
+                { code: 'lmstudio/openai/gpt-oss-20b', value: 'GPT OSS 20B' },
+                { code: 'google/gemini-3.1-pro-preview', value: 'Gemini 3.1 Pro Preview' },
+            ],
+            currentModelCode: 'opencode/big-pickle',
+        } as never;
+        const offered = getAvailableModels('opencode', metadata, translate);
+        // Every code, byte for byte. A second slash is part of an lmstudio id
+        // and must not be tidied away.
+        expect(offered.map((m) => m.key)).toEqual([
+            'opencode/big-pickle',
+            'lmstudio/openai/gpt-oss-20b',
+            'google/gemini-3.1-pro-preview',
+        ]);
+        // And nothing added. Codex gets a synthesised `default` row; OpenCode
+        // must not, because `default` is not a model OpenCode listed.
+        expect(offered).toHaveLength(3);
+    });
+
+    it('offers nothing at all when the harness published no list', () => {
+        // The honest reading of "this login's models are unknown", and the
+        // reason a `drover opencode` PANE still has no picker: a pane session
+        // is not a Happy session, so nothing ever publishes a catalog for it.
+        expect(getAvailableModels('opencode', { models: [] } as never, translate)).toEqual([]);
+        expect(getAvailableModels('opencode', {} as never, translate)).toEqual([]);
+    });
+
     it('leaves every other harness alone', () => {
         expect(harnessHasModeControls('claude')).toBe(true);
         expect(harnessHasModeControls('codex')).toBe(true);

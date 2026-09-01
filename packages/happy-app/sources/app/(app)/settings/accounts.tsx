@@ -122,7 +122,7 @@ import { harnessName } from '@/utils/harnessName';
 import { DroverAccountLoginBody } from '@/components/tools/views/DroverAccountLoginBody';
 import { MachineMcpRows } from '@/components/MachineMcpRows';
 import { machineDroverMcps, type MachineMcpsResult } from '@/sync/machineMcps';
-import { mcpSummaryLine } from '@/sync/mcpText';
+import { mcpOnlyFooter } from '@/sync/mcpText';
 
 /** How often a machine with a login in flight is asked again. */
 const watchPollMs = 4_000;
@@ -463,6 +463,14 @@ export default function AccountsScreen() {
                                 ...prev,
                                 [`${machine.id}:${mh.harness}`]: !prev[`${machine.id}:${mh.harness}`],
                             }))}
+                            /* The providers disclosure is its own (DROVE-296).
+                               Same map, a different key, so opening OpenCode's
+                               141 models does not also unfold its 37 servers. */
+                            providersExpanded={!!openMcp[`${machine.id}:${mh.harness}:providers`]}
+                            onToggleProviders={() => setOpenMcp((prev) => ({
+                                ...prev,
+                                [`${machine.id}:${mh.harness}:providers`]: !prev[`${machine.id}:${mh.harness}:providers`],
+                            }))}
                         />
                     );
                     // One row, used by every harness section, so a machine that
@@ -673,9 +681,7 @@ export default function AccountsScreen() {
                             <ItemGroup
                                 key={`${machine.id}:mcp:${mh.harness}`}
                                 title={`${machineName(machine)} · ${mh.label}`}
-                                footer={mh.configured
-                                    ? `Configured in one file on this machine, not per account. ${mcpSummaryLine(mh)}.`
-                                    : 'Read-only here. Configuring MCP servers from the phone is not built yet.'}
+                                footer={mcpOnlyFooter(mh)}
                             >
                                 {mcpRow(mh)}
                             </ItemGroup>

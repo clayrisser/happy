@@ -1,5 +1,6 @@
 /**
- * One harness's MCP servers, as rows under that harness's heading (DROVE-274).
+ * One harness's MCP servers AND its model providers, as rows under that
+ * harness's heading (DROVE-274, DROVE-296).
  *
  * Clay: "MCPs are configured differently per harness so I guess under each
  * harness you see the MCPs ... really what I wanna see is just per harness
@@ -19,6 +20,15 @@
  * agree. The names are one tap down, where somebody looking for a specific one
  * will go.
  *
+ * THE PROVIDERS ARE A SECOND DISCLOSURE (DROVE-296). Clay: "I typically use
+ * opencode for custom 3rd party model providers" — that is what OpenCode is
+ * for in this setup, so its providers belong beside its servers rather than on
+ * a screen of their own. Its own toggle because the two lists have two
+ * lengths, 37 servers against 141 models, and opening one to read the other is
+ * the wall this file already refused once. Only OpenCode has one; the field is
+ * null on the other three, and a null draws nothing rather than a "None
+ * configured" row inventing a setting that does not exist.
+ *
  * ONLY THE DEFAULT SCOPE'S NAMES ARE LISTED. Claude mirrors the default
  * account's servers into every account (DROVE-252), so twelve identical lists
  * would bury the one that is wrong. The accounts that DIFFER are listed after
@@ -34,7 +44,13 @@ import { useUnistyles } from 'react-native-unistyles';
 
 import { Item } from '@/components/Item';
 import { mcpDivergenceSummary, type McpHarnessReport, type McpScope } from '@slopus/happy-wire';
-import { mcpEmptyReason, mcpReadAgo } from '@/sync/mcpText';
+import {
+    mcpEmptyReason,
+    mcpReadAgo,
+    providerEmptyReason,
+    providerOriginLine,
+    providerSummaryLine,
+} from '@/sync/mcpText';
 
 /** iOS systemBlue / systemOrange / systemGrey, as the rest of this screen uses them. */
 const blue = '#007AFF';
@@ -47,6 +63,15 @@ export interface MachineMcpRowsProps {
     readAt: number;
     expanded: boolean;
     onToggle: () => void;
+    /**
+     * The PROVIDERS disclosure, which is a second one (DROVE-296).
+     *
+     * Its own state rather than sharing the servers' toggle: they are two lists
+     * with two lengths — 37 servers and 141 models on Clay's Mac — and opening
+     * one to read the other is the wall this screen already refused once.
+     */
+    providersExpanded?: boolean;
+    onToggleProviders?: () => void;
     /** Injectable so the clock is not a reason a test flakes. */
     now?: number;
 }
@@ -70,7 +95,7 @@ function divergenceLine(scope: McpScope): string {
 }
 
 export function MachineMcpRows(props: MachineMcpRowsProps) {
-    const { harness, readAt, expanded, onToggle, now } = props;
+    const { harness, readAt, expanded, onToggle, providersExpanded, onToggleProviders, now } = props;
     const { theme } = useUnistyles();
 
     const base = harness.scopes[0];
@@ -78,6 +103,98 @@ export function MachineMcpRows(props: MachineMcpRowsProps) {
     // ones that match the default are deliberately silent.
     const odd = harness.scopes.slice(1).filter((s) => s.divergence || s.error || s.missing);
     const alarming = odd.some((s) => s.error || s.missing || (s.divergence?.missing.length ?? 0) > 0);
+
+    /*
+     * THE PROVIDERS (DROVE-296), under the same harness heading and above the
+     * freshness line in both branches below.
+     *
+     * Clay: "I typically use opencode for custom 3rd party model providers."
+     * That is what OpenCode is FOR here, so it belongs beside its servers
+     * rather than on a screen of its own — and it is rendered in the
+     * NOT-CONFIGURED branch too, because a machine can perfectly well have
+     * providers and no MCP servers, and the early return used to swallow
+     * everything after it.
+     *
+     * `null` providers draws nothing at all. Three of the four harnesses have
+     * no provider list to have, and a "None configured" row under Claude Code
+     * would be inventing a setting that does not exist.
+     */
+    const providers = harness.providers;
+    const providerAlarm = !!providers && (
+        providers.missing || !!providers.error
+        || providers.providers.some((p) => p.origin === 'declared')
+    );
+    const providerRows = !providers ? null : (
+        <>
+            <Item
+                title="Model providers"
+                subtitle={providerSummaryLine(providers)}
+                subtitleLines={0}
+                icon={<Ionicons
+                    name={providerAlarm ? 'warning-outline' : 'layers-outline'}
+                    size={29}
+                    color={providerAlarm ? amber : blue}
+                />}
+                onPress={onToggleProviders}
+                showChevron={false}
+                rightElement={(
+                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                        <Text style={{ color: theme.colors.textSecondary, marginRight: 6 }}>
+                            {String(providers.count)}
+                        </Text>
+                        <Ionicons
+                            name={providersExpanded ? 'chevron-up' : 'chevron-down'}
+                            size={17}
+                            color={theme.colors.groupped.chevron}
+                        />
+                    </View>
+                )}
+            />
+            {providersExpanded && !providers.count && (
+                <Item
+                    title="None configured"
+                    subtitle={providerEmptyReason(providers) ?? undefined}
+                    subtitleLines={0}
+                    icon={<Ionicons name="ellipse-outline" size={29} color={grey} />}
+                    showChevron={false}
+                />
+            )}
+            {providersExpanded && providers.providers.map((provider) => (
+                <React.Fragment key={provider.id}>
+                    <Item
+                        title={provider.name}
+                        subtitle={providerOriginLine(provider.origin) ?? undefined}
+                        subtitleLines={0}
+                        detail={`${provider.modelCount}`}
+                        icon={<Ionicons
+                            name={provider.origin === 'declared' ? 'ellipse-outline' : 'ellipse'}
+                            size={13}
+                            color={provider.origin === 'declared' ? amber : blue}
+                            style={{ width: 29, textAlign: 'center' }}
+                        />}
+                        showChevron={false}
+                    />
+                    {/*
+                      * The MODEL IDS, in the `provider/model` spelling OpenCode
+                      * itself takes. Spelled out rather than shortened, because
+                      * this is the list a pick has to name exactly and a
+                      * prettified label is how DROVE-253 got a model id that
+                      * did not exist.
+                      */}
+                    {provider.models.map((model) => (
+                        <Item
+                            key={`${provider.id}/${model.id}`}
+                            title={model.name}
+                            subtitle={`${provider.id}/${model.id}`}
+                            subtitleLines={0}
+                            icon={<View style={{ width: 29 }} />}
+                            showChevron={false}
+                        />
+                    ))}
+                </React.Fragment>
+            ))}
+        </>
+    );
 
     if (!harness.configured) {
         return (
@@ -89,6 +206,7 @@ export function MachineMcpRows(props: MachineMcpRowsProps) {
                     icon={<Ionicons name="ellipse-outline" size={29} color={grey} />}
                     showChevron={false}
                 />
+                {providerRows}
                 <Item
                     title={mcpReadAgo(readAt, now)}
                     icon={<Ionicons name="time-outline" size={29} color={grey} />}
@@ -156,6 +274,8 @@ export function MachineMcpRows(props: MachineMcpRowsProps) {
                     showChevron={false}
                 />
             ))}
+
+            {providerRows}
 
             {expanded && (
                 <Item

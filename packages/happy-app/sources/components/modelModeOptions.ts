@@ -284,10 +284,38 @@ export function filterPermissionModesForCli<T extends ModeOption>(
  *
  *   opencode  permissions are `permission: {bash: "ask"}` in opencode.json,
  *             read at startup. There is no route that changes them on a
- *             running session, so a mode pick has nowhere to land. The MODEL
- *             does have a route (`POST /api/session/{id}/model`, measured on
- *             1.18.20) but nothing carries a pick to it yet, so the picker
- *             stays off until something does.
+ *             running session, so a mode pick has nowhere to land.
+ *
+ * A CORRECTION, because a wrong measurement in a comment is worse than no
+ * comment (DROVE-296). What stood here said the model "does have a route
+ * (`POST /api/session/{id}/model`, measured on 1.18.20)". It does not. The
+ * whole /session/* route set on the installed 1.18.20 is {id}, /abort,
+ * /children, /command, /diff, /fork, /init, /message, /message/{messageID},
+ * /permissions/{permissionID}, /prompt_async, /revert, /share, /shell,
+ * /summarize, /todo, /unrevert — no model setter under either prefix. What
+ * carries a model on that API is the BODY of `POST /session/{id}/message`
+ * (`model: {providerID, modelID}`), which sets it for that one turn, and the
+ * drover does not use that route: it submits through /tui/append-prompt and
+ * /tui/submit-prompt so the pane's human sees what the phone typed.
+ *
+ * The real blocker for a PANE is one level up anyway: a `drover opencode` pane
+ * is not a Happy session at all. It is registered on the drover bus and its
+ * gates are mirrored into the one machine-wide bridge session; nothing mints a
+ * per-pane session, so there is no `metadata` to publish a model list onto and
+ * no session sheet to draw. That mirror is DROVE-56's unbuilt half, not a
+ * missing picker.
+ *
+ * WHERE THE PICKER ALREADY WORKS, and it works by lookup: an ACP OpenCode
+ * session (`happy acp opencode`, runAcp.ts). Measured against 1.18.20 on
+ * 2026-09-01 — `session/new` answers with a `configOptions` select of
+ * category `model`, 141 entries spelled `provider/model`, currentValue
+ * `opencode/big-pickle`; `session/set_config_option` with a listed value moves
+ * currentValue to it; and a value nobody listed comes back
+ * `-32602 Invalid params: model not found`. sessionConfigMetadata.ts puts that
+ * select straight into `metadata.models`, and getAvailableModels below prefers
+ * `metadata.models` over every table in this file — so the sheet offers the
+ * harness's own spelling and nothing else, which is the DROVE-253 rule with a
+ * second harness's name on it.
  *
  * Cursor was in this set and is NOT any more (DROVE-57). It is a happy-cli
  * runner now, not a bus-only pane, and it does have a model switch — see

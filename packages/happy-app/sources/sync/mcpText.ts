@@ -8,7 +8,7 @@
  * a module, and now they do not.
  */
 
-import type { McpReport } from '@slopus/happy-wire';
+import type { McpReport, ProviderReport } from '@slopus/happy-wire';
 
 /**
  * A harness's section, in the order the machine listed them.
@@ -58,6 +58,80 @@ export function mcpEmptyReason(harness: {
     if (scope.error) return `${scope.source} could not be read (${scope.error}).`;
     if (scope.missing) return `No ${scope.source} on this machine.`;
     return `${scope.source} configures no MCP servers.`;
+}
+
+/**
+ * The footer under a harness that has no account group of its own — Codex and
+ * OpenCode, today.
+ *
+ * It states what was found and then what cannot be done from here, and the
+ * second half changed with DROVE-296: OpenCode now shows the providers as
+ * well, and "Configuring MCP servers from the phone is not built yet" read as
+ * though the providers above it were editable.
+ */
+export function mcpOnlyFooter(harness: {
+    configured: boolean;
+    count: number;
+    scopes: { servers: { enabled: boolean }[] }[];
+    providers?: { count: number; modelCount: number } | null;
+}): string {
+    const parts: string[] = [];
+    if (harness.configured) {
+        parts.push(`Configured in one file on this machine, not per account. ${mcpSummaryLine(harness)}.`);
+    }
+    const p = harness.providers;
+    if (p?.count) {
+        parts.push(`${p.count} model provider${p.count === 1 ? '' : 's'}, asked of the harness itself.`);
+    }
+    parts.push('Read-only here. Editing any of this from the phone is not built yet.');
+    return parts.join(' ');
+}
+
+/**
+ * The one line under the Model providers heading (DROVE-296).
+ *
+ * Counts, same as the servers above, and for the same reason: Clay's OpenCode
+ * lists 141 models across five providers, and 141 names is not a summary. The
+ * DECLARED-only count is called out separately because it is the one that
+ * means something is wrong — a provider his config declares and the harness
+ * did not list is a provider whose key never arrived, so a pick against it
+ * fails at exec.
+ */
+export function providerSummaryLine(report: ProviderReport): string {
+    if (report.missing) return 'This harness is not installed here';
+    if (report.error) return `\`${report.asked}\` ${report.error}`;
+    if (!report.count) return 'None configured';
+    const providers = `${report.count} provider${report.count === 1 ? '' : 's'}`;
+    const models = `${report.modelCount} model${report.modelCount === 1 ? '' : 's'}`;
+    const unusable = report.providers.filter((p) => p.origin === 'declared').length;
+    return unusable ? `${providers}, ${models}, ${unusable} not available` : `${providers}, ${models}`;
+}
+
+/**
+ * Why the provider list is empty, in the machine's own terms.
+ *
+ * Three empties again and they still mean different things: the harness is not
+ * on that machine, the harness is there and would not answer, and the harness
+ * answered with nothing. Only the third is "you have configured none".
+ */
+export function providerEmptyReason(report: ProviderReport): string | null {
+    if (report.count) return null;
+    if (report.missing) return 'No OpenCode on this machine, so it lists no providers.';
+    if (report.error) return `\`${report.asked}\` ${report.error} on this machine.`;
+    if (report.configError) return `${report.config} could not be read (${report.configError}).`;
+    return `\`${report.asked}\` listed none, and ${report.config} declares none.`;
+}
+
+/**
+ * What a provider's `origin` means, said rather than shown as a word nobody
+ * can decode. Null for the ordinary case — a provider that simply works needs
+ * no explanation, and a label under every row is noise that hides the one row
+ * that matters.
+ */
+export function providerOriginLine(origin: string): string | null {
+    if (origin === 'declared') return 'Declared in the config, not listed by OpenCode — usually a missing key';
+    if (origin === 'both') return 'Declared in the config and listed by OpenCode';
+    return null;
 }
 
 /** `Read 3 minutes ago`. Relative, because the absolute time means nothing here. */
