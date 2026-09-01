@@ -14,7 +14,7 @@
  * on the computer", never a field the phone could fill.
  */
 
-import type { PluginReport, PluginSummary } from '@slopus/happy-wire';
+import type { PluginInstallSource, PluginReport, PluginSummary } from '@slopus/happy-wire';
 
 /** `Read 3 minutes ago`. Relative, because the absolute time means nothing here. */
 export function pluginReadAgo(readAt: number, now: number = Date.now()): string {
@@ -214,4 +214,80 @@ export function pluginLinksLine(links: PluginSummary extends never ? never : {
     const left = links.skipped.length + links.kept.length;
     if (left) parts.push(`${left} left alone (something else owns the name)`);
     return parts.length ? parts.join(' · ') : null;
+}
+
+/**
+ * What kind of source somebody typed, worked out from the text itself.
+ *
+ * The phone cannot ask "is this a git repo or a tarball" and get a useful
+ * answer — that is a question about a string, and making somebody pick a kind
+ * from a menu before typing the thing is a step that exists only because the
+ * code would not look. So the shape decides:
+ *
+ *   `~/…`, `/…`, `./…`   a local path on that machine
+ *   `…​.tar.gz|.tgz|.tar` a bundle, which the engine REFUSES without a pin
+ *   `…​.git`, `git@h:p`,  a git remote, at `#ref` when one is given
+ *   `http(s)://…`
+ *
+ * A CREDENTIAL IN THE URL IS REFUSED HERE TOO. The machine refuses it and is
+ * the authority — this is not that check moved, it is the same rule said
+ * early, so a pasted `https://user:token@host/r.git` never leaves the handset
+ * at all. The engine's rule is the one being mirrored: a password, or a
+ * username on http(s), which is the token-as-user form GitHub documents. A
+ * bare `git@` on ssh is a login name, not a secret.
+ */
+export function pluginSourceFor(
+    input: string,
+    sha256?: string | null,
+): { ok: true; source: PluginInstallSource } | { ok: false; error: string } {
+    const raw = input.trim();
+    if (!raw) return { ok: false, error: 'Nothing typed.' };
+
+    if (raw.startsWith('~') || raw.startsWith('/') || raw.startsWith('.')) {
+        return { ok: true, source: { kind: 'path', path: raw } };
+    }
+
+    // `#ref` is how a ref is given inline; the engine takes it as its own field.
+    const hash = raw.indexOf('#');
+    const url = hash === -1 ? raw : raw.slice(0, hash);
+    const ref = hash === -1 ? null : raw.slice(hash + 1).trim() || null;
+
+    const credential = credentialInUrl(url);
+    if (credential) return { ok: false, error: credential };
+
+    if (/\.(tar\.gz|tgz|tar)$/i.test(url)) {
+        const pin = (sha256 ?? '').trim().toLowerCase();
+        if (!/^[0-9a-f]{64}$/.test(pin)) {
+            return { ok: false, error: 'A bundle needs a 64-character sha256 pin, checked before a byte of it is read.' };
+        }
+        return { ok: true, source: { kind: 'tarball', url, sha256: pin } };
+    }
+
+    if (/\.git$/i.test(url) || /^[^@/\s]+@[^:/\s]+:/.test(url) || /^https?:\/\//i.test(url)) {
+        if (ref && !/^[A-Za-z0-9._/-]+$/.test(ref)) {
+            return { ok: false, error: 'A git ref is a tag, branch or sha, nothing else.' };
+        }
+        return { ok: true, source: { kind: 'git', url, ref } };
+    }
+
+    return {
+        ok: false,
+        error: 'Not a path, a git remote or a bundle. Try ~/path, git@host:group/repo.git#tag, '
+            + 'https://host/repo.git, or a .tar.gz with its sha256.',
+    };
+}
+
+/** The engine's rule, said early: a password, or a username on http(s). */
+function credentialInUrl(url: string): string | null {
+    let u: URL;
+    try {
+        u = new URL(url);
+    } catch {
+        return null; // scp-style or a bare path: no userinfo to carry
+    }
+    if (u.password || (u.username && /^https?:$/.test(u.protocol))) {
+        return 'That url carries a credential. Use an ssh remote or a credential helper on the computer — '
+            + 'a token typed on a phone has already been somewhere it should not be.';
+    }
+    return null;
 }

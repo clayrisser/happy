@@ -64,7 +64,14 @@ import {
     type PluginOpParams,
     type PluginReport,
 } from '@/sync/machinePlugins';
-import { pluginCountsLine, pluginEmptyReason, pluginLinksLine, pluginOpDone, pluginOpTitle } from '@/sync/pluginText';
+import {
+    pluginCountsLine,
+    pluginEmptyReason,
+    pluginLinksLine,
+    pluginOpDone,
+    pluginOpTitle,
+    pluginSourceFor,
+} from '@/sync/pluginText';
 import { useAllMachines } from '@/sync/storage';
 
 const amber = '#FF9500';
@@ -152,6 +159,47 @@ export default function PluginsScreen() {
         await load(machineId);
         if (openCatalog[machineId]) await loadCatalog(machineId);
     }, [load, loadCatalog, openCatalog]);
+
+    /**
+     * Install from something that is not in the catalog: a path on that
+     * machine, a git remote at a ref, or a sha256-pinned bundle.
+     *
+     * ONE FIELD, and the kind is read off what was typed. Making somebody pick
+     * "git or tarball or path" from a menu before typing the thing is a step
+     * that exists only because the code would not look at the string, and
+     * pluginSourceFor looks.
+     *
+     * The pin is asked for SECOND and only for a bundle, because it is the one
+     * thing that cannot be worked out and the engine refuses an unpinned
+     * bundle before it reads a byte. A url carrying a credential is refused
+     * here rather than sent — the machine refuses it too and is the authority,
+     * but a token pasted into a phone should not travel first.
+     */
+    const installFromSource = React.useCallback(async (machineId: string) => {
+        const typed = await Modal.prompt(
+            'Install from a source',
+            'A path on that computer, a git remote (add #tag for a ref), or a .tar.gz bundle. '
+            + 'Never a url with a token in it.',
+            { placeholder: 'git@github.com:acme/notes.git#v1.0.0' },
+        );
+        if (!typed) return;
+
+        let source = pluginSourceFor(typed);
+        if (!source.ok && source.error.includes('sha256 pin')) {
+            const pin = await Modal.prompt(
+                'That bundle needs its pin',
+                'The 64-character sha256 the bundle is checked against, before a byte of it is read.',
+                { placeholder: 'sha256' },
+            );
+            if (!pin) return;
+            source = pluginSourceFor(typed, pin);
+        }
+        if (!source.ok) {
+            Modal.alert('That is not a source', source.error);
+            return;
+        }
+        await runOp(machineId, { op: 'install', source: source.source });
+    }, [runOp]);
 
     const section = (machineId: string, report: PluginReport, names: string[], keyPrefix: string) =>
         report.plugins
@@ -255,6 +303,17 @@ export default function PluginsScreen() {
 
                     rows.push(
                         <ItemGroup key={`${machine.id}:catalog`}>
+                            {/* Not in the catalog: a path, a git remote at a
+                                ref, or a pinned bundle. Above the catalog
+                                disclosure because it is the thing somebody
+                                came here to do that the list below cannot. */}
+                            <Item
+                                title="Install from a source"
+                                subtitle="A path on that computer, a git remote, or a pinned bundle"
+                                icon={<Ionicons name="add-circle-outline" size={29} color={blue} />}
+                                onPress={() => void installFromSource(machine.id)}
+                                showChevron={false}
+                            />
                             <Item
                                 title="Catalog"
                                 subtitle={catReport

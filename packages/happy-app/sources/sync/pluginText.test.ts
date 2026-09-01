@@ -72,6 +72,7 @@ import {
     pluginProvidesLine,
     pluginReadAgo,
     pluginScopeLine,
+    pluginSourceFor,
     pluginStaleLine,
     pluginTouchesLine,
     pluginVarsLine,
@@ -292,5 +293,69 @@ describe('pluginLinksLine (DROVE-312)', () => {
         expect(pluginLinksLine({ linked: [], removed: [], skipped: [], kept: [] })).toBeNull();
         expect(pluginLinksLine(null)).toBeNull();
         expect(pluginLinksLine(undefined)).toBeNull();
+    });
+});
+
+describe('pluginSourceFor: the kind is read off the text, not asked for', () => {
+    const src = (input: string, sha?: string) => {
+        const r = pluginSourceFor(input, sha);
+        if (!r.ok) throw new Error(`expected a source, got: ${r.error}`);
+        return r.source;
+    };
+    const err = (input: string, sha?: string) => {
+        const r = pluginSourceFor(input, sha);
+        if (r.ok) throw new Error(`expected a refusal, got ${JSON.stringify(r.source)}`);
+        return r.error;
+    };
+
+    it('reads a local path off its leading character', () => {
+        expect(src('~/Projects/notes')).toEqual({ kind: 'path', path: '~/Projects/notes' });
+        expect(src('/opt/notes')).toEqual({ kind: 'path', path: '/opt/notes' });
+        expect(src('./notes')).toEqual({ kind: 'path', path: './notes' });
+    });
+
+    it('reads a git remote in both spellings, and takes the ref after a #', () => {
+        expect(src('git@github.com:acme/notes.git')).toEqual({
+            kind: 'git', url: 'git@github.com:acme/notes.git', ref: null,
+        });
+        expect(src('https://github.com/acme/notes.git#v1.2.0')).toEqual({
+            kind: 'git', url: 'https://github.com/acme/notes.git', ref: 'v1.2.0',
+        });
+    });
+
+    it('refuses a ref that is not a tag, branch or sha', () => {
+        expect(err('https://h/r.git#v1;rm -rf /')).toContain('nothing else');
+    });
+
+    it('needs the pin before a bundle, because the engine refuses one without it', () => {
+        const pin = 'a'.repeat(64);
+        expect(src('https://h/notes.tgz', pin)).toEqual({ kind: 'tarball', url: 'https://h/notes.tgz', sha256: pin });
+        expect(err('https://h/notes.tar.gz')).toContain('sha256 pin');
+        expect(err('https://h/notes.tar.gz', 'nope')).toContain('sha256 pin');
+    });
+
+    it('normalises a pin somebody pasted in capitals', () => {
+        const s = src('https://h/n.tgz', 'A'.repeat(64));
+        expect(s).toEqual({ kind: 'tarball', url: 'https://h/n.tgz', sha256: 'a'.repeat(64) });
+    });
+
+    it('REFUSES a url carrying a credential before it leaves the handset', () => {
+        const e = err('https://clay:FIXTURESECRET@github.com/acme/notes.git');
+        expect(e).toContain('carries a credential');
+        // The refusal must not quote the thing it refused.
+        expect(e).not.toContain('FIXTURESECRET');
+    });
+
+    it('refuses the token-as-user form GitHub documents, with no password at all', () => {
+        expect(err('https://ghp_xxxx@github.com/acme/notes.git')).toContain('carries a credential');
+    });
+
+    it('leaves an ssh login name alone — git@ is not a secret', () => {
+        expect(src('git@github.com:acme/notes.git').kind).toBe('git');
+    });
+
+    it('says what it could not read rather than guessing a kind', () => {
+        expect(err('notes')).toContain('Not a path, a git remote or a bundle');
+        expect(err('   ')).toBe('Nothing typed.');
     });
 });
