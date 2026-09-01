@@ -318,7 +318,10 @@ export class AudioCueMixer {
     private start(id: AudioCueId, at: number): void {
         const spec = cueSpec(id);
         this.playingUntil = at + cueDurationMs(spec);
-        this.playCue(id, Math.max(0, Math.min(1, this.settings().volume * spec.gain)));
+        // The SETTING and nothing else (DROVE-341). The cue's own level is
+        // baked into the file cuePlayer renders; multiplying it in here as
+        // well is what squared it and put the heartbeat under the voice.
+        this.playCue(id, this.settings().volume);
     }
 
     /** Everything that waited too long, gone rather than played late. */

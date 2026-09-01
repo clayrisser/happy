@@ -221,10 +221,27 @@ describe('AudioCueMixer', () => {
         expect(played).toEqual(['skipAhead']);
     });
 
-    it('scales each cue by its own gain and the volume setting', () => {
+    it('hands the player the volume setting and nothing else (DROVE-341)', () => {
+        // The cue's own level is baked into the rendered file, so the number
+        // that reaches the player is the SETTING, undecorated. Multiplying the
+        // cue's level in here as well is what squared it: at the old default
+        // of 0.35 the tool tick came out at 0.0105 rather than 0.105, which is
+        // twenty dB under where the table put it.
         config = { ...config, volume: 0.5 };
         mixer.event('toolCall');
         run(250);
-        expect(volumes[0]).toBeCloseTo(0.5 * cueSpec('toolCall').gain, 5);
+        expect(volumes[0]).toBe(0.5);
+    });
+
+    it('does not let the cue table leak into the player volume', () => {
+        // Two cues at very different levels still hand the player the same
+        // number, because the difference between them is in the file.
+        expect(cueSpec('agentStart').amplitude).toBeGreaterThan(cueSpec('toolCall').amplitude);
+        config = { ...config, volume: 0.4 };
+        mixer.event('toolCall');
+        mixer.event('agentStart');
+        run(30_000);
+        expect(volumes.length).toBeGreaterThanOrEqual(2);
+        for (const volume of volumes) expect(volume).toBe(0.4);
     });
 });
