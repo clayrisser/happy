@@ -2,6 +2,7 @@ import type { FlexStyle } from './flexFrames';
 import {
     MOBILE_COMPOSER_BUBBLE_ACTION_ROW_HEIGHT,
     MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE,
+    MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH,
     MOBILE_COMPOSER_METRICS,
     MOBILE_COMPOSER_TEXT_ROW_BASE_HEIGHT,
     resolveMobileComposerActionGeometry,
@@ -21,21 +22,22 @@ import {
  *   bubble          column, padding `bubbleInset`, gap `controlGap`
  *     textRow       the field, full width, as tall as the text
  *     actionRow     row, alignItems centre:
- *                     add       the `+`, 36
+ *                     add       the `+`, 39
  *                     gap       6
- *                     capsule   permission | effort | model, 36 tall
+ *                     capsule   permission | auto-accept ‖ read-aloud ‖
+ *                               effort ‖ model, 39 tall, 26 per glyph segment
  *                     gap       6
  *                     spacer    flex 1, the row's only slack
- *                     audio     the audio-out disc, 36
+ *                     mic       39
  *                     gap       6
- *                     primary   send / mic / stop, 36
+ *                     primary   send / stop, 39
  *
- * THE ACTION ROW HOLDS FIVE THINGS SINCE DROVE-236, and the gaps are CHILDREN
- * rather than the row's `gap` property. That is not stylistic. The row needs a
- * fixed 6 in three places and flexible slack in exactly one, and a row-level
- * `gap` applies to every boundary including both sides of the spacer, which
- * would have put 12 between the capsule and the audio disc at the width where
- * the row is fullest. A gap with a width is a child the layout engine resolves
+ * THE ACTION ROW HOLDS FOUR THINGS SINCE DROVE-284 — read-aloud's disc joined
+ * the capsule — and the gaps are CHILDREN rather than the row's `gap` property.
+ * That is not stylistic. The row needs a fixed 6 in three places and flexible
+ * slack in exactly one, and a row-level `gap` applies to every boundary
+ * including both sides of the spacer, which would have put 12 between the
+ * capsule and the mic at the width where the row is fullest. A gap with a width is a child the layout engine resolves
  * like any other, which is the opposite of the hand-placed offset this file
  * exists to refuse.
  *
@@ -63,13 +65,17 @@ import {
  * session capsule up into the bubble's empty middle beside the `+`, another
  * from the audio button up to the right rim, and an X through the mic that is
  * already in there. So the split is off. It is one bubble: text on top, then
- * `+`, the session controls, the audio button and send.
+ * `+`, the session controls, read-aloud, the mic and send.
+ *
+ * AND READ-ALOUD HAS SINCE MOVED AGAIN, into the capsule (DROVE-284): "Add the
+ * reading mode whatever thing to the group and keep it all on the same row as
+ * send and +." Its rim is one control shorter for it and the composer is one
+ * row on every phone again.
  *
  * That is a reversal of DROVE-196 and worth naming as one. What it does NOT
  * reverse is DROVE-206's "the boss should not be in the message box": boss
- * mode is not a control here, it is the audio button's long press, and the
- * audio button is one thing rather than the two-identities-in-one-spot that
- * ticket was about.
+ * mode is not a control here, it is read-aloud's long press, and read-aloud is
+ * one thing rather than the two-identities-in-one-spot that ticket was about.
  *
  * NOTHING HERE CARRIES `position`. That is asserted, not assumed
  * (`composerBubbleLayout.spec.ts`), because a hand-placed offset is exactly
@@ -131,8 +137,13 @@ export function resolveComposerBubbleTextRowGeometry(): ComposerBubbleStyle {
 }
 
 /**
- * The button row: the `+` at the leading end, send at the trailing end, and
- * since DROVE-236 the session controls and the audio button between them.
+ * The button row: the `+` at the leading end, send at the trailing end, the
+ * session capsule beside the `+` (DROVE-236) and the mic beside send.
+ *
+ * READ-ALOUD IS NOT ON IT ANY MORE (DROVE-284). Clay: "Add the reading mode
+ * whatever thing to the group and keep it all on the same row as send and +."
+ * It is a segment of the capsule now, which is what buys the single row back on
+ * every phone.
  *
  * As tall as the discs and no taller, so the air around them is the bubble's
  * padding rather than a number of their own. `alignItems: 'center'` is what
@@ -146,37 +157,6 @@ export function resolveComposerBubbleTextRowGeometry(): ComposerBubbleStyle {
  * to the leading one.
  */
 export function resolveComposerBubbleActionRowGeometry(): ComposerBubbleStyle {
-    return {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'flex-start',
-        width: '100%',
-        height: MOBILE_COMPOSER_BUBBLE_ACTION_ROW_HEIGHT,
-    };
-}
-
-/**
- * THE CAPSULE'S OWN ROW, on the phones too narrow to share one (DROVE-266).
- *
- * DROVE-196's layout, brought back for the widths that need it, which is what
- * DROVE-264 named as the remedy and what growing the buttons made unavoidable:
- * six objects at 39 leave 77pt for the name at 375 and 22 at 320, and the
- * longest name needs 91. The argument and the crossover are on
- * `composerCapsuleOwnRow` in sessionPillLabel.ts.
- *
- * IT IS THE ACTION ROW'S SHAPE, deliberately. Same height, same centring, same
- * full interior width, so the bubble is a column of rows that are all the same
- * kind of thing and the capsule is not centred against anything variable. What
- * it does NOT take is `flex: 1` on the capsule: the capsule still sizes to its
- * content and still shrinks through the model segment, so a short name on a
- * wide-ish phone does not draw a bar of empty glass across the bubble.
- *
- * IT SITS ABOVE THE BUTTON ROW, not below it. Send stays in the bubble's
- * bottom-trailing corner where DROVE-214 put it and where its clearance from
- * the rounded corner is measured; the capsule takes the new line between the
- * text and the buttons.
- */
-export function resolveComposerBubbleCapsuleRowGeometry(): ComposerBubbleStyle {
     return {
         flexDirection: 'row',
         alignItems: 'center',
@@ -233,7 +213,11 @@ export function resolveComposerBubbleSessionCapsuleGeometry(): ComposerBubbleSty
  */
 export function resolveComposerBubbleSessionSegmentGeometry(): ComposerBubbleStyle {
     return {
-        width: MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE,
+        // NOT SQUARE SINCE DROVE-284. The capsule is still the row's height and
+        // a glyph segment is `MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH` wide, which
+        // is the glyph's measured ink plus `controlGap` either side. Four of
+        // them at a disc's width is what forced the second row Clay rejected.
+        width: MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH,
         height: MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE,
         alignItems: 'center',
     };
@@ -247,7 +231,6 @@ export function resolveComposerBubbleDiscGeometry(): ComposerBubbleStyle {
 export const COMPOSER_BUBBLE_GEOMETRY = resolveComposerBubbleGeometry();
 export const COMPOSER_BUBBLE_TEXT_ROW_GEOMETRY = resolveComposerBubbleTextRowGeometry();
 export const COMPOSER_BUBBLE_ACTION_ROW_GEOMETRY = resolveComposerBubbleActionRowGeometry();
-export const COMPOSER_BUBBLE_CAPSULE_ROW_GEOMETRY = resolveComposerBubbleCapsuleRowGeometry();
 export const COMPOSER_BUBBLE_SPACER_GEOMETRY = resolveComposerBubbleSpacerGeometry();
 export const COMPOSER_BUBBLE_GAP_GEOMETRY = resolveComposerBubbleGapGeometry();
 export const COMPOSER_BUBBLE_SESSION_CAPSULE_GEOMETRY = resolveComposerBubbleSessionCapsuleGeometry();

@@ -42,6 +42,8 @@ import {
     micColour,
     primaryActionColour,
     autoAcceptColour,
+    composerAudioOutFill,
+    composerAudioOutTint,
 } from './composerControlColour';
 import {
     CHROME_BACKDROP_EXTREMES,
@@ -1044,5 +1046,108 @@ describe('what the pause disc measures', () => {
 
     it('leaves white on the dark amber at the 2.06:1 that made the tint a function', () => {
         expect(worstContrast('#FFFFFF', [composerPausedFill(true)])).toBeCloseTo(2.06, 2);
+    });
+});
+
+/**
+ * READ-ALOUD'S FOUR FACES, MEASURED ON THE CAPSULE IT MOVED ONTO (DROVE-284).
+ *
+ * Clay: "Add the reading mode whatever thing to the group and keep it all on
+ * the same row as send and +." The control left the row's in-field disc for a
+ * segment of the session capsule, which is a DIFFERENT surface, so every number
+ * DROVE-236 and DROVE-258 took against the disc has to be taken again here
+ * rather than inherited.
+ *
+ * TWO BARS, AS EVERYWHERE ELSE ON THIS ROW. A fill is a shape and is held to
+ * `COMPOSER_DISC_SEPARATION_FLOOR`; the glyph on it is text and is held to the
+ * real 3:1. The amber is where the second one bites, which is the whole of
+ * DROVE-258's tint function.
+ */
+describe('read-aloud as a capsule segment', () => {
+    it.each([
+        ['dark', true, 7.17, 4.48, 4.16],
+        ['light', false, 3.03, 3.81, 3.71],
+    ] as const)('%s: the three live fills read off the capsule at %s, %s and %s:1', (
+        _name, dark, paused, accent, recording,
+    ) => {
+        const capsule = composerSessionCapsuleFill(dark);
+        expect(worstContrast(composerAudioOutFill(dark, 'paused')!, [capsule])).toBeCloseTo(paused, 2);
+        expect(worstContrast(composerAudioOutFill(dark, 'accent')!, [capsule])).toBeCloseTo(accent, 2);
+        expect(worstContrast(composerAudioOutFill(dark, 'recording')!, [capsule])).toBeCloseTo(recording, 2);
+        for (const face of ['paused', 'accent', 'recording'] as const) {
+            expect(worstContrast(composerAudioOutFill(dark, face)!, [capsule]), face)
+                .toBeGreaterThanOrEqual(COMPOSER_DISC_SEPARATION_FLOOR);
+        }
+    });
+
+    it.each([
+        ['dark', true, 10.22, 3.29, 3.55, 14.74],
+        ['light', false, 4.61, 5.80, 5.64, 13.80],
+    ] as const)('%s: the glyph reads on each of them at %s, %s, %s and %s:1 off', (
+        _name, dark, paused, accent, recording, off,
+    ) => {
+        const glyphOn = (face: 'paused' | 'accent' | 'recording') => worstContrast(
+            composerAudioOutTint(dark, face), [composerAudioOutFill(dark, face)!],
+        );
+        expect(glyphOn('paused')).toBeCloseTo(paused, 2);
+        expect(glyphOn('accent')).toBeCloseTo(accent, 2);
+        expect(glyphOn('recording')).toBeCloseTo(recording, 2);
+        // Off there is no fill at all, so the glyph is read off the capsule
+        // like the padlock and the needle beside it.
+        expect(composerAudioOutFill(dark, 'none')).toBeNull();
+        expect(worstContrast(composerAudioOutTint(dark, 'none'), [composerSessionCapsuleFill(dark)]))
+            .toBeCloseTo(off, 2);
+        for (const face of ['paused', 'accent', 'recording'] as const) {
+            expect(glyphOn(face), face).toBeGreaterThanOrEqual(CHROME_CONTRAST_FLOOR);
+        }
+    });
+
+    it('flips the tint on the amber rather than copying the row\u2019s white', () => {
+        // DROVE-258's finding, re-checked on this surface: white on the dark
+        // theme's amber measures about 2:1, so a segment that copied "always
+        // the primary tint" would draw a pause glyph you cannot read on the
+        // face whose whole job is to make pause readable.
+        expect(composerAudioOutTint(true, 'paused')).toBe(COMPOSER_CONTROL_PALETTE.light.foreground);
+        expect(composerAudioOutTint(true, 'accent')).toBe(COMPOSER_CONTROL_PALETTE.dark.foreground);
+        expect(composerAudioOutTint(true, 'recording')).toBe(COMPOSER_CONTROL_PALETTE.dark.foreground);
+        // And off it is the ROW's foreground, which is theme-dependent.
+        expect(composerAudioOutTint(true, 'none')).toBe(COMPOSER_CONTROL_PALETTE.dark.foreground);
+        expect(composerAudioOutTint(false, 'none')).toBe(COMPOSER_CONTROL_PALETTE.light.foreground);
+    });
+
+    it('keeps every fill OPAQUE, which is the guarantee DROVE-254 bought', () => {
+        // `colorAlpha === 1` is load-bearing and is not weakened to make a
+        // layout fit: a translucent fill inside the bubble's own glass has no
+        // single value to measure, which is the fault that refusal exists to
+        // stop coming back. A segment's fill is painted by a View rather than
+        // handed to a UIGlassEffect, and the rule is the same either way.
+        for (const dark of [true, false]) {
+            for (const face of ['paused', 'accent', 'recording'] as const) {
+                expect(colorAlpha(composerAudioOutFill(dark, face)!), `${dark}/${face}`).toBe(1);
+            }
+        }
+    });
+
+    it('spends no new hue: the three faces are three entries the palette already had', () => {
+        // The bar this file sets for a state that earns colour. Read-aloud adds
+        // none: reading is the accent, a call is the recording red, paused is
+        // DROVE-258's amber, which is `pending` under another name.
+        for (const dark of [true, false]) {
+            const p = composerControlPalette(dark);
+            expect(composerAudioOutFill(dark, 'accent')).toBe(p.accent);
+            expect(composerAudioOutFill(dark, 'recording')).toBe(p.recording);
+            expect(composerAudioOutFill(dark, 'paused')).toBe(composerPausedFill(dark));
+            expect(composerAudioOutFill(dark, 'paused')).toBe(p.pending);
+        }
+    });
+
+    it('takes the palette\u2019s accent, not the theme\u2019s raw blue', () => {
+        // The disc used `theme.colors.radio.active` directly, which quietly
+        // sidestepped DROVE-264's finding: that value is #0A84FF and the
+        // palette's accent is #0A8FFF, eleven points of green lifted precisely
+        // so one hue can be a glyph on the bubble AND a fill under a white
+        // glyph. Read-aloud's reading face is the second job by name.
+        expect(composerAudioOutFill(true, 'accent')).toBe('#0A8FFF');
+        expect(composerAudioOutFill(true, 'accent')).not.toBe('#0A84FF');
     });
 });

@@ -16,6 +16,8 @@ import {
 } from './sessionControlGlyphs';
 import {
     autoAcceptColour,
+    composerAudioOutFill,
+    composerAudioOutTint,
     composerCapsuleDivider,
     composerControlPalette,
     composerGaugeTrack,
@@ -35,6 +37,7 @@ import {
     COMPOSER_SESSION_CONTROL_SIZE,
     type SessionPillLabel,
 } from './sessionPillLabel';
+import type { AudioOutFill, AudioOutGlyph } from './composerAudioOut';
 
 /**
  * Permission mode, effort and model, folded into the composer's button row
@@ -126,7 +129,36 @@ export type ComposerSessionPicker = 'permission' | 'model' | 'effort';
  * convention, so a toggle can never be handed to `onPress` and asked for a
  * sheet.
  */
-export type ComposerSessionSegment = ComposerSessionPicker | 'autoAccept';
+export type ComposerSessionSegment = ComposerSessionPicker | 'autoAccept' | 'readAloud';
+
+/**
+ * READ-ALOUD, AS A SEGMENT OF THIS CAPSULE (DROVE-284).
+ *
+ * Clay: "Add the reading mode whatever thing to the group and keep it all on
+ * the same row as send and +." The control is unchanged — the state table is
+ * still `audioOutButton` in composerAudioOut.ts, both gestures are still the
+ * two handlers AgentInput has always wired — and only the box around it
+ * changed, exactly as DROVE-236 said when it moved the other way.
+ *
+ * THE FILL COMES IN WITH IT. A disc could say its state with a coloured circle;
+ * a segment says it with a coloured segment, which is the same carrier at a
+ * different shape and is how `controlOpen` already washes a pressed segment.
+ * The four faces are unchanged: no fill off, amber paused, accent reading,
+ * recording red on a call.
+ */
+export interface ComposerReadAloudSegment {
+    /** The glyph for the state, from `audioOutButton`. */
+    glyph: AudioOutGlyph;
+    /** Which of the four faces, from `audioOutButton`. */
+    fill: AudioOutFill;
+    /** Read-aloud is on, paused included: what a TAP will turn off. */
+    on: boolean;
+    /** Already translated by the caller, which owns `t`. */
+    accessibilityLabel: string;
+    onPress: () => void;
+    /** Boss mode from off, pause/resume while on (DROVE-233/275). */
+    onLongPress?: () => void;
+}
 
 export interface ComposerSessionControlsProps {
     label: SessionPillLabel;
@@ -140,6 +172,20 @@ export interface ComposerSessionControlsProps {
      * argued on `MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE`.
      */
     size?: number;
+    /**
+     * How wide a GLYPH segment is, which is no longer how tall it is
+     * (DROVE-284).
+     *
+     * Defaults to `size`, which is square and is what Home's 44pt capsule on a
+     * row of its own still draws. The chat's capsule passes
+     * `MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH`, because four glyph segments at a
+     * disc's width is 156pt of a 393pt phone and a segment bounded by hairlines
+     * never needed a circle's diameter. The argument and the ink measurements
+     * are on that constant; what it buys is on `COMPOSER_BUBBLE_ROW_GEOMETRY`.
+     *
+     * The MODEL segment ignores this: it is `wide` and sizes to its name.
+     */
+    segmentWidth?: number;
     /**
      * The capsule's own frame, handed in by the caller (DROVE-236).
      *
@@ -211,6 +257,16 @@ export interface ComposerSessionControlsProps {
      * there is nothing for the segment to say and it is absent.
      */
     onToggleAutoAccept?: () => void;
+    /**
+     * Read-aloud, drawn as a segment between the permission pair and the
+     * effort gauge (DROVE-284).
+     *
+     * Absent means there is no reader on this surface and the segment is not
+     * drawn — the same shape as the bolt's `onToggleAutoAccept`, and for the
+     * same reason: a speaker with nothing behind it says only that something is
+     * missing. `audioOutButton`'s `shown` is what the caller reads to decide.
+     */
+    readAloud?: ComposerReadAloudSegment | null;
 }
 
 /** What VoiceOver adds while a pick is in flight, since colour reaches nobody there. */
@@ -366,15 +422,36 @@ function Control(props: {
      * the call site and this is a plain press.
      */
     onPress?: () => void;
-    /** The square glyph segment by default; the model segment sizes to its name. */
+    /**
+     * The long press, on the one segment that has one (DROVE-284).
+     *
+     * Read-aloud's second gesture is Clay's own table: boss mode from off,
+     * pause and resume while it is reading (DROVE-233/275). It survives the
+     * move into the capsule because the press was never a property of the disc
+     * — `BubblePressable` is a `Pressable` and takes both.
+     */
+    onLongPress?: () => void;
+    /**
+     * An OPAQUE fill behind this one segment, or nothing (DROVE-284).
+     *
+     * Read-aloud's live states. It is a rectangle rather than a disc because a
+     * segment is a rectangle; the capsule's `overflow: hidden` rounds it at
+     * whichever end it lands on, which is what already clips `controlOpen`'s
+     * wash. Opaque for DROVE-254's reason — a translucent fill inside the
+     * bubble's own glass has no single value to measure — and every value handed
+     * here is asserted at `colorAlpha === 1` in composerControlColour.spec.ts.
+     */
+    fill?: string | null;
+    /** The glyph segment's own width by default; the model segment sizes to its name. */
     wide?: boolean;
     size: number;
+    segmentWidth: number;
     verticalSlop: number;
     children: React.ReactNode;
 }) {
     const segmentStyle = props.wide
         ? [styles.modelSegment, { height: props.size }]
-        : [styles.control, { width: props.size, height: props.size }];
+        : [styles.control, { width: props.segmentWidth, height: props.size }];
     /**
      * THE FADE IS THIS SEGMENT'S ONLY POSSIBLE RESPONSE, AND THAT FOLLOWS FROM
      * THE CAPSULE RATHER THAN FROM THE SURFACE (DROVE-266).
@@ -405,6 +482,7 @@ function Control(props: {
     return (
         <BubblePressable
             onPress={props.onPress}
+            onLongPress={props.onLongPress}
             disabled={!pressable}
             nativeGlassPress={false}
             // Vertical only. See `verticalSlop` on the props for why the other
@@ -412,6 +490,7 @@ function Control(props: {
             hitSlop={{ top: props.verticalSlop, bottom: props.verticalSlop, left: 0, right: 0 }}
             style={(p) => [
                 ...segmentStyle,
+                props.fill ? { backgroundColor: props.fill } : null,
                 props.open && styles.controlOpen,
                 { opacity: pressable && p.pressed ? 0.7 : 1 },
             ]}
@@ -444,7 +523,11 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
         pending,
         autoAccept = false,
         onToggleAutoAccept,
+        readAloud,
         size = COMPOSER_SESSION_CONTROL_SIZE,
+        // Square unless the caller says otherwise, which is Home's 44pt capsule
+        // on a row of its own. The chat's is narrower (DROVE-284).
+        segmentWidth = size,
         verticalSlop = 0,
         style,
     } = props;
@@ -457,12 +540,14 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
     // (DROVE-281). See `onToggleAutoAccept` for why this one is absent rather
     // than dead while the three pickers are dead rather than absent.
     const showAutoAccept = !!onToggleAutoAccept;
+    // Drawn where there is a reader, absent where there is not (DROVE-284).
+    const showReadAloud = !!readAloud;
     const showEffort = !!label.effort && effortCount > 0 && effortIndex != null && effortIndex >= 0;
     const showModel = !!label.model;
     const canOpenMode = canOpen?.permission !== false;
     const canOpenEffort = canOpen?.effort !== false;
     const canOpenModel = canOpen?.model !== false;
-    if (!showMode && !showAutoAccept && !showEffort && !showModel) {
+    if (!showMode && !showAutoAccept && !showReadAloud && !showEffort && !showModel) {
         return null;
     }
     const mode = permissionModeAccessibility(label.mode);
@@ -479,8 +564,10 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
     // the model's name. That is also why `dividers` in the budget stayed at 2
     // while `glyphSegments` went to 3.
     const permissionGroup = showMode || showAutoAccept;
-    const effortNeedsDivider = showEffort && permissionGroup;
-    const modelNeedsDivider = showModel && (permissionGroup || showEffort);
+    const readAloudNeedsDivider = showReadAloud && permissionGroup;
+    const effortNeedsDivider = showEffort && (permissionGroup || showReadAloud);
+    const modelNeedsDivider = showModel && (permissionGroup || showReadAloud || showEffort);
+    const readAloudFill = readAloud ? composerAudioOutFill(theme.dark, readAloud.fill) : null;
     // One interactive surface for the capsule, not one per segment
     // (DROVE-169). UIGlassEffect follows the touch inside the effect view it
     // is on, so the segment under the finger brightens and its neighbours
@@ -525,6 +612,7 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                     open={openPicker === 'permission'}
                     onPress={canOpenMode && onPress ? () => onPress('permission') : undefined}
                     size={size}
+                    segmentWidth={segmentWidth}
                     verticalSlop={verticalSlop}
                 >
                     {/* The foreground in every mode (DROVE-215), with no
@@ -581,6 +669,7 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                     open={false}
                     onPress={onToggleAutoAccept}
                     size={size}
+                    segmentWidth={segmentWidth}
                     verticalSlop={verticalSlop}
                 >
                     {/* The bolt FILLS as well as colouring, so the state has a
@@ -594,6 +683,51 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                     />
                 </Control>
             ) : null}
+            {readAloudNeedsDivider ? <View style={[styles.segmentDivider, { backgroundColor: divider }]} /> : null}
+            {/* READ-ALOUD, IN THE GROUP (DROVE-284).
+
+                Clay, rejecting the second row DROVE-281 bought: "Add the
+                reading mode whatever thing to the group and keep it all on the
+                same row as send and +." It sits third, after the permission
+                pair and before the effort gauge, with a rule either side
+                because the subject changes at both: permission -> how the
+                agent talks back -> how hard it thinks -> which model.
+
+                IT IS THE SAME CONTROL. `audioOutButton` still decides all four
+                faces, `handleAudioOutPress` and `handleAudioOutLongPress` are
+                still the two handlers, and DROVE-233/275's long press — boss
+                mode from off, pause and resume while reading — comes with it,
+                because a press was never a property of the disc.
+
+                THE FILL IS A RECTANGLE NOW AND SAYS THE SAME THING. Off it
+                wears the capsule like the padlock does; paused it is the
+                palette's amber (DROVE-258), reading the accent, on a call the
+                recording red. The capsule's `overflow: hidden` rounds it if it
+                ever lands on an end. The glyph is `composerFillTint`'s answer
+                over whichever fill it is on, which is white everywhere except
+                the amber, where white measures about 2:1 and the tint flips —
+                the same rule the disc used, reached through the same
+                function. */}
+            {readAloud ? (
+                <Control
+                    segment="readAloud"
+                    accessibilityLabel={readAloud.accessibilityLabel}
+                    toggled={readAloud.on}
+                    open={false}
+                    onPress={readAloud.onPress}
+                    onLongPress={readAloud.onLongPress}
+                    fill={readAloudFill}
+                    size={size}
+                    segmentWidth={segmentWidth}
+                    verticalSlop={verticalSlop}
+                >
+                    <Ionicons
+                        name={readAloud.glyph}
+                        size={20}
+                        color={composerAudioOutTint(theme.dark, readAloud.fill)}
+                    />
+                </Control>
+            ) : null}
             {effortNeedsDivider ? <View style={[styles.segmentDivider, { backgroundColor: divider }]} /> : null}
             {showEffort ? (
                 <Control
@@ -603,6 +737,7 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                     open={openPicker === 'effort'}
                     onPress={canOpenEffort && onPress ? () => onPress('effort') : undefined}
                     size={size}
+                    segmentWidth={segmentWidth}
                     verticalSlop={verticalSlop}
                 >
                     {/* The dial is DROVE-141's resting glyph, unchanged by the
@@ -630,6 +765,7 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                     open={openPicker === 'model'}
                     onPress={canOpenModel && onPress ? () => onPress('model') : undefined}
                     size={size}
+                    segmentWidth={segmentWidth}
                     verticalSlop={verticalSlop}
                     wide
                 >

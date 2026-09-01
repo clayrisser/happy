@@ -49,6 +49,7 @@ import { ProviderIcon } from './ProviderIcon';
 import { isRigMetadata } from '@/sync/rig';
 import {
     MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE,
+    MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH,
     MOBILE_COMPOSER_LAYOUT,
     MOBILE_COMPOSER_METRICS,
     resolveMobileComposerActionGeometry,
@@ -56,7 +57,6 @@ import {
 } from './agentInputLayout';
 import {
     COMPOSER_BUBBLE_ACTION_ROW_GEOMETRY,
-    COMPOSER_BUBBLE_CAPSULE_ROW_GEOMETRY,
     COMPOSER_BUBBLE_GAP_GEOMETRY,
     COMPOSER_BUBBLE_GEOMETRY,
     COMPOSER_BUBBLE_SESSION_CAPSULE_GEOMETRY,
@@ -68,7 +68,7 @@ import { LiveMicBanner } from './LiveMicBanner';
 import type { MicButtonState } from '@/voice/micButton';
 import type { DictationCaptureState } from '@/voice/dictationCapture';
 import { DroverChannelsSheet } from './DroverChannelsSheet';
-import { buildSessionPillLabel, composerCapsuleOwnRow } from './sessionPillLabel';
+import { buildSessionPillLabel } from './sessionPillLabel';
 import type { AgentModePendingFlags } from '@/sync/useAgentModePending';
 import { permissionModeGlyph } from './sessionControlGlyphs';
 import { useAutoAccept, useAutoAcceptToggle } from '@/hooks/useAutoAccept';
@@ -91,8 +91,6 @@ import {
     composerControlPalette,
     composerFillTint,
     composerGlyphColour,
-    composerPausedFill,
-    composerPausedTint,
     composerMicSurface,
     composerSendSurface,
     micColour,
@@ -434,14 +432,6 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     mobileBubbleGap: COMPOSER_BUBBLE_GAP_GEOMETRY,
     /** The session capsule, sized to its content, inside that row. */
     mobileBubbleSessionCapsule: COMPOSER_BUBBLE_SESSION_CAPSULE_GEOMETRY,
-    /**
-     * THE CAPSULE'S OWN ROW, on the phones too narrow to share one (DROVE-266).
-     *
-     * The action row's shape at the action row's height, so the bubble stays a
-     * column of rows that are the same kind of thing. The argument for when it
-     * is drawn is on `composerCapsuleOwnRow`.
-     */
-    mobileBubbleCapsuleRow: COMPOSER_BUBBLE_CAPSULE_ROW_GEOMETRY,
 
     // Overlay styles
     autocompleteOverlay: {
@@ -943,16 +933,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
      */
     const composerDiscFill = theme.dark ? COMPOSER_IN_FIELD_DISC.dark : COMPOSER_IN_FIELD_DISC.light;
     const composerDiscOpenFill = theme.dark ? COMPOSER_IN_FIELD_DISC_OPEN.dark : COMPOSER_IN_FIELD_DISC_OPEN.light;
-    /**
-     * WHETHER THE SESSION CAPSULE HAS TAKEN A ROW OF ITS OWN (DROVE-266).
-     *
-     * Read from the screen's width and nothing else, through the same function
-     * the budget arithmetic and the spec read, so the layout and the model
-     * cannot disagree about which shape the bubble is in. Off the compact
-     * composer there is no bubble to stack, so it is false there whatever the
-     * window is doing.
-     */
-    const capsuleOwnRow = compactMobileComposer && composerCapsuleOwnRow(screenWidth);
     /**
      * The in-field send glyph: the accent once there is something to send, the
      * theme's neutral when there is not (DROVE-176). It no longer wears a
@@ -2300,25 +2280,28 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     ) : null;
 
     /**
-     * MODE, EFFORT AND MODEL, INSIDE THE BUBBLE (DROVE-236).
+     * THE SESSION GROUP, INSIDE THE BUBBLE (DROVE-236), NOW HOLDING FIVE THINGS
+     * (DROVE-284).
      *
-     * They were a capsule on a row of their own under the bubble, which is
-     * where DROVE-196 put them: "the second row buttons should sit outside the
-     * speech bubble." Clay has drawn the reverse in red: the capsule circled,
-     * an arrow up into the bubble's empty middle beside the `+`. So they are
-     * on the bubble's own button row now, between the `+` and the audio
-     * button.
+     * It was a capsule on a row of its own under the bubble, which is where
+     * DROVE-196 put it: "the second row buttons should sit outside the speech
+     * bubble." Clay drew the reverse in red — the capsule circled, an arrow up
+     * into the bubble's empty middle beside the `+` — so it is on the bubble's
+     * own button row. DROVE-281 added the auto-accept bolt and DROVE-284 added
+     * read-aloud, on "add the reading mode whatever thing to the group".
      *
-     * NOTHING ABOUT THE PRESSES MOVED. Each segment still opens its own picker
-     * on the first tap through `handleSessionControlPress`, and every one of
-     * those is a sheet (DROVE-242). No long press, no drag, no intermediate
-     * menu: the three that were true on the row are true in here.
+     * THE PRESSES HAVE NOT MOVED EITHER TIME. Three of the five segments open
+     * their own picker on the first tap through `handleSessionControlPress`,
+     * and every one of those is a sheet (DROVE-242). The other two are the ones
+     * that DO something: the bolt flips a boolean and read-aloud keeps both of
+     * its gestures, tap for reading mode and long press for pause or boss mode.
      *
-     * WHAT DID MOVE IS THE SIZE, 44 to 36, because that is what the row is.
-     * The cost is a 36pt-wide touch target on the two glyph segments, argued
-     * on `MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE`, and 33pt off the model name's
-     * budget at every width, argued in `sessionPillLabel.ts`. Both are the
-     * price of one bubble instead of two rows.
+     * WHAT IT COSTS. The capsule is the row's height rather than 44
+     * (`MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE`) and its glyph segments are
+     * narrower than they are tall (`MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH`).
+     * Both are touch target spent on width, both are argued on the constants,
+     * and the second is what buys back the single row Clay asked for with a
+     * fifth thing in the group.
      */
     const mobileSessionControls = props.zenMode ? null : (
             <ComposerSessionControls
@@ -2327,6 +2310,11 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 // `composerBubbleLayout.spec.ts` rather than restated here.
                 style={styles.mobileBubbleSessionCapsule}
                 size={MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE}
+                // The glyph segments are NOT square in here (DROVE-284). Four
+                // of them at a disc's width is 156pt of a 393pt phone, and a
+                // segment bounded by hairlines never needed a circle's
+                // diameter. The measurement is on the constant.
+                segmentWidth={MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH}
                 // The row's own slop, vertically. Horizontally these segments
                 // touch each other inside one capsule, so there is none to
                 // take.
@@ -2344,6 +2332,33 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                    no session for the toggle to be about — the capsule draws
                    three segments instead of four and says nothing untrue. */
                 onToggleAutoAccept={props.sessionId ? toggleAutoAccept : undefined}
+                /* READ-ALOUD, MOVED IN OFF THE ROW (DROVE-284).
+
+                   Clay: "Add the reading mode whatever thing to the group and
+                   keep it all on the same row as send and +." DROVE-236 moved
+                   it OUT of a capsule onto the row when he circled the speaker
+                   and drew an arrow to the mic; that capsule was the audio pair
+                   and is gone, and this one is the session's, which is where he
+                   has now put it.
+
+                   IT KEEPS BOTH GESTURES AND THE WHOLE STATE TABLE. Single
+                   press is reading mode, long press is boss mode, and in
+                   reading mode the long press is DROVE-233's pause. Same two
+                   handlers, same `audioOutButton`; only the box changed, which
+                   is what DROVE-236 said the last time this control moved.
+
+                   ABSENT WITHOUT A READER, like the bolt without a session:
+                   `audioOut.shown` is false on an embedded or disconnected
+                   chat, and a speaker with nothing behind it says only that
+                   something is missing. */
+                readAloud={audioOut.shown ? {
+                    glyph: audioOut.glyph,
+                    fill: audioOut.fill,
+                    on: audioOut.on,
+                    accessibilityLabel: t(audioOut.labelKey),
+                    onPress: handleAudioOutPress,
+                    onLongPress: handleAudioOutLongPress,
+                } : null}
                 canOpen={{
                     // The sheet behind the padlock still holds the auto-accept
                     // switch as well as the mode list (DROVE-277, kept by
@@ -2365,72 +2380,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 } : null}
             />
     );
-
-    /**
-     * THE AUDIO-OUT BUTTON, beside the mic at the bubble's right rim
-     * (DROVE-236).
-     *
-     * Clay circled the speaker and drew an arrow up to sit next to the mic. So
-     * it comes off the shared capsule, which has nothing left to share
-     * anyway, because the mic that was its other half IS the primary button
-     * now. It becomes the third disc on this row.
-     *
-     * IT KEEPS BOTH GESTURES AND THE WHOLE STATE TABLE. Single press is
-     * reading mode, long press is boss mode, and in reading mode the long
-     * press is the pause DROVE-233 built. `handleAudioOutPress` and
-     * `handleAudioOutLongPress` are the same two handlers the capsule wired;
-     * only the box around them changed.
-     *
-     * FOUR THINGS ON TWO CARRIERS. The GLYPH says which state you are in:
-     * slashed off, waves reading, pause bars paused. The FILL says it again in
-     * colour: the accent disc while it is reading, the AMBER disc while it is
-     * paused, the recording disc while a call is up. All three hues are already
-     * in composerControlColour.ts, so DROVE-215's rule costs nothing here.
-     *
-     * PAUSED WAS THE ONE STATE YOU HAD TO REMEMBER (DROVE-258). It drew the
-     * reading glyph on no disc, so a paused reader and an actively reading one
-     * differed by a disc and nothing else, and paused and off by a glyph and
-     * nothing else. Clay: "When I long press read and it pauses color it I
-     * dunno pause colour maybe yellow or orange and show pause icon." The amber
-     * is the palette's own and nothing else on this row is coloured by it.
-     *
-     * AT REST IT WEARS THE ROW'S OWN DISC rather than nothing. On the control
-     * row it sat on a glass capsule that drew the button for it; there is no
-     * capsule here, and a bare glyph between two discs would read as
-     * decoration rather than as a button. So the resting face is
-     * `mobileInFieldDisc`, the same surface the `+` wears and the same one
-     * send wears with nothing to send. Normal and paused differ in the glyph,
-     * paused and reading in the fill, normal and reading in both. The state
-     * table in full is in composerAudioOut.ts.
-     */
-    const mobileAudioAction = audioOut.shown ? (
-        <ComposerControlButton
-            // Always a filled disc, at every one of its four faces, so it is
-            // always a glass button and never a bare glyph (DROVE-266). The
-            // four fills are the state table in composerAudioOut.ts read as
-            // COLOURS rather than as stylesheet entries, because a tint is a
-            // prop and a background was a style.
-            fill={audioOut.fill === 'paused' ? composerPausedFill(theme.dark)
-                : audioOut.fill === 'accent' ? theme.colors.radio.active
-                    : audioOut.fill === 'recording' ? composerControlPalette(theme.dark).recording
-                        : composerDiscFill}
-            onPress={handleAudioOutPress}
-            onLongPress={handleAudioOutLongPress}
-            accessibilityRole="button"
-            accessibilityState={{ selected: audioOut.on }}
-            accessibilityLabel={t(audioOut.labelKey)}
-        >
-            <Ionicons
-                name={audioOut.glyph}
-                size={16}
-                color={audioOut.fill === 'none'
-                    ? composerGlyphColour(composerPalette)
-                    : audioOut.fill === 'paused'
-                        ? composerPausedTint(theme.dark)
-                        : theme.colors.button.primary.tint}
-            />
-        </ComposerControlButton>
-    ) : null;
 
     return (
         <View style={[
@@ -3032,43 +2981,35 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         `gap` property, because the row wants a fixed 6 in
                         three places and slack in exactly one. See
                         `resolveComposerBubbleGapGeometry`. */}
-                    {/* THE CAPSULE'S OWN ROW, on the phones too narrow to share
-                        one (DROVE-266). DROVE-264 named this remedy for 320 and
-                        left it unbuilt; growing the buttons made it compulsory,
-                        because six objects take the size and 375 cannot survive
-                        a single point of growth. `composerCapsuleOwnRow` is the
-                        line and sessionPillLabel.ts carries the arithmetic.
-
-                        It goes ABOVE the button row so send stays in the
-                        bubble's bottom-trailing corner, where DROVE-214 put it
-                        and where its clearance from the rounded corner is
-                        measured. */}
-                    {compactMobileComposer && capsuleOwnRow && mobileSessionControls ? (
-                        <View style={styles.mobileBubbleCapsuleRow}>
-                            {mobileSessionControls}
-                        </View>
-                    ) : null}
+                    {/* ONE ROW AGAIN, AT EVERY WIDTH (DROVE-284). DROVE-266
+                        gave the capsule a row of its own below 389 and
+                        DROVE-281 made that every phone. Clay: "Dude I don't
+                        like that extra row. Add the reading mode whatever thing
+                        to the group and keep it all on the same row as send and
+                        +." So read-aloud is a segment of the capsule, the
+                        capsule's glyph segments stopped being as wide as discs,
+                        and the second row is gone rather than conditional.
+                        sessionPillLabel.ts carries the arithmetic. */}
                     {compactMobileComposer ? (
                         <View style={styles.mobileBubbleActionRow}>
                             {showMobileAddButton ? mobileAddAction : null}
-                            {showMobileAddButton && mobileSessionControls && !capsuleOwnRow
+                            {showMobileAddButton && mobileSessionControls
                                 ? <View style={styles.mobileBubbleGap} />
                                 : null}
-                            {capsuleOwnRow ? null : mobileSessionControls}
-                            {mobileSessionControls && !capsuleOwnRow
+                            {mobileSessionControls}
+                            {mobileSessionControls
                                 ? <View style={styles.mobileBubbleGap} />
                                 : null}
                             <View style={styles.mobileBubbleActionSpacer} />
-                            {mobileAudioAction}
-                            {mobileAudioAction
-                                ? <View style={styles.mobileBubbleGap} />
-                                : null}
-                            {/* THE MIC, ITS OWN CONTROL AGAIN (DROVE-264). It
-                                sits between the audio button and send because
-                                the pair it belongs to is voice-in and send: one
-                                puts words in the field, the next sends them,
-                                and Clay's composition runs left to right across
-                                exactly those two. */}
+                            {/* THE MIC, ITS OWN CONTROL AGAIN (DROVE-264), and
+                                since DROVE-284 send's only neighbour. The pair
+                                it belongs to is voice-in and send: one puts
+                                words in the field, the next sends them, and
+                                Clay's composition runs left to right across
+                                exactly those two. Read-aloud used to stand to
+                                its left and is in the capsule now, which leaves
+                                the trailing end of the row holding only the two
+                                controls that act on the message being written. */}
                             {mobileMicAction}
                             {mobileMicAction
                                 ? <View style={styles.mobileBubbleGap} />

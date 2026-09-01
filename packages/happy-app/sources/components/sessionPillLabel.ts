@@ -31,7 +31,7 @@
  */
 
 import {
-    MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE,
+    MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH,
     MOBILE_COMPOSER_METRICS,
 } from './agentInputLayout';
 
@@ -47,10 +47,11 @@ export const SESSION_PILL_SEPARATOR = ' · ';
  * model segment (DROVE-178) is as tall, and as wide as its name needs.
  *
  * IT IS NOT WHAT THE CHAT DRAWS ANY MORE (DROVE-236). The chat's capsule is
- * inside the bubble's own button row, which is 36 tall, so it takes
- * `MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE`. This stays the default because the
- * component still takes a size and 44 is what a capsule on a row of its own
- * should be.
+ * inside the bubble's own button row, so it is as tall as that row
+ * (`MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE`) and its glyph segments are as wide as
+ * `MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH` rather than square (DROVE-284). This
+ * stays the default because the component still takes a size and 44 is what a
+ * capsule on a row of its own should be.
  */
 export const COMPOSER_SESSION_CONTROL_SIZE = 44;
 
@@ -93,7 +94,8 @@ export const COMPOSER_MODEL_SEGMENT = {
      * before it is ever cut, down to this scale, because `Opus 5...` is the
      * exact failure DROVE-138 was filed about.
      *
-     * 0.80 since DROVE-236, and DROVE-264 deliberately did NOT move it again.
+     * 0.80 since DROVE-236, and DROVE-264, DROVE-266 and DROVE-284 have each
+     * declined to move it again.
      *
      * The floor exists so the longest name the picker offers still draws WHOLE
      * on the narrowest phone it can. DROVE-236 moved it 0.85 -> 0.80 to keep
@@ -102,11 +104,21 @@ export const COMPOSER_MODEL_SEGMENT = {
      * would buy nothing and cost type everywhere. The 8pt came out of the
      * segment's padding instead, which is a give with a bottom.
      *
-     * What it is still FOR is the widths that share one row, which DROVE-281
-     * moved up to 428: the two 14-glyph Gemini names land at 0.827 on the 430
-     * Pro Max and 0.929 on the 440, and the crossover where the longer of them
-     * meets this floor is what `COMPOSER_ROW_MIN_MODEL_WIDTH` is. Below it the
-     * capsule takes its own row and nothing scales at all.
+     * DROVE-284 IS WHERE IT WOULD HAVE BEEN EASIEST TO SPEND AND IT IS NOT
+     * SPENT. That ticket takes the capsule's own row away on Clay's
+     * instruction, so the give with no bottom is gone and this floor is the
+     * last line before a name is cut. It buys the width out of the capsule's
+     * SEGMENTS instead (`MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH`), which is a
+     * give with a bottom and a measurement. Lowering the floor would not even
+     * buy the width that fails: 320 leaves the name 40pt and the SHORTEST name
+     * in any picker needs 46 at 0.8, so the floor would have to go under 0.6 to
+     * rescue a phone nobody holds, at the cost of type on every phone somebody
+     * does.
+     *
+     * What it is FOR is the widths that scale, and after DROVE-284 there is
+     * exactly one: the three 14-glyph Gemini names land at 0.847 on a 375
+     * phone, and draw WHOLE at full size on 390 and everything above it. The
+     * crossover where they meet this floor is `COMPOSER_ROW_MIN_MODEL_WIDTH`.
      * `composerModelBudget` below has the full table.
      */
     minimumFontScale: 0.8,
@@ -114,107 +126,100 @@ export const COMPOSER_MODEL_SEGMENT = {
 
 /**
  * Everything on the bubble's button row that is NOT the model's name, in
- * points (DROVE-236, DROVE-264).
+ * points (DROVE-236, DROVE-264, DROVE-284).
  *
- * Left to right, and this is Clay's row with DROVE-264's second voice control
- * in it:
+ * Left to right, and this is Clay's row with read-aloud moved into the group:
  *
- *   the `+` disc, a gap, the session capsule (permission | effort | model),
- *   a gap, the spacer, the audio disc, a gap, the MIC, a gap, SEND.
+ *   the `+` disc, a gap, the session capsule
+ *   (permission | auto-accept ‖ read-aloud ‖ effort ‖ model),
+ *   a gap, the spacer, the MIC, a gap, SEND.
  *
  * IT IS INSIDE THE BUBBLE, which is why there are two insets rather than one.
  * `screenInset` is the composer's own gutter, `bubbleInset` is the bubble's
  * padding, and the row is laid out in what is left.
  *
- * SIX OBJECTS SINCE DROVE-264, WHERE THERE WERE FIVE. That ticket un-collapsed
- * send and the mic, because a single morphing button cannot draw "type a bit,
- * dictate the rest, then send": reaching the mic requires send to disappear.
- * So one more object and one more 6pt gap, and this is the file that says what
- * it costs.
+ * ONE ROW AT EVERY WIDTH AGAIN, WHICH IS THE WHOLE OF DROVE-284. Clay, on what
+ * DROVE-281 shipped: "Dude I don't like that extra row. Add the reading mode
+ * whatever thing to the group and keep it all on the same row as send and +."
+ * Both halves of that are one move. The read-aloud button stops being a loose
+ * disc and becomes a segment of the capsule, and the second row goes away.
  *
- * THE OBJECTS ARE ALL ONE WIDTH THOUGH TWO OF THEM ARE NOW BARE GLYPHS, and
- * that is a decision rather than an oversight. Send and the mic at rest draw no
- * circle (DROVE-264), so their INK is about 18pt and a narrower box would buy
- * the name back some of what this ticket spends. It is refused twice over.
- * Send still draws a full disc for Stop and for the gate's lock, and the mic
- * draws one the moment it is open, so a narrower box would either shrink those
- * circles below the `+`'s and the audio button's — three sizes of circle on one
- * row, which is DROVE-214's "one circle, so one value" broken — or resize the
- * box per face and reflow the row every time the agent starts a turn.
+ * WHY HIS INSTRUCTION IS THE REMEDY AND NOT JUST THE COMPLAINT. A loose disc
+ * costs its own 39pt diameter PLUS a 6pt gap. A capsule segment costs a
+ * segment plus a hairline and shares the capsule's ends. Moving read-aloud in
+ * takes 45 off the row and puts 27 back (a 26pt segment and a hairline), and the arithmetic of the move is
+ * only a third of what it buys: the other two thirds is that once the capsule
+ * holds FOUR glyph segments, a segment being as wide as a disc stops being a
+ * rounding error and becomes 156pt of a 393pt phone. It never needed to be.
+ * `MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH` is the argument and the measurement;
+ * the short version is that a disc needs its own diameter because it is a
+ * circle and a segment is bounded by hairlines, which is the same thing
+ * `COMPOSER_MODEL_SEGMENT.paddingHorizontal` already established one segment
+ * over.
  *
- * THE COST, MEASURED, AND WHAT IT DOES TO EACH PHONE. Four columns now:
- * DROVE-266 grew every object on the row 36 -> 39 and that is six objects, so
- * it spent 18 more, and DROVE-281 put the auto-accept bolt in the capsule,
- * which is one more 39pt segment and no extra rule:
+ * FIVE OBJECTS ON THE ROW SINCE DROVE-284, WHERE THERE WERE SIX. Send and the
+ * mic stay apart (DROVE-264: "I might wanna type some stuff and then hit the
+ * microphone and then say some stuff"), and read-aloud is the one that left.
  *
- *   width   -264   +264   +266   +281   what the row draws after DROVE-281
- *   320      82     40     22    -17    the capsule takes its own row
- *   375     137     95     77     38    the capsule takes its own row
- *   390     152    110     92     53    the capsule takes its own row
- *   393     155    113     95     56    the capsule takes its own row
- *   430     192    150    132     93    every Claude name; Gemini at 0.827
+ * THE THREE REMAINING DISCS ARE ALL ONE WIDTH THOUGH TWO OF THEM ARE BARE
+ * GLYPHS, and that is unchanged from DROVE-264. Send draws a full disc for Stop
+ * and for the gate's lock, and the mic draws one the moment it is open, so a
+ * narrower box would either shrink those circles below the `+`'s — two sizes of
+ * circle on one row, which is DROVE-214's "one circle, so one value" broken —
+ * or resize the box per face and reflow the row every time the agent starts a
+ * turn.
  *
- * SO THE THING THAT GIVES IN DROVE-281 IS THE SINGLE ROW ON EVERY PHONE, and
- * it is named rather than discovered. Clay asked for auto-accept to be one tap
- * on the row; a 39pt control is what one tap costs; the row had 95pt of slack
- * at 393 and the control is 39 of it plus the name's own needs. The crossover
- * moves 389 -> 428, which is above every phone in the app's range and below
- * the 430 and 440 Pro Max widths, so 393 — the width Clay reads — gains the
- * second row that 320 and 375 have had since DROVE-266, and the widest phones
- * keep the single row.
+ * WHAT THE ROW COSTS, TICKET BY TICKET, AND WHAT IT LEAVES THE NAME:
  *
- * THAT IS DROVE-264'S OWN REMEDY REACHING ITS CONCLUSION rather than a new
- * idea: "vertical space, which a phone has, instead of the name, which it does
- * not". Nothing is cut and nothing scales past the floor at any width, because
- * on its own row the capsule has the bubble's whole interior: 163pt for the
- * name at 320 with four segments in it, and the longest name in either picker
- * is 110pt at FULL size. The alternative was a fifth loose disc on the action
- * row, which costs 45 rather than 39 and puts a control that describes how the
- * session runs among the four that DO things.
+ *   width   -264   +264   +266   +281   +284   what the row draws now
+ *   320      82     40     22    -17     40    every name cut; below the floor
+ *   375     137     95     77     38     95    every name whole or scaled ≥0.8
+ *   390     152    110     92     53    110    every name WHOLE at full size
+ *   393     155    113     95     56    113    every name WHOLE at full size
+ *   430     192    150    132     93    150    every name WHOLE at full size
+ *
+ * SO DROVE-284 HANDS BACK MORE THAN DROVE-281 SPENT: the fixed row goes 299 ->
+ * 242, which is 17pt better than the 260 DROVE-266 left, and 393 — the width
+ * Clay reads — goes from a second row to drawing `Gemini 3.1 Pro`, the longest
+ * name either picker offers, WHOLE at full type size on one line. Nothing on
+ * this row was dropped to get there and nothing was cut.
  *
  * WHAT GIVES, IN ORDER, AND WHY IT IS STILL NOT THE NAME.
  *
  *   1. The spacer, which costs nothing and at 320 was already zero.
- *   2. The model segment's own PADDING, 10 to 6, argued on
- *      `COMPOSER_MODEL_SEGMENT.paddingHorizontal`. This is the real give and it
- *      is 8pt: without it `Gemini 3.1 Pro` lands at 0.765 on a 375 phone, under
- *      the floor, which is a shipping name being CUT.
- *   3. Then the name's TYPE SIZE, down to `minimumFontScale`.
+ *   2. The model segment's own PADDING, 10 to 6 (DROVE-264), argued on
+ *      `COMPOSER_MODEL_SEGMENT.paddingHorizontal`.
+ *   3. The capsule's glyph SEGMENTS, 39 to 26 (DROVE-284), argued on
+ *      `MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH`. This is the new give and it is
+ *      52pt across the four, which is what makes the single row affordable
+ *      again with a fourth control in the capsule.
+ *   4. Then the name's TYPE SIZE, down to `minimumFontScale`.
  *
- * A FOURTH GIVE ARRIVED IN DROVE-266, AND IT IS THE ONE WITH NO BOTTOM:
+ * AND THE FIFTH IS GONE. DROVE-266's "the capsule stops sharing the row" was
+ * the give with no bottom, and Clay has refused it: "I don't like that extra
+ * row." So the list has a bottom again, and `COMPOSER_ROW_MIN_MODEL_WIDTH` is
+ * where it is, at 371 — below every phone the app supports and above 320.
  *
- *   4. The capsule stops sharing the row. `composerCapsuleOwnRow` below.
- *
- * That is what turns this from a budget with a failure at the narrow end into a
- * layout that holds at every width, and DROVE-281 is what makes it the ordinary
- * case on a phone rather than the narrow-end case. Clay asked for bigger
- * buttons, six objects on this row take the size, so a point costs the name six
- * and DROVE-266 moved the crossover 371 -> 389; DROVE-281 adds a fourth segment
- * to the capsule and moves it 389 -> 428. Below it the capsule takes a row of
- * its own and gets the bubble's whole interior — 163pt at 320 with four
- * segments, against a 110pt longest name — so nothing is cut and nothing is
- * scaled past the floor anywhere. Above it the single row still holds, which at
- * 430 draws every Claude name whole and puts `Gemini 3.1 Pro`, the longest in
- * either picker, at 0.827 — over the 0.8 floor, where DROVE-266 had it at
- * 0.847 on the 393 that no longer shares a row.
- *
- * WHICH ALSO SETTLES 320, THE HONEST HALF DROVE-264 COULD ONLY NAME. It said
- * plainly that no name in either picker cleared 320 once a sixth object was on
- * the row, `Opus 5` at 0.667 included, and that the remedy was the capsule
- * taking a row of its own — vertical space, which a phone has, instead of the
- * name, which it does not. That is now built rather than written down.
- * `COMPOSER_ROW_MIN_MODEL_WIDTH` is the line, and the spec measures the
- * crossover rather than trusting the number.
+ * 320 IS THE HONEST FAILURE AND IT IS STATED RATHER THAN ROUTED AROUND. On one
+ * row a 320pt phone leaves the name 40pt, and the SHORTEST name in any picker,
+ * `Opus 5`, needs 46 at the type floor, so every name in every picker is cut
+ * there. It is not shavable either, and the spec measures how far it is from
+ * being: the segments would have to come down to 24 to buy `Opus 5` and to 13
+ * to buy `Gemini 3.1 Pro`, and the capsule draws a 20pt glyph, so neither is a
+ * width a segment can be. What would have to go at 320 is a control or the name
+ * itself. 320 is below the narrowest phone this app supports — 375, per
+ * statusRowLayout.spec.ts — so the trade is named and taken: 320 loses the name
+ * rather than 393 gaining a row.
  *
  * THE NAME ITSELF WAS THE OBVIOUS THING TO SPEND AND IT IS STILL REFUSED. A
  * glyph where the name is would buy about 62pt at a stroke and make every width
- * comfortable. It is refused because the name is the one thing on this row that
- * carries a VALUE rather than a state: a padlock says which mode, a dial says
- * which level, and both are readable as pictures, but there is no glyph for
- * "Opus 5" that a person reads as "Opus 5". DROVE-138 was filed precisely about
- * `Opus 5 1M` being cut to `Opus 5...`, and DROVE-178 brought the name back up
- * into this capsule after Clay circled it on the status row and drew an arrow
- * at the gap.
+ * comfortable, 320 included. It is refused because the name is the one thing on
+ * this row that carries a VALUE rather than a state: a padlock says which mode,
+ * a dial says which level, and both are readable as pictures, but there is no
+ * glyph for "Opus 5" that a person reads as "Opus 5". DROVE-138 was filed
+ * precisely about `Opus 5 1M` being cut to `Opus 5...`, and DROVE-178 brought
+ * the name back up into this capsule after Clay circled it on the status row
+ * and drew an arrow at the gap.
  */
 export const COMPOSER_BUBBLE_ROW_GEOMETRY = {
     /** The composer's outer gutter, each side. */
@@ -222,97 +227,68 @@ export const COMPOSER_BUBBLE_ROW_GEOMETRY = {
     /** The bubble's own padding, each side, inside that. */
     bubbleInset: MOBILE_COMPOSER_METRICS.bubbleInset,
     /**
-     * The `+`, the audio button, the MIC and SEND. Four since DROVE-264: the
-     * last two are bare glyphs at rest and keep the disc's box, because both
-     * still draw a full disc on one of their faces.
+     * The `+`, the MIC and SEND. THREE since DROVE-284: read-aloud was the
+     * fourth and it is a capsule segment now. The last two are bare glyphs at
+     * rest and keep the disc's box, because both still draw a full disc on one
+     * of their faces.
      */
-    discs: 4,
+    discs: 3,
     disc: MOBILE_COMPOSER_METRICS.primaryActionSize,
     /**
-     * `+` | capsule, capsule | spacer, audio | mic, mic | send. The spacer's
-     * floor is 0.
+     * `+` | capsule, capsule | spacer, mic | send. The spacer's floor is 0 and
+     * the spacer itself is what separates it from the mic, so there are three
+     * fixed gaps for five objects.
      */
-    gaps: 4,
+    gaps: 3,
     gap: MOBILE_COMPOSER_METRICS.controlGap,
     /**
-     * Permission mode, AUTO-ACCEPT and the effort gauge (DROVE-281).
+     * Permission mode, auto-accept, READ-ALOUD and the effort gauge
+     * (DROVE-284).
      *
-     * Three since the auto-accept bolt became a segment of this capsule rather
-     * than a row inside the padlock's sheet. It is a segment and not a fifth
-     * disc because the capsule is what groups the controls that describe HOW
-     * the session runs, and answering prompts unasked is as much a part of how
-     * it runs as which permission mode it is in.
+     * Four since Clay asked for "the reading mode whatever thing" to join the
+     * group. It belongs there under the capsule's own rule: the capsule holds
+     * the controls that say HOW this session runs while the loose discs DO
+     * things, and whether the agent reads its answers aloud is how it runs, the
+     * same way answering prompts unasked is (DROVE-281).
      */
-    glyphSegments: 3,
-    segment: MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE,
+    glyphSegments: 4,
+    segment: MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH,
     /**
-     * STILL TWO, THOUGH THERE ARE NOW FOUR SEGMENTS (DROVE-281).
+     * THREE, FOR FIVE SEGMENTS (DROVE-284).
      *
-     * mode | auto-accept ‖ effort ‖ model. The padlock and the bolt are the two
-     * permission controls and they touch with NO rule between them, which is
-     * the grouping doing the talking: a hairline says "separate press", and
-     * these two are a pair. The rules stay where the subject changes — from
-     * permission to effort, and from effort to the model's name.
+     * mode | auto-accept ‖ read-aloud ‖ effort ‖ model. The padlock and the
+     * bolt are the two permission controls and they touch with NO rule between
+     * them, which is DROVE-281's grouping doing the talking: a hairline says
+     * "separate press", and those two are a pair. The rules stay where the
+     * subject changes — permission to read-aloud, read-aloud to effort, and
+     * effort to the model's name.
      */
-    dividers: 2,
+    dividers: 3,
 } as const;
 
 /**
  * The narrowest width this row still spells the model's name on (DROVE-264,
- * moved 375 -> 389 by DROVE-266).
+ * 375 -> 389 by DROVE-266, 389 -> 428 by DROVE-281, and 428 -> 371 here).
  *
  * Not a taste line and not a device list: it is the width at which the budget
  * left over from `composerRowFixedWidth` can still hold the longest name the
  * pickers offer at `minimumFontScale`. The spec measures that crossover and
  * asserts this number against it rather than trusting it.
  *
- * IT IS THE CROSSOVER ITSELF NOW, not the narrowest phone above it. While
- * falling below it meant a CUT NAME the constant was rounded up to a real
- * handset, because shipping a fault at 371..374 that no device could reach was
- * pointless precision. Below it now means the capsule takes a row of its own,
- * which is a layout that works at every width, so the honest place for the line
- * is where the arithmetic puts it: 428 since DROVE-281 put the auto-accept bolt
- * in the capsule, where DROVE-266 left it at 389.
+ * IT MEANS A CUT NAME AGAIN, WHICH IS WHAT IT MEANT BEFORE DROVE-266. While
+ * the capsule could take a row of its own, falling below this line was a
+ * LAYOUT change and nothing was ever cut anywhere. Clay has rejected that row
+ * — "I don't like that extra row" — so below this width the name is cut, and
+ * the number matters again in the way it did originally.
  *
- * WHICH PUTS EVERY PHONE BELOW THE LINE, 393 INCLUDED, and that is the change
- * this ticket makes to the composer's shape rather than a fact it discovered.
- * The widths that still share one row are the Pro Max pair, 430 and 440, and
- * the iPad and desktop widths above them. Nothing is cut at any of them.
+ * WHICH IS WHY IT IS BELOW EVERY PHONE THE APP SUPPORTS. 371 clears 375, the
+ * narrowest handset statusRowLayout.spec.ts still supports, with 4pt to spare,
+ * and clears 390, 393, 430 and 440 by more. It does NOT clear 320, and that is
+ * the one honest failure of the single row; the argument is on
+ * `COMPOSER_BUBBLE_ROW_GEOMETRY` and it is not fixable by rearranging this row.
  */
-export const COMPOSER_ROW_MIN_MODEL_WIDTH = 428;
+export const COMPOSER_ROW_MIN_MODEL_WIDTH = 371;
 
-/**
- * Whether the session capsule takes a ROW OF ITS OWN (DROVE-266).
- *
- * This is DROVE-264's named remedy, built rather than left as a note. That
- * ticket put a sixth object on the row, said plainly that 320 no longer held,
- * and wrote down what to do about it: "give the capsule a row of its own again
- * below it (DROVE-196's layout, which DROVE-236 reversed) — vertical space,
- * which a phone has, instead of the name, which it does not".
- *
- * WHAT MADE IT NO LONGER OPTIONAL. Clay asked for bigger buttons, and six
- * objects on this row take that size, so a point of growth costs the name six.
- * The table is on `primaryActionSize`, and its first line is the one that
- * settles this: at 37, one point up from 36, the crossover is already 377 and
- * 375 is a phone people hold. There is no growth small enough to keep the
- * single row at 375, so either the size stays where it is and Clay is told no,
- * or the capsule gets its row. It gets its row.
- *
- * AND IT FIXES 320 ON THE WAY, which DROVE-264 could only name. Below this
- * width nothing is cut and nothing shrinks past the floor at any width the app
- * runs on, including 320, where every name in both pickers has failed since
- * DROVE-264. On its own row the capsule has the bubble's whole interior: 163pt
- * for the name at 320 with DROVE-281's fourth segment in the capsule, which is
- * 21 glyphs against a 14-glyph longest name, where the single row leaves it
- * MINUS 17 and cannot draw the capsule at all.
- *
- * WHAT IT COSTS is one action row's height plus a gap, on the phones below the
- * line and on no others. That is the trade DROVE-264 pointed at — vertical
- * space, which a phone has.
- */
-export function composerCapsuleOwnRow(screenWidth: number): boolean {
-    return screenWidth < COMPOSER_ROW_MIN_MODEL_WIDTH;
-}
 
 /** Everything on the row but the name, which is what the name gets the rest of. */
 export function composerRowFixedWidth(): number {

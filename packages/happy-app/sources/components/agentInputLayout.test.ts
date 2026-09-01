@@ -194,11 +194,6 @@ describe('agent input compact mobile layout', () => {
         expect(resolveHeight(120)).toBe(194);
         expect(resolveHeight(400)).toBe(194);
         expect(resolveHeight(22, true)).toBe(174);
-        // The capsule's own row costs exactly what a row in this column costs:
-        // its height and the gap above it (DROVE-266).
-        expect(resolveHeight(22, false, true) - resolveHeight(22))
-            .toBe(agentInputLayout.MOBILE_COMPOSER_BUBBLE_ACTION_ROW_HEIGHT
-                + agentInputLayout.MOBILE_COMPOSER_METRICS.controlGap);
     });
 
     /**
@@ -255,22 +250,20 @@ describe('agent input compact mobile layout', () => {
             - resolveHeight(metrics.inputLineHeight)).toBe(metrics.inputLineHeight);
     });
 
-    it('reads no screen width itself, and takes the one shape question as an argument', () => {
+    it('opens the same height on every phone again, and reads no screen width', () => {
         const metrics = agentInputLayout.MOBILE_COMPOSER_METRICS;
         const resolveHeight = agentInputLayout.resolveMobileComposerHeight;
-        // It used to be true that the composer opened the same height on a
-        // 320pt phone as on a 393pt one. DROVE-266 makes it one height per
-        // SHAPE rather than one height full stop, because below
-        // COMPOSER_ROW_MIN_MODEL_WIDTH the capsule takes a row of its own.
-        //
-        // What has NOT changed is that this function reads no width. The shape
-        // arrives as an argument decided by `composerCapsuleOwnRow`, so there is
-        // still exactly one place that turns a width into a layout, which is the
-        // property the old test was really protecting.
+        // DROVE-266 made this one height per SHAPE rather than one height full
+        // stop, because below COMPOSER_ROW_MIN_MODEL_WIDTH the capsule took a
+        // row of its own. DROVE-284 takes that row away on Clay's instruction —
+        // "I don't like that extra row" — so the shape argument is gone and the
+        // composer opens at one height on every phone, which is what it did
+        // before DROVE-266.
         expect(resolveHeight(metrics.inputLineHeight))
             .toBe(agentInputLayout.MOBILE_COMPOSER_BASE_HEIGHT);
-        expect(resolveHeight(metrics.inputLineHeight, false, false))
-            .toBe(agentInputLayout.MOBILE_COMPOSER_BASE_HEIGHT);
+        expect(resolveHeight.length).toBeLessThanOrEqual(2);
+        expect(agentInputLayout.resolveMobileComposerBubbleHeight.length)
+            .toBeLessThanOrEqual(2);
     });
 
     /**

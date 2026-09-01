@@ -561,3 +561,164 @@ describe('the effort segment after the drag was deleted', () => {
         expect(needle(null)).toBe(palette.foreground);
     });
 });
+
+/**
+ * READ-ALOUD, MOVED INTO THE CAPSULE (DROVE-284).
+ *
+ * Clay, rejecting the second row DROVE-281 bought with: "Dude I don't like that
+ * extra row. Add the reading mode whatever thing to the group and keep it all on
+ * the same row as send and +."
+ *
+ * The arithmetic of the move is sessionPillLabel.spec.ts's. This is the half
+ * only a render can show: that the control arrived with EVERYTHING it had on
+ * the row — four faces on two carriers, the amber pause DROVE-258 built, and
+ * the long press DROVE-233/275 gave it — rather than arriving as a glyph that
+ * happens to sit in the right place.
+ */
+describe('read-aloud as a capsule segment', () => {
+    /**
+     * The segment's style is a FUNCTION of the press state, the way
+     * `BubblePressable` takes it, so a test that read `props.style` as an array
+     * would silently see nothing. Resolved at rest, which is the face at issue.
+     */
+    const stylePartsOf = (node: any) => {
+        const style = typeof node.props.style === 'function'
+            ? node.props.style({ pressed: false })
+            : node.props.style;
+        return (Array.isArray(style) ? style : [style]).filter(Boolean);
+    };
+
+    const readAloud = (overrides: Record<string, unknown> = {}) => ({
+        glyph: 'volume-high',
+        fill: 'accent',
+        on: true,
+        accessibilityLabel: 'Read aloud',
+        onPress: () => {},
+        onLongPress: () => {},
+        ...overrides,
+    });
+
+    it('sits third, between the permission pair and the effort gauge', () => {
+        const labels = mount({ onToggleAutoAccept: () => {}, readAloud: readAloud() })
+            .root.findAll((node: any) => typeof node.type === 'string' && !!node.props?.accessibilityLabel)
+            .map((node: any) => node.props.accessibilityLabel);
+        expect(labels).toEqual([
+            'Permission mode', 'Auto-accept', 'Read aloud', 'Reasoning effort', 'Model',
+        ]);
+    });
+
+    it('is absent where there is no reader, not drawn and dead', () => {
+        // The bolt's shape, for the bolt's reason (DROVE-281): a picker with
+        // nothing to pick still SAYS what the session is set to, and a speaker
+        // with no reader behind it says only that something is missing. An
+        // embedded or disconnected chat has no reader.
+        const labels = mount().root
+            .findAll((node: any) => typeof node.type === 'string' && !!node.props?.accessibilityLabel)
+            .map((node: any) => node.props.accessibilityLabel);
+        expect(labels).not.toContain('Read aloud');
+    });
+
+    it('takes a THIRD hairline, and the permission pair still touches', () => {
+        // Two rules became three, because the subject changes once more:
+        // permission -> read-aloud -> effort -> the name. The padlock and the
+        // bolt still have nothing between them, which is DROVE-281's grouping
+        // and the thing a third rule could quietly undo.
+        const rules = (renderer: any) => renderer.root.findAllByType('View' as any)
+            .filter((node: any) => (Array.isArray(node.props.style) ? node.props.style : [node.props.style])
+                .some((part: any) => part?.width === 1));
+        expect(rules(mount({ onToggleAutoAccept: () => {}, readAloud: readAloud() }))).toHaveLength(3);
+        expect(rules(mount({ onToggleAutoAccept: () => {} }))).toHaveLength(2);
+    });
+
+    /**
+     * THE STATE TABLE, INTACT (DROVE-236, DROVE-258).
+     *
+     *    normal    slashed speaker, no fill
+     *    paused    PAUSE BARS, amber fill
+     *    reading   speaker with waves, accent fill
+     *    boss      speaker, recording fill
+     *
+     * Every pair differs in both carriers except normal and boss, which differ
+     * in the fill and are never confusable anyway: one is silent and the other
+     * has a call up.
+     */
+    it('draws all four faces, glyph and fill, exactly as the disc did', () => {
+        const faceOf = (fill: string, glyph: string) => {
+            const renderer = mount({ readAloud: readAloud({ fill, glyph }) });
+            const segment = press(renderer, 'Read aloud');
+            const parts = stylePartsOf(segment);
+            return {
+                glyph: segment.findByType('Ionicons' as any).props.name,
+                colour: segment.findByType('Ionicons' as any).props.color,
+                fill: parts.reduce((found: any, part: any) => part?.backgroundColor ?? found, undefined),
+            };
+        };
+        expect(faceOf('none', 'volume-mute'))
+            .toEqual({ glyph: 'volume-mute', colour: palette.foreground, fill: undefined });
+        expect(faceOf('accent', 'volume-high'))
+            .toEqual({ glyph: 'volume-high', colour: '#FFFFFF', fill: palette.accent });
+        expect(faceOf('recording', 'volume-high'))
+            .toEqual({ glyph: 'volume-high', colour: '#FFFFFF', fill: palette.recording });
+        // PAUSED IS THE ONE THAT HAD TO SURVIVE THE MOVE (DROVE-258). Clay:
+        // "When I long press read and it pauses color it I dunno pause colour
+        // maybe yellow or orange and show pause icon." Amber fill, pause bars,
+        // and the tint FLIPS to black because white on the dark theme's amber
+        // measures about 2:1 — the exact bug a copied ternary would have
+        // shipped.
+        expect(faceOf('paused', 'pause'))
+            .toEqual({ glyph: 'pause', colour: '#000000', fill: palette.pending });
+    });
+
+    it('keeps the long press, which is pause, resume and boss mode', () => {
+        // DROVE-233/275's second gesture, and the one thing a move like this
+        // silently drops. The segment is a Pressable like the disc was, so the
+        // handler is wired rather than reasoned about.
+        const pressed: string[] = [];
+        const renderer = mount({
+            readAloud: readAloud({
+                onPress: () => pressed.push('press'),
+                onLongPress: () => pressed.push('long'),
+            }),
+        });
+        const segment = press(renderer, 'Read aloud');
+        expect(typeof segment.props.onLongPress).toBe('function');
+        act(() => { segment.props.onLongPress(); });
+        act(() => { segment.props.onPress(); });
+        expect(pressed).toEqual(['long', 'press']);
+        // And the three pickers have no long press to confuse it with.
+        expect(press(renderer, 'Permission mode').props.onLongPress).toBeUndefined();
+        expect(press(renderer, 'Reasoning effort').props.onLongPress).toBeUndefined();
+    });
+
+    it('is a switch to a screen reader, like the bolt and unlike the pickers', () => {
+        // A press that flips a state rather than raising a sheet, so VoiceOver
+        // announces a state instead of an `expanded` it does not have.
+        const segment = press(mount({ readAloud: readAloud({ on: true }) }), 'Read aloud');
+        expect(segment.props.accessibilityRole).toBe('switch');
+        expect(segment.props.accessibilityState.checked).toBe(true);
+        const off = press(mount({ readAloud: readAloud({ on: false, fill: 'none' }) }), 'Read aloud');
+        expect(off.props.accessibilityState.checked).toBe(false);
+    });
+
+    it('draws a glyph segment narrower than it is tall, and the model segment neither', () => {
+        // DROVE-284's other half. `segmentWidth` defaults to `size`, which is
+        // Home's square 44pt capsule; the chat hands in the narrower value and
+        // the segments follow it on one axis only.
+        const renderer = mount({
+            size: 39, segmentWidth: 26, onToggleAutoAccept: () => {}, readAloud: readAloud(),
+        });
+        for (const label of ['Permission mode', 'Auto-accept', 'Read aloud', 'Reasoning effort']) {
+            const box = stylePartsOf(press(renderer, label)).reduce((found: any, part: any) => ({
+                width: part?.width ?? found.width, height: part?.height ?? found.height,
+            }), { width: undefined, height: undefined });
+            expect(box, label).toEqual({ width: 26, height: 39 });
+        }
+        // The name sizes to itself and takes only the height.
+        const modelParts = stylePartsOf(press(renderer, 'Model'));
+        expect(modelParts.some((part: any) => part?.width === 26)).toBe(false);
+        expect(modelParts.some((part: any) => part?.height === 39)).toBe(true);
+        // Square by default, which is what Home still draws.
+        const homeParts = stylePartsOf(press(mount({ readAloud: readAloud() }), 'Read aloud'));
+        expect(homeParts.some((part: any) => part?.width === 44 && part?.height === 44)).toBe(true);
+    });
+});

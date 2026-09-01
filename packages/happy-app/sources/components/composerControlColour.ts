@@ -127,6 +127,7 @@
  * read it.
  */
 
+import type { AudioOutFill } from './composerAudioOut';
 import {
     CHROME_CONTRAST_FLOOR,
     CHROME_GLASS_TINT,
@@ -857,6 +858,53 @@ export function composerFillTint(fill: string): string {
 /** The pause glyph's colour: whichever foreground reads on the amber. */
 export function composerPausedTint(dark: boolean): string {
     return composerFillTint(composerPausedFill(dark));
+}
+
+/**
+ * READ-ALOUD'S FOUR FACES, AS A CAPSULE SEGMENT RATHER THAN A DISC
+ * (DROVE-284).
+ *
+ * Clay: "Add the reading mode whatever thing to the group and keep it all on
+ * the same row as send and +." The control moved into the session capsule and
+ * its state table did not move with it — `audioOutButton` in
+ * composerAudioOut.ts still decides which of the four faces is drawn, and this
+ * only says what colour that face is.
+ *
+ * WHAT CHANGED IS THE OFF FACE AND NOTHING ELSE. On the row it wore the
+ * in-field disc at rest, because DROVE-266 ruled that a bare glyph between two
+ * discs reads as decoration rather than as a button. Inside the capsule the
+ * question does not arise: the padlock, the bolt and the gauge all sit on the
+ * capsule's own fill with nothing of their own, and a fifth surface among them
+ * would be the odd object rather than the button. So off is `null` — no fill —
+ * and the three live faces keep the colours DROVE-258 and DROVE-236 measured.
+ *
+ * THE ACCENT IS THE PALETTE'S, NOT `theme.colors.radio.active`. The disc took
+ * the theme's blue directly, which quietly sidestepped DROVE-264's finding:
+ * that value is `#0A84FF` and the palette's accent is `#0A8FFF`, eleven points
+ * of green lifted precisely so the same hue can be a glyph on the bubble AND a
+ * fill under a white glyph. Read-aloud's reading face is the second of those
+ * two jobs by name, so it belongs to the measured value.
+ */
+export function composerAudioOutFill(dark: boolean, fill: AudioOutFill): string | null {
+    if (fill === 'none') return null;
+    const palette = composerControlPalette(dark);
+    if (fill === 'paused') return composerPausedFill(dark);
+    if (fill === 'recording') return palette.recording;
+    return palette.accent;
+}
+
+/**
+ * And the glyph on it: `composerFillTint`'s answer over whichever fill is
+ * there, the row's foreground when there is none.
+ *
+ * One rule rather than a ternary at the call site, which is what shipped the
+ * bug DROVE-258 wrote about: white on the dark theme's amber measures about
+ * 2:1, so a copied "always the primary tint" would draw a pause glyph you
+ * cannot read on the disc whose whole job is to make pause readable.
+ */
+export function composerAudioOutTint(dark: boolean, fill: AudioOutFill): string {
+    const bed = composerAudioOutFill(dark, fill);
+    return bed ? composerFillTint(bed) : composerGlyphColour(composerControlPalette(dark));
 }
 
 /**

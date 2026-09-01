@@ -274,12 +274,15 @@ export const MOBILE_COMPOSER_METRICS = {
      *   39   fixed 260   crossover 389   390 and 393 hold it
      *   40   fixed 266   crossover 395   393 does not, and 393 is the phone
      *
-     * TWO THINGS FALL OUT OF THAT TABLE. That 375 cannot survive ANY growth,
-     * not even a single point, so the remedy DROVE-264 named for 320 — the
-     * capsule taking a row of its own, vertical space instead of the name — is
-     * no longer optional and is built (`composerCapsuleOwnRow`). And that 40
-     * would put that second row on a 393pt handset, which is undoing
-     * DROVE-236's 50pt of transcript on the screen Clay actually reads. So 39.
+     * TWO THINGS FELL OUT OF THAT TABLE, and DROVE-284 has since reversed one
+     * of them. That 375 could not survive ANY growth, so DROVE-266 built the
+     * remedy DROVE-264 had only named — the capsule taking a row of its own.
+     * Clay has now rejected that row by name, so it is gone and the width it
+     * was buying comes from the capsule's segments instead
+     * (`MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH`): only THREE discs take this
+     * size now, the crossover is 371, and 375 is back above it. The other
+     * finding stands unchanged — 40 would still spend 3pt of name per disc that
+     * the row has no slack for at 375.
      *
      * The touch target grows with it: 39 drawn plus `primaryActionSlop` a side
      * is 51, against DROVE-153's 44pt floor.
@@ -374,6 +377,64 @@ export const MOBILE_COMPOSER_BUBBLE_ACTION_ROW_HEIGHT = MOBILE_COMPOSER_METRICS.
  * DROVE-138 was filed about losing the model name.
  */
 export const MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE = MOBILE_COMPOSER_METRICS.primaryActionSize;
+
+/**
+ * HOW WIDE A CAPSULE GLYPH SEGMENT IS, WHICH IS NO LONGER HOW TALL IT IS
+ * (DROVE-284).
+ *
+ * Clay, on the second row DROVE-281 bought with: "Dude I don't like that extra
+ * row. Add the reading mode whatever thing to the group and keep it all on the
+ * same row as send and +." So the composer is one row again at every width, and
+ * this is most of what pays for it.
+ *
+ * A SEGMENT IS NOT A DISC AND WAS ONLY EVER SQUARE BECAUSE ONE PROP SET BOTH
+ * AXES. `size` above says how tall the capsule is; until this ticket it also
+ * said how wide each glyph segment is, so four glyph segments cost 156pt — 40%
+ * of a 393pt phone — to draw four 20pt glyphs. A disc needs its own diameter
+ * because it is a circle. A segment is bounded by a hairline on each side, and
+ * `COMPOSER_MODEL_SEGMENT.paddingHorizontal` already won this exact argument
+ * for the segment next door: "every other segment on this row is bounded by a
+ * circle's rim or a disc's edge and needs a rim's clearance, and this one is
+ * bounded by two hairlines, which need a gap's."
+ *
+ * SO IT IS THE GLYPH'S INK PLUS `controlGap` EITHER SIDE, and the ink is
+ * MEASURED off Ionicons.ttf the way `IONICON_INK_RATIO` is rather than guessed
+ * from the 20pt em box:
+ *
+ *   lock-closed   0.6875 of the em   13.75pt at size 20   <- the padlock
+ *   flash         0.6867             13.73                <- the bolt
+ *   volume-high   0.8750             17.50                <- read-aloud
+ *   shield / map  0.8750             17.50
+ *   eye           0.9355             18.71                <- the widest
+ *   pause         0.4375              8.75
+ *
+ * 13.75 + 2 x 6 = 25.75, so 26.
+ *
+ * THE TWO WIDE GLYPHS SIT CLOSER TO THE RULE AND THAT IS SAID RATHER THAN
+ * HIDDEN. `eye` keeps 3.6pt each side and `volume-high` 4.25, against the
+ * padlock's 6.1. Both are well over the 2pt DROVE-118 measured as the distance
+ * at which two marks read as one blob, and a hairline between them is a
+ * stronger separator than air is. Sizing every segment to the WIDEST glyph
+ * instead would be 31, which costs 20pt across the four and puts the longest
+ * model name under the type floor at 375 — a cut name on a phone people hold,
+ * to buy 2pt of air around a glyph only Codex's read-only mode draws.
+ *
+ * THE TOUCH TARGET IS THE THING THIS SPENDS, and the trade was already made
+ * and written down at 39: `MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE` says the
+ * segments answer in a 39 x 51 box, "still under Apple's 44pt floor on ONE
+ * axis, by 5 rather than by 8". This makes that axis 26 rather than 39, so the
+ * box is 26 x 51 and the shortfall on the horizontal is 18. It is spent for the
+ * same reason DROVE-236 spent the first 5: horizontal slop is not available
+ * inside a shared capsule, because a segment claiming it would be claiming its
+ * neighbour's ink, and the alternative is not a bigger target — it is a second
+ * row Clay has now rejected by name, or a cut model name.
+ *
+ * The VERTICAL axis is untouched, and it is the one a thumb misses on: the
+ * capsule is 39 tall with `primaryActionSlop` above and below it, and the
+ * segments are stacked side by side rather than one above the other, so a
+ * finger landing between two of them lands on one of them.
+ */
+export const MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH = 26;
 
 /**
  * The chat bubble, empty: padding, one line of text, the gap, the button row,
@@ -487,34 +548,29 @@ export const MOBILE_COMPOSER_CHROME_HEIGHT = MOBILE_COMPOSER_BASE_HEIGHT
 export function resolveMobileComposerHeight(
     inputHeight: number,
     hasAttachments = false,
-    capsuleOwnRow = false,
 ): number {
     return MOBILE_COMPOSER_CHROME_HEIGHT
-        + resolveMobileComposerBubbleHeight(inputHeight, hasAttachments, capsuleOwnRow);
+        + resolveMobileComposerBubbleHeight(inputHeight, hasAttachments);
 }
 
-/** How tall the chat bubble is: its rows, its padding and any attachments. */
+/**
+ * How tall the chat bubble is: its rows, its padding and any attachments.
+ *
+ * ONE BUTTON ROW AT EVERY WIDTH AGAIN (DROVE-284). DROVE-266 added a
+ * `capsuleOwnRow` term here and DROVE-281 made it true on every phone; Clay
+ * rejected the price by name — "I don't like that extra row" — so the term is
+ * gone rather than defaulted to false. The bubble's height no longer depends on
+ * the width, which is what it was before DROVE-266 and what it is again.
+ */
 export function resolveMobileComposerBubbleHeight(
     inputHeight: number,
     hasAttachments = false,
-    /**
-     * Whether the session capsule has taken a row of its own (DROVE-266).
-     *
-     * True only below `COMPOSER_ROW_MIN_MODEL_WIDTH`, and it costs exactly what
-     * a row in this column costs: the row's height plus the gap above it, the
-     * same terms the attachment strip is counted on. Defaults to false, which
-     * is every phone at or above the line and every caller before this one.
-     */
-    capsuleOwnRow = false,
 ): number {
     return MOBILE_COMPOSER_METRICS.bubbleInset
         + MOBILE_COMPOSER_METRICS.bubbleInsetBottom
         + resolveMobileComposerTextRowHeight(inputHeight)
         + MOBILE_COMPOSER_METRICS.controlGap
         + MOBILE_COMPOSER_BUBBLE_ACTION_ROW_HEIGHT
-        + (capsuleOwnRow
-            ? MOBILE_COMPOSER_BUBBLE_ACTION_ROW_HEIGHT + MOBILE_COMPOSER_METRICS.controlGap
-            : 0)
         // The strip is a third row in the same column, so it costs the gap as
         // well as its own height. Counted here because the bubble's `gap` is
         // what actually draws it (DROVE-214).
