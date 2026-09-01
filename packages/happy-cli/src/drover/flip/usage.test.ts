@@ -817,7 +817,7 @@ describe('what /usage prints reaches the card by itself', () => {
                     const { recordUsagePrint } = await import('./refresh')
                     return recordUsagePrint(
                         a,
-                        'Current session: 68% used, resets Sep 2 at 4:20am (America/Chicago)\n',
+                        'Current session: 68% used · resets Sep 2 at 4:20am (America/Chicago)\n',
                         now,
                     )
                 },
@@ -849,5 +849,70 @@ describe('what /usage prints reaches the card by itself', () => {
         const { readVendorUsageCache, readAccounts } = await import('./accounts')
         expect(readVendorUsageCache(readAccounts()[0])!.rows[0].percent).toBe(26)
         reporter.stop()
+    })
+})
+
+/**
+ * DROVE-173's three disagreements, re-asked of the NEW row source (DROVE-340).
+ *
+ * That ticket made the sheet agree with `/usage` in three ways: the bars fill
+ * with what is USED, headroom ignores a family window the session's model is
+ * not in, and a reset resolves in the zone Claude Code named rather than the
+ * machine's. All three were settled over rows read from
+ * `cachedUsageUtilization`. This ticket changed where the rows come from — the
+ * printed paragraph — so all three are asked again, of a snapshot built from a
+ * print and nothing else.
+ */
+describe('the three disagreements, over a printed reading', () => {
+    const print = [
+        'Current session: 1% used · resets Sep 2 at 4:20am (Europe/London)',
+        'Current week (all models): 12% used · resets Sep 3 at 10am (Europe/London)',
+        'Current week (Fable): 100% used · resets Sep 3 at 10am (Europe/London)',
+    ].join('\n')
+
+    async function snapshotFromPrint(family: string | null) {
+        writeAccounts(['bitspur.com'])
+        const now = Date.parse('2026-09-01T22:30:00Z')
+        const { recordUsagePrint } = await import('./refresh')
+        const { readAccounts } = await import('./accounts')
+        const { usageSnapshot } = await usageModule()
+        expect(recordUsagePrint(readAccounts()[0], print, now)).toBe(true)
+        return usageSnapshot('bitspur.com', now, family)
+    }
+
+    it('leaves an Opus session available with the Fable week spent (disagreement 2)', async () => {
+        // The original complaint exactly: "bitspur.com · 0% left" while the
+        // session window was 99% free, because headroom took the minimum over
+        // every window including a Fable one that does not bind Opus.
+        const opus = await snapshotFromPrint('opus')
+        expect(opus.accounts[0].headroom).toBe(88)
+        // And the family window is still CARRIED, so the wrist and the sheet
+        // can show it — it is ignored for headroom, not dropped. That it is
+        // marked 'fable' at all is what makes the rule work, and it is derived
+        // from the display name the paragraph printed.
+        const scoped = opus.accounts[0].limits.find((r) => r.kind === 'weekly_scoped')!
+        expect(scoped.family).toBe('fable')
+        expect(scoped.percent).toBe(100)
+
+        // The same account, running Fable, is correctly out.
+        const fableRun = await snapshotFromPrint('fable')
+        expect(fableRun.accounts[0].headroom).toBe(0)
+    })
+
+    it('resolves the printed reset in the zone Claude Code named (disagreement 3)', async () => {
+        // 4:20am Europe/London on Sep 2 is 03:20Z — London is on BST. Getting
+        // this wrong by an offset is what made a reset look stale.
+        const snap = await snapshotFromPrint('opus')
+        const session = snap.accounts[0].limits.find((r) => r.kind === 'session')!
+        expect(session.resetsAt).toBe(Date.parse('2026-09-02T03:20:00Z'))
+    })
+
+    it('carries percent USED, which is what the fill convention reads (disagreement 1)', async () => {
+        // The rows say used; `headroom` is the one derived "left" figure and
+        // the app fills from the row. A print that said 1% used must not
+        // arrive as 1% left.
+        const snap = await snapshotFromPrint('opus')
+        expect(snap.accounts[0].limits.find((r) => r.kind === 'session')!.percent).toBe(1)
+        expect(snap.accounts[0].limits.find((r) => r.kind === 'weekly_all')!.percent).toBe(12)
     })
 })

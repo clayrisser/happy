@@ -16,7 +16,7 @@
  * session window:
  *
  *     cache before   fetchedAtMs 1788303039947   session 68
- *     printed        "Current session: 70% used, resets Sep 2 at 4:20am"
+ *     printed        "Current session: 70% used · resets Sep 2 at 4:20am"
  *     cache after    fetchedAtMs 1788303039947   session 68   (byte-identical)
  *
  * So `/usage` fetches LIVE every time and prints what it fetched. What it
@@ -64,9 +64,14 @@ export function readingPath(stateDir: string, name: string): string {
 /**
  * The three lines `/usage` prints, as they actually appear:
  *
- *     Current session: 70% used, resets Sep 2 at 4:20am (Europe/London)
- *     Current week (all models): 14% used, resets Sep 3 at 10am (Europe/London)
- *     Current week (Fable): 24% used, resets Sep 3 at 10am (Europe/London)
+ *     Current session: 100% used · resets Sep 2 at 3:50am (Europe/London)
+ *     Current week (all models): 21% used · resets Sep 8 at 1pm (Europe/London)
+ *     Current week (Fable): 41% used · resets Sep 8 at 1pm (Europe/London)
+ *
+ * Copied off a real run on 2.1.257, middle dot and all. The separator is not
+ * load-bearing — `.*?resets` accepts a comma too, and 2.1.251 printed one —
+ * but the fixtures use what the installed version actually prints, so a
+ * format change shows up as a failing parse rather than a silent zero.
  *
  * The reset clause is optional on purpose: a percent with no reset is still
  * worth having, and `rowUsable` reads a missing reset as "says nothing either
