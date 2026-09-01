@@ -25,6 +25,7 @@ const airplay = ['AirPlay'];
 
 interface Harness {
     guard: AudioRouteGuard;
+    pause: ReturnType<typeof vi.fn>;
     interrupt: ReturnType<typeof vi.fn>;
     announce: ReturnType<typeof vi.fn>;
     /** Mutable so a test can turn read-aloud off between two readings. */
@@ -33,6 +34,7 @@ interface Harness {
 
 function harness(over: Partial<Harness['state']> = {}): Harness {
     const state = { speaking: true, enabled: true, speaker: 'phone' as Speaker, ...over };
+    const pause = vi.fn();
     const interrupt = vi.fn();
     const announce = vi.fn();
     const deps: AudioRouteGuardDeps = {
@@ -40,10 +42,11 @@ function harness(over: Partial<Harness['state']> = {}): Harness {
         isSpeaking: () => state.speaking,
         isEnabled: () => state.enabled,
         speaker: () => state.speaker,
+        pause,
         interrupt,
         announce,
     };
-    return { guard: new AudioRouteGuard(deps), interrupt, announce, state };
+    return { guard: new AudioRouteGuard(deps), pause, interrupt, announce, state };
 }
 
 /**
@@ -51,9 +54,9 @@ function harness(over: Partial<Harness['state']> = {}): Harness {
  * decided here (DROVE-119).
  *
  * DROVE-189 kept every line of this classification and changed only what
- * happens next: the move to the speaker is announced, and read-aloud is left
- * ON. Clay asked for that directly, having asked for the opposite in
- * DROVE-119 and lived with it.
+ * happens next, and DROVE-294 changed the verb again: the move to the
+ * speaker now PAUSES the reading at its place. Clay, more than once: "When
+ * headphones are disconnected it is supposed to PAUSE the playback."
  */
 describe('classifyRoute', () => {
     it('wired headphones are headphones', () => {
@@ -129,11 +132,19 @@ describe('leaksToTheRoom', () => {
 });
 
 describe('AudioRouteGuard', () => {
-    it('headphones to the speaker: names the change and says where the sound went', () => {
+    /**
+     * THE VERB DROVE-294 CORRECTS. DROVE-119 stopped the reading and switched
+     * it off; DROVE-189 let it carry on out of the speaker under a toast.
+     * Clay asked for neither, in as many words, more than once: "When
+     * headphones are disconnected it is supposed to PAUSE the playback."
+     * Every music app pauses on route loss, and now so does this.
+     */
+    it('headphones to the speaker: pauses the reading at its place', () => {
         const h = harness();
         h.guard.observe(headphones);
-        expect(h.interrupt).not.toHaveBeenCalled();
+        expect(h.pause).not.toHaveBeenCalled();
         h.guard.observe(speaker);
+        expect(h.pause).toHaveBeenCalledTimes(1);
         expect(h.interrupt).toHaveBeenCalledTimes(1);
         expect(h.announce).toHaveBeenCalledTimes(1);
         expect(h.guard.stopCount).toBe(1);
@@ -145,7 +156,8 @@ describe('AudioRouteGuard', () => {
      * said, plainly, that removing headphones must not disable read-aloud: an
      * AirPod that drops for a second should not need a deliberate press to get
      * the voice back. The guard has no way to disable anything any more, which
-     * is stronger than a test.
+     * is stronger than a test. DROVE-294's pause keeps this: paused is a third
+     * state, not a way to be off.
      */
     it('leaves read-aloud ON when the headphones come out', () => {
         const h = harness();
@@ -154,37 +166,49 @@ describe('AudioRouteGuard', () => {
         expect(h.state.enabled).toBe(true);
     });
 
-    it('names the change BEFORE the toast, so the captures stop first', () => {
+    it('silences first, tells the captures second, toasts last', () => {
+        // The pause is the point of the whole feature, so it goes first: the
+        // speaker is quiet before anything else is attended to. The captures
+        // are next (a latched mic on the built-in microphone still has to
+        // stop, DROVE-119's one lasting insight), and the toast is for him.
         const h = harness();
         const order: string[] = [];
+        h.pause.mockImplementation(() => order.push('pause'));
         h.interrupt.mockImplementation(() => order.push('interrupt'));
         h.announce.mockImplementation(() => order.push('announce'));
         h.guard.observe(headphones);
         h.guard.observe(speaker);
-        expect(order).toEqual(['interrupt', 'announce']);
+        expect(order).toEqual(['pause', 'interrupt', 'announce']);
     });
 
     it('headphones to CarPlay says nothing', () => {
         const h = harness();
         h.guard.observe(airpods);
         h.guard.observe(carplay);
+        expect(h.pause).not.toHaveBeenCalled();
         expect(h.interrupt).not.toHaveBeenCalled();
         expect(h.announce).not.toHaveBeenCalled();
     });
 
-    it('the speaker to headphones says nothing and re-enables nothing', () => {
+    it('the speaker to headphones says nothing, pauses nothing, re-enables nothing', () => {
         const h = harness({ enabled: false });
         h.guard.observe(speaker);
         h.guard.observe(headphones);
+        expect(h.pause).not.toHaveBeenCalled();
         expect(h.interrupt).not.toHaveBeenCalled();
         expect(h.state.enabled).toBe(false);
     });
 
-    it('reconnecting after an announcement changes nothing either way', () => {
+    it('reconnecting does NOT auto-resume: the pause is his to lift', () => {
+        // Consistent with iOS music and with DROVE-289's rule that a pause he
+        // holds only he lifts. The guard has no resume dependency at all,
+        // which is stronger than a test — this pins that plugging back in
+        // fires nothing, not even a second pause.
         const h = harness();
         h.guard.observe(headphones);
         h.guard.observe(speaker);
         h.guard.observe(headphones);
+        expect(h.pause).toHaveBeenCalledTimes(1);
         expect(h.state.enabled).toBe(true);
         expect(h.guard.stopCount).toBe(1);
     });
@@ -193,6 +217,7 @@ describe('AudioRouteGuard', () => {
         const h = harness({ speaker: 'watch' });
         h.guard.observe(headphones);
         h.guard.observe(speaker);
+        expect(h.pause).not.toHaveBeenCalled();
         expect(h.interrupt).not.toHaveBeenCalled();
         expect(h.announce).not.toHaveBeenCalled();
     });
@@ -201,6 +226,7 @@ describe('AudioRouteGuard', () => {
         const h = harness({ speaking: false });
         h.guard.observe(headphones);
         h.guard.observe(speaker);
+        expect(h.pause).not.toHaveBeenCalled();
         expect(h.announce).not.toHaveBeenCalled();
         expect(h.state.enabled).toBe(true);
     });
@@ -210,6 +236,7 @@ describe('AudioRouteGuard', () => {
         h.guard.observe(headphones);
         h.guard.observe(speaker);
         h.guard.observe(speaker);
+        expect(h.pause).toHaveBeenCalledTimes(1);
         expect(h.interrupt).toHaveBeenCalledTimes(1);
     });
 
@@ -232,18 +259,21 @@ describe('AudioRouteGuard', () => {
     it('polls the route itself when the event carries none', () => {
         const state = { speaking: true, enabled: true, speaker: 'phone' as Speaker };
         let ports = headphones;
+        const pause = vi.fn();
         const interrupt = vi.fn();
         const guard = new AudioRouteGuard({
             route: () => ports,
             isSpeaking: () => state.speaking,
             isEnabled: () => state.enabled,
             speaker: () => state.speaker,
+            pause,
             interrupt,
             announce: () => { },
         });
         guard.observe();
         ports = speaker;
         guard.observe();
+        expect(pause).toHaveBeenCalledTimes(1);
         expect(interrupt).toHaveBeenCalledTimes(1);
     });
 });

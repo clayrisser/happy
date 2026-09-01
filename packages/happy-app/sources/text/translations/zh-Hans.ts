@@ -479,7 +479,7 @@ export const zhHans: TranslationStructure = {
             onHint: '正在朗读回复。点按某句话即可从那里开始朗读',
             paused: '已暂停。长按可从停下的地方继续',
             resumed: '从停下的地方继续朗读',
-            headphonesOff: '耳机已断开，改用扬声器播放',
+            headphonesOff: '耳机已断开，朗读已暂停',
         },
         audioOut: {
             boss: '语音通话进行中',

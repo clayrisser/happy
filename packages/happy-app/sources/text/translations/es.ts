@@ -478,7 +478,7 @@ export const es: TranslationStructure = {
             onHint: 'Leyendo las respuestas en voz alta. Toca una frase para leer desde ahí',
             paused: 'En pausa. Mantén pulsado para continuar donde se quedó',
             resumed: 'Continuando la lectura desde donde se quedó',
-            headphonesOff: 'Auriculares desconectados, ahora por el altavoz',
+            headphonesOff: 'Auriculares desconectados, lectura en pausa',
         },
         audioOut: {
             boss: 'Llamada de voz en curso',

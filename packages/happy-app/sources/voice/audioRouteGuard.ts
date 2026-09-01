@@ -2,32 +2,38 @@ import { routeHasHeadphones } from 'drover-speech';
 import type { Speaker } from './speaker';
 
 /**
- * Headphones coming out SAYS SO, and nothing else (DROVE-119, reversed by
- * DROVE-189).
+ * Headphones coming out PAUSES the reading at its place (DROVE-294, after
+ * two wrong verbs).
  *
  * DROVE-119 read Clay's "if headphones disconnect, make sure by default you
  * mute, or you disable the reading things back" as a shutdown, and shipped
- * one: a pulled AirPod cut the sentence and switched read-aloud off. He has
- * since asked for the opposite in as many words, and he is right. An AirPod
- * drops, a case lids in a pocket, a car stereo hands back. None of those is
- * him asking for silence, and the recovery was a deliberate press of a button
- * he could not see. The room it was protecting is rarer than the pocket.
+ * one: a pulled AirPod cut the sentence, threw the position away and switched
+ * read-aloud off. DROVE-189 swung to the other extreme — announce the move
+ * and let the reply carry on out of the phone's speaker. Clay asked for
+ * neither, and said so more than once: "When headphones are disconnected it
+ * is supposed to PAUSE the playback — I've told you this many times." Every
+ * music app on iOS pauses on route loss and resumes where it was, and that is
+ * the verb here now: the reading holds its exact position (DROVE-233's
+ * pause), the reader stays ON, the amber face shows (DROVE-258), and nothing
+ * plays from the speaker — which satisfies DROVE-119's safety goal better
+ * than the stop ever did.
  *
- * What is left is the ANNOUNCEMENT: the toast says the sound moved to the
- * speaker, and he turns it off himself if he is in company. The interrupt is
- * still raised, because the gate still uses it to stop a latched mic; it
- * simply no longer stops the voice.
+ * Plugging back in does NOT auto-resume. Resume is his gesture — the button,
+ * a headphone press, the lock screen — consistent with iOS music and with
+ * DROVE-289's rule that a pause he holds only he lifts. The interrupt is
+ * still raised, because the gate still uses it to stop a latched mic; the
+ * toast still says what happened.
  *
- * Three things narrow what counts as a move worth announcing, and each one is
- * a case where saying anything would be noise:
+ * Three things narrow what counts as a route loss worth acting on, and each
+ * one is a case where pausing would be noise:
  *
  *   - Only a move TO the built-in speaker. Headphones to CarPlay, or AirPods
- *     to a Bluetooth speaker the user chose, is not a leak; stopping there
+ *     to a Bluetooth speaker the user chose, is not a leak; pausing there
  *     would be maddening.
  *   - Only while the PHONE is the speaker. When the watch is reading
  *     (DROVE-92), the phone's route says nothing about who can hear.
  *   - Only while something is actually being spoken. A route change between
- *     replies has nothing to leak, so there is nothing to say about it.
+ *     replies has nothing to leak, so there is nothing to pause.
  */
 
 /** What a route means for who can hear. */
@@ -85,11 +91,21 @@ export interface AudioRouteGuardDeps {
     /** Which device the next sentence would go to. */
     speaker: () => Speaker;
     /**
-     * Name the route change. The gate decides what it means, and since
-     * DROVE-189 it means the captures stop and the voice carries on.
+     * Hold the reading at its exact position (DROVE-294). The same pause the
+     * long press, the headphone press and the lock screen use (DROVE-233),
+     * which is what makes a resume from any of those surfaces continue at
+     * the same sentence. The guard has no resume dependency on purpose:
+     * reconnecting must not lift a pause only he holds (DROVE-289).
+     */
+    pause: () => void;
+    /**
+     * Name the route change for the captures. The gate decides what it
+     * means: the captures stop (a latched mic on the built-in microphone was
+     * DROVE-119's one lasting insight) and the voice is not stopped — it is
+     * already paused by the line above.
      */
     interrupt: () => void;
-    /** One line saying where the sound went. */
+    /** One line saying what happened. */
     announce: () => void;
 }
 
@@ -104,7 +120,7 @@ export interface AudioRouteGuardDeps {
 export class AudioRouteGuard {
     private readonly deps: AudioRouteGuardDeps;
     private previous: RouteKind | null = null;
-    /** How many times it has announced a move to the speaker; for the tests. */
+    /** How many times it has paused a reply on a route loss; for the tests. */
     private stopped = 0;
 
     constructor(deps: AudioRouteGuardDeps) {
@@ -142,8 +158,11 @@ export class AudioRouteGuard {
         };
         if (!leaksToTheRoom(change)) return;
         this.stopped += 1;
-        // Read-aloud stays ON (DROVE-189). The interrupt is for the captures;
-        // the toast is for him.
+        // PAUSE, not stop, not carry-on (DROVE-294). Silence first, so the
+        // speaker is quiet before anything else is attended to; the captures
+        // second; the toast, describing a speaker already silent, last.
+        // Read-aloud stays ON — paused is a third state (DROVE-233).
+        this.deps.pause();
         this.deps.interrupt();
         this.deps.announce();
     }

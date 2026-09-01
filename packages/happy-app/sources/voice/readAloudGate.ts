@@ -128,20 +128,21 @@ export const readAloudStopsSpeech = {
     /** A boss-mode call owns the audio route for its duration. */
     'call-started': true,
     /**
-     * DROVE-189 REVERSED DROVE-119, because Clay asked for it in as many
-     * words: read-aloud must not be disabled when headphones are removed.
+     * DROVE-189 REVERSED DROVE-119, and DROVE-294 found the right verb.
      *
      * DROVE-119 turned reading OFF when AirPods came out to the built-in
-     * speaker, on the theory that a private reply should not be played to the
-     * room. The theory was mine to begin with and the cost is his: an AirPod
-     * that drops for a second, a case that opens in a pocket, and the voice is
-     * not paused but SWITCHED OFF, needing a deliberate press to come back.
-     * That fires far more often than the room it was protecting.
+     * speaker: position thrown away, a deliberate press to come back.
+     * DROVE-189 swung to announce-and-carry-on, which put the reply on the
+     * loudspeaker instead. Clay asked for neither, more than once: "When
+     * headphones are disconnected it is supposed to PAUSE the playback."
      *
-     * So the route change is now ANNOUNCED and nothing else: the toast still
-     * says the sound moved to the speaker, and he decides. The captures are
-     * still told, because a latched mic on the built-in microphone is a
-     * different question and DROVE-119's guard was never wrong about that.
+     * So the route guard now PAUSES via DROVE-233's setPaused — position
+     * held, reader ON, amber face, resume his gesture — and this row stays
+     * `false` because pause is the guard's own act, not the gate's: this
+     * table only answers whether the VOICE is stopped and the reading thrown
+     * away, and on an unplug it must not be. The captures are still told,
+     * because a latched mic on the built-in microphone is a different
+     * question and DROVE-119's guard was never wrong about that.
      */
     'headphones-unplugged': false,
     /** A settings preview wants the speaker for a second. */
