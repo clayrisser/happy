@@ -63,6 +63,21 @@ export type DroverUsageAccountLike = {
      * machine that does not report it, which reads as fine.
      */
     onboarded?: boolean | null;
+    /**
+     * THE BACK DOOR (DROVE-333): the ambient login, plus every row sharing it.
+     *
+     * An automatic pick does not land there while anything else can take the
+     * work, and a session already there is not flipped, downgraded or parked
+     * off it — so the only way on or off is by hand, and the `Switch ›` on this
+     * sheet is one of the hands.
+     *
+     * The CLI decides it and stamps it (happy-cli src/drover/flip/accounts.ts
+     * `isBackdoorAccount`), because this payload carries neither `ambient` nor
+     * `login` and cannot work it out. Absent means an older machine that never
+     * asked, which reads as NOT the back door: inventing one out of a missing
+     * field would label somebody's ordinary account.
+     */
+    backdoor?: boolean | null;
     fetchedAt?: number | null;
     /** Percent LEFT on the fullest limit; null when never measured. */
     headroom?: number | null;
@@ -517,6 +532,11 @@ export type DroverOtherAccountRow = {
      * carried separately because the two need different fixes.
      */
     onboarded: boolean;
+    /**
+     * The back door: nothing automatic lands here or moves off it (DROVE-333).
+     * The row stays switchable — a flip BY HAND is the whole point of it.
+     */
+    backdoor: boolean;
     /** The reading is old enough to say so rather than show as current (DROVE-173). */
     stale?: boolean;
     /**
@@ -570,6 +590,10 @@ function toAccountRow(a: DroverUsageAccountLike, capturedAt = Number.NaN): Drove
         // Absent reads as onboarded, which is what an older CLI meant: it did
         // not report the field because nothing had asked the question yet.
         onboarded: a.onboarded !== false,
+        // Absent reads as NOT the back door, which is the opposite default and
+        // the right one: onboarding is a thing an old CLI simply did not
+        // mention, and a back door is a thing it did not have.
+        backdoor: a.backdoor === true,
         ...(droverAccountStale(a, capturedAt) ? { stale: true } : {}),
         ...(droverAccountExpired(a, capturedAt) ? { expired: true } : {}),
         headroom: typeof a.headroom === 'number' && Number.isFinite(a.headroom)
@@ -643,6 +667,10 @@ export function currentDroverAccountRow(
         expiresInDays: null,
         loggedIn: true,
         onboarded: true,
+        // A bare stamp says a name and nothing else, and the back door is a
+        // fact about the REGISTRY. Guessing it from the name is exactly what
+        // isBackdoorAccount refuses to do on both sides (DROVE-333).
+        backdoor: false,
         headroom: null,
         back: null,
         family: null,

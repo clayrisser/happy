@@ -94,6 +94,7 @@ import {
     type DroverUsageLike,
 } from '@/utils/droverUsage';
 import {
+    backdoorAccountLabel,
     cursorAccountTrailing,
     cursorAccountUsable,
     isCursorAccount,
@@ -841,9 +842,26 @@ export function usageAccountBarGroup(
     // old prints LAST window's reset time, which is what read as a wrong
     // clock next to /usage.
     const title = account.stale && base ? `${base} · ${t('agentInput.usagePopup.stale')}` : base;
+    const headline = back && title ? `${title} · ${back}` : title;
+    // THE BACK DOOR, LAST ON THE HEADING (DROVE-333).
+    //
+    // This sheet is where the `Switch ›` lives, so it is the sheet where Clay
+    // decides where a session goes — and until now it was the one account
+    // surface that could NOT say which row the machine leaves alone. Settings ›
+    // Accounts said it from `MachineAccount`; the payload here is session
+    // metadata and carried neither `ambient` nor `login`, so the CLI stamps
+    // `backdoor` on the snapshot instead and this reads it.
+    //
+    // Last, after the headroom, the staleness and the back-at time, because
+    // those are what the bars underneath are about; this says what a TAP would
+    // mean. Same words as the Settings row, from the same constant.
+    //
+    // The block stays switchable. Manual is not a downgrade here, it is the
+    // whole design: the machine will not go through this door, and Clay always
+    // can.
     return {
         key: account.name ? `account:${account.name}` : 'usage',
-        title: back && title ? `${title} · ${back}` : title,
+        title: headline && account.backdoor ? `${headline} · ${backdoorAccountLabel}` : headline,
         active: account.current,
         account: account.name || null,
         // The sheet is the screen where the choice is made, so it is the
@@ -1175,6 +1193,10 @@ export function resolveUsageStrip(input: UsageStripInput): UsageStrip {
             loggedIn: true,
             // The session is running here, so it demonstrably can (DROVE-246).
             onboarded: true,
+            // The registry does not know this account, so it cannot be the
+            // ambient row or a twin of it — and there is no snapshot to have
+            // been stamped either way (DROVE-333).
+            backdoor: false,
             headroom: null,
             back: null,
             family: null,

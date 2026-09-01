@@ -249,6 +249,26 @@ export function collectDroverAccountsFromSessions(
     return [...found].sort();
 }
 
+/* ------------------------------------------------------------------------- *
+ * THE BACK DOOR (DROVE-333).
+ *
+ * Clay: "reserve the main account to be like a back door account: when you're
+ * in the main account you don't do any magic flipping / auto flipping. When I
+ * get stuck I'll switch to the main account and from there manually log into
+ * the terminal."
+ *
+ * TWO SURFACES, ONE STRING. Settings › Accounts labels its rows from
+ * `MachineAccount`, which carries `ambient` and `login`; the composer quota
+ * sheet — the surface the `Switch ›` button actually lives on — labels its
+ * headings from the session's usage snapshot, which now carries a `backdoor`
+ * flag the CLI stamps (happy-cli src/drover/flip/usage.ts). Different payloads,
+ * different derivations, and the same words, because two spellings of one fact
+ * on two screens is how Clay would come to think they were two facts.
+ * ------------------------------------------------------------------------- */
+
+/** What both account surfaces call the back door, verbatim. */
+export const backdoorAccountLabel = 'backdoor · manual flips only';
+
 /**
  * The chat message that moves a session to another account.
  *

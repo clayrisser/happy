@@ -43,6 +43,7 @@
 
 import {
     accountHarness,
+    backdoorAccountLabel,
     cursorAccountLabel,
     cursorAccountUsable,
     cursorRenewLabel,
@@ -780,7 +781,7 @@ export function accountSubtitle(account: MachineAccount, accounts?: MachineAccou
     if (account.login) parts.push(account.login);
     parts.push(accountHeadroomLabel(account));
     if (account.sameLoginAs) parts.push(`same login as ${account.sameLoginAs}`);
-    if (isBackdoorAccount(account, accounts)) parts.push('backdoor · manual flips only');
+    if (isBackdoorAccount(account, accounts)) parts.push(backdoorAccountLabel);
     return parts.join(' · ');
 }
 

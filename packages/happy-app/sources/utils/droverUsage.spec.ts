@@ -145,9 +145,16 @@ describe('droverOtherAccounts', () => {
             // Claude account from a cursor one, and those want opposite
             // treatment — the first may be flipped to and will have a figure
             // later, the second may not and never will.
-            { name: 'main', harness: 'claude', tokenState: null, expiresInDays: null, loggedIn: true, onboarded: true, headroom: 0, back: sep3, family: null },
-            { name: 'bitspur.com', harness: 'claude', tokenState: null, expiresInDays: null, loggedIn: true, onboarded: true, headroom: 0, back: sep3, family: 'Fable' },
-            { name: 'spare', harness: 'claude', tokenState: null, expiresInDays: null, loggedIn: false, onboarded: true, headroom: null, back: null, family: null },
+            //
+            // `backdoor` is the CLI's verdict, not this file's (DROVE-333): the
+            // ambient row and everything on its login are the account nothing
+            // automatic lands on or moves off. Absent reads FALSE, the opposite
+            // default from `onboarded` above and the right one — an older CLI
+            // did not fail to mention a back door, it did not have one, and a
+            // missing field must never label somebody's ordinary account.
+            { name: 'main', harness: 'claude', tokenState: null, expiresInDays: null, loggedIn: true, onboarded: true, backdoor: false, headroom: 0, back: sep3, family: null },
+            { name: 'bitspur.com', harness: 'claude', tokenState: null, expiresInDays: null, loggedIn: true, onboarded: true, backdoor: false, headroom: 0, back: sep3, family: 'Fable' },
+            { name: 'spare', harness: 'claude', tokenState: null, expiresInDays: null, loggedIn: false, onboarded: true, backdoor: false, headroom: null, back: null, family: null },
         ]);
     });
 
@@ -158,6 +165,34 @@ describe('droverOtherAccounts', () => {
     it('is empty without a snapshot', () => {
         expect(droverOtherAccounts(null, 'jamrizzi')).toEqual([]);
         expect(droverOtherAccounts({ capturedAt: 1, accounts: [] }, null)).toEqual([]);
+    });
+});
+
+describe('the back door on the wire (DROVE-333)', () => {
+    // The composer quota sheet is where the `Switch ›` button lives, and its
+    // payload is this snapshot — which carries neither `ambient` nor `login`,
+    // so it could not work out which row the machine leaves alone. The CLI
+    // stamps `backdoor` and this reads it; nothing here re-derives the rule.
+    const withBackdoor: DroverUsageLike = {
+        capturedAt: 1_000,
+        accounts: [
+            { name: 'main', current: false, loggedIn: true, backdoor: true, headroom: 43, cooling: null, limits: [] },
+            { name: 'jamrizzi', current: false, loggedIn: true, backdoor: true, headroom: 43, cooling: null, limits: [] },
+            { name: 'alt', current: true, loggedIn: true, headroom: 12, cooling: null, limits: [] },
+        ],
+    };
+
+    it('carries the flag through to the row, twins included', () => {
+        const rows = droverOtherAccounts(withBackdoor, null);
+        expect(rows.map((r) => [r.name, r.backdoor])).toEqual([['main', true], ['jamrizzi', true]]);
+    });
+
+    it('reads a missing flag as NOT the back door', () => {
+        // An older machine never asked the question. Labelling on a gap would
+        // put "manual flips only" on somebody's ordinary account, which is a
+        // worse error than saying nothing.
+        expect(droverAccountsUsage(withBackdoor, null).find((r) => r.name === 'alt')?.backdoor).toBe(false);
+        expect(droverOtherAccounts(usage, null).every((r) => r.backdoor === false)).toBe(true);
     });
 });
 
