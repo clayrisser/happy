@@ -13,7 +13,7 @@ describe('resolveComposerPrimaryPress', () => {
     });
 
     it('a long-press opens the sheet whatever face the button wears', () => {
-        for (const action of ['send', 'stop', 'blocked', 'idle', 'mic'] as const) {
+        for (const action of ['send', 'stop', 'blocked', 'idle'] as const) {
             expect(resolveComposerPrimaryPress({ gesture: 'longPress', action, liveHasContent: true, canPress: true })).toBe('channels');
         }
     });
@@ -42,9 +42,9 @@ describe('resolveComposerPrimaryPress', () => {
      * its own on the row now and calls the mic handler directly, so no gesture
      * on the send button can start a voice turn.
      */
-    it('never starts boss mode: the waveform is not this button any more', () => {
+    it('never starts boss mode, and since DROVE-264 never opens a mic either', () => {
         const dispatches = new Set<string>();
-        for (const action of ['send', 'stop', 'blocked', 'idle', 'mic'] as const) {
+        for (const action of ['send', 'stop', 'blocked', 'idle'] as const) {
             for (const gesture of ['press', 'longPress'] as const) {
                 for (const liveHasContent of [true, false]) {
                     for (const canPress of [true, false]) {
@@ -54,37 +54,27 @@ describe('resolveComposerPrimaryPress', () => {
             }
         }
         expect(dispatches).not.toContain('boss');
-        // `mic` joins in DROVE-236 and boss mode still does not. Dictation
-        // fills THIS composer with THIS message; a call is a session thing and
-        // is on the audio-out button.
-        expect([...dispatches].sort()).toEqual(['abort', 'channels', 'mic', 'none', 'send']);
+        // `mic` joined in DROVE-236 and has left again in DROVE-264: the
+        // microphone is its own button with its own press, so no gesture on
+        // this one touches a capture. Boss mode never came back.
+        expect(dispatches).not.toContain('mic');
+        expect([...dispatches].sort()).toEqual(['abort', 'channels', 'none', 'send']);
     });
 
     /**
-     * DROVE-236. The mic face is checked BEFORE the live text, which is the
-     * only ordering that survives dictation: partials are live content, and a
-     * press mid-sentence must close the mic rather than send what has landed so
-     * far.
+     * DROVE-264, and it is the assertion the split exists for.
+     *
+     * DROVE-236 had to check a `mic` face BEFORE the live text, because a
+     * capture open on THIS button filled the composer with partials and a press
+     * mid-sentence had to close the mic rather than send half a line. Two
+     * controls cannot flip into each other, so the guard is gone and a press
+     * with dictated words in the field sends them. That is Clay's composition:
+     * type a bit, dictate the rest, send.
      */
-    it('a tap on the mic face opens or closes the capture, never sends', () => {
+    it('sends dictated content, because the mic is no longer this button', () => {
         expect(resolveComposerPrimaryPress({
-            gesture: 'press', action: 'mic', liveHasContent: false, canPress: true,
-        })).toBe('mic');
-        expect(resolveComposerPrimaryPress({
-            gesture: 'press', action: 'mic', liveHasContent: true, canPress: true,
-        })).toBe('mic');
-    });
-
-    it('keeps the channel sheet on the long press even while the mic is open', () => {
-        expect(resolveComposerPrimaryPress({
-            gesture: 'longPress', action: 'mic', liveHasContent: true, canPress: true,
-        })).toBe('channels');
-    });
-
-    it('a disabled mic face does nothing', () => {
-        expect(resolveComposerPrimaryPress({
-            gesture: 'press', action: 'mic', liveHasContent: false, canPress: false,
-        })).toBe('none');
+            gesture: 'press', action: 'send', liveHasContent: true, canPress: true,
+        })).toBe('send');
     });
 
     /**

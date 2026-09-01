@@ -787,12 +787,21 @@ export function resolveMobileComposerLineGeometry(): MobileComposerGeometryStyle
  * rim, and a 44pt capsule between two 36pt circles would have been the one
  * object on the row that did not belong to it.
  *
+ * `mic` came BACK in DROVE-264, which un-collapsed it from the primary. It is
+ * the same object as the rest and at the same size, and that is the decision
+ * rather than the default: at rest it draws no circle at all (DROVE-254), so
+ * its ink is about 18pt and a narrower box would hand the model's name back
+ * some of what this ticket costs it. It keeps 36 because the moment the mic is
+ * OPEN it draws a full disc, and a disc narrower than the `+`'s would be a
+ * second size of circle on a row DROVE-214 gave one. The same holds for
+ * `primary`, which draws a disc for Stop and for the gate's lock.
+ *
  * All of them centre their glyph with `alignItems`/`justifyContent`, which is
  * all a glyph in a disc ever needed. The variants remain distinct only so a
  * caller reads which one it is drawing.
  */
 export function resolveMobileComposerActionGeometry(
-    variant: 'icon' | 'primary' | 'add' | 'audio',
+    variant: 'icon' | 'primary' | 'add' | 'audio' | 'mic',
 ): MobileComposerGeometryStyle {
     const inBubble = variant !== 'icon';
     const size = inBubble

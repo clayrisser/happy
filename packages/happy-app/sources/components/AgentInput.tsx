@@ -83,10 +83,12 @@ import {
     COMPOSER_IN_FIELD_DISC,
     COMPOSER_IN_FIELD_DISC_OPEN,
     composerControlPalette,
+    composerFillTint,
     composerGlyphColour,
     composerPausedFill,
     composerPausedTint,
-    composerPrimarySurface,
+    composerMicSurface,
+    composerSendSurface,
     micColour,
     primaryActionColour,
 } from './composerControlColour';
@@ -273,6 +275,7 @@ const MOBILE_ICON_ACTION_GEOMETRY = resolveMobileComposerActionGeometry('icon');
 const MOBILE_PRIMARY_ACTION_GEOMETRY = resolveMobileComposerActionGeometry('primary');
 const MOBILE_ADD_ACTION_GEOMETRY = resolveMobileComposerActionGeometry('add');
 const MOBILE_AUDIO_ACTION_GEOMETRY = resolveMobileComposerActionGeometry('audio');
+const MOBILE_MIC_ACTION_GEOMETRY = resolveMobileComposerActionGeometry('mic');
 
 // Shared with the action-area offset reported to onActionAreaOffsetChange —
 // the Shaker's layout.y is relative to innerContainer, which sits this far
@@ -536,6 +539,7 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
      * other half of it is the primary button now.
      */
     mobileAudioButton: MOBILE_AUDIO_ACTION_GEOMETRY,
+    mobileMicButton: MOBILE_MIC_ACTION_GEOMETRY,
     // Stream-talk on: the surface carries it, not just the glyph, which is
     // what a blue icon on nothing could never say at a glance.
     mobileIconButtonOn: {
@@ -923,6 +927,11 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
      * its own send/mic below and has no talk button, so both of these are false
      * there and its table is exactly what it was.
      */
+    /**
+     * The mic is drawn at all where this surface can dictate: a recogniser and
+     * a wire to it. It no longer decides anything about SEND (DROVE-264); it
+     * decides whether the mic button exists.
+     */
     const canDictateHere = compactMobileComposer && !!props.onTalkTap;
     const primaryAction = resolveAgentInputPrimaryAction({
         hasComposerContent,
@@ -930,28 +939,23 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         isSendDisabled: props.isSendDisabled ?? false,
         showAbortButton: props.showAbortButton ?? false,
         canAbort: !!props.onAbort && !stopRequested,
-        captureOpen: compactMobileComposer && micLive,
-        canDictate: canDictateHere,
     });
     const shouldShowStopButton = primaryAction === 'stop';
     const canSendMessage = primaryAction === 'send';
-    /** The primary button is the microphone right now (DROVE-236). */
-    const primaryIsMic = primaryAction === 'mic';
     /**
-     * WHICH SURFACE THAT BUTTON WEARS (DROVE-254).
+     * WHICH SURFACE EACH OF THE TWO WEARS (DROVE-254, DROVE-264).
      *
-     * Clay: "No circle on this icon unless pressed as mic." The table is in
-     * composerControlColour.ts with the argument for every face, including why
-     * the `+` and send keep their discs while the mic at rest loses one. Read
-     * from the same three flags the glyph below is drawn from, so the fill and
-     * the glyph cannot disagree about which face this is.
+     * Two tables now, because they are two buttons. Clay: "the send button
+     * shouldn't have a circle around it", and the mic's open-only disc from
+     * DROVE-254 stands. Both are in composerControlColour.ts with the argument;
+     * each is read from the same flags its glyph is drawn from, so a fill and a
+     * glyph cannot disagree about which face this is.
      */
-    const primarySurface = composerPrimarySurface({
+    const sendSurface = composerSendSurface({
         stop: shouldShowStopButton,
         blocked: isSendBlocked,
-        mic: primaryIsMic,
-        micLive,
     });
+    const micSurface = composerMicSurface({ live: micLive });
     /**
      * The in-field send glyph: the accent once there is something to send, the
      * theme's neutral when there is not (DROVE-176). It no longer wears a
@@ -1368,16 +1372,8 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             case 'send':
                 handleSendPress();
                 return;
-            case 'mic':
-                // THE SAME CAPTURE, not a third one (DROVE-210, DROVE-236).
-                // `onTalkTap` is the join the headphone gesture and the
-                // headphone press already land on, so a latch opened on any of
-                // the three is closed by any of the three. It has been on this
-                // component since DROVE-210 with nowhere to be pressed from;
-                // this is the render site.
-                hapticsLight();
-                props.onTalkTap?.();
-                return;
+            // `mic` is gone from this table (DROVE-264). The microphone is its
+            // own button with its own press, `handleMobileMicPress` above.
             case 'none':
                 return;
         }
@@ -1391,6 +1387,19 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         primaryAction,
         props.onTalkTap,
     ]);
+    /**
+     * THE MIC BUTTON'S PRESS (DROVE-264).
+     *
+     * Straight to `onTalkTap` with no table between, because the mic has one
+     * gesture and one meaning: open the latch, close the latch. It is the same
+     * handler the headphone press and the lock screen reach, which is DROVE-210's
+     * one-capture rule and the reason this is a tap rather than a second
+     * recogniser (`resolveComposerPrimaryPress` no longer has a `mic` row).
+     */
+    const handleMobileMicPress = React.useCallback(() => {
+        hapticsLight();
+        props.onTalkTap?.();
+    }, [props.onTalkTap]);
     const handleMobilePrimaryPress = React.useCallback(() => dispatchPrimaryGesture('press'), [dispatchPrimaryGesture]);
     const handleMobilePrimaryLongPress = React.useCallback(() => dispatchPrimaryGesture('longPress'), [dispatchPrimaryGesture]);
 
@@ -2094,30 +2103,23 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 style={[
                     styles.sendButton,
                     styles.mobilePrimaryButton,
-                    // ONE TABLE, FIVE FACES, and it is in
-                    // composerControlColour.ts rather than in this ternary
-                    // (DROVE-214, DROVE-236, DROVE-254).
+                    // THREE FACES NOW, AND TWO OF THEM ARE THE SAME (DROVE-264).
                     //
-                    // Stop is checked first: a blank composer on a
-                    // non-steerable agent is both blocked and abortable, and it
-                    // must not look locked. Send keeps ONE disc whether or not
-                    // there is something to send, because the GLYPH carries
-                    // that state (DROVE-214, DROVE-215). A live mic fills the
-                    // disc with the row's recording red, the same surface the
-                    // talk button wears, so an open mic looks the same wherever
-                    // it was opened from (DROVE-236).
+                    // Clay: "the send button shouldn't have a circle around
+                    // it." So there is no resting fill at all, with something to
+                    // send or without — the GLYPH carries that, and always has
+                    // (DROVE-214, DROVE-215). Stop is checked first, because a
+                    // blank composer on a non-steerable agent is both blocked
+                    // and abortable and must not look locked; the gate's lock
+                    // keeps its surface, because a lock with no surface reads as
+                    // decoration rather than as a button refusing.
                     //
-                    // AND A MIC AT REST WEARS NOTHING (DROVE-254). Clay: "No
-                    // circle on this icon unless pressed as mic." The box is
-                    // untouched, only the fill goes, so the name's budget on
-                    // this row does not move. The glyph clears 10.9:1 on the
-                    // dark bubble and 18.8:1 on the light one bare, measured in
-                    // composerControlColour.spec.ts.
-                    primarySurface === 'stop' ? styles.mobileStopButton
-                        : primarySurface === 'locked' ? styles.sendButtonLocked
-                            : primarySurface === 'recording' ? styles.talkButtonHeld
-                                : primarySurface === 'disc' ? styles.mobileInFieldDisc
-                                    : undefined,
+                    // The mic is not one of these faces any more. It is its own
+                    // button, immediately to the left. `composerSendSurface`
+                    // holds the table and the argument.
+                    sendSurface === 'stop' ? styles.mobileStopButton
+                        : sendSurface === 'locked' ? styles.sendButtonLocked
+                            : undefined,
                 ]}
             >
                 <BubblePressable
@@ -2128,7 +2130,9 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         justifyContent: 'center',
                         opacity: p.pressed ? 0.7 : 1,
                     })}
-                    // 36 drawn plus 6 a side is a 48pt target, above the floor.
+                    // 36 reserved plus 6 a side is a 48pt target, above the
+                    // floor, and it is a target rather than a drawn circle for
+                    // every face but Stop and the lock.
                     hitSlop={MOBILE_COMPOSER_METRICS.primaryActionSlop}
                     onPress={handleMobilePrimaryPress}
                     // Long-press: the channel sheet (DROVE-83).
@@ -2138,11 +2142,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     // It is a send button (DROVE-206). Stop is the one face
                     // that is genuinely another action, and it only appears on
                     // an empty composer while the agent is working.
-                    accessibilityLabel={shouldShowStopButton
-                        ? 'Stop'
-                        : primaryIsMic
-                            ? t(micLive ? 'agentInput.audioOut.micStop' : 'agentInput.audioOut.micStart')
-                            : 'Send'}
+                    accessibilityLabel={shouldShowStopButton ? 'Stop' : 'Send'}
                     accessibilityState={{ disabled: !canPressSendButton }}
                 >
                     {isAborting ? (
@@ -2162,21 +2162,6 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                             size={14}
                             color={theme.colors.textSecondary}
                         />
-                    ) : primaryIsMic ? (
-                        // A MICROPHONE, AND NEVER A PLANE (DROVE-236). This is
-                        // the whole of what DROVE-206 bought and it is not
-                        // being spent: the paper plane means a press sends, so
-                        // it is drawn when and only when the action is send.
-                        // A mic on the disc says a press opens or closes the
-                        // mic, and it says so at every length of text, because
-                        // `captureOpen` outranks the composer's contents.
-                        <Ionicons
-                            name="mic"
-                            size={18}
-                            color={micLive
-                                ? '#FFFFFF'
-                                : micColour(composerPalette, 'idle')}
-                        />
                     ) : (
                         // A FLAT ARROWHEAD, not a tilted plane (DROVE-236).
                         // Clay, with a reference crop: "Shouldn't send look
@@ -2188,7 +2173,10 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         // DROVE-214's argument survives the swap: an up-arrow
                         // is what a chat field submits with when it has no send
                         // button, a send button carries a send glyph, and this
-                        // is one.
+                        // is one. It is now the only thing this slot ever
+                        // draws apart from Stop and the lock (DROVE-264), which
+                        // is what makes "a paper plane means a press sends" a
+                        // property of the tree rather than of an ordering.
                         //
                         // Sized by ink rather than by the number it replaces,
                         // and by the LONGEST ink span rather than the x one.
@@ -2224,6 +2212,75 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             </View>
         </Shaker>
     );
+
+    /**
+     * THE MICROPHONE, ITS OWN BUTTON AGAIN, IMMEDIATELY LEFT OF SEND
+     * (DROVE-264, reversing DROVE-236's collapse).
+     *
+     * Clay: "I don't think we should combine the send and the microphone button
+     * because I might wanna type some stuff and then hit the microphone and
+     * then say some stuff." A single morphing slot cannot draw that: reaching
+     * the mic means the send affordance has to go. Both are here at once now,
+     * both independently tappable, at every length of text and at every moment
+     * of a capture.
+     *
+     * ONE CAPTURE, STILL (DROVE-210). It presses `onTalkTap`, the same handler
+     * the headphone gesture and the lock screen reach, so a latch opened
+     * anywhere is closed anywhere. This is not a second recogniser; it is the
+     * render site DROVE-236 gave the primary button and DROVE-264 gives back to
+     * a control of its own.
+     *
+     * NO CIRCLE UNLESS OPEN, which is DROVE-254's rule and Clay's standing
+     * instruction. At rest it is a bare white glyph on the bubble, 10.862:1 on
+     * dark and 18.819:1 on light, measured in composerControlColour.spec.ts.
+     * Held or latched it fills with the row's recording red and the glyph goes
+     * white on it, the same surface the row's talk button wears, so an open mic
+     * looks the same wherever it was opened from.
+     *
+     * NO LONG PRESS. The channel sheet is the primary's second gesture and
+     * push-to-talk is not coming back here: DROVE-236 named losing hold-to-talk
+     * as the cost of the collapse, and the split does not automatically pay it
+     * back, because a second gesture on this button is a decision rather than a
+     * refactor. Tap to open the latch, tap to close it.
+     */
+    const mobileMicAction = canDictateHere ? (
+        <View
+            style={[
+                styles.mobileMicButton,
+                micSurface === 'recording' ? styles.talkButtonHeld : undefined,
+            ]}
+        >
+            <BubblePressable
+                style={(p) => ({
+                    width: '100%',
+                    height: '100%',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    opacity: p.pressed ? 0.7 : 1,
+                })}
+                // 36 reserved plus 6 a side, the same bargain every control on
+                // this row strikes.
+                hitSlop={MOBILE_COMPOSER_METRICS.primaryActionSlop}
+                onPress={handleMobileMicPress}
+                accessibilityRole="button"
+                accessibilityState={{ selected: micLive }}
+                accessibilityLabel={t(micLive
+                    ? 'agentInput.audioOut.micStop'
+                    : 'agentInput.audioOut.micStart')}
+            >
+                <Ionicons
+                    name="mic"
+                    size={18}
+                    // White on the red disc while it is open, the row's
+                    // foreground while it is not. `micColour` is the one way to
+                    // either, so the glyph and the fill read the same state.
+                    color={micLive
+                        ? composerFillTint(composerControlPalette(theme.dark).recording)
+                        : micColour(composerPalette, 'idle')}
+                />
+            </BubblePressable>
+        </View>
+    ) : null;
 
     /**
      * MODE, EFFORT AND MODEL, INSIDE THE BUBBLE (DROVE-236).
@@ -2888,6 +2945,16 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                             <View style={styles.mobileBubbleActionSpacer} />
                             {mobileAudioAction}
                             {mobileAudioAction
+                                ? <View style={styles.mobileBubbleGap} />
+                                : null}
+                            {/* THE MIC, ITS OWN CONTROL AGAIN (DROVE-264). It
+                                sits between the audio button and send because
+                                the pair it belongs to is voice-in and send: one
+                                puts words in the field, the next sends them,
+                                and Clay's composition runs left to right across
+                                exactly those two. */}
+                            {mobileMicAction}
+                            {mobileMicAction
                                 ? <View style={styles.mobileBubbleGap} />
                                 : null}
                             {mobilePrimaryAction}

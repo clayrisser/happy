@@ -81,11 +81,11 @@
  *
  * AND SINCE DROVE-254 THERE IS A SECOND AXIS: the SURFACE behind the glyph.
  * It says the same thing colour does and it says it for the same reason. A
- * control wears a fill when it is an object you press, and the primary button
- * gains a fill when its mic is actually open and has none when it is not. No
- * hue is spent on that; the fill it gains is the recording red the glyph
- * already wore. The rule below is about glyphs, the rule on
- * `composerPrimarySurface` is about fills, and they agree.
+ * control wears a fill when it is an object you press, and the MIC gains a
+ * fill when it is actually open and has none when it is not. No hue is spent
+ * on that; the fill it gains is the recording red the glyph already wore. The
+ * rule below is about glyphs, the rules on `composerSendSurface` and
+ * `composerMicSurface` are about fills, and they agree.
  *
  * WHAT KEPT COLOUR, and none of it is a mode value:
  *   - the mic and the waveform while a mic is open (recording).
@@ -103,8 +103,9 @@
  * from the app doing something, it is simply always available, and a colour
  * that is always on carries nothing. The send button at the other rim keeps
  * the accent, because "there is something to send" is a live state, and that
- * contrast is what the accent buys. An empty composer is two foreground
- * glyphs on two identical discs.
+ * contrast is what the accent buys. Since DROVE-264 send has no disc under it
+ * either, so an empty composer is a white `+` on a disc at one rim and two
+ * bare white glyphs at the other.
  *
  * An open picker still marks its current choice the way a picker does, the
  * effort popover's `Auto` or a checkmark in a native menu, because that is
@@ -168,8 +169,35 @@ export const COMPOSER_CONTROL_PALETTE: { dark: ComposerControlPalette; light: Co
         // theme.colors.text on the dark theme. Literal white, which is what
         // Clay asked for and what the mic and speaker were already drawn in.
         foreground: '#FFFFFF',
-        // iOS system blue, dark variant: the theme's radio.active.
-        accent: '#0A84FF',
+        // THE SYSTEM BLUE, LIFTED 11 POINTS OF GREEN (DROVE-264).
+        //
+        // It was `#0A84FF` exactly, iOS system blue's dark variant and the
+        // theme's `radio.active`, and it was measured against the DISC send
+        // used to wear: 4.042:1 on `COMPOSER_IN_FIELD_DISC`. DROVE-264 takes
+        // that disc away on Clay's "the send button shouldn't have a circle
+        // around it", so the accent is now read straight off the bubble, and on
+        // the bubble the system blue measures 2.978:1. That is under the floor
+        // this file refuses to let a colour in below, by 0.022, which nothing
+        // would have noticed on a phone and a spec does.
+        //
+        // THE VALUE IS PINNED BETWEEN TWO OPPOSITE REQUIREMENTS, which is why
+        // it is this precise and why it is worth a paragraph. The accent has
+        // two jobs: it is a GLYPH on the bubble (send with something to send)
+        // and it is a FILL under a white glyph (read-aloud reading, DROVE-118).
+        // Lighter clears the bubble and strands the white; darker carries the
+        // white and vanishes into the bubble. `#0A8FFF` is the point that
+        // maximises the smaller of the two: 3.303:1 on the bubble and 3.288:1
+        // for white on it. Anything much either side fails one of them.
+        //
+        // 0.3 OF MARGIN IS THIN AND IS SAID SO RATHER THAN HIDDEN. If either
+        // number ever has to move again, the fix is not a third nudge: it is to
+        // stop making one value do both jobs, the way this palette already
+        // splits the accent by THEME, and split it by ROLE as well. That is a
+        // decision with an argument to write, not a hex to retune.
+        //
+        // It is still the theme's blue: 0.025 away by `colorDistance`, against
+        // the 0.12 the spec allows before the row would have two blues.
+        accent: '#0A8FFF',
         // DROVE-142's banner red, unchanged: on the dark glass it clears 4:1.
         recording: '#FF3B30',
         // iOS system orange, dark variant. Drawn by nothing until DROVE-217.
@@ -288,8 +316,11 @@ export const COMPOSER_FALLBACK_SURFACE = { dark: '#1E1E1E', light: '#F8F8F8' } a
  * step DOWN from the glass on each and neither theme is the exception.
  *
  * The fill no longer carries send's state; the GLYPH does, which is the rule
- * this file already runs on. An empty composer is two identical circles, and
- * the accent appears at one rim when there is something to send.
+ * this file already runs on, and DROVE-264 has since taken send's circle away
+ * altogether. So this value has two members rather than three: the `+` and the
+ * audio button. The rule it was written for is untouched — one circle, one
+ * value — and the accent still appears at the trailing rim when there is
+ * something to send, now on a bare glyph.
  */
 export const COMPOSER_IN_FIELD_DISC = { dark: '#282828', light: '#D1D1D6' } as const;
 
@@ -411,60 +442,106 @@ export function composerSessionCapsuleFill(dark: boolean): string {
  */
 
 /**
- * WHICH SURFACE THE PRIMARY BUTTON WEARS, at every face it has (DROVE-254).
+ * SEND AND THE MIC ARE TWO CONTROLS AGAIN, AND NEITHER WEARS A CIRCLE AT REST
+ * (DROVE-264, reversing half of DROVE-254 and half of DROVE-236).
  *
- * Clay, on the trailing button: "No circle on this icon unless pressed as
- * mic." DROVE-236 collapsed send and the mic into one control, so that button
- * has five faces and the instruction names two of them. The rest are decided
- * here rather than left to a ternary at the call site.
+ * Clay, two messages: "I don't think we should combine the send and the
+ * microphone button because I might wanna type some stuff and then hit the
+ * microphone and then say some stuff", and "the send button shouldn't have a
+ * circle around it".
  *
- *   stop      its own surface. Stop is another ACTION, not another state of
- *             send, and DROVE-214 already ruled it out of the shared disc.
- *   blocked   the locked surface. A lock with no surface reads as decoration
- *             rather than as a button refusing.
- *   mic live  the recording disc, which is the whole of "unless pressed as
- *             mic": held or latched (DROVE-210), the same red fill the row's
- *             talk button wears, so an open mic looks the same wherever it was
- *             opened from. No new hue: `recording` is DROVE-142's banner red,
- *             already in the palette, already worn by the glyph.
- *   mic rest  NOTHING. A bare glyph on the bubble.
- *   send      the disc, at every length of text, and `idle` with it, because
- *             `idle` draws the send arrowhead disabled and is a send face.
+ * WHY THE COLLAPSE WAS WRONG, in his words rather than in a principle. DROVE-236
+ * folded send and the mic into one slot on the argument that they are one job:
+ * put words in, send them out. That is true of the JOB and false of the
+ * SEQUENCE. A single morphing button assumes typing and dictating are
+ * ALTERNATIVES, so reaching the mic requires the send affordance to disappear
+ * and the other way round. Clay's composition is type a bit, dictate the rest,
+ * then send, which needs both controls on the screen at the same moment. One
+ * slot cannot hold that however cleverly its faces are ordered.
  *
- * WHY THE `+` AND SEND KEEP THEIR DISCS WHILE THE MIC AT REST DOES NOT, which
- * is the part that needs an argument rather than an instruction. A disc is
- * what makes a control look pressable, so taking one away costs something and
- * has to buy something. What it buys is the one property this button has that
- * neither of the other two does: it is the only control on the row that
- * CHANGES WHAT IT IS. The `+` is always the `+`; send is always send. This
- * slot is send or the mic, which is exactly what DROVE-236 collapsed it for,
- * and a bare glyph at rest against a filled disc when live gives that slot a
- * visible off and on it did not have. It is the surface saying "this is
- * happening now", which is DROVE-215's rule on the axis this ticket is about.
- * Send's disc stays because send has no ON state to spend one on: "there is
- * something to send" is carried by the glyph's accent and always has been.
+ * WHAT THE SPLIT GIVES BACK FOR FREE, and it is the trap DROVE-236 wrote the
+ * longest comment about. That ticket had to check `captureOpen` FIRST and let it
+ * outrank the composer's contents, because dictation partials land in the field
+ * within a word and the button would otherwise flip to Send under his thumb
+ * mid-sentence. Two controls cannot flip into each other, so the rule has no
+ * subject any more: the mic is always the mic and send is always send, at every
+ * length of text and at every moment of a capture. The guarantee DROVE-206
+ * bought — "a paper plane means a press sends" — is now structural rather than
+ * defended by an ordering.
  *
- * THE BOX DOES NOT MOVE. Only the fill goes; the button is the same 36pt
- * reservation at every face, so the model's name keeps the 82pt it has at 320
- * (`sessionPillLabel.ts`, `discs: 3`). A cosmetic change must not quietly cost
- * the name.
+ * ## The two tables
+ *
+ * SEND. `stop` and `locked` are send unable to proceed and keep their own
+ * surfaces, exactly as DROVE-254 left them: Stop is another ACTION, and a lock
+ * with no surface reads as decoration rather than as a button refusing.
+ * Everything else is NOTHING — a bare glyph on the bubble, at every length of
+ * text, which is the second message.
+ *
+ * That is the row becoming consistent rather than gaining an exception. The
+ * mic at rest was already bare (DROVE-254), so a bare send makes the trailing
+ * pair one vocabulary instead of a circle beside a glyph. The measurement was
+ * already taken when the mic lost its own disc: a foreground glyph on the
+ * bubble is 10.862:1 on dark and 18.819:1 on light, both miles over the 3:1
+ * floor, which is why the circle was spendable at all.
+ *
+ * DROVE-254's argument for KEEPING send's disc was that "send has no ON state
+ * to spend one on". That is still true and it is no longer the question. The
+ * disc was never bought by send's states; it was inherited from the `+` at the
+ * other rim (DROVE-214, "one circle, so one value"). Clay has now looked at the
+ * pair and asked for the glyph. What survives of DROVE-214 is the RULE — one
+ * circle, one value — and it survives with two members instead of three: the
+ * `+` and the audio button are discs, the two voice-and-send glyphs are not.
+ *
+ * THE MIC. Unchanged from DROVE-254 and re-argued now that it sits beside a
+ * PERMANENT send rather than replacing it. Nothing at rest, the recording disc
+ * the moment it is open, held or latched (DROVE-210).
+ *
+ * It reads BETTER next to a permanent send, not worse, and the reason is what
+ * the disc was doing in the first place. DROVE-254 spent the mic's circle to
+ * give one slot "a visible off and on", because that slot changed what it WAS.
+ * The slot does not change any more, so the disc has stopped paying for
+ * identity and pays only for state: the one control on the row that can be
+ * OPEN is the one control that grows a surface when it is. That is DROVE-215's
+ * rule on the fill axis, and it is now the only thing the fill says.
+ *
+ * The pair also cannot be confused while the mic is live, which is the thing to
+ * check when two glyphs sit together with no circles: an open mic is a filled
+ * red disc beside a bare white arrowhead, which differ in surface, in colour
+ * and in shape at once.
+ *
+ * NO NEW HUE AND NO NEW GREY. Every surface below is one the row already had.
+ *
+ * WHAT THIS COSTS THE ROW, because a second permanent control is not free and
+ * the ticket asks for it in writing. One 36pt object and one 6pt gap, which is
+ * 42pt off the model name's budget at every width. The table, the widths that
+ * still hold and the width that does not are in `sessionPillLabel.ts`.
  */
-export type ComposerPrimarySurface = 'stop' | 'locked' | 'recording' | 'disc' | 'none';
+export type ComposerSendSurface = 'stop' | 'locked' | 'none';
 
-export function composerPrimarySurface(state: {
+/**
+ * Send's surface. Stop first, for DROVE-254's reason: a blank composer on a
+ * non-steerable agent is both blocked and abortable, and it must not look
+ * locked.
+ */
+export function composerSendSurface(state: {
     /** The agent is working on an empty composer, so the button is Stop. */
     stop: boolean;
     /** The gate refuses this send. */
     blocked: boolean;
-    /** The button is the microphone right now rather than send. */
-    mic: boolean;
-    /** And that microphone is OPEN: held or latched (DROVE-210). */
-    micLive: boolean;
-}): ComposerPrimarySurface {
+}): ComposerSendSurface {
     if (state.stop) return 'stop';
     if (state.blocked) return 'locked';
-    if (!state.mic) return 'disc';
-    return state.micLive ? 'recording' : 'none';
+    return 'none';
+}
+
+export type ComposerMicSurface = 'recording' | 'none';
+
+/** The mic's surface: nothing, until the mic is actually open (DROVE-210). */
+export function composerMicSurface(state: {
+    /** Held or latched right now. */
+    live: boolean;
+}): ComposerMicSurface {
+    return state.live ? 'recording' : 'none';
 }
 
 /**
@@ -688,10 +765,9 @@ export function composerGaugeContrast(
  * nothing a spec can hold. Every fill on this row is an opaque hex for that
  * reason, this one included, and `colorAlpha` is asserted rather than assumed.
  *
- * IT IS NOT A FACE ON `composerPrimarySurface`. That table is the PRIMARY
- * button's five faces — stop, locked, the mic open, the mic at rest, send —
- * and read-aloud is not one of them; the two controls sit side by side and are
- * different buttons. The audio-out button has its own table and has since
+ * IT IS NOT A FACE ON SEND'S OR THE MIC'S TABLE. Those are
+ * `composerSendSurface` and `composerMicSurface`, and read-aloud is neither;
+ * the three controls sit side by side and are different buttons. The audio-out button has its own table and has since
  * DROVE-236: `audioOutButton`'s `fill` in composerAudioOut.ts, which is where
  * this face is added rather than at a call site.
  *

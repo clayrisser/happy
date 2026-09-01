@@ -34,7 +34,8 @@ import {
     composerGlyphColour,
     composerPausedFill,
     composerPausedTint,
-    composerPrimarySurface,
+    composerMicSurface,
+    composerSendSurface,
     composerSessionCapsuleFill,
     pendingOrSettled,
     composerGlyphLayers,
@@ -638,33 +639,50 @@ describe.each(themes)('the session capsule on the $name theme', ({ name, dark })
  * mic." DROVE-236 collapsed send and the mic into one control, so that is an
  * instruction about two of five faces and the table decides the rest.
  */
-describe('the primary button\u2019s surface, face by face', () => {
-    const face = (over: Partial<Parameters<typeof composerPrimarySurface>[0]> = {}) =>
-        composerPrimarySurface({ stop: false, blocked: false, mic: false, micLive: false, ...over });
+describe('send and the mic, two tables since DROVE-264', () => {
+    const send = (over: Partial<Parameters<typeof composerSendSurface>[0]> = {}) =>
+        composerSendSurface({ stop: false, blocked: false, ...over });
+    const mic = (live: boolean) => composerMicSurface({ live });
 
-    it('takes the circle off the mic at rest, which is the instruction', () => {
-        expect(face({ mic: true })).toBe('none');
+    it('takes the circle off SEND, which is the instruction', () => {
+        // Clay: "the send button shouldn't have a circle around it." At every
+        // length of text, because the glyph is what carries "there is something
+        // to send" and always has (DROVE-214, DROVE-215).
+        expect(send()).toBe('none');
     });
 
-    it('puts it back the moment the mic is actually open, held or latched (DROVE-210)', () => {
-        expect(face({ mic: true, micLive: true })).toBe('recording');
+    it('keeps the circle off the mic at rest, which was already the rule', () => {
+        expect(mic(false)).toBe('none');
     });
 
-    it('leaves send its disc, with something to send and without', () => {
-        // Send has no ON state to spend a surface on: "there is something to
-        // send" is what the glyph's accent has always carried (DROVE-214,
-        // DROVE-215). The mic does have one, which is what buys the change.
-        expect(face()).toBe('disc');
+    it('puts the mic’s back the moment it is actually open, held or latched', () => {
+        expect(mic(true)).toBe('recording');
     });
 
-    it('keeps Stop and the gate\u2019s lock on their own surfaces, and ranks them first', () => {
-        // Stop outranks everything: a blank composer on a non-steerable agent
-        // is both blocked and abortable and must not look locked.
-        expect(face({ stop: true, blocked: true, mic: true, micLive: true })).toBe('stop');
-        expect(face({ blocked: true, mic: true, micLive: true })).toBe('locked');
+    it('makes the trailing pair ONE vocabulary rather than a circle beside a glyph', () => {
+        // The row's consistency, stated as an assertion. Before DROVE-264 the
+        // mic at rest was bare and send wore a disc, so two neighbouring
+        // controls in the same state drew differently for no reason a reader
+        // could name.
+        expect(send()).toBe(mic(false));
     });
 
-    it('spends no new colour: the only fill it gains is the recording red the glyph already wore', () => {
+    it('keeps Stop and the gate’s lock on their own surfaces, and ranks them first', () => {
+        // Stop outranks the gate: a blank composer on a non-steerable agent is
+        // both blocked and abortable and must not look locked.
+        expect(send({ stop: true, blocked: true })).toBe('stop');
+        expect(send({ blocked: true })).toBe('locked');
+    });
+
+    it('leaves the mic’s surface deaf to everything but the capture', () => {
+        // The other half of the split. The mic used to share a table with send,
+        // so Stop and the gate could take its slot; they cannot reach it now,
+        // which is what makes "hit the microphone" work mid-turn and mid-block.
+        expect(mic(true)).toBe('recording');
+        expect(mic(false)).toBe('none');
+    });
+
+    it('spends no new colour: the only fill either gains is the recording red', () => {
         // DROVE-215's rule on the surface axis. A disc that appears only while
         // the mic is open is a state change, which is exactly what earns one,
         // and the fill it takes is DROVE-142's banner red rather than a second
@@ -679,18 +697,73 @@ describe('the primary button\u2019s surface, face by face', () => {
 });
 
 /**
- * AND THE BARE MIC GLYPH HAS TO CARRY ITSELF (DROVE-254).
+ * AND BOTH BARE GLYPHS HAVE TO CARRY THEMSELVES (DROVE-254, DROVE-264).
  *
- * Taking the disc away takes the anchor DROVE-214 measured with it, so the
- * glyph is now read straight off the bubble's material. Measured rather than
- * assumed: a glyph that was fine on a #282828 disc is not automatically fine
- * on a #3D3D3D bubble.
+ * Taking a disc away takes the anchor DROVE-214 measured with it, so the glyph
+ * is read straight off the bubble's material. Measured rather than assumed: a
+ * glyph that was fine on a #282828 disc is not automatically fine on a #3D3D3D
+ * bubble. DROVE-254 took this measurement for the mic; DROVE-264 spends the
+ * same number on send, which is why its circle could go without a second look.
  */
-describe.each(themes)('the mic\u2019s glyph with no disc under it, on the $name theme', ({ dark }) => {
-    it('clears the 3:1 floor on the bubble it is drawn straight onto', () => {
-        const bubble = parseColor(dark ? COMPOSER_BUBBLE_MATERIAL.dark : COMPOSER_BUBBLE_MATERIAL.light);
+describe.each(themes)('the bare glyphs with no disc under them, on the $name theme', ({ dark }) => {
+    const bubble = () => parseColor(dark ? COMPOSER_BUBBLE_MATERIAL.dark : COMPOSER_BUBBLE_MATERIAL.light);
+
+    it('clears the 3:1 floor on the bubble they are drawn straight onto', () => {
+        for (const glyph of [
+            micColour(composerControlPalette(dark), 'idle'),
+            // Send with nothing to send is the foreground, same as the mic.
+            primaryActionColour(composerControlPalette(dark), false),
+        ]) {
+            expect(contrastRatio(parseColor(glyph), bubble()))
+                .toBeGreaterThanOrEqual(CHROME_CONTRAST_FLOOR);
+        }
+    });
+
+    it('measures 10.862:1 on dark and 18.819:1 on light, which is the number the circle cost', () => {
+        // The figure DROVE-254 took for the mic and DROVE-264 spends again for
+        // send. Written down rather than derived at the call site, because it
+        // is the whole argument for a bare glyph.
         const glyph = parseColor(micColour(composerControlPalette(dark), 'idle'));
-        expect(contrastRatio(glyph, bubble)).toBeGreaterThanOrEqual(CHROME_CONTRAST_FLOOR);
+        expect(contrastRatio(glyph, bubble())).toBeCloseTo(dark ? 10.862 : 18.819, 3);
+    });
+
+    it('keeps send’s ACCENT legible bare, which the disc used to sit under', () => {
+        // The one case where the disc WAS doing work, and the reason this
+        // ticket is not a pure subtraction. The accent is not the foreground,
+        // so it does not inherit the foreground's headroom, and it has to clear
+        // the floor on the bubble by itself.
+        const accent = parseColor(primaryActionColour(composerControlPalette(dark), true));
+        expect(contrastRatio(accent, bubble())).toBeGreaterThanOrEqual(CHROME_CONTRAST_FLOOR);
+    });
+
+    it('fails the spec for the system blue the accent used to be exactly', () => {
+        // THE VALUE THAT WOULD HAVE SHIPPED, FAILING, which is what stops this
+        // coming back. `#0A84FF` is iOS system blue's dark variant and it was
+        // right while send wore a #282828 disc, where it measures 4.042:1.
+        // Bare on the bubble it is 2.978:1, under the floor, and it is exactly
+        // the sort of miss that survives a screenshot.
+        if (!dark) return;
+        expect(contrastRatio(parseColor('#0A84FF'), bubble())).toBeCloseTo(2.978, 3);
+        expect(contrastRatio(parseColor('#0A84FF'), bubble())).toBeLessThan(CHROME_CONTRAST_FLOOR);
+        expect(contrastRatio(parseColor('#0A84FF'), parseColor(COMPOSER_IN_FIELD_DISC.dark)))
+            .toBeGreaterThanOrEqual(CHROME_CONTRAST_FLOOR);
+    });
+
+    it('holds the accent between its two opposite floors, and says how much room is left', () => {
+        // The accent is a glyph on the bubble AND a fill under a white glyph
+        // (DROVE-118, DROVE-258). Those pull opposite ways, so the pair is
+        // asserted together: a change that helps one and breaks the other fails
+        // here rather than on a phone.
+        const accent = composerControlPalette(dark).accent;
+        const onBubble = contrastRatio(parseColor(accent), bubble());
+        const whiteOnIt = contrastRatio(parseColor('#FFFFFF'), parseColor(accent));
+        expect(onBubble).toBeGreaterThanOrEqual(CHROME_CONTRAST_FLOOR);
+        expect(whiteOnIt).toBeGreaterThanOrEqual(CHROME_CONTRAST_FLOOR);
+        expect(composerFillTint(accent)).toBe('#FFFFFF');
+        if (dark) {
+            expect(onBubble).toBeCloseTo(3.303, 3);
+            expect(whiteOnIt).toBeCloseTo(3.288, 3);
+        }
     });
 
     it('loses contrast against the disc it used to sit on, and still has room to spare', () => {
@@ -698,11 +771,21 @@ describe.each(themes)('the mic\u2019s glyph with no disc under it, on the $name 
         // from the bubble, so a white glyph on it was further off than a white
         // glyph on the bubble. Both are miles over the floor, which is why the
         // circle was spendable at all.
-        const bubble = parseColor(dark ? COMPOSER_BUBBLE_MATERIAL.dark : COMPOSER_BUBBLE_MATERIAL.light);
         const disc = parseColor(dark ? COMPOSER_IN_FIELD_DISC.dark : COMPOSER_IN_FIELD_DISC.light);
         const glyph = parseColor(micColour(composerControlPalette(dark), 'idle'));
-        expect(contrastRatio(glyph, bubble)).toBeGreaterThan(CHROME_CONTRAST_FLOOR * 3);
+        expect(contrastRatio(glyph, bubble())).toBeGreaterThan(CHROME_CONTRAST_FLOOR * 3);
         expect(contrastRatio(glyph, disc)).toBeGreaterThan(CHROME_CONTRAST_FLOOR * 3);
+    });
+
+    it('still reads the two apart while the mic is OPEN, which is when they sit closest', () => {
+        // Two bare glyphs side by side is fine while both are at rest, because
+        // they are different shapes. The state to check is the one where they
+        // are NOT symmetric: a filled red disc beside a bare arrowhead. They
+        // differ in surface, in shape and in the glyph's own colour at once.
+        const recordingFill = parseColor(composerControlPalette(dark).recording);
+        expect(contrastRatio(recordingFill, bubble()))
+            .toBeGreaterThanOrEqual(COMPOSER_DISC_SEPARATION_FLOOR);
+        expect(composerFillTint(composerControlPalette(dark).recording)).toBe('#FFFFFF');
     });
 });
 
