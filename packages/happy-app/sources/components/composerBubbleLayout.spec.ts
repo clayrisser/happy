@@ -290,17 +290,19 @@ describe('the composer bubble, resolved rather than restated', () => {
         expect(MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE).toBe(39);
         // A SEGMENT IS NOT A DISC ANY MORE (DROVE-284). It is the capsule's
         // height tall and its own width wide, and the difference is what buys
-        // the single row back with a fourth control in the capsule. 28 since
-        // the air refinement: Clay ruled DROVE-284's ink-tight 26 crowded, and
-        // the 12pt name pays for the two points — the derivation is asserted
-        // in sessionPillLabel.spec.ts.
+        // the single row back with a fourth control in the capsule. 27 since
+        // DROVE-320: Clay ruled DROVE-284's ink-tight 26 crowded and was given
+        // two points, then asked for the model text back bigger, which is what
+        // had paid for them — so one point returns to the type and one stays
+        // as air. The derivation is asserted in sessionPillLabel.spec.ts and
+        // still RETURNS this number rather than being handed it.
         expect(COMPOSER_BUBBLE_ROW_GEOMETRY.segment).toBe(MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH);
-        expect(MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH).toBe(28);
-        // 3 discs, 3 gaps, 4 glyph segments, 3 hairlines counted whole. 250,
-        // which is 49 back on DROVE-281's 299 and 10 back on DROVE-266's 260 —
+        expect(MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH).toBe(27);
+        // 3 discs, 3 gaps, 4 glyph segments, 3 hairlines counted whole. 246,
+        // which is 53 back on DROVE-281's 299 and 14 back on DROVE-266's 260 —
         // with one more control in the capsule than either of them had.
-        expect(composerRowFixedWidth()).toBe(250);
-        expect(299 - composerRowFixedWidth()).toBe(49);
+        expect(composerRowFixedWidth()).toBe(246);
+        expect(299 - composerRowFixedWidth()).toBe(53);
         // And the capsule the row DRAWS agrees with the budget that counts it.
         // Five segments, THREE hairlines, which is the permission pair touching.
         const capsuleParts = ['modeSegment', 'autoAcceptSegment', 'readAloudSegment',
@@ -336,8 +338,10 @@ describe('the composer bubble, resolved rather than restated', () => {
      * it reaches zero the row is full.
      */
     it('fits the row on every supported phone, and says what the name has left', () => {
-        expect(phones.map(composerModelBudget)).toEqual([32, 87, 105]);
-        expect([430, 440].map(composerModelBudget)).toEqual([142, 152]);
+        // Four wider at every width since DROVE-320: one point off each of the
+        // four glyph segments, handed to the name so it can draw at 13pt.
+        expect(phones.map(composerModelBudget)).toEqual([36, 91, 109]);
+        expect([430, 440].map(composerModelBudget)).toEqual([146, 156]);
         for (const phone of [375, 390, 393, 430, 440]) {
             const frames = layout(22, {}, widthOf(phone));
             const row = findFrame(frames, 'actionRow');
@@ -367,13 +371,15 @@ describe('the composer bubble, resolved rather than restated', () => {
                 expect(composerModelFits(name, phone), `${name} at ${phone}`).toBe(true);
             }
         }
-        // The names that DO need the scale, and where. 375 and 390 are the
-        // two supported widths where anything scales after the air refinement
-        // — 390's 0.989 on the three 14-glyph names is the refinement's one
-        // named softening, asserted in sessionPillLabel.spec.ts.
-        expect(composerModelScaleFor('Gemini 3.1 Pro', 375)).toBeCloseTo(0.824, 3);
-        expect(composerModelScaleFor('GPT-5.6 Luna', 375)).toBeCloseTo(0.962, 3);
-        expect(composerModelScaleFor('Gemini 3.1 Pro', 390)).toBeCloseTo(0.989, 3);
+        // The names that DO need the scale, and where. 375 and 390 are still
+        // the two supported widths where anything scales after DROVE-320 —
+        // 390's 0.980 on the three 14-glyph names is the air refinement's one
+        // named softening, deepened by the bigger type and asserted in
+        // sessionPillLabel.spec.ts. 375's scale goes UP while its type does
+        // too, because the budget grew by more than the extra ink costs.
+        expect(composerModelScaleFor('Gemini 3.1 Pro', 375)).toBeCloseTo(0.827, 3);
+        expect(composerModelScaleFor('GPT-5.6 Luna', 375)).toBeCloseTo(0.964, 3);
+        expect(composerModelScaleFor('Gemini 3.1 Pro', 390)).toBeCloseTo(0.980, 3);
         expect(composerModelScaleFor('Gemini 3.1 Pro', 375))
             .toBeGreaterThan(COMPOSER_MODEL_SEGMENT.minimumFontScale);
         for (const phone of [393, 430, 440]) {
@@ -392,8 +398,10 @@ describe('the composer bubble, resolved rather than restated', () => {
         }
         // The spacer really does go first: at 375, the narrowest supported
         // width, with the longest name in either picker at the floor there are
-        // 2pt of it left — the two points the wider segments did NOT take,
-        // which is the same 2 the crossover clears 375 by.
+        // 2pt of it left — the same 2 the crossover clears 375 by, and STILL
+        // 2 after DROVE-320 because the 13pt name's 4 extra points at the floor
+        // were paid for rather than borrowed from here. A bigger name that had
+        // simply been asked for would have eaten this and then the name.
         const frames = layout(22, {
             model: 'Gemini 3.1 Pro',
             fontScale: COMPOSER_MODEL_SEGMENT.minimumFontScale,
@@ -440,16 +448,15 @@ describe('the composer bubble, resolved rather than restated', () => {
     it('overflows at 320 and nowhere else, even at the type floor', () => {
         // The failure, measured rather than described. The shortest name in any
         // picker at the smallest type the segment will draw still overruns the
-        // rim by 12pt at 320 — the air refinement's wider segments deepen a
-        // failure that was already total, on a width below the supported
-        // floor, and no scale rescues it. sessionPillLabel.ts carries what
-        // would have to give.
+        // rim by 8pt at 320 — DROVE-320's 4pt narrows a failure that was
+        // already total, on a width below the supported floor, and no scale
+        // rescues it. sessionPillLabel.ts carries what would have to give.
         const frames = layout(22, {
             model: 'Opus 5', fontScale: COMPOSER_MODEL_SEGMENT.minimumFontScale,
         }, widthOf(320));
         const send = findFrame(frames, 'send');
         const rim = frames.width - MOBILE_COMPOSER_METRICS.bubbleInset;
-        expect(send.x + send.width - rim).toBe(12);
+        expect(send.x + send.width - rim).toBe(8);
         // And 375, the narrowest phone the app supports, does not: it is the
         // first supported width above `COMPOSER_ROW_MIN_MODEL_WIDTH`'s 373.
         const ok = layout(22, {
@@ -477,7 +484,7 @@ describe('the composer bubble, resolved rather than restated', () => {
             .toBe(bubble.height - MOBILE_COMPOSER_METRICS.bubbleInsetBottom);
     });
 
-    it('hands the name back 49pt, which is still more than DROVE-281 spent', () => {
+    it('hands the name back 53pt, which is still more than DROVE-281 spent', () => {
         // The row DROVE-281 shipped, reconstructed from its own terms rather
         // than from constants that have since moved: four discs, four gaps,
         // three 39pt glyph segments, two hairlines.
@@ -488,27 +495,40 @@ describe('the composer bubble, resolved rather than restated', () => {
             - (4 * g.disc + 4 * g.gap + 3 * MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE + 2);
         expect(phones.map(before284)).toEqual([-17, 38, 56]);
         for (const phone of phones) {
-            expect(composerModelBudget(phone) - before284(phone), `${phone}`).toBe(49);
+            expect(composerModelBudget(phone) - before284(phone), `${phone}`).toBe(53);
         }
         // THE LEDGER, IN TWO NAMED TERMS, IN THE ORDER THEY HAPPEN. Clay's
         // DROVE-284 instruction is the first: a loose disc and its gap leave
         // the row (45), and a segment and a hairline join the capsule at the
         // width a segment was then (40), which is 5 on its own. The second is
-        // the one that moved twice: four glyph segments that were only square
-        // because one prop set both axes went to the ink-tight 26, and Clay's
-        // "spread them out" brought them back to the 28 the 12pt name affords
-        // — 11pt off each against the disc they were.
+        // the one that has now moved three times: four glyph segments that were
+        // only square because one prop set both axes went to the ink-tight 26,
+        // Clay's "spread them out" brought them to 28, and DROVE-320 took one
+        // point back to pay for the 13pt name — 12pt off each against the disc
+        // they were.
         const discAndGap = g.disc + g.gap;
         const segmentThen = MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE + 1;
         const narrowing = 4 * (MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE - g.segment);
-        expect([discAndGap, segmentThen, narrowing]).toEqual([45, 40, 44]);
-        expect(discAndGap - segmentThen + narrowing).toBe(49);
-        // And the 8 DROVE-264's padding cut still hands back on top of it,
-        // which is ALSO the 8 the air refinement spent: 2pt on each of the
-        // four segments, paid for by the name's own point of type.
-        expect(COMPOSER_MODEL_SEGMENT.paddingHorizontal).toBe(6);
-        expect(2 * (10 - COMPOSER_MODEL_SEGMENT.paddingHorizontal)).toBe(8);
-        expect(4 * (g.segment - 26)).toBe(8);
+        expect([discAndGap, segmentThen, narrowing]).toEqual([45, 40, 48]);
+        expect(discAndGap - segmentThen + narrowing).toBe(53);
+        // And the padding hands back 10 on top of it, 8 of which was
+        // DROVE-264's give and the last 2 DROVE-320's. THE TWO GIVES DO NOT
+        // ADD UP TO THE AIR ANY MORE, and that is the ticket: the air
+        // refinement spent 8 (2pt on each of four segments) and DROVE-320
+        // spends 6 of it back on type — 4 off the segments and 2 off the
+        // padding — leaving 4 of Clay's granted air still on the row.
+        expect(COMPOSER_MODEL_SEGMENT.paddingHorizontal).toBe(5);
+        expect(2 * (10 - COMPOSER_MODEL_SEGMENT.paddingHorizontal)).toBe(10);
+        // What is still standing of Clay's granted air: 4pt, one per segment.
+        expect(4 * (g.segment - 26)).toBe(4);
+        // And what DROVE-320 took to pay for the 13pt name: 4 off the four
+        // segments and 2 off the two sides of the padding, which is exactly
+        // the 6 more points the longest name needs at the type floor
+        // (85 -> 89 on the name, and 4 of the 6 land in the budget itself).
+        const fromSegments = 4 * (28 - g.segment);
+        const fromPadding = 2 * (6 - COMPOSER_MODEL_SEGMENT.paddingHorizontal);
+        expect([fromSegments, fromPadding]).toEqual([4, 2]);
+        expect(fromSegments + fromPadding).toBe(6);
     });
 
     it('draws the two discs as mirror images about the bubble\'s centre line', () => {
