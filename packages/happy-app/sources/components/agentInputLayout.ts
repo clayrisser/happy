@@ -416,27 +416,39 @@ export const MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE = MOBILE_COMPOSER_METRICS.prima
  * point (13 -> 12, `COMPOSER_MODEL_SEGMENT`), and the width that frees goes to
  * the segments.
  *
- * SO THE WIDTH IS NOW DERIVED TOP-DOWN, from what the narrowest supported
- * phone affords rather than from the least the glyph needs: the WIDEST whole
- * point at which the longest name either picker offers still clears the type
- * floor at 375. The arithmetic, run and asserted in sessionPillLabel.spec.ts:
- * 375 less the two insets (38) less the discs, gaps and hairlines (138) less
- * the name's floor width at 12pt (85) leaves 114 for four segments, and
- * floor(114 / 4) = 28. The ink rule survives as the LOWER bound — 28 never
- * goes under the 26 the padlock's ink plus `controlGap` demands — and the
- * spend is Clay's own grant: "you have a little more space."
+ * SO THE WIDTH IS DERIVED TOP-DOWN, from what the narrowest supported phone
+ * affords rather than from the least the glyph needs: the WIDEST whole point
+ * at which the longest name either picker offers still clears the type floor
+ * at 375. The arithmetic, run and asserted in sessionPillLabel.spec.ts: 375
+ * less the two insets (38) less the discs, gaps and hairlines (138) less the
+ * name's floor width (89) leaves 110 for four segments, and floor(110 / 4) =
+ * 27. The ink rule survives as the LOWER bound — 27 never goes under the 26
+ * the padlock's ink plus `controlGap` demands.
  *
- * WHAT 28 BUYS EACH GLYPH: the padlock keeps 7.1pt a side against 26's 6.1,
- * `volume-high` 5.25 against 4.25, and `eye`, the widest mark the capsule can
- * draw, 4.6 against 3.6 — all clear of the 2pt DROVE-118 measured as the
- * distance at which two marks read as one blob. Sizing every segment to the
- * widest glyph instead would be 31, which busts the 375 floor outright.
+ * 27, DOWN FROM 28, BECAUSE CLAY TOOK BACK WHAT PAID FOR THE 28 (DROVE-320).
+ * "I told you to make this bigger" is the model name, and the name's point of
+ * type is exactly what the air refinement spent. So the trade unwinds by half:
+ * the name goes back to 13pt and the segments give up ONE of the two points
+ * rather than both, because the other point comes from the name's own padding
+ * (`COMPOSER_MODEL_SEGMENT.paddingHorizontal`, 6 -> 5, re-derived there). The
+ * formula did not change; the name's floor width changed under it, 85 -> 89,
+ * and 27 is what it now returns. Nothing here is a number anybody picked.
+ *
+ * WHAT 27 BUYS EACH GLYPH: the padlock keeps 6.6pt a side against 26's 6.1 and
+ * 28's 7.1, `volume-high` 4.75, and `eye`, the widest mark the capsule can
+ * draw, 4.1 — all clear of the 2pt DROVE-118 measured as the distance at which
+ * two marks read as one blob, and all still wider than the 26 Clay called
+ * crowded. Sizing every segment to the widest glyph instead would be 31, which
+ * busts the 375 floor outright. `eye`'s 4.145 is doing a second job since
+ * DROVE-320: rounded up, it IS the name's padding, because the tightest
+ * clearance in the capsule is the rule the whole capsule's ink is held to.
  *
  * WHAT IT COSTS, in the same ledger DROVE-284 wrote: the fixed row goes 242 ->
- * 250, still 49 better than DROVE-281's 299, and the one softening is at 390,
- * where the three 14-glyph Gemini names now draw at 0.989 rather than full
- * size — 1.1% under, on the one supported width between the two phones the
- * tickets name. 393, the width Clay reads, still draws every name whole.
+ * 250 -> 246, now 53 better than DROVE-281's 299, and the one softening is
+ * still at 390, where the three 14-glyph Gemini names draw at 0.980 rather
+ * than full size — 2% under, on the one supported width between the two phones
+ * the tickets name, though at 13pt that is 12.73pt of type against the 11.87
+ * the 0.989 bought. 393, the width Clay reads, still draws every name whole.
  * sessionPillLabel.ts carries the full width table.
  *
  * THE TOUCH TARGET IS THE THING THIS SPENDS, and the trade was already made
@@ -455,7 +467,7 @@ export const MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE = MOBILE_COMPOSER_METRICS.prima
  * segments are stacked side by side rather than one above the other, so a
  * finger landing between two of them lands on one of them.
  */
-export const MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH = 28;
+export const MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH = 27;
 
 /**
  * READ-ALOUD'S FILL, INSET AS A PILL RATHER THAN BLED TO THE SEGMENT'S BOX
@@ -476,9 +488,11 @@ export const MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH = 28;
  * never touch, and the 13pt height difference keeps them from ever reading as
  * one mark — and 3pt clear of the capsule's rim above and below, one whole
  * point over DROVE-118's 2pt blob threshold. The radius is half the pill's
- * narrower side, so the shape is a stadium at every segment width. At the
- * chat's 28 x 39 segment that is a 26 x 33 pill, radius 13; `volume-high`,
- * the widest everyday glyph, keeps 4.25pt of fill beyond its ink.
+ * narrower side, so the shape is a stadium at every segment width, and that
+ * is why DROVE-320's point off the segment needed no edit here: at the chat's
+ * 27 x 39 segment it is a 25 x 33 pill, radius 12.5, where 28 gave 26 x 33 and
+ * 13. `volume-high`, the widest everyday glyph, keeps 3.75pt of fill beyond
+ * its 17.5pt of ink, still clear of the 2pt blob threshold.
  *
  * NO COLOUR MOVES. The four faces, their fills and their tints are exactly
  * `composerAudioOutFill` / `composerAudioOutTint`, every fill still opaque and

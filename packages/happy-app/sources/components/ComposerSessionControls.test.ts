@@ -65,7 +65,7 @@ vi.mock('@/constants/Typography', () => ({ Typography: { default: () => ({}) } }
 vi.mock('./BubblePressable', () => ({ BubblePressable: host('BubblePressable') }));
 
 const { ComposerSessionControls } = await import('./ComposerSessionControls');
-const { MOBILE_COMPOSER_SEGMENT_FILL_INSET } = await import('./agentInputLayout');
+const { MOBILE_COMPOSER_SEGMENT_FILL_INSET, MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH } = await import('./agentInputLayout');
 const {
     COMPOSER_CONTROL_PALETTE,
     composerCapsuleDivider,
@@ -699,11 +699,16 @@ describe('read-aloud as a capsule segment', () => {
     });
 
     it('insets the pill 1 off each hairline and 3 off the rim, a stadium', () => {
-        // The chat's segment: 28 wide, 39 tall, so the pill is 26 x 33 with a
-        // 13pt radius, and `volume-high`, the widest everyday glyph, keeps
-        // 4.25pt of fill beyond its 17.5pt of ink.
+        // The chat's segment, taken from the constant the chat actually hands
+        // in rather than a literal beside it: 27 wide since DROVE-320, 39
+        // tall, so the pill is 25 x 33 with a 13pt radius, and `volume-high`,
+        // the widest everyday glyph, keeps 3.75pt of fill beyond its 17.5pt of
+        // ink. A number typed here instead is how a green suite ends up
+        // asserting a segment the row does not draw.
         const renderer = mount({
-            size: 39, segmentWidth: 28, readAloud: readAloud({ fill: 'accent' }),
+            size: 39,
+            segmentWidth: MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH,
+            readAloud: readAloud({ fill: 'accent' }),
         });
         const pill = pillOf(press(renderer, 'Read aloud'));
         const box = (Array.isArray(pill.props.style) ? pill.props.style : [pill.props.style])
@@ -713,10 +718,23 @@ describe('read-aloud as a capsule segment', () => {
                 borderRadius: part?.borderRadius ?? found.borderRadius,
             }), {});
         expect(box).toEqual({
-            width: 28 - 2 * MOBILE_COMPOSER_SEGMENT_FILL_INSET.horizontal,
+            width: MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH
+                - 2 * MOBILE_COMPOSER_SEGMENT_FILL_INSET.horizontal,
             height: 39 - 2 * MOBILE_COMPOSER_SEGMENT_FILL_INSET.vertical,
-            borderRadius: 13,
+            // A stadium: half the SHORT axis, which the renderer derives as
+            // `Math.min(pill.width, pill.height) / 2`. 12.5 at a 27pt segment
+            // where it was 13 at 28 — it follows the segment rather than being
+            // a number typed once.
+            borderRadius: Math.min(
+                MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH
+                    - 2 * MOBILE_COMPOSER_SEGMENT_FILL_INSET.horizontal,
+                39 - 2 * MOBILE_COMPOSER_SEGMENT_FILL_INSET.vertical,
+            ) / 2,
         });
+        expect(box.borderRadius).toBe(12.5);
+        expect(box.width).toBe(25);
+        // The fill still clears `volume-high`'s 17.5pt of ink on both sides.
+        expect((box.width - 20 * 0.875) / 2).toBeCloseTo(3.75, 3);
         expect(MOBILE_COMPOSER_SEGMENT_FILL_INSET).toEqual({ horizontal: 1, vertical: 3 });
         // And the glyph is INSIDE the pill, so the pill centres it exactly as
         // the segment centred it — nothing moved but where the colour stops.
@@ -763,17 +781,25 @@ describe('read-aloud as a capsule segment', () => {
         // Home's square 44pt capsule; the chat hands in the narrower value and
         // the segments follow it on one axis only.
         const renderer = mount({
-            size: 39, segmentWidth: 28, onToggleAutoAccept: () => {}, readAloud: readAloud(),
+            size: 39,
+            segmentWidth: MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH,
+            onToggleAutoAccept: () => {},
+            readAloud: readAloud(),
         });
         for (const label of ['Permission mode', 'Auto-accept', 'Read aloud', 'Reasoning effort']) {
             const box = stylePartsOf(press(renderer, label)).reduce((found: any, part: any) => ({
                 width: part?.width ?? found.width, height: part?.height ?? found.height,
             }), { width: undefined, height: undefined });
-            expect(box, label).toEqual({ width: 28, height: 39 });
+            expect(box, label).toEqual({
+                width: MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH, height: 39,
+            });
         }
+        expect(MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH).toBe(27);
         // The name sizes to itself and takes only the height.
         const modelParts = stylePartsOf(press(renderer, 'Model'));
-        expect(modelParts.some((part: any) => part?.width === 28)).toBe(false);
+        expect(modelParts.some((part: any) => (
+            part?.width === MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH
+        ))).toBe(false);
         expect(modelParts.some((part: any) => part?.height === 39)).toBe(true);
         // Square by default, which is what Home still draws.
         const homeParts = stylePartsOf(press(mount({ readAloud: readAloud() }), 'Read aloud'));
