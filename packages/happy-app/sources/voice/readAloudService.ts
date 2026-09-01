@@ -29,9 +29,11 @@ import {
     dictationReportsProgress,
     isDroverSpeechAvailable,
     remoteTriplePressAvailable,
+    setNowPlayingTitle,
     startDictation,
     stopDictation,
 } from 'drover-speech';
+import { getSessionName } from '@/utils/sessionUtils';
 
 /**
  * The one reader the app owns (DROVE-30).
@@ -227,6 +229,16 @@ startNextSessionPress({
     ),
     current: () => readAloud.readingSessionId,
     take: (sessionId) => readAloud.takeVoice(sessionId),
+    ack: (id) => audioCues.ack(id),
+    // The card is named after the session the press landed on, and
+    // `getSessionName` is the one derivation the list, the wrist and the
+    // account switcher all read (sessionTitle.ts). A session the store has
+    // never heard of names nothing rather than guessing: the native side
+    // ignores an empty title and the card keeps what it had.
+    announce: (sessionId) => {
+        const session = storage.getState().sessions[sessionId];
+        void setNowPlayingTitle(session ? getSessionName(session) : '');
+    },
     subscribe: (listener) => addRemoteCommandListener(listener),
 });
 

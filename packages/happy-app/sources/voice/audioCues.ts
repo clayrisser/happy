@@ -92,7 +92,22 @@ export type AudioCueId =
      * that exists so a press which did nothing does not SOUND like a press
      * that worked.
      */
-    | 'micRefused';
+    | 'micRefused'
+    /**
+     * The double press moved the voice to another session (DROVE-300).
+     *
+     * The skip is the one gesture whose result can be SILENCE and still be
+     * correct: the session it lands on may be waiting on a reply and have
+     * nothing to say for a minute. Without this the press is
+     * indistinguishable from a dead button, which is the failure
+     * headphonePress.ts names and the mic already spends three cues avoiding.
+     */
+    | 'sessionSkipped'
+    /**
+     * A double press with nowhere to go (DROVE-300). One session armed, or
+     * none. Never a stop, and now never silent either.
+     */
+    | 'skipRefused';
 
 export interface AudioCueSpec {
     id: AudioCueId;
@@ -426,6 +441,38 @@ export const audioCues: readonly AudioCueSpec[] = [
         rank: 0,
         title: 'Microphone refused',
         meaning: 'A press that could not open the mic. The same low note twice, going nowhere.',
+    },
+    //
+    // The double press answers too (DROVE-300).
+    //
+    // Replies to Clay like the three above, so the same loud gain, and told
+    // apart from them by BEAT COUNT: the mic speaks in twos, the skip in
+    // threes. That is deliberate and it is the whole trick. A pocket flattens
+    // pitch, so a fourth and a fifth two-note cue would be four and five ways
+    // of saying the same thing; three beats is a different rhythm and rhythm
+    // is what survives. The refusal then falls out of the same rule rather
+    // than being invented: two notes going nowhere is the mic refusing, three
+    // notes going nowhere is the skip refusing, and each refusal is its own
+    // answer's shape with the movement taken out.
+    {
+        id: 'sessionSkipped',
+        kind: 'event',
+        beats: [{ hz: 523, ms: 60 }, { hz: 659, ms: 60 }, { hz: 784, ms: 80 }],
+        gapMs: 30,
+        gain: 0.95,
+        rank: 0,
+        title: 'Skipped to the next session',
+        meaning: 'A double press moved the voice to the next session with reading on. Three notes, climbing.',
+    },
+    {
+        id: 'skipRefused',
+        kind: 'event',
+        beats: [{ hz: 196, ms: 120 }, { hz: 196, ms: 120 }, { hz: 196, ms: 120 }],
+        gapMs: 90,
+        gain: 0.95,
+        rank: 0,
+        title: 'Nowhere to skip to',
+        meaning: 'A double press with only one session reading, or none. The same low note three times, going nowhere.',
     },
 ];
 

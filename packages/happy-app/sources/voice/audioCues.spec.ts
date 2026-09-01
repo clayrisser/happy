@@ -25,6 +25,7 @@ describe('the cue table', () => {
             'working', 'waitingPermission', 'waitingQuestion', 'waitingNeedsYou', 'waitingExpiry',
             'agentStart', 'agentDone', 'agentFailed', 'toolCall', 'reply', 'skipAhead',
             'micOpen', 'micClosed', 'micRefused',
+            'sessionSkipped', 'skipRefused',
         ];
         for (const id of ids) expect(cueSpec(id).id).toBe(id);
         expect(audioCues).toHaveLength(ids.length);
@@ -41,6 +42,42 @@ describe('the cue table', () => {
             expect(cueSpec(id).gain, id).toBeGreaterThanOrEqual(cueSpec('waitingNeedsYou').gain);
             expect(cueSpec(id).gain, id).toBeGreaterThan(cueSpec('toolCall').gain);
         }
+    });
+
+    it('answers the double press as loudly as the triple (DROVE-300)', () => {
+        // The skip cues are replies to CLAY, like the mic's three, so they
+        // belong in the same loud band. A skip he cannot hear is the same
+        // failure as a mic he cannot hear: a press that is indistinguishable
+        // from a dead button.
+        for (const id of ['sessionSkipped', 'skipRefused'] as AudioCueId[]) {
+            expect(cueSpec(id).gain, id).toBe(cueSpec('micRefused').gain);
+        }
+    });
+
+    it('tells the mic from the skip by beat COUNT, not pitch (DROVE-300)', () => {
+        // The trick that keeps a fifth and a sixth press cue from being two
+        // more ways of saying the same thing. A pocket flattens pitch, so the
+        // mic speaks in twos and the skip in threes and the rhythm carries it
+        // with the tones thrown away.
+        for (const id of ['micOpen', 'micClosed', 'micRefused'] as AudioCueId[]) {
+            expect(cueSpec(id).beats).toHaveLength(2);
+        }
+        for (const id of ['sessionSkipped', 'skipRefused'] as AudioCueId[]) {
+            expect(cueSpec(id).beats).toHaveLength(3);
+        }
+    });
+
+    it('shapes each refusal as its own answer with the movement taken out', () => {
+        // Not a separate invention per press: `micRefused` is `micOpen`'s two
+        // beats going nowhere and `skipRefused` is `sessionSkipped`'s three
+        // going nowhere. That is what makes a refusal recognisable as the
+        // refusal OF something rather than as a sixth unrelated noise.
+        for (const id of ['micRefused', 'skipRefused'] as AudioCueId[]) {
+            expect(new Set(cueSpec(id).beats.map((beat) => beat.hz)).size, id).toBe(1);
+        }
+        const skipped = cueSpec('sessionSkipped').beats.map((beat) => beat.hz);
+        expect(skipped[1]).toBeGreaterThan(skipped[0]);
+        expect(skipped[2]).toBeGreaterThan(skipped[1]);
     });
 
     it('tells the three mic answers apart by shape (DROVE-225)', () => {
