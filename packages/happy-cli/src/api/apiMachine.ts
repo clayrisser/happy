@@ -20,6 +20,7 @@ import { registerMachineAccountsHandlers } from '@/drover/machineAccounts';
 import { registerMachineMcpsHandlers } from '@/drover/machineMcps';
 import { registerMachineFilesHandlers } from '@/drover/machineFiles';
 import { registerMachineProvidersHandlers } from '@/drover/machineProviders';
+import { registerMachinePluginsHandlers } from '@/drover/machinePlugins';
 import { registerDroverDemoPushHandler } from '@/drover/demo';
 import { PushNotificationClient } from './pushNotifications';
 import { detectCLIAvailability, CLIAvailability } from '@/utils/detectCLI';
@@ -184,6 +185,13 @@ export class ApiMachineClient {
         // while DROVE-304's plaintext log paths are still open. The phone
         // sends the NAME of an environment variable; the key stays here.
         registerMachineProvidersHandlers(this.rpcHandlerManager);
+        // The plugins this machine manages, and the writes that manage them
+        // (DROVE-310). On the daemon for the same reason as the MCP handler —
+        // a plugin belongs to the machine, not a session — and beside it because
+        // it is the same kind of surface: the phone SEES the plugin set here and,
+        // unlike the read-only MCP view, ALSO enables, disables, installs and
+        // scopes it.
+        registerMachinePluginsHandlers(this.rpcHandlerManager);
         // The channel demo's test push (DROVE-75). On the daemon for the same
         // reason the policy handler is: the phone wants to prove the push path
         // while nothing is running. Its own push client rather than the
