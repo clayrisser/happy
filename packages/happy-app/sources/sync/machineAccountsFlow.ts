@@ -148,7 +148,21 @@ export type AddAccountPhase =
      * browser approves. Telling him to paste a code that will never appear is
      * exactly the dead end DROVE-238 was filed about, in a new coat.
      */
-    | { kind: 'starting'; harness: AccountHarness }
+    | {
+        kind: 'starting';
+        harness: AccountHarness;
+        /**
+         * A card that BEAT the RPC's reply (DROVE-334).
+         *
+         * A `link` event used to be dropped outright in this phase, and the
+         * screen only re-dispatches one when the card's identity moves — so a
+         * link that landed in the two or three seconds before `started` came
+         * back was never seen again, and the login dead-ended at the
+         * sixty-second sentence with the card sitting right there. Remembered
+         * here instead, and carried into `waiting`.
+         */
+        linkSeen?: boolean;
+    }
     /**
      * The login is running over there and we are watching the registry.
      * `before` is the set of account names that machine had BEFORE the start,
@@ -175,8 +189,28 @@ export type AddAccountPhase =
          * login can do that, so it is evidence of the same quality.
          */
         stale: string[];
-        /** A card with a URL is on the bus, so there is something to open. */
+        /**
+         * A card with a URL is on the bus RIGHT NOW, so there is something to
+         * open and something to answer.
+         *
+         * Live presence, and only that. It goes false the moment the card is
+         * settled — answered, cancelled or expired — because the bridge retires
+         * the request (droverBridge.ts retireCard) and the screen has nothing
+         * left to render. Reading it as "a link came back" is the whole of
+         * DROVE-334; that fact is `linkSeen`.
+         */
         linkReady: boolean;
+        /**
+         * A link came back for THIS login, at some point (DROVE-334).
+         *
+         * Sticky, and that is the whole of it. Clay tapped Add a Claude account
+         * at 23:16, the Mac put the card on the bus ten seconds later, and he
+         * sent the code at thirty-two seconds — then at sixty the screen told
+         * him no sign-in link had come back, because answering the card retired
+         * it and flipped `linkReady` off again. The deadline below reads THIS,
+         * so a login whose link arrived can never be told it had none.
+         */
+        linkSeen: boolean;
         /**
          * Long enough went by with no card that the screen says so.
          *
@@ -186,6 +220,9 @@ export type AddAccountPhase =
          * tell from any other pending question. Silence is the one thing the
          * phone CAN see, so silence is what gets said. Still watching, because
          * a late link is still a link.
+         *
+         * Silence means NO LINK EVER CAME, not "no card is open just now"
+         * (DROVE-334). The two are not the same the instant Clay answers one.
          */
         linkLate: boolean;
     }
@@ -269,7 +306,10 @@ function elapsed(
     linkWaitMs: number,
 ): AddAccountPhase {
     if (at - phase.startedAt >= watchMs) return { kind: 'stoppedWatching', harness: phase.harness };
-    if (!phase.linkReady && !phase.linkLate && at - phase.startedAt >= linkWaitMs) {
+    // `linkSeen`, never `linkReady` (DROVE-334). The live flag goes false when
+    // the card is answered, and a login whose code has already been sent is the
+    // last one that should be told its link never came.
+    if (!phase.linkSeen && !phase.linkLate && at - phase.startedAt >= linkWaitMs) {
         return { ...phase, linkLate: true };
     }
     return phase;
@@ -310,7 +350,12 @@ export function advanceAddAccount(
                 startedAt: event.at,
                 before: [...event.before],
                 stale: [...(event.stale ?? [])],
-                linkReady: false,
+                // A card that arrived while the RPC was still in flight is kept
+                // rather than thrown away (DROVE-334): it is already open on the
+                // bus, so the screen starts with it instead of waiting for the
+                // next time the card's identity happens to move.
+                linkReady: phase.linkSeen === true,
+                linkSeen: phase.linkSeen === true,
                 linkLate: false,
             };
 
@@ -319,12 +364,27 @@ export function advanceAddAccount(
             return { kind: 'failed', harness: phase.harness, reason: event.reason };
 
         case 'link':
+            // Before `started` came back. Remembered, not dropped (DROVE-334).
+            if (phase.kind === 'starting') {
+                if (!event.ready || phase.linkSeen === true) return phase;
+                return { ...phase, linkSeen: true };
+            }
             if (phase.kind !== 'waiting') return phase;
             if (phase.linkReady === event.ready) return phase;
             // A link that turns up after the screen said there was none takes
             // the sentence with it. Leaving it up beside a live link would be
             // the screen contradicting itself.
-            return { ...phase, linkReady: event.ready, linkLate: event.ready ? false : phase.linkLate };
+            //
+            // `linkSeen` only ever goes UP. The card being settled retires it
+            // from the session and brings `ready` back false, which is exactly
+            // what fell between Clay sending his code and the sixty-second
+            // deadline firing on a login that had had its link all along.
+            return {
+                ...phase,
+                linkReady: event.ready,
+                linkSeen: phase.linkSeen || event.ready,
+                linkLate: event.ready ? false : phase.linkLate,
+            };
 
         case 'accounts': {
             if (phase.kind !== 'waiting') return phase;
@@ -474,6 +534,29 @@ export function addAccountStatus(phase: AddAccountPhase): AddAccountStatus | nul
                     watching: true,
                     hasLink: true,
                     spinner: false,
+                };
+            }
+            // THE LINK CAME AND ITS CARD IS SETTLED (DROVE-334).
+            //
+            // Answered, cancelled or expired — the bridge retires the request
+            // either way, so `linkReady` is false again and there is nothing
+            // left on this screen to press. What is NOT true is that no link
+            // came back, and that is the sentence Clay was reading at 23:16
+            // half a minute after sending his code. Say the one thing that is
+            // both true and useful: the phone's half is done and the Mac's is
+            // not. One sentence for both harnesses because it is true of both —
+            // a Claude login takes a code back and a cursor one takes a browser
+            // approval, and either way the card is spent and the machine is
+            // where the rest happens.
+            if (phase.linkSeen) {
+                return {
+                    title: 'Finishing the login on that machine…',
+                    detail: 'The sign-in link went out and its card is settled, so nothing here is '
+                        + 'waiting on you. The account appears in this list when the login lands '
+                        + 'over there.',
+                    watching: true,
+                    hasLink: false,
+                    spinner: true,
                 };
             }
             if (phase.linkLate) {
