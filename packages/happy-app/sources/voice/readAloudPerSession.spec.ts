@@ -351,6 +351,41 @@ describe('reading per session, over the real reader (DROVE-297)', () => {
         expect(engine.spoken.length).toBe(said);
     });
 
+    it('switching a YIELDED session off drops its held place too', async () => {
+        // Off subsumes pause, per session (DROVE-289 decision 4), and this is
+        // the long way round to breaking it: A is armed, yielded and holding a
+        // place. Switching it off from over here must throw that place away,
+        // or coming back on resumes in the middle of a reply from before he
+        // switched it off.
+        reader.setSessionEnabled('a', true);
+        reader.setSessionEnabled('c', true);
+        reader.visit('a');
+        await readTwoOf('a', 'ma', 10);
+        expect(engine.spoken).toEqual(['One.', 'Two.']);
+
+        reader.visit('c');
+        await settle();
+        expect(reader.hasHeldReading('a')).toBe(true);
+        expect(reader.readingStateOf('a')).toBe('yielded');
+
+        reader.setSessionEnabled('a', false);
+        await settle();
+        expect(reader.hasHeldReading('a'), 'a switched-off session kept its place').toBe(false);
+        expect(reader.readingStateOf('a')).toBe('off');
+        // C never had the voice taken from it: switching A off is not a claim.
+        expect(reader.readingSessionId).toBe('c');
+
+        // Back on, and into it: a START at new content, not a resume at the
+        // stale sentence (DROVE-226).
+        reader.setSessionEnabled('a', true);
+        await settle();
+        const said = engine.spoken.length;
+        reader.visit('a');
+        await settle();
+        expect(engine.spoken.length, 'a re-armed session resumed a stale place').toBe(said);
+        expect(engine.spoken).not.toContain('Three.');
+    });
+
     it('the default arms a session nobody has said anything about (DROVE-179 kept)', async () => {
         // With the persisted setting on and no session individually switched
         // off, every session is enabled, so navigating takes the voice exactly

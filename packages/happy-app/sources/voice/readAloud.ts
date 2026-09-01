@@ -971,6 +971,13 @@ export class ReadAloudReader {
         const was = this.enabledFor(sessionId);
         this.sessionEnabled.set(sessionId, enabled);
         if (was === enabled) return;
+        // OFF SUBSUMES PAUSE, PER SESSION (DROVE-289 decision 4), and it does
+        // so whether or not this session had the voice. Switching a YIELDED
+        // session off has to drop its held place too, or coming back on would
+        // resume in the middle of a reply from before he switched it off —
+        // which is the resume-at-a-stale-position failure, reached the long
+        // way round.
+        if (!enabled) this.heldReadings.delete(sessionId);
         this.applyMove(voiceMove(enabled ? 'enable' : 'disable', {
             holder: this.readingSessionId,
             session: sessionId,
@@ -1007,11 +1014,10 @@ export class ReadAloudReader {
     private applyMove(move: VoiceMove, reason: ReadAloudInterruption = 'switched-session'): void {
         if (move.kind === 'keep') return;
         if (move.kind === 'release') {
-            // Off subsumes pause, per session (DROVE-289): the position goes,
-            // here and in the stash. The voice falls silent and nothing else
-            // claims it — turning one session off must never start another
-            // one talking.
-            this.heldReadings.delete(move.session);
+            // The voice falls silent and nothing else claims it: turning one
+            // session off must never start another one talking. The position
+            // is thrown away by `applyEnabled`, which interrupts; the stashed
+            // one, if any, went with `setSessionEnabled`.
             this.applyEnabled(false);
             return;
         }
