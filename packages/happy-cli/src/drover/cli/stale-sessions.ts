@@ -333,7 +333,7 @@ export function staleScan(cli: string, env: Env, probe: Probe, now: () => number
         if (!id) {
             const re = new RegExp(`^ *${pid} .*claude_local_launcher\\.cjs .*--resume ([0-9a-f-]*)`);
             for (const c of all) {
-                const m = re.exec(c);
+                const m = c.match(re);
                 if (m) {
                     id = m[1];
                     break;
@@ -341,7 +341,7 @@ export function staleScan(cli: string, env: Env, probe: Probe, now: () => number
             }
         }
         if (!id) {
-            const m = /--resume ([0-9a-f][0-9a-f-]*)/.exec(args);
+            const m = args.match(/--resume ([0-9a-f][0-9a-f-]*)/);
             if (m) id = m[1];
         }
         if (!id) id = '-';
@@ -406,7 +406,7 @@ export function staleCodeMtime(paths: string[]): string {
  * another process entirely.
  */
 export function staleServicePid(label: string, probe: Probe): string {
-    const m = /"PID" = ([0-9][0-9]*);/.exec(probe.launchctlList(label));
+    const m = probe.launchctlList(label).match(/"PID" = ([0-9][0-9]*);/);
     return m ? m[1] : '';
 }
 
