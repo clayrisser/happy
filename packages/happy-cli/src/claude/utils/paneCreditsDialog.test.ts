@@ -208,6 +208,31 @@ describe('creditsSafeRow', () => {
         expect(creditsSafeRow(paneCreditsDialog(inverted)!)!.label).toBe('No, keep my current model')
     })
 
+    it('refuses a row that reads as a decline AND spends, which is the only case the spend check decides', () => {
+        // THE GUARD THIS PINS is `if (creditsRowSpends(row.label)) continue`,
+        // and before this test nothing reached it: every spending label the
+        // component ships today ("Yes, buy usage credits") matches no
+        // declining pattern, so the declining test alone already skipped it.
+        // Delete the spend check and the whole suite still passed — measured.
+        //
+        // It bites on an OVERLAP, which a rewording can produce without anyone
+        // noticing: `^switch to .+ and continue$` is a decline, `usage credits`
+        // spends, and one label can satisfy both. Taking it would buy credits
+        // on a timeout nobody saw. Null is the right answer — the caller
+        // presses Escape, which buys nothing.
+        const overlapping = screen(
+            '   Switch to Fable 5?',
+            '   Fable 5 runs on usage credits.',
+            '',
+            '   ❯ Switch to Fable 5 with usage credits and continue',
+            '     Yes, buy usage credits',
+        )
+        const dialog = paneCreditsDialog(overlapping)!
+        // Both rows spend, so neither may be taken, decline-shaped or not.
+        expect(creditsRowSpends('Switch to Fable 5 with usage credits and continue')).toBe(true)
+        expect(creditsSafeRow(dialog)).toBeNull()
+    })
+
     it('answers null rather than guessing when no row reads as a decline', () => {
         // A build that renames the decline is a build this file has not been
         // measured against. Null sends the caller to Escape, which buys
