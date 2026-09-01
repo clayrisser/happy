@@ -142,6 +142,24 @@ describe('paneCommandOutcome and the credits dialog', () => {
         })
     })
 
+    it('reports `credits` for a Fable 5.1 switch too, so the new picker entry cannot hang (DROVE-324)', () => {
+        // `/model claude-fable-5-1` raises the Fable 5.1 spelling. Before the
+        // version-aware detector this returned `pending` forever — the switch
+        // hung on a prompt nobody answered — and it must still never reach the
+        // confirm arm, whose one Enter would land on "Yes, buy usage credits".
+        const creditsPicker51 = screen(
+            '❯ Write me a poem',
+            '▔'.repeat(40),
+            '   Switch to Fable 5.1?',
+            '   Fable 5.1 runs on usage credits — you have $4.20 in credits.',
+            '',
+            '   ❯ No, keep my current model',
+            '     Yes, buy usage credits',
+        )
+        expect(paneConfirmDialog(creditsPicker51)).toBeNull()
+        expect(paneCommandOutcome(idle, creditsPicker51, 'model')).toEqual({ state: 'credits' })
+    })
+
     it('still answers the ordinary Switch model? confirmation', () => {
         const switching = screen(
             '   Switch model?',

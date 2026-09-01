@@ -74,7 +74,8 @@ function isRule(line: string): boolean {
 }
 
 /**
- * The three titles, verbatim from 2.1.252.
+ * The three titles, verbatim from 2.1.252 — the measured baseline the patterns
+ * below generalize.
  *
  * Deliberately NOT added to `paneConfirmDialog`. That function's contract is
  * "this dialog is answered by one Enter", and these are the dialogs for which
@@ -84,6 +85,33 @@ export const paneCreditsTitles = [
     'Switch to Fable 5?',
     "You've reached your Fable 5 limit",
     'Fable 5 now uses usage credits',
+] as const
+
+/**
+ * The three titles as patterns over the Fable model VERSION (DROVE-324).
+ *
+ * 2.1.252 spelled the one metered model `Fable 5`, so the baseline above is
+ * three literals. The picker now offers Fable 5.1 as well (`claude-fable-5-1`),
+ * and 2.1.257 templates the model name into these titles — `Switch to Fable
+ * 5.1?`, `Fable 5.1 now uses usage credits`. A literal-only detector would miss
+ * every one of those, and a missed credits dialog is BOTH regressions this file
+ * guards against at once: the gate stops holding, so the switch hangs on a
+ * prompt nobody answers (the Fable-5 stuck-prompt bug), and if it ever fell
+ * through to the confirm arm, the one Enter that answers a confirmation lands on
+ * "Yes, buy usage credits".
+ *
+ * So detection matches the Fable family by version rather than one literal. It
+ * is not widened past credits: each pattern still carries a credits-only phrase
+ * ("usage credits", "reached your Fable <n> limit") or the premium-switch
+ * consent ("Switch to Fable <n>?"), none of which the safe `Switch model?`
+ * confirmation ever draws. The version group is `[\d.]+` so 5, 5.1 and any later
+ * Fable point release are covered without another edit here — the same
+ * ships-after-the-table resilience the app-side effort deny list uses.
+ */
+const paneCreditsTitlePatterns: readonly RegExp[] = [
+    /Switch to Fable [\d.]+\?/,
+    /You've reached your Fable [\d.]+ limit/,
+    /Fable [\d.]+ now uses usage credits/,
 ] as const
 
 /** One row of the dialog, exactly as the pane drew it. */
@@ -116,8 +144,12 @@ export interface PaneCreditsDialog {
  * those still lands on a dialog.
  */
 export function paneCreditsDialogTitle(capture: string): string | null {
-    for (const title of paneCreditsTitles) {
-        if (capture.includes(title)) return title
+    for (const pattern of paneCreditsTitlePatterns) {
+        const match = capture.match(pattern)
+        // The ACTUAL substring on screen, not a canonical stand-in: the full
+        // read below finds the title's line with `line.includes(title)`, so a
+        // "Switch to Fable 5.1?" screen must hand back "Switch to Fable 5.1?".
+        if (match) return match[0]
     }
     return null
 }
