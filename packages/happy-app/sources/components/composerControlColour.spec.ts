@@ -41,6 +41,7 @@ import {
     composerGlyphLayers,
     micColour,
     primaryActionColour,
+    permissionLockColour,
 } from './composerControlColour';
 import {
     CHROME_BACKDROP_EXTREMES,
@@ -56,6 +57,7 @@ import {
 import { effortGaugeAngle } from './sessionControlGlyphs';
 import { colorDistance } from '../utils/subagentTint';
 import { permissionModeGlyph } from './sessionControlGlyphs';
+import { permissionAccessibilityValue } from './autoAcceptRow';
 
 /**
  * What each theme already means by a colour, from where it is decided:
@@ -162,6 +164,39 @@ describe.each(themes)('the rule on the $name theme: the foreground unless it is 
     it('leaves the mic, the waveform and the send button on the foreground at rest', () => {
         expect(micColour(palette, 'idle')).toBe(palette.foreground);
         expect(primaryActionColour(palette, false)).toBe(palette.foreground);
+    });
+
+    /**
+     * AUTO-ACCEPT IS THE THIRD ACTIVE STATE (DROVE-277), and it is written
+     * here rather than beside the modes because it is not one: a mode is a
+     * value the session holds, and auto-accept is the app answering prompts on
+     * Clay's behalf while he is not looking. Same class as an open mic.
+     */
+    it('leaves the padlock on the foreground in every mode, which is DROVE-215 unchanged', () => {
+        expect(permissionLockColour(palette, false)).toBe(palette.foreground);
+        expect(permissionLockColour(palette, false)).toBe(composerGlyphColour(palette));
+    });
+
+    it('colours the padlock with the accent while auto-accept is on, and spends no new hue on it', () => {
+        expect(permissionLockColour(palette, true)).toBe(palette.accent);
+        // The same accent the send button wears when it has something to send:
+        // one colour, one meaning, "something is about to happen".
+        expect(permissionLockColour(palette, true)).toBe(primaryActionColour(palette, true));
+        // And the palette did not grow to fit it.
+        expect(Object.keys(palette).sort()).toEqual(['accent', 'foreground', 'pending', 'recording']);
+    });
+
+    it('leaves the SHAPE alone, so the colour adds a state instead of hiding the mode', () => {
+        // Six modes, six silhouettes, and auto-accept does not become a
+        // seventh: whatever the toggle is set to, the glyph is still the
+        // mode's. A reader who cannot tell the accent from the foreground
+        // reads the mode correctly and hears auto-accept in words.
+        const shapes = ['yolo', 'safe-yolo', 'read-only', 'plan', 'acceptEdits', 'default']
+            .map((mode) => permissionModeGlyph(null, mode));
+        expect(new Set(shapes).size).toBe(shapes.length);
+        expect(permissionAccessibilityValue('Yolo', true)).toBe('Yolo, auto-accept on');
+        expect(permissionAccessibilityValue('Yolo', false)).toBe('Yolo');
+        expect(permissionAccessibilityValue(undefined, true)).toBe('auto-accept on');
     });
 
     it('holds a seat for DROVE-217’s pending without wiring it, already measured', () => {

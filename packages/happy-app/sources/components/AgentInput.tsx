@@ -1,6 +1,6 @@
 import { Ionicons, Octicons } from '@expo/vector-icons';
 import * as React from 'react';
-import { Keyboard, View, Platform, useWindowDimensions, Text, ActivityIndicator, Pressable, LayoutChangeEvent } from 'react-native';
+import { Keyboard, View, Platform, Switch, useWindowDimensions, Text, ActivityIndicator, Pressable, LayoutChangeEvent } from 'react-native';
 import { Image } from 'expo-image';
 import { AgentInputAttachmentStrip } from './AgentInputAttachmentStrip';
 import type { AttachmentPreview } from '@/sync/attachmentTypes';
@@ -71,6 +71,8 @@ import { DroverChannelsSheet } from './DroverChannelsSheet';
 import { buildSessionPillLabel, composerCapsuleOwnRow } from './sessionPillLabel';
 import type { AgentModePendingFlags } from '@/sync/useAgentModePending';
 import { permissionModeGlyph } from './sessionControlGlyphs';
+import { useAutoAccept, useAutoAcceptToggle } from '@/hooks/useAutoAccept';
+import { AUTO_ACCEPT_SUBTITLE, AUTO_ACCEPT_TITLE, autoAcceptGlyph } from './autoAcceptRow';
 import { ComposerSessionControls, type ComposerSessionPicker } from './ComposerSessionControls';
 import { effortSliderScaleFromLevels } from './effortSlider';
 import {
@@ -755,6 +757,12 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     ), [props.availableModes]);
     const availableModels = props.availableModels ?? [];
     const availableEffortLevels = props.availableEffortLevels ?? [];
+    // Auto-accept for THIS session (DROVE-277). In memory, so it is false on
+    // every fresh launch without anything resetting it, and it is read here
+    // rather than in the capsule so the padlock and the sheet row cannot
+    // disagree about what the session is set to.
+    const autoAccept = useAutoAccept(props.sessionId);
+    const setAutoAccept = useAutoAcceptToggle(props.sessionId);
     const modelLabel = props.modelMode?.name ?? t('agentInput.model.title');
     const effortLabel = props.effortLevel?.name;
     const isSandboxEnabled = React.useMemo(() => {
@@ -2318,8 +2326,14 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 effortIndex={effortIndex}
                 effortCount={effortScale.keys.length}
                 onPress={handleSessionControlPress}
+                autoAccept={autoAccept}
                 canOpen={{
-                    permission: !!props.onPermissionModeChange && availableModes.length > 0,
+                    // The sheet behind the padlock now holds the auto-accept
+                    // switch as well as the mode list (DROVE-277), so a session
+                    // whose harness publishes no modes still has something to
+                    // open — and the one control this ticket adds must not be
+                    // unreachable on exactly the sessions that ask the most.
+                    permission: (!!props.onPermissionModeChange && availableModes.length > 0) || !!props.sessionId,
                     effort: availableEffortLevels.length > 0 && !!props.onEffortLevelChange,
                     model: availableModels.length > 0 && !!props.onModelModeChange,
                 }}
@@ -2474,6 +2488,63 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                         <Text style={styles.overlaySectionTitle}>
                                             {permissionTitle}
                                         </Text>
+                                        {/* AUTO-ACCEPT, at the top of the permission
+                                            sheet (DROVE-277). It sits above the mode
+                                            list rather than below it because it is the
+                                            widest thing on the sheet: while it is on,
+                                            every Allow / Deny prompt in this session is
+                                            answered without being shown, whichever mode
+                                            is ticked underneath. A switch, not a radio,
+                                            because it is not one of the modes and must
+                                            not read as picking one.
+
+                                            The wording is the safety feature and lives
+                                            in autoAcceptRow.ts, where a test can hold
+                                            it: it names what still asks, and it says
+                                            out loud that a restart turns this off. */}
+                                        {!!props.sessionId && (
+                                            <View
+                                                style={{
+                                                    flexDirection: 'row',
+                                                    alignItems: 'flex-start',
+                                                    paddingHorizontal: 16,
+                                                    paddingVertical: 8,
+                                                    marginHorizontal: 8,
+                                                    marginBottom: 4,
+                                                    borderRadius: 14,
+                                                    gap: 12,
+                                                }}
+                                            >
+                                                <Ionicons
+                                                    name={autoAcceptGlyph(autoAccept)}
+                                                    size={16}
+                                                    color={autoAccept ? theme.colors.radio.active : theme.colors.textSecondary}
+                                                    style={{ marginTop: 2 }}
+                                                />
+                                                <View style={{ flex: 1 }}>
+                                                    <Text style={{
+                                                        fontSize: 14,
+                                                        color: theme.colors.text,
+                                                        ...Typography.default(),
+                                                    }}>
+                                                        {AUTO_ACCEPT_TITLE}
+                                                    </Text>
+                                                    <Text style={{
+                                                        fontSize: 11,
+                                                        color: theme.colors.textSecondary,
+                                                        ...Typography.default(),
+                                                    }}>
+                                                        {AUTO_ACCEPT_SUBTITLE}
+                                                    </Text>
+                                                </View>
+                                                <Switch
+                                                    value={autoAccept}
+                                                    onValueChange={setAutoAccept}
+                                                    accessibilityLabel={AUTO_ACCEPT_TITLE}
+                                                    accessibilityHint={AUTO_ACCEPT_SUBTITLE}
+                                                />
+                                            </View>
+                                        )}
                                         {availableModes.map((mode) => {
                                             const isSelected = permissionModeKey === mode.key;
                                             return (

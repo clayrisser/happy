@@ -11,6 +11,7 @@ import { t } from '@/text';
 import { MobileGlassBackdrop } from '@/components/MobileGlass';
 import { startDroverWatchFeed } from '@/sync/droverWatchFeed';
 import { startDroverAnnounce } from '@/sync/droverAnnounce';
+import { startDroverAutoAccept } from '@/sync/droverAutoAccept';
 
 export const unstable_settings = {
     initialRouteName: 'index',
@@ -23,6 +24,13 @@ export default function RootLayout() {
     // The phone's haptic and audio announce for a new gate (DROVE-72). Reads
     // the card's `delivery` and this phone's switches; never a Mac's.
     React.useEffect(() => startDroverAnnounce(), []);
+    // Auto-accept, for the sessions Clay switched it on for (DROVE-277). Above
+    // the screen on purpose: a gate arrives whether or not that session is the
+    // one on show, and a runtime that only fired while the card was visible
+    // would auto-accept the prompts he was already watching and nothing else.
+    // It answers only plain Allow / Deny gates off the bus, it can never deny,
+    // and every answer it sends is stamped `by auto-accept` on the ledger.
+    React.useEffect(() => startDroverAutoAccept(), []);
 
     // Every phone gets the app's own header (DROVE-161). It used to be
     // Android, Mac and web only, with iPhones left on UIKit's navigation bar,
