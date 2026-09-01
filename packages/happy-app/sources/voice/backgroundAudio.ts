@@ -63,11 +63,14 @@ import { readAloudTransport, remoteTransportGesture, transportEffect } from './r
  *
  * Two things were welded to `holdSession` and only one of them belongs to it.
  *
- *   THE SESSION keeps the app alive in the background, and it costs ducked
- *   music for as long as it is held. So it is asked for only while
- *   backgrounded with read-aloud on, and dropped on the way to the foreground.
- *   Unchanged, pauses included: a pause that released it would let iOS suspend
- *   the app, and a suspended app cannot be resumed from the lock screen.
+ *   THE SESSION keeps the app alive. It is held whenever read-aloud is on, the
+ *   foreground included (DROVE-233 nowplaying-card): the native keepalive is
+ *   the app's only audio producer, and without it running in the foreground
+ *   iOS draws no lock-screen card there. It no longer costs ducked music —
+ *   read-aloud is PRIMARY audio now, not a ducking session — so there is
+ *   nothing to save by dropping it in the foreground. Pauses hold too: a pause
+ *   that released it would let iOS suspend the app, and a suspended app cannot
+ *   be resumed from the lock screen.
  *
  *   THE NOW-PLAYING CARD is what carries the lock screen's play/pause. It
  *   activates nothing and ducks nothing, so tying its life to the session's
@@ -128,17 +131,25 @@ export function startBackgroundAudio(reader: BackgroundReader): () => void {
     const apply = () => {
         try {
             reader.setBackgrounded(backgrounded);
-            // Only hold while there is something to stay alive FOR. Holding
-            // with read-aloud off would keep music ducked for no one.
+            // Hold whenever read-aloud is ON, foreground included (DROVE-233
+            // nowplaying-card). It used to be `backgrounded && isEnabled`,
+            // because the hold cost ducked music and only the background needed
+            // to keep the app alive. Two things changed that. The session is no
+            // longer a ducking session — read-aloud is PRIMARY audio now (the
+            // Swift `.duckOthers` drop), so holding no longer dips anyone's
+            // music. And the DROVE-259 keepalive is gated `guard sessionHeld`
+            // in native, so with read-aloud on in the FOREGROUND and no sentence
+            // in flight there was NO producer at all and iOS drew no card. That
+            // is the H2a half of the missing lock-screen card. Holding while
+            // enabled keeps a producer alive so the card exists in the
+            // foreground too, and the app can be woken from the lock screen.
             //
-            // A PAUSE STILL HOLDS (DROVE-233). `isEnabled` is true while
-            // paused, on purpose: the session is what keeps the app from being
-            // suspended, and an app iOS has suspended cannot be resumed from
-            // the lock screen. Releasing it on a pause would make the pause
-            // one-way, which is the whole feature gone. The cost is DROVE-189's
-            // and unchanged: music stays ducked while he is listening to the
-            // session, paused or not.
-            const next = backgrounded && reader.isEnabled;
+            // A PAUSE STILL HOLDS (DROVE-233): `isEnabled` is true while paused,
+            // on purpose. The session is what keeps the app from being
+            // suspended, and an app iOS has suspended cannot be resumed from the
+            // lock screen. Releasing it on a pause would make the pause one-way,
+            // which is the whole feature gone.
+            const next = reader.isEnabled;
             if (next !== held) {
                 held = next;
                 void holdAudioSession(next);
@@ -166,9 +177,9 @@ export function startBackgroundAudio(reader: BackgroundReader): () => void {
         apply();
     });
 
-    // Read-aloud going off in the background has to let the session go too,
-    // or music stays ducked for nobody. `apply` re-reads `isEnabled`, so one
-    // line covers the toggle, the route guard and a boss-mode call alike.
+    // Read-aloud going off has to let the session go, or a producer stays alive
+    // for nobody. `apply` re-reads `isEnabled`, so one line covers the toggle,
+    // the route guard and a boss-mode call alike.
     const enabledChanged = reader.addInterruptListener(() => { apply(); });
 
     // The native side has already paused and resumed the utterance. What the

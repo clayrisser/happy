@@ -857,11 +857,12 @@ public final class DroverSpeechModule: Module {
                 //
                 // The session is reactivated first, because an `.ended`
                 // WITHOUT `.shouldResume` reactivated nothing at all and a
-                // player needs somewhere to play. `.duckOthers` is what lets
-                // that succeed while the other app carries on; if it does not,
-                // `startSilenceKeepalive` builds a player that cannot start
-                // and the reader is over until the next `speak`, which is the
-                // honest answer rather than a pretended one.
+                // player needs somewhere to play. Read-aloud takes the session
+                // back as PRIMARY audio now (DROVE-233, no `.duckOthers`); if
+                // reactivation fails, `startSilenceKeepalive` builds a player
+                // that cannot start and the reader is over until the next
+                // `speak`, which is the honest answer rather than a pretended
+                // one.
                 if self.sessionHeld && !self.isDictating {
                     try? self.activatePlayback()
                     self.startSilenceKeepalive()
@@ -1177,12 +1178,22 @@ public final class DroverSpeechModule: Module {
     //
 
     /// `.playback` is what keeps speech alive with the screen locked, and
-    /// `.duckOthers` makes music dip rather than stop. `.spokenAudio` tells iOS
-    /// this is speech, so it interacts with CarPlay and AirPods the way a
-    /// podcast does rather than the way a game sound effect does.
+    /// `.spokenAudio` tells iOS this is speech, so it interacts with CarPlay and
+    /// AirPods the way a podcast does rather than the way a game sound effect
+    /// does.
+    ///
+    /// NO `.duckOthers` (DROVE-233). Ducking declares this app's audio SECONDARY,
+    /// the way a navigation prompt dips music without taking it over, and iOS
+    /// never promotes a ducking app to the Now Playing app however its
+    /// `playbackState` reads — so the lock-screen / Dynamic Island card never
+    /// drew even though build 18 reported the app <Playing>. Without the option
+    /// read-aloud is PRIMARY audio: it interrupts other players rather than
+    /// ducking them, which is how an audio player behaves and what Clay asked
+    /// for ("an audio player I can pause and resume"), and it is the app iOS
+    /// hands the card to.
     private func activatePlayback() throws {
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
+        try session.setCategory(.playback, mode: .spokenAudio, options: [])
         try session.setActive(true, options: [])
     }
 
