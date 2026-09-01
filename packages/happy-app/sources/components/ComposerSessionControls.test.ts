@@ -3,13 +3,14 @@
  * DROVE-215).
  *
  * composerControlColour.spec.ts measures the colours and sessionPillLabel.spec.ts
- * pins the model's width budget. This is the render: that the FOUR segments
- * come out in the order Clay asked for, that each of the three pickers opens
- * its own on the first tap and never a menu of them (DROVE-111), that the
- * fourth opens nothing at all (DROVE-281), and that the colour each glyph is
- * drawn in is the one the rule says it should be. The colour
- * half is the one that has to be a RENDER: the module can only say what it
- * hands out, and the call site is where a tint gets put back.
+ * pins the model's width budget. This is the render: that the segments come
+ * out in the order Clay asked for — lock, speaker, effort, model since
+ * DROVE-331 sent the auto-accept bolt back to the sheet — that each of the
+ * three pickers opens its own on the first tap and never a menu of them
+ * (DROVE-111), that read-aloud opens nothing at all (DROVE-284), and that the
+ * colour each glyph is drawn in is the one the rule says it should be. The
+ * colour half is the one that has to be a RENDER: the module can only say
+ * what it hands out, and the call site is where a tint gets put back.
  *
  * The model's three assertions moved here from AgentInputStatusRow.test.ts
  * when DROVE-178 moved the segment.
@@ -68,6 +69,7 @@ const { ComposerSessionControls } = await import('./ComposerSessionControls');
 const { MOBILE_COMPOSER_SEGMENT_FILL_INSET, MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH } = await import('./agentInputLayout');
 const {
     COMPOSER_CONTROL_PALETTE,
+    autoAcceptColour,
     composerCapsuleDivider,
     composerGaugeTrack,
     composerSessionCapsuleFill,
@@ -100,8 +102,9 @@ function mount(overrides: Record<string, unknown> = {}) {
 /**
  * The glyph inside ONE segment (DROVE-281).
  *
- * There are two Ionicons in the capsule now, so `findByType` on the root is
- * ambiguous and every colour assertion has to name the segment it is about.
+ * There can be two Ionicons in the capsule — the padlock's and read-aloud's —
+ * so `findByType` on the root is ambiguous and every colour assertion has to
+ * name the segment it is about.
  */
 function iconIn(renderer: any, label: string) {
     return press(renderer, label).findByType('Ionicons' as any).props;
@@ -119,13 +122,12 @@ describe('the session capsule', () => {
             (node: any) => typeof node.type === 'string' && !!node.props?.accessibilityLabel,
         ).map((node: any) => node.props.accessibilityLabel);
         expect(labels(mount())).toEqual(['Permission mode', 'Reasoning effort', 'Model']);
-        // AND AUTO-ACCEPT SECOND WHEN THERE IS ONE (DROVE-281). Clay: "put the
-        // mode button in the group with the rest". It goes NEXT TO the padlock
-        // rather than at either end, because those two are the pair: both say
-        // what this session is allowed to do without asking. Effort and the
-        // model's name are about how it thinks, not what it may do.
-        expect(labels(mount({ onToggleAutoAccept: () => {} })))
-            .toEqual(['Permission mode', 'Auto-accept', 'Reasoning effort', 'Model']);
+        // AND NO AUTO-ACCEPT SEGMENT, WHATEVER THE STATE (DROVE-331). DROVE-281
+        // drew a bolt second, touching the padlock; Clay, with it and the
+        // sheet's switch both on his phone: "because of the toggles in the
+        // sheet for auto-accept, we don't need it also in the bar group." The
+        // state is the padlock's to wear now, not a segment's.
+        expect(labels(mount({ autoAccept: true }))).toEqual(['Permission mode', 'Reasoning effort', 'Model']);
     });
 
     /**
@@ -157,13 +159,13 @@ describe('the session capsule', () => {
             .filter((node: any) => (Array.isArray(node.props.style) ? node.props.style : [node.props.style])
                 .some((part: any) => part?.width === 1));
         expect(rules).toHaveLength(2);
-        // STILL TWO WITH FOUR SEGMENTS (DROVE-281). The bolt joins the capsule
-        // and no rule joins with it, because the padlock and the bolt touch: a
-        // hairline here reads as "a separate thing to press", and the grouping
-        // is the whole of Clay's answer. The count is asserted rather than the
-        // absence, because a third rule appearing is exactly how the grouping
-        // would be lost without anything else failing.
-        const withBolt = mount({ onToggleAutoAccept: () => {} });
+        // TWO FOR THREE SEGMENTS, one between every pair. DROVE-281's bolt
+        // joined without a rule because it touched the padlock; it is gone
+        // (DROVE-331) and the state it carried does not add a segment, so
+        // auto-accept ON draws the same two rules. The count is asserted
+        // rather than the absence, because a third rule appearing is exactly
+        // how a segment would come back without anything else failing.
+        const withBolt = mount({ autoAccept: true });
         expect(withBolt.root.findAllByType('View' as any)
             .filter((node: any) => (Array.isArray(node.props.style) ? node.props.style : [node.props.style])
                 .some((part: any) => part?.width === 1))).toHaveLength(2);
@@ -306,7 +308,9 @@ describe('the colour each glyph is drawn in (DROVE-176, DROVE-215)', () => {
         // Clay: "I told you to do white for the color of all the icons." The
         // mode is a value the session holds, not a thing it is doing, so it
         // buys no colour. The SHAPE still separates them, which is the trade
-        // DROVE-141 made and DROVE-176 promised to keep good for.
+        // DROVE-141 made and DROVE-176 promised to keep good for. Auto-accept
+        // is off here, which is every session at launch; on, the padlock is
+        // the one exception (below).
         const glyph = (modeKind: string) => mount({ modeKind }).root.findByType('Ionicons' as any).props;
         expect(glyph('yolo').name).toBe('lock-open-outline');
         expect(glyph('default').name).toBe('lock-closed-outline');
@@ -318,98 +322,67 @@ describe('the colour each glyph is drawn in (DROVE-176, DROVE-215)', () => {
     });
 
     /**
-     * AUTO-ACCEPT COLOURS ITS OWN SEGMENT AND NOTHING ELSE (DROVE-281), and
-     * pinning it in a RENDER matters more here than anywhere else on the row:
-     * the colour is a sighted carrier of a state whose cost of being missed is
-     * a command running unasked.
+     * AUTO-ACCEPT COLOURS THE PADLOCK AND NOTHING ELSE (DROVE-277, DROVE-331),
+     * and pinning it in a RENDER matters more here than anywhere else on the
+     * row: the colour is a sighted carrier of a state whose cost of being
+     * missed is a command running unasked.
      *
-     * DROVE-277 put this colour on the PADLOCK, because the switch was a row
-     * inside the padlock's sheet and the padlock was the only object that
-     * could carry the state at all. The bolt is a segment now, so the state
-     * sits on the control that changes it, and DROVE-215's white-icon rule
-     * goes back to having no exception anywhere on the row.
+     * DROVE-277 put this colour on the padlock because the switch was a row
+     * inside the padlock's sheet and nothing else on the row could carry the
+     * state. DROVE-281 moved it to a bolt segment beside the padlock. DROVE-331
+     * took the bolt off the row on Clay's word — the sheet's switch is the one
+     * control — so the padlock carries it again, for DROVE-277's reason: it is
+     * the only object on the row that can, and it opens the sheet where the
+     * bit is set.
      */
-    it('draws the bolt in the accent while auto-accept is on, and fills it as well', () => {
-        const bolt = (autoAccept: boolean) =>
-            iconIn(mount({ autoAccept, onToggleAutoAccept: () => {} }), 'Auto-accept');
-        expect(bolt(false).color).toBe(palette.foreground);
-        expect(bolt(true).color).toBe(palette.accent);
-        // NOT HUE ALONE. The outline and the solid are the same glyph at two
-        // weights, so the state has a silhouette for a reader who cannot tell
-        // the accent from the foreground.
-        expect(bolt(false).name).not.toBe(bolt(true).name);
-        expect(bolt(true).name).toContain('flash');
-        expect(bolt(false).name).toContain('flash');
-    });
-
-    it('leaves the padlock on the foreground even while auto-accept is on (DROVE-281)', () => {
-        // The exception DROVE-277 carved into DROVE-215's rule, closed. Two
-        // accent glyphs touching inside one capsule would say the same thing
-        // twice, and the second would say it about a control that is not the
-        // one you press to change it.
+    it('draws the padlock in the accent while auto-accept is on, in every mode (DROVE-277, DROVE-331)', () => {
         for (const mode of ['yolo', 'safe-yolo', 'read-only', 'plan', 'acceptEdits', 'default']) {
-            for (const autoAccept of [false, true]) {
-                const renderer = mount({ modeKind: mode, autoAccept, onToggleAutoAccept: () => {} });
-                expect(iconIn(renderer, 'Permission mode').color, `${mode}/${autoAccept}`)
-                    .toBe(palette.foreground);
-            }
+            expect(iconIn(mount({ modeKind: mode, autoAccept: false }), 'Permission mode').color, `${mode}/off`)
+                .toBe(palette.foreground);
+            expect(iconIn(mount({ modeKind: mode, autoAccept: true }), 'Permission mode').color, `${mode}/on`)
+                .toBe(palette.accent);
         }
-        // And the SILHOUETTE is the same either way, so the row never
-        // misreports which mode the session is in to say it is auto-accepting.
+        // NOT A NEW HUE: the same accent send wears with something to send.
+        expect(iconIn(mount({ autoAccept: true }), 'Permission mode').color)
+            .toBe(autoAcceptColour(palette, true));
+        // The SILHOUETTE is the same either way, so the row never misreports
+        // which mode the session is in to say it is auto-accepting; the words
+        // carry the state for a reader the hue never reaches (below).
         const shape = (autoAccept: boolean) =>
-            iconIn(mount({ modeKind: 'yolo', autoAccept, onToggleAutoAccept: () => {} }), 'Permission mode').name;
+            iconIn(mount({ modeKind: 'yolo', autoAccept }), 'Permission mode').name;
         expect(shape(true)).toBe(shape(false));
+        // And a pending pick outranks it, as it does every colour on the row
+        // (DROVE-217): the wait is the thing Clay sees.
+        expect(iconIn(mount({ autoAccept: true, pending: { permission: true } }), 'Permission mode').color)
+            .toBe(palette.pending);
+        // Nothing else on the row takes the state: the gauge stays on the
+        // foreground while auto-accept is on.
+        expect(mount({ autoAccept: true }).root.findByType('Line' as any).props.stroke)
+            .toBe(palette.foreground);
     });
 
-    /**
-     * ONE TAP, WHICH IS THE WHOLE TICKET (DROVE-281).
-     *
-     * DROVE-277's switch was two taps behind the padlock's sheet. Clay flips
-     * this per session, mid-work, so two taps is a toggle he does not flip.
-     */
-    it('flips auto-accept on the first tap, and opens no picker doing it', () => {
-        const opened: string[] = [];
-        let flipped = 0;
-        const renderer = mount({
-            onPress: (picker: string) => opened.push(picker),
-            onToggleAutoAccept: () => { flipped += 1; },
-        });
-        act(() => {
-            press(renderer, 'Auto-accept').props.onPress();
-        });
-        expect(flipped).toBe(1);
-        // It must never reach the picker machinery: there is no sheet for
-        // composerPicker.ts to dismiss and no pick for the terminal to confirm.
-        expect(opened).toEqual([]);
-    });
-
-    it('reads as a switch rather than a button with a sheet it does not have', () => {
-        // The three pickers are buttons that expand. This one is checked or
-        // not, and saying `expanded` on it would promise VoiceOver a sheet.
-        for (const on of [false, true]) {
-            const control = press(mount({ autoAccept: on, onToggleAutoAccept: () => {} }), 'Auto-accept');
-            expect(control.props.accessibilityRole).toBe('switch');
-            expect(control.props.accessibilityState.checked, `${on}`).toBe(on);
-            expect(control.props.accessibilityState.expanded).toBeUndefined();
-            // In WORDS as well as in the state, for a reader that announces
-            // the value and not the state.
-            expect(control.props.accessibilityValue.text).toBe(on ? 'On' : 'Off');
-            // And what it actually does, which no colour or glyph can say.
-            expect(control.props.accessibilityHint).toBeTruthy();
+    it('draws no auto-accept segment at all, whatever it is handed (DROVE-331)', () => {
+        // DROVE-281's bolt: a fourth segment touching the padlock, a switch to
+        // a screen reader, one tap to flip. Gone, because the sheet behind the
+        // padlock has the same switch and Clay does not want the bit in two
+        // places. Absent rather than drawn-and-dead, and absent with the state
+        // ON and with a stray toggle handler, which are the two things a
+        // leftover branch would draw on.
+        for (const overrides of [{}, { autoAccept: true }, { autoAccept: true, onToggleAutoAccept: () => {} }]) {
+            expect(press(mount(overrides), 'Auto-accept')).toBeUndefined();
+            expect(mount(overrides).root.findAll(
+                (node: any) => typeof node.type === 'string' && node.props?.accessibilityRole === 'switch',
+            )).toEqual([]);
+            expect(mount(overrides).root.findAllByType('Ionicons' as any)
+                .map((node: any) => node.props.name)
+                .filter((name: string) => name.includes('flash'))).toEqual([]);
         }
-        // The padlock is untouched: still a button, still expandable.
-        const lock = press(mount({ onToggleAutoAccept: () => {} }), 'Permission mode');
+        // The padlock is still a button that expands, not a switch: the state
+        // it wears is not a state it flips.
+        const lock = press(mount({ autoAccept: true }), 'Permission mode');
         expect(lock.props.accessibilityRole).toBe('button');
         expect(lock.props.accessibilityState.checked).toBeUndefined();
-    });
-
-    it('draws no bolt at all on a session that has no auto-accept to hold', () => {
-        // Absent rather than drawn-and-dead, which is the opposite of what the
-        // three pickers do. A picker with nothing to pick still SAYS what the
-        // session is set to; a bolt that cannot be pressed says only that
-        // something is missing.
-        expect(press(mount(), 'Auto-accept')).toBeUndefined();
-        expect(press(mount({ autoAccept: true }), 'Auto-accept')).toBeUndefined();
+        expect(lock.props.accessibilityState.expanded).toBe(false);
     });
 
     it('says auto-accept in words as well as in colour, for the reader the hue never reaches', () => {
@@ -599,36 +572,50 @@ describe('read-aloud as a capsule segment', () => {
         ...overrides,
     });
 
-    it('sits third, between the permission pair and the effort gauge', () => {
-        const labels = mount({ onToggleAutoAccept: () => {}, readAloud: readAloud() })
+    it('sits second, between the padlock and the effort gauge', () => {
+        // Third from DROVE-284 to DROVE-331, while the auto-accept bolt sat
+        // between it and the padlock. Lock, speaker, effort, model now.
+        const labels = mount({ autoAccept: true, readAloud: readAloud() })
             .root.findAll((node: any) => typeof node.type === 'string' && !!node.props?.accessibilityLabel)
             .map((node: any) => node.props.accessibilityLabel);
         expect(labels).toEqual([
-            'Permission mode', 'Auto-accept', 'Read aloud', 'Reasoning effort', 'Model',
+            'Permission mode', 'Read aloud', 'Reasoning effort', 'Model',
         ]);
     });
 
     it('is absent where there is no reader, not drawn and dead', () => {
-        // The bolt's shape, for the bolt's reason (DROVE-281): a picker with
-        // nothing to pick still SAYS what the session is set to, and a speaker
-        // with no reader behind it says only that something is missing. An
-        // embedded or disconnected chat has no reader.
+        // Absent rather than drawn-and-dead: a picker with nothing to pick
+        // still SAYS what the session is set to, and a speaker with no reader
+        // behind it says only that something is missing. An embedded or
+        // disconnected chat has no reader.
         const labels = mount().root
             .findAll((node: any) => typeof node.type === 'string' && !!node.props?.accessibilityLabel)
             .map((node: any) => node.props.accessibilityLabel);
         expect(labels).not.toContain('Read aloud');
     });
 
-    it('takes a THIRD hairline, and the permission pair still touches', () => {
+    it('takes a THIRD hairline, one between every pair', () => {
         // Two rules became three, because the subject changes once more:
-        // permission -> read-aloud -> effort -> the name. The padlock and the
-        // bolt still have nothing between them, which is DROVE-281's grouping
-        // and the thing a third rule could quietly undo.
+        // permission -> read-aloud -> effort -> the name. Four segments, three
+        // rules, and nothing touching: the padlock and the bolt were the pair
+        // that did (DROVE-281) and the bolt is gone (DROVE-331), so a segment
+        // with no rule beside it would be the bolt coming back.
         const rules = (renderer: any) => renderer.root.findAllByType('View' as any)
             .filter((node: any) => (Array.isArray(node.props.style) ? node.props.style : [node.props.style])
                 .some((part: any) => part?.width === 1));
-        expect(rules(mount({ onToggleAutoAccept: () => {}, readAloud: readAloud() }))).toHaveLength(3);
-        expect(rules(mount({ onToggleAutoAccept: () => {} }))).toHaveLength(2);
+        expect(rules(mount({ readAloud: readAloud() }))).toHaveLength(3);
+        expect(rules(mount({ autoAccept: true, readAloud: readAloud() }))).toHaveLength(3);
+        expect(rules(mount())).toHaveLength(2);
+        // And a rule directly follows the padlock: segments and hairlines in
+        // tree order alternate, starting and ending on a segment.
+        const ordered = mount({ readAloud: readAloud() }).root
+            .findAll((node: any) => typeof node.type === 'string' && (
+                !!node.props?.accessibilityLabel
+                || (Array.isArray(node.props.style) ? node.props.style : [node.props.style])
+                    .some((part: any) => part?.width === 1)
+            ))
+            .map((node: any) => node.props.accessibilityLabel ?? '|');
+        expect(ordered).toEqual(['Permission mode', '|', 'Read aloud', '|', 'Reasoning effort', '|', 'Model']);
     });
 
     /**
@@ -766,7 +753,7 @@ describe('read-aloud as a capsule segment', () => {
         expect(press(renderer, 'Reasoning effort').props.onLongPress).toBeUndefined();
     });
 
-    it('is a switch to a screen reader, like the bolt and unlike the pickers', () => {
+    it('is a switch to a screen reader, unlike the pickers', () => {
         // A press that flips a state rather than raising a sheet, so VoiceOver
         // announces a state instead of an `expanded` it does not have.
         const segment = press(mount({ readAloud: readAloud({ on: true }) }), 'Read aloud');
@@ -783,10 +770,9 @@ describe('read-aloud as a capsule segment', () => {
         const renderer = mount({
             size: 39,
             segmentWidth: MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH,
-            onToggleAutoAccept: () => {},
             readAloud: readAloud(),
         });
-        for (const label of ['Permission mode', 'Auto-accept', 'Read aloud', 'Reasoning effort']) {
+        for (const label of ['Permission mode', 'Read aloud', 'Reasoning effort']) {
             const box = stylePartsOf(press(renderer, label)).reduce((found: any, part: any) => ({
                 width: part?.width ?? found.width, height: part?.height ?? found.height,
             }), { width: undefined, height: undefined });

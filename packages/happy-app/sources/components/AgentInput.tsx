@@ -765,17 +765,10 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     // rather than in the capsule so the padlock and the sheet row cannot
     // disagree about what the session is set to.
     const autoAccept = useAutoAccept(props.sessionId);
+    // The sheet's switch is the ONE setter since DROVE-331. DROVE-281's bolt
+    // on the capsule wrote through this same setter; Clay ruled two controls
+    // for one bit redundant and the bolt is gone.
     const setAutoAccept = useAutoAcceptToggle(props.sessionId);
-    /**
-     * The bolt's press, which is the sheet's switch with the value read off
-     * the store rather than handed in (DROVE-281).
-     *
-     * Both write through `setAutoAccept`, so the segment and the sheet row
-     * cannot drift: there is one setter and one module-level set behind it.
-     */
-    const toggleAutoAccept = React.useCallback(() => {
-        setAutoAccept(!autoAccept);
-    }, [setAutoAccept, autoAccept]);
     const modelLabel = props.modelMode?.name ?? t('agentInput.model.title');
     const effortLabel = props.effortLevel?.name;
     const isSandboxEnabled = React.useMemo(() => {
@@ -2338,8 +2331,8 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     ) : null;
 
     /**
-     * THE SESSION GROUP, INSIDE THE BUBBLE (DROVE-236), NOW HOLDING FIVE THINGS
-     * (DROVE-284).
+     * THE SESSION GROUP, INSIDE THE BUBBLE (DROVE-236), HOLDING FOUR THINGS
+     * (DROVE-284, DROVE-331).
      *
      * It was a capsule on a row of its own under the bubble, which is where
      * DROVE-196 put it: "the second row buttons should sit outside the speech
@@ -2347,19 +2340,24 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
      * into the bubble's empty middle beside the `+` — so it is on the bubble's
      * own button row. DROVE-281 added the auto-accept bolt and DROVE-284 added
      * read-aloud, on "add the reading mode whatever thing to the group".
+     * DROVE-331 took the bolt back out: "because of the toggles in the sheet
+     * for auto-accept, we don't need it also in the bar group." The sheet's
+     * switch below is the one auto-accept control; the padlock wears the
+     * state.
      *
-     * THE PRESSES HAVE NOT MOVED EITHER TIME. Three of the five segments open
-     * their own picker on the first tap through `handleSessionControlPress`,
-     * and every one of those is a sheet (DROVE-242). The other two are the ones
-     * that DO something: the bolt flips a boolean and read-aloud keeps both of
-     * its gestures, tap for reading mode and long press for pause or boss mode.
+     * THE PRESSES HAVE NOT MOVED. Three of the four segments open their own
+     * picker on the first tap through `handleSessionControlPress`, and every
+     * one of those is a sheet (DROVE-242). Read-aloud is the one that DOES
+     * something and keeps both of its gestures, tap for reading mode and long
+     * press for pause or boss mode.
      *
      * WHAT IT COSTS. The capsule is the row's height rather than 44
      * (`MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE`) and its glyph segments are
      * narrower than they are tall (`MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH`).
      * Both are touch target spent on width, both are argued on the constants,
      * and the second is what buys back the single row Clay asked for with a
-     * fifth thing in the group.
+     * fourth thing in the group. The 27pt the bolt held is the model name's
+     * now, through the budget in sessionPillLabel.ts.
      */
     const mobileSessionControls = props.zenMode ? null : (
             <ComposerSessionControls
@@ -2382,14 +2380,11 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 effortIndex={effortIndex}
                 effortCount={effortScale.keys.length}
                 onPress={handleSessionControlPress}
+                /* THE PADLOCK WEARS THIS (DROVE-277, DROVE-331): the accent
+                   while it is on, and "auto-accept on" in its accessibility
+                   value. It is not a segment any more; the switch in the
+                   sheet this padlock opens is the one control. */
                 autoAccept={autoAccept}
-                /* THE BOLT'S PRESS (DROVE-281). It is not a picker, so it does
-                   not go through `handleSessionControlPress` and never touches
-                   composerPicker.ts's dismissal machine: there is no sheet to
-                   dismiss. Absent without a session id, because there is then
-                   no session for the toggle to be about — the capsule draws
-                   three segments instead of four and says nothing untrue. */
-                onToggleAutoAccept={props.sessionId ? toggleAutoAccept : undefined}
                 /* READ-ALOUD, MOVED IN OFF THE ROW (DROVE-284).
 
                    Clay: "Add the reading mode whatever thing to the group and
@@ -2405,7 +2400,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                    handlers, same `audioOutButton`; only the box changed, which
                    is what DROVE-236 said the last time this control moved.
 
-                   ABSENT WITHOUT A READER, like the bolt without a session:
+                   ABSENT WITHOUT A READER:
                    `audioOut.shown` is false on an embedded or disconnected
                    chat, and a speaker with nothing behind it says only that
                    something is missing. */
@@ -2418,11 +2413,10 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     onLongPress: handleAudioOutLongPress,
                 } : null}
                 canOpen={{
-                    // The sheet behind the padlock still holds the auto-accept
-                    // switch as well as the mode list (DROVE-277, kept by
-                    // DROVE-281 for the boundary wording the segment has no room
-                    // for), so a session whose harness publishes no modes still
-                    // has something to open.
+                    // The sheet behind the padlock holds the auto-accept switch
+                    // as well as the mode list (DROVE-277, and the ONE
+                    // auto-accept control since DROVE-331), so a session whose
+                    // harness publishes no modes still has something to open.
                     permission: (!!props.onPermissionModeChange && availableModes.length > 0) || !!props.sessionId,
                     effort: availableEffortLevels.length > 0 && !!props.onEffortLevelChange,
                     model: availableModels.length > 0 && !!props.onModelModeChange,
@@ -2513,7 +2507,9 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                             {permissionTitle}
                                         </Text>
                                         {/* AUTO-ACCEPT, at the top of the permission
-                                            sheet (DROVE-277). It sits above the mode
+                                            sheet (DROVE-277), and THE ONE PLACE IT IS
+                                            SET since DROVE-331 took DROVE-281's bolt
+                                            off the capsule. It sits above the mode
                                             list rather than below it because it is the
                                             widest thing on the sheet: while it is on,
                                             every Allow / Deny prompt in this session is
