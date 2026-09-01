@@ -10,6 +10,10 @@ import { ambientDataDir } from "@/drover/flip/accounts";
 import { parseFlipCommand } from "@/drover/flip/controller";
 import { capturePane, injectIntoPane, interruptPane, paneAcceptsCommand, paneIsIdle, pressPaneKey, registryStatus } from "./utils/paneInject";
 import { paneCommandKind, paneCommandOutcome, paneUltracodeActive } from "./utils/paneCommandOutcome";
+import { creditsSafeRow, paneCreditsDialog, type PaneCreditsDialog } from "./utils/paneCreditsDialog";
+import { answerPaneCreditsRow } from "./utils/paneCreditsAnswer";
+import { creditsGateName, creditsLedgerVerdict, openPaneCreditsGate } from "./utils/paneCreditsGate";
+import { noteGate } from "@/drover/gateLedger";
 import { createPaneCommandQueue, paneCommandArgument, paneCommandsForSelection, paneModelAsRequest, paneSlashCommand, parseRemoteControlRequest, remoteControlCommand, type PaneModelSelection } from "./utils/paneModelSync";
 import { cyclePaneMode, panePermissionAsRequest, pressCycleKey, readPaneMode, readPaneModeChip, type PaneMode } from "./utils/panePermissionSync";
 import { isPermissionMode, mapToClaudeMode } from "./utils/permissionMode";
@@ -583,6 +587,124 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
         await reportPanePermissionMode(mode);
     }
 
+    /** True from the moment a credits gate is raised until its row is typed. */
+    let creditsGateBusy = false;
+
+    /**
+     * The Fable credits dialog, on the same footer timer (DROVE-279).
+     *
+     * It has to be a WATCHER and not just an outcome of `/model`, because the
+     * dialog Clay actually hits is the mid-session one: he is halfway through a
+     * turn, the week's included Fable usage runs out, and Claude Code draws
+     * "You've reached your Fable 5 limit" with nobody having typed anything.
+     * Nothing polls the pane on that path, so the dialog sits there, and
+     * `paneAcceptsCommand` — which now refuses while it is up — holds every
+     * queued command behind it. That is the strand Clay described.
+     *
+     * Reads and hands off. It never answers, and there is nothing in this
+     * function or below it that presses a key at a dialog it has not read off
+     * the screen on the same tick.
+     */
+    async function watchPaneCreditsDialog(): Promise<void> {
+        if (!tmuxPane || !childAlive || creditsGateBusy) return;
+        // Its own capture rather than one shared with the footer watcher: that
+        // watcher's seam is `readPaneModeChip`, and pulling the capture up out
+        // of it to save a `tmux capture-pane` every two seconds would move a
+        // seam DROVE-199's tests hold, to buy a subprocess. The two reads look
+        // at disjoint parts of the screen anyway — a footer chip and a dialog,
+        // which are never both there.
+        const capture = await capturePane(tmuxPane);
+        if (capture === null) return;
+        const dialog = paneCreditsDialog(capture);
+        // Null is "nothing answerable on screen" and covers the spinner steps
+        // this dialog opens on ("Checking usage credits…"). Two seconds later
+        // the timer looks again, and the queue stays held meanwhile because
+        // paneAcceptsCommand matches on the TITLE rather than on the rows.
+        if (dialog === null) return;
+        creditsGateBusy = true;
+        try {
+            await runPaneCreditsGate(dialog);
+        } catch (e) {
+            // A throw here would leave the latch set and the dialog forever
+            // unasked. Nothing below is allowed to be the reason a pane stays
+            // stranded.
+            logger.debug('[local]: the credits gate threw:', e);
+        } finally {
+            creditsGateBusy = false;
+        }
+    }
+
+    /**
+     * Ask Clay which row, then type THAT row. Never a default, never a guess.
+     *
+     * The three outcomes and what each one costs:
+     *
+     *   - he picks a row: it is typed. If the row he picked spends money, he
+     *     spent it, which is the only way this dialog is ever allowed to spend
+     *     anything.
+     *   - nobody answers inside the budget: the SAFE row is typed — the
+     *     component's own decline, identified by its text rather than by its
+     *     position — and both halves of DROVE-239's trail are written: the
+     *     ledger says `unanswered-safe-row` and the withdrawal on the bus says
+     *     `gate-timeout:fable-credits`, so `endedBy.by` names us instead of
+     *     the anonymous "producer".
+     *   - the safe row cannot be recognised: Escape, which is the dialog's own
+     *     onCancel. Dismissed, nothing consented to, nothing bought.
+     *
+     * Every one of the three ends with the dialog off the screen, which is
+     * what unblocks the pane queue.
+     */
+    async function runPaneCreditsGate(dialog: PaneCreditsDialog): Promise<void> {
+        logger.debug(`[local]: ${dialog.title} is on screen — asking rather than answering`);
+        session.client.sendSessionEvent({
+            type: 'message',
+            message: `Cattle Drover: the terminal is asking "${dialog.title}". Pick a row on your phone — nothing is bought until you do.`,
+        });
+        const outcome = await openPaneCreditsGate({
+            dialog,
+            sessionId: session.sessionId ?? null,
+            cwd: process.cwd(),
+            account: session.client.getMetadata()?.droverAccount ?? null,
+            surface: tmuxPane ?? null,
+        });
+        const safe = creditsSafeRow(dialog);
+        // The ONLY two labels that can be typed: one a human named, or the one
+        // this side identified as the decline. Null means Escape.
+        const label = outcome.pick === 'row' ? outcome.label : (safe?.label ?? null);
+        if (outcome.pick === 'safe') {
+            logger.debug(`[local]: nobody answered the credits gate (${outcome.reason}) — taking ${label ?? 'Escape'}`);
+        }
+        const result = await answerPaneCreditsRow(
+            {
+                capture: () => capturePane(tmuxPane!),
+                press: (key) => pressPaneKey(tmuxPane!, key),
+                settle: (ms) => new Promise<void>((r) => setTimeout(r, ms)),
+            },
+            label,
+        );
+        // Said out loud on the phone, not just logged. A dialog that answered
+        // itself while Clay was not looking is exactly what has to be visible.
+        const said =
+            result.state === 'typed'
+                ? outcome.pick === 'row'
+                    ? `Cattle Drover: typed "${result.label}" in the terminal.`
+                    : `Cattle Drover: nobody answered "${dialog.title}", so the terminal took the safe row "${result.label}". Nothing was bought.`
+                : result.state === 'dismissed'
+                    ? `Cattle Drover: dismissed "${dialog.title}" without buying anything — ${result.reason}.`
+                    : result.state === 'gone'
+                        ? `Cattle Drover: "${dialog.title}" closed in the terminal before an answer landed.`
+                        : `Cattle Drover: could not answer "${dialog.title}" — ${result.reason}. Nothing was typed.`;
+        session.client.sendSessionEvent({ type: 'message', message: said });
+        // DROVE-239's split, in this gate's words: `-remotely` is a human
+        // having decided, anything else is this process having decided FOR
+        // him. That distinction is the whole reason the ledger exists, and it
+        // has to survive without the bus's memory.
+        noteGate('question', creditsGateName, creditsLedgerVerdict(outcome, result));
+        if (result.state === 'stuck') {
+            logger.debug(`[local]: the credits dialog is still up: ${result.reason}`);
+        }
+    }
+
     /**
      * The toggle half of what used to be one optimistic write.
      *
@@ -640,6 +762,15 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
                 return true;
             }
             const outcome = paneCommandOutcome(before, after, kind);
+            if (outcome.state === 'credits') {
+                // NOT the confirm arm below, and the difference is money
+                // (DROVE-279). `watchPaneCreditsDialog` is already on the same
+                // 2s timer and owns this dialog, so this returns rather than
+                // racing it — two writers on one pane interleave their
+                // keystrokes, and one of this dialog's rows is a purchase.
+                logger.debug(`[local]: ${command} raised the Fable credits dialog — the gate owns it, not this loop`);
+                return true;
+            }
             if (outcome.state === 'confirm') {
                 // Answered only because we READ our own dialog first and know
                 // "Yes" is the highlighted row. A blind Enter at a pane is the
@@ -1171,7 +1302,15 @@ export async function claudeLocalLauncher(session: Session): Promise<LauncherRes
         // process can subscribe to. `watchPanePermissionMode` no-ops while
         // there is no child in the pane, so the cost between spawns is a
         // timer tick.
-        panePermissionTimer = setInterval(() => { void watchPanePermissionMode(); }, panePermissionPollMs);
+        // Same timer and the same reason it is unconditional, for the credits
+        // dialog too (DROVE-279): that one arrives on no signal this process
+        // can subscribe to either — Claude Code draws it mid-turn when the
+        // week's included Fable usage runs out — and it blocks the pane queue
+        // until somebody answers it.
+        panePermissionTimer = setInterval(() => {
+            void watchPanePermissionMode();
+            void watchPaneCreditsDialog();
+        }, panePermissionPollMs);
         panePermissionTimer.unref?.();
         // The scanner already reported the transcript's state, but it did so
         // before the queue existed. Decide once now, so a session relaunched
