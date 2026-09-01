@@ -10,6 +10,7 @@ import * as Clipboard from 'expo-clipboard';
 import { Modal } from '@/modal';
 import { Ionicons } from '@expo/vector-icons';
 import { MobileGlassSurface } from '@/components/MobileGlass';
+import { textSelectionSurface } from '@/components/textSelectionSurface';
 
 export default function TextSelectionScreen() {
     const router = useRouter();
@@ -97,17 +98,27 @@ export default function TextSelectionScreen() {
                     { paddingBottom: insets.bottom + 16 }
                 ]}
             >
-                <TextInput
-                    style={[styles.textInput, { 
-                        color: theme.colors.text,
-                        backgroundColor: 'transparent'
-                    }]}
-                    value={fullText}
-                    multiline={true}
-                    editable={false}
-                    selectTextOnFocus={false}
-                    scrollEnabled={false}
-                />
+                {/* The control that can select a word differs by platform,
+                    and getting it wrong is silent. See
+                    `textSelectionSurface.ts`: iOS needs the UITextView a
+                    read-only multiline TextInput renders, and Android must
+                    NOT use one, because `editable={false}` disables the
+                    EditText and a disabled view takes no touches. */}
+                {textSelectionSurface(Platform.OS) === 'text-input' ? (
+                    <TextInput
+                        style={[styles.textInput, {
+                            color: theme.colors.text,
+                            backgroundColor: 'transparent'
+                        }]}
+                        value={fullText}
+                        multiline={true}
+                        editable={false}
+                        selectTextOnFocus={false}
+                        scrollEnabled={false}
+                    />
+                ) : (
+                    <Text selectable style={styles.selectableText}>{fullText}</Text>
+                )}
             </ScrollView>
             </MobileGlassSurface>
         </View>
@@ -152,6 +163,13 @@ const styles = StyleSheet.create((theme) => ({
         borderWidth: 0,
         paddingHorizontal: 0,
         paddingVertical: 0,
+    },
+    selectableText: {
+        ...Typography.mono(),
+        fontSize: 14,
+        lineHeight: 20,
+        color: theme.colors.text,
+        minHeight: 200,
     },
     copyButton: {
         padding: 8,

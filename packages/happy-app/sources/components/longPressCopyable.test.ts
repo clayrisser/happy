@@ -175,6 +175,50 @@ describe('LongPressCopyable on iOS', () => {
     });
 });
 
+describe('the hold offers both the coarse action and the fine one', () => {
+    /**
+     * DROVE-282. Until this landed the menu had one item, so the reader at
+     * `/text-selection` — the only surface in the app where a word can be
+     * selected with the platform's own handles — was unreachable from a
+     * message. Copy stays FIRST: the fine action is added beside the coarse
+     * one, never in place of it.
+     */
+    function openMenu() {
+        const renderer = render(React.createElement(AndroidCopyable, {
+            text: MESSAGE,
+            children: React.createElement('Bubble'),
+        }));
+        act(() => shared.longPressHandlers[0]());
+        return renderer;
+    }
+
+    function menuLabels(renderer: ReactTestRenderer): string[] {
+        return renderer.root.findAllByType('Pressable' as any)
+            .map((row: any) => row.props.accessibilityLabel)
+            .filter((label: unknown): label is string => typeof label === 'string');
+    }
+
+    it('lists Copy first and Select Text second', () => {
+        expect(menuLabels(openMenu())).toEqual(['Copy', 'Select Text']);
+    });
+
+    it('hands the reader exactly the text Copy would have put on the clipboard', () => {
+        const renderer = openMenu();
+        const selectRow = renderer.root.findAllByType('Pressable' as any)
+            .find((row: any) => row.props.accessibilityLabel === 'Select Text');
+        act(() => selectRow.props.onPress());
+        expect(shared.push).toHaveBeenCalledWith(`/text-selection?textId=temp:${MESSAGE.length}`);
+    });
+
+    it('closes the menu before pushing, so the modal is not left over the reader', () => {
+        const renderer = openMenu();
+        const selectRow = renderer.root.findAllByType('Pressable' as any)
+            .find((row: any) => row.props.accessibilityLabel === 'Select Text');
+        act(() => selectRow.props.onPress());
+        expect(renderer.root.findAllByType('RNModal' as any)).toHaveLength(0);
+    });
+});
+
 describe('LongPressCopyable fallbacks', () => {
     // Android has no context-menu primitive in @expo/ui, so the hold degrades
     // to the anchored menu it has today rather than to no copy at all.

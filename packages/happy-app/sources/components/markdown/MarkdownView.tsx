@@ -325,10 +325,32 @@ function RenderCodeBlock(props: { content: string, language: string | null, firs
     const [wrap, toggleWrap] = useCodeWrap('code');
     const { theme } = useUnistyles();
 
+    // A fence is the densest thing in the transcript to copy by hand — a
+    // command line, a diff, a stack trace — so it gets its own one-tap copy
+    // (DROVE-282). The button existed already and no phone could reach it:
+    // `copyButtonWrapper` is `opacity: 0, pointerEvents: 'none'` until
+    // `isHovered`, and hover is a mouse. On a touch screen it is simply shown.
+    const showCopyButton = Platform.OS !== 'web' || isHovered;
+
+    // Confirmed in place rather than with an alert. The alert was tolerable
+    // when only a mouse could raise it; a modal with an OK button on every
+    // copy tap is not what a phone should do.
+    const [copied, setCopied] = React.useState(false);
+    const copiedTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+    React.useEffect(() => () => {
+        if (copiedTimer.current !== null) {
+            clearTimeout(copiedTimer.current);
+        }
+    }, []);
+
     const copyCode = React.useCallback(async () => {
         try {
             await Clipboard.setStringAsync(props.content);
-            Modal.alert(t('common.success'), t('markdown.codeCopied'), [{ text: t('common.ok'), style: 'cancel' }]);
+            setCopied(true);
+            if (copiedTimer.current !== null) {
+                clearTimeout(copiedTimer.current);
+            }
+            copiedTimer.current = setTimeout(() => setCopied(false), 1200);
         } catch (error) {
             console.error('Failed to copy code:', error);
             Modal.alert(t('common.error'), t('markdown.copyFailed'), [{ text: t('common.ok'), style: 'cancel' }]);
@@ -367,14 +389,16 @@ function RenderCodeBlock(props: { content: string, language: string | null, firs
                 <WrapGlyph on={wrap} color={theme.colors.textSecondary} style={style.codeWrapGlyph} />
             </DoubleTap>
             <View
-                style={[style.copyButtonWrapper, isHovered && style.copyButtonWrapperVisible]}
+                style={[style.copyButtonWrapper, showCopyButton && style.copyButtonWrapperVisible]}
                 {...(Platform.OS === 'web' ? ({ className: 'copy-button-wrapper' } as any) : {})}
             >
                 <Pressable
-                    style={style.copyButton}
+                    accessibilityLabel={t('common.copy')}
+                    accessibilityRole="button"
+                    style={[style.copyButton, copied && style.copyButtonCopied]}
                     onPress={copyCode}
                 >
-                    <Text style={style.copyButtonText}>{t('common.copy')}</Text>
+                    <Text style={style.copyButtonText}>{copied ? t('common.copied') : t('common.copy')}</Text>
                 </Pressable>
             </View>
         </View>
