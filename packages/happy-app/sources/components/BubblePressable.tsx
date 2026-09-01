@@ -26,6 +26,21 @@ type BubblePressableProps = Omit<PressableProps, 'style'> & {
     pressedStyle?: StyleProp<ViewStyle>;
     bubbleScale?: number;
     scaleFeedback?: boolean;
+    /**
+     * Override the surrounding surface's answer about whether the PLATFORM is
+     * drawing this press (DROVE-266).
+     *
+     * The context is a property of the SURFACE, and it is right for a control
+     * that stands on the material. It is wrong for one whose own opaque fill
+     * COVERS it: the composer's `+`, its session capsule, its audio disc and
+     * its mic once open all replace the glass rather than sit on it, so
+     * `UIGlassEffect.isInteractive` lenses under a view you cannot see through
+     * and the spring standing down would leave them with no response at all.
+     * Those pass `false` here. `resolveComposerPressResponse` in
+     * glassInteractionPolicy.ts decides which is which and carries the
+     * argument; this prop is only how the answer reaches the Pressable.
+     */
+    nativeGlassPress?: boolean;
 };
 
 /**
@@ -40,11 +55,13 @@ export const BubblePressable = React.memo(({
     disabled,
     onPressIn,
     onPressOut,
+    nativeGlassPress: nativeGlassPressOverride,
     ...props
 }: BubblePressableProps) => {
     const scale = useSharedValue(1);
     const [pressed, setPressed] = React.useState(false);
-    const nativeGlassPress = useNativeGlassPress();
+    const surfaceGlassPress = useNativeGlassPress();
+    const nativeGlassPress = nativeGlassPressOverride ?? surfaceGlassPress;
     const { animateScale } = resolveBubblePressableFeedback({
         platform: Platform.OS === 'web' ? 'web' : 'native',
         scaleFeedback,

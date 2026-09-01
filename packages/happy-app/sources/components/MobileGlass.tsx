@@ -15,6 +15,16 @@ type MobileGlassSurfaceProps = ViewProps & {
     enabled?: boolean;
     intensity?: number;
     interactive?: boolean;
+    /**
+     * Whether this surface is itself the thing being pressed (DROVE-266).
+     *
+     * A press target has to be free to swell past its resting frame, so it
+     * stops clipping; a surface that merely HOSTS interactive material keeps
+     * its clip, because the lensing it wants happens inside its own bounds.
+     * The composer card is the second kind and needs the clip to round the
+     * field it holds. `getGlassSurfaceOverflow` carries the argument.
+     */
+    pressTarget?: boolean;
     nativeEffect?: boolean;
     material?: MobileGlassMaterial;
     glassEffectStyle?: GlassStyle;
@@ -49,6 +59,7 @@ export function MobileGlassSurface({
     enabled = Platform.OS !== 'web' && !isRunningOnMac(),
     intensity = 72,
     interactive = false,
+    pressTarget = true,
     nativeEffect = interactive,
     material = 'liquid',
     glassEffectStyle = 'clear',
@@ -147,7 +158,7 @@ export function MobileGlassSurface({
                 // that swell into an inner zoom (DROVE-202). A surface nothing
                 // lands on keeps whatever clipping it asked for: the composer
                 // card needs it to round the field it holds.
-                style={[style, interactive && { overflow: getGlassSurfaceOverflow(true) }]}
+                style={[style, interactive && { overflow: getGlassSurfaceOverflow(true, pressTarget) }]}
             >
                 {surfaceOverlay}
                 <GlassPressProvider value={interactive}>
