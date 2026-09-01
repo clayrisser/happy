@@ -465,21 +465,25 @@ export function useVoiceComposer(options: VoiceComposerOptions): VoiceComposerSt
     /**
      * One tap on a control that has no touch stream (DROVE-210).
      *
-     * The composer's primary button is a plain `onPress`: it fires once, on
-     * the lift, with no press-in, no duration and no coordinates. So the tap
-     * is fed to the same reducer as a press and a lift at the SAME instant.
-     * Zero elapsed is under HOLD_MIN_MS on any clock, which is exactly the
-     * definition of a tap, so it can only ever latch, and on a mic that is
-     * already latched it can only ever stop. Push-to-talk and slide-to-cancel
-     * need the touch stream and stay on the capsule's TalkButton.
+     * Some controls report a press and nothing else: the headphone double
+     * press, the lock screen, the watch. No press-in, no duration, no
+     * coordinates. So the tap is fed to the same reducer as a press and a lift
+     * at the SAME instant. Zero elapsed is under HOLD_MIN_MS on any clock,
+     * which is exactly the definition of a tap, so it can only ever latch, and
+     * on a mic that is already latched it can only ever stop.
      *
-     * Same reducer, same capture, same banner, so a latch opened on either
-     * control is stopped by either.
+     * THE COMPOSER'S MIC IS NO LONGER ONE OF THEM (DROVE-269). It ran on this
+     * for two tickets and that is what cost push-to-talk; it has the full
+     * touch stream again, so it reaches `onTalkPressIn` and the three below.
+     * Push-to-talk and slide-to-cancel are back on the screen with it.
+     *
+     * Same reducer, same capture, same banner, so a latch opened on any of
+     * them is stopped by any other.
      */
     const onTalkTap = React.useCallback(() => {
-        // A finger is already down on the capsule's button. Two controls
-        // driving one gesture at once is the only way that happens, and the
-        // lift belongs to the finger, not to this tap.
+        // A finger is already down on the mic. Two controls driving one
+        // gesture at once is the only way that happens -- a headphone squeeze
+        // mid-hold -- and the lift belongs to the finger, not to this tap.
         if (gestureRef.current.pressedAt !== null) return;
         if (!canPress()) return;
         const at = Date.now();

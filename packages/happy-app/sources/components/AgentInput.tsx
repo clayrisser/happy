@@ -35,6 +35,8 @@ import { AnimatedFade } from './AnimatedOverlay';
 import { BubblePressable } from './BubblePressable';
 import { resolveAgentInputPrimaryAction } from './agentInputPrimaryAction';
 import { resolveComposerPrimaryPress, type ComposerPrimaryGesture } from './composerPrimaryPress';
+import { talkButtonWiring } from './talkButtonWiring';
+import { useTalkTouchStream } from './talkTouchStream';
 import { ComposerToast } from './ComposerToast';
 import { flipStreamTalk, streamTalkPauseToast } from '@/voice/streamTalk';
 import { audioOutButton } from './composerAudioOut';
@@ -149,9 +151,14 @@ interface AgentInputProps {
     /** The finger crossed the button's edge while still down (DROVE-105). */
     onTalkSlide?: (inside: boolean) => void;
     /**
-     * One tap, on a control with no touch stream (DROVE-210). The primary
-     * button is a plain `onPress`, so this is all it can do: latch the mic
-     * open, and stop a latched one. Same capture as the capsule above.
+     * One tap, on a control with no touch stream (DROVE-210). Latch the mic
+     * open, and stop a latched one. Same capture as the three above.
+     *
+     * The composer's mic is NOT one of those controls any more: it has the
+     * full stream again (DROVE-269), so this is here for the headphone double
+     * press, the lock screen and the watch, which report a press and nothing
+     * else. A latch opened by any of them is stopped by the button, and the
+     * other way round.
      */
     onTalkTap?: () => void;
     onTalkCancel?: () => void;
@@ -893,33 +900,47 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     const sendBlockShakerRef = React.useRef<ShakeInstance>(null);
     const inputRef = React.useRef<MultiTextInputHandle>(null);
     /*
-     * `talkWiring` and the `TalkButton` it fed stood here and are gone
-     * (DROVE-236).
+     * THE TALK GESTURE, BACK ON THE COMPOSER (DROVE-269).
      *
-     * Clay's markup crosses the control row's mic out: "it is already in the
-     * bubble." It is. The primary button IS the microphone whenever the
-     * composer has nothing to send or a capture is open, so a second mic on
-     * the row was the duplicate he struck through.
+     * `talkWiring` stood here, fed a `TalkButton` on the control row, and went
+     * with that row in DROVE-236, which folded the mic into the primary button
+     * and named losing hold-to-talk as the price. DROVE-264 split the two
+     * controls apart again and left the price paid: "a second gesture on this
+     * button is a decision rather than a refactor."
      *
-     * WHAT THAT COSTS, NAMED RATHER THAN BURIED. TalkButton's gesture was
-     * press-and-HOLD with slide-off-to-cancel (DROVE-105, DROVE-140). The
-     * primary's is a tap: tap to open the latch, tap to close it. So the
-     * composer loses push-to-talk and slide-to-cancel from the SCREEN. What
-     * survives is the latch on the primary and the headphone press
-     * (DROVE-225), and DROVE-210's one-capture rule holds across both because
-     * the primary calls `onTalkTap`, the same handler every other entry point
-     * reaches.
+     * It was a decision, and it was taken without asking the person who uses
+     * it. Clay: "why isn't holding down the microphone doing push to talk like
+     * it used to do." So the three-outcome contract this file has documented on
+     * `onTalkPressIn` since DROVE-30 is wired to the standalone mic, whole:
+     * press and hold released ON the button sends, a tap latches and the next
+     * tap stops with the words left in the composer, sliding off before the
+     * lift cancels.
      *
-     * The hold could NOT simply move to the primary's long press: that gesture
-     * is the channel sheet at every face, which `composerPrimaryPress.ts` made
-     * a rule in this same ticket precisely so the second gesture stays one
-     * thing. Giving it back a home is a decision, not a refactor.
+     * NOTHING HERE INVENTS THE GESTURE. All four handlers stayed on the
+     * interface through both collapses and are still driven by the same
+     * reducer in `micButton.ts`; what was missing was a control feeding them a
+     * touch stream. `talkTouchStream.ts` is that stream, lifted out of
+     * TalkButton so the two buttons cannot drift, and the mic spreads what it
+     * returns.
      *
-     * `TalkButton.tsx` and `talkButtonWiring.ts` are left intact with their
-     * specs. The gesture is not deleted, its render site in the chat composer
-     * is, and `props.onTalkPressIn` / `onTalkPressOut` / `onTalkSlide` are
-     * still on the interface for whatever draws it next.
+     * The hold still could NOT be the primary's long press: that gesture is the
+     * channel sheet at every face (`composerPrimaryPress.ts`). It is the MIC's
+     * own touch stream, on the mic's own rectangle, which is the one place a
+     * hold has never meant anything else.
+     *
+     * Handlers by REFERENCE, never wrapped in a lambda (DROVE-210): an arrow
+     * that forgets to forward `touchAt` type-checks and silently undoes
+     * DROVE-140.
      */
+    const talkWiring = React.useMemo(
+        () => talkButtonWiring({
+            onTalkPressIn: props.onTalkPressIn,
+            onTalkPressOut: props.onTalkPressOut,
+            onTalkSlide: props.onTalkSlide,
+        }),
+        [props.onTalkPressIn, props.onTalkPressOut, props.onTalkSlide],
+    );
+    const micTouch = useTalkTouchStream(talkWiring);
     /** The mic is open right now, latched by a tap or held under a finger. */
     const micLive = props.talkState === 'latched' || props.talkState === 'held';
     /**
@@ -931,8 +952,15 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
      * The mic is drawn at all where this surface can dictate: a recogniser and
      * a wire to it. It no longer decides anything about SEND (DROVE-264); it
      * decides whether the mic button exists.
+     *
+     * The wire is now the touch stream rather than the tap (DROVE-269).
+     * `talkButtonWiring` is null exactly when there is no `onTalkPressIn`, and
+     * a press-in with no lift behind it would leave the mic open with no way to
+     * close it, so a half-wired button is not drawn at all. The voice layer
+     * hands all four out together off one `offersDictation`, so on the phone
+     * this is the same condition it was.
      */
-    const canDictateHere = compactMobileComposer && !!props.onTalkTap;
+    const canDictateHere = compactMobileComposer && !!talkWiring;
     const primaryAction = resolveAgentInputPrimaryAction({
         hasComposerContent,
         isSendBlocked,
@@ -1385,21 +1413,20 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         handleSendPress,
         hasImages,
         primaryAction,
-        props.onTalkTap,
     ]);
-    /**
-     * THE MIC BUTTON'S PRESS (DROVE-264).
+    /*
+     * `handleMobileMicPress` stood here and is gone (DROVE-269).
      *
-     * Straight to `onTalkTap` with no table between, because the mic has one
-     * gesture and one meaning: open the latch, close the latch. It is the same
-     * handler the headphone press and the lock screen reach, which is DROVE-210's
-     * one-capture rule and the reason this is a tap rather than a second
-     * recogniser (`resolveComposerPrimaryPress` no longer has a `mic` row).
+     * DROVE-264 gave the mic a plain `onPress` straight to `onTalkTap`, with a
+     * haptic of its own in front of it. Both are wrong for a button with a
+     * touch stream: the gesture reducer is fed press-in and press-out now, and
+     * it names its own haptics -- one on the open, one on each crossing, one on
+     * the lift -- so a `hapticsLight` here was a second tick on top of the
+     * first. `onTalkTap` remains the entry for controls that genuinely have no
+     * touch stream: the headphone double press, the lock screen, the watch.
+     * Same reducer, same capture, so a latch opened by ear is still stopped by
+     * thumb (DROVE-210).
      */
-    const handleMobileMicPress = React.useCallback(() => {
-        hapticsLight();
-        props.onTalkTap?.();
-    }, [props.onTalkTap]);
     const handleMobilePrimaryPress = React.useCallback(() => dispatchPrimaryGesture('press'), [dispatchPrimaryGesture]);
     const handleMobilePrimaryLongPress = React.useCallback(() => dispatchPrimaryGesture('longPress'), [dispatchPrimaryGesture]);
 
@@ -2237,14 +2264,47 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
      * white on it, the same surface the row's talk button wears, so an open mic
      * looks the same wherever it was opened from.
      *
-     * NO LONG PRESS. The channel sheet is the primary's second gesture and
-     * push-to-talk is not coming back here: DROVE-236 named losing hold-to-talk
-     * as the cost of the collapse, and the split does not automatically pay it
-     * back, because a second gesture on this button is a decision rather than a
-     * refactor. Tap to open the latch, tap to close it.
+     * PUSH TO TALK, BACK (DROVE-269, reversing this comment's own refusal).
+     *
+     * What stood here said push-to-talk was not coming back, because DROVE-236
+     * named the loss as the cost of the collapse and a second gesture was a
+     * decision rather than a refactor. The decision has now been taken, by the
+     * person it costs: "why isn't holding down the microphone doing push to
+     * talk like it used to do."
+     *
+     * So the mic runs the whole three-outcome contract again, on its own
+     * rectangle. Press and hold, released ON the button: the words are sent.
+     * Tap: the mic latches open and the next tap stops it with the words in the
+     * composer, unsent, exactly as before -- a hold is ADDED to the tap, not
+     * put in its place, and the reducer reads the same lift for both. Slide off
+     * before lifting: the recording is thrown away.
+     *
+     * STILL NO LONG PRESS, which is a different thing. `onLongPress` is the
+     * channel sheet on the primary button, and this control never had one; the
+     * hold here is the press stream itself, so there is no second gesture to
+     * arbitrate with. `micButton.ts` decides tap from hold on the OS touch
+     * clock, under the finger, at HOLD_MIN_MS.
+     *
+     * AND IT CANNOT FLIP UNDER A THUMB, which is the trap DROVE-236 wrote its
+     * longest comment about and the reason this had to be checked rather than
+     * assumed. That failure was one morphing button whose FACE was resolved
+     * from the composer's contents, so a dictation partial landing mid-word
+     * turned the mic into Send under a held finger. Nothing on this control
+     * reads the composer: `canDictateHere` is the recogniser and the wiring,
+     * the surface is `micLive`, and send is a separate permanent button to its
+     * right. `micPushToTalkEndToEnd.spec.ts` drives a hold with partials
+     * arriving mid-hold and pins that.
+     *
+     * The handlers are SPREAD, not written out (DROVE-210, DROVE-269). There is
+     * no call site here for a lambda to be added to, so the OS touch clock
+     * cannot be dropped on the way to the reducer.
      */
     const mobileMicAction = canDictateHere ? (
         <View
+            // The button's own rectangle owns the touch stream: `onLayout`
+            // measures it and the pressable's touches bubble here, so the slide
+            // test is this box with slop and no window measuring.
+            {...micTouch.view}
             style={[
                 styles.mobileMicButton,
                 micSurface === 'recording' ? styles.talkButtonHeld : undefined,
@@ -2261,9 +2321,17 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 // 36 reserved plus 6 a side, the same bargain every control on
                 // this row strikes.
                 hitSlop={MOBILE_COMPOSER_METRICS.primaryActionSlop}
-                onPress={handleMobileMicPress}
+                // No `onPress`. The lift is `onPressOut`, and the reducer
+                // decides from how long the finger was down what that lift
+                // meant; an `onPress` beside it would fire on the same lift and
+                // toggle the latch straight back off (DROVE-269).
+                {...micTouch.press}
+                // The press FEEDBACK is left exactly as DROVE-264 drew it. A
+                // hold does not need its own treatment here: the disc arrives
+                // on the press-in and says the mic is open, which is the thing
+                // a finger is waiting to see.
                 accessibilityRole="button"
-                accessibilityState={{ selected: micLive }}
+                accessibilityState={{ busy: props.talkState === 'held', selected: props.talkState === 'latched' }}
                 accessibilityLabel={t(micLive
                     ? 'agentInput.audioOut.micStop'
                     : 'agentInput.audioOut.micStart')}

@@ -1,0 +1,604 @@
+import { readFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { describe, expect, it } from 'vitest';
+import { createTalkTouchStream } from '@/components/talkTouchStream';
+import { talkButtonWiring } from '@/components/talkButtonWiring';
+import { MOBILE_COMPOSER_METRICS } from '@/components/agentInputLayout';
+import {
+    DictationCapture,
+    RECOGNISER_FINAL,
+    type DictationEngine,
+} from './dictationCapture';
+import { dictationComposerEvents } from './dictationComposer';
+import {
+    HOLD_MIN_MS,
+    idleMicGesture,
+    reduceMicGesture,
+    type MicButtonState,
+    type MicGesture,
+    type MicGestureEvent,
+} from './micButton';
+
+/**
+ * A FINGER ON THE COMPOSER'S MICROPHONE, ALL THE WAY THROUGH (DROVE-269).
+ *
+ * Clay: "why isn't holding down the microphone doing push to talk like it used
+ * to do." It used to, and every piece of it still existed: the reducer in
+ * `micButton.ts`, the four props on `AgentInput`, the handlers in
+ * `useVoiceComposer`. What DROVE-236 removed and DROVE-264 did not put back was
+ * the one thing in between -- a control feeding those props a TOUCH STREAM. The
+ * mic had a plain `onPress`, and a press knows nothing about how long a finger
+ * was down or where it went.
+ *
+ * WHY THIS FILE IS AN END-TO-END AND NOT THREE UNIT TESTS. Twice tonight a
+ * dictation fix shipped green because its tests drove a signal the real path
+ * never sends: DROVE-263's first attempt tested a task boundary the on-device
+ * recogniser does not produce, and its second had a case called "from empty"
+ * that never passed an empty string. So nothing here calls a handler by name.
+ * Every test starts from the events REACT NATIVE DELIVERS to a pressable --
+ * `onLayout` with a measured box, `onPressIn`/`onPressOut` carrying
+ * `nativeEvent.timestamp`, `onTouchMove` carrying `locationX`/`locationY` --
+ * pushes them through the same `createTalkTouchStream` and `talkButtonWiring`
+ * the composer spreads, into the same reducer, and into a REAL
+ * `DictationCapture` over a hand-driven recogniser. The assertions are on what
+ * lands in the composer and on whether it was sent.
+ *
+ * WHAT IS STILL NOT COVERED, said plainly. vitest runs on node and the suite is
+ * `.ts` only, so React itself is never mounted: that the mic's JSX hands these
+ * props to that stream is read out of the source at the bottom of this file,
+ * and that iOS delivers a touch clock at all is a device check. Both are named
+ * in the ticket rather than implied by a green run.
+ */
+
+/**
+ * The button's real box, so the slide test is measured against what ships.
+ * `resolveMobileComposerActionGeometry('mic')` builds its width and height out
+ * of this same number; taken as a style it is a `DimensionValue`, and this is
+ * the arithmetic one.
+ */
+const micBox = {
+    width: MOBILE_COMPOSER_METRICS.primaryActionSize,
+    height: MOBILE_COMPOSER_METRICS.primaryActionSize,
+};
+
+/**
+ * The native module, driven by hand. Same shape as the one in
+ * `dictationContinuity.spec.ts`: the counts are how a test sees the microphone
+ * actually opening and closing rather than taking the transcript's word for it.
+ */
+class FakeRecogniser implements DictationEngine {
+    starts = 0;
+    stops = 0;
+    cancels = 0;
+    private stopResolvers: ((text: string) => void)[] = [];
+
+    start(): Promise<unknown> {
+        this.starts += 1;
+        return Promise.resolve(true);
+    }
+
+    stop(): Promise<string> {
+        this.stops += 1;
+        return new Promise<string>((resolve) => { this.stopResolvers.push(resolve); });
+    }
+
+    cancel(): void {
+        this.cancels += 1;
+    }
+
+    /** The recogniser answering a stop with what it finally heard. */
+    settle(text: string): void {
+        this.stopResolvers.shift()?.(text);
+    }
+}
+
+async function flush(): Promise<void> {
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+}
+
+/**
+ * The composer, the capture, the gesture and the button's touch stream, wired
+ * exactly as `useVoiceComposer` and `AgentInput` wire them.
+ *
+ * TWO CLOCKS, ON PURPOSE (DROVE-140). `wall` is what a handler reads with
+ * `Date.now()` when the JS thread finally reaches it; `finger` is the OS touch
+ * clock stamped when the touch happened. They advance independently here so a
+ * test can make the thread lag, which is what turned taps into holds and is the
+ * regression the stream has to keep forwarding `touchAt` to prevent.
+ */
+function harness(base = '') {
+    const engine = new FakeRecogniser();
+    let wall = 1_000;
+    let finger = 500_000;
+    let composer = base;
+    let draft = base;
+    let sends = 0;
+    const errors: string[] = [];
+    const haptics: string[] = [];
+    const states: MicButtonState[] = [];
+    const capture = new DictationCapture(engine, dictationComposerEvents({
+        base: () => draft,
+        setComposerText: (text) => { composer = text; },
+        send: () => { sends += 1; },
+        onError: (message) => { errors.push(message); },
+        onChange: () => { /* the indicator, not the text */ },
+    }), () => wall);
+
+    let gesture: MicGesture = idleMicGesture;
+    /** When the hold timer would fire, or null when none is pending. */
+    let holdDueAt: number | null = null;
+
+    /** The effect switch out of `useVoiceComposer.dispatch`, minus read-aloud. */
+    function dispatch(event: MicGestureEvent): void {
+        if (event.type === 'pressOut' || event.type === 'ended') holdDueAt = null;
+        const step = reduceMicGesture(gesture, event);
+        gesture = step.next;
+        states.push(step.next.state);
+        for (const effect of step.effects) {
+            switch (effect) {
+                case 'open':
+                    draft = composer;
+                    capture.begin('hold');
+                    haptics.push('light');
+                    break;
+                case 'watchHold':
+                    // `setTimeout` counts REAL time, so this is the finger's
+                    // clock. A jammed thread delays the callback; it does not
+                    // move the deadline.
+                    holdDueAt = finger + HOLD_MIN_MS;
+                    break;
+                case 'latch': capture.latch(); break;
+                case 'send': capture.send(); break;
+                case 'stop': capture.stop(); break;
+                case 'cancel': capture.cancel(); break;
+                case 'tick': haptics.push('selection'); break;
+            }
+        }
+    }
+
+    // The composer's own two lines: the three handlers by reference, and one
+    // stream over them.
+    const wiring = talkButtonWiring({
+        onTalkPressIn: (touchAt) => dispatch({ type: 'pressIn', at: wall, touchAt }),
+        onTalkPressOut: (touchAt) => dispatch({ type: 'pressOut', at: wall, touchAt }),
+        onTalkSlide: (inside) => dispatch({ type: 'slide', inside }),
+    });
+    const stream = createTalkTouchStream(() => wiring);
+
+    // The layout React Native reports once the button has been measured.
+    stream.view.onLayout({
+        nativeEvent: { layout: { x: 0, y: 0, width: micBox.width, height: micBox.height } },
+    } as never);
+
+    /** Both clocks move together unless a test says otherwise. */
+    function advance(ms: number, threadLag = 0): void {
+        finger += ms;
+        wall += ms + threadLag;
+        if (holdDueAt !== null && finger >= holdDueAt) {
+            holdDueAt = null;
+            dispatch({ type: 'holdConfirm' });
+        }
+    }
+
+    const centre = { x: micBox.width / 2, y: micBox.height / 2 };
+
+    return {
+        engine,
+        capture,
+        errors,
+        haptics,
+        states,
+        get composer() { return composer; },
+        get sends() { return sends; },
+        get micState(): MicButtonState { return gesture.state; },
+        advance,
+        /** Type into the field between gestures, as a thumb would. */
+        type(text: string) { composer = text; },
+        /** Finger down on the button, at its centre. */
+        down(at: { x: number; y: number } = centre) {
+            stream.press.onPressIn({ nativeEvent: { timestamp: finger, ...at } } as never);
+        },
+        /** The finger moving, still down. Coordinates are button-relative. */
+        move(at: { x: number; y: number }) {
+            stream.view.onTouchMove({
+                nativeEvent: { timestamp: finger, locationX: at.x, locationY: at.y },
+            } as never);
+        },
+        /** Finger up. */
+        up() {
+            stream.press.onPressOut({ nativeEvent: { timestamp: finger } } as never);
+        },
+        /** A press-in whose touch clock the platform did not stamp (web). */
+        downWithNoTouchClock() {
+            stream.press.onPressIn({ nativeEvent: {} } as never);
+        },
+        upWithNoTouchClock() {
+            stream.press.onPressOut({ nativeEvent: {} } as never);
+        },
+    };
+}
+
+/** Well past the point where a press is a hold. */
+const holdFor = HOLD_MIN_MS + 400;
+/** Well inside the tap window. */
+const tapFor = 120;
+
+describe('press and hold, released on the button (DROVE-269)', () => {
+    it('opens the mic on the press, not on the lift', async () => {
+        const h = harness();
+        h.down();
+        await flush();
+        // The whole point of starting on the press: a hold never misses the
+        // first word, and a tap costs no extra latency.
+        expect(h.engine.starts).toBe(1);
+        expect(h.capture.current.active).toBe(true);
+        expect(h.micState).toBe('held');
+    });
+
+    it('sends what was said when the finger lifts on the button', async () => {
+        const h = harness();
+        h.down();
+        await flush();
+        h.capture.partial('ship the login fix');
+        h.advance(holdFor);
+        h.up();
+        await flush();
+        h.engine.settle('ship the login fix');
+        await flush();
+
+        expect(h.composer).toBe('ship the login fix');
+        expect(h.sends).toBe(1);
+        expect(h.micState).toBe('idle');
+        expect(h.capture.current.active).toBe(false);
+    });
+
+    it('appends to what was already typed rather than replacing it', async () => {
+        const h = harness('draft: ');
+        h.down();
+        await flush();
+        h.capture.partial('and then merge it');
+        h.advance(holdFor);
+        h.up();
+        await flush();
+        h.engine.settle('and then merge it');
+        await flush();
+        expect(h.composer).toBe('draft: and then merge it');
+        expect(h.sends).toBe(1);
+    });
+
+    it('is decided on the OS touch clock, so a lagging thread cannot fake a hold', async () => {
+        // The exact failure `talkTouchStream` exists to make unrepeatable: a
+        // wrapper that drops `touchAt` leaves the reducer subtracting two
+        // JS-thread readings, and press-in is the busiest moment this screen
+        // has. 120 ms on the finger, 900 ms of thread lag around it.
+        const h = harness();
+        h.down();
+        await flush();
+        h.advance(tapFor, 900);
+        h.up();
+        await flush();
+
+        expect(h.micState).toBe('latched');
+        expect(h.sends).toBe(0);
+        expect(h.capture.current.active).toBe(true);
+    });
+
+    it('still reads a long hold as a hold when the platform stamps no touch clock', async () => {
+        // Web synthesises these events. The wall clock is the documented
+        // fallback, and it must not be reachable while a touch clock exists.
+        const h = harness();
+        h.downWithNoTouchClock();
+        await flush();
+        h.advance(holdFor);
+        h.upWithNoTouchClock();
+        await flush();
+        h.engine.settle('sent from the browser');
+        await flush();
+        expect(h.sends).toBe(1);
+    });
+});
+
+describe('a tap still latches, and the next tap still stops (DROVE-269 adds, it does not replace)', () => {
+    it('latches the mic open and leaves it open after the lift', async () => {
+        const h = harness();
+        h.down();
+        await flush();
+        h.advance(tapFor);
+        h.up();
+        await flush();
+
+        expect(h.micState).toBe('latched');
+        expect(h.capture.current.active).toBe(true);
+        expect(h.capture.current.mode).toBe('latch');
+        expect(h.sends).toBe(0);
+    });
+
+    it('the next tap stops it with the words in the composer, unsent', async () => {
+        const h = harness();
+        h.down();
+        await flush();
+        h.advance(tapFor);
+        h.up();
+        await flush();
+
+        h.capture.partial('leave this one for me to read');
+        h.advance(3_000);
+        h.down();
+        h.advance(tapFor);
+        h.up();
+        await flush();
+        h.engine.settle('leave this one for me to read');
+        await flush();
+
+        expect(h.composer).toBe('leave this one for me to read');
+        expect(h.sends).toBe(0);
+        expect(h.micState).toBe('idle');
+    });
+
+    it('a HOLD on a latched mic stops it too, and does not send', async () => {
+        // The reducer's latched branch has no hold timer, so how long the
+        // finger stays down cannot change what the lift means. Worth pinning:
+        // the natural mistake when adding a hold is to make it send from any
+        // state, which would send a latch he opened to think in.
+        const h = harness();
+        h.down();
+        h.advance(tapFor);
+        h.up();
+        await flush();
+
+        h.capture.partial('still thinking about it');
+        h.down();
+        h.advance(holdFor);
+        h.up();
+        await flush();
+        h.engine.settle('still thinking about it');
+        await flush();
+
+        expect(h.composer).toBe('still thinking about it');
+        expect(h.sends).toBe(0);
+    });
+});
+
+describe('sliding off before the lift cancels (DROVE-269)', () => {
+    it('throws the recording away and puts the composer back', async () => {
+        const h = harness('half a sentence');
+        h.down();
+        await flush();
+        h.capture.partial('scratch that');
+        expect(h.composer).not.toBe('half a sentence');
+
+        h.advance(holdFor);
+        // Off the button's right edge, past the slop.
+        h.move({ x: micBox.width + 40, y: micBox.height / 2 });
+        h.up();
+        await flush();
+
+        expect(h.engine.cancels).toBe(1);
+        expect(h.composer).toBe('half a sentence');
+        expect(h.sends).toBe(0);
+        expect(h.micState).toBe('idle');
+    });
+
+    it('cancels a TAP that slid off too: nobody drags off a button they meant to latch', async () => {
+        const h = harness();
+        h.down();
+        await flush();
+        h.advance(tapFor);
+        h.move({ x: -60, y: 0 });
+        h.up();
+        await flush();
+
+        expect(h.micState).toBe('idle');
+        expect(h.capture.current.active).toBe(false);
+        expect(h.engine.cancels).toBe(1);
+    });
+
+    it('does not cancel on a wobble inside the slop, which a two-second hold has', async () => {
+        const h = harness();
+        h.down();
+        await flush();
+        h.capture.partial('a long one');
+        h.advance(holdFor);
+        // Just past the edge but inside CANCEL_SLOP: a thumb resettling.
+        h.move({ x: micBox.width + 8, y: micBox.height + 8 });
+        h.up();
+        await flush();
+        h.engine.settle('a long one');
+        await flush();
+
+        expect(h.engine.cancels).toBe(0);
+        expect(h.sends).toBe(1);
+    });
+
+    it('cancels even when the platform reports the lift before the slide', async () => {
+        // Pressability drops the press when the finger leaves its press rect,
+        // which is wider than CANCEL_SLOP, so the crossing is normally seen
+        // first. This pins the other order anyway: an early `onPressOut` with
+        // no crossing behind it must not send.
+        const h = harness();
+        h.down();
+        await flush();
+        h.capture.partial('do not send this');
+        h.advance(holdFor);
+        h.up();
+        h.move({ x: micBox.width + 200, y: 0 });
+        await flush();
+
+        // Nothing was sent by the lift itself; the transcript went to the
+        // composer rather than to the wire.
+        expect(h.sends).toBe(0);
+    });
+});
+
+/**
+ * THE TRAP THAT CAUSED THE ORIGINAL COLLAPSE (DROVE-236, checked not assumed).
+ *
+ * DROVE-236 wrote its longest comment about `captureOpen` having to outrank the
+ * composer's contents: dictation partials land in the field MID-WORD, the one
+ * morphing button re-resolved its face from that text, and it flipped to Send
+ * under his thumb mid-sentence. DROVE-264 argued the split makes that guard
+ * unnecessary because two separate controls cannot flip into each other.
+ *
+ * That argument is about the FACE. Restoring the hold makes it about the
+ * GESTURE too, because now there is a finger down for seconds while those
+ * partials arrive. So both halves are checked here: the words landing in the
+ * field change nothing about what the button is, and nothing about what its
+ * lift will do.
+ */
+describe('the mic cannot change identity under a held finger', () => {
+    it('runs an identical gesture whether the composer is empty or filling up', async () => {
+        async function run(fill: boolean) {
+            const h = harness(fill ? 'typed first' : '');
+            h.down();
+            await flush();
+            if (fill) {
+                // Every one of these is a partial landing mid-word, which is
+                // the shape DROVE-236 named.
+                h.capture.partial('so');
+                h.capture.partial('so we sh');
+                h.capture.partial('so we should');
+            }
+            h.advance(holdFor);
+            h.up();
+            await flush();
+            h.engine.settle(fill ? 'so we should' : '');
+            await flush();
+            return h;
+        }
+        const empty = await run(false);
+        const filling = await run(true);
+        expect(filling.states).toEqual(empty.states);
+        expect(filling.haptics).toEqual(empty.haptics);
+        // And the one that had words sent them.
+        expect(filling.sends).toBe(1);
+        expect(filling.composer).toBe('typed first so we should');
+    });
+
+    it('keeps the button held for the whole hold, however the text moves', async () => {
+        const h = harness();
+        h.down();
+        await flush();
+        h.capture.partial('one');
+        h.advance(200);
+        h.capture.partial('one two');
+        h.advance(200);
+        h.type('a thumb typing in the middle of a capture');
+        h.advance(holdFor);
+        h.capture.partial('one two three');
+        h.up();
+        await flush();
+        h.engine.settle('one two three');
+        await flush();
+
+        // Held from the press to the lift, then idle. Never latched, never
+        // anything the composer's contents could have made it.
+        expect(h.states).toEqual(['held', 'held', 'idle']);
+        expect(h.sends).toBe(1);
+    });
+});
+
+/**
+ * DROVE-263, ON THIS GESTURE (the invariant that must not weaken).
+ *
+ * `requiresOnDeviceRecognition = true` means the recogniser never finalises on
+ * a pause: it keeps ONE task and opens a new RESULT SEQUENCE from empty. So the
+ * signal a real pause sends mid-hold is a partial that is suddenly SHORTER, and
+ * often an empty one. A hold is exactly the gesture that spans a pause, so it
+ * is the gesture that has to survive it.
+ */
+describe('a hold that spans a pause keeps everything, and the lift sends all of it', () => {
+    it('survives the empty partial the on-device recogniser opens a sequence with', async () => {
+        const h = harness();
+        h.down();
+        await flush();
+        h.capture.partial('so the thing I wanted to say');
+        h.advance(1_800);
+        // The pause. A new result sequence, reported from nothing.
+        h.capture.partial('');
+        h.capture.partial('is that');
+        h.capture.partial('is that it should ship tonight');
+        h.advance(holdFor);
+        h.up();
+        await flush();
+        h.engine.settle('is that it should ship tonight');
+        await flush();
+
+        expect(h.composer).toBe('so the thing I wanted to say is that it should ship tonight');
+        expect(h.sends).toBe(1);
+    });
+
+    it('survives a recogniser that does finalise, on the builds where it does', async () => {
+        const h = harness();
+        h.down();
+        await flush();
+        h.capture.partial('first half');
+        h.advance(4_000);
+        h.capture.recogniserEnded('first half', RECOGNISER_FINAL);
+        await flush();
+        // The microphone is still open under the finger, and reopened.
+        expect(h.capture.current.active).toBe(true);
+        expect(h.engine.starts).toBe(2);
+        expect(h.micState).toBe('held');
+
+        h.capture.partial('second half');
+        h.advance(holdFor);
+        h.up();
+        await flush();
+        h.engine.settle('second half');
+        await flush();
+
+        expect(h.composer).toBe('first half second half');
+        expect(h.sends).toBe(1);
+    });
+});
+
+const sourcesRoot = resolve(__dirname, '..');
+
+function read(relative: string): string {
+    return readFileSync(join(sourcesRoot, relative), 'utf8');
+}
+
+/**
+ * The wiring, read out of the composer (DROVE-210, DROVE-235's precedent).
+ *
+ * vitest cannot mount the button, so the last link is asserted against the
+ * source. Coarse, and it catches the exact class of regression this ticket is
+ * about: a mic whose props never reach the stream above, which is how the
+ * gesture came to be missing in the first place.
+ */
+describe('the composer hands the mic the touch stream (DROVE-269)', () => {
+    const agentInput = read('components/AgentInput.tsx');
+
+    it('spreads both halves of the stream onto the mic', () => {
+        expect(agentInput).toContain('{...micTouch.view}');
+        expect(agentInput).toContain('{...micTouch.press}');
+        expect(agentInput).toContain('const micTouch = useTalkTouchStream(talkWiring);');
+    });
+
+    it('builds the three handlers by reference, never through a lambda', () => {
+        // A zero-argument arrow is assignable to `(touchAt?: number) => void`,
+        // so nothing but this catches a wrapper that drops the touch clock.
+        expect(agentInput).toContain('onTalkPressIn: props.onTalkPressIn');
+        expect(agentInput).not.toContain('onTalkPressIn?.()');
+        expect(agentInput).not.toContain('props.onTalkPressIn()');
+    });
+
+    it('binds no bare press on the mic, which would fight the lift', () => {
+        expect(agentInput).not.toContain('onPress={handleMobileMicPress}');
+        expect(agentInput).not.toContain('onPress={() => props.onTalkTap');
+    });
+
+    it('draws the mic from the recogniser and its own state, never from the composer', () => {
+        // The DROVE-236 trap, pinned in the source as well as in the gesture:
+        // neither the button's existence nor its surface may read the text.
+        expect(agentInput).toContain('const canDictateHere = compactMobileComposer && !!talkWiring;');
+        expect(agentInput).toContain('const micSurface = composerMicSurface({ live: micLive });');
+        expect(agentInput).toContain("const micLive = props.talkState === 'latched' || props.talkState === 'held';");
+    });
+
+    it('leaves the two talk buttons on one stream, so they cannot drift', () => {
+        const talkButton = read('components/TalkButton.tsx');
+        expect(talkButton).toContain('{...stream.view}');
+        expect(talkButton).toContain('{...stream.press}');
+    });
+});

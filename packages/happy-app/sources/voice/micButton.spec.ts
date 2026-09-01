@@ -253,14 +253,16 @@ describe('reduceMicGesture', () => {
     });
 
     /**
-     * The composer's PRIMARY button (DROVE-210). It is a plain `onPress`: one
-     * callback, on the lift, with no press-in, no duration and no
-     * coordinates. So a tap on it is fed here as a press and a lift at the
-     * same instant, and the reducer needs no new event type to handle it.
+     * A control with only a press (DROVE-210): the headphone double press, the
+     * lock screen, the watch. One callback, on the lift, with no press-in, no
+     * duration and no coordinates. So a tap on it is fed here as a press and a
+     * lift at the same instant, and the reducer needs no new event type to
+     * handle it.
      *
-     * That is also why the two controls are not identical and cannot be: zero
-     * elapsed can only ever latch, so push-to-talk and slide-to-cancel stay on
-     * the capsule's TalkButton, which owns the whole touch stream.
+     * That is also why such a control cannot be identical to a button: zero
+     * elapsed can only ever latch, so push-to-talk and slide-to-cancel need the
+     * touch stream, which is what the composer's mic got back in DROVE-269 and
+     * what `micPushToTalkEndToEnd.spec.ts` drives end to end.
      */
     describe('one tap on a control with no touch stream', () => {
         it('latches the mic open', () => {
