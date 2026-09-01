@@ -5,7 +5,6 @@ import {
     addSpeechInterruptionListener,
     holdAudioSession,
     setReadingState,
-    speechInterruptionsHandled,
 } from 'drover-speech';
 import { readAloudTransport, remoteTransportGesture, transportEffect } from './readAloudTransport';
 
@@ -100,15 +99,18 @@ export interface BackgroundReader {
     addTransportListener(listener: () => void): () => void;
 }
 
-/**
- * Whether the lock screen can pause and resume, on this binary.
+/*
+ * `lockScreenControlsAvailable()` used to sit here (DROVE-301 removed it).
  *
- * Exposed so a settings row can say so rather than showing a control that
- * does nothing on build 12.
+ * It answered "can the lock screen pause and resume on this binary", so that a
+ * settings row could say so instead of drawing a control that did nothing on
+ * build 12. The row was never written and nothing ever imported it, so what it
+ * actually provided was false comfort: a capability probe nobody reads cannot
+ * make anything safe. Build 12 is also long behind the floor — DROVE-233's
+ * `.duckOthers` drop needs 19 — so there is no longer a build for it to warn
+ * about. `speechInterruptionsHandled` is still exported from drover-speech if a
+ * row ever wants it.
  */
-export function lockScreenControlsAvailable(): boolean {
-    return speechInterruptionsHandled();
-}
 
 let started = false;
 

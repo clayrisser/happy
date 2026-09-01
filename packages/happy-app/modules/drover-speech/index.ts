@@ -114,6 +114,10 @@ type DroverSpeechModuleType = {
     /**
      * Whether the card's lifetime is this binary's (DROVE-233). Build 15 and
      * later; its own stamp for the reason `handlesMicCommand` has one.
+     *
+     * DECLARED BECAUSE NATIVE HAS IT, not because JS asks (DROVE-301 deleted
+     * the reader that did). This interface describes the native surface, and an
+     * older bundle running against a newer binary still probes it.
      */
     handlesReadingState?: () => boolean;
     /** Read-aloud is on, paused or off, for the lock screen. See DROVE-233. */
@@ -318,20 +322,16 @@ export async function holdAudioSession(hold: boolean): Promise<void> {
  */
 export type ReadingState = 'off' | 'reading' | 'paused';
 
-/**
- * Whether this binary owns the card's lifetime, or the old build does
- * (DROVE-233).
+/*
+ * `readingStateReported()` used to sit here (DROVE-301 removed it).
  *
- * Its own stamp rather than a reuse of `speechInterruptionsHandled`, for the
- * reason DROVE-225 gave for `remoteMicCommandAvailable`: they ship in
- * different builds. False is build 14 and earlier, where the card appears only
- * while the app is backgrounded with read-aloud on. `setReadingState` is a
- * no-op there and `holdAudioSession` carries on doing what it did.
+ * It stamped whether this binary owns the now-playing card's lifetime, against
+ * build 14. Nothing ever imported it. The guard it looked like it was providing
+ * was never the thing keeping an old build safe either: `setReadingState` below
+ * already returns without calling when the native function is absent, so the
+ * old behaviour holds on its own, and this only ever restated that in a form no
+ * caller checked.
  */
-export function readingStateReported(): boolean {
-    if (!native) return false;
-    return typeof native.handlesReadingState === 'function';
-}
 
 /** Tell the lock screen what the reader is doing. A no-op on an older build. */
 export async function setReadingState(state: ReadingState): Promise<void> {

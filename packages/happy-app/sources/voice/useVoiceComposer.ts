@@ -155,11 +155,6 @@ const subscribeReadAloudTransport = (onChange: () => void) => readAloud.addTrans
 
 export function useVoiceComposer(options: VoiceComposerOptions): VoiceComposerState {
     const { sessionId, active, sessionDisconnected = false, voiceCallActive, getComposerText, setComposerText, send, onError } = options;
-    // The persisted setting is only the DEFAULT a session inherits since
-    // DROVE-297. It is read to feed the reader that default, and no longer
-    // written by this composer: the control below writes the session's own
-    // switch, which is the whole point of the ticket.
-    const [readAloudDefault] = useLocalSettingMutable('readAloudEnabled');
     const [dictationEnabled] = useLocalSettingMutable('voiceDictationEnabled');
     const [talk, setTalk] = React.useState<DictationCaptureState>(idleTalk);
     const [talkState, setTalkState] = React.useState<MicButtonState>('idle');
@@ -251,16 +246,19 @@ export function useVoiceComposer(options: VoiceComposerOptions): VoiceComposerSt
         return () => { readAloud.blur(sessionId, 'left-session'); };
     }, [sessionId, active]);
 
-    // The persisted setting is the DEFAULT a session inherits (DROVE-297), not
-    // the switch on this one: the composer's control writes the session's own
-    // switch below. Only the surface that FOCUSES may drive it (DROVE-179).
-    // Two of these hooks can be mounted at once, the chat and an embedded side
-    // chat, and the embedded one writing `false` here would silence whatever
-    // the user is actually looking at.
-    React.useEffect(() => {
-        if (!active) return;
-        readAloud.setEnabled(readAloudDefault);
-    }, [active, readAloudDefault]);
+    // THE MASTER SWITCH IS NOT THIS HOOK'S, AND THAT IS DROVE-301 (it used to
+    // be an effect here). The persisted setting is the DEFAULT a session
+    // inherits (DROVE-297), it is app-wide, and it is now read app-wide, at
+    // module scope in readAloudService.ts beside `startBackgroundAudio` and the
+    // headphone presses. Turning read-aloud on from Settings, the channels
+    // screen or the sheet therefore reaches the reader with no session screen
+    // mounted at all, and a cold launch with it persisted on comes up armed
+    // rather than publishing `'off'` and tearing the lock-screen card down.
+    //
+    // It also retires this file's own hazard rather than managing it: two of
+    // these hooks can be mounted at once, the chat and an embedded side chat,
+    // and the embedded one writing `false` would have silenced whatever the
+    // user was looking at. No surface writes it now.
 
     // A live boss-mode call wins: two audio consumers arguing over the
     // AVAudioSession category is the pitfall the ticket names, so read-aloud
