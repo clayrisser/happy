@@ -145,28 +145,43 @@ describe('agent input compact mobile layout', () => {
     });
 
     /**
-     * Home is not the screen Clay photographed and its dock has no status strip
-     * for a control row to be furniture in front of, so its focused composer
-     * stays one card and stays 104. Two constants exist so that moving the
-     * chat's box cannot silently resize Home, which is what would have happened
-     * while both read one number.
+     * HOME'S FOCUSED COMPOSER IS THE CHAT'S BUBBLE (DROVE-345).
+     *
+     * This asserted 104 and, deliberately, that Home was NOT the chat's number:
+     * DROVE-196 split the two because the chat's card had lost its control row
+     * to the strip below it while Home's still held one. DROVE-236 put the
+     * chat's row back inside its bubble, so both have been one card holding a
+     * field and a button row ever since, and DROVE-345 makes them the same
+     * component. Clay: "this input is not using our liquid glass input that we
+     * have everywhere else."
+     *
+     * So the assertion is RETARGETED rather than dropped, and it is stronger
+     * than it was: the two are now required to AGREE at every input height and
+     * with attachments either way, which is the failure the old `.not.toBe`
+     * would have hidden.
      */
-    it('leaves the Home focused composer on DROVE-153 arithmetic', () => {
-        const metrics = agentInputLayout.MOBILE_COMPOSER_METRICS;
-
-        expect(agentInputLayout.MOBILE_HOME_COMPOSER_BASE_HEIGHT).toBe(104);
-        expect(agentInputLayout.MOBILE_HOME_COMPOSER_BASE_HEIGHT).toBe(
-            metrics.shellPaddingTop
-            + metrics.inputMinHeight
-            + metrics.actionRowHeight
-            + metrics.shellPaddingBottom,
-        );
-        expect(agentInputLayout.resolveMobileHomeComposerHeight(30)).toBe(104);
-        expect(agentInputLayout.resolveMobileHomeComposerHeight(30, true)).toBe(176);
-        // And it is NOT the chat's number any more, which is the whole point of
-        // there being two.
+    it('resolves the Home focused composer through the chat\'s bubble', () => {
         expect(agentInputLayout.MOBILE_HOME_COMPOSER_BASE_HEIGHT)
-            .not.toBe(agentInputLayout.MOBILE_COMPOSER_BASE_HEIGHT);
+            .toBe(agentInputLayout.MOBILE_COMPOSER_BUBBLE_BASE_HEIGHT);
+        expect(agentInputLayout.MOBILE_HOME_COMPOSER_BASE_HEIGHT).toBe(88);
+        // 88, down from 104. The 16 is the bubble's tighter box: 9/4 of padding
+        // where the card had 8/8, and a 39pt button row where the card had 44 —
+        // both of them numbers Clay has already ruled on for the chat
+        // (DROVE-236, DROVE-266) and neither of them reachable from Home while
+        // it had a resolver of its own.
+        for (const input of [0, 22, 30, 44, 120, 400]) {
+            expect(agentInputLayout.resolveMobileHomeComposerHeight(input), String(input))
+                .toBe(agentInputLayout.resolveMobileComposerBubbleHeight(input));
+            expect(agentInputLayout.resolveMobileHomeComposerHeight(input, true), String(input))
+                .toBe(agentInputLayout.resolveMobileComposerBubbleHeight(input, true));
+        }
+        // The strip is a third row in the same column, so it costs the gap as
+        // well as its own height — which Home's own resolver did not count,
+        // because its strip was stacked inside one card.
+        expect(agentInputLayout.resolveMobileHomeComposerHeight(30, true)
+            - agentInputLayout.resolveMobileHomeComposerHeight(30))
+            .toBe(agentInputLayout.MOBILE_COMPOSER_METRICS.attachmentExtraHeight
+                + agentInputLayout.MOBILE_COMPOSER_METRICS.controlGap);
     });
 
     it('starts collapsed composer text where the capsule becomes straight', () => {

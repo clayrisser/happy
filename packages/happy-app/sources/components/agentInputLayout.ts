@@ -686,49 +686,56 @@ export function resolveMobileComposerTextRowHeight(inputHeight: number): number 
 }
 
 /**
- * Home's field, which is still one row with a 44pt floor.
+ * Home's field, which is the bubble's text row (DROVE-345).
  *
- * Split from the chat's bubble in DROVE-214. They shared one function while
- * they were the same shape; the chat's bubble is two rows now and Home's card
- * is not, so sharing would have silently resized Home.
+ * DROVE-214 split it from the chat's on the grounds that the chat's bubble was
+ * two rows and Home's card was one. Home's card is the same bubble now, so the
+ * split is what would silently resize it. The floor moves with that: the text
+ * row's `MOBILE_COMPOSER_TEXT_ROW_BASE_HEIGHT` rather than `inputMinHeight`'s
+ * 44, which is the same move DROVE-214 made for the chat and the reason the
+ * two numbers exist separately at all.
+ *
+ * The attachment strip costs the column's `gap` as well as its own height,
+ * because in the bubble it is a third row rather than something stacked inside
+ * one — counted by `resolveMobileComposerBubbleHeight`, which is what this
+ * feeds.
  */
 export function resolveMobileHomeFieldHeight(
     inputHeight: number,
     hasAttachments = false,
 ): number {
-    return Math.max(
-        MOBILE_COMPOSER_METRICS.inputMinHeight,
-        inputHeight
-            + MOBILE_COMPOSER_METRICS.inputPaddingTop
-            + MOBILE_COMPOSER_METRICS.inputPaddingBottom,
-    ) + (hasAttachments ? MOBILE_COMPOSER_METRICS.attachmentExtraHeight : 0);
+    return resolveMobileComposerTextRowHeight(inputHeight)
+        + (hasAttachments
+            ? MOBILE_COMPOSER_METRICS.attachmentExtraHeight + MOBILE_COMPOSER_METRICS.controlGap
+            : 0);
 }
 
 /**
- * Home's focused composer, which is still ONE card holding the field and the
- * control row (DROVE-196).
+ * HOME'S FOCUSED COMPOSER IS THE CHAT'S BUBBLE (DROVE-345).
  *
- * Home is not the screen Clay photographed and its dock has no status strip
- * under it, so there is nothing there for the row to be furniture in front of.
- * It keeps DROVE-153's arithmetic to the point: padding, field, row, padding.
- * This exists so that the chat's block height can change without silently
- * resizing Home, which is what would have happened while both read one
- * constant.
+ * It had its own arithmetic — `shellPaddingTop` + `inputMinHeight` +
+ * `actionRowHeight` + `shellPaddingBottom`, 104 — and DROVE-196 split it from
+ * the chat's on the grounds that the chat's card had lost its control row to
+ * the strip below it while Home's was still one card holding both. That
+ * premise is dead: DROVE-236 put the chat's control row back INSIDE its
+ * bubble, so both screens are one card holding a field and a button row, and
+ * DROVE-345 makes them literally the same component. Two resolvers for one
+ * shape is how Home stayed flat through five Liquid Glass tickets.
+ *
+ * So this is the bubble's height, and the constants below are kept as names
+ * for what the bubble resolves rather than as a second derivation. Clay: "this
+ * input is not using our liquid glass input that we have everywhere else."
  */
-export const MOBILE_HOME_COMPOSER_BASE_HEIGHT = MOBILE_COMPOSER_METRICS.shellPaddingTop
-    + MOBILE_COMPOSER_METRICS.inputMinHeight
-    + MOBILE_COMPOSER_METRICS.actionRowHeight
-    + MOBILE_COMPOSER_METRICS.shellPaddingBottom;
+export const MOBILE_HOME_COMPOSER_BASE_HEIGHT = MOBILE_COMPOSER_BUBBLE_BASE_HEIGHT;
 
 export const MOBILE_HOME_COMPOSER_CHROME_HEIGHT = MOBILE_HOME_COMPOSER_BASE_HEIGHT
-    - MOBILE_COMPOSER_METRICS.inputMinHeight;
+    - MOBILE_COMPOSER_TEXT_ROW_BASE_HEIGHT;
 
 export function resolveMobileHomeComposerHeight(
     inputHeight: number,
     hasAttachments = false,
 ): number {
-    return MOBILE_HOME_COMPOSER_CHROME_HEIGHT
-        + resolveMobileHomeFieldHeight(inputHeight, hasAttachments);
+    return resolveMobileComposerBubbleHeight(inputHeight, hasAttachments);
 }
 
 export type MobileComposerMenuVariant = 'icon' | 'model' | 'effort' | 'permission';
