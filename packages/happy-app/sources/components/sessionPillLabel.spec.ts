@@ -15,6 +15,7 @@ import {
     COMPOSER_MODEL_SEGMENT,
     composerModelBudget,
     composerModelFits,
+    composerModelPresentation,
     composerModelScaleFor,
     composerModelSegmentWidth,
     composerRowFixedWidth,
@@ -566,6 +567,66 @@ describe('the model segment on the button row (DROVE-178)', () => {
         expect(widest).toBeGreaterThan(4);
         expect(widest).toBeCloseTo(4.145, 3);
         expect(Math.ceil(widest)).toBe(COMPOSER_MODEL_SEGMENT.paddingHorizontal);
+    });
+
+    /**
+     * THE NAME'S THREE FACES, PINNED (DROVE-331).
+     *
+     * Clay: "you can even make the model text a bit smaller and truncate if it
+     * ends up running under." So the give-way order has a last step: after the
+     * spacer, the padding and the type size, the ellipsis. DROVE-138 was filed
+     * about `Opus 5...` and the fix is still "smaller before shorter" — the
+     * cut is the LAST thing, never the first, and on every supported width it
+     * never happens at all.
+     */
+    it('draws the name whole where it fits, smaller where it must, and cuts it last (DROVE-331)', () => {
+        const floor = COMPOSER_MODEL_SEGMENT.minimumFontScale;
+        // WHOLE on every supported width, for the longest name either picker
+        // offers: 13pt, the segment as wide as the name, nothing cut. It
+        // stays whole down to 365, ten under the narrowest phone.
+        for (const width of [365, 375, 390, 393, 430, 440]) {
+            expect(composerModelPresentation('Gemini 3.1 Pro', width), `${width}`)
+                .toEqual({ outcome: 'whole', scale: 1, width: 108, cut: 0 });
+        }
+        expect(composerModelPresentation('Opus 5', 320)).toEqual({ outcome: 'whole', scale: 1, width: 52, cut: 0 });
+        // SCALED from 364 down to the crossover: the segment is the whole
+        // budget and the type steps down, to 0.806 at 346 — just over the
+        // floor, which is what makes 346 the crossover.
+        expect(composerModelPresentation('Gemini 3.1 Pro', 364).outcome).toBe('scaled');
+        const atCrossover = composerModelPresentation('Gemini 3.1 Pro', COMPOSER_ROW_MIN_MODEL_WIDTH);
+        expect(atCrossover.outcome).toBe('scaled');
+        expect(atCrossover.width).toBe(composerModelBudget(COMPOSER_ROW_MIN_MODEL_WIDTH));
+        expect(atCrossover.scale).toBeCloseTo(0.806, 3);
+        expect(atCrossover.scale).toBeGreaterThanOrEqual(floor);
+        expect(atCrossover.cut).toBe(0);
+        expect(composerModelPresentation('Opus 5 1M', 320)).toMatchObject({ outcome: 'scaled', width: 63, cut: 0 });
+        expect(composerModelPresentation('Opus 5 1M', 320).scale).toBeCloseTo(0.841, 3);
+        // TRUNCATED one point under the crossover, and at 320 for every long
+        // name: the type is at the floor, the segment is still exactly the
+        // budget — so send stays on the rim and the padlock, the speaker and
+        // the dial keep their 27 — and the ellipsis stands in for what is
+        // left. 26 points of `Gemini 3.1 Pro` at 320: the same 26 the
+        // unshrunk name overruns the rim by in composerBubbleLayout.spec.ts.
+        expect(composerModelPresentation('Gemini 3.1 Pro', COMPOSER_ROW_MIN_MODEL_WIDTH - 1).outcome).toBe('truncated');
+        const cut = composerModelPresentation('Gemini 3.1 Pro', 320);
+        expect(cut).toEqual({ outcome: 'truncated', scale: floor, width: 63, cut: 26 });
+        expect(cut.width).toBe(composerModelBudget(320));
+        expect(cut.cut).toBe(composerModelSegmentWidth('Gemini 3.1 Pro', floor) - composerModelBudget(320));
+        for (const name of ['Opus 4.8 1M', 'Sonnet 4.5', 'GPT-5.6 Luna', 'Gemini 3.1 Pro']) {
+            const p = composerModelPresentation(name, 320);
+            expect(p.outcome, name).toBe('truncated');
+            expect(p.scale, name).toBe(floor);
+            expect(p.width, name).toBe(63);
+            expect(p.cut, name).toBeGreaterThan(0);
+        }
+        // THE ORDER: whole -> scaled -> truncated as the phone narrows, and
+        // never back. Walked width by width for the longest name.
+        const outcomes: string[] = [];
+        for (let width = 440; width >= 300; width -= 1) {
+            const o = composerModelPresentation('Gemini 3.1 Pro', width).outcome;
+            if (outcomes[outcomes.length - 1] !== o) outcomes.push(o);
+        }
+        expect(outcomes).toEqual(['whole', 'scaled', 'truncated']);
     });
 
     /**

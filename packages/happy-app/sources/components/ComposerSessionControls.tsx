@@ -364,7 +364,9 @@ const styles = StyleSheet.create((theme) => ({
      * The model's name: as wide as the name, and the only thing in the capsule
      * that can give way, after the spacer beside it has (DROVE-178).
      * `flexShrink: 1` with `minWidth: 0` is what lets the text inside scale
-     * rather than push the audio button off the row.
+     * rather than push the audio button off the row — and, past the type
+     * floor, be cut at its tail (DROVE-331). The glyph segments keep
+     * `flexShrink: 0`, so a name that runs under never squeezes them.
      */
     modelSegment: {
         paddingHorizontal: COMPOSER_MODEL_SEGMENT.paddingHorizontal,
@@ -797,6 +799,20 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                         // failure DROVE-138 was filed about (DROVE-178).
                         adjustsFontSizeToFit
                         minimumFontScale={COMPOSER_MODEL_SEGMENT.minimumFontScale}
+                        // AND SHORTER LAST (DROVE-331). Clay, with the bolt's
+                        // width in hand: "you can even make the model text a
+                        // bit smaller and truncate if it ends up running
+                        // under." At the floor a name that still does not fit
+                        // is cut at its tail rather than pushing send off the
+                        // rim or squeezing the three glyph segments, which
+                        // keep their width (`flexShrink: 0`); this segment is
+                        // the one that gives (`flexShrink: 1, minWidth: 0`).
+                        // Stated, though it is the platform's default, so the
+                        // ruling is on the control and the render test holds
+                        // it. `composerModelPresentation` says which of whole
+                        // / scaled / truncated a phone draws, and on every
+                        // supported width it is whole.
+                        ellipsizeMode="tail"
                     >
                         {label.model}
                     </Text>

@@ -157,9 +157,18 @@ export const COMPOSER_MODEL_SEGMENT = {
      */
     paddingHorizontal: 5,
     /**
-     * Never an ellipsis. A name that will not fit at 13pt is drawn smaller
-     * before it is ever cut, down to this scale, because `Opus 5...` is the
-     * exact failure DROVE-138 was filed about.
+     * Smaller before shorter. A name that will not fit at 13pt is drawn
+     * smaller before it is ever cut, down to this scale, because `Opus 5...`
+     * is the exact failure DROVE-138 was filed about.
+     *
+     * AN ELLIPSIS LAST, SINCE DROVE-331. Clay, with the bolt's width in hand:
+     * "you can even make the model text a bit smaller and truncate if it ends
+     * up running under." So this floor is where the type stops shrinking and
+     * the tail ellipsis begins: the give-way order gained a step behind the
+     * type size, and `composerModelPresentation` below says which step a
+     * phone is on. "Smaller before shorter" is unchanged; what changed is that
+     * a name past the floor is cut instead of overrunning the rim, and on
+     * every supported width no name reaches either.
      *
      * 0.80 since DROVE-236, and DROVE-264, DROVE-266 and DROVE-284 have each
      * declined to move it again.
@@ -318,6 +327,10 @@ export const COMPOSER_MODEL_SEGMENT = {
  *      with a fourth control in the capsule and a 13pt name beside it.
  *   4. Then the name's TYPE SIZE, down to `minimumFontScale`. This is the
  *      give this ticket is BUYING BACK, and 2 and 3 are what it pays with.
+ *      And past the floor, since DROVE-331, the name's TAIL: an ellipsis on
+ *      Clay's word, `composerModelPresentation` below, which is the one give
+ *      that has no bottom and is why nothing after it can be pushed off the
+ *      row.
  *
  * NOTHING PAST 1 GIVES ON ANY SUPPORTED WIDTH SINCE DROVE-331. With the bolt's
  * 27 in the name's budget the spacer has 10pt left at 375 under the longest
@@ -493,6 +506,57 @@ export function composerModelScaleFor(name: string, screenWidth: number): number
 /** True when the name draws whole at 13pt on this phone, with no scaling. */
 export function composerModelFits(name: string, screenWidth: number): boolean {
     return composerModelSegmentWidth(name) <= composerModelBudget(screenWidth);
+}
+
+export type ComposerModelOutcome = 'whole' | 'scaled' | 'truncated';
+
+export interface ComposerModelPresentation {
+    outcome: ComposerModelOutcome;
+    /** The type scale the name draws at: 1 whole, in [floor, 1) scaled, the floor when cut. */
+    scale: number;
+    /** The width the segment takes on the row, which the resolver lays out with. */
+    width: number;
+    /** Points of the name at the floor that the ellipsis stands in for; 0 unless cut. */
+    cut: number;
+}
+
+/**
+ * How the model's name is DRAWN on a phone of `screenWidth`: whole, smaller,
+ * or cut (DROVE-331).
+ *
+ * Clay, with the bolt gone and the row photographed: "we have extra space
+ * here" and "you can even make the model text a bit smaller and truncate if
+ * it ends up running under." So the give-way order has a last step. DROVE-138
+ * was filed about `Opus 5...` and DROVE-178 answered it with "smaller before
+ * shorter"; that is unchanged, and it is followed by the step DROVE-178
+ * refused: at the type floor, a name that still does not fit is cut with a
+ * tail ellipsis rather than pushing send off the rim or squeezing the
+ * padlock, the speaker and the dial. On every supported width the answer is
+ * `whole`; the other two are what a phone under `COMPOSER_ROW_MIN_MODEL_WIDTH`
+ * draws.
+ *
+ *   whole      the name at 13pt, the segment as wide as the name
+ *   scaled     the segment is the whole budget, the type is `scale` of 13pt,
+ *              `scale` in [minimumFontScale, 1)
+ *   truncated  the segment is the whole budget, the type is at the floor, and
+ *              `cut` points of the name are behind the ellipsis
+ *
+ * `width` is what the segment takes on the row in every case, which is what
+ * `flexShrink: 1, minWidth: 0` on the model segment resolves to on the phone
+ * and what composerBubbleLayout.spec.ts lays the row out with. The other
+ * segments never shrink, because this one always fits the budget by
+ * construction.
+ */
+export function composerModelPresentation(name: string, screenWidth: number): ComposerModelPresentation {
+    const m = COMPOSER_MODEL_SEGMENT;
+    const budget = composerModelBudget(screenWidth);
+    const whole = composerModelSegmentWidth(name);
+    if (whole <= budget) return { outcome: 'whole', scale: 1, width: whole, cut: 0 };
+    const atFloor = composerModelSegmentWidth(name, m.minimumFontScale);
+    if (atFloor <= budget) {
+        return { outcome: 'scaled', scale: composerModelScaleFor(name, screenWidth), width: budget, cut: 0 };
+    }
+    return { outcome: 'truncated', scale: m.minimumFontScale, width: Math.max(0, budget), cut: atFloor - budget };
 }
 
 export interface SessionPillModelLike {

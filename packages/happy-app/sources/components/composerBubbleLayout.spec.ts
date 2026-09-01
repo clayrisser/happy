@@ -26,6 +26,7 @@ import {
     COMPOSER_MODEL_SEGMENT,
     composerModelBudget,
     composerModelFits,
+    composerModelPresentation,
     composerModelScaleFor,
     composerModelSegmentWidth,
     composerRowFixedWidth,
@@ -97,7 +98,7 @@ const phones = [320, 375, 393];
  * and `MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH` wide, which is what
  * `COMPOSER_BUBBLE_SESSION_SEGMENT_GEOMETRY` resolves to.
  */
-function sessionCapsule(model: string, fontScale = 1): FlexNode {
+function sessionCapsule(model: string, fontScale = 1, modelWidth?: number): FlexNode {
     const divider: FlexNode = { name: 'divider', style: { width: 1, height: 20 } };
     return {
         name: 'sessionCapsule',
@@ -114,7 +115,12 @@ function sessionCapsule(model: string, fontScale = 1): FlexNode {
             {
                 name: 'modelSegment',
                 style: {
-                    width: composerModelSegmentWidth(model, fontScale),
+                    // The name's own width by default, so a row that is too
+                    // narrow OVERFLOWS and the failure is measured. Handed
+                    // `composerModelPresentation`'s width instead, it is the
+                    // segment `flexShrink: 1, minWidth: 0` resolves to on the
+                    // phone (DROVE-331), and the row holds.
+                    width: modelWidth ?? composerModelSegmentWidth(model, fontScale),
                     height: MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE,
                 },
             },
@@ -127,18 +133,20 @@ interface TreeOptions {
     withControls?: boolean;
     model?: string;
     fontScale?: number;
+    /** The model segment's resolved width, when the presentation decides it (DROVE-331). */
+    modelWidth?: number;
 }
 
 function bubbleTree(textIntrinsic: number, options: TreeOptions = {}): FlexNode {
     const {
-        withAdd = true, withControls = true, model = 'Opus 5', fontScale = 1,
+        withAdd = true, withControls = true, model = 'Opus 5', fontScale = 1, modelWidth,
     } = options;
     const gap: FlexNode = { name: 'gap', style: COMPOSER_BUBBLE_GAP_GEOMETRY };
     const actions: FlexNode[] = [];
     if (withAdd) actions.push({ name: 'add', style: COMPOSER_BUBBLE_DISC_GEOMETRY });
     if (withControls) {
         if (withAdd) actions.push({ ...gap, name: 'gapAddCapsule' });
-        actions.push(sessionCapsule(model, fontScale));
+        actions.push(sessionCapsule(model, fontScale, modelWidth));
         actions.push({ ...gap, name: 'gapCapsuleSpacer' });
     }
     actions.push({ name: 'spacer', style: COMPOSER_BUBBLE_SPACER_GEOMETRY });
@@ -491,6 +499,59 @@ describe('the composer bubble, resolved rather than restated', () => {
         }, widthOf(375));
         const okSend = findFrame(ok, 'send');
         expect(okSend.x + okSend.width).toBe(ok.width - MOBILE_COMPOSER_METRICS.bubbleInset);
+    });
+
+    /**
+     * THE CUT, RESOLVED THROUGH THE ENGINE (DROVE-331).
+     *
+     * Clay: "you can even make the model text a bit smaller and truncate if it
+     * ends up running under." The test above lets the unshrunk name overrun
+     * the rim so the failure is measured; this one lays the segment out at the
+     * width `composerModelPresentation` says it takes, which is what
+     * `flexShrink: 1, minWidth: 0` on the model segment does on the phone, and
+     * asserts what the ellipsis buys: send on the rim, the three glyph
+     * segments at their 27, and the cut exactly the overrun.
+     */
+    it('cuts the name rather than the row or the other segments, at the width the presentation resolves (DROVE-331)', () => {
+        const drawn = composerModelPresentation('Gemini 3.1 Pro', 320);
+        expect(drawn.outcome).toBe('truncated');
+        const frames = layout(22, { model: 'Gemini 3.1 Pro', modelWidth: drawn.width }, widthOf(320));
+        const rim = frames.width - MOBILE_COMPOSER_METRICS.bubbleInset;
+        const send = findFrame(frames, 'send');
+        expect(send.x + send.width).toBe(rim);
+        expect(findFrame(frames, 'spacer').width).toBe(0);
+        for (const name of ['modeSegment', 'readAloudSegment', 'effortSegment']) {
+            expect(findFrame(frames, name).width, name).toBe(MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH);
+        }
+        const model = findFrame(frames, 'modelSegment');
+        expect(model.width).toBe(composerModelBudget(320));
+        expect(model.width).toBe(63);
+        expect(findFrame(frames, 'sessionCapsule').width)
+            .toBe(3 * MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH + COMPOSER_BUBBLE_ROW_GEOMETRY.dividers + 63);
+        // What the ellipsis stands in for is the overrun the unshrunk name
+        // measures, to the point.
+        const unshrunk = layout(22, {
+            model: 'Gemini 3.1 Pro', fontScale: COMPOSER_MODEL_SEGMENT.minimumFontScale,
+        }, widthOf(320));
+        const unshrunkSend = findFrame(unshrunk, 'send');
+        expect(drawn.cut).toBe(unshrunkSend.x + unshrunkSend.width - rim);
+        expect(drawn.cut).toBe(26);
+        // Scaled, one step up the order: at the crossover the segment is the
+        // whole budget, nothing is cut, and the row holds the same way.
+        const scaled = composerModelPresentation('Gemini 3.1 Pro', 346);
+        expect(scaled.outcome).toBe('scaled');
+        const atCrossover = layout(22, { model: 'Gemini 3.1 Pro', modelWidth: scaled.width }, widthOf(346));
+        const crossoverSend = findFrame(atCrossover, 'send');
+        expect(crossoverSend.x + crossoverSend.width).toBe(atCrossover.width - MOBILE_COMPOSER_METRICS.bubbleInset);
+        expect(findFrame(atCrossover, 'spacer').width).toBe(0);
+        expect(findFrame(atCrossover, 'modelSegment').width).toBe(89);
+        // And on a supported phone the same call draws the name WHOLE, at the
+        // name's own width, with the spacer holding the rest.
+        const whole = composerModelPresentation('Gemini 3.1 Pro', 375);
+        expect(whole.outcome).toBe('whole');
+        const ok = layout(22, { model: 'Gemini 3.1 Pro', modelWidth: whole.width }, widthOf(375));
+        expect(findFrame(ok, 'modelSegment').width).toBe(108);
+        expect(findFrame(ok, 'spacer').width).toBe(10);
     });
 
     it('opens at one height on every phone again, which is what the row buys back', () => {

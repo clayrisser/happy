@@ -176,15 +176,22 @@ describe('the session capsule', () => {
         }
     });
 
-    it('spells the model out in full, and never gains an ellipsis (DROVE-138, DROVE-178)', () => {
+    it('spells the model out in full where it fits, smaller where it must, and cuts it last (DROVE-138, DROVE-178, DROVE-331)', () => {
         const renderer = mount({ label: { mode: 'Yolo', model: 'Opus 5 1M', effort: 'High', text: '' } });
         const text = renderer.root.findAllByType('Text' as any)
             .find((node: any) => node.props.children === 'Opus 5 1M');
         expect(text).toBeTruthy();
-        expect(text.props.ellipsizeMode).toBeUndefined();
         // Smaller before shorter: the failure DROVE-138 was filed about was
-        // `Opus 5...`, so the segment scales the type instead of cutting it.
+        // `Opus 5...`, so the segment scales the type before it ever cuts it.
         expect(text.props.adjustsFontSizeToFit).toBe(true);
+        expect(text.props.numberOfLines).toBe(1);
+        // AND AN ELLIPSIS AFTER THAT, ON CLAY'S WORD (DROVE-331): "make the
+        // model text a bit smaller and truncate if it ends up running under."
+        // Tail, stated rather than left to the platform default, so the cut
+        // is a ruling on the control. It was asserted ABSENT here until
+        // DROVE-331; sessionPillLabel.spec.ts pins that no supported width
+        // ever reaches it.
+        expect(text.props.ellipsizeMode).toBe('tail');
         // 0.80 since DROVE-236 moved the capsule into the bubble and took 33pt
         // off the name's budget. The floor is derived, not chosen: it is what
         // `Opus 4.8 1M` needs to draw WHOLE at 320. sessionPillLabel.spec.ts
