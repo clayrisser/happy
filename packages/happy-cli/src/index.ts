@@ -27,6 +27,28 @@ import type { StartOptions } from '@/claude/runClaude'
   // Check if first argument is a subcommand
   const subcommand = args[0]
 
+  // DROVE-314: read-only verbs must not pay the session-supervisor cost.
+  // `drover --version` (the daemon's version probe, run constantly) and
+  // `drover --help` are pure reads, but when they fall through to the main
+  // branch below they load persistence, the auth/api layer and runClaude just
+  // to print a string — ~680ms of bundle-load waste on Clay's machine, paid on
+  // every probe. This is DROVE-288's insight (a read verb needs no supervisor)
+  // applied to the two verbs that still went the long way. When the flag IS the
+  // invocation, answer it here and exit before anything heavy loads. A flag
+  // mixed with other args (e.g. `drover --model x --version`, or `drover claude
+  // --help`) still flows through the main parser and is forwarded to Claude as
+  // before — only chalk and the version string, both already loaded, are
+  // touched here.
+  if (subcommand === '--version' || subcommand === '-v') {
+    console.log(`drover version: ${packageJson.version}`)
+    process.exit(0)
+  }
+  if (subcommand === '--help' || subcommand === '-h') {
+    printDroverHelp()
+    console.log(chalk.gray('Run `claude --help` to see all Claude Code options.'))
+    process.exit(0)
+  }
+
   // If --version is passed - do not log, its likely daemon inquiring about our
   // version. pick-account runs before EVERY session start (DROVE-21) and would
   // otherwise leave a one-line log file per start.
@@ -782,9 +804,63 @@ ${chalk.bold('To clean up runaway processes:')} Use ${chalk.cyan('drover doctor 
       options.claudeArgs = [...(options.claudeArgs || []), '--chrome']
     }
 
-    // Show help
+    // Show help. Bare `drover --help` is handled by the fast path at the top of
+    // this file (DROVE-314); this branch only runs when --help arrives mixed
+    // with a claude passthrough (e.g. `drover claude --help`), so it keeps the
+    // slower `claude --help` append that spawns the claude binary.
     if (showHelp) {
+      printDroverHelp()
       console.log(`
+${chalk.gray('─'.repeat(60))}
+${chalk.bold.cyan('Claude Code Options (from `claude --help`):')}
+`)
+
+      // Run claude --help and display its output
+      // Use execFileSync directly with claude CLI for runtime-agnostic compatibility
+      try {
+        const { claudeCliPath } = await import('./claude/claudeLocal')
+        const claudeHelp = execFileSync(claudeCliPath, ['--help'], { encoding: 'utf8', windowsHide: true })
+        console.log(claudeHelp)
+      } catch (e) {
+        console.log(chalk.yellow('Could not retrieve claude help. Make sure claude is installed.'))
+      }
+
+      process.exit(0)
+    }
+
+    // Show version
+    if (showVersion) {
+      console.log(`drover version: ${packageJson.version}`)
+      // Don't exit - continue to pass --version to Claude Code
+    }
+
+    // Normal flow - auth and machine setup
+    const { credentials } = await authAndEnsureDaemon();
+
+    // Start the CLI
+    try {
+      const { runClaude } = await import('@/claude/runClaude')
+      await runClaude(credentials, options);
+    } catch (error) {
+      console.error(chalk.red('Error:'), error instanceof Error ? error.message : 'Unknown error')
+      if (process.env.DEBUG) {
+        console.error(error)
+      }
+      process.exit(1)
+    }
+  }
+})();
+
+
+/**
+ * The drover-native help text. Kept synchronous and dependency-free (chalk and
+ * packageJson are the entry's only eager imports) so `drover --help` can print
+ * it and exit without loading persistence, the api layer or runClaude
+ * (DROVE-314). The `claude --help` append lives at the call site, not here,
+ * because it spawns the claude binary and only the mixed-args path wants it.
+ */
+function printDroverHelp(): void {
+  console.log(`
 ${chalk.bold('drover')} - Cattle Drover · Claude Code on the go
 
 ${chalk.bold('Usage:')}
@@ -834,47 +910,8 @@ ${chalk.bold('Cattle Drover supports ALL Claude options!')}
   Use any claude flag with drover as you would with claude. Our favorite:
 
   drover --resume
-
-${chalk.gray('─'.repeat(60))}
-${chalk.bold.cyan('Claude Code Options (from `claude --help`):')}
 `)
-      
-      // Run claude --help and display its output
-      // Use execFileSync directly with claude CLI for runtime-agnostic compatibility
-      try {
-        const { claudeCliPath } = await import('./claude/claudeLocal')
-        const claudeHelp = execFileSync(claudeCliPath, ['--help'], { encoding: 'utf8', windowsHide: true })
-        console.log(claudeHelp)
-      } catch (e) {
-        console.log(chalk.yellow('Could not retrieve claude help. Make sure claude is installed.'))
-      }
-      
-      process.exit(0)
-    }
-
-    // Show version
-    if (showVersion) {
-      console.log(`drover version: ${packageJson.version}`)
-      // Don't exit - continue to pass --version to Claude Code
-    }
-
-    // Normal flow - auth and machine setup
-    const { credentials } = await authAndEnsureDaemon();
-
-    // Start the CLI
-    try {
-      const { runClaude } = await import('@/claude/runClaude')
-      await runClaude(credentials, options);
-    } catch (error) {
-      console.error(chalk.red('Error:'), error instanceof Error ? error.message : 'Unknown error')
-      if (process.env.DEBUG) {
-        console.error(error)
-      }
-      process.exit(1)
-    }
-  }
-})();
-
+}
 
 /**
  * Handle notification command
