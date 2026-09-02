@@ -25,6 +25,8 @@ import {
     type DroverFileRead,
     type DroverFilesList,
 } from '@/sync/machineFiles';
+import { droverFileImageUri } from '@slopus/happy-wire';
+import { InlineImage } from '@/components/InlineImage';
 import { breadcrumb, fileNotes, fileSizeLabel, joinRel, noMachineTrouble, parentRel } from '@/utils/worktreeSheetTabs';
 import {
     filesCrumbHeight,
@@ -264,6 +266,8 @@ function FileView(props: { boxHeight: number; read: DroverFileRead | null; troub
     const { boxHeight, read, trouble } = props;
     const notes = read ? fileNotes(read) : [];
     const lines = React.useMemo(() => (read?.content ?? '').split('\n'), [read?.content]);
+    // A picture in the worktree is drawn, not announced (DROVE-366).
+    const imageUri = droverFileImageUri(read);
     return (
         <View>
             {notes.length > 0 ? <Text style={styles.notes}>{notes.join(' · ')}</Text> : null}
@@ -272,6 +276,12 @@ function FileView(props: { boxHeight: number; read: DroverFileRead | null; troub
                     <Text style={styles.trouble}>{trouble}</Text>
                 ) : !read ? (
                     <View style={styles.loading}><ActivityIndicator /></View>
+                ) : imageUri ? (
+                    <InlineImage
+                        uri={imageUri}
+                        maxHeight={boxHeight}
+                        fallback={<Text style={styles.trouble}>Binary file, not shown</Text>}
+                    />
                 ) : read.binary ? (
                     <Text style={styles.trouble}>Binary file, not shown</Text>
                 ) : (

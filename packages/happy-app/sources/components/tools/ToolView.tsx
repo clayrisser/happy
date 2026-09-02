@@ -23,9 +23,12 @@ import {
 } from '@/utils/toolDisplay';
 import { useSetting } from '@/sync/storage';
 import { InlineImage } from '@/components/InlineImage';
-import { toolResultImage } from '@/utils/imageResult';
+import { useToolImage } from '@/hooks/useToolImage';
 import { getToolRowRoute } from '@/utils/toolRowRoute';
 import { useSubagentScope } from '@/sync/subagentMessages';
+
+/** Stable, so a row with no transcript does not re-run the attachment join. */
+const noMessages: Message[] = [];
 
 interface ToolViewProps {
     metadata: Metadata | null;
@@ -52,10 +55,9 @@ export const ToolView = React.memo<ToolViewProps>((props) => {
 
     // When a tool reads an image the image IS the result, so it belongs in the
     // transcript rather than two taps inside the detail screen (DROVE-151).
-    const resultImage = React.useMemo(
-        () => (tool.state === 'completed' ? toolResultImage(tool.result) : null),
-        [tool.state, tool.result],
-    );
+    // A Read of a picture the phone sent falls back to the phone's own copy
+    // when the result did not carry the bytes (DROVE-366).
+    const resultImage = useToolImage(tool, props.messages ?? noMessages, sessionId);
 
     const handlePress = React.useCallback(() => {
         if (onPress) {

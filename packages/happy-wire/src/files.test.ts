@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
     droverFileEntryAllowedKeys,
+    droverFileImageAllowedKeys,
+    droverFileImageUri,
     droverFileReadLeaks,
     droverFilesListLeaks,
     droverPaneLeaks,
@@ -59,12 +61,77 @@ describe('a read and a pane are checked the same way', () => {
     it('refuses a read that grew a field', () => {
         expect(droverFileReadLeaks({
             root: '/x', path: 'a.ts', content: 'hi', size: 2, truncated: false, binary: false, redacted: 0, readAt: 1, absolutePath: '/x/a.ts',
-        })).toEqual(['file.absolutePath is not one of root, path, content, size, truncated, binary, redacted, readAt']);
+        })).toEqual(['file.absolutePath is not one of root, path, content, size, truncated, binary, image, redacted, readAt']);
     });
 
     it('refuses a pane whose lines are not text', () => {
         expect(droverPaneLeaks({ sessionId: 's', pane: '%3', lines: [1], redacted: 0, capturedAt: 1 }))
             .toContain('pane.lines is not a list of strings');
+    });
+});
+
+/** A real 1x1 PNG, so the shape under test is a shape that decodes. */
+const onePixelPng = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+
+const imageRead = (image: unknown) => ({
+    root: '/x', path: 'docs/shot.png', content: null, size: 68,
+    truncated: false, binary: true, image, redacted: 0, readAt: 1,
+});
+
+describe('a picture the daemon read (DROVE-366)', () => {
+    it('passes an image of the declared shape', () => {
+        expect(droverFileReadLeaks(imageRead({ mediaType: 'image/png', base64: onePixelPng }))).toEqual([]);
+    });
+
+    it('still passes a read that carries no image at all', () => {
+        expect(droverFileReadLeaks(imageRead(null))).toEqual([]);
+        const withoutKey = imageRead(null) as Record<string, unknown>;
+        delete withoutKey.image;
+        expect(droverFileReadLeaks(withoutKey)).toEqual([]);
+    });
+
+    it('refuses an extra key INSIDE the image, which the top-level pass cannot see', () => {
+        expect(droverFileReadLeaks(imageRead({
+            mediaType: 'image/png', base64: onePixelPng, absolutePath: '/Users/clay/docs/shot.png',
+        }))).toEqual([`file.image.absolutePath is not one of ${droverFileImageAllowedKeys.join(', ')}`]);
+    });
+
+    it('refuses a media type the phone was never told about', () => {
+        expect(droverFileReadLeaks(imageRead({ mediaType: 'image/svg+xml', base64: onePixelPng })))
+            .toContain('file.image.mediaType is not one of image/png, image/jpeg, image/gif, image/webp');
+        expect(droverFileReadLeaks(imageRead({ mediaType: 'text/plain', base64: onePixelPng })))
+            .toContain('file.image.mediaType is not one of image/png, image/jpeg, image/gif, image/webp');
+    });
+
+    it('refuses bytes that are not base64', () => {
+        expect(droverFileReadLeaks(imageRead({ mediaType: 'image/png', base64: '' })))
+            .toContain('file.image.base64 is not bytes');
+        // A path where the bytes should be is the shape worth naming.
+        expect(droverFileReadLeaks(imageRead({ mediaType: 'image/png', base64: '/Users/clay/shot.png' })))
+            .toContain('file.image.base64 is not base64');
+        expect(droverFileReadLeaks(imageRead({ mediaType: 'image/png', base64: `data:image/png;base64,${onePixelPng}` })))
+            .toContain('file.image.base64 is not base64');
+    });
+});
+
+describe('droverFileImageUri', () => {
+    it('builds a data uri an Image can draw', () => {
+        expect(droverFileImageUri(imageRead({ mediaType: 'image/png', base64: onePixelPng }) as never))
+            .toBe(`data:image/png;base64,${onePixelPng}`);
+    });
+
+    it('is null for every way there is nothing to draw', () => {
+        // Not an image, an image over the daemon's cap, and no read at all.
+        expect(droverFileImageUri({
+            root: '/x', path: 'a.ts', content: 'hi', size: 2, truncated: false, binary: false, redacted: 0, readAt: 1,
+        })).toBeNull();
+        expect(droverFileImageUri(imageRead(null) as never)).toBeNull();
+        expect(droverFileImageUri(null)).toBeNull();
+        expect(droverFileImageUri(undefined)).toBeNull();
+    });
+
+    it('will not build a uri for a media type outside the set', () => {
+        expect(droverFileImageUri(imageRead({ mediaType: 'image/svg+xml', base64: onePixelPng }) as never)).toBeNull();
     });
 });
 

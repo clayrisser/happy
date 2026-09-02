@@ -169,9 +169,19 @@ export function fileSizeLabel(bytes: number | null): string {
  * it is binary, that the drover masked something in it. Joined with ` · ` by
  * the caller; empty means the file is exactly what is on disk.
  */
-export function fileNotes(file: { truncated: boolean; binary: boolean; redacted: number; size: number }): string[] {
+export function fileNotes(file: {
+    truncated: boolean;
+    binary: boolean;
+    redacted: number;
+    size: number;
+    /** A picture the daemon read whole, when the file is one (DROVE-366). */
+    image?: { mediaType: string; base64: string } | null;
+}): string[] {
     const notes: string[] = [];
-    if (file.binary) notes.push('binary, not shown');
+    // An image IS shown now, so saying it is not would be the row lying about
+    // what is drawn directly under it. Every other binary still says so, and
+    // so does an image the daemon refused to send for its size.
+    if (file.binary && !file.image) notes.push('binary, not shown');
     if (file.truncated) notes.push(`first 256 KB of ${fileSizeLabel(file.size)}`);
     if (file.redacted > 0) notes.push(file.redacted === 1 ? '1 secret masked' : `${file.redacted} secrets masked`);
     return notes;
