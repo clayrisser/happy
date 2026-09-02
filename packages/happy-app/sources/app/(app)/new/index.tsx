@@ -132,6 +132,9 @@ const ALL_AGENTS: { key: AgentKey; label: string }[] = [
     { key: 'claude', label: 'claude code' },
     { key: 'codex', label: 'codex' },
     { key: 'cursor', label: 'cursor' },
+    // DROVE-381. Filtered by machineChoiceAgentAvailable below, so it only
+    // appears on a computer whose daemon reported a gemini install.
+    { key: 'gemini', label: 'gemini' },
     { key: 'agy', label: 'antigravity' },
     { key: 'rig', label: 'drover' },
     // DROVE-316. Filtered by machineChoiceAgentAvailable below, so it only

@@ -51,15 +51,6 @@ type MetadataOption = {
     description?: string | null;
 };
 
-const GEMINI_MODEL_FALLBACKS: ModelMode[] = [
-    { key: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro', description: 'latest & most capable' },
-    { key: 'gemini-3-flash-preview', name: 'Gemini 3 Flash', description: 'latest & fast' },
-    { key: 'gemini-3.1-flash-lite-preview', name: 'Gemini 3.1 Flash Lite', description: 'latest & fastest' },
-    { key: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', description: 'most capable' },
-    { key: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', description: 'fast & efficient' },
-    { key: 'gemini-2.5-flash-lite', name: 'Gemini 2.5 Flash Lite', description: 'fastest' },
-];
-
 export function mapMetadataOptions(options?: MetadataOption[] | null): ModeOption[] {
     if (!options || options.length === 0) {
         return [];
@@ -111,14 +102,22 @@ export function getCodexPermissionModes(translate: Translate): PermissionMode[] 
     ];
 }
 
-// Only the keys runGemini actually honours (its validModes list). Gemini is
-// retired from the harness picker, but existing sessions still open this menu,
-// and the two modes that used to be here were both broken: `auto_edit` is not
-// in MessageMetaSchema at all, so picking it dropped the entire message, and
-// `plan` passed the schema only to be ignored by runGemini — which left the
-// session on whatever it had before, up to and including yolo.
+// Gemini's own four, exactly as `gemini --help` prints them:
+// `--approval-mode default|auto_edit|yolo|plan`. All four are real on
+// @google/gemini-cli 0.58.0 and the descriptions are its wording, not ours.
+//
+// This list was down to two for a while, and both cuts have since expired.
+// `auto_edit` was dropped because it "is not in MessageMetaSchema at all", but
+// that schema's `permissionMode` is a plain `z.string()` now — native clients
+// publish their own mode codes, so nothing enumerated is left to fall out of.
+// `plan` was dropped because runGemini ignored it. Its validModes list is still
+// Codex-shaped (`default|read-only|safe-yolo|yolo`) and still does not know
+// these codes, so a mode picked here reaches the CLI only through the harness
+// that passes `--approval-mode` straight to the binary (DROVE-381).
 export function getGeminiPermissionModes(translate: Translate): PermissionMode[] {
     return [
+        { key: 'auto_edit', name: 'Edits', description: translate('agentInput.geminiPermissionMode.autoEdit') },
+        { key: 'plan', name: 'Plan', description: translate('agentInput.geminiPermissionMode.plan') },
         { key: 'yolo', name: 'Yolo', description: translate('agentInput.geminiPermissionMode.yolo') },
         { key: 'default', name: 'Default', description: translate('agentInput.geminiPermissionMode.default') },
     ];
@@ -188,10 +187,6 @@ export function includeConfiguredModel(
             description: 'custom model',
         },
     ];
-}
-
-export function getGeminiModelModes(): ModelMode[] {
-    return GEMINI_MODEL_FALLBACKS;
 }
 
 // runOpenClaw never reads permissionMode, so neither of these changes what
@@ -464,14 +459,19 @@ export function getHardcodedModelModes(flavor: AgentFlavor, _translate: Translat
     // anywhere but the machine it was typed on. The session publishes what
     // `pi --list-models` actually reports, which the picker already prefers,
     // and that is the whole of DROVE-253's rule applied here.
-    if (!harnessHasModeControls(flavor) || flavor === 'cursor' || flavor === 'pi') {
+    //
+    // gemini lands here on Cursor's grounds, doubled (DROVE-381). Its list is
+    // per LOGIN — the preview ids are only reachable by accounts with preview
+    // access — and per INSTALLED CLI, since the ids live in the bundle and there
+    // is no `--list-models` to ask. So there is no table that is true on another
+    // machine, and the one that used to be here proved it: it offered
+    // `gemini-3-flash-preview`, which is not among the ids 0.58.0 ships. The
+    // session publishes what the installed binary lists instead.
+    if (!harnessHasModeControls(flavor) || flavor === 'cursor' || flavor === 'gemini' || flavor === 'pi') {
         return [];
     }
     if (flavor === 'codex') {
         return getCodexModelModes();
-    }
-    if (flavor === 'gemini') {
-        return getGeminiModelModes();
     }
     if (flavor === 'openclaw') {
         return getOpenClawModelModes();

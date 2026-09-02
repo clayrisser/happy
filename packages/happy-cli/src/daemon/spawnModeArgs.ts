@@ -89,6 +89,21 @@ export function appendDaemonSpawnModeArgs(
     }
     return;
   }
+  // gemini takes a model and an approval mode (DROVE-381). The mode leaves
+  // here in the daemon's spelling, `--permission-mode`, the way codex's does,
+  // and `drover gemini` turns it into gemini's `--approval-mode`, whose four
+  // values (`default|auto_edit|yolo|plan`) are the four the app offers.
+  // `default` follows Claude's rule, not Codex's: the app sends it with every
+  // spawn, so it means "no request" and leaves the verb's policy in charge
+  // rather than pinning "prompt for approval". `auto` is gemini's own model
+  // alias, so like cursor's it passes through. There is no effort axis.
+  if (agent === 'gemini') {
+    appendDaemonPermissionArgs(args, agent, options.permissionMode, skipPermissions);
+    if (options.modelMode && options.modelMode !== 'default') {
+      args.push('--model', options.modelMode);
+    }
+    return;
+  }
   if (agent !== 'claude' && agent !== 'codex') return;
 
   appendDaemonPermissionArgs(args, agent, options.permissionMode, skipPermissions);

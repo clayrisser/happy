@@ -39,14 +39,23 @@ const NON_SPAWNABLE_HARNESS_NAMES: Record<string, string> = {};
 /**
  * Harnesses you can no longer start a session with.
  *
- * Gemini's CLI login is dead for individual accounts — it now refuses with
- * "This client is no longer supported […] migrate to the Antigravity suite",
- * which is the `agy` harness. OpenClaw is shelved for now. Both stay in
- * HARNESS_NAMES so an existing session still shows a real product name, and
- * neither is removed from the CLI, the wire, or the transcript renderers.
+ * GEMINI WAS HERE, AND WHY IT LEFT IS THE POINT (DROVE-381). The retirement was
+ * measured against an older gemini-cli that refused an individual Google account
+ * with "This client is no longer supported […] migrate to the Antigravity
+ * suite", which is the `agy` harness. That refusal is gone in @google/gemini-cli
+ * 0.58.0: `oauth-personal`, `gemini-api-key`, `vertex-ai` and `cloud-shell` are
+ * all still live auth types in the shipped bundle, the only Antigravity strings
+ * left in it are about IDE integration and an extension install, and a headless
+ * `gemini -p` run against GEMINI_API_KEY answers. So the row comes back. The
+ * Google browser login was NOT re-driven, so oauth-personal is
+ * present-and-unverified rather than proven; the API-key path is the one with a
+ * real run behind it.
+ *
+ * OpenClaw is shelved for now. Both stay in HARNESS_NAMES so an existing session
+ * still shows a real product name, and neither is removed from the CLI, the
+ * wire, or the transcript renderers.
  */
 export const RETIRED_HARNESSES: ReadonlySet<NewSessionAgentType> = new Set([
-    'gemini',
     'openclaw',
 ]);
 
@@ -69,6 +78,12 @@ export const HARNESS_ORDER: readonly NewSessionAgentType[] = [
     'claude',
     'codex',
     'cursor',
+    // Beside the other first-party vendor CLIs, because that is what it is
+    // (DROVE-381). The runner-before-listing rule above is already satisfied
+    // here: happy-cli has carried `src/gemini/runGemini.ts` the whole time the
+    // row was retired, so un-retiring adds a row to a runner rather than the
+    // other way round.
+    'gemini',
     'agy',
     'rig',
     'pi',
@@ -107,6 +122,11 @@ export function isHarnessAvailable({
     // reports nothing for it, and offering a harness on a machine that has no
     // cursor-agent produces a spawn that fails after the tmux window opens.
     if (key === 'cursor') return availability?.cursor === true;
+    // Gemini for the same reason, on the way back in (DROVE-381). `npm install
+    // -g @google/gemini-cli` lands in the npm global prefix, which is not on a
+    // launchd daemon's PATH, so the report has to be explicit and it has to be
+    // trustworthy — geminiBin.ts resolves that install the way piBin.ts does.
+    if (key === 'gemini') return availability?.gemini === true;
     // pi, for the same reason as Cursor and Antigravity, and with one of its
     // own (DROVE-316): it is the LOCAL-model harness, so offering it on a
     // machine with no pi is a spawn that fails after the window opens, and the
@@ -142,11 +162,15 @@ export function listAvailableHarnesses({
         (key === selected && key !== 'agy' && key !== 'pi')
         || isHarnessAvailable({ availability, happyAgentAvailable, key })
     ));
-    // pi joins agy and cursor in being excluded from the fallback: all three
-    // are only offered on an explicit installation report, so a machine with an
-    // older daemon (or none picked yet) gets the familiar catalog rather than a
-    // speculative row that fails on tap.
-    const fallback = HARNESS_ORDER.filter((key) => key !== 'agy' && key !== 'cursor' && key !== 'pi');
+    // pi and gemini join agy and cursor in being excluded from the fallback:
+    // all four are only offered on an explicit installation report, so a machine
+    // with an older daemon (or none picked yet) gets the familiar catalog rather
+    // than a speculative row that fails on tap. Gemini's case is sharper than
+    // most, because a daemon old enough to report nothing is also old enough to
+    // predate geminiBin.ts, and its answer would have been wrong anyway.
+    const fallback = HARNESS_ORDER.filter((key) => (
+        key !== 'agy' && key !== 'cursor' && key !== 'gemini' && key !== 'pi'
+    ));
     return (keys.length > 0 ? keys : fallback).map((key) => ({
         key,
         name: HARNESS_NAMES[key],

@@ -40,7 +40,12 @@ const codeAgentDefaults: Record<AgentKey, AgentDefaultConfig> = {
     // spelled inside the model id. `auto` is Cursor's own default model, and
     // the session republishes the real list once it starts (DROVE-57).
     cursor: { permissionMode: 'bypassPermissions', modelMode: 'auto', effortLevel: null },
-    gemini: { permissionMode: 'default', modelMode: 'gemini-2.5-pro', effortLevel: null },
+    // `auto` is gemini's own default alias and it beats a pinned id here: the
+    // id an account can actually reach depends on its tier (preview models are
+    // not universal) and on the installed CLI, so `gemini-2.5-pro` was a default
+    // that aged into a wrong answer. The alias resolves on the machine, and the
+    // session republishes the real list once it starts (DROVE-381).
+    gemini: { permissionMode: 'default', modelMode: 'auto', effortLevel: null },
     openclaw: { permissionMode: 'default', modelMode: 'default', effortLevel: null },
     agy: { permissionMode: 'default', modelMode: 'Gemini 3.1 Pro (High)', effortLevel: null },
     // pi is the LOCAL harness (DROVE-295), so there is no model name that is

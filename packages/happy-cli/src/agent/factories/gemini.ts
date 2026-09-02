@@ -9,6 +9,7 @@
  */
 
 import { AcpBackend, type AcpBackendOptions, type AcpPermissionHandler } from '../acp/AcpBackend';
+import { findGeminiBin } from '@/gemini/geminiBin';
 import type { AgentBackend, McpServerConfig, AgentFactoryOptions } from '../core';
 import { agentRegistry } from '../core';
 import { geminiTransport } from '../transport';
@@ -92,8 +93,12 @@ export function createGeminiBackend(options: GeminiBackendOptions): GeminiBacken
     logger.warn(`[Gemini] No API key found. Run 'happy connect gemini' to authenticate via Google OAuth, or set ${GEMINI_API_KEY_ENV} environment variable.`);
   }
 
-  // Command to run gemini
-  const geminiCommand = 'gemini';
+  // Resolved absolutely, because a session started from the phone is spawned
+  // by a launchd daemon whose PATH lacks the npm global prefix, the only place
+  // gemini installs. HAPPY_GEMINI_PATH wins; see geminiBin.ts (DROVE-381). A
+  // miss falls through to the bare name so the spawn failure below still
+  // says "is gemini installed" rather than nothing.
+  const geminiCommand = findGeminiBin() ?? 'gemini';
   
   // Get model from options, local config, system environment, or use default
   // Priority: options.model (if provided) > local config > env var > default

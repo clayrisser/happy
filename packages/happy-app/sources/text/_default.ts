@@ -633,10 +633,12 @@ export const en = {
         },
         geminiPermissionMode: {
             title: 'GEMINI PERMISSION MODE',
-            default: 'ask before every tool',
-            autoEdit: 'accept file edits',
-            yolo: 'never ask, full access',
-            plan: 'read only, plan first',
+            // gemini --help's own wording for --approval-mode, so the row says
+            // what the binary will do rather than our paraphrase of it.
+            default: 'prompt for approval',
+            autoEdit: 'auto-approve edit tools',
+            yolo: 'auto-approve all tools',
+            plan: 'read-only mode',
             badgeAutoEdit: 'auto edit',
             badgeYolo: 'yolo',
             badgePlan: 'plan',

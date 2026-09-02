@@ -40,11 +40,11 @@ describe('resolveMachineAgent', () => {
         })).toBe('claude');
     });
 
-    // Gemini's login is dead and OpenClaw is shelved, so a draft pointing at
-    // either has to move even though the binary is still on the machine.
+    // OpenClaw is shelved, so a draft pointing at it has to move even though
+    // the binary is still on the machine.
     it('migrates off a retired harness whose CLI is still installed', () => {
-        expect(resolveMachineAgent('gemini', {
-            gemini: true,
+        expect(resolveMachineAgent('openclaw', {
+            openclaw: true,
             claude: true,
             codex: true,
         })).toBe('claude');
@@ -56,6 +56,24 @@ describe('resolveMachineAgent', () => {
     });
 
     it('migrates off a retired harness when capability metadata is missing', () => {
-        expect(resolveMachineAgent('gemini', undefined)).toBe('claude');
+        expect(resolveMachineAgent('openclaw', undefined)).toBe('claude');
+    });
+
+    // Gemini used to be the other half of both cases above. DROVE-381 un-retired
+    // it, so a draft on gemini now STAYS on gemini where the CLI is reported —
+    // migrating it would be the stale-draft bug pointed the other way.
+    it('leaves a gemini draft alone now that gemini is offered again', () => {
+        expect(resolveMachineAgent('gemini', {
+            gemini: true,
+            claude: true,
+            codex: true,
+        })).toBe('gemini');
+
+        // Still replaced when the machine says it has no gemini, by the same
+        // rule that moves any other uninstalled selection.
+        expect(resolveMachineAgent('gemini', {
+            gemini: false,
+            claude: true,
+        })).toBe('claude');
     });
 });
