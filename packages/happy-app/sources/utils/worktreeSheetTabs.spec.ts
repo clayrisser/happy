@@ -132,6 +132,14 @@ describe('the Files tab\'s paths', () => {
         expect(fileNotes({ truncated: false, binary: false, redacted: 0, size: 10 })).toEqual([]);
         expect(fileNotes({ truncated: true, binary: false, redacted: 2, size: 300 * 1024 })).toEqual(['first 256 KB of 300 KB', '2 secrets masked']);
         expect(fileNotes({ truncated: false, binary: true, redacted: 0, size: 10 })).toEqual(['binary, not shown']);
+        // A picture is drawn under the note, so the note must not say it is not.
+        expect(fileNotes({
+            truncated: false, binary: true, redacted: 0, size: 68,
+            image: { mediaType: 'image/png', base64: 'iVBORw0KGgo=' },
+        })).toEqual([]);
+        // An image the daemon would not send for its size is still not shown.
+        expect(fileNotes({ truncated: false, binary: true, redacted: 0, size: 20 * 1024 * 1024, image: null }))
+            .toEqual(['binary, not shown']);
         expect(fileNotes({ truncated: false, binary: false, redacted: 1, size: 10 })).toEqual(['1 secret masked']);
     });
 });

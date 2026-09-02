@@ -62,6 +62,22 @@ export interface DroverFilesList {
     readAt: number;
 }
 
+/**
+ * An image the daemon read whole, when the file's MAGIC BYTES say it is one
+ * (DROVE-366).
+ *
+ * The read used to answer every image with `binary: true, content: null`, so a
+ * picture in a worktree was a line of text saying it would not be shown. The
+ * extension is never consulted: a `.png` whose bytes are a shell script is not
+ * an image and does not get this.
+ */
+export interface DroverFileImage {
+    /** Sniffed from the bytes. One of `droverFileImageMediaTypes`. */
+    mediaType: string;
+    /** The whole file, base64. Never partial: an image over the cap sends none. */
+    base64: string;
+}
+
 /** One file's text, as `GET /v1/files/read` answers it. */
 export interface DroverFileRead {
     root: string;
@@ -73,6 +89,12 @@ export interface DroverFileRead {
     /** Only the first part came, because the file is bigger than the cap. */
     truncated: boolean;
     binary: boolean;
+    /**
+     * The picture, when the file is one and fits under the daemon's image cap.
+     * Null or absent otherwise, including for an image too big to send, which
+     * is why the phone must not read this as "there is no image here".
+     */
+    image?: DroverFileImage | null;
     /**
      * How many secret-shaped spans were replaced with the marker, on the
      * drover and on the daemon combined. Shown, so a file that reads
@@ -129,7 +151,17 @@ export type DroverPaneRequest =
  */
 export const droverFileEntryAllowedKeys: readonly string[] = Object.freeze(['name', 'type', 'size', 'modified', 'refused']);
 export const droverFilesListAllowedKeys: readonly string[] = Object.freeze(['root', 'path', 'entries', 'readAt']);
-export const droverFileReadAllowedKeys: readonly string[] = Object.freeze(['root', 'path', 'content', 'size', 'truncated', 'binary', 'redacted', 'readAt']);
+export const droverFileReadAllowedKeys: readonly string[] = Object.freeze(['root', 'path', 'content', 'size', 'truncated', 'binary', 'image', 'redacted', 'readAt']);
+export const droverFileImageAllowedKeys: readonly string[] = Object.freeze(['mediaType', 'base64']);
+
+/**
+ * The four the daemon sniffs. A media type outside this set means the drover
+ * grew a decoder the phone was never told about, which is exactly the drift
+ * these allowlists exist to catch.
+ */
+export const droverFileImageMediaTypes: readonly string[] = Object.freeze([
+    'image/png', 'image/jpeg', 'image/gif', 'image/webp',
+]);
 export const droverPaneAllowedKeys: readonly string[] = Object.freeze(['sessionId', 'pane', 'lines', 'redacted', 'capturedAt']);
 
 function extraKeys(value: unknown, allowed: readonly string[], where: string, problems: string[]): void {
@@ -177,7 +209,45 @@ export function droverFileReadLeaks(file: unknown): string[] {
     if (content !== null && content !== undefined && typeof content !== 'string') {
         problems.push('file.content is neither text nor null');
     }
+    const image = (file as DroverFileRead | null)?.image;
+    if (image !== null && image !== undefined) {
+        // The nested object needs its own pass: extraKeys reads one level, so
+        // a drover that started attaching the absolute path INSIDE the image
+        // would sail through the check on `file`.
+        extraKeys(image, droverFileImageAllowedKeys, 'file.image', problems);
+        const mediaType = (image as DroverFileImage).mediaType;
+        if (typeof mediaType !== 'string' || !droverFileImageMediaTypes.includes(mediaType)) {
+            problems.push(`file.image.mediaType is not one of ${droverFileImageMediaTypes.join(', ')}`);
+        }
+        const base64 = (image as DroverFileImage).base64;
+        if (typeof base64 !== 'string' || base64.length === 0) {
+            problems.push('file.image.base64 is not bytes');
+        } else if (!base64Re.test(base64)) {
+            problems.push('file.image.base64 is not base64');
+        }
+    }
     return problems;
+}
+
+/** Standard alphabet, padded. A path or a data URI prefix fails it. */
+const base64Re = /^[A-Za-z0-9+/]+={0,2}$/;
+
+/**
+ * The picture as something an <Image> can draw, or null.
+ *
+ * Null covers all three "nothing to draw" cases at once: not an image, an
+ * image over the daemon's cap, and a read that failed. The caller then says so
+ * rather than drawing an empty frame.
+ */
+export function droverFileImageUri(file: DroverFileRead | null | undefined): string | null {
+    const image = file?.image;
+    if (!image || typeof image.mediaType !== 'string' || typeof image.base64 !== 'string') {
+        return null;
+    }
+    if (image.base64.length === 0 || !droverFileImageMediaTypes.includes(image.mediaType)) {
+        return null;
+    }
+    return `data:${image.mediaType};base64,${image.base64}`;
 }
 
 /** And for a pane. */
