@@ -135,10 +135,14 @@ describe('a session lands on Clay\'s table', () => {
             latestUsage: usage(compactionAt),
         });
 
-        it('was green before this ticket, and that was the bug', () => {
-            // Same snapshot with the field the old CLI never wrote. Nothing
-            // else in it says the session is busy, which is exactly how the
-            // most disruptive thing a session does came to wear the idle hue.
+        it('is anything but compacting without the field the old CLI never wrote', () => {
+            // Same snapshot, minus `compacting`. It was GREEN when this ticket
+            // was written — the idle hue on the most disruptive thing a session
+            // does — and DROVE-361 has since given the agent out on its own its
+            // own term, so it reads working now. The claim that survives both
+            // is the one this test is for: without the CLI saying so, nothing
+            // here reaches `compacting`, because the inference underneath it
+            // needs a working main thread and a compaction pass has none.
             const before = session({
                 metadata: {
                     liveStatus: {
@@ -148,7 +152,8 @@ describe('a session lands on Clay\'s table', () => {
                 } as never,
                 latestUsage: usage(compactionAt),
             });
-            expect(stateOf(before)).toBe('connected');
+            expect(stateOf(before)).not.toBe('compacting');
+            expect(stateOf(before)).toBe('working');
         });
 
         it('is purple and pulsing on every surface that draws the session', () => {

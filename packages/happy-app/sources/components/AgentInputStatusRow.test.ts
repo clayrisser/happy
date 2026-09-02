@@ -418,11 +418,15 @@ describe('AgentInputStatusRow on an idle pane session', () => {
         expect(sheet().props.open).toBe(false);
     });
 
-    it('draws the context gauge as the ring alone once the account is on the row (DROVE-138)', () => {
+    it('keeps the context percent beside the account when the row can afford both (DROVE-372)', () => {
         const renderer = row({ contextUsage: context });
-        // The ring fills toward the next COMPACTION, so the text is the
-        // cheapest thing on a full row to lose.
-        expect(line(renderer)).toEqual(['jamrizzi', '23%']);
+        // This row used to read `jamrizzi 23%` with a bare ring, because the
+        // percent was withheld whenever an account was present (DROVE-138).
+        // The account only reaches the strip through DROVE-352's
+        // harness-narrowed groups, so that rule made the SAME slot print its
+        // number on Codex and hide it on Claude — the divergence Clay
+        // photographed for DROVE-372. Width decides now, and this row has it.
+        expect(line(renderer)).toEqual(['46% ctx', 'jamrizzi', '23%']);
         expect(renderer.root.findAllByType('Svg' as any)).toHaveLength(1);
         // And the tap prints the sentence WITH ITS SOURCE in it (DROVE-231):
         // both real numbers and where the compaction point sits.
@@ -444,7 +448,7 @@ describe('AgentInputStatusRow on an idle pane session', () => {
         });
         // 46% of the way to the compaction point, not 42% of the window: the
         // number agrees with the ring beside it (DROVE-231).
-        expect(line(renderer)).toEqual(['46% context', '77% week']);
+        expect(line(renderer)).toEqual(['46% ctx', '77% week']);
     });
 
     it('fades with the rest of the composer detail while the chat is scrolled up', () => {
@@ -469,7 +473,7 @@ describe('AgentInputStatusRow on an idle pane session', () => {
         // strip prints used since DROVE-230. This expectation was written on a
         // base where `weekPercent` was still headroom, which is exactly the
         // split brain that lane existed to remove.
-        expect(line(renderer)).toEqual(['46% context', '23% week']);
+        expect(line(renderer)).toEqual(['46% ctx', '23% week']);
         // The account is hidden, not forgotten: the sheet still opens on it
         // and a switch still says which account it is leaving (DROVE-160).
         const sheet = () => renderer.root.findByType('UsageAccountBarsSheet' as any);
@@ -805,12 +809,11 @@ describe('AgentInputStatusRow while the session is working', () => {
         }
     });
 
-    it('folds the context percent onto its ring while the main thread works, and a tap unfolds it', () => {
+    it('folds the context percent onto its ring when the WORKING row runs out of width, and a tap unfolds it', () => {
         vi.useFakeTimers();
         vi.setSystemTime(now + 1_000);
         try {
-            // Idle with no account taking the width, the percent is on the
-            // row as before (DROVE-138 folds it when there is one).
+            // Idle, the row has room and the percent is on it.
             const idle = resolveUsageStrip({
                 usageLimits: { capturedAt: 1, windows: [{ id: 'seven_day', utilization: 77, resetsAt: sep5 }] },
                 droverUsage: null,
@@ -819,12 +822,27 @@ describe('AgentInputStatusRow while the session is working', () => {
                 contextUsage: context,
                 weekPercent: idle.weekPercent,
                 usageBarGroups: idle.usageBarGroups,
-            }))).toContain('46% context');
-            // Working, the ring carries it alone: the live token count is the
-            // cost readout at that moment, and the row has to fit.
+            }))).toContain('46% ctx');
+            // Working, the same row carries a tool, a clock, a tally and a
+            // count as well — and at 390 it STILL fits, so the reading stays.
+            // It used to vanish here on a rule of its own (DROVE-155 folded it
+            // whenever the main thread worked, whatever the width). That rule
+            // is gone with the account one: `contextPercent` is rank 0 on
+            // STATUS_ROW_GIVE_WAY and nothing but the budget takes it now, on
+            // any harness, for the one reason (DROVE-372).
             const renderer = row({ sessionId: 'busy', contextUsage: context });
-            expect(line(renderer)).not.toContain('46% context');
+            expect(line(renderer)).toContain('46% ctx');
             expect(renderer.root.findAllByType('Svg' as any)).toHaveLength(1);
+            // Squeeze the same row and it is the first thing to go, with the
+            // ring left carrying the reading.
+            screen.width = 320;
+            try {
+                const narrow = row({ sessionId: 'busy', contextUsage: context });
+                expect(line(narrow)).not.toContain('46% ctx');
+                expect(narrow.root.findAllByType('Svg' as any)).toHaveLength(1);
+            } finally {
+                screen.width = 390;
+            }
             act(() => {
                 segment(renderer, 'Context').props.onPress();
             });
@@ -952,8 +970,13 @@ describe('the token tally on the strip (DROVE-184)', () => {
             expect(text.join(' ')).toContain('1.9M');
             expect(text.join(' ')).not.toContain('1.8M');
             expect(text).not.toContain('working');
+            // The dot is the working blue, not green: the fan-out is still out
+            // and DROVE-361 gave that its own term in the one dot table. It is
+            // the WORD that stays off the row, which is what this assertion is
+            // really guarding — the dot carries the state and no segment
+            // repeats it (DROVE-231, DROVE-250).
             expect(renderer.root.findByType('StatusDot' as any).props.color)
-                .toBe(statusDotColors.connected);
+                .toBe(statusDotColors.working);
         } finally {
             vi.useRealTimers();
         }
@@ -1024,14 +1047,20 @@ describe('AgentInputStatusRow dot rule', () => {
         }
     });
 
-    it('keeps the connection colour while only background agents are out', () => {
+    it('pulses working while only background agents are out (DROVE-361)', () => {
         vi.useFakeTimers();
         vi.setSystemTime(now + 1_000);
         try {
             const renderer = row({ sessionId: 'agentsOnly' });
             const dot = renderer.root.findByType('StatusDot' as any);
-            expect(dot.props.color).toBe(statusDotColors.connected);
-            expect(dot.props.isPulsing).toBe(false);
+            // Green here was the DROVE-361 bug: Clay photographed a terminal
+            // running `general-purpose … 1h 39m 8s` beside a flat green dot.
+            // The strip cannot draw idle next to its own worker count, so
+            // `agentsWorking` is its own term below `waiting` and above
+            // `connected` (happy-wire's statusDot.ts). One table, and the
+            // strip, the list and the wrist all read it (DROVE-372).
+            expect(dot.props.color).toBe(statusDotColors.working);
+            expect(dot.props.isPulsing).toBe(true);
             // The agents still say how many they are, and nothing else.
             expect(line(renderer)).toEqual(['2', 'jamrizzi', '23%']);
         } finally {
@@ -1103,8 +1132,13 @@ describe('AgentInputStatusRow dot rule', () => {
             const threeWorkers = [1, 2, 3].map((n) => ({
                 id: `a${n}`, label: `Agent ${n}`, startedAt: now - 300_000,
             }));
-            // Before: the state he photographed. Green, on a session that is
-            // rewriting its own history.
+            // Before: a CLI too old to say `compacting`. It drew flat GREEN
+            // when Clay photographed it; DROVE-361 has since given the three
+            // workers their own term, so it is the working blue today. Either
+            // way it is NOT purple, which is the thing this test exists to
+            // separate — the inference alone never reaches `compacting`,
+            // because a compaction pass has no working main thread to
+            // corroborate it (COMPACTING_NEEDS_WORKING_MAIN).
             sessions.midCompactionOldCli = {
                 metadata: { liveStatus: { at: now, agents: threeWorkers } },
             };
@@ -1112,8 +1146,8 @@ describe('AgentInputStatusRow dot rule', () => {
                 sessionId: 'midCompactionOldCli',
                 contextUsage: { contextSize: 199_000, contextWindow: 200_000 },
             }).root.findByType('StatusDot' as any);
-            expect(before.props.color).toBe(statusDotColors.connected);
-            expect(before.props.isPulsing).toBe(false);
+            expect(before.props.color).not.toBe(statusDotColors.compacting);
+            expect(before.props.color).toBe(statusDotColors.working);
 
             // After: the same snapshot with the one field the CLI now writes.
             sessions.midCompaction = {
@@ -1373,7 +1407,7 @@ describe('AgentInputStatusRow never draws an empty strip', () => {
                 ['the task list', { ...empty, sessionId: 'oneTask' }, '1/3 tasks'],
                 ['the account and quota', {}, 'jamrizzi'],
                 ['the account alone', { weekPercent: null }, 'jamrizzi'],
-                ['the context gauge', { ...empty, contextUsage: context }, '46% context'],
+                ['the context gauge', { ...empty, contextUsage: context }, '46% ctx'],
             ];
             for (const [what, props, expected] of only) {
                 const renderer = row(props);

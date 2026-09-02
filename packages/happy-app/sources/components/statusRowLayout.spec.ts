@@ -28,7 +28,6 @@ import { describe, expect, it } from 'vitest';
 import { MOBILE_COMPOSER_LAYOUT, MOBILE_COMPOSER_METRICS } from './agentInputLayout';
 import {
     estimateStatusRowWidth,
-    showsContextPercent,
     statusRowFits,
     statusRowFolds,
     statusRowGiveWayRank,
@@ -42,6 +41,11 @@ import {
     STATUS_ROW_GIVE_WAY,
     STATUS_ROW_MODEL_TRUNCATION,
 } from './statusRowLayout';
+import {
+    noStatusStripFolds,
+    resolveStatusStrip,
+    statusStripDrawn,
+} from './statusStripLayout';
 
 /** No fold fired. Four of them now: the two numbers joined the name and the model. */
 const noFolds = { toolName: false, model: false, tokens: false, elapsed: false } as const;
@@ -495,21 +499,62 @@ describe('the quota segment', () => {
 });
 
 describe('the context gauge', () => {
-    it('drops its percent once the account is on the row; the ring still fills', () => {
-        expect(showsContextPercent('jamrizzi', false, false)).toBe(false);
+    /**
+     * `showsContextPercent(account, precise, mainWorking)` used to live here
+     * and answer this. It withheld the percent whenever an account was on the
+     * row or the main thread was working — a second width heuristic outside the
+     * layout system, keyed on a fact that tracks the HARNESS, since an account
+     * reaches the strip only through DROVE-352's harness-narrowed
+     * `usageBarGroups`.
+     *
+     * DROVE-372 deleted it. The percent is offered unconditionally and
+     * `STATUS_ROW_GIVE_WAY` folds it, so the assertions below pin the same
+     * outcomes the four above did — a crowded row still loses the number — plus
+     * the thing they could not say, which is that it is lost for WIDTH and by
+     * one order for every harness.
+     */
+    it('gives the percent up first of anything on the row', () => {
+        expect(STATUS_ROW_GIVE_WAY[0]).toBe('contextPercent');
+        expect(statusRowGiveWayRank('contextPercent')).toBe(0);
     });
 
-    it('drops it while the main thread works too, where the token count is the cost readout (DROVE-155)', () => {
-        expect(showsContextPercent(null, false, true)).toBe(false);
+    it('is still the first thing a crowded row loses, account or not', () => {
+        // What the old `account` and `mainWorking` gates were reaching for.
+        // Now it is the budget that says so, at a width where it is true.
+        const working = {
+            dot: true,
+            toolName: 'Bash',
+            elapsed: '4m 20s',
+            thinkingTokens: '51.6k',
+            workers: 6,
+            liveExpands: true,
+            tokens: '12.9M',
+            contextGauge: true,
+            contextPercent: '23% ctx',
+            account: 'jam@codejam.ninja',
+            quotaPercent: '23%',
+            quotaExpands: true,
+        };
+        const narrow = resolveStatusStrip(working, 320, STATUS_ROW_GIVE_WAY);
+        expect(narrow.folds.contextPercent).toBe(true);
+        // And it goes before the clock or the tally, which is the ordering the
+        // old boolean could not express at all.
+        expect(narrow.folds.tokens).toBe(false);
     });
 
-    it('keeps the percent on an idle session with no account taking the width', () => {
-        expect(showsContextPercent(null, false, false)).toBe(true);
-        expect(showsContextPercent('   ', false, false)).toBe(true);
+    it('never shrinks the number instead of dropping it', () => {
+        // A truncated percentage says nothing, so `context` has no give.
+        expect(statusRowShrink.context).toBe(0);
+        expect(statusRowShrink.quota).toBe(0);
     });
 
-    it('always prints the exact figure once it has been tapped', () => {
-        expect(showsContextPercent('jamrizzi', true, true)).toBe(true);
+    it('keeps the ring when the percent goes, so the reading survives the fold', () => {
+        const folded = statusStripDrawn(
+            { dot: true, contextGauge: true, contextPercent: '23% ctx' },
+            { ...noStatusStripFolds, contextPercent: true },
+        );
+        expect(folded.contextPercent).toBeNull();
+        expect(folded.contextGauge).toBe(true);
     });
 });
 
