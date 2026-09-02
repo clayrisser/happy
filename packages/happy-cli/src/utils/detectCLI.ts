@@ -3,6 +3,7 @@ import os from 'os';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { findAgyBin } from '@/agy/constants';
+import { findClaudeBin } from '@/claude/claudeBin';
 import { findCursorBin } from '@/cursor/cursorBin';
 import { findCodexBin } from '@/codex/codexBin';
 import { findGeminiBin } from '@/gemini/geminiBin';
@@ -44,7 +45,11 @@ function commandExists(command: string): boolean {
 }
 
 function detectPosix(): CLIAvailability {
-  const claude = commandExists('claude');
+  // NOT commandExists (DROVE-400): Claude Code's native installer puts
+  // `claude` in ~/.local/bin, which no launchd daemon has on its PATH. The
+  // bare probe reported claude: false on Clay's own Mac, and the phone's
+  // new-session sheet drew the Claude Code row disabled for it.
+  const claude = findClaudeBin() !== undefined;
   // NOT commandExists: `npm install -g @openai/codex` and `brew install --cask
   // codex` both land outside a launchd daemon's PATH, so a bare probe reports
   // "not installed" on a machine that runs Codex every day — and the app's
@@ -86,7 +91,8 @@ function detectWindows(): CLIAvailability {
     }
   };
 
-  const claude = checkCommand('claude');
+  // Same resolver as POSIX, which already knows the Windows wrapper names.
+  const claude = findClaudeBin() !== undefined;
   const codex = findCodexBin() !== undefined;
   // Same resolver as POSIX, which already knows the Windows wrapper names.
   const gemini = findGeminiBin() !== undefined;
