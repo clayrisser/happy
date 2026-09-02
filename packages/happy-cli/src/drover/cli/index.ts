@@ -120,6 +120,16 @@ export const droverVerbs: readonly DroverVerb[] = [
         load: () => import('./account'),
     },
     {
+        name: 'account-login',
+        summary: 'Add and log in a Claude account from the phone: the URL off a tmux pane, the code off the bus.',
+        load: () => import('./account-login'),
+    },
+    {
+        name: 'cursor-login',
+        summary: 'Add a Cursor subscription from the phone. One link, no code back, and the shared Keychain untouched.',
+        load: () => import('./cursor-login'),
+    },
+    {
         name: 'account-of',
         summary: 'Which account THIS process is running on, from the config dir rather than a stale stamp.',
         load: () => import('./account-of'),

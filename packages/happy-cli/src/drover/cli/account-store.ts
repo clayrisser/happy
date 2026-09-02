@@ -434,6 +434,30 @@ export function cursorAuthStore(stateDir: string, env: NodeJS.ProcessEnv = proce
     return env.DROVER_CURSOR_AUTH || join(stateDir, 'cursor-auth.json');
 }
 
+/**
+ * cursor_token_exp — the `exp` claim, or undefined when it is not a whole
+ * number of seconds. Exported since DROVE-315 wave 4: the login prints "token
+ * good until <date>" off it, which is the one place the value itself is said
+ * out loud rather than compared.
+ */
+export function cursorTokenExpiry(token: string): number | undefined {
+    return cursorTokenExp(token);
+}
+
+/**
+ * cursor_token_usable — is this token one a session can actually run on?
+ *
+ * `unreadable` passes, deliberately: cursor could change its format, and
+ * refusing every session over a parse failure would be a worse outage than
+ * trying and being told no. What this CANNOT do is prove the server still
+ * honours it — `exp` is a ceiling, not a promise — so a true answer means "not
+ * locally provably dead", which is strictly weaker than "accepted".
+ */
+export function cursorTokenUsable(token: string, nowSec: number = Math.floor(Date.now() / 1000), env: NodeJS.ProcessEnv = process.env): boolean {
+    const state = cursorTokenState(token, nowSec, env);
+    return state === 'live' || state === 'renew' || state === 'unreadable';
+}
+
 /** cursor_auth_read — that account's stored object, or undefined. */
 export function cursorAuthRead(store: string, name: string): CursorAuthEntry | undefined {
     let doc: unknown;
@@ -446,6 +470,146 @@ export function cursorAuthRead(store: string, name: string): CursorAuthEntry | u
     const entry = (doc as Record<string, unknown>)[name];
     if (!entry || typeof entry !== 'object') return undefined;
     return entry as CursorAuthEntry;
+}
+
+/** cursor_auth_token — just the token, for that account. */
+export function cursorAuthToken(store: string, name: string): string | undefined {
+    const entry = cursorAuthRead(store, name);
+    if (entry === undefined) return undefined;
+    const token = entry.token;
+    if (typeof token !== 'string' || token === '') return undefined;
+    return token;
+}
+
+/**
+ * cursor_auth_write — store it, 0600 (DROVE-315 wave 4, the WRITE half of
+ * lib/drover-cursor-auth.sh).
+ *
+ * Written through a temp file in the same directory and renamed, so a reader
+ * never sees a half-written store, and chmod'd BEFORE the rename so the secret
+ * is never world-readable for even an instant. The DIRECTORY is 0700 for the
+ * same reason: $STATE_DIR holds ledgers and logs anybody may read, and this one
+ * file is the exception that has to be nobody's.
+ *
+ * The entry replaces whatever was under that name rather than merging into it.
+ * A cursor account has no directory and no second credential, so logging in
+ * again produces a NEWER TOKEN FOR THE SAME ACCOUNT and nothing else worth
+ * keeping — which is exactly the repair an expired cursor account needs.
+ *
+ * NOTHING IS LOGGED. The token is a value this function writes and never
+ * prints, and no caller here puts it on a screen: DROVE-304 redacts what the
+ * shell says, and the node half must not need redacting.
+ */
+export function cursorAuthWrite(
+    store: string,
+    name: string,
+    token: string,
+    authId: string,
+    email: string,
+    nowSec: number = Math.floor(Date.now() / 1000),
+): boolean {
+    const dir = dirname(store);
+    try {
+        mkdirSync(dir, { recursive: true });
+    } catch {
+        return false;
+    }
+    try {
+        chmodSync(dir, 0o700);
+    } catch {
+        // `chmod 700 … || :` — a directory whose mode we could not set is not
+        // a reason to lose the write.
+    }
+    let doc: Record<string, unknown> = {};
+    try {
+        const parsed: unknown = JSON.parse(readFileSync(store, 'utf8'));
+        if (parsed && typeof parsed === 'object') doc = parsed as Record<string, unknown>;
+    } catch {
+        // A store that is missing or unreadable starts as `{}`, which is what
+        // the shell's `[ -f "$caw_f" ] || printf '{}\n'` does. A store that
+        // exists and does not parse is REPLACED there too, because jq reading
+        // it fails and the write is retried against the stub — the same
+        // outcome, reached without a second process.
+    }
+    doc[name] = { token, authId, email, storedAt: nowSec };
+    const tmp = `${store}.${process.pid}`;
+    try {
+        writeFileSync(tmp, `${jqJson(doc)}\n`, { encoding: 'utf8', mode: 0o600 });
+        chmodSync(tmp, 0o600);
+        renameSync(tmp, store);
+        return true;
+    } catch {
+        try {
+            unlinkSync(tmp);
+        } catch {
+            // Already gone.
+        }
+        return false;
+    }
+}
+
+/**
+ * cursor_auth_harvest — the token a just-finished login wrote.
+ *
+ * The login runs under a PRIVATE HOME with AGENT_CLI_CREDENTIAL_STORE=file, so
+ * its credential lands in <home>/.cursor/auth.json (0600) and Clay's own
+ * Keychain login is never touched by adding an account.
+ *
+ * THE SHARED KEYCHAIN IS NOT A FALLBACK HERE, and an earlier draft of the shell
+ * had it as one. That is a real bug and not a harmless spare tyre. The slot is
+ * machine-wide and holds whatever ran last — Clay's own ambient login, another
+ * account a managed run persisted, or a dead token. None of those is the
+ * account this login just added, so reading it would attach a STRANGER's
+ * credential to the new row and the registry would then be lying about whose
+ * subscription it bills.
+ *
+ * So a login that wrote no auth.json harvested nothing, and the caller fails
+ * with "no credential" instead of quietly adopting somebody else. The only
+ * place the shared slot is ever touched in this codebase is nowhere.
+ */
+export function cursorAuthHarvest(loginHome: string): string | undefined {
+    let doc: unknown;
+    try {
+        doc = JSON.parse(readFileSync(join(loginHome, '.cursor', 'auth.json'), 'utf8'));
+    } catch {
+        return undefined;
+    }
+    if (!doc || typeof doc !== 'object') return undefined;
+    const token = (doc as Record<string, unknown>).accessToken;
+    if (typeof token !== 'string' || token === '') return undefined;
+    return token;
+}
+
+/**
+ * cursor_auth_identity — the address that login belongs to, or undefined.
+ *
+ * cursor-agent caches what its own GetMe RPC returned into cli-config.json, so
+ * under a private HOME that file names exactly the account that just logged in
+ * and no network call is needed to read it. NOTHING IS PROMPTED FOR; when there
+ * is no email the caller falls back to the JWT subject, which is stable per
+ * account even though it is not pretty.
+ *
+ * `.authInfo.email // .authInfo.displayName // empty` — jq's `//` falls through
+ * on FALSE as well as null, which is why an explicit `=== false` is refused
+ * here rather than stringified.
+ */
+export function cursorAuthIdentity(loginHome: string): string | undefined {
+    let doc: unknown;
+    try {
+        doc = JSON.parse(readFileSync(join(loginHome, '.cursor', 'cli-config.json'), 'utf8'));
+    } catch {
+        return undefined;
+    }
+    if (!doc || typeof doc !== 'object') return undefined;
+    const info = (doc as Record<string, unknown>).authInfo;
+    if (!info || typeof info !== 'object') return undefined;
+    for (const key of ['email', 'displayName']) {
+        const v = (info as Record<string, unknown>)[key];
+        if (v === undefined || v === null || v === false) continue;
+        const said = String(v);
+        if (said !== '') return said;
+    }
+    return undefined;
 }
 
 /**
