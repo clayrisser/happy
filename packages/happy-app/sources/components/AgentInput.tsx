@@ -61,6 +61,7 @@ import {
     COMPOSER_BUBBLE_SURFACE,
 } from './composerBubbleLayout';
 import { COMPOSER_STRIP_BOX } from './composerStripLayout';
+import { sheetSectionRhythm, sheetSectionTitleInset } from './sheetHeaderLayout';
 import { LiveMicBanner } from './LiveMicBanner';
 import type { MicButtonState } from '@/voice/micButton';
 import type { DictationCaptureState } from '@/voice/dictationCapture';
@@ -441,8 +442,12 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         marginBottom: 8,
         zIndex: 1000,
     },
+    // The section rhythm (DROVE-376), shared with DroverChannelsSheet. The
+    // title used to sit 8pt left of the rows it heads, with four points of air
+    // under it; the inset is derived from the row card's now.
     overlaySection: {
-        paddingVertical: 8,
+        paddingTop: sheetSectionRhythm.top,
+        paddingBottom: sheetSectionRhythm.bottom,
     },
     settingsStatusInfo: {
         paddingTop: 6,
@@ -450,11 +455,11 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         paddingHorizontal: 8,
     },
     overlaySectionTitle: {
-        fontSize: 12,
-        fontWeight: '600',
+        fontSize: sheetSectionRhythm.titleSize,
+        lineHeight: sheetSectionRhythm.titleLine,
         color: theme.colors.textSecondary,
-        paddingHorizontal: 16,
-        paddingBottom: 4,
+        paddingHorizontal: sheetSectionTitleInset,
+        paddingBottom: sheetSectionRhythm.gap,
         ...Typography.default('semiBold'),
     },
     overlayDivider: {

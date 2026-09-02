@@ -33,7 +33,7 @@
 import * as React from 'react';
 import { ActivityIndicator, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useUnistyles } from 'react-native-unistyles';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { Item } from '@/components/Item';
 import { ItemGroup } from '@/components/ItemGroup';
@@ -45,6 +45,37 @@ import {
     machineMcpReconnect,
 } from '@/sync/machineMcpHealth';
 import { mcpHealthTitle, mcpHealthTone, mcpObservedAgo } from '@/sync/mcpText';
+import { Typography } from '@/constants/Typography';
+import { sheetHeaderHeight, sheetHeaderRhythm } from './sheetHeaderLayout';
+
+/**
+ * The header on the shared sheet rhythm (DROVE-376). It used to draw a 20pt
+ * title over a 13pt subtitle at a 16pt inset, none of it with a line height,
+ * inside padding that sized itself -- the same hand-spacing that put the
+ * worktrees sheet's tab control on its subtitle. The rows below it are
+ * `ItemGroup`, which brings its own header spacing, so nothing here has to
+ * guess at the gap.
+ */
+const stylesheet = StyleSheet.create((theme) => ({
+    header: {
+        height: sheetHeaderHeight({ subtitle: true }),
+        paddingHorizontal: sheetHeaderRhythm.horizontal,
+        paddingTop: sheetHeaderRhythm.top,
+    },
+    title: {
+        fontSize: sheetHeaderRhythm.titleSize,
+        lineHeight: sheetHeaderRhythm.titleLine,
+        color: theme.colors.text,
+        ...Typography.default('semiBold'),
+    },
+    subtitle: {
+        marginTop: sheetHeaderRhythm.gap,
+        fontSize: sheetHeaderRhythm.subtitleSize,
+        lineHeight: sheetHeaderRhythm.subtitleLine,
+        color: theme.colors.textSecondary,
+        ...Typography.default(),
+    },
+}));
 
 /** iOS systemGreen / systemOrange / systemGrey, beside the blue this screen uses. */
 const green = '#34C759';
@@ -140,11 +171,11 @@ export const McpServerSheet = React.memo(function McpServerSheet(props: McpServe
     return (
         <ComposerSheet open onClose={() => onClose?.()}>
             <View style={{ paddingBottom: 12 }}>
-                <View style={{ paddingHorizontal: 16, paddingTop: 4, paddingBottom: 8 }}>
-                    <Text style={{ color: theme.colors.text, fontSize: 20, fontWeight: '600' }}>
+                <View style={stylesheet.header}>
+                    <Text style={stylesheet.title} numberOfLines={1} ellipsizeMode="tail">
                         {server.name}
                     </Text>
-                    <Text style={{ color: theme.colors.textSecondary, fontSize: 13, marginTop: 2 }}>
+                    <Text style={stylesheet.subtitle} numberOfLines={1} ellipsizeMode="tail">
                         {`${harnessLabel} · ${server.transport}${server.enabled ? '' : ' · disabled'}`}
                     </Text>
                 </View>

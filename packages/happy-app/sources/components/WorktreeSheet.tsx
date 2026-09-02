@@ -27,7 +27,9 @@ import { WorktreeFilesTab } from './WorktreeFilesTab';
 import { WorktreeTerminalTab } from './WorktreeTerminalTab';
 import { WorktreeTodosTab } from './WorktreeTodosTab';
 import { hapticsLight } from './haptics';
-import { worktreeSheetBodyPadding } from './worktreeSheetLayout';
+import { worktreeSheetBodyPadding, worktreeSheetHeaderHeight } from './worktreeSheetLayout';
+import { sheetHeaderRhythm } from './sheetHeaderLayout';
+import { Typography } from '@/constants/Typography';
 
 /**
  * The worktrees, opened from the session header's title pill (DROVE-90, moved
@@ -343,20 +345,38 @@ const stylesheet = StyleSheet.create((theme) => ({
     body: {
         paddingBottom: worktreeSheetBodyPadding,
     },
+    /**
+     * An EXPLICIT height, not padding around auto-sized text (DROVE-376). The
+     * tab control below used to be drawn over the path, because the header was
+     * whatever `Text` happened to measure and the 10pt of clear air under the
+     * subtitle was split across two views. The height and the line heights
+     * both come from `sheetHeaderRhythm`, so what is drawn is what is
+     * computed, and the gap to the tabs is inside this box.
+     */
     header: {
-        paddingHorizontal: 20,
-        paddingTop: 2,
-        paddingBottom: 8,
+        height: worktreeSheetHeaderHeight,
+        paddingHorizontal: sheetHeaderRhythm.horizontal,
+        paddingTop: sheetHeaderRhythm.top,
     },
+    /**
+     * `Typography.default()` sets a fontFamily and nothing else, and this
+     * header was the one in the family that skipped it -- so the title drew in
+     * the system font while every other sheet's drew in IBM Plex Sans, at a
+     * different leading. With the line heights declared the box no longer
+     * depends on which font won, and the sheet matches its neighbours.
+     */
     title: {
-        fontSize: 15,
-        fontWeight: '600' as const,
+        fontSize: sheetHeaderRhythm.titleSize,
+        lineHeight: sheetHeaderRhythm.titleLine,
         color: theme.colors.text,
+        ...Typography.default('semiBold'),
     },
     subtitle: {
-        marginTop: 2,
-        fontSize: 12,
+        marginTop: sheetHeaderRhythm.gap,
+        fontSize: sheetHeaderRhythm.subtitleSize,
+        lineHeight: sheetHeaderRhythm.subtitleLine,
         color: theme.colors.textSecondary,
+        ...Typography.default(),
     },
     loadingContainer: {
         paddingVertical: 32,
