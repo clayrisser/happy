@@ -44,19 +44,32 @@
  * process group without a pid file, and the session NAME is the lock on a
  * second concurrent login.
  *
- * ITS OWN TMUX SERVER, `-L drover-login`. Clay has a screenful of sessions and
- * a login pane sitting among his projects would be its own bug. A private
- * socket is invisible to `tmux ls`, to `prefix + s`, to the pane walk in the
- * bus (engine/registry.js lists panes on the DEFAULT socket) and to `drover
- * sessions`. Nothing in that session runs the drover wrapper, so no
- * SessionStart hook fires and no Happy session is ever minted: the app's own
- * list cannot see it either.
+ * AND THE WRAPPER NOW OPENS ITS OWN WINDOW (DROVE-348), which is why this file
+ * got smaller. It used to build the whole `tmux -L drover-login new-session`
+ * command line here, on a PRIVATE socket chosen so a login pane would never
+ * appear among Clay's projects. He overruled that: "I could see a new tmux
+ * window and actually watch it do it. Not only would that be helpful for
+ * debugging, it just sounds like the right way to do it."
  *
- * Nothing here handles a credential. It starts a session; the code never
+ * So the login lives in a named window on the USER'S server, and the shell
+ * wrapper puts itself there: started with no terminal — which is exactly what a
+ * daemon spawn is — `drover account login` re-execs into
+ * `login-<harness>-<account>` and runs the login in a second pane of the same
+ * window. One implementation of "which window", in the file that also owns the
+ * lock, instead of two that have to agree across a language boundary.
+ *
+ * What is left here is a plain detached spawn and ONE question asked of tmux
+ * before it: is a window for this account already open with something running
+ * in it? That is worth keeping in TypeScript because the answer has to reach
+ * the phone as a sentence, and this RPC is the only thing on the path that can
+ * still return one — the wrapper's own refusal (exit 3) goes to a process
+ * nobody is waiting on.
+ *
+ * Nothing here handles a credential. It starts a process; the code never
  * touches this process.
  */
 
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -92,8 +105,16 @@ export interface AccountLoginResult {
     harness: AccountLoginHarness
 }
 
-/** The tmux server the login runs on, and never the default one. */
-export const accountLoginSocket = 'drover-login'
+/**
+ * The tmux server the login runs on: the USER'S (DROVE-348), which is what
+ * `default` means to tmux and therefore what a bare `tmux` reaches.
+ * DROVER_TMUX_SOCKET moves it, and it is the same variable
+ * lib/drover-tmux-entry.sh reads, so the daemon and the wrapper cannot disagree
+ * about which server they are talking about.
+ */
+export function accountLoginSocket(env: NodeJS.ProcessEnv = process.env): string {
+    return env.DROVER_TMUX_SOCKET || 'default'
+}
 
 /**
  * The same character set `valid_name` enforces in libexec/drover-account-edit,
@@ -150,34 +171,31 @@ export function buildAccountLoginArgv(
 }
 
 /**
- * The session name, which is also the lock.
+ * The window name, which is also the lock.
  *
- * A pure function of WHICH account is being added: `login-alt`, or
- * `login-clayrisser-gmail-com` — tmux forbids `.` and `:` in a session name,
- * so everything outside [A-Za-z0-9_-] becomes a dash. The shell side computes
- * the same string from the same rule.
+ * A pure function of WHICH HARNESS and WHICH account are being added:
+ * `login-claude-alt`, `login-cursor-clayrisser-gmail-com` — tmux forbids `.`
+ * and `:` in a name, so everything outside [A-Za-z0-9_-] becomes a dash. The
+ * shell computes the same string from the same rule, in
+ * lib/drover-login-session.sh.
  *
- * A NAMELESS add is `login-new`, and that is a placeholder rather than an
- * answer: which ~/.claude-accounts/account-N it lands on is decided inside
- * `drover account login`, and only then. The shell RENAMES the session to
- * `login-account-3` once it knows, which is also how a nameless add from the
- * phone and one from a terminal end up colliding on one name instead of
- * racing for one directory. `login-new` still does the job here, because two
- * nameless adds from the app both want it and tmux refuses the second.
+ * THE HARNESS IS IN THE NAME (DROVE-348) where it used not to be. On a private
+ * socket holding nothing else `login-alt` was unambiguous; in a session beside
+ * a day's work it is not, and these names are read in a window list now.
+ *
+ * A NAMELESS add is `login-<harness>-new`, and that is a placeholder rather
+ * than an answer: which ~/.claude-accounts/account-N it lands on is decided
+ * inside `drover account login`, and only then. The shell RENAMES the window to
+ * `login-claude-account-3` once it knows, which is also how a nameless add from
+ * the phone and one from a terminal end up colliding on one name instead of
+ * racing for one directory.
  */
-export function accountLoginSessionName(
+export function accountLoginWindowName(
     name?: string | null,
     harness: AccountLoginHarness = 'claude',
 ): string {
-    const spelling = (name ?? '').trim()
-    // A NAMELESS CURSOR ADD IS `login-cursor`, not `login-new` (DROVE-270),
-    // because that is the slug libexec/drover-cursor-login computes for itself
-    // — a cursor account cannot be named after a config dir, since it has
-    // none, so `cursor` is its placeholder where `new` is Claude's. Matching
-    // it means the session this daemon opens is already the name the script
-    // wants, instead of one it has to rename on the way past.
-    if (!spelling) return harness === 'cursor' ? 'login-cursor' : 'login-new'
-    return `login-${spelling.replace(/[^A-Za-z0-9_-]+/g, '-')}`
+    const spelling = (name ?? '').trim() || 'new'
+    return `login-${harness}-${spelling.replace(/[^A-Za-z0-9_-]+/g, '-')}`
 }
 
 /**
@@ -214,67 +232,32 @@ export function accountLoginPath(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 /**
- * The whole tmux command line, split out so the shape is a test rather than a
- * comment.
+ * The environment the detached wrapper runs with, split out so the shape is a
+ * test rather than a comment.
  *
- * `-n control` names the window this wrapper runs in, and the shell reads that
- * name back: a session that still has a `control` window has a run attached to
- * it, which is how a live login is told from one left behind by a run that was
- * killed outright. `-x 200 -y 50` because with no client attached a pane is
- * 80x24, and the authorize URL is 300-odd characters — `capture-pane -J`
- * rejoins it either way, but a wider pane is fewer joins to get wrong.
+ * DROVER_LOGIN_PATH and NOT PATH, and that is DROVE-212's measurement rather
+ * than a preference: a launchd job's PATH has no ~/.local/bin, where Claude
+ * Code's installer puts `claude`, so the wrapper's `command -v claude` guard
+ * failed and exited into a stderr pointed at /dev/null. It travels under its own
+ * name because libexec/drover-account-login applies it deliberately, before it
+ * hands itself to a tmux window that would otherwise inherit the tmux SERVER's
+ * PATH.
  */
-export function buildAccountLoginTmuxArgv(opts: {
-    argv: string[]
-    session: string
-    path: string
-    socket?: string
-    env?: NodeJS.ProcessEnv
-}): string[] {
-    const socket = opts.socket ?? accountLoginSocket
-    const env = opts.env ?? process.env
-    const argv = [
-        'tmux', '-L', socket,
-        'new-session', '-d',
-        '-s', opts.session,
-        '-n', 'control',
-        '-x', '200', '-y', '50',
-        // NOT `-e PATH=…`. Measured on tmux 3.7c: a session environment's PATH
-        // reaches `show-environment` and never reaches the pane, which keeps
-        // the tmux SERVER's. Under its own name it is delivered like any other
-        // variable, and libexec/drover-account-login exports it as PATH.
-        '-e', `DROVER_LOGIN_PATH=${opts.path}`,
-        '-e', `DROVER_LOGIN_SESSION=${opts.session}`,
-        '-e', `DROVER_LOGIN_SOCKET=${socket}`,
-    ]
-    // A tmux SERVER keeps the environment of whoever started it, and a new
-    // session on an existing server inherits that rather than ours. The server
-    // is short-lived (it dies with its last session), but "short-lived" is not
-    // "never", and a login that posted its card to the wrong bus because an
-    // older server had a different DROVER_URL would be indistinguishable from
-    // no card at all — which is the failure this whole ticket is about. So the
-    // few variables that decide WHERE the card goes travel per-session.
-    for (const key of droverEnvPassthrough) {
-        const value = env[key]
-        if (value) argv.push('-e', `${key}=${value}`)
-    }
-    argv.push(...opts.argv)
-    return argv
+export function buildAccountLoginEnv(
+    path: string,
+    env: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+    return { ...env, DROVER_LOGIN_PATH: path }
 }
-
-/** The variables that decide which bus, which checkout and which registry. */
-export const droverEnvPassthrough = [
-    'DROVER_URL', 'DROVER_DIR', 'DROVER_BIN', 'DROVER_ACCOUNTS', 'STATE_DIR',
-] as const
 
 export interface AccountLoginDeps {
     droverBin?: string
     exists?: (path: string) => boolean
-    launch?: (argv: string[], session: string) => void
+    launch?: (argv: string[], window: string) => void
 }
 
 function tmux(args: string[]): { ok: boolean; out: string } {
-    const r = spawnSync('tmux', ['-L', accountLoginSocket, ...args], { encoding: 'utf8' })
+    const r = spawnSync('tmux', ['-L', accountLoginSocket(), ...args], { encoding: 'utf8' })
     return {
         ok: r.status === 0,
         out: `${r.stdout ?? ''}${r.stderr ?? ''}`.trim(),
@@ -282,37 +265,51 @@ function tmux(args: string[]): { ok: boolean; out: string } {
 }
 
 /**
- * Open the session, or say who has it.
+ * Is a login for this account already open with something running in it?
  *
- * `new-session` is the claim and it is atomic: tmux refuses a duplicate name,
- * so there is no read-then-write window in which two taps both think they won.
- * A name already taken is only sometimes a live login — a run that was
- * SIGKILLed leaves its session behind with the control window gone — so the
- * one recovery is to check for that window and, when it is missing, take the
- * corpse over with a single kill. That is the whole of what used to be a lock
- * file, two pids, a `ps` re-check and a TERM-then-KILL reaper.
+ * `list-windows -a` is every window on the server, and `#{pane_dead}` is the
+ * liveness question rather than "does the window exist" — a finished login
+ * leaves its window behind ON PURPOSE now, holding what it said, and that
+ * corpse must not read as a login in flight. The format puts the flag first so
+ * a window name containing a space still parses.
+ *
+ * This is advisory and the wrapper refuses again for itself. It exists so the
+ * refusal can be a SENTENCE on the phone: this RPC is the last thing on the path
+ * that can return one, since the wrapper's own exit 3 goes to a process nobody
+ * is waiting on.
  */
-function launchInTmux(argv: string[], session: string): void {
-    const cmd = buildAccountLoginTmuxArgv({ argv, session, path: accountLoginPath() })
-    const first = tmux(cmd.slice(3))
-    if (first.ok) return
+export function accountLoginBusy(window: string): boolean {
+    const windows = tmux(['list-windows', '-a', '-F', '#{pane_dead} #{window_name}'])
+    if (!windows.ok) return false
+    return windows.out.split('\n').some((line) => {
+        const trimmed = line.trim()
+        return trimmed.startsWith('0 ') && trimmed.slice(2) === window
+    })
+}
 
-    const windows = tmux(['list-windows', '-t', session, '-F', '#{window_name}'])
-    if (windows.ok && windows.out.split('\n').some((w) => w.trim() === 'control')) {
+/**
+ * Start the wrapper and get out of the way.
+ *
+ * `detached` plus `unref` so the daemon can be restarted without taking the
+ * login with it, and stdio on /dev/null because the wrapper's output does not
+ * belong here — it re-execs into `login-<harness>-<account>` on the user's own
+ * server and narrates THERE, which is the whole of DROVE-348. The pre-window
+ * guards (no tmux, no `claude`) still put a card on the bus rather than exiting
+ * into silence, which is what DROVE-212 asked of them.
+ */
+function launchDetached(argv: string[], window: string): void {
+    if (accountLoginBusy(window)) {
         throw new Error(
             'A login is already waiting on this machine. Answer or cancel that one first — '
             + 'its card is still on the phone, and this screen shows the link it already has.',
         )
     }
-
-    // Nobody is driving it. Whatever it left running is ours to end.
-    tmux(['kill-session', '-t', session])
-    const second = tmux(cmd.slice(3))
-    if (second.ok) return
-    throw new Error(
-        `Cannot start the login: tmux would not open a session for it (${second.out || 'no output'}). `
-        + `Look at it with: tmux -L ${accountLoginSocket} ls`,
-    )
+    const child = spawn(argv[0]!, argv.slice(1), {
+        detached: true,
+        stdio: 'ignore',
+        env: buildAccountLoginEnv(accountLoginPath()),
+    })
+    child.unref()
 }
 
 export async function startAccountLogin(
@@ -347,8 +344,8 @@ export async function startAccountLogin(
     }
 
     const argv = buildAccountLoginArgv(droverBin, name || undefined, harness)
-    const session = accountLoginSessionName(name, harness)
-    const launch = deps.launch ?? launchInTmux
-    launch(argv, session)
+    const window = accountLoginWindowName(name, harness)
+    const launch = deps.launch ?? launchDetached
+    launch(argv, window)
     return { started: true, name: name || null, harness }
 }
