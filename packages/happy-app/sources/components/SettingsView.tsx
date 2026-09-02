@@ -254,6 +254,18 @@ export const SettingsView = React.memo(function SettingsView({
                     icon={<Ionicons name="notifications-outline" size={29} color="#AF52DE" />}
                     onPress={() => router.push('/settings/channels' as any)}
                 />
+                {/* The plugins each machine manages, and the verbs that
+                    manage them (DROVE-310). Below Accounts because it is the
+                    same kind of page — what a machine is carrying — and its own
+                    route rather than a section under each harness, because a
+                    plugin is global by default and scoped to a harness only when
+                    somebody narrows it. */}
+                <Item
+                    title="Plugins"
+                    subtitle="What each machine carries, and enabling it per harness"
+                    icon={<Ionicons name="cube-outline" size={29} color="#34C759" />}
+                    onPress={() => router.push('/settings/plugins' as any)}
+                />
                 {/* Every channel on demand (DROVE-75): each wrist buzz, the
                     voices, every card shape, and a real push, without waiting
                     for a gate. Shown once on first run; this is the way back. */}

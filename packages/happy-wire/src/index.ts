@@ -8,5 +8,6 @@ export * from './statusDot';
 export * from './redact';
 export * from './mcp';
 export * from './providers';
+export * from './plugins';
 export * from './workflowDetail';
 export * from './files';
