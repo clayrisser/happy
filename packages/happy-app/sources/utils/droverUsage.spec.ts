@@ -19,6 +19,7 @@ import {
     droverRowApplies,
     droverRowUsable,
     droverStaleAfterMs,
+    droverUsageForHarness,
     droverWindowCovers,
     droverWindowId,
     droverWindowSpan,
@@ -494,5 +495,41 @@ describe('droverWindowSpent and droverMootingWindow', () => {
         const windows = [window('five_hour', 20), window('seven_day', 40), window('seven_day_fable', 100)];
         expect(droverMootingWindow(windows[0], windows)).toBeNull();
         expect(droverMootingWindow(windows[1], windows)).toBeNull();
+    });
+});
+
+describe('droverUsageForHarness (DROVE-352)', () => {
+    const usage: DroverUsageLike = {
+        capturedAt: 1_000,
+        accounts: [
+            { name: 'a', harness: 'claude', current: true, loggedIn: true, fetchedAt: 900, headroom: 10, cooling: null, limits: [] },
+            { name: 'b', current: false, loggedIn: true, fetchedAt: 900, headroom: 20, cooling: null, limits: [] },
+            { name: 'c', harness: 'cursor', current: false, loggedIn: true, fetchedAt: null, headroom: null, cooling: null, limits: [] },
+        ],
+    };
+
+    it('keeps the accounts of that harness, absent reading as claude', () => {
+        expect(droverUsageForHarness(usage, 'claude')!.accounts.map((a) => a.name)).toEqual(['a', 'b']);
+        // `a` survives the cursor pass ONLY because it is the current account.
+        expect(droverUsageForHarness(usage, 'cursor')!.accounts.map((a) => a.name)).toEqual(['a', 'c']);
+    });
+
+    it('never drops the account the session is on, marked or stamped', () => {
+        const unmarked: DroverUsageLike = {
+            capturedAt: 1_000,
+            accounts: usage!.accounts.map((a) => ({ ...a, current: false })),
+        };
+        // The `current` flag gone, the older `droverAccount` stamp answers.
+        expect(droverUsageForHarness(unmarked, 'cursor', 'a')!.accounts.map((a) => a.name))
+            .toEqual(['a', 'c']);
+        expect(droverUsageForHarness(unmarked, 'cursor')!.accounts.map((a) => a.name))
+            .toEqual(['c']);
+    });
+
+    it('returns the same object when nothing goes, so a memo does not churn', () => {
+        const claudeOnly: DroverUsageLike = { capturedAt: 1_000, accounts: [usage!.accounts[0]] };
+        expect(droverUsageForHarness(claudeOnly, 'claude')).toBe(claudeOnly);
+        expect(droverUsageForHarness(null, 'claude')).toBeNull();
+        expect(droverUsageForHarness(undefined, 'claude')).toBeUndefined();
     });
 });

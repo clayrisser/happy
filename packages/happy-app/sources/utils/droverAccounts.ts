@@ -53,6 +53,19 @@ export function isCursorAccount(account: { harness?: string | null } | null | un
 }
 
 /**
+ * The harness a SESSION is on, from `metadata.flavor` (DROVE-352).
+ *
+ * Through `accountHarness` on purpose, so a session and an account are named
+ * by ONE rule with ONE default. That shared default is what makes the quota
+ * sheet's filter degrade correctly: a session written before `flavor` existed
+ * and an account written before `harness` existed both read as claude, so an
+ * old snapshot on an old session lists exactly what it listed before.
+ */
+export function sessionHarness(flavor?: string | null): string {
+    return accountHarness({ harness: flavor });
+}
+
+/**
  * Why a cursor row shows a dash where every other row shows a percentage.
  *
  * Said out loud rather than left as an empty slot, because the alternative

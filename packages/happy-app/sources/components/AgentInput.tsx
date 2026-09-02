@@ -241,6 +241,12 @@ interface AgentInputProps {
      */
     sessionStatusDroverUsage?: DroverUsageLike;
     sessionStatusDroverAccount?: string | null;
+    /**
+     * The session's harness, `metadata.flavor` (DROVE-352). The quota sheet
+     * lists only accounts of this harness: a Claude session was showing Cursor
+     * rows it could never move onto. Absent reads as claude.
+     */
+    sessionStatusFlavor?: string | null;
     onFileViewerPress?: () => void;
     agentType?: 'claude' | 'codex' | 'gemini' | 'openclaw' | 'agy';
     onAgentClick?: () => void;
@@ -811,10 +817,14 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         usageLimits: props.sessionStatusUsageLimits ?? null,
         droverUsage: props.sessionStatusDroverUsage,
         droverAccount: props.sessionStatusDroverAccount,
+        // The sheet lists this session's own harness and nothing else
+        // (DROVE-352).
+        flavor: props.sessionStatusFlavor,
     }), [
         props.sessionStatusUsageLimits,
         props.sessionStatusDroverUsage,
         props.sessionStatusDroverAccount,
+        props.sessionStatusFlavor,
     ]);
 
     const agentInputEnterToSend = useSetting('agentInputEnterToSend');

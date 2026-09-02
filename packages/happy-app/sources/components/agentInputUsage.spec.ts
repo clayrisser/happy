@@ -1307,3 +1307,173 @@ describe('the two readings of the current account', () => {
     });
 
 });
+
+/**
+ * THE SHEET IS THIS SESSION'S ACCOUNTS, NOT THE MACHINE'S (DROVE-352).
+ *
+ * Clay, on a Claude session: "This particular session is a Claude session, so
+ * I'm not sure why it's showing Cursor accounts. The list of accounts for the
+ * session you're in should only show accounts that are on that computer AND
+ * are the same harness."
+ *
+ * ONE fixture drives both readings below, which is the point of it: the
+ * snapshot the CLI writes is the whole registry, and what differs between a
+ * Claude session and a Cursor session looking at it is only the flavor stamped
+ * on the session.
+ */
+const mixedRegistry: DroverUsageLike = {
+    capturedAt: 1_000,
+    accounts: [
+        {
+            name: 'jamrizzi', harness: 'claude', current: true, loggedIn: true,
+            fetchedAt: 950, headroom: 51, cooling: null,
+            limits: [
+                { kind: 'session', percent: 49, resetsAt: sessionReset, scope: null, family: null },
+                { kind: 'weekly_all', percent: 23, resetsAt: sep5, scope: null, family: null },
+            ],
+        },
+        {
+            name: 'main', harness: 'claude', current: false, loggedIn: true,
+            fetchedAt: 900, headroom: 40, cooling: null,
+            limits: [
+                { kind: 'session', percent: 4, resetsAt: 1_500, scope: null, family: null },
+                { kind: 'weekly_all', percent: 60, resetsAt: sep5, scope: null, family: null },
+            ],
+        },
+        // The two rows off Clay's screenshot, drawing three dashed bars each.
+        {
+            name: 'promanagerdevteam@gmail.com', harness: 'cursor', tokenState: 'live',
+            current: false, loggedIn: true, fetchedAt: null, headroom: null, cooling: null, limits: [],
+        },
+        {
+            name: 'clayrisser@gmail.com', harness: 'cursor', tokenState: 'live',
+            current: false, loggedIn: true, fetchedAt: null, headroom: null, cooling: null, limits: [],
+        },
+    ],
+};
+
+/**
+ * The same registry as a CURSOR session sees it: nothing marked current.
+ *
+ * That is not a convenience, it is what such a snapshot looks like. runCursor
+ * stamps neither `droverAccount` nor a current row (DROVE-253 left the flip
+ * out — a cursor account has no config dir to swap), so no Claude account is
+ * ever marked as the one a cursor session is running on. Marking one anyway
+ * would be testing a state the CLI cannot produce, and the current account is
+ * deliberately never filtered out.
+ */
+const mixedFromCursor: DroverUsageLike = {
+    capturedAt: mixedRegistry!.capturedAt,
+    accounts: mixedRegistry!.accounts.map((a) => ({ ...a, current: false })),
+};
+
+const names = (strip: { usageBarGroups: UsageBarGroup[] }) =>
+    strip.usageBarGroups.map((g) => g.account);
+
+describe('the quota sheet lists this session harness only (DROVE-352)', () => {
+    it('drops the Cursor rows from a Claude session', () => {
+        const strip = resolveUsageStrip({
+            usageLimits: null, droverUsage: mixedRegistry,
+            droverAccount: 'jamrizzi', flavor: 'claude',
+        });
+        expect(names(strip)).toEqual(['jamrizzi', 'main']);
+        // The bug as Clay saw it: not merely an extra row, but a cursor
+        // account wearing Session / Week / Fable week as three dashes.
+        expect(strip.usageBarGroups.map((g) => g.title).join(' ')).not.toContain('Cursor');
+    });
+
+    it('reads a session with no flavor as a Claude session', () => {
+        // Every session written before the field existed is a Claude one, and
+        // every account written before `harness` existed is a Claude account
+        // — one default on both sides, which is what makes an old snapshot
+        // list exactly what it listed before.
+        const legacy = resolveUsageStrip({
+            usageLimits: null, droverUsage: mixedRegistry, droverAccount: 'jamrizzi',
+        });
+        expect(names(legacy)).toEqual(['jamrizzi', 'main']);
+        const unlabelled: DroverUsageLike = {
+            capturedAt: 1_000,
+            accounts: mixedRegistry!.accounts
+                .filter((a) => a.harness !== 'cursor')
+                .map(({ harness, ...rest }) => rest),
+        };
+        expect(names(resolveUsageStrip({
+            usageLimits: null, droverUsage: unlabelled, droverAccount: 'jamrizzi',
+        }))).toEqual(['jamrizzi', 'main']);
+    });
+
+    it('shows a Cursor session its Cursor rows, saying no quota is published', () => {
+        const strip = resolveUsageStrip({
+            usageLimits: null, droverUsage: mixedFromCursor,
+            droverAccount: null, flavor: 'cursor',
+        });
+        expect(names(strip)).toEqual(['promanagerdevteam@gmail.com', 'clayrisser@gmail.com']);
+        for (const group of strip.usageBarGroups) {
+            expect(group.title).toContain('Cursor · no quota published');
+            // The windows a cursor subscription does not have still draw their
+            // slots, and still say nothing (DROVE-148's one block shape).
+            expect(group.rows.map((r) => r.percentText)).toEqual([null, null]);
+        }
+    });
+
+    it('offers Switch only on accounts the sheet still lists', () => {
+        const claude = resolveUsageStrip({
+            usageLimits: null, droverUsage: mixedRegistry,
+            droverAccount: 'jamrizzi', flavor: 'claude',
+        });
+        expect(claude.usageBarGroups.filter((g) => g.switchable).map((g) => g.account))
+            .toEqual(['main']);
+        // And a cursor session has nowhere to switch: a flip is a
+        // CLAUDE_CONFIG_DIR swap, and none of these rows has one.
+        const cursor = resolveUsageStrip({
+            usageLimits: null, droverUsage: mixedFromCursor,
+            droverAccount: null, flavor: 'cursor',
+        });
+        expect(cursor.usageBarGroups.some((g) => g.switchable)).toBe(false);
+    });
+
+    it('keeps the account the session is ON whatever the flavor claims', () => {
+        // A mis-stamped flavor must not empty the sheet. The filter can only
+        // ever remove rows the session is not running on.
+        const strip = resolveUsageStrip({
+            usageLimits: null, droverUsage: mixedRegistry,
+            droverAccount: 'jamrizzi', flavor: 'cursor',
+        });
+        expect(names(strip)).toContain('jamrizzi');
+        expect(strip.usageBarGroups[0].active).toBe(true);
+    });
+
+    it('reads one machine, because it reads one session metadata', () => {
+        // The machine half needs no filter and this is the proof: the strip
+        // has no source but the snapshot handed to it, so another machine's
+        // accounts have no way in. `otherMachine` is never passed and never
+        // appears.
+        const otherMachine: DroverUsageLike = {
+            capturedAt: 9_000,
+            accounts: [{
+                name: 'risserproperties', harness: 'claude', current: true, loggedIn: true,
+                fetchedAt: 8_900, headroom: 90, cooling: null, limits: [],
+            }],
+        };
+        const here = resolveUsageStrip({
+            usageLimits: null, droverUsage: mixedRegistry,
+            droverAccount: 'jamrizzi', flavor: 'claude',
+        });
+        expect(names(here)).not.toContain('risserproperties');
+        expect(names(resolveUsageStrip({
+            usageLimits: null, droverUsage: otherMachine, droverAccount: 'risserproperties',
+        }))).toEqual(['risserproperties']);
+    });
+
+    it('narrows the week figure and the caption with the blocks', () => {
+        // Filtered ONCE, at the top, so the strip's own number, the freshness
+        // stamp and the caption cannot disagree with the list under them.
+        const strip = resolveUsageStrip({
+            usageLimits: null, droverUsage: mixedRegistry,
+            droverAccount: 'jamrizzi', flavor: 'claude',
+        });
+        expect(strip.weekPercent).toBe(23);
+        expect(strip.usageFromDrover).toBe(true);
+        expect(strip.usageBarCapturedAt).toBe(1_000);
+    });
+});

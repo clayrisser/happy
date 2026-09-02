@@ -86,6 +86,7 @@ import {
     droverRowUsable,
     droverSnapshotAgeMs,
     droverSnapshotOverdue,
+    droverUsageForHarness,
     droverWindowId,
     usageLimitsFromDroverUsage,
     type DroverAccountUsageRow,
@@ -98,6 +99,7 @@ import {
     cursorAccountTrailing,
     cursorAccountUsable,
     isCursorAccount,
+    sessionHarness,
 } from '@/utils/droverAccounts';
 import { harnessName } from '@/utils/harnessName';
 import {
@@ -116,6 +118,15 @@ export type UsageStripInput = {
     droverUsage: DroverUsageLike;
     /** The older per-account stamp, the fallback when the snapshot marks nothing current. */
     droverAccount?: string | null;
+    /**
+     * The session's own harness, `metadata.flavor` (DROVE-352). It decides
+     * which of the snapshot's accounts belong on THIS sheet.
+     *
+     * Absent reads as claude, on both sides of the comparison, which is what
+     * every session and every account written before their harness fields
+     * existed actually is — so an old snapshot lists what it always listed.
+     */
+    flavor?: string | null;
 };
 
 /**
@@ -1177,6 +1188,29 @@ export function fresherUsageLimits(
 }
 
 export function resolveUsageStrip(input: UsageStripInput): UsageStrip {
+    // THE SNAPSHOT NARROWED TO THIS SESSION'S HARNESS, FIRST (DROVE-352).
+    //
+    // Clay: "The list of accounts for the session you're in should only show
+    // accounts that are on that computer AND are the same harness." Two Cursor
+    // blocks sat between his Claude ones, each drawing Session, Week and Fable
+    // week as dashes — three windows a cursor subscription does not have, on
+    // accounts a Claude session cannot move onto.
+    //
+    // Done ONCE, here, before anything reads the accounts, rather than at each
+    // of the six places below that would otherwise have to remember: the week
+    // figure, the blocks, the bindings, the caption's skipped-family list, the
+    // freshness stamp and the SDK precedence all take the same object, so they
+    // cannot come to different answers about which accounts this session has.
+    //
+    // The machine half is already true and needs no code: this snapshot is
+    // session metadata, written by the CLI hosting the session off that
+    // machine's own registry, and nothing merges two sessions' snapshots here.
+    // `droverUsageForHarness` says why the current account is never dropped.
+    const droverUsage = droverUsageForHarness(
+        input.droverUsage,
+        sessionHarness(input.flavor),
+        input.droverAccount,
+    );
     // Whichever of the two readings for THIS account was taken later
     // (DROVE-340). Agent state used to win outright, on the grounds that it is
     // live from the SDK; it is live only in the sense that it arrived on a
@@ -1186,8 +1220,8 @@ export function resolveUsageStrip(input: UsageStripInput): UsageStrip {
     // hour old — while the snapshot is re-read every thirty seconds. That
     // precedence is why the sheet's bars sat minutes behind the wrist, which
     // reads the snapshot and only the snapshot.
-    const droverLimits = usageLimitsFromDroverUsage(input.droverUsage, input.droverAccount);
-    const live = fresherUsageLimits(input.usageLimits, input.droverUsage);
+    const droverLimits = usageLimitsFromDroverUsage(droverUsage, input.droverAccount);
+    const live = fresherUsageLimits(input.usageLimits, droverUsage);
     const usageLimits = live ?? droverLimits;
     const usageFromDrover = !live && !!droverLimits;
     // Only Session and Week are user-meaningful; provider-internal windows
@@ -1227,7 +1261,7 @@ export function resolveUsageStrip(input: UsageStripInput): UsageStrip {
     // this the current account got three rows and the rest got one bar apiece,
     // which is the wrong answer to "where do I flip to": one number cannot say
     // that an account is fine on the week and burnt on the session.
-    const accounts = droverAccountsUsage(input.droverUsage, input.droverAccount);
+    const accounts = droverAccountsUsage(droverUsage, input.droverAccount);
     const sdkRows = getUsageLimitRows(input.usageLimits ?? null);
     // A session on an account the registry does not know still has the SDK's
     // own windows, and they still earn a block; it just has no headroom to
@@ -1236,10 +1270,15 @@ export function resolveUsageStrip(input: UsageStripInput): UsageStrip {
         const stamped = currentDroverAccountRow(null, input.droverAccount);
         accounts.unshift({
             name: stamped?.name ?? '',
-            // SDK usage windows are Claude Code's, so this block is a Claude
-            // one by construction: a cursor session has no such stream — and a
-            // Claude login carries no token and no expiry.
-            harness: 'claude',
+            // THE SESSION'S OWN HARNESS, not a guess (DROVE-352). This block
+            // stands for the session rather than for a registry row, so it is
+            // never filtered and it wears what the session is. It used to be
+            // hardcoded claude on the reasoning that SDK windows are Claude
+            // Code's, which is still true and is now the reason this branch is
+            // only ever reached on a Claude session — but a block labelled by
+            // construction rather than by fact is how the sheet came to call
+            // things by the wrong harness in the first place.
+            harness: sessionHarness(input.flavor),
             tokenState: null,
             expiresInDays: null,
             loggedIn: true,
@@ -1263,10 +1302,10 @@ export function resolveUsageStrip(input: UsageStripInput): UsageStrip {
     // computed `headroom` from — a heading whose number and whose named window
     // came from different sets would be the bug it is meant to fix.
     const bindings = new Map<string, DroverBindingLimit | null>();
-    const capturedAt = input.droverUsage?.capturedAt ?? Number.NaN;
-    for (const raw of input.droverUsage?.accounts ?? []) {
+    const capturedAt = droverUsage?.capturedAt ?? Number.NaN;
+    for (const raw of droverUsage?.accounts ?? []) {
         if (!raw || typeof raw.name !== 'string' || !raw.name) continue;
-        bindings.set(raw.name, droverBindingLimit(raw, input.droverUsage?.modelFamily ?? null, capturedAt));
+        bindings.set(raw.name, droverBindingLimit(raw, droverUsage?.modelFamily ?? null, capturedAt));
     }
     // No heading over the LIST (DROVE-117). Clay: "Don't say other accounts.
     // Have each one listed." Each block is headed by its own account, which is
@@ -1292,10 +1331,10 @@ export function resolveUsageStrip(input: UsageStripInput): UsageStrip {
         weekTone,
         usageFromDrover,
         usageBarGroups: groups,
-        usageBarCapturedAt: input.droverUsage?.capturedAt ?? null,
+        usageBarCapturedAt: droverUsage?.capturedAt ?? null,
         usageBarFooter: usageBarFooterText({
-            modelFamily: input.droverUsage?.modelFamily ?? null,
-            skipped: usageSkippedFamilyWindows(input.droverUsage),
+            modelFamily: droverUsage?.modelFamily ?? null,
+            skipped: usageSkippedFamilyWindows(droverUsage),
         }),
     };
 }
