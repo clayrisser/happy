@@ -18,16 +18,17 @@
  * clipped. What a caller's style says, and what the primitive does with it
  * last, is what this can see and a pure function cannot.
  *
- * The composer has FOUR glass hosts on the material, and exactly three of them
- * answer a finger:
+ * The composer has THREE glass hosts on the material, and all three answer a
+ * finger:
  *
  *   the shell      `MobileGlassSurface` with `COMPOSER_BUBBLE_SURFACE`, over a
  *                  caller style that still carries `overflow: 'hidden'` for
  *                  the flat desktop card underneath it. NOT interactive since
  *                  DROVE-343, and still never clipped.
- *   the text row   `MobileGlassSurface` with `COMPOSER_BUBBLE_TEXT_ROW_SURFACE`.
- *                  The bubble's press target: the one frame that swells when a
- *                  finger lands on it.
+ *   the text row   NOT a host. It is a plain view, and the bubble's press
+ *                  target: it reports its touches and the shell answers them
+ *                  for the length of the press. It carried a surface of its own
+ *                  for one OTA and Clay photographed it as a lighter panel.
  *   a filled disc  `ComposerControlButton` with a fill, which is
  *                  `GlassChromeButton` at 39 (DROVE-266) and therefore
  *                  `GlassChromeSurface`.
@@ -40,7 +41,9 @@
  * swelled the whole bubble. Clay: "whenever I push a button from that group,
  * the input box should not also have that touch effect. The input box should
  * only get the touch effect when I'm touching where the text is." There is no
- * per-region switch, so the shell went calm and the text row took the press.
+ * per-region switch. It is a plain boolean prop though, so the shell asks for
+ * the press only while the text row reports a touch: scoped in time where it
+ * cannot be scoped in space.
  *
  * Send and the mic at rest are bare glyphs with no glass of their own
  * (DROVE-254, DROVE-264). They drew the shell's swell and now draw
@@ -148,11 +151,11 @@ import { MobileGlassSurface } from './MobileGlass';
 import { ComposerControlButton } from './ComposerControlButton';
 import { ComposerSessionControls } from './ComposerSessionControls';
 import { ComposerBubble } from './ComposerBubble';
+import * as layoutModule from './composerBubbleLayout';
 import {
     COMPOSER_BUBBLE_SURFACE,
-    COMPOSER_BUBBLE_TEXT_ROW_GEOMETRY,
-    COMPOSER_BUBBLE_TEXT_ROW_SURFACE,
     resolveComposerBubbleSurfaceStyle,
+    resolveComposerShellInteractive,
 } from './composerBubbleLayout';
 import { MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE, MOBILE_COMPOSER_METRICS } from './agentInputLayout';
 import {
@@ -261,99 +264,103 @@ describe('the composer shell is calm glass and is not clipped (DROVE-328, DROVE-
     });
 });
 
-describe('the bubble\u2019s press target is the text row (DROVE-343)', () => {
-    const textRow = () => mount(React.createElement(
-        MobileGlassSurface,
-        {
-            ...COMPOSER_BUBBLE_TEXT_ROW_SURFACE,
-            enabled: true,
-            style: COMPOSER_BUBBLE_TEXT_ROW_GEOMETRY,
-        },
+/**
+ * THE TEXT ROW DRAWS NOTHING AT REST, AND THE SHELL DRAWS THE PRESS
+ * (DROVE-343, second pass).
+ *
+ * The first pass asserted the opposite of this block: that the text row mounts
+ * an interactive `MobileGlassSurface` of the shell's own material, on the
+ * reasoning that glass nested in glass has nothing left to refract
+ * (DROVE-254). The EFFECT does not, and that was never the whole surface:
+ * `MobileGlassSurface` also paints `chromeGlassTint` — DROVE-171's tint,
+ * chosen so the composer SEPARATES from the chat behind it — and a full-bleed
+ * white `LinearGradient` over it. On OTA 01a05f69, iOS 26 build 18, Clay:
+ * "What the hell happened here?" over a screenshot of a distinctly lighter
+ * rounded panel filling the field.
+ *
+ * So the assertions are retargeted to the thing the screenshot falsified: a
+ * view mounted at rest draws at rest, so nothing is mounted. What is left is a
+ * plain view reporting its touches, and the shell's `isInteractive` following
+ * them for the length of the press.
+ */
+describe('the text row draws nothing at rest (DROVE-343)', () => {
+    const bubbleWith = (props: Record<string, unknown> = {}) => mount(React.createElement(
+        ComposerBubble,
+        { style: cardStyle, ...props } as never,
         React.createElement('Field'),
     ));
 
-    it('asks UIGlassEffect for the press, so THIS is what swells', () => {
-        // Clay: "The input box should only get the touch effect when I'm
-        // touching where the text is." The effect view answers every touch
-        // inside itself, so the frame carrying `isInteractive` IS the answer to
-        // "where does a press swell the composer".
-        expect(COMPOSER_BUBBLE_TEXT_ROW_SURFACE.interactive).toBe(true);
-        const [glass] = glassViews(textRow());
-        expect(glass.props.isInteractive).toBe(true);
-    });
-
-    it('is the same material as the shell, so it draws as nothing at rest', () => {
-        // DROVE-254's finding used rather than fought. Nested glass over the
-        // shell's own has nothing left to refract, which is wrong for a capsule
-        // (it has to read as an object) and exactly right here: the text row is
-        // the field's area, not a control, and must be invisible until a finger
-        // lands on it.
-        expect(COMPOSER_BUBBLE_TEXT_ROW_SURFACE.material).toBe(COMPOSER_BUBBLE_SURFACE.material);
-        expect(COMPOSER_BUBBLE_TEXT_ROW_SURFACE.glassEffectStyle)
-            .toBe(COMPOSER_BUBBLE_SURFACE.glassEffectStyle);
-    });
-
-    it('reaches the native view unclipped, and concentric with the shell', () => {
-        const [glass] = glassViews(textRow());
-        expect(flatten(glass.props.style).overflow).toBe('visible');
-        // The shell's arc offset inward by the padding between them, so the two
-        // curves stay parallel while the row swells.
-        expect(flatten(glass.props.style).borderRadius).toBe(
-            MOBILE_COMPOSER_METRICS.shellRadius - MOBILE_COMPOSER_METRICS.bubbleInset,
-        );
-    });
-
-    it('still mounts the field inside the material', () => {
-        expect(textRow().root.findAllByType('Field' as any)).toHaveLength(1);
-    });
-});
-
-describe('the session capsule is interactive glass and is not clipped (DROVE-343)', () => {
-    const capsule = () => mount(React.createElement(ComposerSessionControls, {
-        label: { mode: 'Yolo', model: 'Opus 5 1M', effort: 'High', text: '' },
-        modeKind: 'yolo',
-        effortIndex: 3,
-        effortCount: 6,
-        size: MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE,
-        onPress: () => {},
-    } as never));
-
-    it('is ONE GlassView for the whole group, asking for the press', () => {
-        // One interactive surface for a grouped control (DROVE-169): the effect
-        // follows the touch inside itself, so the segment under the finger
-        // brightens and its neighbours answer with it. Four surfaces would be
-        // four buttons that happen to touch.
-        const views = glassViews(capsule());
+    it('mounts exactly one glass host, and it is the shell', () => {
+        // TWO was the bug. The second was the field's own, and it is the panel
+        // in the photograph.
+        const views = glassViews(bubbleWith());
         expect(views).toHaveLength(1);
-        expect(views[0].props.isInteractive).toBe(true);
+        expect(flatten(views[0].props.style).borderRadius)
+            .toBe(MOBILE_COMPOSER_METRICS.shellRadius);
     });
 
-    it('spends the row\u2019s fill as the effect\u2019s tint rather than a view over it', () => {
-        // The move that answers DROVE-254 rather than repeating it: an opaque
-        // `tintColor` draws a prominent glass control, where a translucent one
-        // over another material is the smear 254 was filed about.
-        const [glass] = glassViews(capsule());
-        expect(glass.props.tintColor).toBe(composerGlassTint(composerSessionCapsuleFill(true)));
+    it('gives the field\u2019s row no material, no tint and no radius of its own', () => {
+        const renderer = bubbleWith();
+        const field = renderer.root.findAllByType('Field' as any)[0];
+        expect(field).toBeTruthy();
+        // Every ancestor style between the field and the shell: nothing in it
+        // may paint. A `backgroundColor`, a `tintColor` or a `borderRadius`
+        // here is the lighter panel coming back.
+        const row = renderer.root.findAllByType('View' as any)
+            .filter((node: any) => node.findAllByType('Field' as any).length > 0);
+        for (const node of row) {
+            const style = flatten(node.props.style);
+            expect(style.backgroundColor).toBeUndefined();
+            expect(style.borderRadius).toBeUndefined();
+            expect(style.borderWidth).toBeUndefined();
+            expect(node.props.tintColor).toBeUndefined();
+        }
+        // And the resolver no longer publishes a surface for it to wear.
+        expect('COMPOSER_BUBBLE_TEXT_ROW_SURFACE' in layoutModule).toBe(false);
     });
 
-    it('reaches the native view with overflow visible, so its swell is not cut', () => {
-        // DROVE-328's rule at the control DROVE-343 turned back into a surface.
-        // The clip it used to carry was rounding the open segment's wash; the
-        // wash is an inset pill now and rounds itself.
-        const [glass] = glassViews(capsule());
-        expect(flatten(glass.props.style).overflow).toBe('visible');
+    it('leaves the shell calm until the field is actually held', () => {
+        // At rest the bubble is exactly what it was before this ticket: one
+        // calm glass shell, no press anywhere.
+        const [glass] = glassViews(bubbleWith());
+        expect(glass.props.isInteractive).toBe(false);
+        expect(resolveComposerShellInteractive(null)).toBe(false);
     });
 
-    it('falls back to a flat capsule on a phone without the material', () => {
-        glassApi.available = false;
-        const renderer = capsule();
-        expect(glassViews(renderer)).toHaveLength(0);
-        // And the flat one clips, because there it is the only thing rounding
-        // the segments it holds.
-        const flat = renderer.root.findAllByType('View' as any)
-            .find((node: any) => flatten(node.props.style).backgroundColor === composerSessionCapsuleFill(true));
-        expect(flat).toBeTruthy();
-        expect(flatten(flat!.props.style).overflow).toBe('hidden');
+    it('spends the field\u2019s press on the shell, and nothing else does', () => {
+        // The press case Clay kept: "The input box should only get the touch
+        // effect when I'm touching where the text is." The row reports the
+        // touch, the shell answers it, and a touch that starts on the `+` or
+        // the capsule never reaches this handler at all.
+        expect(resolveComposerShellInteractive('textRow')).toBe(true);
+        expect(resolveComposerShellInteractive('sessionCapsule')).toBe(false);
+        expect(resolveComposerShellInteractive('add')).toBe(false);
+
+        const renderer = bubbleWith();
+        const row = renderer.root.findAllByType('View' as any)
+            .find((node: any) => typeof node.props.onTouchStart === 'function');
+        expect(row, 'the field\u2019s row reports its own touches').toBeTruthy();
+        act(() => { row!.props.onTouchStart(); });
+        expect(glassViews(renderer)[0].props.isInteractive).toBe(true);
+        act(() => { row!.props.onTouchEnd(); });
+        expect(glassViews(renderer)[0].props.isInteractive).toBe(false);
+        // A drag off the field ends it too, or the bubble would stay swollen.
+        act(() => { row!.props.onTouchStart(); });
+        act(() => { row!.props.onTouchCancel(); });
+        expect(glassViews(renderer)[0].props.isInteractive).toBe(false);
+    });
+
+    it('never mounts or unmounts a host to draw that press', () => {
+        // DROVE-286: the press stream must not ride a view the state can
+        // unmount. Swapping a glass host in on touch-down would do exactly
+        // that, under the finger, and take the keyboard with it.
+        const renderer = bubbleWith();
+        const before = glassViews(renderer).length;
+        const row = renderer.root.findAllByType('View' as any)
+            .find((node: any) => typeof node.props.onTouchStart === 'function');
+        act(() => { row!.props.onTouchStart(); });
+        expect(glassViews(renderer)).toHaveLength(before);
+        expect(renderer.root.findAllByType('Field' as any)).toHaveLength(1);
     });
 });
 
@@ -383,17 +390,18 @@ describe('the shared composer keeps its own padding under a hostile card style (
         expect(resolved.paddingBottom).toBe(MOBILE_COMPOSER_METRICS.bubbleInsetBottom);
     });
 
-    it('mounts the shell calm and the text row interactive, in that order', () => {
+    it('mounts ONE calm host with the field inside it', () => {
         const views = glassViews(mount(React.createElement(
             ComposerBubble,
             {} as never,
             React.createElement('Field'),
         )));
-        // Two surfaces: the shell, then the field's own inside it.
-        expect(views).toHaveLength(2);
+        // TWO here for one OTA — the shell, and a surface of the field's own
+        // inside it — and the second is the lighter panel Clay photographed.
+        // One host, calm at rest, is the whole shape of the fix.
+        expect(views).toHaveLength(1);
         expect(views[0].props.isInteractive).toBe(false);
-        expect(views[1].props.isInteractive).toBe(true);
-        expect(views[1].findAllByType('Field' as any).length).toBeGreaterThan(0);
+        expect(views[0].findAllByType('Field' as any).length).toBeGreaterThan(0);
     });
 
     it('puts one gap between trailing controls and none before the first', () => {

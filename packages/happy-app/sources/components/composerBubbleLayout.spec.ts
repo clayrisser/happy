@@ -15,6 +15,7 @@ import {
     COMPOSER_PRESS_TARGETS,
     composerPressTargetsAreDisjoint,
     resolveComposerPressTarget,
+    resolveComposerShellInteractive,
     COMPOSER_BUBBLE_ACTION_ROW_GEOMETRY,
     COMPOSER_BUBBLE_DISC_GEOMETRY,
     COMPOSER_BUBBLE_GAP_GEOMETRY,
@@ -886,6 +887,34 @@ describe('a press lands on exactly one surface (DROVE-343)', () => {
                 .toBeNull();
         }
         expect([...COMPOSER_PRESS_TARGETS]).toEqual(['textRow', 'sessionCapsule', 'add']);
+    });
+
+    it('turns the shell\'s glass on for the field and for nothing else', () => {
+        /**
+         * THE END OF THE CHAIN (DROVE-343, second pass).
+         *
+         * The frames say where a press lands; this says what the material does
+         * about it. The first pass answered the second half with a nested
+         * surface on the text row, and a surface mounted at rest draws at
+         * rest — Clay photographed the field as a lighter panel. So the shell
+         * carries `isInteractive` again and it is scoped in TIME instead: on
+         * while the text row is held, off otherwise.
+         *
+         * Resolved from the same tree as the press cases above, so the two
+         * halves cannot drift: a point that reports the capsule must leave the
+         * shell calm, at every text height.
+         */
+        for (const text of textHeights) {
+            const frames = layout(text);
+            const shellAt = (name: string) => resolveComposerShellInteractive(
+                resolveComposerPressTarget(frames, centre(findFrame(frames, name))),
+            );
+            expect(shellAt('textRow'), String(text)).toBe(true);
+            for (const quiet of ['modeSegment', 'readAloudSegment', 'effortSegment',
+                'modelSegment', 'sessionCapsule', 'add', 'mic', 'send']) {
+                expect(shellAt(quiet), `${quiet} at ${text}`).toBe(false);
+            }
+        }
     });
 
     it('still answers when zen mode draws neither the + nor the capsule', () => {

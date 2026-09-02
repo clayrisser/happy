@@ -41,7 +41,12 @@ const screens = {
  * ticket is about.
  */
 const sharedOnly = [
-    'COMPOSER_BUBBLE_TEXT_ROW_SURFACE',
+    // `COMPOSER_BUBBLE_TEXT_ROW_SURFACE` was here and is gone (DROVE-343,
+    // second pass): the text row has no surface at all now, because one
+    // mounted at rest draws at rest and Clay photographed it as a lighter
+    // panel filling the field. What replaced it is the shell's press, scoped
+    // in time by `resolveComposerShellInteractive`, and that is on the list.
+    'resolveComposerShellInteractive',
     'COMPOSER_BUBBLE_TEXT_ROW_GEOMETRY',
     'COMPOSER_BUBBLE_ACTION_ROW_GEOMETRY',
     'COMPOSER_BUBBLE_SPACER_GEOMETRY',
