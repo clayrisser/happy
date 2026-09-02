@@ -65,6 +65,16 @@ export const droverVerbs: readonly DroverVerb[] = [
         load: () => import('./share-sessions'),
     },
     {
+        name: 'sessions',
+        summary: 'What is running, where, and on which account. One session is one row, sized to the terminal.',
+        load: () => import('./sessions'),
+    },
+    {
+        name: 'pick-session',
+        summary: 'Pick a conversation in this directory to resume, so the id is known before claude starts.',
+        load: () => import('./pick-session'),
+    },
+    {
         name: 'stale-sessions',
         summary: 'Running sessions still on the CLI code the last build replaced, by name, and which of them relaunch themselves.',
         load: () => import('./stale-sessions'),
