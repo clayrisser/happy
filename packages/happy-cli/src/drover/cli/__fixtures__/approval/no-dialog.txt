@@ -1,0 +1,40 @@
+
+
+  Ran 1 shell command
+
+⏺ Same output — the pane is idle:
+
+  ❯
+  ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ──
+    ⏵⏵ auto mode on (shift+tab to cycle) · esc to interrupt · ← for agents
+
+✻ Churned for 7s · done 4:24 PM
+
+❯ Use the Bash tool to run exactly: uname -a && sw_vers
+
+  Ran 1 shell command
+  ⎿  Interrupted · What should Claude do instead?
+
+✻ Brewed for 2s · done 4:25 PM
+
+❯ Use the Write tool to create a file called hello.txt containing the word hi
+
+  Made 1 scratchpad edit +1
+
+⏺ Created hello.txt in the scratchpad with "hi".
+
+✻ Worked for 5s · done 4:26 PM
+
+❯ Use the Write tool to create /tmp/drove198-outside.txt containing the word hi
+
+⏺ Write(/tmp/drove198-outside.txt)
+  ⎿  User rejected write to ../../../../../../../tmp/drove198-outside.txt
+      1 hi
+
+✻ Sautéed for 2s · done 4:28 PM
+                                                                                                      ● high · /effort
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏸ manual mode on · ? for shortcuts · ← for agents

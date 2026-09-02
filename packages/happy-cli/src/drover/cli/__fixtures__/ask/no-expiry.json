@@ -1,0 +1,1 @@
+{"kind":"question","title":"Wait forever","reason":"","preview":"","ttlMs":0,"multiSelect":false,"channel":"external","options":[{"id":"a","label":"a"},{"id":"b","label":"b"}],"origin":{"harness":"shell","gate":null,"sessionId":null,"cwd":"/tmp/work","account":null,"surface":null}}

@@ -1,0 +1,1 @@
+{"kind":"question","title":"Claude login for ~/.claude-accounts/account-1 failed","reason":"nobody sent the code within 900s","preview":"nobody sent the code within 900s","ttlMs":300000,"channel":"external","options":[{"id":"ok","label":"OK"}],"origin":{"harness":"drover","gate":"account-login","account":null,"sessionId":null,"cwd":"/tmp/work","surface":null}}

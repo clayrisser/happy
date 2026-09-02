@@ -1,0 +1,1 @@
+{"kind":"permission","title":"Roll the stack?","reason":"keycloak, prod","preview":"./roll.sh --yes","ttlMs":600000,"multiSelect":false,"channel":"external","options":null,"origin":{"harness":"shell","gate":null,"sessionId":null,"cwd":"/tmp/work","account":"clayrisser@gmail.com","surface":null}}

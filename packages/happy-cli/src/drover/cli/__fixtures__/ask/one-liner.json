@@ -1,0 +1,1 @@
+{"kind":"question","title":"Which region?","reason":"","preview":"","ttlMs":600000,"multiSelect":false,"channel":"external","options":[{"id":"use1","label":"use1"},{"id":"euw1","label":"euw1"},{"id":"apse1","label":"apse1"}],"origin":{"harness":"shell","gate":null,"sessionId":null,"cwd":"/tmp/work","account":null,"surface":null}}
