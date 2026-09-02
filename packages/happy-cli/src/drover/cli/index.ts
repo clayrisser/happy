@@ -150,6 +150,11 @@ export const droverVerbs: readonly DroverVerb[] = [
         load: () => import('./flip-policy'),
     },
     {
+        name: 'settings',
+        summary: 'The per-session flip policy: auto-flip, or ask first. Every path is a bus call, so the phone and the terminal cannot disagree.',
+        load: () => import('./settings'),
+    },
+    {
         name: 'flip-menu',
         summary: 'A tmux picker for which account this pane flips to, ordered by headroom with the key on every row.',
         load: () => import('./flip-menu'),
