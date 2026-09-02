@@ -4,6 +4,49 @@ import * as z from 'zod';
 // Schema
 //
 
+/**
+ * How far read-aloud got in one session on THIS device (DROVE-193).
+ *
+ * Clay force-quits and reopens the app constantly, because that is how every
+ * OTA reaches him, and every launch used to start the reply over from the
+ * top. DROVE-126's spoken-once invariant is a field on the in-process
+ * timeline, so a fresh process has no timeline, no `queuedChunks`, and every
+ * sentence looks unread. This is that invariant written down.
+ *
+ * WHAT IS KEYED, and it is not a sentence index. The timeline is rebuilt on
+ * every launch out of whatever pages the fetch happens to return, and each
+ * message is re-split from its text, so index 47 in the old process points
+ * at something else entirely in the new one. `key` is the message's own
+ * identity — the same key the reader's dedupe already uses, prefixed
+ * `aside:` or `thinking:` for the two non-prose strands so a title cannot be
+ * confused with a sentence of the reply — and `ordinal` is the position
+ * within it. A message id comes from the server and survives a re-fetch; an
+ * ordinal only has to survive ITS OWN message being re-split, and a message
+ * that is not still streaming does not re-split at all.
+ *
+ * `createdAt` is the ordering the timeline itself sorts by, and it is what
+ * makes "everything older than this was spoken too" decidable from one
+ * entry instead of a set of every id ever said.
+ *
+ * `at` is when the mark was written. Only the prune reads it.
+ */
+export const ReadAloudResumeMarkSchema = z.object({
+    key: z.string(),
+    createdAt: z.number(),
+    ordinal: z.number(),
+    at: z.number(),
+});
+
+export type ReadAloudResumeMark = z.infer<typeof ReadAloudResumeMarkSchema>;
+
+/**
+ * How many sessions keep a read position. One mark per session, not a set of
+ * every sentence ever spoken, and the oldest is dropped once there are more
+ * than this — so the store is bounded by a number rather than by how long he
+ * has owned the phone.
+ */
+export const readAloudResumeLimit = 32;
+
 export const LocalSettingsSchema = z.object({
     // Developer settings (device-specific)
     debugMode: z.boolean().describe('Enable debug logging'),
@@ -24,6 +67,12 @@ export const LocalSettingsSchema = z.object({
     // almost never should.
     readAloudEnabled: z.boolean().describe('Read assistant replies aloud as they arrive'),
     voiceDictationEnabled: z.boolean().describe('Show the press-and-hold talk button in the composer'),
+    // Where read-aloud got to in each session, on THIS handset (DROVE-193).
+    // Device-local for the reason the switch above it is: what he heard on
+    // the phone on the walk to the car is not what the watch said in his ear,
+    // and a synced position would have one surface skip what the other read.
+    // Bounded to `readAloudResumeLimit` entries and dropped with the session.
+    readAloudResume: z.record(z.string(), ReadAloudResumeMarkSchema).describe('Where read-aloud got to per session on this device'),
     // Whether the sentence tap has ever been used on this device (DROVE-195).
     // Not a preference and not shown in Settings: it is what retires the hint
     // on the read-aloud toast. DROVE-163 changed the gesture from a double tap
@@ -74,6 +123,7 @@ export const localSettingsDefaults: LocalSettings = {
     zenMode: false,
     readAloudEnabled: false,
     voiceDictationEnabled: true,
+    readAloudResume: {},
     sentenceTapUsed: false,
     phoneHaptics: false,
     droverDemoSeenAt: null,
@@ -102,4 +152,48 @@ export function localSettingsParse(settings: unknown): LocalSettings {
 
 export function applyLocalSettings(settings: LocalSettings, delta: Partial<LocalSettings>): LocalSettings {
     return { ...localSettingsDefaults, ...settings, ...delta };
+}
+
+//
+// Read positions (DROVE-193)
+//
+
+/**
+ * Write one session's read position, keeping the store bounded.
+ *
+ * A plain function so the bound is testable without a store: the caller owns
+ * WHEN a mark is written, this owns how many are kept. Returns the record
+ * unchanged when nothing moved, so a no-op write cannot churn the store.
+ */
+export function applyReadAloudResume(
+    marks: Record<string, ReadAloudResumeMark>,
+    sessionId: string,
+    mark: Omit<ReadAloudResumeMark, 'at'>,
+    at: number,
+): Record<string, ReadAloudResumeMark> {
+    const current = marks[sessionId];
+    if (current !== undefined
+        && current.key === mark.key
+        && current.createdAt === mark.createdAt
+        && current.ordinal === mark.ordinal) {
+        return marks;
+    }
+    const next: Record<string, ReadAloudResumeMark> = { ...marks, [sessionId]: { ...mark, at } };
+    const ids = Object.keys(next);
+    if (ids.length <= readAloudResumeLimit) return next;
+    // Oldest first, and the session just written is the newest by
+    // construction, so it can never be the one dropped.
+    ids.sort((a, b) => (next[a]?.at ?? 0) - (next[b]?.at ?? 0));
+    for (const id of ids.slice(0, ids.length - readAloudResumeLimit)) delete next[id];
+    return next;
+}
+
+/** The session is gone, so its position goes with it (DROVE-193). */
+export function pruneReadAloudResume(
+    marks: Record<string, ReadAloudResumeMark>,
+    sessionId: string,
+): Record<string, ReadAloudResumeMark> {
+    if (marks[sessionId] === undefined) return marks;
+    const { [sessionId]: _dropped, ...rest } = marks;
+    return rest;
 }

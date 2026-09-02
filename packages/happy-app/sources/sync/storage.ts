@@ -19,7 +19,7 @@ import { getSessionName, getSessionSubtitle, getSessionAvatarId } from '@/utils/
 import { resolveSessionState, type SessionState } from './sessionState';
 import { getSessionActivityAt } from '@/utils/sessionActivity';
 import { applySettings, Settings } from "./settings";
-import { LocalSettings, applyLocalSettings } from "./localSettings";
+import { LocalSettings, applyLocalSettings, pruneReadAloudResume } from "./localSettings";
 import { creditTokenLedger, resetTokenLedger, type TokenLedger, type TokenLedgerSighting } from "./tokenLedger";
 import { loadTokenLedger, saveTokenLedger } from "./tokenLedgerStore";
 import type { PushPermissionInfo } from "./pushRegistration";
@@ -1407,6 +1407,16 @@ export const storage = create<StorageState>()((set, get) => {
             delete lastMessageSentAt[sessionId];
             saveSessionLastMessageSentAt(lastMessageSentAt);
 
+            // The session is gone, so read-aloud's place in it goes too
+            // (DROVE-193). This is what makes the stored positions bounded by
+            // the sessions that exist rather than by how long he has had the
+            // app; the cap in `applyReadAloudResume` is the belt under it.
+            const readAloudResume = pruneReadAloudResume(state.localSettings.readAloudResume, sessionId);
+            const localSettings = readAloudResume === state.localSettings.readAloudResume
+                ? state.localSettings
+                : applyLocalSettings(state.localSettings, { readAloudResume });
+            if (localSettings !== state.localSettings) saveLocalSettings(localSettings);
+
             // Rebuild sessionListViewData without the deleted session.
             // Pass unreadSessionIds so the remaining sessions keep their unread badges.
             const sessionListViewData = buildSessionListViewData(remainingSessions, state.unreadSessionIds, state.machines, state.projects);
@@ -1416,7 +1426,8 @@ export const storage = create<StorageState>()((set, get) => {
                 sessions: remainingSessions,
                 sessionMessages: remainingSessionMessages,
                 sessionFileCache: remainingFileCache,
-                sessionListViewData
+                sessionListViewData,
+                localSettings
             };
         }),
         // Friend management methods

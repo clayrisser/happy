@@ -1,4 +1,4 @@
-import { ReadAloudReader } from './readAloud';
+import { ReadAloudReader, type ReadAloudMark } from './readAloud';
 import { speechEngine } from './speechEngine';
 import { createRoutedSpeechEngine } from './routedSpeechEngine';
 import { createCuedSpeechEngine } from './cuedSpeechEngine';
@@ -6,6 +6,7 @@ import { audioCues } from './audioCueService';
 import { resolveSpeaker } from './speaker';
 import { cueWatchReplyStart, watchSpeechEngine } from './watchSpeaker';
 import { storage } from '@/sync/storage';
+import { applyReadAloudResume } from '@/sync/localSettings';
 import { resolveAudioCues, resolveStreamTalk } from '@/sync/settings';
 import { extractThinkingText, isEmptyThinking } from '@/utils/thinkingText';
 import { readDetourFromHere, readFromHere, readSentenceFromHere } from './readAloudTap';
@@ -105,8 +106,33 @@ export const readAloud = new ReadAloudReader(
         // from before the reader was on (DROVE-285). Read only inside the
         // tap's `ensureHistoryFrom`, never on a scroll or a page arriving.
         historyFor: (sessionId) => storage.getState().sessionMessages[sessionId]?.messages ?? [],
+        // Where this handset got to, from the launch before (DROVE-193).
+        // `localSettings` and not `settings` for DROVE-190's reason: what he
+        // heard walking to the car is not what the watch said in his ear, so
+        // a synced position would have one surface skip what the other read.
+        resumeFrom: (sessionId) => storage.getState().localSettings.readAloudResume[sessionId] ?? null,
+        onSpoke: (sessionId, mark) => rememberReadPosition(sessionId, mark),
     },
 );
+
+/**
+ * File the sentence that just made a sound (DROVE-193).
+ *
+ * The bound lives in `applyReadAloudResume` rather than here: one mark per
+ * session, the oldest dropped past the limit, and the record handed straight
+ * back when nothing moved so a redundant write cannot churn the store. The
+ * reader has already decided the mark is ahead of the one it held.
+ *
+ * Cheap enough to run per sentence: nothing subscribes to this key, so the
+ * `set` re-renders no screen, and the write behind it is one MMKV put every
+ * few seconds of speech.
+ */
+function rememberReadPosition(sessionId: string, mark: ReadAloudMark): void {
+    const marks = storage.getState().localSettings.readAloudResume;
+    const next = applyReadAloudResume(marks, sessionId, mark, Date.now());
+    if (next === marks) return;
+    storage.getState().applyLocalSettings({ readAloudResume: next });
+}
 
 /**
  * Tap a section and reading moves there (DROVE-146). The wiring only; the rule
