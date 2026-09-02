@@ -8,6 +8,60 @@ import { randomKeyNaked } from "@/utils/randomKeyNaked";
 import { allocateUserSeq } from "@/storage/seq";
 import { sessionDelete } from "@/app/session/sessionDelete";
 import { activityCache } from "@/app/presence/sessionCache";
+import { callerAccess, grantsForCaller, requireSessionRole, sessionsVisibleTo } from "@/app/session/sessionAccess";
+
+// What every list endpoint selects. `accountId` and the caller's own grant
+// are what callerAccess needs to hand a grantee the re-wrapped key in place
+// of the owner's (DROVE-388); the rest is the row as it always was.
+function listSelect(userId: string) {
+    return {
+        id: true,
+        seq: true,
+        createdAt: true,
+        updatedAt: true,
+        metadata: true,
+        metadataVersion: true,
+        agentState: true,
+        agentStateVersion: true,
+        dataEncryptionKey: true,
+        projectId: true,
+        active: true,
+        lastActiveAt: true,
+        accountId: true,
+        grants: grantsForCaller(userId)
+    } as const;
+}
+
+type ListRow = Prisma.SessionGetPayload<{ select: ReturnType<typeof listSelect> }>;
+
+// A session row on the wire, for the caller: an owner sees its own wrapped
+// key, a grantee sees the grant's, and both learn the role and the owner.
+function listRow(v: ListRow, userId: string) {
+    const access = callerAccess(v, userId);
+    if (!access) {
+        return null;
+    }
+    return {
+        id: v.id,
+        seq: v.seq,
+        createdAt: v.createdAt.getTime(),
+        updatedAt: v.updatedAt.getTime(),
+        active: v.active,
+        activeAt: v.lastActiveAt.getTime(),
+        metadata: v.metadata,
+        metadataVersion: v.metadataVersion,
+        agentState: v.agentState,
+        agentStateVersion: v.agentStateVersion,
+        dataEncryptionKey: access.dataEncryptionKey,
+        projectId: v.projectId,
+        role: access.role,
+        ownerId: access.ownerId
+    };
+}
+
+function listRows(rows: ListRow[], userId: string) {
+    return rows.map((v) => listRow(v, userId)).filter((v) => v !== null);
+}
 
 export function sessionRoutes(app: Fastify) {
 
@@ -18,58 +72,14 @@ export function sessionRoutes(app: Fastify) {
         const userId = request.userId;
 
         const sessions = await db.session.findMany({
-            where: { accountId: userId },
+            where: sessionsVisibleTo(userId),
             orderBy: { updatedAt: 'desc' },
             take: 150,
-            select: {
-                id: true,
-                seq: true,
-                createdAt: true,
-                updatedAt: true,
-                metadata: true,
-                metadataVersion: true,
-                agentState: true,
-                agentStateVersion: true,
-                dataEncryptionKey: true,
-                projectId: true,
-                active: true,
-                lastActiveAt: true,
-                // messages: {
-                //     orderBy: { seq: 'desc' },
-                //     take: 1,
-                //     select: {
-                //         id: true,
-                //         seq: true,
-                //         content: true,
-                //         localId: true,
-                //         createdAt: true
-                //     }
-                // }
-            }
+            select: listSelect(userId)
         });
 
         return reply.send({
-            sessions: sessions.map((v) => {
-                // const lastMessage = v.messages[0];
-                const sessionUpdatedAt = v.updatedAt.getTime();
-                // const lastMessageCreatedAt = lastMessage ? lastMessage.createdAt.getTime() : 0;
-
-                return {
-                    id: v.id,
-                    seq: v.seq,
-                    createdAt: v.createdAt.getTime(),
-                    updatedAt: sessionUpdatedAt,
-                    active: v.active,
-                    activeAt: v.lastActiveAt.getTime(),
-                    metadata: v.metadata,
-                    metadataVersion: v.metadataVersion,
-                    agentState: v.agentState,
-                    agentStateVersion: v.agentStateVersion,
-                    dataEncryptionKey: v.dataEncryptionKey ? Buffer.from(v.dataEncryptionKey).toString('base64') : null,
-                    projectId: v.projectId,
-                    lastMessage: null
-                };
-            })
+            sessions: listRows(sessions, userId).map((v) => ({ ...v, lastMessage: null }))
         });
     });
 
@@ -87,43 +97,17 @@ export function sessionRoutes(app: Fastify) {
 
         const sessions = await db.session.findMany({
             where: {
-                accountId: userId,
+                ...sessionsVisibleTo(userId),
                 active: true,
                 lastActiveAt: { gt: new Date(Date.now() - 1000 * 60 * 15) /* 15 minutes */ }
             },
             orderBy: { lastActiveAt: 'desc' },
             take: limit,
-            select: {
-                id: true,
-                seq: true,
-                createdAt: true,
-                updatedAt: true,
-                metadata: true,
-                metadataVersion: true,
-                agentState: true,
-                agentStateVersion: true,
-                dataEncryptionKey: true,
-                projectId: true,
-                active: true,
-                lastActiveAt: true,
-            }
+            select: listSelect(userId)
         });
 
         return reply.send({
-            sessions: sessions.map((v) => ({
-                id: v.id,
-                seq: v.seq,
-                createdAt: v.createdAt.getTime(),
-                updatedAt: v.updatedAt.getTime(),
-                active: v.active,
-                activeAt: v.lastActiveAt.getTime(),
-                metadata: v.metadata,
-                metadataVersion: v.metadataVersion,
-                agentState: v.agentState,
-                agentStateVersion: v.agentStateVersion,
-                dataEncryptionKey: v.dataEncryptionKey ? Buffer.from(v.dataEncryptionKey).toString('base64') : null,
-                projectId: v.projectId,
-            }))
+            sessions: listRows(sessions, userId)
         });
     });
 
@@ -152,7 +136,7 @@ export function sessionRoutes(app: Fastify) {
         }
 
         // Build where clause
-        const where: Prisma.SessionWhereInput = { accountId: userId };
+        const where: Prisma.SessionWhereInput = { ...sessionsVisibleTo(userId) };
 
         // Add changedSince filter (just a filter, doesn't affect pagination)
         if (changedSince) {
@@ -175,20 +159,7 @@ export function sessionRoutes(app: Fastify) {
             where,
             orderBy,
             take: limit + 1, // Fetch one extra to determine if there are more
-            select: {
-                id: true,
-                seq: true,
-                createdAt: true,
-                updatedAt: true,
-                metadata: true,
-                metadataVersion: true,
-                agentState: true,
-                agentStateVersion: true,
-                dataEncryptionKey: true,
-                projectId: true,
-                active: true,
-                lastActiveAt: true,
-            }
+            select: listSelect(userId)
         });
 
         // Check if there are more results
@@ -203,26 +174,14 @@ export function sessionRoutes(app: Fastify) {
         }
 
         return reply.send({
-            sessions: resultSessions.map((v) => ({
-                id: v.id,
-                seq: v.seq,
-                createdAt: v.createdAt.getTime(),
-                updatedAt: v.updatedAt.getTime(),
-                active: v.active,
-                activeAt: v.lastActiveAt.getTime(),
-                metadata: v.metadata,
-                metadataVersion: v.metadataVersion,
-                agentState: v.agentState,
-                agentStateVersion: v.agentStateVersion,
-                dataEncryptionKey: v.dataEncryptionKey ? Buffer.from(v.dataEncryptionKey).toString('base64') : null,
-                projectId: v.projectId,
-            })),
+            sessions: listRows(resultSessions, userId),
             nextCursor,
             hasNext
         });
     });
 
-    // Create or load session by tag
+    // Create or load session by tag. Owners only: a guest never creates a
+    // session (DROVE-388).
     app.post('/v1/sessions', {
         schema: {
             body: z.object({
@@ -233,7 +192,7 @@ export function sessionRoutes(app: Fastify) {
                 projectId: z.string().nullish()
             })
         },
-        preHandler: app.authenticate
+        preHandler: [app.authenticate, app.requireOwner]
     }, async (request, reply) => {
         const userId = request.userId;
         const { tag, metadata, dataEncryptionKey, projectId } = request.body;
@@ -353,15 +312,9 @@ export function sessionRoutes(app: Fastify) {
         const userId = request.userId;
         const { sessionId } = request.params;
 
-        // Verify session belongs to user
-        const session = await db.session.findFirst({
-            where: {
-                id: sessionId,
-                accountId: userId
-            }
-        });
-
-        if (!session) {
+        // Owner or a read grant; anything else is not found.
+        const access = await requireSessionRole(userId, sessionId, 'read');
+        if (!access) {
             return reply.code(404).send({ error: 'Session not found' });
         }
 
@@ -422,7 +375,7 @@ export function sessionRoutes(app: Fastify) {
         eventRouter.emitEphemeral({
             userId,
             payload: sessionActivity,
-            recipientFilter: { type: 'user-scoped-only' }
+            recipientFilter: { type: 'user-scoped-and-grantees', sessionId }
         });
 
         return reply.send({ success: true });

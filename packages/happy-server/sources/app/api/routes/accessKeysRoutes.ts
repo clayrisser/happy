@@ -6,7 +6,7 @@ import { log } from "@/utils/log";
 export function accessKeysRoutes(app: Fastify) {
     // Get Access Key API
     app.get('/v1/access-keys/:sessionId/:machineId', {
-        preHandler: app.authenticate,
+        preHandler: [app.authenticate, app.requireOwner],
         schema: {
             params: z.object({
                 sessionId: z.string(),
@@ -79,7 +79,7 @@ export function accessKeysRoutes(app: Fastify) {
 
     // Create Access Key API
     app.post('/v1/access-keys/:sessionId/:machineId', {
-        preHandler: app.authenticate,
+        preHandler: [app.authenticate, app.requireOwner],
         schema: {
             params: z.object({
                 sessionId: z.string(),
@@ -175,7 +175,7 @@ export function accessKeysRoutes(app: Fastify) {
 
     // Update Access Key API
     app.put('/v1/access-keys/:sessionId/:machineId', {
-        preHandler: app.authenticate,
+        preHandler: [app.authenticate, app.requireOwner],
         schema: {
             params: z.object({
                 sessionId: z.string(),

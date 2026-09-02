@@ -10,7 +10,7 @@ import * as privacyKit from "privacy-kit";
 export function artifactsRoutes(app: Fastify) {
     // GET /v1/artifacts - List all artifacts for the account
     app.get('/v1/artifacts', {
-        preHandler: app.authenticate,
+        preHandler: [app.authenticate, app.requireOwner],
         schema: {
             response: {
                 200: z.array(z.object({
@@ -63,7 +63,7 @@ export function artifactsRoutes(app: Fastify) {
 
     // GET /v1/artifacts/:id - Get single artifact with full body
     app.get('/v1/artifacts/:id', {
-        preHandler: app.authenticate,
+        preHandler: [app.authenticate, app.requireOwner],
         schema: {
             params: z.object({
                 id: z.string()
@@ -123,7 +123,7 @@ export function artifactsRoutes(app: Fastify) {
 
     // POST /v1/artifacts - Create new artifact
     app.post('/v1/artifacts', {
-        preHandler: app.authenticate,
+        preHandler: [app.authenticate, app.requireOwner],
         schema: {
             body: z.object({
                 id: z.string().uuid(),
@@ -227,7 +227,7 @@ export function artifactsRoutes(app: Fastify) {
 
     // POST /v1/artifacts/:id - Update artifact with version control
     app.post('/v1/artifacts/:id', {
-        preHandler: app.authenticate,
+        preHandler: [app.authenticate, app.requireOwner],
         schema: {
             params: z.object({
                 id: z.string()
@@ -358,7 +358,7 @@ export function artifactsRoutes(app: Fastify) {
 
     // DELETE /v1/artifacts/:id - Delete artifact
     app.delete('/v1/artifacts/:id', {
-        preHandler: app.authenticate,
+        preHandler: [app.authenticate, app.requireOwner],
         schema: {
             params: z.object({
                 id: z.string()

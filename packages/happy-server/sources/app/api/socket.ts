@@ -1,6 +1,8 @@
 import { onShutdown } from "@/utils/shutdown";
 import { Fastify } from "./types";
-import { buildMachineActivityEphemeral, ClientConnection, eventRouter } from "@/app/events/eventRouter";
+import { buildMachineActivityEphemeral, ClientConnection, eventRouter, sessionGrantRoom } from "@/app/events/eventRouter";
+import { getAccountKind } from "@/app/auth/accountKind";
+import { db } from "@/storage/db";
 import { Server } from "socket.io";
 import { createAdapter } from "@socket.io/redis-streams-adapter";
 import { Redis } from "ioredis";
@@ -119,6 +121,17 @@ export function startSocket(app: Fastify) {
             return;
         }
 
+        // session-scoped is the CLI and machine-scoped is the daemon. A guest
+        // runs neither (DROVE-388): it is a phone that watches and answers.
+        if (clientType === 'session-scoped' || clientType === 'machine-scoped') {
+            const kind = await getAccountKind(verified.userId);
+            if (kind !== 'owner') {
+                log({ module: 'websocket' }, `Guest account ${verified.userId} refused a ${clientType} connection`);
+                next(new Error('Guest accounts may only connect user-scoped'));
+                return;
+            }
+        }
+
         socket.data.userId = verified.userId;
         socket.data.clientType = clientType;
         socket.data.sessionId = sessionId;
@@ -168,6 +181,22 @@ export function startSocket(app: Fastify) {
         }
         eventRouter.addConnection(userId, connection);
         websocketConnectionsGauge.inc({ type: connection.connectionType, ...labels });
+
+        // A phone hears the sessions it was granted as well as its own
+        // (DROVE-388). Grants made after this point join the socket live
+        // from the grant route; revokes leave it.
+        if (connection.connectionType === 'user-scoped') {
+            db.sessionGrant.findMany({
+                where: { granteeAccountId: userId },
+                select: { sessionId: true }
+            }).then((grants) => {
+                for (const grant of grants) {
+                    socket.join(sessionGrantRoom(grant.sessionId));
+                }
+            }).catch((error) => {
+                log({ module: 'websocket', level: 'error' }, `Could not join grant rooms for ${userId}: ${error}`);
+            });
+        }
 
         // Broadcast daemon online status
         if (connection.connectionType === 'machine-scoped') {

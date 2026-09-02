@@ -19,9 +19,23 @@ datasource db {
 // Account
 //
 
+// owner is every account that existed before DROVE-388; guest sees only the
+// sessions it was granted. Which kind a new key becomes is the relay's
+// ACCOUNT_REGISTRATION policy (sources/app/auth/accountKind.ts).
+enum AccountKind {
+    owner
+    guest
+}
+
 model Account {
     id              String      @id @default(cuid())
     publicKey       String      @unique
+    kind            AccountKind @default(owner)
+    // The curve25519 box public key an owner wraps a session key to when it
+    // grants this account a session. Registered by the account itself
+    // (POST /v1/account/content-key); the signing key above never leaves
+    // the device and is not this key.
+    contentPublicKey String?    @unique
     seq             Int         @default(0)
     feedSeq         BigInt      @default(0)
     createdAt       DateTime    @default(now())
@@ -54,6 +68,8 @@ model Account {
     UserFeedItem        UserFeedItem[]
     UserKVStore         UserKVStore[]
     VoiceConversation   VoiceConversation[]
+    SessionGrants       SessionGrant[]        @relation("GrantsReceived")
+    SessionGrantsGiven  SessionGrant[]        @relation("GrantsGiven")
 }
 
 model TerminalAuthRequest {
@@ -112,10 +128,42 @@ model Session {
     messages          SessionMessage[]
     usageReports      UsageReport[]
     accessKeys        AccessKey[]
+    grants            SessionGrant[]
 
     @@unique([accountId, tag])
     @@index([accountId, updatedAt(sort: Desc)])
     @@index([projectId])
+}
+
+//
+// Session grants (DROVE-388)
+//
+
+enum SessionGrantRole {
+    read
+    answer
+}
+
+// One session handed to one other account. wrappedKey is the session's data
+// key re-wrapped, by the owner's app, to the grantee's contentPublicKey, in
+// the same layout Session.dataEncryptionKey uses, so the grantee's client
+// opens it with the code it already has. The server stores the bytes and
+// never holds the plaintext key.
+model SessionGrant {
+    id               String           @id @default(cuid())
+    sessionId        String
+    session          Session          @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+    granteeAccountId String
+    grantee          Account          @relation("GrantsReceived", fields: [granteeAccountId], references: [id], onDelete: Cascade)
+    wrappedKey       Bytes
+    role             SessionGrantRole
+    grantedById      String
+    grantedBy        Account          @relation("GrantsGiven", fields: [grantedById], references: [id])
+    createdAt        DateTime         @default(now())
+    updatedAt        DateTime         @updatedAt
+
+    @@unique([sessionId, granteeAccountId])
+    @@index([granteeAccountId])
 }
 
 //

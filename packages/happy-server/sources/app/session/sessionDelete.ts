@@ -97,10 +97,12 @@ export async function sessionDelete(ctx: Context, sessionId: string): Promise<bo
                 updatePayload: JSON.stringify(updatePayload)
             }, `Emitting delete-session update to user-scoped connections`);
 
+            // Grantees hear the delete too: the grant rows went with the
+            // session (cascade), but their sockets are still in its room.
             eventRouter.emitUpdate({
                 userId: ctx.uid,
                 payload: updatePayload,
-                recipientFilter: { type: 'user-scoped-only' }
+                recipientFilter: { type: 'user-scoped-and-grantees', sessionId }
             });
 
             // Delete attachment blobs (local dir or S3 prefix)

@@ -3,6 +3,7 @@ import { type Fastify } from "../types";
 import * as privacyKit from "privacy-kit";
 import { db } from "@/storage/db";
 import { auth } from "@/app/auth/auth";
+import { registerOrLogin } from "@/app/auth/accountKind";
 import { log } from "@/utils/log";
 
 export function authRoutes(app: Fastify) {
@@ -24,13 +25,14 @@ export function authRoutes(app: Fastify) {
             return reply.code(401).send({ error: 'Invalid signature' });
         }
 
-        // Create or update user in database
+        // Create or update user in database. Whether a NEW key becomes an
+        // owner or a guest, or is refused, is the relay's registration
+        // policy (DROVE-388), not the client's choice.
         const publicKeyHex = privacyKit.encodeHex(publicKey);
-        const user = await db.account.upsert({
-            where: { publicKey: publicKeyHex },
-            update: { updatedAt: new Date() },
-            create: { publicKey: publicKeyHex }
-        });
+        const user = await registerOrLogin(publicKeyHex);
+        if (!user) {
+            return reply.code(403).send({ error: 'registration-closed' });
+        }
 
         return reply.send({
             success: true,
@@ -125,7 +127,7 @@ export function authRoutes(app: Fastify) {
 
     // Approve auth request
     app.post('/v1/auth/response', {
-        preHandler: app.authenticate,
+        preHandler: [app.authenticate, app.requireOwner],
         schema: {
             body: z.object({
                 response: z.string(),
@@ -212,7 +214,7 @@ export function authRoutes(app: Fastify) {
 
     // Approve account auth request
     app.post('/v1/auth/account/response', {
-        preHandler: app.authenticate,
+        preHandler: [app.authenticate, app.requireOwner],
         schema: {
             body: z.object({
                 response: z.string(),

@@ -25,7 +25,7 @@ export async function userRoutes(app: Fastify) {
                 })
             }
         },
-        preHandler: app.authenticate
+        preHandler: [app.authenticate, app.requireOwner]
     }, async (request, reply) => {
         const { id } = request.params;
 
@@ -70,7 +70,7 @@ export async function userRoutes(app: Fastify) {
                 })
             }
         },
-        preHandler: app.authenticate
+        preHandler: [app.authenticate, app.requireOwner]
     }, async (request, reply) => {
         const { query } = request.query;
 
@@ -123,7 +123,7 @@ export async function userRoutes(app: Fastify) {
                 })
             }
         },
-        preHandler: app.authenticate
+        preHandler: [app.authenticate, app.requireOwner]
     }, async (request, reply) => {
         const user = await friendAdd(Context.create(request.userId), request.body.uid);
         return reply.send({ user });
@@ -143,7 +143,7 @@ export async function userRoutes(app: Fastify) {
                 })
             }
         },
-        preHandler: app.authenticate
+        preHandler: [app.authenticate, app.requireOwner]
     }, async (request, reply) => {
         const user = await friendRemove(Context.create(request.userId), request.body.uid);
         return reply.send({ user });
@@ -157,7 +157,7 @@ export async function userRoutes(app: Fastify) {
                 })
             }
         },
-        preHandler: app.authenticate
+        preHandler: [app.authenticate, app.requireOwner]
     }, async (request, reply) => {
         const friends = await friendList(Context.create(request.userId));
         return reply.send({ friends });

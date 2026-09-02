@@ -160,7 +160,7 @@ async function emitProjectUpdate(
 
 export function projectRoutes(app: Fastify) {
     app.post('/v1/projects', {
-        preHandler: app.authenticate,
+        preHandler: [app.authenticate, app.requireOwner],
         schema: { body: projectCreateBody },
     }, async (request, reply) => {
         const userId = request.userId;
@@ -197,7 +197,7 @@ export function projectRoutes(app: Fastify) {
     });
 
     app.get('/v1/projects', {
-        preHandler: app.authenticate,
+        preHandler: [app.authenticate, app.requireOwner],
         schema: {
             querystring: z.object({
                 changedSince: z.coerce.number().int().positive().optional(),
@@ -224,7 +224,7 @@ export function projectRoutes(app: Fastify) {
     });
 
     app.get('/v1/projects/:projectId', {
-        preHandler: app.authenticate,
+        preHandler: [app.authenticate, app.requireOwner],
         schema: { params: projectIdParams },
     }, async (request, reply) => {
         const project = await db.project.findFirst({
@@ -235,7 +235,7 @@ export function projectRoutes(app: Fastify) {
     });
 
     app.patch('/v1/projects/:projectId', {
-        preHandler: app.authenticate,
+        preHandler: [app.authenticate, app.requireOwner],
         schema: { params: projectIdParams, body: projectPatchBody },
     }, async (request, reply) => {
         const userId = request.userId;
@@ -287,7 +287,7 @@ export function projectRoutes(app: Fastify) {
     });
 
     app.patch('/v1/projects/:projectId/avatar', {
-        preHandler: app.authenticate,
+        preHandler: [app.authenticate, app.requireOwner],
         schema: { params: projectIdParams, body: avatarActivateBody },
     }, async (request, reply) => {
         const userId = request.userId;
@@ -327,7 +327,7 @@ export function projectRoutes(app: Fastify) {
     });
 
     app.delete('/v1/projects/:projectId/avatar', {
-        preHandler: app.authenticate,
+        preHandler: [app.authenticate, app.requireOwner],
         schema: { params: projectIdParams },
     }, async (request, reply) => {
         const userId = request.userId;
@@ -356,7 +356,7 @@ export function projectRoutes(app: Fastify) {
     });
 
     app.delete('/v1/projects/:projectId', {
-        preHandler: app.authenticate,
+        preHandler: [app.authenticate, app.requireOwner],
         schema: { params: projectIdParams },
     }, async (request, reply) => {
         const userId = request.userId;
@@ -409,7 +409,7 @@ export function projectRoutes(app: Fastify) {
     });
 
     app.post('/v1/projects/:projectId/avatar/request-upload', {
-        preHandler: app.authenticate,
+        preHandler: [app.authenticate, app.requireOwner],
         schema: { params: projectIdParams, body: uploadRequestBody },
     }, async (request, reply) => {
         const userId = request.userId;
@@ -439,7 +439,7 @@ export function projectRoutes(app: Fastify) {
     });
 
     app.put('/v1/projects/:projectId/avatar/:avatarFile', {
-        preHandler: app.authenticate,
+        preHandler: [app.authenticate, app.requireOwner],
         schema: { params: projectIdParams.extend({ avatarFile: z.string() }) },
     }, async (request, reply) => {
         if (!isLocalStorage()) return reply.code(404).send({ error: 'Direct upload not available in S3 mode' });
@@ -460,7 +460,7 @@ export function projectRoutes(app: Fastify) {
     // Download always resolves the currently activated ref. Callers cannot
     // use this endpoint as an arbitrary project-prefix file oracle.
     app.post('/v1/projects/:projectId/avatar/request-download', {
-        preHandler: app.authenticate,
+        preHandler: [app.authenticate, app.requireOwner],
         schema: { params: projectIdParams },
     }, async (request, reply) => {
         const project = await db.project.findFirst({ where: { id: request.params.projectId, accountId: request.userId } });
@@ -480,7 +480,7 @@ export function projectRoutes(app: Fastify) {
     });
 
     app.get('/v1/projects/:projectId/avatar/:avatarFile', {
-        preHandler: app.authenticate,
+        preHandler: [app.authenticate, app.requireOwner],
         schema: { params: projectIdParams.extend({ avatarFile: z.string() }) },
     }, async (request, reply) => {
         if (!isLocalStorage()) return reply.code(404).send({ error: 'Direct download not available in S3 mode' });

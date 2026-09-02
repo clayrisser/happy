@@ -10,7 +10,7 @@ import { buildNewMachineUpdate, buildUpdateMachineUpdate, buildDeleteMachineUpda
 
 export function machinesRoutes(app: Fastify) {
     app.post('/v1/machines', {
-        preHandler: app.authenticate,
+        preHandler: [app.authenticate, app.requireOwner],
         schema: {
             body: z.object({
                 id: z.string(),
@@ -111,7 +111,7 @@ export function machinesRoutes(app: Fastify) {
 
     // Machines API
     app.get('/v1/machines', {
-        preHandler: app.authenticate,
+        preHandler: [app.authenticate, app.requireOwner],
     }, async (request, reply) => {
         const userId = request.userId;
 
@@ -137,7 +137,7 @@ export function machinesRoutes(app: Fastify) {
 
     // GET /v1/machines/:id - Get single machine by ID
     app.get('/v1/machines/:id', {
-        preHandler: app.authenticate,
+        preHandler: [app.authenticate, app.requireOwner],
         schema: {
             params: z.object({
                 id: z.string()
@@ -178,7 +178,7 @@ export function machinesRoutes(app: Fastify) {
     // DELETE /v1/machines/:id - Remove a machine and its access keys.
     // Sessions spawned by this machine are preserved so history is not lost.
     app.delete('/v1/machines/:id', {
-        preHandler: app.authenticate,
+        preHandler: [app.authenticate, app.requireOwner],
         schema: {
             params: z.object({
                 id: z.string()

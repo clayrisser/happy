@@ -47,7 +47,7 @@ export function connectRoutes(app: Fastify) {
 
     // GitHub OAuth parameters
     app.get('/v1/connect/github/params', {
-        preHandler: app.authenticate,
+        preHandler: [app.authenticate, app.requireOwner],
         schema: {
             response: {
                 200: z.object({
@@ -217,7 +217,7 @@ export function connectRoutes(app: Fastify) {
 
     // GitHub disconnect endpoint
     app.delete('/v1/connect/github', {
-        preHandler: app.authenticate,
+        preHandler: [app.authenticate, app.requireOwner],
         schema: {
             response: {
                 200: z.object({
@@ -247,7 +247,7 @@ export function connectRoutes(app: Fastify) {
     //
 
     app.post('/v1/connect/:vendor/register', {
-        preHandler: app.authenticate,
+        preHandler: [app.authenticate, app.requireOwner],
         schema: {
             body: z.object({
                 token: z.string()
@@ -268,7 +268,7 @@ export function connectRoutes(app: Fastify) {
     });
 
     app.get('/v1/connect/:vendor/token', {
-        preHandler: app.authenticate,
+        preHandler: [app.authenticate, app.requireOwner],
         schema: {
             params: z.object({
                 vendor: z.enum(['openai', 'anthropic', 'gemini'])
@@ -293,7 +293,7 @@ export function connectRoutes(app: Fastify) {
     });
 
     app.delete('/v1/connect/:vendor', {
-        preHandler: app.authenticate,
+        preHandler: [app.authenticate, app.requireOwner],
         schema: {
             params: z.object({
                 vendor: z.enum(['openai', 'anthropic', 'gemini'])
@@ -311,7 +311,7 @@ export function connectRoutes(app: Fastify) {
     });
 
     app.get('/v1/connect/tokens', {
-        preHandler: app.authenticate,
+        preHandler: [app.authenticate, app.requireOwner],
         schema: {
             response: {
                 200: z.object({

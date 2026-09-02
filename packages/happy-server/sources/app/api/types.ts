@@ -57,5 +57,6 @@ declare module 'fastify' {
     }
     interface FastifyInstance {
         authenticate: any;
+        requireOwner: any;
     }
 }

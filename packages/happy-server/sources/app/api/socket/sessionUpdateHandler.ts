@@ -6,6 +6,7 @@ import { allocateSessionSeq, allocateUserSeq } from "@/storage/seq";
 import { AsyncLock } from "@/utils/lock";
 import { log } from "@/utils/log";
 import { randomKeyNaked } from "@/utils/randomKeyNaked";
+import { resolveSessionAccess, roleAllows } from "@/app/session/sessionAccess";
 import { Socket } from "socket.io";
 
 export function sessionUpdateHandler(userId: string, socket: Socket, connection: ClientConnection) {
@@ -176,7 +177,7 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
             eventRouter.emitEphemeral({
                 userId,
                 payload: sessionActivity,
-                recipientFilter: { type: 'user-scoped-only' }
+                recipientFilter: { type: 'user-scoped-and-grantees', sessionId: sid }
             });
         } catch (error) {
             log({ module: 'websocket', level: 'error' }, `Error in session-alive: ${error}`);
@@ -192,13 +193,14 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
 
                 log({ module: 'websocket' }, `Received message from socket ${socket.id}: sessionId=${sid}, messageLength=${message.length} bytes, connectionType=${connection.connectionType}, connectionSessionId=${connection.connectionType === 'session-scoped' ? connection.sessionId : 'N/A'}`);
 
-                // Resolve session
-                const session = await db.session.findUnique({
-                    where: { id: sid, accountId: userId }
-                });
-                if (!session) {
+                // Owner or an answer grant (DROVE-388). The message is
+                // stored and emitted under the OWNER's id: the rooms the
+                // CLI and the owner's phone sit in are keyed by it.
+                const access = await resolveSessionAccess(userId, sid);
+                if (!access || !roleAllows(access.role, 'answer')) {
                     return;
                 }
+                const ownerId = access.ownerId;
                 let useLocalId = typeof localId === 'string' ? localId : null;
 
                 // Create encrypted message
@@ -208,7 +210,7 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
                 };
 
                 // Resolve seq
-                const updSeq = await allocateUserSeq(userId);
+                const updSeq = await allocateUserSeq(ownerId);
                 const msgSeq = await allocateSessionSeq(sid);
 
                 // Check if message already exists
@@ -234,7 +236,7 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
                 // Emit new message update to relevant clients
                 const updatePayload = buildNewMessageUpdate(msg, sid, updSeq, randomKeyNaked(12));
                 eventRouter.emitUpdate({
-                    userId,
+                    userId: ownerId,
                     payload: updatePayload,
                     recipientFilter: { type: 'all-interested-in-session', sessionId: sid },
                     skipSenderConnection: connection
@@ -283,7 +285,7 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
             eventRouter.emitEphemeral({
                 userId,
                 payload: sessionActivity,
-                recipientFilter: { type: 'user-scoped-only' }
+                recipientFilter: { type: 'user-scoped-and-grantees', sessionId: sid }
             });
         } catch (error) {
             log({ module: 'websocket', level: 'error' }, `Error in session-end: ${error}`);

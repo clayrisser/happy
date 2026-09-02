@@ -7,6 +7,22 @@ import { randomKeyNaked } from "@/utils/randomKeyNaked";
 import { allocateUserSeq } from "@/storage/seq";
 import { log } from "@/utils/log";
 import { AccountProfile } from "@/types";
+import { Prisma } from "@prisma/client";
+
+// The curve25519 box public key is 32 bytes; anything else is not one.
+const BOX_PUBLIC_KEY_LENGTH = 32;
+
+function decodeBoxPublicKey(base64: string): string | null {
+    const bytes = Buffer.from(base64, 'base64');
+    if (bytes.length !== BOX_PUBLIC_KEY_LENGTH) {
+        return null;
+    }
+    return bytes.toString('hex');
+}
+
+function encodeBoxPublicKey(hex: string | null): string | null {
+    return hex ? Buffer.from(hex, 'hex').toString('base64') : null;
+}
 
 export function accountRoutes(app: Fastify) {
     app.get('/v1/account/profile', {
@@ -20,7 +36,9 @@ export function accountRoutes(app: Fastify) {
                 lastName: true,
                 username: true,
                 avatar: true,
-                githubUser: true
+                githubUser: true,
+                kind: true,
+                contentPublicKey: true
             }
         });
         const connectedVendors = new Set((await db.serviceAccountToken.findMany({ where: { accountId: userId } })).map(t => t.vendor));
@@ -32,8 +50,68 @@ export function accountRoutes(app: Fastify) {
             username: user.username,
             avatar: user.avatar ? { ...user.avatar, url: getPublicUrl(user.avatar.path) } : null,
             github: user.githubUser ? user.githubUser.profile : null,
-            connectedServices: Array.from(connectedVendors)
+            connectedServices: Array.from(connectedVendors),
+            // DROVE-388: which chrome the app draws, and the key an owner
+            // wraps a session key to when it grants this account a session.
+            kind: user.kind,
+            contentPublicKey: encodeBoxPublicKey(user.contentPublicKey)
         });
+    });
+
+    // Register the account's content (box) public key, so an owner can wrap
+    // a session key to it (DROVE-388). Any kind of account may register one;
+    // the signing key never leaves the device and is not this key. A key
+    // already bound to another account is refused: it is the identity a
+    // grant is addressed to, and two accounts must not share one.
+    app.post('/v1/account/content-key', {
+        preHandler: app.authenticate,
+        schema: {
+            body: z.object({
+                contentPublicKey: z.string()
+            })
+        }
+    }, async (request, reply) => {
+        const hex = decodeBoxPublicKey(request.body.contentPublicKey);
+        if (!hex) {
+            return reply.code(400).send({ error: 'content-key-malformed' });
+        }
+        try {
+            await db.account.update({
+                where: { id: request.userId },
+                data: { contentPublicKey: hex }
+            });
+        } catch (error) {
+            if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+                return reply.code(409).send({ error: 'content-key-taken' });
+            }
+            throw error;
+        }
+        return reply.send({ success: true });
+    });
+
+    // Resolve a content public key to the account that registered it: the
+    // owner's share sheet turns a scanned QR into a grantee with this. Owners
+    // only, and it says nothing beyond what the grantee chose to publish.
+    app.get('/v1/account/lookup', {
+        preHandler: [app.authenticate, app.requireOwner],
+        schema: {
+            querystring: z.object({
+                contentPublicKey: z.string()
+            })
+        }
+    }, async (request, reply) => {
+        const hex = decodeBoxPublicKey(request.query.contentPublicKey);
+        if (!hex) {
+            return reply.code(400).send({ error: 'content-key-malformed' });
+        }
+        const account = await db.account.findUnique({
+            where: { contentPublicKey: hex },
+            select: { id: true, kind: true, username: true, firstName: true, lastName: true }
+        });
+        if (!account) {
+            return reply.code(404).send({ error: 'account-not-found' });
+        }
+        return reply.send({ account });
     });
 
     // Get Account Settings API
