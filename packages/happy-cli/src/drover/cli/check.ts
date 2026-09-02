@@ -124,6 +124,10 @@ every drover start in DROVE-261.
 sweep that catches the OTHER failure (a merge that eats a \`;;\`) lives in
 tests/check.bats and \`make lint\`.
 
+A full run also checks bin/drover's OWNER TABLE against libexec/: every file
+has a row, every row has a file, and every node-owned verb is actually routed
+with \`run_node\`. Skipped under -q, so the CLI start path never pays for it.
+
 bin/drover runs this before it dispatches, except for \`drover statusline\`.
 DROVER_SKIP_CHECK=1 bypasses it, which is what you want while you are fixing
 the file it is complaining about.
@@ -144,6 +148,18 @@ Put the \`#\` back. \`sh -n\` will not tell you: a command invocation is valid
 shell, which is the whole reason this check exists.
 
 To run anyway while you fix it:  DROVER_SKIP_CHECK=1 drover ...
+`;
+
+/**
+ * The paragraph the shell cat'd to stderr after the drift lines, blank first
+ * line included, when the owner table and libexec/ disagree.
+ */
+const DRIFT = `
+drover-check: bin/drover's owner table and libexec/ have drifted. Every file in
+libexec/ is either routed to the fork's node CLI (owner=node, with a \`run_node
+<verb>\` line) or owned by the shell file outright (owner=shell, with none). A
+new file with no row is a verb nobody decided about; a node row with no
+run_node is a verb the flip forgot to route.
 `;
 
 type Env = Record<string, string | undefined>;
@@ -246,6 +262,114 @@ export function defaultFiles(root: string): string[] {
     ];
 }
 
+// --- the owner table against libexec/ (DROVE-315) ----------------------------
+//
+// The shell does this in one awk over bin/drover; this is that awk, rule for
+// rule, because the two must REFUSE THE SAME TREES. A table that has drifted
+// from libexec/ is how a verb silently stops being routed, and a checker that
+// only half-agrees is a checker that lets the half it dropped through.
+
+/** `/^drover_owner\(\) \{$/` — the table opens at column 0. */
+const OWNER_OPEN = /^drover_owner\(\) \{$/;
+/** `/^\}$/` — and closes at column 0, which is why the arms inside are indented. */
+const OWNER_CLOSE = /^\}$/;
+/** `/^[[:space:]]*owner=/` — the line that says which side the pending names are on. */
+const OWNER_SET = /^[ \t\v\f\r]*owner=/;
+/** `case`, `esac` and `;;`, which are shell and not verb names. */
+const OWNER_KEYWORD = /^[ \t\v\f\r]*(case|esac|;;)/;
+/** A DISPATCH arm: a bare `verb)` at column 0. The table's own arms are indented. */
+const ARM = /^[a-z][a-z0-9-]*\)$/;
+/** A call site: `run_node <verb> ` — the trailing space is the awk's, and it is
+ *  what keeps the function DEFINITION (which names no verb) out of the set. */
+const RUN_NODE = /^[ \t\v\f\r]*run_node[ \t\v\f\r]+[a-z][a-z0-9-]*[ \t\v\f\r]/;
+/** `/^[a-z][a-z0-9-]*$/` — what counts as a verb name once the punctuation is blanked. */
+const VERB_NAME = /^[a-z][a-z0-9-]*$/;
+
+/** The verb names under libexec/, `drover-` stripped — the awk's `-v files=`. */
+export function libexecVerbs(root: string): string[] {
+    let names: string[];
+    try {
+        names = readdirSync(join(root, 'libexec'));
+    } catch {
+        return [];
+    }
+    return names
+        .filter((n) => n.startsWith('drover-'))
+        .filter((n) => isRegularFile(join(root, 'libexec', n)))
+        .map((n) => n.slice('drover-'.length))
+        .filter((n) => n !== '')
+        .sort();
+}
+
+/**
+ * bin/drover's owner table against the files on disk. Returns one message per
+ * drift, in the awk's two groups: the files with no row first, then everything
+ * the table itself gets wrong. Empty means the tree is consistent.
+ */
+export function ownerDrift(droverText: string, onDiskNames: string[]): string[] {
+    const onDisk = new Set(onDiskNames.filter((n) => n !== ''));
+    const owner = new Map<string, string>();
+    const routed = new Set<string>();
+    const armed = new Set<string>();
+
+    const lines = droverText.split('\n');
+    // A trailing newline is a record separator, not an empty record.
+    if (lines.length && lines[lines.length - 1] === '') lines.pop();
+
+    let tbl = false;
+    let pend: string[] = [];
+    for (const line of lines) {
+        if (OWNER_OPEN.test(line)) {
+            tbl = true;
+            continue;
+        }
+        if (tbl && OWNER_CLOSE.test(line)) {
+            tbl = false;
+            continue;
+        }
+        if (tbl && OWNER_SET.test(line)) {
+            // The names accumulated since the last owner= line belong to this
+            // side. `owner=` with nothing after it is the `*)` arm, which
+            // claims nobody — but it still clears the pending list.
+            const o = line.replace(OWNER_SET, '');
+            if (o !== '') for (const v of pend) owner.set(v, o);
+            pend = [];
+            continue;
+        }
+        if (tbl && OWNER_KEYWORD.test(line)) continue;
+        if (tbl) {
+            for (const w of line.replace(/[\\)|]/g, ' ').split(/[ \t\v\f\r]+/)) {
+                if (VERB_NAME.test(w)) pend.push(w);
+            }
+            continue;
+        }
+        if (ARM.test(line)) armed.add(line.slice(0, -1));
+        if (RUN_NODE.test(line)) {
+            const w = line.split(/[ \t\v\f\r]+/);
+            const i = w.indexOf('run_node');
+            if (i >= 0 && w[i + 1] !== undefined) routed.add(w[i + 1]);
+        }
+    }
+
+    const out: string[] = [];
+    for (const v of [...onDisk].sort()) {
+        if (!owner.has(v)) out.push(`libexec/drover-${v} has no row in bin/drover drover_owner()`);
+    }
+    for (const [v, o] of owner) {
+        if (!onDisk.has(v)) out.push(`drover_owner() names ${v}, but libexec/drover-${v} is gone`);
+        if (o === 'node' && !routed.has(v)) {
+            out.push(`${v} is owned by node but nothing calls run_node ${v} \u2014 it is not routed`);
+        }
+        if (o === 'shell' && routed.has(v)) {
+            out.push(`${v} is owned by shell but bin/drover calls run_node ${v}`);
+        }
+        if (o === 'shell' && !armed.has(v)) {
+            out.push(`${v} is owned by shell but bin/drover has no ${v}) arm \u2014 it falls through to the fork CLI`);
+        }
+    }
+    return out;
+}
+
 export interface CheckOptions {
     /** The environment; process.env unless a test says otherwise. */
     env?: Env;
@@ -290,11 +414,15 @@ export async function run(args: string[], opts: CheckOptions = {}): Promise<numb
     }
 
     let files: string[];
+    // The checkout the second sweep reads bin/drover from. Named files never
+    // reach it: that run is about those files.
+    let root: string | null = null;
     if (named !== null) {
         files = named;
     } else {
         const env = opts.env ?? process.env;
-        files = defaultFiles(droverEnv(env, opts.home ?? homedir()).droverDir);
+        root = droverEnv(env, opts.home ?? homedir()).droverDir;
+        files = defaultFiles(root);
         if (files.length === 0) {
             if (!quiet) process.stdout.write('drover check: nothing to read\n');
             return 0;
@@ -328,6 +456,30 @@ export async function run(args: string[], opts: CheckOptions = {}): Promise<numb
         process.stderr.write(WHY);
         return 1;
     }
+
+    // THE SECOND SWEEP. Skipped when files were named and under -q, which is
+    // the CLI start path — this is a repo-shape lint, not a guard against a
+    // tree that would hang on load.
+    if (root !== null && !quiet) {
+        const droverPath = join(root, 'bin', 'drover');
+        let droverText: string | null = null;
+        try {
+            droverText = readFileSync(droverPath, 'utf8');
+        } catch {
+            // No bin/drover, or unreadable: the shell's `[ -f ]` skipped it too.
+        }
+        // A throwaway tree in the bats suite holds a stub bin/drover with no
+        // table in it. Nothing to be consistent with there, so say nothing.
+        if (droverText !== null && /^drover_owner\(\) \{$/m.test(droverText)) {
+            const drift = ownerDrift(droverText, libexecVerbs(root));
+            if (drift.length > 0) {
+                for (const msg of drift) process.stderr.write(`drover-check: ${msg}\n`);
+                process.stderr.write(DRIFT);
+                return 1;
+            }
+        }
+    }
+
     if (!quiet) process.stdout.write('drover check: headers clean\n');
     return 0;
 }

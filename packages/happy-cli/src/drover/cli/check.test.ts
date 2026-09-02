@@ -182,8 +182,8 @@ function proseOnly(into: string = join(work, 'prose')): string {
  * A throwaway tree: the real scripts under a directory of this test's own, so
  * a run against the DEFAULT list never reads the checkout Clay is working in.
  */
-function fakeTree(): string {
-    const tree = join(work, 'tree');
+function fakeTree(name = 'tree'): string {
+    const tree = join(work, name);
     for (const d of ['bin', 'libexec', 'lib', 'etc', 'adapters', 'clients']) mkdirSync(join(tree, d), { recursive: true });
     const copy = (from: string, to: string, suffix?: string): void => {
         for (const n of readdirSync(from)) {
@@ -522,6 +522,56 @@ describe.skipIf(!haveTree || !existsSync(shellVerb))('drover check — prints wh
             expect(n.code, args.join(' ')).toBe(s.code);
             expect(n.out, args.join(' ')).toBe(s.out);
             expect(n.err, args.join(' ')).toBe(s.err);
+        }
+    });
+
+    it('agrees on a DRIFTED owner table, message for message (DROVE-315)', async () => {
+        // The second sweep, which only a full run reaches. Each tree carries
+        // exactly ONE drift, because the awk walks its arrays in hash order
+        // and a tree with two failures has no defined line ORDER to compare —
+        // the messages are what must agree, and one per tree is how you pin
+        // them without pinning something awk never promised.
+        const cases: Array<[string, (tree: string) => void]> = [
+            // A new file nobody decided about.
+            ['no-row', (tree) => {
+                writeFileSync(join(tree, 'libexec', 'drover-zzz'), '#!/bin/sh\n# doc\nexit 0\n', { mode: 0o755 });
+            }],
+            // A row whose file is gone.
+            ['gone', (tree) => {
+                rmSync(join(tree, 'libexec', 'drover-todos'));
+            }],
+            // A node-owned verb the flip forgot to route.
+            ['unrouted', (tree) => {
+                const f = join(tree, 'bin', 'drover');
+                const text = readFileSync(f, 'utf8');
+                const line = text.split('\n').find((l) => /^\s*run_node providers\s/.test(l));
+                expect(line, 'the providers call site is what this drifts').toBeDefined();
+                writeFileSync(f, text.replace(`${line}\n`, ''), { mode: 0o755 });
+                chmodSync(f, 0o755);
+            }],
+        ];
+
+        for (const [name, drift] of cases) {
+            const tree = realpathSync(fakeTree(`drift-${name}`));
+            drift(tree);
+            const treeVerb = join(tree, 'libexec', 'drover-check');
+            const s2 = shell(treeVerb, []);
+            const n = await capture([], treeEnv(tree));
+            // It REFUSED, and said so on stderr — not a silent pass.
+            expect(s2.code, `${name}: the shell must refuse a drifted table`).toBe(1);
+            expect(s2.err, name).toContain('have drifted');
+            expect(n.code, name).toBe(s2.code);
+            expect(n.out, name).toBe(s2.out);
+            expect(n.err, name).toBe(s2.err);
+
+            // ...and -q still says nothing, on both, because the start path
+            // does not pay for this sweep.
+            const sq = shell(treeVerb, ['-q']);
+            const nq = await capture(['-q'], treeEnv(tree));
+            expect(sq.code, `${name} -q`).toBe(0);
+            expect(nq.code, `${name} -q`).toBe(sq.code);
+            expect(nq.out, `${name} -q`).toBe(sq.out);
+            expect(nq.err, `${name} -q`).toBe(sq.err);
         }
     });
 
