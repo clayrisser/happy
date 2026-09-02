@@ -4,11 +4,15 @@ import { Platform, type StyleProp, type ViewStyle } from 'react-native';
 export interface LongPressCopyableProps {
     children: React.ReactNode;
     /**
-     * The content fills its row (an agent turn) rather than hugging its own
-     * width (a user bubble). SwiftUI has to be told which: a hosted view that
-     * sizes itself to its content cannot also resolve a percentage width.
+     * The caller's own layout, and on iOS the only place the fill-versus-hug
+     * decision is made. It rides INSIDE the SwiftUI host, which stretches
+     * unconditionally: a `measured` host has a real width from RN style and
+     * the content hugs its own width within it (Rule 3, `nativeControls.ts`).
+     *
+     * There was a `fill` prop here for the opposite arrangement — a host that
+     * sized itself to its content and so could not resolve a percentage width.
+     * `RNHostView` removed the reason for it (DROVE-154).
      */
-    fill?: boolean;
     style?: StyleProp<ViewStyle>;
     text: string;
 }
