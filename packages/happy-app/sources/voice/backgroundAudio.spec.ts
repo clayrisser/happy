@@ -48,6 +48,7 @@ describe('background reading', () => {
         });
         reader.setEnabled(true);
         reader.focus('s1');
+        reader.setSessionEnabled('s1', true);
     });
 
     it('treats only `active` as the foreground', () => {

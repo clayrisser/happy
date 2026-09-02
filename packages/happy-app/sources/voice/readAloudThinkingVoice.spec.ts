@@ -142,6 +142,7 @@ function realReader(engine: SpeechEngine, speakThinking?: boolean): ReadAloudRea
     });
     reader.setEnabled(true);
     reader.focus('s1');
+    reader.setSessionEnabled('s1', true);
     return reader;
 }
 

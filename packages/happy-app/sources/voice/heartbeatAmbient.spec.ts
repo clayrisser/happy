@@ -82,6 +82,7 @@ describe('the heartbeat is ambient, the earcon is an event', () => {
         );
         reader.setEnabled(true);
         reader.focus('s1');
+        reader.setSessionEnabled('s1', true);
         mixer.setState({ reading: true, working: true, pendingKinds: [], agents: 0 });
     });
 

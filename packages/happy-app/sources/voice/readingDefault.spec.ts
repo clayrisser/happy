@@ -19,6 +19,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  * `react-native` and `drover-speech` are mocked the way the other voice specs
  * mock them: vitest reaches the local native module through an alias but not
  * through autolinking.
+ *
+ * RETARGETED BY DROVE-386, AND THE REASON MATTERS MORE THAN THE DIFF. Every
+ * assertion below used to be written against "the setting is what a session
+ * nobody has touched inherits", so "the setting reached the reader" and "a
+ * session started talking" were the same observation and the tests measured
+ * the second to prove the first. Clay's rule splits them: the persisted
+ * setting is a CAPABILITY, and arming is per session and his. So each test
+ * here now measures the two separately — the capability landing on the reader
+ * with no screen mounted (DROVE-301's actual acceptance criterion, untouched),
+ * and a session being armed by hand afterwards putting the card up.
+ *
+ * NOTHING IS WEAKENED BY THAT. The publishes are still asserted exactly, the
+ * cold-launch teardown DROVE-301 was filed for is still refused, and the one
+ * test whose SENSE is inverted ("a cold launch comes up armed") says so in its
+ * own body.
  */
 
 const h = vi.hoisted(() => ({
@@ -126,8 +141,9 @@ describe('the read-aloud setting with no session screen mounted (DROVE-301)', ()
     });
 
     /**
-     * App boot, in the order readAloudService.ts does it: the default is armed
-     * from the persisted setting BEFORE the audio wiring publishes anything.
+     * App boot, in the order readAloudService.ts does it: the capability lands
+     * on the reader from the persisted setting BEFORE the audio wiring
+     * publishes anything.
      */
     function launch(persisted: boolean): void {
         settings = new FakeSettings(persisted);
@@ -139,15 +155,39 @@ describe('the read-aloud setting with no session screen mounted (DROVE-301)', ()
         stopAudio = startBackgroundAudio(reader);
     }
 
-    it('turning it ON from settings holds the session and puts a card up', () => {
-        // AC 1. The bug: this wrote the local setting and stopped there,
-        // because the only `setEnabled` caller was an effect on a mounted
-        // SessionView. Nothing here mounts one.
+    it('turning it ON from settings reaches the reader with no screen mounted, and arms nothing', () => {
+        // AC 1, WHICH IS STILL THE POINT OF DROVE-301. The bug it was filed
+        // for is that this wrote the local setting and stopped there, because
+        // the only `setEnabled` caller was an effect on a mounted SessionView.
+        // Nothing here mounts one, and the setting still lands.
+        //
+        // What changed is the SECOND half of the old assertion. The setting
+        // arriving used to be enough to hold the session and put a card up,
+        // because an un-switched session inherited it. It no longer does
+        // (DROVE-386): the capability landing is a fact about the phone, not a
+        // command to start talking.
         launch(false);
         h.hold = [];
         h.reading = [];
 
         settings.write(true);
+
+        expect(reader.readingReport().defaultEnabled).toBe(true);
+        expect(reader.isEnabled).toBe(false);
+        expect(h.hold).not.toContain(true);
+        expect(h.reading).not.toContain('reading');
+    });
+
+    it('a session armed by hand afterwards holds the session and puts a card up, still with no screen', () => {
+        // The other half of AC 1, and the half that proves the path is whole:
+        // the card comes up from a module-scope reader with no SessionView
+        // anywhere, exactly as DROVE-301 required. Only the trigger moved,
+        // from "the setting arrived" to "he armed this session".
+        launch(true);
+        h.hold = [];
+        h.reading = [];
+
+        reader.setSessionEnabled('s1', true);
 
         expect(reader.isEnabled).toBe(true);
         expect(h.hold).toEqual([true]);
@@ -156,6 +196,7 @@ describe('the read-aloud setting with no session screen mounted (DROVE-301)', ()
 
     it('turning it OFF from settings releases the session and clears the card', () => {
         launch(true);
+        reader.setSessionEnabled('s1', true);
         h.hold = [];
         h.reading = [];
 
@@ -164,18 +205,33 @@ describe('the read-aloud setting with no session screen mounted (DROVE-301)', ()
         expect(reader.isEnabled).toBe(false);
         expect(h.hold).toEqual([false]);
         expect(h.reading).toEqual(['off']);
+        // Off is still the kill, per session as well as globally (DROVE-289).
+        expect(reader.isSessionEnabled('s1')).toBe(false);
     });
 
-    it('a cold launch with it persisted ON never publishes off', () => {
-        // AC 2, and the sharper half of the ticket. `setReadingState('off')` is
-        // not a missed publish, it is an ACTIVE teardown in native: it tears
-        // down the remote commands and clears the now-playing card. The app
-        // used to do that to itself at launch because no screen was up yet.
+    it('a cold launch with it persisted ON comes up with NO session reading (DROVE-386)', () => {
+        // THIS TEST'S SENSE IS INVERTED AND HERE IS WHY. It used to read "a
+        // cold launch with it persisted ON never publishes off", because
+        // `setReadingState('off')` is an ACTIVE teardown in native — it tears
+        // down the remote commands and clears the now-playing card — and
+        // DROVE-301 was filed because the app did that to itself at launch
+        // while no screen was up.
+        //
+        // Clay's rule makes the teardown CORRECT at launch: "even if it was
+        // reading, if I close the app and reopen, it shouldn't". Nothing is
+        // reading after a relaunch, so there is nothing for the lock screen to
+        // show and publishing 'off' is the honest state rather than a
+        // self-inflicted dismantling. The failure DROVE-301 named — a card
+        // that should exist being torn down — is still refused, by the test
+        // above: arm a session and the card comes up with no screen mounted.
         launch(true);
 
-        expect(h.reading).toEqual(['reading']);
-        expect(h.reading).not.toContain('off');
-        expect(h.hold).toEqual([true]);
+        expect(h.reading).toEqual(['off']);
+        expect(h.hold).not.toContain(true);
+        // And the capability DID land, so this is a silent phone rather than
+        // a phone that never heard the setting. That distinction is the whole
+        // of DROVE-301 and it is what this line keeps.
+        expect(reader.readingReport().defaultEnabled).toBe(true);
     });
 
     it('a cold launch with it persisted OFF publishes off once, and holds nothing', () => {
@@ -204,25 +260,29 @@ describe('the read-aloud setting with no session screen mounted (DROVE-301)', ()
         expect(h.reading).toEqual([]);
     });
 
-    it('keeps DROVE-297: a session switched off stays off when the default comes on', () => {
-        // The default is a DEFAULT. Turning the master switch on from settings
-        // must not re-arm a session the user explicitly silenced.
+    it('the capability coming on re-arms nothing, the session he silenced included', () => {
+        // Was "a session switched off stays off when the default comes on",
+        // which asserted the silenced session stayed off and any OTHER session
+        // came on. The first clause is unchanged and the second is inverted:
+        // no session comes on, because there is no longer a default to inherit
+        // (DROVE-386). Turning the capability on is him making the feature
+        // available, not him asking for audio.
         launch(false);
         reader.setSessionEnabled('quiet', false);
 
         settings.write(true);
 
         expect(reader.isSessionEnabled('quiet')).toBe(false);
-        expect(reader.isSessionEnabled('other')).toBe(true);
+        expect(reader.isSessionEnabled('other')).toBe(false);
     });
 
-    it('keeps DROVE-226: arming at launch reads no history', async () => {
-        // The one thing that sounds like it should break. A cold launch comes
-        // up ARMED and SILENT: `defaultEnabled` decides whether the reader may
-        // speak, and what it speaks comes from a timeline that is empty until
-        // sync feeds it forward.
+    it('keeps DROVE-226: a session armed at launch reads no history', async () => {
+        // The one thing that sounds like it should break. An armed session is
+        // ARMED and SILENT: the switch decides whether the reader may speak,
+        // and what it speaks comes from a timeline that is empty until sync
+        // feeds it forward.
         launch(true);
-        reader.focus('s1');
+        reader.setSessionEnabled('s1', true);
         await settle();
 
         expect(reader.isEnabled).toBe(true);

@@ -60,6 +60,7 @@ describe('a cue never cuts, pauses or delays speech', () => {
         );
         reader.setEnabled(true);
         reader.focus('s1');
+        reader.setSessionEnabled('s1', true);
         mixer = new AudioCueMixer({
             now: () => now,
             play: (id) => { played.push(id); },

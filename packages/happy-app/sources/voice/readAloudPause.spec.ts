@@ -41,6 +41,7 @@ describe('pause and resume', () => {
         });
         reader.setEnabled(true);
         reader.focus('s1');
+        reader.setSessionEnabled('s1', true);
     });
 
     it('starts unpaused', () => {
@@ -98,6 +99,7 @@ describe('pause and resume', () => {
         });
         held.setEnabled(true);
         held.focus('s1');
+        held.setSessionEnabled('s1', true);
         held.onMessages('s1', [prose('m1', 'One. Two. Three. Four.', 1)]);
         await settle();
         expect(said).toEqual(['One.']);
@@ -133,6 +135,7 @@ describe('pause and resume', () => {
         });
         held.setEnabled(true);
         held.focus('s1');
+        held.setSessionEnabled('s1', true);
         held.onMessages('s1', [prose('m1', 'One. Two. Three. Four.', 1)]);
         await settle();
         expect(said).toEqual(['One.']);
@@ -166,6 +169,7 @@ describe('pause and resume', () => {
         });
         held.setEnabled(true);
         held.focus('s1');
+        held.setSessionEnabled('s1', true);
         held.onMessages('s1', [prose('m1', 'One. Two.', 1)]);
         await settle();
         expect(said).toEqual(['One.']);
@@ -188,6 +192,7 @@ describe('pause and resume', () => {
         });
         held.setEnabled(true);
         held.focus('s1');
+        held.setSessionEnabled('s1', true);
         held.onMessages('s1', [prose('m1', 'One. Two.', 1)]);
         await settle();
         const before = stops;
@@ -207,6 +212,7 @@ describe('pause and resume', () => {
         });
         held.setEnabled(true);
         held.focus('s1');
+        held.setSessionEnabled('s1', true);
         held.onMessages('s1', [prose('m1', 'One. Two.', 1)]);
         await settle();
         expect(held.playhead?.sentence).toBe('One.');
@@ -235,6 +241,7 @@ describe('pause is not off, and off is not pause', () => {
         });
         reader.setEnabled(true);
         reader.focus('s1');
+        reader.setSessionEnabled('s1', true);
     });
 
     it('a pause leaves read-aloud ON, which is what keeps the session held', () => {
@@ -262,6 +269,9 @@ describe('pause is not off, and off is not pause', () => {
         reader.setPaused(true);
         reader.setEnabled(false);
         reader.setEnabled(true);
+        // The kill took the session's switch with it, so switching the
+        // capability back on is not enough to speak again (DROVE-386).
+        reader.setSessionEnabled('s1', true);
         expect(reader.isPaused).toBe(false);
         // Nothing owed from before the toggle: interrupt moved the cursor to
         // the end and the pause went with the queue it was holding.
@@ -322,6 +332,7 @@ describe('the three surfaces share one state', () => {
         });
         reader.setEnabled(true);
         reader.focus('s1');
+        reader.setSessionEnabled('s1', true);
         reader.addTransportListener(() => { flips += 1; });
     });
 
@@ -383,6 +394,7 @@ describe('pause beside the other things that silence the reader', () => {
         });
         reader.setEnabled(true);
         reader.focus('s1');
+        reader.setSessionEnabled('s1', true);
     });
 
     it('a mic release does not resume a pause (DROVE-143)', async () => {

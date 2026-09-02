@@ -70,6 +70,7 @@ describe('seeking to a double-tapped sentence (DROVE-163)', () => {
         const reader = new ReadAloudReader(engine);
         reader.setEnabled(true);
         reader.focus('s1');
+        reader.setSessionEnabled('s1', true);
         return { reader, engine };
     }
 

@@ -72,6 +72,12 @@ describe('per-session read position across a switch (DROVE-289)', () => {
         engine = new FakeEngine();
         reader = new ReadAloudReader(engine);
         reader.setEnabled(true);
+        // BOTH SESSIONS ARMED BY HAND (DROVE-386). This file is about the
+        // position each one holds across a switch, and since arming no longer
+        // comes free with the capability, a switch to an unarmed s2 would move
+        // no voice at all and there would be nothing to hold.
+        reader.setSessionEnabled('s1', true);
+        reader.setSessionEnabled('s2', true);
         reader.focus('s1');
     });
 
@@ -210,7 +216,11 @@ describe('per-session read position across a switch (DROVE-289)', () => {
 
         // Coming back on is a START (DROVE-233): the old position is gone,
         // nothing old is resumed, and only new content is read (DROVE-226).
+        // Re-armed by hand, because the kill took the per-session switch with
+        // the position and turning the capability back on re-arms nothing
+        // (DROVE-386).
         reader.setEnabled(true);
+        reader.setSessionEnabled('s1', true);
         const before = engine.spoken.length;
         reader.focus('s1');
         await settle();

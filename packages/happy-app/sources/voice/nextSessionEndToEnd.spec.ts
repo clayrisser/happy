@@ -79,9 +79,15 @@ describe('a double press hands the voice to the next reading-enabled session', (
         order = [];
         engine = new FakeEngine();
         reader = new ReadAloudReader(engine);
-        // The master default, which DROVE-297 makes a default rather than a
-        // command: every session is armed until he switches one off.
+        // The capability is on and BOTH SESSIONS ARE ARMED BY HAND (DROVE-386).
+        // This used to lean on the master default arming everything, which is
+        // the inheritance DROVE-386 removed. The double press walks the armed
+        // sessions (DROVE-300) and there have to be two of them for a ring to
+        // have a next, so the spec says which two rather than inheriting them.
         reader.setEnabled(true);
+        reader.setSessionEnabled('s1', true);
+        reader.setSessionEnabled('s2', true);
+        reader.setSessionEnabled('s3', true);
         reader.visit('s1');
         sessions = ['s1', 's2'];
         let listener: ((command: RemoteCommand) => void) | null = null;

@@ -112,6 +112,7 @@ describe('a session of him doing things (DROVE-179)', () => {
         const reader = new ReadAloudReader(engine);
         reader.setEnabled(true);
         reader.focus('s1');
+        reader.setSessionEnabled('s1', true);
         // Listening starts after the session is picked up, so the list below
         // is only what HE did.
         const captureStops: ReadAloudInterruption[] = [];
@@ -190,6 +191,7 @@ describe('a session of him doing things (DROVE-179)', () => {
         const reader = new ReadAloudReader(engine);
         reader.setEnabled(true);
         reader.focus('s1');
+        reader.setSessionEnabled('s1', true);
         reader.onMessages('s1', [agentText('m1', reply, 10)]);
         await settle();
         const before = engine.spoken.length;
@@ -211,6 +213,7 @@ describe('a session of him doing things (DROVE-179)', () => {
         const reader = new ReadAloudReader(engine);
         reader.setEnabled(true);
         reader.focus('s1');
+        reader.setSessionEnabled('s1', true);
         reader.onMessages('s1', [agentText('m1', reply, 10)]);
         await settle();
 
@@ -226,6 +229,7 @@ describe('a session of him doing things (DROVE-179)', () => {
             const reader = new ReadAloudReader(engine);
             reader.setEnabled(true);
             reader.focus('s1');
+            reader.setSessionEnabled('s1', true);
             reader.onMessages('s1', [agentText('m1', reply, 10)]);
             await settle();
 
@@ -240,6 +244,7 @@ describe('a session of him doing things (DROVE-179)', () => {
         const reader = new ReadAloudReader(engine);
         reader.setEnabled(true);
         reader.focus('s1');
+        reader.setSessionEnabled('s1', true);
         reader.onMessages('s1', [agentText('m1', reply, 10)]);
         await settle();
 
@@ -247,6 +252,7 @@ describe('a session of him doing things (DROVE-179)', () => {
         // session taking focus does stop the old reply, and the voice reads
         // the new session instead of falling silent.
         reader.focus('s2');
+        reader.setSessionEnabled('s2', true);
         await settle();
         expect(reader.focusedSessionId).toBe('s2');
 
@@ -262,6 +268,7 @@ describe('a session of him doing things (DROVE-179)', () => {
         const reader = new ReadAloudReader(engine);
         reader.setEnabled(true);
         reader.focus('s1');
+        reader.setSessionEnabled('s1', true);
         reader.onMessages('s1', [agentText('m1', reply, 10)]);
         await settle();
 
@@ -275,6 +282,7 @@ describe('a session of him doing things (DROVE-179)', () => {
         const reader = new ReadAloudReader(engine);
         reader.setEnabled(true);
         reader.focus('s1');
+        reader.setSessionEnabled('s1', true);
         const captureStops: ReadAloudInterruption[] = [];
         reader.addInterruptListener((reason) => captureStops.push(reason));
         reader.onMessages('s1', [agentText('m1', reply, 10)]);

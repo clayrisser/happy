@@ -87,6 +87,7 @@ describe('a double tap on a sentence of a rendered reply (DROVE-195, DROVE-235)'
         const reader = new ReadAloudReader(engine);
         reader.setEnabled(true);
         reader.focus('s1');
+        reader.setSessionEnabled('s1', true);
         return { reader, engine };
     }
 

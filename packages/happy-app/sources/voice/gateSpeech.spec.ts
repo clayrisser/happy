@@ -153,6 +153,7 @@ describe('a gate in the reader', () => {
         });
         reader.setEnabled(true);
         reader.focus('s1');
+        reader.setSessionEnabled('s1', true);
     });
 
     it('finishes the sentence in flight, then says the gate ahead of the rest', async () => {

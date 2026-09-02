@@ -144,10 +144,18 @@ export function readingSessionArmed(state: ReadingSessionState): boolean {
  * asks and reports rather than keeping a picture of its own that two terminals
  * could race into disagreement.
  *
- * `defaultEnabled` is here for the terminal's third edge case: reading being
- * off by default is a thing to REPORT, not to quietly fix. Enabling audio on a
- * phone in his pocket from a Mac is a surprise, and surprises with audio are
+ * `defaultEnabled` is here for the terminal's third edge case: read-aloud being
+ * off on the phone is a thing to REPORT, not to quietly fix. Enabling audio on
+ * a phone in his pocket from a Mac is a surprise, and surprises with audio are
  * the thing he has complained about all the way through this area.
+ *
+ * ITS NAME OUTLIVED ITS MEANING, and the wire keeps the name on purpose. It
+ * was what an un-switched session INHERITED; since DROVE-386 it is only
+ * whether the phone may read at all, because nothing is inherited any more —
+ * a session is armed by his thumb or by `drover read <session>`, and by
+ * nothing else. `drover read` already printed it as "off on the phone" rather
+ * than as a default, so the terminal's reading of this field never changed
+ * and renaming it would break the CLI to fix a comment.
  */
 export interface ReadingReport {
     /** The session actually speaking or holding a place. Null when none is. */
@@ -156,6 +164,6 @@ export interface ReadingReport {
     readonly state: ReadingSessionState;
     /** The sentence at the synthesiser, or null between two of them. */
     readonly sentence: string | null;
-    /** Does a session nobody has switched read at all? */
+    /** May this phone read at all? The persisted setting (DROVE-386). */
     readonly defaultEnabled: boolean;
 }

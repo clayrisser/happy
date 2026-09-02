@@ -160,6 +160,7 @@ describe('a pause silences the cues too', () => {
         );
         reader.setEnabled(true);
         reader.focus(session);
+        reader.setSessionEnabled(session, true);
         audioCues.attach(reader);
     });
 

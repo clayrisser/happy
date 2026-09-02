@@ -58,6 +58,7 @@ describe('ReadAloudReader', () => {
         reader = new ReadAloudReader(engine);
         reader.setEnabled(true);
         reader.focus('s1');
+        reader.setSessionEnabled('s1', true);
     });
 
     it('speaks assistant prose one sentence at a time', async () => {
@@ -241,6 +242,7 @@ describe('ReadAloudReader', () => {
             const other = new ReadAloudReader(flaky, { retryDelayMs: 10 });
             other.setEnabled(true);
             other.focus('s1');
+            other.setSessionEnabled('s1', true);
             other.onMessages('s1', [agentText('m1', 'One. Two.')]);
             await vi.advanceTimersByTimeAsync(1);
 
@@ -292,6 +294,7 @@ describe('ReadAloudReader', () => {
             const held = new ReadAloudReader(engine, { holdMs: 500 });
             held.setEnabled(true);
             held.focus('s1');
+            held.setSessionEnabled('s1', true);
             held.onMessages('s1', [agentText('m1', 'Almost there')]);
             await settle();
             expect(engine.spoken).toEqual([]);
@@ -308,6 +311,7 @@ describe('ReadAloudReader', () => {
             const held = new ReadAloudReader(engine, { holdMs: 500 });
             held.setEnabled(true);
             held.focus('s1');
+            held.setSessionEnabled('s1', true);
             held.onMessages('s1', [agentText('m1', 'Almost there')]);
             held.interrupt('call-started');
             vi.advanceTimersByTime(1000);
@@ -343,6 +347,7 @@ describe('ReadAloudReader', () => {
             });
             made.setEnabled(true);
             made.focus('s1');
+            made.setSessionEnabled('s1', true);
             return made;
         }
 
@@ -853,7 +858,9 @@ describe('ReadAloudReader interrupt listeners', () => {
     it('hears focus moving, losing focus, and the toggle going off', () => {
         reader.setEnabled(true);
         reader.focus('s1');
+        reader.setSessionEnabled('s1', true);
         reader.focus('s2');
+        reader.setSessionEnabled('s2', true);
         reader.blur('s2');
         reader.setEnabled(false);
         expect(heard).toEqual(['switched-session', 'switched-session', 'left-session', 'toggled-off']);
@@ -917,6 +924,7 @@ describe('the transcript as a playhead (DROVE-114, DROVE-146)', () => {
         reader = new ReadAloudReader(engine);
         reader.setEnabled(true);
         reader.focus('s1');
+        reader.setSessionEnabled('s1', true);
     });
 
     it('reads on from a tap further down', async () => {
@@ -1020,6 +1028,7 @@ describe('the transcript as a playhead (DROVE-114, DROVE-146)', () => {
         });
         talk.setEnabled(true);
         talk.focus('s1');
+        talk.setSessionEnabled('s1', true);
         talk.onMessages('s1', [agentText('m1', 'Streaming sentence 1. Streaming sentence 2.', 1)]);
         await settle();
         clock += 3000;
@@ -1073,6 +1082,7 @@ describe('a sentence is never spoken twice on its own (DROVE-126)', () => {
         reader = new ReadAloudReader(engine);
         reader.setEnabled(true);
         reader.focus('s1');
+        reader.setSessionEnabled('s1', true);
     });
 
     it('says each sentence exactly once across a stop and new content', async () => {

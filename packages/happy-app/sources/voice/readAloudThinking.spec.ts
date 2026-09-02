@@ -92,6 +92,7 @@ describe('reading the thinking', () => {
         );
         built.setEnabled(true);
         built.focus('s1');
+        built.setSessionEnabled('s1', true);
         return built;
     }
 

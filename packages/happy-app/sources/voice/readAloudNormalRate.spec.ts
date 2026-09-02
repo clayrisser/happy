@@ -110,6 +110,7 @@ function realReader(engine: SpeechEngine, clock: () => number, running: () => bo
     });
     reader.setEnabled(true);
     reader.focus('s1');
+    reader.setSessionEnabled('s1', true);
     return reader;
 }
 

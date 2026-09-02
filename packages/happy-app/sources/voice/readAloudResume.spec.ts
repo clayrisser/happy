@@ -86,7 +86,17 @@ describe('read-aloud resumes across a restart (DROVE-193)', () => {
         );
         readers.push(reader);
         reader.setEnabled(true);
-        if (sessionId !== null) reader.focus(sessionId);
+        if (sessionId !== null) {
+            reader.focus(sessionId);
+            // ARMED BY HAND, EVERY LAUNCH (DROVE-386). This is the relaunch
+            // test, so it is the one place the new rule is most visible: the
+            // persisted setting comes back on, and the session does NOT come
+            // back armed. What survives a relaunch is the read POSITION on the
+            // disk (DROVE-193), which is what these tests are about; the
+            // arming is his to redo, and `launch` doing it explicitly is the
+            // honest spelling of "and then he turned this session on again".
+            reader.setSessionEnabled(sessionId, true);
+        }
         return reader;
     }
 
