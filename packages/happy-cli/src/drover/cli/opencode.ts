@@ -25,22 +25,31 @@
  *   * No build step. The bridge and the bus are cattle-drover's own node;
  *     nothing in the fork's dist is involved.
  *
- * WHY THIS ONE STILL SPAWNS. Every other harness ends by handing argv to a
- * runner that lives in THIS process. OpenCode's does not exist here: the pane
- * must BE the OpenCode TUI, and the bridge must be its SIBLING rather than its
- * child, so that ctrl-c, resize and the pane's own lifetime behave exactly as
- * an unwrapped opencode would. So this verb execs the real binary and detaches
- * the bridge beside it, which is what the shell did and what the shape
- * requires — not a node wrapper around a shell wrapper.
+ * WHY THIS ONE STILL SPAWNS. A headless runner lives in THIS process for the
+ * harnesses that have one. OpenCode's does not exist here and must not: the
+ * pane must BE the OpenCode TUI, and the bridge must be its SIBLING rather than
+ * its child, so that ctrl-c, resize and the pane's own lifetime behave exactly
+ * as an unwrapped opencode would. So this verb runs the real binary and
+ * detaches the bridge beside it, which is what the shell did and what the
+ * shape requires — not a node wrapper around a shell wrapper.
+ *
+ * AND THE BRIDGE IS TOLD THE TUI'S PID (DROVE-377). Measured on Clay's machine:
+ * this verb was killed, `opencode --port 50249` stayed alive with parent 1 and
+ * kept answering its API, and the phone kept a green row for a pane that was
+ * gone. harness/paneTui.ts forwards SIGTERM and SIGHUP to the child so the
+ * launcher cannot die without it, and the bridge reaps a TUI reparented to pid
+ * 1 or whose pane has vanished, then ends the row. Both, because one of them
+ * is always the one that did not fire.
  */
 
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, openSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { homedir } from 'node:os';
 import { delimiter, join } from 'node:path';
 
 import { droverEnv } from './env';
+import { runPaneTui, type TuiStarted } from './harness/paneTui';
 import { droverTmuxHavePane, type Env } from './harness/tmuxEntry';
 import { defaultIo, reenterLine, runEnter, type EnterIo } from './harness/tmuxEnter';
 
@@ -87,8 +96,8 @@ export interface OpencodeIo {
     freePort: () => Promise<number | null>;
     /** Start the bridge as a SIBLING, detached, logging to a file. */
     startBridge: (script: string, argv: string[], logFile: string, env: Env) => void;
-    /** Become the TUI. Answers with its exit code. */
-    execTui: (bin: string, argv: string[], env: Env) => number;
+    /** Become the TUI. `started(pid)` fires once it exists. Answers with its exit code. */
+    execTui: (bin: string, argv: string[], env: Env, started?: TuiStarted) => Promise<number>;
     enter: (argv: string[]) => Promise<number>;
 }
 
@@ -132,10 +141,7 @@ export function defaultOpencodeIo(): OpencodeIo {
             });
             child.unref();
         },
-        execTui: (bin, argv, env) => {
-            const r = spawnSync(bin, argv, { stdio: 'inherit', env: env as NodeJS.ProcessEnv });
-            return r.status ?? 1;
-        },
+        execTui: (bin, argv, env, started) => runPaneTui(bin, argv, env, started),
         enter: async (argv) => {
             const { droverDir } = droverEnv(process.env, homedir());
             return runEnter(argv, io, join(droverDir, 'libexec'));
@@ -245,18 +251,23 @@ export async function run(args: string[], io: OpencodeIo = defaultOpencodeIo()):
         // Best effort, as `mkdir -p ... || true` was.
     }
 
-    // The bridge starts FIRST and waits for the API, so the session is
-    // registered the moment the TUI answers rather than after the first turn.
-    // It is a SIBLING of the pane process and not a child of it: the TUI takes
-    // this pane over below, so the pane is the TUI and nothing else.
-    const bridgeArgv = ['--endpoint', endpoint, '--cwd', io.cwd, '--pane', env.TMUX_PANE ?? '', '--bus', droverUrl];
-    if (seed) bridgeArgv.push('--seed', seed);
-    io.startBridge(
-        join(droverDir, 'adapters', 'opencode-bridge.mjs'),
-        bridgeArgv,
-        join(logDir, `bridge-${port}.log`),
-        { ...env, DROVER_URL: droverUrl, DROVER_ORIGIN: env.DROVER_ORIGIN || 'terminal' },
-    );
-
-    return io.execTui(bin, ['--port', port, ...rest], env);
+    // The bridge starts the moment the TUI's pid exists and waits for the API,
+    // so the session is registered the moment the TUI answers rather than
+    // after the first turn. It is a SIBLING of the pane process and not a
+    // child of it: the TUI takes this pane over, so the pane is the TUI and
+    // nothing else. The pid is what lets the bridge reap a TUI that outlives
+    // its pane (DROVE-377).
+    return io.execTui(bin, ['--port', port, ...rest], env, (pid) => {
+        const bridgeArgv = [
+            '--endpoint', endpoint, '--cwd', io.cwd, '--pane', env.TMUX_PANE ?? '', '--bus', droverUrl,
+            '--tui-pid', String(pid),
+        ];
+        if (seed) bridgeArgv.push('--seed', seed);
+        io.startBridge(
+            join(droverDir, 'adapters', 'opencode-bridge.mjs'),
+            bridgeArgv,
+            join(logDir, `bridge-${port}.log`),
+            { ...env, DROVER_URL: droverUrl, DROVER_ORIGIN: env.DROVER_ORIGIN || 'terminal' },
+        );
+    });
 }
