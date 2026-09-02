@@ -50,6 +50,9 @@ final class DroverWatchDelegate: NSObject, WCSessionDelegate {
     /// action is explicit — "pause" or "resume", never a toggle — because the
     /// wrist presses off a snapshot that may be a minute old.
     var onTransport: (([String: Any]) -> Void)?
+    /// Called when the watch app comes forward or goes away (DROVE-391), with
+    /// `reachable`. The feed closes a wake stretch on it; nothing publishes.
+    var onReachability: (([String: Any]) -> Void)?
 
     /// How long the wrist may be kept waiting before it is answered with
     /// whatever this phone last published.
@@ -99,6 +102,14 @@ final class DroverWatchDelegate: NSObject, WCSessionDelegate {
     func sessionDidDeactivate(_ session: WCSession) {
         // Re-activate so a watch switch does not silently end the feed.
         WCSession.default.activate()
+    }
+
+    /// The only time the phone is told `isReachable` moved (DROVE-391). JS
+    /// reads the flag itself at every publish; this is for the moment
+    /// BETWEEN publishes, when the wrist is raised and the stretch that
+    /// coalesces wakes should end so the next gate is news again.
+    func sessionReachabilityDidChange(_ session: WCSession) {
+        onReachability?(["reachable": session.isReachable])
     }
 
     /// Live answer from the watch while the phone app is running.
@@ -281,7 +292,7 @@ public final class DroverWatchModule: Module {
 
         Events(
             "onAnswer", "onFlip", "onRefresh", "onOpened", "onSay", "onRoute", "onSpoken",
-            "onListen", "onTransport"
+            "onListen", "onTransport", "onReachability"
         )
 
         OnCreate {
@@ -303,6 +314,9 @@ public final class DroverWatchModule: Module {
             }
             self.watchDelegate.onTransport = { [weak self] event in
                 self?.sendEvent("onTransport", event)
+            }
+            self.watchDelegate.onReachability = { [weak self] event in
+                self?.sendEvent("onReachability", event)
             }
             self.watchDelegate.onSay = { [weak self] event in
                 self?.sendEvent("onSay", event)
@@ -327,20 +341,31 @@ public final class DroverWatchModule: Module {
                 return ["supported": false, "paired": false, "installed": false, "reachable": false]
             }
             let session = WCSession.default
-            return [
+            let activated = session.activationState == .activated
+            var status: [String: Any] = [
                 "supported": true,
-                "activated": session.activationState == .activated,
+                "activated": activated,
                 "paired": session.isPaired,
                 "installed": session.isWatchAppInstalled,
                 "reachable": session.isReachable,
+            ]
+            // The budget and the complication are facts only once the session
+            // has activated (DROVE-391): before that WatchConnectivity answers
+            // 0 and false, and JS read the 0 as a spent budget in the first
+            // second after launch. Omitted until they mean something, so the
+            // screens say "unknown" for the gap rather than picking a side.
+            if activated {
                 // How many more times today the phone may LAUNCH the watch app
                 // in the background (DROVE-62). Zero means either the budget is
-                // spent or — far more likely — the Drover complication is not
-                // on any watch face, which is the documented condition for this
-                // count being zero. A wrist that cannot be woken is worth
-                // saying out loud rather than discovering as silence.
-                "wakes": session.remainingComplicationUserInfoTransfers
-            ]
+                // spent or the Drover complication is not on any watch face,
+                // and the next key is what tells the two apart.
+                status["wakes"] = session.remainingComplicationUserInfoTransfers
+                // Whether the Drover complication is on an active face. False
+                // is the documented condition for the count above being zero,
+                // and it is fixed on the watch, not by waiting for tomorrow.
+                status["complicationEnabled"] = session.isComplicationEnabled
+            }
+            return status
         }
 
         /// Publish the current gate list. `json` is a serialized
@@ -442,18 +467,26 @@ public final class DroverWatchModule: Module {
         /// bare true is the difference between a wrist that is quiet and a
         /// wrist nobody can tell is quiet. Spend it only on an arrival worth a
         /// buzz; the 60s heartbeat must never come through here.
+        ///
+        /// REFUSED, not downgraded, with the complication off or the budget at
+        /// 0 (DROVE-391). The downgraded transfer queued a userInfo nobody
+        /// wanted: the application context `publish` wrote already carries
+        /// the same snapshot, and the queue is what a real wake tomorrow
+        /// would have to drain first. False with nothing sent is the honest
+        /// answer, and JS says which of the two causes it was.
         AsyncFunction("wake") { (json: String) -> Bool in
             guard WCSession.isSupported() else { return false }
             let session = WCSession.default
             guard session.activationState == .activated else { return false }
+            guard session.isComplicationEnabled,
+                  session.remainingComplicationUserInfoTransfers > 0 else { return false }
             guard let data = json.data(using: .utf8),
                   let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let dict = plistSanitized(raw) as? [String: Any] else {
                 throw Exception(name: "DroverWatch", description: "snapshot was not a JSON object")
             }
-            let budget = session.remainingComplicationUserInfoTransfers
             session.transferCurrentComplicationUserInfo(dict)
-            return budget > 0
+            return true
         }
 
         /// Write the PHONE widget's face into the app group, and reload its
