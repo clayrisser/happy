@@ -518,20 +518,22 @@ export function addAccountStatus(phase: AddAccountPhase): AddAccountStatus | nul
                 if (phase.harness === 'cursor') {
                     return {
                         title: 'Approve the sign-in in your browser',
-                        detail: 'The sign-in page is open in your browser. Approve it there and the account '
-                            + 'appears in this list — there is no code to send back.',
+                        // A fragment, and the ONE fact the title does not carry
+                        // (DROVE-346). The card below it now draws Cancel and
+                        // nothing else, so the paragraph explaining that there
+                        // is no code is the card saying twice what it shows.
+                        detail: 'nothing to send back',
                         watching: true,
                         hasLink: true,
                         spinner: false,
                     };
                 }
                 return {
-                    // The code box is on THIS screen now (DROVE-238), so the
-                    // sentence stops pointing at a row that used to navigate
-                    // into the bridge thread to find one.
-                    title: 'Sign in, then paste the code below',
-                    detail: 'The sign-in page is open in your browser. Sign in, then paste the code it '
-                        + 'gives you into the box below and send it.',
+                    // The code step is on THIS screen (DROVE-238) and it is one
+                    // button (DROVE-351) — so the sentence stops pointing at a
+                    // box that is no longer drawn.
+                    title: 'Sign in in your browser, then paste the code',
+                    detail: 'one tap sends what you copied',
                     watching: true,
                     hasLink: true,
                     spinner: false,

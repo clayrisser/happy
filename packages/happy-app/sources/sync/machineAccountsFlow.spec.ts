@@ -42,6 +42,18 @@ import {
 
 const before = ['main', 'jamrizzi'];
 
+/**
+ * The whole of what one status row says, title and detail together.
+ *
+ * The details are fragments now (DROVE-346, DROVE-351) and a fact that used to
+ * live in the sentence often lives in the title instead. What these specs are
+ * really pinning is that the row SAYS it, not which of its two lines carries
+ * it, so they read both.
+ */
+function said(status: { title: string; detail: string }): string {
+    return `${status.title} ${status.detail}`;
+}
+
 function waiting(overrides: Partial<Extract<AddAccountPhase, { kind: 'waiting' }>> = {}) {
     return {
         kind: 'waiting' as const,
@@ -379,17 +391,20 @@ describe('addAccountStatus', () => {
     });
 
     it('tells him the three steps once the link is there', () => {
+        // Title AND detail, because the detail is a fragment now (DROVE-351):
+        // the step that used to be a clause in a sentence is the title, and
+        // what the row has to SAY is the same either way.
         const ready = addAccountStatus(waiting({ linkReady: true, linkSeen: true }))!;
         expect(ready.hasLink).toBe(true);
-        expect(ready.detail).toContain('Sign in');
-        expect(ready.detail).toContain('code');
+        expect(said(ready)).toContain('Sign in');
+        expect(said(ready)).toContain('code');
     });
 
     it('points at his browser rather than naming a card to go and find', () => {
         // DROVE-212: the link used to be two taps away behind a share sheet,
         // so the words pointed at a card. They point at his browser now.
-        expect(addAccountStatus(waiting())!.detail).toContain('browser');
-        expect(addAccountStatus(waiting({ linkReady: true, linkSeen: true }))!.detail).toContain('browser');
+        expect(said(addAccountStatus(waiting())!)).toContain('browser');
+        expect(said(addAccountStatus(waiting({ linkReady: true, linkSeen: true }))!)).toContain('browser');
     });
 
     it('says no link came back without calling the login failed', () => {
@@ -871,13 +886,19 @@ describe('what a cursor login is told', () => {
         // browser approves. Telling Clay to paste a code that never appears is
         // exactly the dead end DROVE-238 was filed about.
         const status = addAccountStatus(waiting({ harness: 'cursor', linkReady: true }))!;
-        expect(status.detail).toContain('no code');
+        // The row no longer has to SAY there is no code, because the card under
+        // it no longer offers one to send (DROVE-351: `loginControls('cursor')`
+        // is Cancel alone). So the bar moves from naming the absence to the
+        // thing that actually matters — never asking for one.
+        expect(said(status)).not.toMatch(/\bcodes?\b/i);
+        expect(said(status)).not.toMatch(/\bpaste\b/i);
+        expect(status.detail).toContain('nothing to send back');
         expect(status.hasLink).toBe(true);
         expect(status.title).toBe('Approve the sign-in in your browser');
     });
 
     it('still asks for the code on a claude login', () => {
-        expect(addAccountStatus(waiting({ linkReady: true, linkSeen: true }))!.detail).toContain('code');
+        expect(said(addAccountStatus(waiting({ linkReady: true, linkSeen: true }))!)).toContain('code');
     });
 
     it('names the harness while it starts', () => {
