@@ -1,10 +1,20 @@
-import { describe, it, expect } from 'vitest';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, describe, it, expect } from 'vitest';
 
+import { CursorBackend } from './CursorBackend';
+import { cursorTurnEnv } from './cursorEnv';
 import {
     parseCursorModels,
     splitCursorModelId,
     buildCursorModelCatalog,
     resolveCursorModelId,
+    listCursorModels,
+    describeCursorListFailure,
+    fallbackCursorModelCatalog,
+    cursorDefaultDescription,
+    cursorFallbackDescription,
 } from './cursorModels';
 
 /**
@@ -79,6 +89,14 @@ describe('buildCursorModelCatalog', () => {
         const opus = catalog.models.find((m) => m.code === 'claude-opus-5-thinking');
         expect(opus?.value).toBe('Claude Opus 5 1M Thinking');
     });
+
+    // `auto - Auto (default)`. The chip has 27pt for a name and no room for a
+    // parenthesis; the fact goes under the row instead (DROVE-395).
+    it('takes the (default) suffix off the name and puts it under the row', () => {
+        const auto = catalog.models.find((m) => m.code === 'auto');
+        expect(auto).toEqual({ code: 'auto', value: 'Auto', description: cursorDefaultDescription });
+        expect(catalog.models.filter((m) => m.description).map((m) => m.code)).toEqual(['auto']);
+    });
 });
 
 describe('resolveCursorModelId', () => {
@@ -120,6 +138,163 @@ describe('resolveCursorModelId', () => {
                 const id = resolveCursorModelId(catalog, family.code, effort);
                 expect(id).not.toContain('[');
             }
+        }
+    });
+});
+
+const temps: string[] = [];
+afterAll(() => {
+    for (const dir of temps) rmSync(dir, { recursive: true, force: true });
+});
+
+/** A cursor-agent that does what the script says. Never the real one. */
+function fakeCursorAgent(script: string): { bin: string; dir: string } {
+    const dir = mkdtempSync(join(tmpdir(), 'cursor-list-'));
+    temps.push(dir);
+    const bin = join(dir, 'cursor-agent');
+    writeFileSync(bin, `#!/bin/sh\n${script}\n`, { mode: 0o755 });
+    return { bin, dir };
+}
+
+const twoModels = 'printf "Available models\\n\\nauto - Auto (default)\\ncomposer-2.5 - Composer 2.5\\n"';
+const bareEnv = { PATH: '/usr/bin:/bin' };
+
+describe('listCursorModels', () => {
+    it('returns the rows cursor-agent prints, and no failure', async () => {
+        const { bin, dir } = fakeCursorAgent(twoModels);
+        expect(await listCursorModels({ bin, cwd: dir, env: bareEnv })).toEqual({
+            models: [
+                { code: 'auto', value: 'Auto (default)' },
+                { code: 'composer-2.5', value: 'Composer 2.5' },
+            ],
+            failure: null,
+        });
+    });
+
+    it('runs under the environment it is handed and no other', async () => {
+        const { bin, dir } = fakeCursorAgent('/usr/bin/env > "$CURSOR_LIST_ENV_OUT"; ' + twoModels);
+        const out = join(dir, 'env.out');
+        await listCursorModels({
+            bin,
+            cwd: dir,
+            env: { ...bareEnv, CURSOR_LIST_ENV_OUT: out, CURSOR_CONFIG_DIR: '/cfg/here' },
+        });
+        const seen = readFileSync(out, 'utf8').split('\n');
+        expect(seen).toContain('CURSOR_CONFIG_DIR=/cfg/here');
+        expect(seen.some((line) => line.startsWith('HAPPY_HOME_DIR='))).toBe(false);
+    });
+
+    // The exit a session started from the phone actually hits (DROVE-387
+    // measured it): the login keychain is locked, cursor-agent says so on
+    // stderr and exits 1 before a single row. This used to come back as `[]`.
+    it('names the exit and the last line cursor-agent said, which is what a locked keychain looks like', async () => {
+        const { bin, dir } = fakeCursorAgent('echo "keychain is locked or is denying access" >&2; exit 1');
+        expect(await listCursorModels({ bin, cwd: dir, env: bareEnv })).toEqual({
+            models: [],
+            failure: 'exit 1: keychain is locked or is denying access',
+        });
+    });
+
+    it('names a binary that is not there', async () => {
+        const listing = await listCursorModels({ bin: '/nonexistent/cursor-agent', cwd: tmpdir(), env: bareEnv });
+        expect(listing.models).toEqual([]);
+        expect(listing.failure).toBe('/nonexistent/cursor-agent not found (ENOENT)');
+    });
+
+    it('an exit 0 with no rows is a failure too, not an empty picker', async () => {
+        const { bin, dir } = fakeCursorAgent('echo "Please log in first"');
+        expect(await listCursorModels({ bin, cwd: dir, env: bareEnv })).toEqual({
+            models: [],
+            failure: 'exit 0 with no model rows: Please log in first',
+        });
+    });
+
+    it('names a list that hung', async () => {
+        const { bin, dir } = fakeCursorAgent('sleep 5');
+        const listing = await listCursorModels({ bin, cwd: dir, env: bareEnv, timeoutMs: 200 });
+        expect(listing.models).toEqual([]);
+        expect(listing.failure).toBe('killed by SIGTERM after 200ms');
+    });
+
+    it('strips colour off the reason and falls back to the message when nothing was said', () => {
+        expect(describeCursorListFailure({ code: 2, stderr: '\u001b[31mno such account\u001b[0m\n' }, 'x', 1))
+            .toBe('exit 2: no such account');
+        expect(describeCursorListFailure({ code: 3, message: 'Command failed' }, 'x', 1)).toBe('exit 3: Command failed');
+        expect(describeCursorListFailure({ signal: 'SIGKILL' }, 'x', 1)).toBe('signal SIGKILL');
+        expect(describeCursorListFailure(null, 'x', 1)).toBe('failed');
+    });
+});
+
+describe('CursorBackend.listModels', () => {
+    // The acceptance criterion, verbatim: the list runs under the same
+    // environment as a turn, so the picker lists only what the turn can run.
+    // The turn's env is cursorTurnEnv (CursorBackend.env); the list is asked
+    // through the backend so it cannot build its own.
+    it('asks under exactly the environment a turn gets: the session config dir, '
+        + 'the owned credential home, and no inherited key', async () => {
+        const { bin, dir } = fakeCursorAgent('/usr/bin/env > "$CURSOR_LIST_ENV_OUT"; ' + twoModels);
+        const out = join(dir, 'env.out');
+        const owned = { credentialHome: join(dir, 'owned-home') };
+        const prior = {
+            HAPPY_CURSOR_PATH: process.env.HAPPY_CURSOR_PATH,
+            CURSOR_API_KEY: process.env.CURSOR_API_KEY,
+            CURSOR_LIST_ENV_OUT: process.env.CURSOR_LIST_ENV_OUT,
+        };
+        process.env.HAPPY_CURSOR_PATH = bin;
+        process.env.CURSOR_API_KEY = 'inherited-and-must-not-survive';
+        process.env.CURSOR_LIST_ENV_OUT = out;
+        try {
+            const backend = new CursorBackend({
+                cwd: dir,
+                configDir: join(dir, 'session-config'),
+                credential: owned,
+                log: () => {},
+            });
+            const listing = await backend.listModels();
+            expect(listing.failure).toBeNull();
+            expect(listing.models.map((m) => m.code)).toEqual(['auto', 'composer-2.5']);
+
+            const seen = readFileSync(out, 'utf8').split('\n').filter(Boolean);
+            const turn = cursorTurnEnv(join(dir, 'session-config'), owned);
+            expect(seen).toContain(`CURSOR_CONFIG_DIR=${turn.CURSOR_CONFIG_DIR}`);
+            expect(seen).toContain(`HOME=${owned.credentialHome}`);
+            expect(seen).toContain('AGENT_CLI_CREDENTIAL_STORE=file');
+            expect(turn.CURSOR_API_KEY).toBeUndefined();
+            expect(seen.some((line) => line.startsWith('CURSOR_API_KEY='))).toBe(false);
+        } finally {
+            for (const [name, value] of Object.entries(prior)) {
+                if (value === undefined) delete process.env[name];
+                else process.env[name] = value;
+            }
+        }
+    });
+});
+
+describe('fallbackCursorModelCatalog', () => {
+    it('is auto plus the family the session started with, each marked, and no tiers', () => {
+        const catalog = fallbackCursorModelCatalog('claude-opus-5-thinking-xhigh');
+        expect(catalog.models).toEqual([
+            { code: 'auto', value: 'Auto', description: cursorFallbackDescription },
+            { code: 'claude-opus-5-thinking', value: 'claude-opus-5-thinking', description: cursorFallbackDescription },
+        ]);
+        expect(catalog.efforts).toEqual([]);
+    });
+
+    it('rejoins the started family to the exact id the session began on, by lookup', () => {
+        const catalog = fallbackCursorModelCatalog('claude-opus-5-thinking-xhigh');
+        expect(resolveCursorModelId(catalog, 'claude-opus-5-thinking', null)).toBe('claude-opus-5-thinking-xhigh');
+        expect(resolveCursorModelId(catalog, 'claude-opus-5-thinking', 'xhigh')).toBe('claude-opus-5-thinking-xhigh');
+        expect(resolveCursorModelId(catalog, 'auto', 'max')).toBe('auto');
+    });
+
+    it('a tier the started id does not have lands on the one it does, never on a made-up id', () => {
+        const catalog = fallbackCursorModelCatalog('cursor-grok-4.6-xhigh-fast');
+        expect(resolveCursorModelId(catalog, 'cursor-grok-4.6-fast', 'low')).toBe('cursor-grok-4.6-xhigh-fast');
+    });
+
+    it('is the one row auto when the session started on no --model, or on auto, or on whitespace', () => {
+        for (const started of [null, undefined, '', '  ', 'auto']) {
+            expect(fallbackCursorModelCatalog(started).models.map((m) => m.code)).toEqual(['auto']);
         }
     });
 });

@@ -49,6 +49,7 @@ import {
     type CursorUsage,
 } from './cursorStream';
 import { cursorTurnEnv, scrubbedCursorVars, type CursorOwnedCredential } from './cursorEnv';
+import { listCursorModels, type CursorModelListing } from './cursorModels';
 import { cursorPermissionArgs } from './cursorPermission';
 
 const execFileAsync = promisify(execFile);
@@ -137,6 +138,19 @@ export class CursorBackend implements AgentBackend {
             this.log(`scrubbed from the turn environment: ${scrubbed.join(', ')}`);
         }
         return cursorTurnEnv(this.opts.configDir, this.opts.credential ?? {});
+    }
+
+    /**
+     * `--list-models`, under exactly the environment a turn gets (DROVE-395).
+     *
+     * The list used to build an env of its own beside the turn's. Same
+     * function today, so the same answer today; but the question the picker
+     * asks is "what can the NEXT TURN run", and the only way that stays true
+     * through whatever the turn env grows next is to ask it from here. What
+     * came back, or why nothing did, is the caller's to publish.
+     */
+    async listModels(): Promise<CursorModelListing> {
+        return listCursorModels({ cwd: this.opts.cwd, env: this.env() });
     }
 
     /**

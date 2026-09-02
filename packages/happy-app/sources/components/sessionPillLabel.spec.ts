@@ -30,6 +30,17 @@ import {
 } from './agentInputLayout';
 
 describe('shortModelName', () => {
+    // DROVE-395: a cursor row is named by the CLI that listed it, and a row
+    // the CLI published without a list is named by its id. Neither is mapped
+    // here; both draw, which is the point, since the segment is hidden only
+    // when there is no name at all.
+    it('shows a cursor row by the name the session published', () => {
+        expect(shortModelName({ key: 'auto', name: 'Auto' })).toBe('Auto');
+        expect(shortModelName({ key: 'claude-opus-5-thinking', name: 'claude-opus-5-thinking' }))
+            .toBe('claude-opus-5-thinking');
+        expect(buildSessionPillLabel({ model: { key: 'auto', name: 'Auto' } }).model).toBe('Auto');
+    });
+
     it('maps the Claude ids to the names people use', () => {
         expect(shortModelName({ key: 'claude-fable-5' })).toBe('Fable 5');
         // DROVE-324: the minor version reads as `5.1`, so the pill shows the
