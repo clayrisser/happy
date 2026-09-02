@@ -54,7 +54,14 @@ vi.mock('drover-speech', () => ({
 }));
 
 import { startBackgroundAudio, type BackgroundReader } from './backgroundAudio';
-import { duplicateRemotePressMs, isDuplicateRemotePress } from './readAloudTransport';
+import {
+    duplicateRemotePressMs,
+    isDiscreteSecondPress,
+    isDuplicateRemotePress,
+    remoteTransportEffect,
+    secondPressResumesAfterMs,
+    transportEffect,
+} from './readAloudTransport';
 
 /** A reader the test drives, firing the transport listener a pause rides. */
 class FakeReader implements BackgroundReader {
@@ -132,18 +139,95 @@ describe('a remote press always leaves the surfaces agreeing with the reader (DR
         expect(published()).toBe('paused');
     });
 
-    it('a `pause` while already paused stays paused AND re-publishes `paused`', () => {
-        // THE BUG. The reader is right to do nothing; the surface that sent it
-        // is wrong, and this press is the proof. Before DROVE-362 the change-only
-        // dedupe swallowed the correction, so an AVRCP unit that believed we
-        // were still playing could only ever send `pause` and the pause became
-        // one-way.
+    it('a `pause` inside a second of the pause stays paused AND re-publishes `paused`', () => {
+        // DROVE-362's case, kept whole and narrowed to the window it is
+        // actually about (DROVE-370). The reader is right to do nothing; the
+        // surface that sent it is wrong, and this press is the proof. Before
+        // DROVE-362 the change-only dedupe swallowed the correction, so an
+        // AVRCP unit that believed we were still playing could only ever send
+        // `pause` and the pause became one-way.
+        //
+        // Past the 300 ms duplicate window, so it is a second COMMAND and not
+        // one gesture arriving twice, and still well inside the second: this
+        // is a head unit answering our own forced republish, not a thumb.
         press('pause');
         expect(h.reading).toEqual(['paused']);
-        now += 5_000;
+        now += 400;
         press('pause');
         expect(reader.isPaused).toBe(true);
         expect(h.reading).toEqual(['paused', 'paused']);
+    });
+
+    it('but a `pause` a second later RESUMES — the headset with one word for its one button', () => {
+        // THE DROVE-370 BUG. Clay: "headphone tap pauses but can't resume it."
+        // AirPods send `togglePlayPause` and always resumed; some headsets and
+        // car units have exactly one spelling for the one button, send `pause`
+        // to pause and `pause` again to resume, and DROVE-362 answered the
+        // second one by re-publishing `paused` at them. Correct, and still a
+        // pause he could not press his way out of.
+        press('pause');
+        expect(reader.isPaused).toBe(true);
+        now += 5_000;
+        press('pause');
+        expect(reader.isPaused).toBe(false);
+        expect(published()).toBe('reading');
+    });
+
+    it('and it flips from there: pause, pause, pause walks paused/reading/paused', () => {
+        // The transport must not latch on one spelling any more than on two.
+        press('pause');
+        expect(reader.isPaused).toBe(true);
+        now += 5_000;
+        press('pause');
+        expect(reader.isPaused).toBe(false);
+        now += 5_000;
+        press('pause');
+        expect(reader.isPaused).toBe(true);
+        expect(published()).toBe('paused');
+    });
+
+    it('the second-press clock starts at the pause, not at the last press', () => {
+        // A unit that re-asserts `pause` every 400 ms must not walk itself
+        // over the line one echo at a time. Each echo is inside a second OF
+        // THE PAUSE, so none of them resumes.
+        press('pause');
+        for (let i = 0; i < 2; i += 1) {
+            now += 400;
+            press('pause');
+            expect(reader.isPaused).toBe(true);
+        }
+        // 1200 ms have passed and it is still paused; the next one is over the
+        // line and reads.
+        now += 400;
+        press('pause');
+        expect(reader.isPaused).toBe(false);
+    });
+
+    it('a pause taken on the ON-SCREEN speaker is resumed by the headphone too', () => {
+        // The three surfaces drive one state (DROVE-233), so the clock has to
+        // be the state's rather than the remote's. He holds the speaker to
+        // pause, pockets the phone, and presses the headphone.
+        reader.setPaused(true);
+        expect(published()).toBe('paused');
+        now += 5_000;
+        press('pause');
+        expect(reader.isPaused).toBe(false);
+    });
+
+    it('a `pause` while paused is STILL one gesture inside the 300 ms window', () => {
+        // DROVE-362's dedupe runs first and is not softened: a press event and
+        // a state notification milliseconds apart is one press, and one press
+        // on an already-paused reader is not a second press.
+        press('pause');
+        now += 5_000;
+        press('pause');
+        expect(reader.isPaused).toBe(false);
+        now += 5_000;
+        press('pause');
+        expect(reader.isPaused).toBe(true);
+        now += duplicateRemotePressMs - 1;
+        press('pause');
+        expect(reader.isPaused).toBe(true);
     });
 
     it('a `play` while already reading stays reading AND re-publishes `reading`', () => {
@@ -220,6 +304,64 @@ describe('a remote press always leaves the surfaces agreeing with the reader (DR
         press('pause');
         expect(h.hold).not.toContain(false);
         expect(published()).toBe('paused');
+    });
+});
+
+describe('a discrete second press, and only that, reinterprets a `pause` (DROVE-370)', () => {
+    it('is not a second press with nothing to be second to', () => {
+        expect(isDiscreteSecondPress(null, 10_000)).toBe(false);
+    });
+
+    it('is a second press from the threshold onward, and not before', () => {
+        expect(isDiscreteSecondPress(0, secondPressResumesAfterMs - 1)).toBe(false);
+        expect(isDiscreteSecondPress(0, secondPressResumesAfterMs)).toBe(true);
+    });
+
+    it('the window is longer than the duplicate window it sits behind', () => {
+        // Otherwise the two rules would fight over the same milliseconds.
+        expect(secondPressResumesAfterMs).toBeGreaterThan(duplicateRemotePressMs);
+    });
+
+    it('turns the one dead cell into a resume, and touches no other', () => {
+        const late = secondPressResumesAfterMs;
+        expect(remoteTransportEffect('remote-pause', 'paused', 0, late)).toBe('resume');
+        expect(remoteTransportEffect('remote-pause', 'paused', 0, late - 1)).toBe('nothing');
+        expect(remoteTransportEffect('remote-pause', 'paused', null, late)).toBe('nothing');
+    });
+
+    it('every other cell is the DROVE-327 table verbatim', () => {
+        // Exhaustive, so a future edit to the table cannot be shadowed here.
+        const gestures = ['tap', 'long-press', 'remote-play', 'remote-pause', 'remote-toggle'] as const;
+        const states = ['off', 'paused', 'reading'] as const;
+        for (const gesture of gestures) {
+            for (const state of states) {
+                if (gesture === 'remote-pause' && state === 'paused') continue;
+                expect(remoteTransportEffect(gesture, state, 0, 1_000_000), `${gesture} on ${state}`)
+                    .toBe(transportEffect(gesture, state));
+            }
+        }
+    });
+
+    it('the on-screen speaker is untouched: a hold still pauses, a tap still resumes', () => {
+        // DROVE-327's row, and the one thing Clay asked to stay put. Neither
+        // gesture is a remote one, so neither can reach the new cell whatever
+        // the clock says.
+        const ancient = 10_000_000;
+        expect(remoteTransportEffect('long-press', 'reading', 0, ancient)).toBe('pause');
+        expect(remoteTransportEffect('long-press', 'paused', 0, ancient)).toBe('turn-off');
+        expect(remoteTransportEffect('tap', 'paused', 0, ancient)).toBe('resume');
+    });
+
+    it('a remote press still never turns read-aloud on or off (DROVE-189)', () => {
+        const gestures = ['remote-play', 'remote-pause', 'remote-toggle'] as const;
+        for (const gesture of gestures) {
+            for (const state of ['off', 'paused', 'reading'] as const) {
+                const effect = remoteTransportEffect(gesture, state, 0, 10_000_000);
+                expect(effect).not.toBe('turn-on');
+                expect(effect).not.toBe('turn-off');
+                expect(effect).not.toBe('boss-mode');
+            }
+        }
     });
 });
 

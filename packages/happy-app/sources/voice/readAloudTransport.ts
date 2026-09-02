@@ -251,6 +251,87 @@ export function isDuplicateRemotePress(
 }
 
 /**
+ * How long after a pause a `pause` stops being that pause's echo and starts
+ * being him pressing again (DROVE-370).
+ *
+ * DROVE-362 taught this file that a head unit can send the same command twice
+ * for one press, and collapsed that inside 300 ms. This is the OTHER half of
+ * the same problem, and it is not a duplicate at all: some headsets and car
+ * units have exactly one word for the one button, and that word is `pause`.
+ * They send it to pause and they send it again to resume, because there is
+ * nothing else to send. AirPods do not do this — a single press there is
+ * `togglePlayPause`, which the DROVE-327 table has always resumed from — so
+ * the bug is invisible on the hardware it is most often tested on, which is
+ * how a pause that Clay could not press his way out of survived DROVE-362.
+ *
+ * A LOCK SCREEN NEVER HITS THIS CELL, which is why it can be given away. When
+ * we publish `paused` the card draws a PLAY glyph, so the next thing the lock
+ * screen sends is `play`, and `play` already resumes. The only sender of a
+ * `pause` into a paused reader is a surface with one spelling or a surface
+ * that disagrees with us — and DROVE-362 handles the second by republishing
+ * the truth. What is left is the first, and it means resume.
+ *
+ * ONE SECOND, and the number is doing real work rather than padding. Our own
+ * republish (DROVE-362's forced `setReadingState`) lands within a few
+ * milliseconds of the press, and a unit that answers it by re-asserting
+ * `pause` does so at once — well inside a second, and often inside the 300 ms
+ * window already. A thumb going back to the button is slower than that by a
+ * wide margin. So under a second is the machine talking to itself and stays
+ * the no-op DROVE-362 made it; over a second is him.
+ */
+export const secondPressResumesAfterMs = 1_000;
+
+/**
+ * Is this `pause` him pressing again, rather than the tail of the pause that
+ * paused us? (DROVE-370.)
+ *
+ * `pausedSince` is when the reader ENTERED paused, by whichever surface did
+ * it — the headphone, the lock screen, or the on-screen hold. Null means it
+ * is not paused, or we never saw it become paused, and neither is a second
+ * press.
+ *
+ * Pure, and takes the clock, for the reason every other decision in this file
+ * does: the three surfaces must not be able to disagree about what a press
+ * was, and a test must not have to wait a second to find out.
+ */
+export function isDiscreteSecondPress(pausedSince: number | null, at: number): boolean {
+    if (pausedSince === null) return false;
+    return at - pausedSince >= secondPressResumesAfterMs;
+}
+
+/**
+ * What a REMOTE press does, which is `transportEffect` plus one cell
+ * (DROVE-370).
+ *
+ * The table above is deliberately stateless and stays that way: it is what
+ * the button, the lock screen and the headphones all read, and giving it a
+ * clock would give the on-screen speaker a clock it has no use for. This wraps
+ * it for the one gesture that needs to know WHEN, and it can only ever turn a
+ * `nothing` into a `resume` — every cell the table answers is returned
+ * untouched, so nothing DROVE-327 or DROVE-362 decided can be reached from
+ * here.
+ *
+ * THE HOLD IS UNAFFECTED. `long-press` is not a remote gesture and never
+ * arrives here, so pausing from the on-screen speaker is exactly what it was.
+ */
+export function remoteTransportEffect(
+    gesture: TransportGesture,
+    state: ReadAloudTransport,
+    pausedSince: number | null,
+    at: number,
+): TransportEffect {
+    const effect = transportEffect(gesture, state);
+    // Only the one dead cell is up for reinterpretation. A `pause` while
+    // READING already pauses, a `play` while paused already resumes, and a
+    // `toggle` already flips: none of them is waiting on a clock.
+    if (effect !== 'nothing') return effect;
+    if (gesture !== 'remote-pause' || state !== 'paused') return effect;
+    // Inside the second this is still DROVE-362's case: the reader does not
+    // move, and the caller republishes the truth at the surface that sent it.
+    return isDiscreteSecondPress(pausedSince, at) ? 'resume' : 'nothing';
+}
+
+/**
  * The gesture a native remote command is, or null when it is not the transport
  * at all.
  *

@@ -56,13 +56,21 @@ describe('the mic follows the voice, not the screen', () => {
 });
 
 /** A composer that has announced itself, driven by hand. */
-function surface(session: string, capturing = false): DictationSurface & { taps: number; live: boolean } {
+function surface(
+    session: string,
+    capturing = false,
+): DictationSurface & { taps: number; commits: number; live: boolean } {
     const it = {
         session,
         taps: 0,
+        // The verb that SENDS (DROVE-370). Counted apart from `taps` on
+        // purpose: the whole point of the ticket is that the headphone's
+        // closing press and the screen's own second tap are different calls.
+        commits: 0,
         live: capturing,
         capturing: () => it.live,
         tap: () => { it.taps += 1; },
+        commit: () => { it.commits += 1; it.live = false; },
     };
     return it;
 }
@@ -70,6 +78,8 @@ function surface(session: string, capturing = false): DictationSurface & { taps:
 class FakeHeadless implements HeadlessDictationPort {
     opened: string[] = [];
     closes = 0;
+    /** Closed AND sent (DROVE-370), kept apart from a plain close. */
+    commits = 0;
     private live = false;
     private settle = false;
 
@@ -77,6 +87,7 @@ class FakeHeadless implements HeadlessDictationPort {
     settling(): boolean { return this.settle; }
     open(session: string): void { this.opened.push(session); this.live = true; }
     close(): void { this.closes += 1; this.live = false; }
+    commit(): void { this.commits += 1; this.live = false; }
     setSettling(next: boolean): void { this.settle = next; }
 }
 
@@ -177,6 +188,8 @@ describe('the subscription is at module scope and resolves with nothing mounted'
 
         expect(headless.opened).toEqual([]);
         expect(screen.taps).toBe(1);
+        // OPENING is still the tap. Only the closing press sends (DROVE-370).
+        expect(screen.commits).toBe(0);
     });
 
     it('refuses audibly when the mounted screen is not the session being read', () => {
@@ -228,7 +241,13 @@ describe('the subscription is at module scope and resolves with nothing mounted'
         expect(headless.opened).toEqual([]);
     });
 
-    it('closes the headless capture a press opened, with a press', () => {
+    it('closes the headless capture a press opened, AND SENDS (DROVE-370)', () => {
+        // Clay: "triple tap starts the mic, but triple tap should also end it,
+        // and when it ends it should auto-submit." Closing it is what it
+        // already did; the send is the ticket. `commit` rather than `close`,
+        // because every OTHER way this capture can end — the idle stop, a
+        // recogniser giving up, a screen arriving — still keeps the words in
+        // the draft without sending them.
         holder = 's1';
         start();
         press(TRIPLE);
@@ -238,7 +257,9 @@ describe('the subscription is at module scope and resolves with nothing mounted'
         press(TRIPLE);
 
         expect(cues).toEqual(['micOpen', 'micClosed']);
-        expect(headless.closes).toBe(1);
+        expect(headless.commits).toBe(1);
+        expect(headless.closes).toBe(0);
+        expect(headless.capturing()).toBe(false);
     });
 
     it('still closes a headless capture after the voice moved away', () => {
@@ -253,7 +274,7 @@ describe('the subscription is at module scope and resolves with nothing mounted'
 
         press(TRIPLE);
 
-        expect(headless.closes).toBe(1);
+        expect(headless.commits).toBe(1);
         expect(headless.capturing()).toBe(false);
     });
 
@@ -283,7 +304,12 @@ describe('the subscription is at module scope and resolves with nothing mounted'
         press(TRIPLE);
 
         expect(cues).toEqual(['micClosed']);
-        expect(screen.taps).toBe(1);
+        // COMMIT, NOT TAP (DROVE-370). The composer's own second tap still
+        // stops and keeps the words (DROVE-105) — that is `tap`, and the
+        // screen still calls it. The headphone press is the hands-free path
+        // and it sends, so it needs its own verb rather than a changed one.
+        expect(screen.commits).toBe(1);
+        expect(screen.taps).toBe(0);
         expect(pending.length).toBe(0);
     });
 
@@ -301,7 +327,8 @@ describe('the subscription is at module scope and resolves with nothing mounted'
         press(TRIPLE);
 
         expect(cues).toEqual(['micClosed']);
-        expect(screen.taps).toBe(1);
+        expect(screen.commits).toBe(1);
+        expect(screen.taps).toBe(0);
     });
 
     it('hands a live headless capture over when a screen arrives', () => {
@@ -315,7 +342,11 @@ describe('the subscription is at module scope and resolves with nothing mounted'
 
         // Closed, not abandoned: `close` commits the words to the draft, so a
         // screen arriving mid-sentence cannot leave two mics on one recogniser.
+        // A HANDOVER IS NOT A SEND (DROVE-370). The screen is about to offer
+        // its own microphone and the words go to the draft it hydrates from;
+        // nothing was asked for and nothing goes out.
         expect(headless.closes).toBe(1);
+        expect(headless.commits).toBe(0);
     });
 
     it('is not fooled by the outgoing screen unregistering after the next one arrived', () => {

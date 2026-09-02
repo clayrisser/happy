@@ -36,6 +36,27 @@ export interface DictationSurface {
      * no duration, so it can only latch, and on a latched mic it can only stop.
      */
     tap(): void;
+    /**
+     * The one capture, ENDED AND SENT (DROVE-370).
+     *
+     * `tap` is the screen's verb and it never sends: DROVE-105 says a second
+     * on-screen tap stops and leaves the words in the composer, where he can
+     * read them and press send himself. That is right, because he is looking
+     * at them.
+     *
+     * The headphone triple press is the other case, and it needs its own verb
+     * rather than a changed `tap`. There is no screen, no lift and no send
+     * button in a pocket, so a close that only stops leaves a sentence he has
+     * to go and find later. Clay: "triple tap should also end it, and when it
+     * ends it should auto-submit."
+     *
+     * It goes through the SAME commit a lift-send does — `onCommit(text, true,
+     * 'send')`, DROVE-350 — so DROVE-360's replaceable-range rules and
+     * DROVE-120's "a capture ending never costs words" are inherited rather
+     * than restated. An empty transcript sends nothing: `DictationCapture`
+     * discards rather than commits on an empty final, so the press just closes.
+     */
+    commit(): void;
 }
 
 let mounted: DictationSurface | null = null;

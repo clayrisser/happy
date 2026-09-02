@@ -6,6 +6,7 @@ import { audioCues } from './audioCueService';
 import { resolveSpeaker } from './speaker';
 import { cueWatchReplyStart, watchSpeechEngine } from './watchSpeaker';
 import { storage } from '@/sync/storage';
+import { sync } from '@/sync/sync';
 import { applyReadAloudResume } from '@/sync/localSettings';
 import { resolveAudioCues, resolveStreamTalk } from '@/sync/settings';
 import { extractThinkingText, isEmptyThinking } from '@/utils/thinkingText';
@@ -300,6 +301,16 @@ const headlessDictation = new HeadlessDictation({
     },
     draft: (session) => storage.getState().sessions[session]?.draft ?? '',
     setDraft: (session, text) => storage.getState().updateSessionDraft(session, text),
+    // The same `sync.sendMessage` the composer's Send calls and the wrist's
+    // dictation calls (DROVE-92), so a sentence ended by a triple press lands
+    // in the session's inbox and in the transcript exactly as a typed one
+    // does. `userSent` goes with it for the same reason SessionView's own Send
+    // does it (DROVE-122): the reader keeps narrating the old reply until the
+    // new one has a sentence to say.
+    send: (session, text) => {
+        readAloud.userSent();
+        void Promise.resolve(sync.sendMessage(session, text, { source: 'voice' })).catch(() => { });
+    },
     micHeld: (held) => readAloud.setMicHeld(held),
     cutReading: () => readAloud.interrupt('mic'),
     // Nobody can read an alert from a pocket, so a microphone that would not
