@@ -34,6 +34,7 @@ import React from "react";
 import { sync } from "./sync";
 import { getCurrentRealtimeSessionId, getVoiceSession } from '@/realtime/RealtimeSession';
 import { isMutableTool } from "@/components/tools/knownTools";
+import { sessionHarnessFlavor } from '@/utils/avatarHarness';
 import { sessionDotFacts, type SessionDotFacts } from '@/components/sessionDot';
 import { DecryptedArtifact } from "./artifactTypes";
 import { FeedItem } from "./feedTypes";
@@ -207,7 +208,9 @@ function buildSessionRowData(
         name: getSessionName(session),
         subtitle: getSessionSubtitle(session),
         avatarId: getSessionAvatarId(session),
-        flavor: session.metadata?.flavor ?? null,
+        // The flavor the row's marks are drawn from (DROVE-393): the stamped
+        // one, or claude on the Claude runner's own evidence, never a guess.
+        flavor: sessionHarnessFlavor(session.metadata),
         clientId: session.metadata?.client?.id ?? null,
         identityLine: rigIdentity ? `${rigIdentity.clientName} · ${rigIdentity.providerName}` : null,
         providerKind: session.metadata?.provider?.kind ?? null,

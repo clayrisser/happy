@@ -7,8 +7,7 @@ import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { type SessionState, formatPathRelativeToHome, vibingMessages, formatLastSeen } from '@/utils/sessionUtils';
 import { Avatar } from './Avatar';
 import { Typography } from '@/constants/Typography';
-import { StatusDot } from './StatusDot';
-import { useSessionRowDot } from './sessionDot';
+import { SessionRowTrailing } from './SessionRowTrailing';
 import { useAllMachines, useSessionGitStatus } from '@/sync/storage';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { t } from '@/text';
@@ -231,12 +230,10 @@ export function ActiveSessionsGroupCompact({ sessions, selectedSessionId }: Acti
     );
 }
 
-// Compact session row with status dot indicator
+// Compact session row: title, then the harness glyph and the status dot.
 export const CompactSessionRow = React.memo(({ session, selected, showBorder }: { session: SessionRowData; selected?: boolean; showBorder?: boolean }) => {
     const styles = stylesheet;
-    const { theme } = useUnistyles();
     const status = STATUS_CONFIG[session.state];
-    const dot = useSessionRowDot(session.dot);
     const navigateToSession = useNavigateToSession();
     const swipeableRef = React.useRef<Swipeable | null>(null);
     const swipeEnabled = Platform.OS !== 'web';
@@ -275,45 +272,6 @@ export const CompactSessionRow = React.memo(({ session, selected, showBorder }: 
         onLongPress: showActionAlert,
     };
 
-    /**
-     * The 18pt slot at the end of the row (DROVE-243).
-     *
-     * It used to be a mux over five conditions that mixed two languages: the
-     * session's state and Clay's reading of it. Unread borrowed the working
-     * blue, which is exactly the collision this ticket is about — and with the
-     * row's pulse gone there is nothing left to tell an unread row from a
-     * working one anyway. So the slot says one thing: what the session is
-     * doing. Unread keeps its own mark where it always had one, the flat list's
-     * timestamp slot, which is a badge and not a status dot.
-     *
-     * The draft pencil survives, and only on a session that is idle and
-     * connected. A half-typed message is a thing to finish and the dot there
-     * would only say `connected`, so the pencil is strictly more information.
-     * Anything else and the dot wins: it is the one that says the session
-     * dropped, which this row previously drew as nothing at all.
-     */
-    const renderTrailingIndicator = () => {
-        const indicator = dot.state === 'connected' && session.hasDraft ? (
-            <Ionicons
-                name="create-outline"
-                size={14}
-                color={theme.colors.textSecondary}
-            />
-        ) : (
-            <StatusDot
-                color={dot.color}
-                isPulsing={dot.isPulsing}
-                accessibilityLabel={dot.label}
-            />
-        );
-
-        return (
-            <View style={styles.trailingIndicatorSlot}>
-                {indicator}
-            </View>
-        );
-    };
-
     const itemContent = (
         <Pressable
             style={[
@@ -339,7 +297,13 @@ export const CompactSessionRow = React.memo(({ session, selected, showBorder }: 
                         sessionId={session.id}
                         style={styles.sessionShortcutBadge}
                     />
-                    {renderTrailingIndicator()}
+                    {/* Glyph, then the 18pt slot (DROVE-243): sessionRowTrailingLayout.ts has the slot's rule. */}
+                    <SessionRowTrailing
+                        flavor={session.flavor}
+                        clientId={session.clientId}
+                        dot={session.dot}
+                        hasDraft={session.hasDraft}
+                    />
                 </View>
             </View>
         </Pressable>
@@ -526,15 +490,6 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     sessionTitleDisconnected: {
         color: theme.colors.textSecondary,
-    },
-    // 18 wide so the dot's center lines up with the center of the project
-    // header's "+" button above the card, on both platform paddings.
-    trailingIndicatorSlot: {
-        alignItems: 'center',
-        justifyContent: 'center',
-        width: 18,
-        height: 18,
-        marginLeft: 8,
     },
     swipeAction: {
         width: 112,

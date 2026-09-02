@@ -26,15 +26,19 @@ export const HARNESS_NAMES: Record<NewSessionAgentType, string> = {
  * flows into SpawnSessionOptions.agent, so anything named there is something the
  * daemon says it can spawn.
  *
- * EMPTY as of DROVE-316. pi was its only entry, and it is now spawnable — it
- * has a happy-cli runner (`packages/happy-cli/src/pi/runPi.ts`) that creates a
- * Happy session, streams the transcript, renders tool calls as tool calls and
- * raises gates that fail closed. The record stays because the next harness to
- * reach the phone over the drover bus before it has a runner belongs here, and
- * because getHarnessName still falls through it for any flavor a session can
- * carry that this list does not name.
+ * pi was the only entry until DROVE-316 made it spawnable. opencode is here as
+ * of DROVE-393: `happy acp opencode` stamps that flavor (runAcp.ts) and so does
+ * a `drover opencode` pane, and neither goes through the picker, because the
+ * pane has to BE the OpenCode TUI rather than a runner in happy-cli
+ * (drover/cli/opencode.ts). A session with that flavor still has to say what it
+ * is, in the info screen's name and in the mark on its row, so it is named
+ * here and avatarHarness.ts draws it from the same key.
  */
-const NON_SPAWNABLE_HARNESS_NAMES: Record<string, string> = {};
+export type NonSpawnableHarness = 'opencode';
+
+export const NON_SPAWNABLE_HARNESS_NAMES: Record<NonSpawnableHarness, string> = {
+    opencode: 'OpenCode',
+};
 
 /**
  * Harnesses you can no longer start a session with.
@@ -101,7 +105,7 @@ export type HarnessOption = {
 };
 
 export function getHarnessName(key: NewSessionAgentType | string): string {
-    return HARNESS_NAMES[key as NewSessionAgentType] ?? NON_SPAWNABLE_HARNESS_NAMES[key] ?? key;
+    return HARNESS_NAMES[key as NewSessionAgentType] ?? NON_SPAWNABLE_HARNESS_NAMES[key as NonSpawnableHarness] ?? key;
 }
 
 /** Whether this machine has given the app enough evidence to offer a harness. */

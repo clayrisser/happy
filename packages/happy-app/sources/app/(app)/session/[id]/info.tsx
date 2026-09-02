@@ -27,6 +27,7 @@ import { MobileGlassSurface } from '@/components/MobileGlass';
 import { getRigIdentity, isRigMetadata } from '@/sync/rig';
 import { droverPolicySummary } from '@/utils/droverPolicySummary';
 import { harnessName } from '@/utils/harnessName';
+import { sessionHarnessFlavor } from '@/utils/avatarHarness';
 import { cloneLineageRows } from '@/utils/droverClone';
 import { MOBILE_GLASS_HEADER_HEIGHT } from '@/components/navigation/headerMetrics';
 import { Switch } from '@/components/Switch';
@@ -396,7 +397,7 @@ function SessionInfoContent({ session }: { session: Session }) {
                             shadowRadius: 24,
                         }}
                     >
-                        <Avatar id={getSessionAvatarId(session)} size={80} monochrome={!sessionStatus.isConnected} flavor={session.metadata?.flavor} clientId={session.metadata?.client?.id} imageUrl={projectAvatar?.uri} thumbhash={projectAvatar?.thumbhash} />
+                        <Avatar id={getSessionAvatarId(session)} size={80} monochrome={!sessionStatus.isConnected} flavor={sessionHarnessFlavor(session.metadata)} clientId={session.metadata?.client?.id} imageUrl={projectAvatar?.uri} thumbhash={projectAvatar?.thumbhash} />
                         <Text style={{
                             fontSize: 20,
                             fontWeight: '600',

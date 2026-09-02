@@ -32,6 +32,7 @@ import { ChatList } from '@/components/ChatList';
 import { Deferred } from '@/components/Deferred';
 import { EmptyMessages } from '@/components/EmptyMessages';
 import { Avatar } from '@/components/Avatar';
+import { sessionHarnessFlavor } from '@/utils/avatarHarness';
 import { VoiceAssistantStatusBar, VOICE_PILL_TOTAL_HEIGHT } from '@/components/VoiceAssistantStatusBar';
 import { useDraft } from '@/hooks/useDraft';
 import { useImagePicker } from '@/hooks/useImagePicker';
@@ -412,7 +413,7 @@ export const SessionView = React.memo((props: { id: string }) => {
                     id={getSessionAvatarId(session)}
                     size={28}
                     monochrome={!headerProps.isConnected}
-                    flavor={session.metadata?.flavor}
+                    flavor={sessionHarnessFlavor(session.metadata)}
                     clientId={session.metadata?.client?.id}
                     badgeLocation="sessionHeader"
                 />
