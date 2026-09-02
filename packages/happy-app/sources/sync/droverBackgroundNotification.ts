@@ -40,15 +40,18 @@ import * as Notifications from 'expo-notifications';
 import * as TaskManager from 'expo-task-manager';
 import { Platform } from 'react-native';
 import {
-    describeDroverWakeBudget,
     getDroverWatchStatus,
     isDroverWatchAvailable,
     publishDroverSnapshot,
     wakeDroverWatch,
 } from 'drover-watch';
+import { describeDroverWakeBudget } from '@/utils/droverWatchStatus';
+import { togglesFromSettings, wakeDeserved } from './droverChannels';
+import { collectGateEntries } from './droverGates';
 import { collectAccounts, collectGates, collectSessions } from './droverWatchFeed';
 import { publishDroverWidgetFace } from './droverWidgetPublish';
 import { storage } from './storage';
+import { decideWristWake, noteWakeRefused, noteWakeSpent } from './droverWakeLedger';
 import {
     claimWristCues,
     noteWristRelay,
@@ -137,14 +140,40 @@ export async function republishWatchSnapshot(): Promise<boolean> {
         return true;
     }
 
-    const spent = await wakeDroverWatch(snapshot);
-    if (!spent) {
+    // Whether to spend a wake is the ONE rule the foreground feed applies
+    // (droverWakeLedger, DROVE-391), and this path used to apply none of it:
+    // it woke for any unclaimed cue with no reachability check, no budget
+    // check, and no haptic check, so every silent push carrying a session
+    // stop spent a launch nobody felt. A reachable watch app is already
+    // looking, a stop is carried and not woken for, a second gate inside one
+    // unreachable stretch rides the application context the first wake's
+    // launch reads, and a dead budget is refused with its cause on record.
+    const claimed = new Set(mine);
+    const deserving = wakeDeserved(
+        collectGateEntries().filter((entry) => claimed.has(entry.gate.id)),
+        togglesFromSettings(storage.getState().settings),
+    );
+    const verdict = decideWristWake({ status, cues: mine, deserving });
+    if (!verdict.spend) {
+        if (verdict.carried) {
+            rememberWristRelayState(snapshot);
+            return true;
+        }
         // Nobody felt it, so it stays carryable for the next path. The state
         // is left alone for the same reason.
+        releaseWristCues(mine);
+        noteWristRelay(wristRefusal(mine, 'mirror', verdict.line));
+        return true;
+    }
+
+    const spent = await wakeDroverWatch(snapshot);
+    if (!spent) {
+        noteWakeRefused('downgraded');
         releaseWristCues(mine);
         noteWristRelay(wristRefusal(mine, 'mirror', describeDroverWakeBudget(status)));
         return true;
     }
+    noteWakeSpent('gate');
     rememberWristRelayState(snapshot);
     return true;
 }

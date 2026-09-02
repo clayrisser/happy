@@ -37,6 +37,7 @@ import {
 } from 'drover-watch';
 
 import { demoLog } from './droverDemo';
+import { noteWakeSpent } from './droverWakeLedger';
 import {
     collectAccountRows,
     collectAccounts,
@@ -45,6 +46,7 @@ import {
     collectTranscript,
 } from './droverWatchFeed';
 import { storage } from './storage';
+import { describeDroverWakeRefusal } from '@/utils/droverWatchStatus';
 import { demoFinishSession, demoBuzzGate, wristCueIsGate, type WristCueSpec } from '@/utils/wristCues';
 
 /** How long the demo card stays on the wall before the phone withdraws it. */
@@ -117,15 +119,24 @@ export async function buzzDroverWatch(spec: WristCueSpec, spendWake = false): Pr
             withdrawLater();
             return { ok: false, why: 'the watch app is not open; tap again to spend one background wake' };
         }
-        if (status.wakes === 0) {
+        // Two causes, two lines (DROVE-391). The complication on no face is
+        // fixed on the watch; the day's budget spent is fixed by tomorrow.
+        // One sentence for both is what this row said, and Clay could not
+        // tell which he had.
+        const refusal = describeDroverWakeRefusal(status);
+        if (refusal) {
             withdrawLater();
-            return { ok: false, why: 'no wakes left today, or the Drover complication is on no watch face' };
+            return { ok: false, why: refusal };
         }
         const spent = await wakeDroverWatch(withDemo);
         if (!spent) {
             withdrawLater();
             return { ok: false, why: 'the wake was not spent as a background launch; open the watch app and try again' };
         }
+        // On the ledger like a real one, so "N of 50 used today" counts what
+        // was spent here; without a stretch, because a Playground test must
+        // not silence the next real gate behind it.
+        noteWakeSpent('demo');
         how = 'wake';
     }
     withdrawLater();

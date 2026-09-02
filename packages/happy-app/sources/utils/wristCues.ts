@@ -267,6 +267,8 @@ export function describeWristFidelity(status: {
     installed: boolean;
     reachable: boolean;
     wakes?: number;
+    /** WCSession.isComplicationEnabled, from build 22 (DROVE-391). */
+    complicationEnabled?: boolean;
 } | null | undefined): WristFidelityVerdict {
     if (!status || !status.paired || !status.installed) {
         return {
@@ -282,6 +284,17 @@ export function describeWristFidelity(status: {
             detail: 'The watch app is open, so the wrist plays Drover\'s own pattern and each kind feels different.',
         };
     }
+    // The two causes of a dead budget, told apart (DROVE-391). With the
+    // complication on no face the count is 0 all day and the fix is on the
+    // watch; with it on a face and 0 left, the fix is tomorrow. A binary that
+    // cannot tell says so rather than guessing, as it always did.
+    if (status.complicationEnabled === false) {
+        return {
+            fidelity: 'silent',
+            headline: 'Quiet until you raise it',
+            detail: 'The watch app is closed and the Drover complication is on no watch face, so this phone cannot wake it. Add the complication to a face; with it on none, the budget is zero all day.',
+        };
+    }
     // An absent budget is an older native module that never reported one.
     // Read as a wake being possible, because calling the wrist dead on a build
     // that simply cannot count is the worse error.
@@ -289,7 +302,9 @@ export function describeWristFidelity(status: {
         return {
             fidelity: 'silent',
             headline: 'Quiet until you raise it',
-            detail: 'The watch app is closed and this phone has no background wakes left. Put the Drover complication on a watch face; with it on none, the budget is zero all day.',
+            detail: status.complicationEnabled === true
+                ? 'The watch app is closed and this phone\'s background wakes are spent for today. The budget is 50 a day and comes back tomorrow.'
+                : 'The watch app is closed and this phone has no background wakes left. Put the Drover complication on a watch face; with it on none, the budget is zero all day.',
         };
     }
     return {

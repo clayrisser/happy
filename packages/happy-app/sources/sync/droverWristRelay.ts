@@ -78,12 +78,17 @@
  *               That is deliberate: a wrist cannot tell three taps from one
  *               long pattern, and it keeps a burst of bus events off a budget
  *               that is finite.
- *   REFUSED     no wakes left (or, far more often, the Drover complication on
- *               no watch face, which reports the same 0). The claim is given
+ *   REFUSED     no wakes left, or the Drover complication on no watch face
+ *               (two causes, told apart since DROVE-391). The claim is given
  *               BACK so the cue stays carryable, the shared record is not
  *               advanced, and the reason is written where a screen reads it:
  *               the session info screen's Wrist row. Never a silent drop —
  *               that is the complaint this ticket was filed about.
+ *   NOT WOKEN   a `finished:` cue, and a second gate inside one unreachable
+ *               stretch (DROVE-391). Both are carried: the reachable watch
+ *               diffs the stop off the publish, and the second gate rides the
+ *               application context the first wake's launch reads. The rule
+ *               and the per-day ledger are droverWakeLedger.ts.
  *
  * The synced haptic switch still rules (droverChannels, DROVE-72): with
  * `announceHaptic` off, Clay has said the wrist should not buzz, and it does
@@ -159,8 +164,22 @@ export function wristCueIds(before: WristCueState, after: WristCueSource): strin
     const wasRunning = new Set(before.running);
     return [
         ...after.gates.filter((g) => !known.has(g.id)).map((g) => g.id),
-        ...after.sessions.filter((s) => !s.active && wasRunning.has(s.id)).map((s) => `finished:${s.id}`),
+        ...after.sessions.filter((s) => !s.active && wasRunning.has(s.id)).map((s) => `${FINISHED_PREFIX}${s.id}`),
     ];
+}
+
+/** The cue id a session that was running and stopped carries: `finished:<sessionId>`. */
+export const FINISHED_PREFIX = 'finished:';
+
+/**
+ * The cues in `ids` that are GATES needing an answer, which are the only cues
+ * a background wake is spent on (DROVE-391). A `finished:` cue is still
+ * carried to a reachable watch, which diffs it off the publish; it never
+ * launches a sleeping one. 300 dead sessions going quiet overnight is up to
+ * 300 launches nobody felt, and that is where the day's 50 went.
+ */
+export function gateCueIds(ids: string[]): string[] {
+    return ids.filter((id) => !id.startsWith(FINISHED_PREFIX));
 }
 
 function readList(key: string): string[] {

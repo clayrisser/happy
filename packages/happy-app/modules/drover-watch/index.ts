@@ -18,11 +18,19 @@ export interface DroverWatchStatus {
     /**
      * How many more background wakes of the watch app this phone may spend
      * today (DROVE-62). Absent on a build whose native module predates the
-     * key. Zero means the wrist cannot be woken at all — either the budget is
-     * spent, or, far more often, the Drover complication is on no watch face,
-     * which is the documented condition for the count being zero.
+     * key, and absent until the session has activated (DROVE-391): before
+     * that the native side answers 0, which is not a fact. Zero means the
+     * wrist cannot be woken at all, and `complicationEnabled` says why.
      */
     wakes?: number;
+    /**
+     * Whether the Drover complication is on an active watch face
+     * (WCSession.isComplicationEnabled, DROVE-391). False is the far more
+     * common reason `wakes` reads 0, and it is fixed on the watch, not by
+     * waiting; true with 0 left means the day's budget is spent. Absent on a
+     * binary older than build 22 and until the session has activated.
+     */
+    complicationEnabled?: boolean;
 }
 
 export interface DroverAnswerEvent {
@@ -620,6 +628,20 @@ export interface DroverTransportEvent {
 }
 
 /**
+ * The watch app coming forward, or going away (DROVE-391).
+ *
+ * `reachable` is WatchConnectivity's own answer to "is the counterpart app
+ * frontmost", and `sessionReachabilityDidChange` is the only time the phone
+ * is told it moved. The feed reads it to close a wake stretch: a wrist that
+ * has just been raised has read the wall, so the next gate that lands after
+ * it goes away is news again and may be woken for. Nothing is published on
+ * it; a watch app that opens asks for a snapshot itself (DROVE-22).
+ */
+export interface DroverReachabilityEvent {
+    reachable: boolean;
+}
+
+/**
  * What the phone sends a reachable watch by `sendMessage` for the voice half
  * (DROVE-92): a sentence to speak with an id to acknowledge, a stop, or the
  * reply-start cue that buzzes the wrist whichever device speaks.
@@ -692,6 +714,7 @@ type DroverWatchModuleType = {
         (eventName: 'onSpoken', listener: (event: DroverSpokenEvent) => void): EventSubscription;
         (eventName: 'onListen', listener: (event: DroverListenEvent) => void): EventSubscription;
         (eventName: 'onTransport', listener: (event: DroverTransportEvent) => void): EventSubscription;
+        (eventName: 'onReachability', listener: (event: DroverReachabilityEvent) => void): EventSubscription;
     };
 };
 
@@ -702,29 +725,25 @@ const native = requireOptionalNativeModule<DroverWatchModuleType>('DroverWatch')
 export const isDroverWatchAvailable = () => native !== null;
 
 /**
- * How many background wakes WatchConnectivity grants a phone per day
- * (`remainingComplicationUserInfoTransfers` starts here each morning). Apple's
- * figure, not ours; it is the denominator of the "wake budget 37/50 today"
- * line and nothing else reads it.
+ * The status as the screens may read it. The words for it (the wake budget,
+ * the complication row) live in sources/utils/droverWatchStatus.ts, where
+ * they have a spec.
+ *
+ * Before `WCSession` activates the native side reports the budget as 0 and
+ * the complication as off, and neither is a fact yet: a status read in the
+ * first second after launch would otherwise say a spent budget on a phone
+ * that has spent nothing (DROVE-391). Both keys are dropped until activation,
+ * so they read as unknown, which is what they are. Build 22's Swift omits
+ * them itself; this is the same rule for the binaries before it, which this
+ * file reaches as an OTA update.
  */
-export const droverWatchWakesPerDay = 50;
-
-/**
- * One line for the phone's session info screen and the feed's log, so the
- * two agree on what a spent budget looks like (DROVE-86). Absent `wakes`
- * (a native module that predates the key) is said as such rather than as 0,
- * because 0 has a specific meaning: no complication on any face, or the day's
- * budget spent, and in either case the wrist cannot be woken.
- */
-export function describeDroverWakeBudget(status: DroverWatchStatus): string {
-    if (typeof status.wakes !== 'number') return 'wake budget unknown';
-    return `wake budget ${status.wakes}/${droverWatchWakesPerDay} today`;
-}
-
 export function getDroverWatchStatus(): DroverWatchStatus {
     if (!native) return { supported: false, paired: false, installed: false, reachable: false };
     try {
-        return native.status();
+        const status = native.status();
+        if (status.activated !== false) return status;
+        const { wakes: _wakes, complicationEnabled: _complication, ...rest } = status;
+        return rest;
     } catch {
         return { supported: false, paired: false, installed: false, reachable: false };
     }
@@ -928,6 +947,20 @@ export function addDroverTransportListener(listener: (event: DroverTransportEven
     if (!native) return { remove: () => {} };
     try {
         return native.addListener('onTransport', listener);
+    } catch {
+        return { remove: () => {} };
+    }
+}
+
+/**
+ * The watch app coming forward or going away (DROVE-391). Same guard as the
+ * rest: builds up to 21 never send it, and a feed on one of those simply
+ * keeps closing its wake stretch by the cooldown alone.
+ */
+export function addDroverReachabilityListener(listener: (event: DroverReachabilityEvent) => void) {
+    if (!native) return { remove: () => {} };
+    try {
+        return native.addListener('onReachability', listener);
     } catch {
         return { remove: () => {} };
     }

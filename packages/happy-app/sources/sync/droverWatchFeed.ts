@@ -22,6 +22,7 @@ import { wristAlreadyDelivered } from '@/utils/wristNudges';
 import { getCurrentAppState } from './apiSocket';
 import {
     claimWristCues,
+    gateCueIds,
     noteWristRelay,
     releaseWristCues,
     rememberWristRelayState,
@@ -31,6 +32,8 @@ import {
     wristCueStateOf,
     wristRefusal,
 } from './droverWristRelay';
+import { decideWristWake, endWakeStretch, noteWakeRefused, noteWakeSpent } from './droverWakeLedger';
+import { describeDroverWakeBudget } from '@/utils/droverWatchStatus';
 import { demoLog, isDroverDemoId } from './droverDemo';
 import { isCursorAccount } from '@/utils/droverAccounts';
 import { isSessionArchived } from './sessionArchive';
@@ -58,11 +61,11 @@ import {
     addDroverRefreshListener,
     addDroverRouteListener,
     addDroverListenListener,
+    addDroverReachabilityListener,
     addDroverSayListener,
     addDroverSpokenListener,
     addDroverTransportListener,
     sendDroverWatchVoice,
-    describeDroverWakeBudget,
     getDroverWatchStatus,
     isDroverWatchAvailable,
     publishDroverSnapshot,
@@ -566,9 +569,12 @@ function sameAccountRows(a: DroverAccountRow[], b: DroverAccountRow[]): boolean 
  * question rather than something done on every publish: the 60s heartbeat
  * would drain it before lunch.
  *
- * True for a gate that was not there before, and for a session that was
- * running and has stopped. Both are things Clay would want to feel; a
- * subagent count moving is not.
+ * True for a GATE that was not there before, and for nothing else
+ * (DROVE-391). A session that was running and has stopped is still a cue
+ * (wristCueIds names it, a reachable watch diffs it off the publish), but it
+ * is not woken for: 300 dead sessions going quiet overnight were up to 300
+ * launches nobody felt, and the day's 50 were gone before the first real
+ * question. A subagent count moving is neither.
  */
 export function deservesAWake(
     before: { gates: DroverGate[]; sessions: DroverSession[] },
@@ -577,7 +583,7 @@ export function deservesAWake(
     // ONE definition of what a cue is, shared with the relay and with the
     // watch's own WristCueDiff (DROVE-224). A second copy here is how the
     // phone and the wrist would come to disagree about what a buzz is for.
-    return wristCueIds(wristCueStateOf(before), after).length > 0;
+    return gateCueIds(wristCueIds(wristCueStateOf(before), after)).length > 0;
 }
 
 let started = false;
@@ -704,9 +710,16 @@ export function startDroverWatchFeed(): () => void {
         // does not forward a push to the watch, so the direct path is the ONLY
         // path and a refusal is a wrist that stays silent outright.
         const carrier = wristCarrierFor(getCurrentAppState());
-        const wake =
-            mine.length > 0 &&
-            (fresh.length === 0 || wakeDeserved(fresh, togglesFromSettings(storage.getState().settings)));
+        // Whether some gate THIS path claimed is announced on haptic with the
+        // phone's switch on. Read off the claimed ids, not off every new
+        // gate: a gate another path already carried is not this wake's to
+        // justify. A stop claimed alone leaves this false and is not woken
+        // for either way (DROVE-391).
+        const claimed = new Set(mine);
+        const deserving = wakeDeserved(
+            fresh.filter((entry) => claimed.has(entry.gate.id)),
+            togglesFromSettings(storage.getState().settings),
+        );
         // The ids another path won the claim for. Named on the snapshot so the
         // wrist marks them played before it diffs and the same todo does not
         // buzz once as the mirrored push and once as this snapshot
@@ -775,42 +788,45 @@ export function startDroverWatchFeed(): () => void {
         // the snapshot diff, so there is no cue format on the wire to keep in
         // step with anything (DROVE-62).
         //
-        // Skipped when the watch is reachable, because reachable means the
-        // watch app is already frontmost — publish's own sendMessage has
-        // reached it and the wrist is being looked at. Spending a background
-        // launch on a screen someone is holding up is the one case where the
-        // budget buys nothing.
-        //
-        // A budget of exactly 0 is skipped and SAID: the native call would be
-        // downgraded to a plain transfer, which the application context above
-        // already covers, and the wrist would stay silent with nothing on
-        // record as to why (DROVE-86). The same line is what the session info
-        // screen shows, so Console and the screen agree.
-        if (wake && !status.reachable) {
-            if (status.wakes === 0) {
-                // Claimed a moment ago and given straight back: a cue nobody
-                // felt must stay carryable, or an exhausted budget would turn
-                // into a gate that is silent forever (DROVE-224). The state is
-                // not remembered either, so the next path still reads the cue
-                // as new.
-                releaseWristCues(mine);
-                noteWristRelay(wristRefusal(mine, carrier, describeDroverWakeBudget(status)));
+        // Whether to spend one is ONE rule in droverWakeLedger, shared with
+        // the background task (DROVE-391): a reachable watch app is already
+        // looking, a stop is carried and not woken for, a second gate inside
+        // one unreachable stretch rides the application context the first
+        // wake's launch reads, and a dead budget is refused and SAID, with
+        // its cause: the complication on no face is fixed on the watch, the
+        // day's 50 spent is fixed by tomorrow (DROVE-86). Every spend and
+        // refusal lands in the per-day ledger the Playground reads back.
+        const verdict = decideWristWake({ status, cues: mine, deserving });
+        if (!verdict.spend) {
+            if (verdict.carried) {
+                // The wrist is up to date, or will be when it next opens:
+                // this is what the next reader diffs against.
+                rememberWristRelayState({ gates, sessions });
                 return;
             }
-            void wakeDroverWatch(snapshot).then((spent) => {
-                if (spent) {
-                    rememberWristRelayState({ gates, sessions });
-                    return;
-                }
-                releaseWristCues(mine);
-                noteWristRelay(`${wristRefusal(mine, carrier, describeDroverWakeBudget(status))}; the wake was not spent as a background launch`);
-            });
+            // Claimed a moment ago and given straight back: a cue nobody
+            // felt must stay carryable, or an exhausted budget would turn
+            // into a gate that is silent forever (DROVE-224). The state is
+            // not remembered either, so the next path still reads the cue
+            // as new. The same line is what the session info screen shows,
+            // so Console and the screen agree.
+            releaseWristCues(mine);
+            noteWristRelay(wristRefusal(mine, carrier, verdict.line));
             return;
         }
-        // Either the wrist was reached (a reachable watch app buzzes off the
-        // publish itself) or there was nothing new to carry. Both are a wrist
-        // that is up to date, so this is what the next reader diffs against.
-        rememberWristRelayState({ gates, sessions });
+        void wakeDroverWatch(snapshot).then((spent) => {
+            if (spent) {
+                noteWakeSpent('gate');
+                rememberWristRelayState({ gates, sessions });
+                return;
+            }
+            // The native side turned it down (build 22 refuses rather than
+            // downgrades; older binaries downgrade to a plain transfer). No
+            // launch went out, so the stretch the verdict opened is closed.
+            noteWakeRefused('downgraded');
+            releaseWristCues(mine);
+            noteWristRelay(`${wristRefusal(mine, carrier, describeDroverWakeBudget(status))}; the wake was not spent as a background launch`);
+        });
     };
 
     // Rebuild the open session's rows when THAT session moved, and hand them
@@ -1064,6 +1080,15 @@ export function startDroverWatchFeed(): () => void {
         if (event.id) settleWatchUtterance(event.id, !!event.finished);
     });
 
+    // The watch app came forward (DROVE-391). The wrist has read the wall, so
+    // the stretch coalescing wakes is over and the next gate that lands after
+    // it goes away is news again. Nothing is published: a watch app that
+    // opens asks for its own snapshot (DROVE-22), and the change guard would
+    // drop an unforced one anyway.
+    const reachability = addDroverReachabilityListener((event) => {
+        if (event.reachable) endWakeStretch();
+    });
+
     // The wrist asked, which means iOS has just woken this app in the
     // background to answer (DROVE-22). Forced, because the ask is about the
     // TIMESTAMP: the gate set is usually identical and the change check would
@@ -1104,6 +1129,7 @@ export function startDroverWatchFeed(): () => void {
         routes.remove();
         spoken.remove();
         transport.remove();
+        reachability.remove();
         readingChanged();
         lastReading = null;
         coalescer.stop();

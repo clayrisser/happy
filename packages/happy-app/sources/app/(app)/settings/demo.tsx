@@ -14,7 +14,7 @@
  */
 
 import * as React from 'react';
-import { AppState, Platform, Text, View } from 'react-native';
+import { Platform, Text, View } from 'react-native';
 import { Stack, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -39,7 +39,10 @@ import { channelReadout, findDroverSettings, readoutIsEmpty } from '@/utils/chan
 import { useAllMachines, useAllSessions } from '@/sync/storage';
 import { buzzDroverWatch, demoBuzzLine, type DemoBuzzOutcome } from '@/sync/droverDemoBuzz';
 import { machineDroverPolicy, type DroverPolicyResponse } from '@/sync/droverPolicy';
-import { getDroverWatchStatus, isDroverWatchAvailable } from 'drover-watch';
+import { wakeLedgerLines } from '@/sync/droverWakeLedger';
+import { isDroverWatchAvailable } from 'drover-watch';
+import { useDroverWatchStatus } from '@/hooks/useDroverWatchStatus';
+import { describeDroverComplication, describeDroverWakesLeft } from '@/utils/droverWatchStatus';
 import type { DroverGateEntry } from '@/sync/droverGates';
 import {
     DEMO_SESSION_ID,
@@ -255,20 +258,10 @@ function WristHapticSection() {
     // What the wrist will ACTUALLY feel, read rather than assumed (DROVE-124).
     // It swings on whether the watch app happens to be on screen this second,
     // so it is read on mount, whenever the phone comes back to the foreground,
-    // and after every buzz. A stale verdict here would be the same confident
-    // wrong answer this row exists to stop giving.
-    const readStatus = React.useCallback(() => {
-        if (!isDroverWatchAvailable()) return null;
-        const status = getDroverWatchStatus();
-        return status.supported ? status : null;
-    }, []);
-    const [status, setStatus] = React.useState(readStatus);
-    React.useEffect(() => {
-        const sub = AppState.addEventListener('change', (state) => {
-            if (state === 'active') setStatus(readStatus());
-        });
-        return () => sub.remove();
-    }, [readStatus]);
+    // when the watch app comes forward, and after every buzz. A stale verdict
+    // here would be the same confident wrong answer this row exists to stop
+    // giving. The ledger rides the same hook (DROVE-391).
+    const { status, ledger, refresh } = useDroverWatchStatus();
     // One verdict for the row at the top, whether or not this build has a
     // watch module at all: "no wrist" is an answer and an empty space is not.
     const reach = available ? describeWristFidelity(status) : {
@@ -282,9 +275,9 @@ function WristHapticSection() {
         if (!alive.current) return outcome;
         setLast({ cue: spec.cue, outcome });
         setArmWake(!outcome.ok && outcome.why.includes('spend one background wake'));
-        setStatus(readStatus());
+        refresh();
         return outcome;
-    }, [armWake, readStatus]);
+    }, [armWake, refresh]);
 
     const buzzOne = React.useCallback(async (spec: WristCueSpec) => {
         if (busy) return;
@@ -338,6 +331,37 @@ function WristHapticSection() {
                 />}
                 showChevron={false}
             />
+            {/* The two causes of a wrist that cannot be woken, as two rows,
+                and what this phone spent today (DROVE-391). This is the
+                screen the one-sentence version was read on; the row under
+                the tap still prints the refusal, and these say which. */}
+            {status && status.paired && status.installed && (
+                <Item
+                    title="Complication on a face"
+                    subtitle={describeDroverComplication(status)}
+                    subtitleLines={0}
+                    icon={<Ionicons name="apps-outline" size={29} color={glyph} />}
+                    showChevron={false}
+                />
+            )}
+            {status && status.paired && status.installed && (
+                <Item
+                    title="Wakes left today"
+                    subtitle={describeDroverWakesLeft(status)}
+                    subtitleLines={0}
+                    icon={<Ionicons name="flash-outline" size={29} color={glyph} />}
+                    showChevron={false}
+                />
+            )}
+            {status && status.paired && status.installed && (
+                <Item
+                    title="Wakes used today"
+                    subtitle={wakeLedgerLines(ledger).join('\n')}
+                    subtitleLines={0}
+                    icon={<Ionicons name="receipt-outline" size={29} color={glyph} />}
+                    showChevron={false}
+                />
+            )}
             <Item
                 title="Play all, back to back"
                 subtitle="Most urgent first, a pause between each"
