@@ -20,7 +20,7 @@ import { Pressable, Text, View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { Typography } from '@/constants/Typography';
 import { hapticsSelection } from './haptics';
-import { sheetTabsHeight, sheetTabsInset } from './worktreeSheetLayout';
+import { sheetTabsBlockHeight, sheetTabsHeight, sheetTabsInset } from './worktreeSheetLayout';
 
 export interface SheetTab<K extends string> {
     key: K;
@@ -36,7 +36,14 @@ export interface SheetTabsProps<K extends string> {
 }
 
 const stylesheet = StyleSheet.create((theme) => ({
+    /**
+     * An explicit block height (DROVE-376), so the strip reserves its own room
+     * rather than inheriting whatever the control measured. The gap ABOVE it
+     * belongs to the header's `sheetHeaderRhythm.bottom`, which is why
+     * `sheetTabsInset.top` is 0 here.
+     */
     strip: {
+        height: sheetTabsBlockHeight,
         paddingHorizontal: sheetTabsInset.horizontal,
         paddingTop: sheetTabsInset.top,
         paddingBottom: sheetTabsInset.bottom,

@@ -19,19 +19,27 @@
  */
 
 import { composerSheetCap, type ComposerSheetWindow } from './composerSheetLayout';
+import { sheetHeaderHeight } from './sheetHeaderLayout';
 
 /**
- * The sheet header as WorktreeSheet draws it: 2pt over a 15pt title, 2pt to
- * a 12pt subtitle, 8pt under. Line heights are the font sizes plus the
- * platform's default leading.
+ * The sheet header, from the shared rhythm every drover sheet is drawn on
+ * (DROVE-376). It used to state its own arithmetic here -- 2 + 18 + 2 + 16 + 8
+ * -- while the component set no `lineHeight` at all, so the drawn header was
+ * 44.2pt against a declared 46 and the tab control came up into the subtitle.
+ * The number now comes from the same place the component's styles do.
  */
-export const worktreeSheetHeaderHeight = 2 + 18 + 2 + 16 + 8;
+export const worktreeSheetHeaderHeight = sheetHeaderHeight({ subtitle: true });
 
 /** UISegmentedControl's natural height, which the RN sibling matches. */
 export const sheetTabsHeight = 32;
 
-/** The strip around the control: the sheet's 16pt side padding, 2pt over, 10pt under. */
-export const sheetTabsInset = { horizontal: 16, top: 2, bottom: 10 } as const;
+/**
+ * The strip around the control: the sheet's 16pt side padding and 10pt under.
+ * NOTHING over it. The gap between the header and this strip belongs to
+ * `sheetHeaderRhythm.bottom` and lives inside the header's own height, because
+ * one gap owned by two views is how this one went missing.
+ */
+export const sheetTabsInset = { horizontal: 16, top: 0, bottom: 10 } as const;
 
 export const sheetTabsBlockHeight = sheetTabsHeight + sheetTabsInset.top + sheetTabsInset.bottom;
 

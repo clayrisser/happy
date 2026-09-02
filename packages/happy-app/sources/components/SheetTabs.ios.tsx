@@ -18,7 +18,7 @@ import { Host, Picker, Text } from '@expo/ui/swift-ui';
 import { accessibilityLabel, pickerStyle, tag } from '@expo/ui/swift-ui/modifiers';
 import type { SheetTabsProps } from './SheetTabs';
 import { hapticsSelection } from './haptics';
-import { sheetTabsHeight, sheetTabsInset } from './worktreeSheetLayout';
+import { sheetTabsBlockHeight, sheetTabsHeight, sheetTabsInset } from './worktreeSheetLayout';
 
 export function SheetTabs<K extends string>(props: SheetTabsProps<K>) {
     const { theme } = useUnistyles();
@@ -30,7 +30,12 @@ export function SheetTabs<K extends string>(props: SheetTabsProps<K>) {
     }, [onSelect, selected]);
     return (
         <View
+            // An explicit block height (DROVE-376). A `Host` is the one child
+            // whose drawn size RN cannot see, so the strip states its own room
+            // instead of taking the host's word for it; the gap above belongs
+            // to the header's `sheetHeaderRhythm.bottom`.
             style={{
+                height: sheetTabsBlockHeight,
                 paddingHorizontal: sheetTabsInset.horizontal,
                 paddingTop: sheetTabsInset.top,
                 paddingBottom: sheetTabsInset.bottom,

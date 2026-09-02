@@ -38,24 +38,41 @@ import { BubblePressable } from './BubblePressable';
 import { ComposerSheet } from './ComposerSheet';
 import { ComposerSheetRow } from './ComposerSheetRow';
 import { hapticsLight } from './haptics';
+import { sheetSectionRhythm, sheetSectionTitleInset } from './sheetHeaderLayout';
 import { useDroverChannels } from '@/hooks/useDroverChannels';
 import { audioRows, MODE_COPY, modeTitle } from '@/sync/droverChannels';
 import { useLocalSettingMutable } from '@/sync/storage';
 import { t } from '@/text';
 
 const stylesheet = StyleSheet.create((theme) => ({
-    // The composer's own section metrics, copied here rather than passed in,
-    // so the sheet no longer needs styles handed down from AgentInput.
+    // The section metrics come from `sheetSectionRhythm` now (DROVE-376).
+    // They used to be copied out of AgentInput, which is how the title ended
+    // up at a 16pt inset over rows whose text starts at 24, with four points
+    // of air between the two. The title's left edge is DERIVED from the row
+    // card's, so the pair cannot drift apart again.
     section: {
-        paddingVertical: 8,
+        paddingTop: sheetSectionRhythm.top,
+        paddingBottom: sheetSectionRhythm.bottom,
     },
     sectionTitle: {
-        fontSize: 12,
-        fontWeight: '600',
+        fontSize: sheetSectionRhythm.titleSize,
+        lineHeight: sheetSectionRhythm.titleLine,
         color: theme.colors.textSecondary,
-        paddingHorizontal: 16,
-        paddingBottom: 4,
+        paddingHorizontal: sheetSectionTitleInset,
+        paddingBottom: sheetSectionRhythm.gap,
         ...Typography.default('semiBold'),
+    },
+    /** 8 + 18 + 14 + 8, which is what `channelSheetRowHeight.mode` claims. */
+    modeTitle: {
+        fontSize: 14,
+        lineHeight: 18,
+        ...Typography.default(),
+    },
+    modeSubtitle: {
+        fontSize: 11,
+        lineHeight: 14,
+        color: theme.colors.textSecondary,
+        ...Typography.default(),
     },
 }));
 
@@ -126,15 +143,13 @@ export const DroverChannelsSheet = React.memo(function DroverChannelsSheet(props
                                 {isSelected && <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: theme.colors.radio.dot }} />}
                             </View>
                             <View style={{ flex: 1 }}>
-                                <Text style={{
-                                    fontSize: 14,
+                                <Text style={[styles.modeTitle, {
                                     color: isSelected ? theme.colors.radio.active : theme.colors.text,
-                                    ...Typography.default(),
-                                }}>
+                                }]}>
                                     {modeTitle(name)}
                                 </Text>
                                 {!!copy?.subtitle && (
-                                    <Text style={{ fontSize: 11, color: theme.colors.textSecondary, ...Typography.default() }}>
+                                    <Text style={styles.modeSubtitle}>
                                         {copy.subtitle}
                                     </Text>
                                 )}

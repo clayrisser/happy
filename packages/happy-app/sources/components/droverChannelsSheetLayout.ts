@@ -20,16 +20,25 @@
  * test can hold a shorter label to the fit instead of eyeballing a screenshot.
  */
 
-/** Row heights as ComposerSheetRow and the mode picker actually draw them. */
+import { sheetSectionPadding, sheetSectionTitleHeight } from './sheetHeaderLayout';
+
+/**
+ * Row heights as ComposerSheetRow and the mode picker actually draw them.
+ *
+ * The two section numbers come off the shared rhythm now (DROVE-376). They
+ * used to be literals here while the component drew a 12pt title with no line
+ * height and 4pt under it -- about 18 against a declared 24 -- which is the
+ * same drift that put the tab control on the worktrees sheet's subtitle.
+ */
 export const channelSheetRowHeight = {
-    /** Radio, title and subtitle inside 8pt of vertical padding. */
+    /** Radio, title and subtitle inside 8pt of vertical padding: 8+18+14+8. */
     mode: 48,
     /** ComposerSheetRow's minHeight. */
     toggle: 48,
-    /** A section's uppercase title. */
-    sectionTitle: 24,
+    /** A section's uppercase title and the gap under it. */
+    sectionTitle: sheetSectionTitleHeight,
     /** The section view's own vertical padding, 8 top and 8 bottom. */
-    sectionPadding: 16,
+    sectionPadding: sheetSectionPadding,
 } as const;
 
 /** What the sheet would be if nothing capped it. */
