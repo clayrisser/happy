@@ -123,7 +123,6 @@ export default function ChannelsScreen() {
                     <Item
                         title={t('agentInput.channels.phoneHaptics')}
                         subtitle={t('agentInput.channels.phoneHapticsSubtitle')}
-                        subtitleLines={0}
                         icon={<Ionicons name={phoneHaptics ? 'phone-portrait-outline' : 'notifications-off-outline'} size={29} color="#FF9500" />}
                         showChevron={false}
                         rightElement={(
