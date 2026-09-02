@@ -224,6 +224,155 @@ struct SharedWireTests {
         check(closed["sessionId"] == nil, "a closed transcript omits the session rather than sending null")
     }
 
+    // MARK: DROVE-384, the in-app nudges
+
+    /// Every moment in the vocabulary plays SOMETHING, and no two that have to
+    /// be told apart share a beat. Sent and refused are the pair that matters:
+    /// they answer the same gesture and mean opposite things.
+    static func everyNudgeHasABeatAndTheOppositesDiffer() {
+        for nudge in WristNudge.allCases {
+            let decision = WristNudgePolicy.decide(nudge, announceHaptic: true, frontmost: true)
+            check(decision.beat != nil, "\(nudge.rawValue) plays a beat")
+            check(!nudge.meaning.isEmpty, "\(nudge.rawValue) says what it is for")
+        }
+        check(WristNudge.answerSent.beat != WristNudge.answerRefused.beat, "sent and refused feel different")
+        check(WristNudge.readingStarted.beat != WristNudge.readingPaused.beat, "start and stop feel different")
+        check(WristNudge.flipLanded.beat == .click, "a flip landing is the lightest thing there is")
+    }
+
+    /// The lead beat of a needs-you nudge is the lead beat of the gate pattern
+    /// it stands for. One vocabulary, not two: the nudge is the first thing a
+    /// wrist feels when that gate lands, and the cue is the whole of it.
+    static func aNudgeLeadsWithTheSameBeatItsGateDoes() {
+        check(WristNudge.needsYou.beat == WristCue.needsYou.beats.first, "needs-you leads the way its gate does")
+        check(WristNudge.gateArrived.beat == WristCue.permission.beats.first, "a gate arriving leads the way a gate does")
+    }
+
+    /// `WKInterfaceDevice.play` does nothing off screen. That is watchOS's
+    /// rule and it is checked BEFORE any policy, so a nudge is never recorded
+    /// as played on a wrist that felt nothing.
+    static func nothingNudgesAWristThatIsNotLookingAtIt() {
+        for nudge in WristNudge.allCases {
+            let decision = WristNudgePolicy.decide(nudge, announceHaptic: true, frontmost: false, demo: true)
+            check(decision == .hush(.notFrontmost), "\(nudge.rawValue) is silent off screen, demo or not")
+        }
+    }
+
+    /// The synced channel rules the wrist. Nothing here reads `phoneHaptics`,
+    /// which is the handset's own switch and has nothing to say about a watch
+    /// (DROVE-190).
+    static func theHapticChannelSilencesEveryNudge() {
+        for nudge in WristNudge.allCases {
+            let decision = WristNudgePolicy.decide(nudge, announceHaptic: false, frontmost: true)
+            check(decision == .hush(.channelOff), "\(nudge.rawValue) obeys the haptic channel")
+        }
+    }
+
+    /// A Playground row that plays nothing is a broken screen, not a quiet
+    /// one: a finger asked for this by name.
+    static func theDemoPlaysWhateverTheChannelSays() {
+        for nudge in WristNudge.allCases {
+            let decision = WristNudgePolicy.decide(
+                nudge, announceHaptic: false, frontmost: true, alreadyDelivered: true, demo: true
+            )
+            check(decision.beat == nudge.beat, "\(nudge.rawValue) still plays for a demo")
+        }
+    }
+
+    /// One todo, one buzz, whichever wire got there first.
+    static func aTodoAlreadyCarriedByThePushDoesNotBuzzAgain() {
+        let held = WristNudgePolicy.decide(.needsYou, announceHaptic: true, frontmost: true, alreadyDelivered: true)
+        check(held == .hush(.alreadyDelivered), "a todo the push carried stays quiet")
+        let fresh = WristNudgePolicy.decide(.needsYou, announceHaptic: true, frontmost: true, alreadyDelivered: false)
+        check(fresh.beat == WristBeat.notification, "a todo nothing carried still buzzes")
+        // And nothing else is deduped: an answer leaving the watch twice is
+        // two answers, not one arrival seen twice.
+        for nudge in WristNudge.allCases where !nudge.dedupes {
+            let decision = WristNudgePolicy.decide(nudge, announceHaptic: true, frontmost: true, alreadyDelivered: true)
+            check(decision.beat != nil, "\(nudge.rawValue) is not deduped by an id")
+        }
+    }
+
+    /// DROVE-92's wire said `reply` and a watch already on Clay's wrist still
+    /// answers to it. TestFlight is not OTA, so the phone can be a build ahead
+    /// for days.
+    static func theOldReplyCueStillNamesTheReadingStart() {
+        check(WristNudge.named("reply") == .readingStarted, "the original spelling still lands")
+        check(WristNudge.named("readingSkipped") == .readingSkipped, "the new names land")
+        check(WristNudge.named("nonsense") == nil, "a cue this build never heard of is not guessed at")
+    }
+
+    /// A flip has landed when the account the phone reports changes, for a
+    /// session THIS wrist has a flip in flight for.
+    static func aFlipLandsWhenTheAccountMoves() {
+        let before = snapshot(sessions: [("s1", "alpha"), ("s2", "alpha")])
+        let after = snapshot(sessions: [("s1", "beta"), ("s2", "beta")])
+        let landed = DroverSnapshot.flipsThatLanded(from: before, to: after, inFlight: ["s1"])
+        check(landed == ["s1"], "only the session this wrist flipped counts as landed")
+        check(
+            DroverSnapshot.flipsThatLanded(from: before, to: before, inFlight: ["s1"]).isEmpty,
+            "a session still on its old account has not landed"
+        )
+        check(
+            DroverSnapshot.flipsThatLanded(from: before, to: after, inFlight: []).isEmpty,
+            "a flip nobody on this wrist asked for is not news"
+        )
+        let gone = snapshot(sessions: [("s2", "beta")])
+        check(
+            DroverSnapshot.flipsThatLanded(from: before, to: gone, inFlight: ["s1"]).isEmpty,
+            "a session that vanished was not moved"
+        )
+    }
+
+    /// The channel and the carried ids ride the snapshot, and a phone that
+    /// predates them still decodes WHOLE — the hand-written decoder's whole
+    /// reason for being.
+    static func theHapticChannelRidesTheSnapshot() {
+        let payload = """
+        {"gates":[],"updatedAt":"2026-09-01T01:00:00Z","connected":true,
+        "announceHaptic":false,"alreadyDelivered":["s1:g1"]}
+        """
+        guard let snapshot = try? DroverSnapshot.decoder.decode(
+            DroverSnapshot.self, from: Data(payload.utf8)
+        ) else {
+            check(false, "a snapshot carrying the haptic channel decodes")
+            return
+        }
+        check(snapshot.announceHaptic == false, "the channel comes across")
+        check(!snapshot.buzzesInApp, "a wrist with the channel off does not buzz in the app")
+        check(snapshot.alreadyDelivered == ["s1:g1"], "the ids another path carried come across")
+
+        let old = """
+        {"gates":[],"updatedAt":"2026-09-01T01:00:00Z","connected":true}
+        """
+        guard let older = try? DroverSnapshot.decoder.decode(
+            DroverSnapshot.self, from: Data(old.utf8)
+        ) else {
+            check(false, "a phone that predates the haptic channel still decodes")
+            return
+        }
+        check(older.announceHaptic == nil, "an older phone says nothing about the channel")
+        check(older.buzzesInApp, "and silence from an older phone is not a silent wrist")
+        check(older.alreadyDelivered.isEmpty, "an older phone carried nothing this wrist knows of")
+    }
+
+    /// A snapshot with the named sessions on the named accounts, built the way
+    /// the phone builds one: through the decoder, so the fixture cannot claim
+    /// a shape the wire could not carry.
+    static func snapshot(sessions: [(String, String)]) -> DroverSnapshot {
+        let rows = sessions
+            .map { "{\"id\":\"\($0.0)\",\"title\":\"\($0.0)\",\"account\":\"\($0.1)\",\"active\":true}" }
+            .joined(separator: ",")
+        let payload = "{\"gates\":[],\"updatedAt\":\"2026-09-01T01:00:00Z\",\"connected\":true,\"sessions\":[\(rows)]}"
+        guard let decoded = try? DroverSnapshot.decoder.decode(
+            DroverSnapshot.self, from: Data(payload.utf8)
+        ) else {
+            check(false, "the flip fixture decodes")
+            return .empty
+        }
+        return decoded
+    }
+
     static func main() {
         answerOmitsWhatItDoesNotCarry()
         answerCarriesTypedText()
@@ -295,6 +444,15 @@ struct SharedWireTests {
         aQuietOnlyAuthorizationIsSilenceNotSuccess()
         everySilenceSaysWhatToDoAboutIt()
         aRefusalNamesTheCueThatWasLost()
+        everyNudgeHasABeatAndTheOppositesDiffer()
+        aNudgeLeadsWithTheSameBeatItsGateDoes()
+        nothingNudgesAWristThatIsNotLookingAtIt()
+        theHapticChannelSilencesEveryNudge()
+        theDemoPlaysWhateverTheChannelSays()
+        aTodoAlreadyCarriedByThePushDoesNotBuzzAgain()
+        theOldReplyCueStillNamesTheReadingStart()
+        aFlipLandsWhenTheAccountMoves()
+        theHapticChannelRidesTheSnapshot()
 
         if failures.isEmpty {
             print("\nall wire checks passed")

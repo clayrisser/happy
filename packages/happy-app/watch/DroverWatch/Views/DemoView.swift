@@ -47,6 +47,27 @@ struct DemoView: View {
                     .foregroundStyle(.secondary)
             }
 
+            // The IN-APP half (DROVE-384). Not gates and not news: feedback
+            // for something happening in front of you, one beat each. They
+            // play here whatever the haptic channel says, because a row that
+            // does nothing is a broken screen and the switch is the thing you
+            // came here to compare against.
+            Section {
+                ForEach(WristNudge.allCases, id: \.self) { nudge in
+                    Button {
+                        store.demoNudge(nudge)
+                    } label: {
+                        NudgeRow(nudge: nudge, playing: store.demoPlayingNudge == nudge)
+                    }
+                }
+            } header: {
+                Text("In the app")
+            } footer: {
+                Text("One beat each, for what you just did. These need this app on screen; nothing else does.")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.secondary)
+            }
+
             // The honest half of the Playground (DROVE-124). Every pattern
             // above plays only because this screen is up. With the app closed
             // watchOS taps once with its own haptic and none of the patterns
@@ -107,6 +128,42 @@ private struct ClosedAppRow: View {
     private var detail: String {
         if let silence = delivery.silence { return silence.reason }
         return "A gate shows its card and taps once. The patterns above need this app on screen; watchOS chooses the haptic for a notification and no API selects it."
+    }
+}
+
+/// One in-app nudge: the moment it answers and the single beat it plays.
+private struct NudgeRow: View {
+    let nudge: WristNudge
+    let playing: Bool
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: playing ? "waveform" : symbol)
+                .font(.caption2)
+                .foregroundStyle(playing ? .green : .secondary)
+                .frame(width: 14)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(nudge.beat.rawValue)
+                    .font(.caption)
+                Text(nudge.meaning)
+                    .font(.system(size: 9))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var symbol: String {
+        switch nudge {
+        case .gateArrived: return "bell"
+        case .needsYou: return "checklist"
+        case .answerSent: return "paperplane"
+        case .answerRefused: return "xmark.octagon"
+        case .readingStarted: return "play"
+        case .readingPaused: return "pause"
+        case .readingSkipped: return "forward"
+        case .flipLanded: return "arrow.triangle.swap"
+        }
     }
 }
 

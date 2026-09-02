@@ -92,12 +92,22 @@ enum WristCue: String, Codable, CaseIterable {
 
 /// One beat of a taptic pattern. Mirrors the `WKHapticType` cases this app
 /// uses; kept out of WatchKit so the decision compiles on the Mac.
+///
+/// The first five are the GATE patterns' alphabet (DROVE-62). The last three
+/// belong to the in-app moments in `WristNudge` (DROVE-384) and appear in no
+/// gate pattern: `.start` and `.stop` are watchOS's own begin/end pair, which
+/// is exactly what a reading starting and stopping is, and `.click` is the
+/// lightest thing the Taptic Engine will do — right for a flip landing, which
+/// is confirmation rather than news.
 enum WristBeat: String, Equatable {
     case notification
     case directionUp
     case retry
     case success
     case failure
+    case start
+    case stop
+    case click
 }
 
 /// One thing worth buzzing about, already deduped and ready to play.

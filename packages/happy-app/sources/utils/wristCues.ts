@@ -13,8 +13,23 @@
  * carry over exactly, and count is what a sleeve leaves you with anyway.
  */
 
-/** Mirrors `WristBeat` in WristCue.swift. */
-export type WristBeat = 'notification' | 'directionUp' | 'retry' | 'success' | 'failure';
+/**
+ * Mirrors `WristBeat` in WristCue.swift.
+ *
+ * The first five are the gate patterns' alphabet. `start`, `stop` and `click`
+ * appear in no gate pattern at all — they belong to the in-app nudges
+ * (wristNudges.ts, DROVE-384) — but the Swift enum is one enum and this
+ * mirrors it whole rather than half of it.
+ */
+export type WristBeat =
+    | 'notification'
+    | 'directionUp'
+    | 'retry'
+    | 'success'
+    | 'failure'
+    | 'start'
+    | 'stop'
+    | 'click';
 
 /** Mirrors `WristCue`. `wire` is the Swift raw value, the bus `kind`. */
 export interface WristCueSpec {

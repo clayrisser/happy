@@ -97,6 +97,14 @@ function playBeat(beat: WristBeat): Promise<void> {
         case 'retry': return Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
         case 'success': return Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         case 'failure': return Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+        // The in-app three (DROVE-384). They reach a phone only through the
+        // Playground, because the moments they answer happen on the wrist —
+        // so the mapping is by WEIGHT, like the rest: a reading opening is
+        // light, closing is medium, and a flip landing is the selection tick,
+        // which is the nearest thing UIKit has to `.click`.
+        case 'start': return Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        case 'stop': return Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+        case 'click': return Haptics.selectionAsync();
     }
 }
 

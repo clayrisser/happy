@@ -833,8 +833,39 @@ struct DroverSnapshot: Codable, Equatable {
     /// from a phone that predates the key; both mean "no reader here" and the
     /// wrist shows neither indicator nor control.
     var reading: DroverReading? = nil
+    /// The synced `droverAnnounceHaptic` channel switch, as the phone read it
+    /// at publish (DROVE-384).
+    ///
+    /// The wrist has always been the surface this switch was ABOUT — DROVE-190
+    /// is explicit that the watch rides `droverAnnounceHaptic` and never the
+    /// handset's own `phoneHaptics` — and until now it never reached the watch
+    /// at all. The phone gated the background WAKE on it and nothing gated the
+    /// pattern the watch plays for itself, so a wrist with the channel off
+    /// still buzzed the moment the app was on screen.
+    ///
+    /// Absent from a phone that predates the key, and absent reads as ON: an
+    /// older phone was buzzing this wrist yesterday and a silent upgrade is
+    /// the worse surprise. Read through `buzzesInApp`, never directly.
+    var announceHaptic: Bool? = nil
+    /// Cue ids some OTHER path already carried to this wrist (DROVE-384).
+    ///
+    /// The dedupe the phone is the only one able to make. A todo can arrive
+    /// twice — as the push iOS mirrors onto the watch, and as this snapshot —
+    /// and those are two wires that cannot see each other. The phone sees
+    /// both, because it claims every cue id in one on-disk ledger before any
+    /// path carries it (droverWristRelay), so it names here the ids whose
+    /// claim it did NOT win. The wrist marks them played before it diffs, and
+    /// the same todo never buzzes twice.
+    var alreadyDelivered: [String] = []
 
     static let empty = DroverSnapshot(gates: [], updatedAt: .distantPast, connected: false)
+
+    /// Whether an in-app nudge or a gate pattern may play on this wrist.
+    ///
+    /// The one place `announceHaptic`'s absence is resolved, so "an older
+    /// phone still buzzes" is a decision written once rather than a `?? true`
+    /// repeated at four call sites.
+    var buzzesInApp: Bool { announceHaptic ?? true }
 
     /// How long a snapshot may go unrefreshed before the wrist stops trusting
     /// it.
@@ -946,10 +977,44 @@ extension DroverSnapshot {
         accountRows = try container.decodeIfPresent([DroverAccount].self, forKey: .accountRows) ?? []
         transcript = try container.decodeIfPresent(DroverTranscript.self, forKey: .transcript)
         reading = try container.decodeIfPresent(DroverReading.self, forKey: .reading)
+        announceHaptic = try container.decodeIfPresent(Bool.self, forKey: .announceHaptic)
+        alreadyDelivered = try container.decodeIfPresent([String].self, forKey: .alreadyDelivered) ?? []
     }
 }
 
 extension DroverSnapshot {
+    /// The sessions whose flip has LANDED between two snapshots (DROVE-384).
+    ///
+    /// A flip is the one thing the wrist asks for that nothing acknowledges:
+    /// `DroverFlip` goes out and the session simply starts reporting the new
+    /// account in some later snapshot. So "landed" is exactly that — a session
+    /// this watch has a flip in flight for, whose `account` the phone now
+    /// spells differently. Anything else is not the flip: a session that
+    /// vanished was not moved, and a session whose account never changed is
+    /// still waiting.
+    ///
+    /// `inFlight` is what keeps this to the finger that asked. A flip made on
+    /// the phone changes the same field, and buzzing a wrist for a decision
+    /// somebody made on another surface is the noise DROVE-190 is about.
+    ///
+    /// Pure and here rather than in GateStore so `test-shared.sh` can check
+    /// it on the Mac, like every other decision behind a buzz.
+    static func flipsThatLanded(
+        from previous: DroverSnapshot,
+        to next: DroverSnapshot,
+        inFlight: Set<String>
+    ) -> [String] {
+        guard !inFlight.isEmpty else { return [] }
+        var before: [String: String?] = [:]
+        for session in previous.sessions { before[session.id] = session.account }
+        return next.sessions.compactMap { session in
+            guard inFlight.contains(session.id) else { return nil }
+            guard let was = before[session.id] else { return nil }
+            guard was != session.account else { return nil }
+            return session.id
+        }
+    }
+
     /// The account the work is on, for the one glance that answers "can I
     /// still work" (DROVE-131).
     ///

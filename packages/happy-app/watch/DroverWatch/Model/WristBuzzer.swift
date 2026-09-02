@@ -56,6 +56,14 @@ final class WristBuzzer {
     /// which one is live without asking UserNotifications itself.
     var onDeliveryChanged: ((WristDelivery) -> Void)?
 
+    /// The synced `droverAnnounceHaptic` channel switch, as the phone last put
+    /// it on a snapshot (DROVE-384). Never `phoneHaptics`, which is local to
+    /// the handset and says nothing about this wrist (DROVE-190).
+    ///
+    /// True until a snapshot says otherwise, which is also what an older phone
+    /// with no such key means: it was buzzing this wrist yesterday.
+    var announceHaptic: Bool = true
+
     /// What the last `getNotificationSettings` said. `.notDetermined` until
     /// asked, which is also the honest starting value: a process that has not
     /// looked does not know.
@@ -169,6 +177,16 @@ final class WristBuzzer {
         let fresh = events.filter { !played.contains($0.id) }
         guard let loudest = fresh.max(by: { $0.cue.rank < $1.cue.rank }) else { return }
         remember(fresh.map(\.id))
+        // The channel switch rules the wrist, and until DROVE-384 it never
+        // reached this process: the phone gated the background WAKE on it and
+        // nothing gated the pattern played here, so a wrist with haptics
+        // switched off still buzzed with the app on screen. The ids are
+        // remembered FIRST, above, so turning the channel back on does not
+        // replay a backlog of gates that were raised while it was off.
+        guard announceHaptic else {
+            droverLog.notice("wrist silent for \(loudest.cue.rawValue, privacy: .public): the haptic channel is off")
+            return
+        }
         // The phone's "Buzz the watch" row publishes a `demo:` gate so the
         // real pattern plays by the real path (DROVE-75). It buzzes like any
         // gate; it is only LOGGED apart, so a demo in the console is never
@@ -191,15 +209,49 @@ final class WristBuzzer {
         }
     }
 
+    /// One IN-APP moment, played now (DROVE-384).
+    ///
+    /// Frontmost only, which is not a limitation here but the definition: a
+    /// nudge is feedback for something happening in front of him, and there is
+    /// no background alert to post and none wanted. It is not a `WristCue` —
+    /// those are news, ranked against each other and deduped so one arrival is
+    /// one buzz, and an answer leaving the watch must never outrank, or be
+    /// deduplicated against, a question.
+    ///
+    /// `id` is only read for the one nudge that dedupes (`needsYou`): it is
+    /// checked against the same persisted ledger the gate buzz keeps, so a
+    /// todo the phone already carried by push stays quiet here.
+    func nudge(_ nudge: WristNudge, id: String? = nil, demo: Bool = false) {
+        let decision = WristNudgePolicy.decide(
+            nudge,
+            announceHaptic: announceHaptic,
+            frontmost: delivery().keepsPattern,
+            alreadyDelivered: id.map { played.contains($0) } ?? false,
+            demo: demo
+        )
+        switch decision {
+        case let .play(beat):
+            if let id { remember([id]) }
+            WKInterfaceDevice.current().play(beat.hapticType)
+        case let .hush(hush):
+            // Said, not surfaced. A nudge is about a moment he is looking at,
+            // so a banner for one that did not fire would be noise about
+            // nothing; a cue that cannot buzz still gets `onRefusal`.
+            droverLog.notice("wrist nudge \(nudge.rawValue, privacy: .public) hushed: \(hush.rawValue, privacy: .public)")
+        }
+    }
+
     /// A reply has started being spoken, on this wrist or on the phone
-    /// (DROVE-92). One beat, frontmost only: the cue arrives by `sendMessage`,
-    /// which only ever reaches a watch app that is on screen, so there is no
-    /// background alert to post and none wanted. It is not a WristCue: those
-    /// are gates and ranked against each other, and a reply starting must
-    /// never outrank, or be deduplicated against, a question.
-    func replyStarted() {
-        guard delivery().keepsPattern else { return }
-        WKInterfaceDevice.current().play(.start)
+    /// (DROVE-92).
+    func replyStarted() { nudge(.readingStarted) }
+
+    /// Mark cue ids another path already carried, so the diff does not buzz
+    /// for them (DROVE-384). The phone names them on the snapshot; see
+    /// `DroverSnapshot.alreadyDelivered` for why only the phone can.
+    func markDelivered(_ ids: [String]) {
+        let fresh = ids.filter { !played.contains($0) }
+        guard !fresh.isEmpty else { return }
+        remember(fresh)
     }
 
     /// Play one pattern now, for the Playground (DROVE-75).
@@ -313,6 +365,9 @@ extension WristBeat {
         case .retry: return .retry
         case .success: return .success
         case .failure: return .failure
+        case .start: return .start
+        case .stop: return .stop
+        case .click: return .click
         }
     }
 }

@@ -18,6 +18,7 @@ import { sync } from './sync';
 import { sessionAllow, sessionDeny } from './ops';
 import { collectGateEntries, collectGates } from './droverGates';
 import { newGateEntries, togglesFromSettings, wakeDeserved } from './droverChannels';
+import { wristAlreadyDelivered } from '@/utils/wristNudges';
 import { getCurrentAppState } from './apiSocket';
 import {
     claimWristCues,
@@ -584,6 +585,8 @@ let lastGates: DroverGate[] = [];
 let lastSessions: DroverSession[] = [];
 let lastAccountRows: DroverAccountRow[] = [];
 let lastReading: DroverReading | null = null;
+/** The haptic channel at the last publish, so a flip of it publishes. */
+let lastAnnounceHaptic: boolean | null = null;
 /**
  * The first publish of a run has nothing to compare against, so every gate in
  * it reads as new. Waking for that would spend the budget on a wall of work
@@ -643,6 +646,12 @@ export function startDroverWatchFeed(): () => void {
         const sessions = collectSessions();
         const accountRows = collectAccountRows(storage.getState().sessions ?? {});
         const reading = collectReading();
+        // The wrist's own switch, read at publish so the watch can obey it
+        // (DROVE-384). The SYNCED drover channel, mirrored to every connected
+        // Mac. This handset's own device-local haptic switch is a different
+        // setting entirely and no line on the wrist path may read it
+        // (DROVE-190) — hapticKinds.spec.ts checks this file for exactly that.
+        const announceHaptic = togglesFromSettings(storage.getState().settings).announceHaptic;
         // Only publish on a real change: updateApplicationContext throttles,
         // and a redundant write can displace a fresh one. A flip changes the
         // SESSION set and not the gate set, so both are compared — checking
@@ -659,6 +668,12 @@ export function startDroverWatchFeed(): () => void {
             // A pause moves nothing else, so without this the wrist keeps
             // yesterday's answer (DROVE-275).
             && sameReading(reading, lastReading)
+            // The haptic channel moves NOTHING else either (DROVE-384). Flip
+            // it in a tmux pane and the gates, sessions, accounts and reader
+            // are all identical, so a publish keyed on those alone would leave
+            // the wrist buzzing off a switch he turned off minutes ago. Same
+            // shape as the pause above and the binding limit before it.
+            && announceHaptic === lastAnnounceHaptic
         ) return;
         // Computed against the PREVIOUS sets, so it has to happen before they
         // are replaced below (DROVE-62).
@@ -692,10 +707,18 @@ export function startDroverWatchFeed(): () => void {
         const wake =
             mine.length > 0 &&
             (fresh.length === 0 || wakeDeserved(fresh, togglesFromSettings(storage.getState().settings)));
+        // The ids another path won the claim for. Named on the snapshot so the
+        // wrist marks them played before it diffs and the same todo does not
+        // buzz once as the mirrored push and once as this snapshot
+        // (DROVE-384). Empty on the seeded first publish, which claims
+        // nothing — and the wrist's own 150s freshness window is what keeps
+        // that wall of history quiet, as it always has been.
+        const alreadyDelivered = publishedOnce ? wristAlreadyDelivered(cues, mine) : [];
         lastGates = gates;
         lastSessions = sessions;
         lastAccountRows = accountRows;
         lastReading = reading;
+        lastAnnounceHaptic = announceHaptic;
         publishedOnce = true;
         const status = getDroverWatchStatus();
         const snapshot = {
@@ -719,6 +742,13 @@ export function startDroverWatchFeed(): () => void {
             // every snapshot rides `sendMessage` to a reachable watch and that
             // wire is capped near 64KB (droverWatchTranscript.spec.ts).
             ...(reading ? { reading } : {}),
+            // The wrist's switch and the ids it must not buzz for again
+            // (DROVE-384). Both are a few bytes and both ride every publish:
+            // the switch because a watch launched later reads the application
+            // context and nothing else, the ids because the arrival that
+            // matters is usually the one that woke the app.
+            announceHaptic,
+            ...(alreadyDelivered.length ? { alreadyDelivered } : {}),
             updatedAt: new Date().toISOString(),
             // "connected" is WatchConnectivity pairing state and nothing more:
             // this phone is activated, a watch is paired, and it has the app.

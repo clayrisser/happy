@@ -4,7 +4,7 @@ import { createRoutedSpeechEngine } from './routedSpeechEngine';
 import { createCuedSpeechEngine } from './cuedSpeechEngine';
 import { audioCues } from './audioCueService';
 import { resolveSpeaker } from './speaker';
-import { cueWatchReplyStart, watchSpeechEngine } from './watchSpeaker';
+import { cueWatchReplyStart, nudgeWatch, watchSpeechEngine } from './watchSpeaker';
 import { storage } from '@/sync/storage';
 import { sync } from '@/sync/sync';
 import { applyReadAloudResume } from '@/sync/localSettings';
@@ -92,7 +92,15 @@ export const readAloud = new ReadAloudReader(
         // never be cut short whatever the arrival stamps look like.
         turnStillRunning: (sessionId) => storage.getState().sessions[sessionId]?.thinking === true,
         skipMarker: '',
-        onSkip: () => audioCues.skipped(),
+        // The earcon in the ear, and the tap on the wrist (DROVE-384). A skip
+        // is the one gesture whose result can be silence — the marker is
+        // deleted on purpose, because Clay asked for "a ding or a beep"
+        // instead of the words — so it is also the one that most needs to be
+        // felt when the phone is in a pocket.
+        onSkip: () => {
+            audioCues.skipped();
+            nudgeWatch('readingSkipped');
+        },
         asideFor: (message, sessionId) => audioCues.titleFor(message, sessionId),
         // The model's reasoning, said in its place (DROVE-181). The setting
         // and the unwrapping both live out here so the queue stays a queue.

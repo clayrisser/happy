@@ -472,6 +472,11 @@ function beatWord(beat: WristCueSpec['beats'][number]): string {
         case 'retry': return 'thud';
         case 'success': return 'soft';
         case 'failure': return 'rough';
+        // No gate pattern uses these three — they belong to the in-app nudges
+        // (DROVE-384) — but the beat union is one union and this reads it.
+        case 'start': return 'open';
+        case 'stop': return 'close';
+        case 'click': return 'click';
     }
 }
 
