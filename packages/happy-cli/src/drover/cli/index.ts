@@ -50,6 +50,16 @@ export const droverVerbs: readonly DroverVerb[] = [
         load: () => import('./questions'),
     },
     {
+        name: 'needs',
+        summary: 'Ask the human to DO something, and keep it on a list until it is.',
+        load: () => import('./needs'),
+    },
+    {
+        name: 'read',
+        summary: 'Steer what the PHONE reads aloud. The Mac never speaks.',
+        load: () => import('./read'),
+    },
+    {
         name: 'reclaim-sessions',
         summary: 'What the one-store merge parked under superseded/, and what --apply would really free. Never a file the store lacks.',
         load: () => import('./reclaim-sessions'),
