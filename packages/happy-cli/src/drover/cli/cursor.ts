@@ -59,6 +59,7 @@ import { homedir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 
 import { droverEnv } from './env';
+import { guardHarness } from './harness/failure';
 import { defaultIo as defaultEnterIo, reenterLine, runEnter } from './harness/tmuxEnter';
 import { droverTmuxHavePane, type Env } from './harness/tmuxEntry';
 
@@ -551,8 +552,19 @@ export function cursorLaunch(argsPre: string, seed: string | null, rest: readonl
 /**
  * The real runner: the fork's `cursor` arm, reached in process rather than by
  * spawning `node bin/drover.mjs cursor`. Same parse, same options object.
+ *
+ * AND THE SAME CATCH (DROVE-374). The arm this replaced wrapped runCursor in a
+ * try/catch that printed one line and exited 1; the port dropped it, so a
+ * cursor-agent that failed — a locked login keychain, on the day it was found —
+ * came back as an unhandled rejection and a raw node stack. guardHarness is
+ * that catch, shared with the codex and pi launchers, which lost it the same
+ * way.
  */
 async function launchCursor(argv: string[]): Promise<number> {
+    return guardHarness('cursor', (line) => process.stderr.write(`${line}\n`), () => runCursorArm(argv));
+}
+
+async function runCursorArm(argv: string[]): Promise<number> {
     const { runCursor } = await import('@/cursor/runCursor');
     const { authAndSetupMachineIfNeeded } = await import('@/ui/auth');
     const { ensureDaemonRunning } = await import('@/daemon/ensureDaemonRunning');

@@ -49,6 +49,7 @@ import { homedir } from 'node:os';
 import { delimiter, join } from 'node:path';
 
 import { droverEnv } from './env';
+import { guardHarness } from './harness/failure';
 import { defaultIo, reenterLine, runEnter } from './harness/tmuxEnter';
 import { droverTmuxHavePane } from './harness/tmuxEntry';
 
@@ -241,7 +242,10 @@ export function defaultPiIo(env: Env = process.env, libexec = ''): PiIo {
             const entry = process.argv[1] ?? '';
             return runEnter(['--cwd', cwd, '--', process.execPath, entry, 'pi', ...argv], defaultIo(), libexec);
         },
-        launch: async (argv, childEnv) => {
+        // GUARDED, because the arm this replaced was (DROVE-374). src/index.ts
+        // wrapped runPi in a try/catch that printed one line and exited 1; the
+        // port dropped it, and a throw then arrived as a raw node stack.
+        launch: async (argv, childEnv) => guardHarness('pi', (line) => process.stderr.write(`${line}\n`), async () => {
             // ONE implementation. The runner IS the pi client — it creates the
             // Happy session the app's list is built from, streams the
             // transcript, races the app's permission card against the drover
@@ -256,7 +260,7 @@ export function defaultPiIo(env: Env = process.env, libexec = ''): PiIo {
             await ensureDaemonRunning();
             await runPi({ credentials, ...parseRunnerArgs(argv) });
             return 0;
-        },
+        }),
         launchBridge: async (argv, childEnv) => {
             const root = droverEnv(env).droverDir;
             return spawnCode(process.execPath, [join(root, 'adapters', 'pi-bridge.mjs'), ...argv], {
