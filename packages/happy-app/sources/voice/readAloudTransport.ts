@@ -208,6 +208,49 @@ export function transportEffect(
 }
 
 /**
+ * A repeat of the same remote command inside this window is ONE gesture
+ * (DROVE-362).
+ *
+ * A Bluetooth head unit is not a lock screen. AVRCP units send `play` and
+ * `pause` as separate commands, many never send `togglePlayPause` at all, and
+ * some send the same command TWICE for one press of one button — a press event
+ * and a state notification arriving as two `pause`es a few tens of
+ * milliseconds apart. Taken at face value that is pause-then-resume in one
+ * press, which is the transport visibly ignoring him.
+ *
+ * The window is deliberately short. 300 ms is longer than any duplicate a
+ * head unit has ever sent and shorter than a deliberate second press, which
+ * has to travel a thumb; iOS's own double-press detection uses a comparable
+ * gap. Two DIFFERENT commands are never collapsed, however close together —
+ * `pause` then `play` in 40 ms is a unit correcting itself and both halves
+ * mean something.
+ */
+export const duplicateRemotePressMs = 300;
+
+/** The last remote transport command, and when it arrived. */
+export interface RemotePress {
+    command: string;
+    at: number;
+}
+
+/**
+ * Is this press the tail of the one before it? (DROVE-362.)
+ *
+ * Pure, and takes the clock rather than reading it, for the same reason the
+ * table above takes the state: the three surfaces must not be able to disagree
+ * about what a press was, and a test must not have to wait 300 ms to find out.
+ */
+export function isDuplicateRemotePress(
+    command: string,
+    previous: RemotePress | null,
+    at: number,
+): boolean {
+    if (previous === null) return false;
+    if (previous.command !== command) return false;
+    return at - previous.at < duplicateRemotePressMs;
+}
+
+/**
  * The gesture a native remote command is, or null when it is not the transport
  * at all.
  *

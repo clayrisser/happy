@@ -6,7 +6,13 @@ import {
     holdAudioSession,
     setReadingState,
 } from 'drover-speech';
-import { readAloudTransport, remoteTransportGesture, transportEffect } from './readAloudTransport';
+import {
+    isDuplicateRemotePress,
+    readAloudTransport,
+    remoteTransportGesture,
+    transportEffect,
+    type RemotePress,
+} from './readAloudTransport';
 
 /**
  * Read-aloud keeps talking with the phone in a pocket (DROVE-189).
@@ -130,6 +136,37 @@ export function startBackgroundAudio(reader: BackgroundReader): () => void {
     // kept: this runs on every interrupt and every pause, and a bridge call
     // per keystroke is worth avoiding.
     let published: string | null = null;
+    /**
+     * Say what the reader is doing, and MEAN it (DROVE-362).
+     *
+     * `force` is the whole of this ticket. Publishing only on a change makes
+     * the JS state the source of truth for WHEN we speak as well as for WHAT
+     * we say, and those are different questions. The moment an outside surface
+     * — the lock screen, an AirPod, a car's head unit — has drifted out of
+     * step with us, a change-only publish can never put it back, because by
+     * construction we only ever speak when WE change.
+     *
+     * That is exactly how a pause got stuck. The DROVE-259 keepalive is still
+     * looping through a pause on purpose, so an AVRCP unit sees an app
+     * producing audio, keeps its PAUSE glyph up and sends `pause` again. The
+     * table answers `nothing`, correctly — and the dedupe then swallowed the
+     * re-assert too, so the unit stayed wrong for good and every later press
+     * was another dead `pause`. From the driver's seat: "it pauses again
+     * instead of unpausing".
+     *
+     * So a press that resolves to `nothing` is not a press to ignore. It is
+     * PROOF that a surface disagrees with the reader, and the answer to a
+     * disagreement is to say the state again. Native's `setReadingState` is
+     * idempotent and republishes both the now-playing dictionary and
+     * `playbackState` on every call, so one forced call is the whole
+     * correction — no Swift, no build.
+     */
+    const publishTransport = (force: boolean) => {
+        const state = readAloudTransport(reader.isEnabled, reader.isPaused);
+        if (!force && state === published) return;
+        published = state;
+        void setReadingState(state === 'off' ? 'off' : state === 'paused' ? 'paused' : 'reading');
+    };
     const apply = () => {
         try {
             reader.setBackgrounded(backgrounded);
@@ -161,11 +198,7 @@ export function startBackgroundAudio(reader: BackgroundReader): () => void {
             // foreground too, so there is always a play/pause to press. On
             // build 14 and earlier this is a no-op and the hold above is still
             // the only thing that puts a card up.
-            const state = readAloudTransport(reader.isEnabled, reader.isPaused);
-            if (state !== published) {
-                published = state;
-                void setReadingState(state === 'off' ? 'off' : state === 'paused' ? 'paused' : 'reading');
-            }
+            publishTransport(false);
         } catch {
             // Nothing about staying alive is worth taking the reader down for.
         }
@@ -223,16 +256,43 @@ export function startBackgroundAudio(reader: BackgroundReader): () => void {
      * call that starts this one. `remoteTransportGesture` returning null is
      * what keeps this file about the transport and nothing else.
      */
+    let lastRemote: RemotePress | null = null;
     const remote = addRemoteCommandListener((command) => {
         const gesture = remoteTransportGesture(command);
         if (gesture === null) return;
+        const at = Date.now();
+        // One press of one button on a head unit can arrive as two identical
+        // commands (DROVE-362). Taken at face value that is pause-then-resume
+        // in a single press, which reads as the transport ignoring him.
+        if (isDuplicateRemotePress(command, lastRemote, at)) {
+            lastRemote = { command, at };
+            return;
+        }
+        lastRemote = { command, at };
         try {
-            const effect = transportEffect(gesture, readAloudTransport(reader.isEnabled, reader.isPaused));
+            const before = readAloudTransport(reader.isEnabled, reader.isPaused);
+            const effect = transportEffect(gesture, before);
             if (effect === 'pause') reader.setPaused(true);
             else if (effect === 'resume') reader.setPaused(false);
             // 'turn-on', 'turn-off' and 'nothing' are unreachable from a remote
             // press by the table above, and doing nothing is the right answer
             // to all three from a pocket.
+            //
+            // DOING NOTHING TO THE READER IS NOT DOING NOTHING (DROVE-362). A
+            // remote `pause` that lands on an already-paused reader, or a
+            // remote `play` on one already reading, is a surface telling us it
+            // disagrees with us — an AVRCP unit that still believes we are
+            // playing can only ever send `pause`, so without this the pause
+            // was one-way and he could never press his way out of it. Every
+            // remote press therefore re-asserts the state, whether or not the
+            // reader moved, so the glyph on the lock screen and in the car
+            // matches the reader after each step and the NEXT press is the
+            // right command.
+            //
+            // Only when the reader did NOT move, because a press that moved it
+            // has already published through `addTransportListener` below and a
+            // second identical call across the bridge buys nothing.
+            if (readAloudTransport(reader.isEnabled, reader.isPaused) === before) publishTransport(true);
         } catch {
             // A dead lock-screen button is better than a dead reader.
         }
@@ -250,6 +310,7 @@ export function startBackgroundAudio(reader: BackgroundReader): () => void {
         started = false;
         held = null;
         published = null;
+        lastRemote = null;
         appState.remove();
         enabledChanged();
         transportChanged();
