@@ -60,9 +60,47 @@ export interface PushTicket {
     details?: { error?: string };
 }
 
+/**
+ * WHICH WAY A PUSH LEAVES THE RELAY (DROVE-332) — the seam, and the decision.
+ *
+ * Today, and by choice: CLI -> this relay -> exp.host -> APNs, with the token
+ * the phone registered under DROVER'S OWN Expo project (BASED-98). Expo signs
+ * for APNs with the key uploaded there, so no Apple key sits on the relay and
+ * a drover relay on Clay's estate needs exactly one thing Happy's hosted server
+ * also needed: outbound HTTPS to exp.host. That is why the first cut stays
+ * here — it works, and it costs no secret.
+ *
+ * The alternative is direct APNs: the relay holds an APNs auth key (.p8), talks
+ * to api.push.apple.com itself, and Expo is out of the loop. That key is a
+ * secret and it is CLAY'S to mint in the Apple Developer portal and place in
+ * the stack's vault. Nothing here creates one, and nothing here should.
+ *
+ * So this function is the seam and not the implementation. Setting the APNs
+ * variables means "use APNs", and a relay that was told to use APNs must not
+ * quietly keep sending through Expo — the whole point of moving would be to
+ * take Expo out of the path. It therefore FAILS LOUDLY until the sender exists,
+ * which is the honest state of the choice rather than a silent no-op.
+ *
+ * To take it: put apnsKey / apnsKeyId / apnsTeamId in the stack's vault, write
+ * the api.push.apple.com sender beside this file, and dispatch to it here.
+ */
+export type PushTransport = 'expo' | 'apns';
+
+export function pushTransport(env: NodeJS.ProcessEnv = process.env): PushTransport {
+    return env.APNS_KEY && env.APNS_KEY_ID && env.APNS_TEAM_ID ? 'apns' : 'expo';
+}
+
 export async function sendPushNotifications(messages: PushMessage[]): Promise<PushTicket[]> {
     if (messages.length === 0) {
         return [];
+    }
+
+    if (pushTransport() === 'apns') {
+        throw new Error(
+            'push: APNS_KEY, APNS_KEY_ID and APNS_TEAM_ID are set, but the direct-APNs '
+            + 'sender is not built (DROVE-332). Unset them to send through Expo, which '
+            + 'needs no key on the relay, or write the api.push.apple.com sender.',
+        );
     }
 
     const tickets: PushTicket[] = [];

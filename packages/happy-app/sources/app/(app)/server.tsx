@@ -17,9 +17,15 @@ import {
     setServerUrl,
     validateServerUrl,
     getServerInfo,
+    getDefaultServerUrl,
     setUseCustomServerForVoice,
     shouldUseCustomServerForVoice,
 } from '@/sync/serverConfig';
+import { switchServer } from '@/sync/serverSwitch';
+import { authGetToken } from '@/auth/authGetToken';
+import { decodeBase64 } from '@/encryption/base64';
+import { TokenStorage } from '@/auth/tokenStorage';
+import * as Updates from 'expo-updates';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 const stylesheet = StyleSheet.create((theme) => ({
@@ -95,6 +101,50 @@ export default function ServerConfigScreen() {
     const [useCustomServerForVoice, setUseCustomServerForVoiceState] = useState(shouldUseCustomServerForVoice());
     const [error, setError] = useState<string | null>(null);
     const [isValidating, setIsValidating] = useState(false);
+    const [isSwitching, setIsSwitching] = useState(false);
+
+    /**
+     * The switch itself (DROVE-332). Identity is the secret key on this device,
+     * so the same key on another relay is the same account there — which makes
+     * changing servers a re-auth rather than the logout-and-pair-again this
+     * screen used to require. `switchServer` asks the new server for a token
+     * FIRST and writes nothing until it answers, so a bad URL or a relay that
+     * is down leaves the app exactly where it was.
+     */
+    const moveTo = async (target: string | null): Promise<boolean> => {
+        setIsSwitching(true);
+        try {
+            const result = await switchServer(target, {
+                authGetToken,
+                decodeSecret: (secret) => decodeBase64(secret, 'base64url'),
+                readCredentials: () => TokenStorage.getCredentials(),
+                writeCredentials: (next) => TokenStorage.setCredentials(next),
+                getServerUrl,
+                setServerUrl,
+                defaultServerUrl: getDefaultServerUrl(),
+                reload: async () => {
+                    if (Platform.OS === 'web') {
+                        window.location.reload();
+                        return;
+                    }
+                    try {
+                        await Updates.reloadAsync();
+                    } catch {
+                        // Dev builds throw ERR_UPDATES_DISABLED. The credentials
+                        // and the URL are already written, so the next start
+                        // lands on the new server either way.
+                    }
+                },
+            });
+            if (!result.ok) {
+                setError(t('server.reauthFailed'));
+                return false;
+            }
+            return true;
+        } finally {
+            setIsSwitching(false);
+        }
+    };
 
     const validateServer = async (url: string): Promise<boolean> => {
         try {
@@ -153,7 +203,9 @@ export default function ServerConfigScreen() {
         );
 
         if (confirmed) {
-            setServerUrl(inputUrl);
+            if (!await moveTo(inputUrl)) {
+                return;
+            }
             const nextIsCustomServer = getServerInfo().isCustom;
             setIsCustomServer(nextIsCustomServer);
             if (!nextIsCustomServer) {
@@ -171,7 +223,9 @@ export default function ServerConfigScreen() {
         );
 
         if (confirmed) {
-            setServerUrl(null);
+            if (!await moveTo(null)) {
+                return;
+            }
             setUseCustomServerForVoice(false);
             setInputUrl('');
             setIsCustomServer(getServerInfo().isCustom);
@@ -229,6 +283,11 @@ export default function ServerConfigScreen() {
                                     {t('server.validatingServer')}
                                 </Text>
                             )}
+                            {isSwitching && (
+                                <Text style={styles.validatingText}>
+                                    {t('server.reauthenticating')}
+                                </Text>
+                            )}
                             <View style={styles.buttonRow}>
                                 <View style={styles.buttonWrapper}>
                                     <RoundButton
@@ -236,14 +295,15 @@ export default function ServerConfigScreen() {
                                         size="normal"
                                         display="inverted"
                                         onPress={handleReset}
+                                        disabled={isValidating || isSwitching}
                                     />
                                 </View>
                                 <View style={styles.buttonWrapper}>
                                     <RoundButton
-                                        title={isValidating ? t('server.validating') : t('common.save')}
+                                        title={isValidating || isSwitching ? t('server.validating') : t('common.save')}
                                         size="normal"
                                         action={handleSave}
-                                        disabled={isValidating}
+                                        disabled={isValidating || isSwitching}
                                     />
                                 </View>
                             </View>

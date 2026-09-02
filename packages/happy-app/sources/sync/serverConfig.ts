@@ -8,6 +8,17 @@ const LOG_SERVER_KEY = 'log-server-url';
 const USE_CUSTOM_SERVER_FOR_VOICE_KEY = 'use-custom-server-for-voice';
 const DEFAULT_SERVER_URL = 'https://api.cluster-fluster.com';
 
+/**
+ * What a reset lands on — the URL the app ships pointing at. Exported so the
+ * server switch can ask the NEW server for a token before writing anything,
+ * including when the new server is the default one (DROVE-332).
+ */
+export function getDefaultServerUrl(): string {
+    return (globalThis as any).__HAPPY_CONFIG__?.serverUrl ||
+           process.env.EXPO_PUBLIC_HAPPY_SERVER_URL ||
+           DEFAULT_SERVER_URL;
+}
+
 export function getServerUrl(): string {
     return serverConfigStorage.getString(SERVER_KEY) ||
            (globalThis as any).__HAPPY_CONFIG__?.serverUrl ||
