@@ -74,6 +74,15 @@ export interface DotFacts {
     toolRunning: boolean
     /** The compaction latch is open (DROVE-257). */
     compacting: boolean
+    /**
+     * A subagent of this session is out working (DROVE-361).
+     *
+     * Its own term, not part of `mainWorking`, for the reason DROVE-155 gave:
+     * background agents are not the main thread. The tmux line carries it so
+     * the terminal and the phone cannot disagree about a session with an hour
+     * of work in flight and an idle prompt.
+     */
+    agentsWorking?: boolean
 }
 
 /**
@@ -97,6 +106,7 @@ export function dotStateFor(facts: DotFacts, now: number = Date.now()): StatusDo
         atCompaction: false,
         compacting: facts.compacting,
         waiting: false,
+        agentsWorking: facts.agentsWorking === true,
         now,
     })
 }

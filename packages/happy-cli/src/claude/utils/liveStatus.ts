@@ -68,6 +68,7 @@
 import { closeSync, fstatSync, openSync, readSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { basename, join } from 'node:path'
 
+import { parseAgentNotifications, readAsyncAgentLaunch } from './agentNotification'
 import type { CompactionLatch, CompactionState } from './compaction'
 import type { TurnStatus } from './turnStatus'
 
@@ -848,6 +849,39 @@ export function createLiveStatusReader(opts: {
     let lastKind: RecordKind = 'other'
     let agents = new Map<string, AgentState>()
     /**
+     * The subagents this reader has watched LAUNCH and not watched finish
+     * (DROVE-361).
+     *
+     * The mtime gate below is a cost control, not a liveness signal, and it
+     * cannot be both. A subagent blocked inside ONE long tool call writes
+     * nothing to its own transcript for the whole call — Clay's ran
+     * `plugins.bats` for 1h 39m — so at ninety seconds the gate deleted a
+     * running agent, `agents` emptied, `moving` went false and the phone drew
+     * the green dot it had correctly been told to draw.
+     *
+     * The fact was on disk the whole time, in two records this file's own
+     * tailer already streams past:
+     *
+     *   launched   the Agent tool_result — `toolUseResult.agentId` with
+     *              `status: "async_launched"`, or the `Async agent launched
+     *              successfully` banner carrying `agentId:`.
+     *   finished   a `<task-notification>` block with `<task-id>` and a
+     *              terminal `<status>`, which Claude Code writes onto a
+     *              `queue-operation` record and again onto the queued prompt.
+     *
+     * Both are parsed by `agentNotification.ts`, which `subagentTranscript`
+     * and the flip gate already read the same way. Nothing new is watched,
+     * polled or opened for this.
+     *
+     * ONLY agents this reader saw start are held. A reader that attached
+     * mid-session begins at a seeded offset and never saw those launches, so
+     * their transcripts keep the ninety-second behaviour and no finished agent
+     * can be resurrected by a notification that scrolled past before we
+     * looked. Held agents are the ones we have positive evidence for, which is
+     * the same bargain `turnStatus` strikes: unknown is not working.
+     */
+    let launchedAgents = new Set<string>()
+    /**
      * One workflow journal's ledger so far, keyed by the journal's path
      * (DROVE-268). Append-only on disk, so it is tailed from a remembered
      * offset like everything else here and the sets only ever grow.
@@ -869,6 +903,7 @@ export function createLiveStatusReader(opts: {
         lastRecordAt = 0
         lastKind = 'other'
         agents = new Map()
+        launchedAgents = new Set()
         journals = new Map()
         phaseNames = new Map()
     }
@@ -886,6 +921,22 @@ export function createLiveStatusReader(opts: {
             } catch {
                 continue
             }
+            // WHO IS OUT, read BEFORE the sidechain skip below (DROVE-361).
+            // A nested agent's launch and its notification are themselves
+            // sidechain records — they belong to the agent that spawned it,
+            // not to the pane — so reading them after the skip would hold only
+            // the top level and let a depth-2 agent vanish exactly as before.
+            // Two disjoint statements about a set of ids; nothing here touches
+            // the tool or token state the skip is protecting.
+            const launched = readAsyncAgentLaunch(record)
+            if (launched) launchedAgents.add(launched.agentId)
+            for (const note of parseAgentNotifications(record)) {
+                // Terminal only. A progress note must never retire an agent
+                // that is still going, which is the same rule the flip gate
+                // holds and the reason the parser returns both kinds.
+                if (note.terminal) launchedAgents.delete(note.agentId)
+            }
+
             // A subagent's own records are written into the parent transcript
             // too. They are the AGENT's tools, not the pane's, and counting
             // them here is what would make the header claim the main turn is
@@ -1057,7 +1108,15 @@ export function createLiveStatusReader(opts: {
             // the whole cost control: a session directory can hold hundreds of
             // finished agent transcripts and none of them will ever change
             // again.
-            if (now - mtimeMs > agentStaleMs) {
+            //
+            // UNLESS WE WATCHED IT LAUNCH AND HAVE NOT WATCHED IT FINISH
+            // (DROVE-361). A quiet transcript is a running agent inside a long
+            // tool call as often as it is a finished one, and this stat cannot
+            // tell them apart. `launchedAgents` can, off the records Claude
+            // Code writes for exactly that purpose — see the field. A workflow
+            // run's agents get no launch banner, so they are never in the set
+            // and this directory keeps the behaviour DROVE-268 gave it.
+            if (now - mtimeMs > agentStaleMs && !launchedAgents.has(id)) {
                 agents.delete(path)
                 continue
             }
