@@ -18,6 +18,7 @@ import { registerDroverPolicyHandler } from '@/drover/flip/policyRpc';
 import { registerListWorktreesHandler } from '@/daemon/listWorktrees';
 import { registerMachineAccountsHandlers } from '@/drover/machineAccounts';
 import { registerMachineMcpsHandlers } from '@/drover/machineMcps';
+import { registerMachineFilesHandlers } from '@/drover/machineFiles';
 import { registerDroverDemoPushHandler } from '@/drover/demo';
 import { PushNotificationClient } from './pushNotifications';
 import { detectCLIAvailability, CLIAvailability } from '@/utils/detectCLI';
@@ -169,6 +170,11 @@ export class ApiMachineClient {
         // MCP config belongs to the machine, and Claude's is per ACCOUNT, so
         // it sits beside the accounts handler that already answers for those.
         registerMachineMcpsHandlers(this.rpcHandlerManager);
+        // A worktree's files and a session's pane, for the worktree sheet's
+        // Files and Terminal tabs (DROVE-330). On the daemon for the fourth
+        // time and the same reason: the worktree Clay tapped may have no
+        // session in it to ask, and the reading is the drover's anyway.
+        registerMachineFilesHandlers(this.rpcHandlerManager);
         // The channel demo's test push (DROVE-75). On the daemon for the same
         // reason the policy handler is: the phone wants to prove the push path
         // while nothing is running. Its own push client rather than the
