@@ -238,6 +238,11 @@ export const droverVerbs: readonly DroverVerb[] = [
         summary: "OpenCode's custom model providers. The write half of `drover mcps`, and it never carries a key.",
         load: () => import('./providers'),
     },
+    {
+        name: 'home',
+        summary: 'One ~/.drover for everything drover owns: each mover\'s state, and what a move would do. Reads only; migrate, verify and rollback stay in libexec/drover-home.',
+        load: () => import('./home'),
+    },
 ];
 
 /** Is this a verb the node CLI carries? */
