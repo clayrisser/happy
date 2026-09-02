@@ -106,12 +106,15 @@ describe('modelModeOptions', () => {
         expect(getDefaultPermissionModeKey('agy')).toBe('default');
     });
 
-    it('only offers gemini modes runGemini actually honours', () => {
-        // auto_edit is absent from MessageMetaSchema and would drop the whole
-        // message; plan passes the schema but runGemini ignores it.
+    it('offers gemini all four of its own approval modes', () => {
+        // `gemini --help`: --approval-mode default|auto_edit|yolo|plan. The list
+        // was cut to two on reasons that have both expired (DROVE-381) —
+        // auto_edit was said to be absent from MessageMetaSchema, whose
+        // permissionMode is a plain z.string() now, and plan was said to be
+        // ignored by runGemini, which is a different runner from the one that
+        // passes --approval-mode to the binary.
         const keys = getGeminiPermissionModes(translate).map((mode) => mode.key);
-        expect(keys).not.toContain('auto_edit');
-        expect(keys).not.toContain('plan');
+        expect(keys).toEqual(['auto_edit', 'plan', 'yolo', 'default']);
     });
 
     it('only offers the curated codex harness models', () => {

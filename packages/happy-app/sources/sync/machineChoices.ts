@@ -162,19 +162,23 @@ export function machineChoiceAgentAvailable(
  * Whether the Home picker should contain this harness at all.
  *
  * Common harnesses stay visible but disabled when unavailable. Antigravity,
- * Happy Agent, Cursor and pi stay absent until this computer reports them
- * available.
+ * Happy Agent, Cursor, gemini and pi stay absent until this computer reports
+ * them available.
  *
  * pi joined that second group in DROVE-316 for its own reason: it is the
  * LOCAL-model harness, so a greyed-out pi row reads as something you could
  * switch on from the phone, and you cannot — it needs a pi install and a model
  * runtime being served on that machine.
+ *
+ * gemini joined it in DROVE-381 for the plainer one: it ships as an npm global,
+ * so the row means nothing until a daemon that can actually find that install
+ * says it is there. A greyed-out row would read as a switch, and it isn't one.
  */
 export function machineChoiceAgentVisible(
     choice: MachineChoice | null,
     agent: NewSessionAgentType,
 ): boolean {
-    return (agent !== 'agy' && agent !== 'rig' && agent !== 'cursor' && agent !== 'pi')
+    return (agent !== 'agy' && agent !== 'rig' && agent !== 'cursor' && agent !== 'gemini' && agent !== 'pi')
         || machineChoiceAgentAvailable(choice, agent);
 }
 

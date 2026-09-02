@@ -8,25 +8,28 @@ describe('harness catalog', () => {
         expect(HARNESS_NAMES.agy).toBe('Antigravity');
     });
 
-    it('retires Gemini and OpenClaw only', () => {
-        expect(isRetiredHarness('gemini')).toBe(true);
+    it('retires OpenClaw only', () => {
         expect(isRetiredHarness('openclaw')).toBe(true);
         expect(isRetiredHarness('claude')).toBe(false);
-        // Antigravity is what Gemini's own error message redirects people to.
+        // Antigravity is what the OLD gemini-cli's error message redirected
+        // people to. 0.58.0 no longer refuses an individual account, so the two
+        // harnesses are now separate offers rather than a redirect (DROVE-381).
         expect(isRetiredHarness('agy')).toBe(false);
+        expect(isRetiredHarness('gemini')).toBe(false);
     });
 
     it('lists only installed harnesses, in pick order', () => {
         const harnesses = listAvailableHarnesses({
-            availability: { claude: true, codex: true, agy: true },
+            availability: { claude: true, codex: true, gemini: true, agy: true },
             happyAgentAvailable: true,
             selected: 'claude',
         });
 
-        expect(harnesses.map((harness) => harness.key)).toEqual(['claude', 'codex', 'agy', 'rig']);
+        expect(harnesses.map((harness) => harness.key)).toEqual(['claude', 'codex', 'gemini', 'agy', 'rig']);
         expect(harnesses.map((harness) => harness.name)).toEqual([
             'Claude Code',
             'Codex',
+            'Gemini',
             'Antigravity',
             'Cattle Drover',
         ]);
@@ -34,7 +37,7 @@ describe('harness catalog', () => {
 
     it('never offers a retired harness, even with its CLI installed', () => {
         const harnesses = listAvailableHarnesses({
-            availability: { claude: true, gemini: true, openclaw: true },
+            availability: { claude: true, openclaw: true },
             happyAgentAvailable: false,
             selected: 'claude',
         });
@@ -46,16 +49,15 @@ describe('harness catalog', () => {
     // stale draft would pin someone to an agent they can no longer start.
     it('does not keep a retired harness listed just because it is selected', () => {
         const harnesses = listAvailableHarnesses({
-            availability: { claude: true, gemini: true },
+            availability: { claude: true, openclaw: true },
             happyAgentAvailable: false,
-            selected: 'gemini',
+            selected: 'openclaw',
         });
 
         expect(harnesses.map((harness) => harness.key)).toEqual(['claude']);
     });
 
     it('keeps a real name for a retired harness so old sessions still read right', () => {
-        expect(HARNESS_NAMES.gemini).toBe('Gemini');
         expect(HARNESS_NAMES.openclaw).toBe('OpenClaw');
     });
 
@@ -132,11 +134,11 @@ describe('pi in the picker', () => {
 
     it('is LAST, because it is the specialist', () => {
         const harnesses = listAvailableHarnesses({
-            availability: { claude: true, codex: true, cursor: true, pi: true },
+            availability: { claude: true, codex: true, cursor: true, gemini: true, pi: true },
             happyAgentAvailable: true,
             selected: 'claude',
         });
-        expect(harnesses.map((h) => h.key)).toEqual(['claude', 'codex', 'cursor', 'rig', 'pi']);
+        expect(harnesses.map((h) => h.key)).toEqual(['claude', 'codex', 'cursor', 'gemini', 'rig', 'pi']);
     });
 
     it('is never offered without an explicit installation report', () => {
@@ -175,5 +177,66 @@ describe('pi in the picker', () => {
             happyAgentAvailable: false,
             selected: 'pi',
         }).map((h) => h.key)).toEqual(['claude', 'codex']);
+    });
+});
+
+// DROVE-381. Gemini is BACK, and this block is the record of why the retirement
+// expired rather than a claim that it never happened. It was measured against a
+// gemini-cli that refused an individual Google account and pointed at
+// Antigravity; @google/gemini-cli 0.58.0 keeps oauth-personal, gemini-api-key,
+// vertex-ai and cloud-shell as live auth types, and a headless API-key run
+// answers. The browser login was not re-driven, so oauth stays
+// present-and-unverified.
+describe('gemini in the picker', () => {
+    it('is not retired any more, and OpenClaw still is', () => {
+        expect(isRetiredHarness('gemini')).toBe(false);
+        expect(isRetiredHarness('openclaw')).toBe(true);
+    });
+
+    it('is offered once the daemon reports a gemini install', () => {
+        const harnesses = listAvailableHarnesses({
+            availability: { claude: true, gemini: true },
+            happyAgentAvailable: false,
+            selected: 'claude',
+        });
+        expect(harnesses.map((h) => h.key)).toEqual(['claude', 'gemini']);
+        expect(harnesses.map((h) => h.name)).toEqual(['Claude Code', 'Gemini']);
+    });
+
+    it('sits with the other first-party vendor CLIs, after cursor', () => {
+        const harnesses = listAvailableHarnesses({
+            availability: { claude: true, codex: true, cursor: true, gemini: true, agy: true },
+            happyAgentAvailable: false,
+            selected: 'claude',
+        });
+        expect(harnesses.map((h) => h.key)).toEqual(['claude', 'codex', 'cursor', 'gemini', 'agy']);
+    });
+
+    it('is never offered without an explicit installation report', () => {
+        // Same rule as Cursor, Antigravity and pi: `npm install -g
+        // @google/gemini-cli` lands in the npm global prefix, so a machine
+        // whose daemon has not said it found one gets no row rather than a tap
+        // that opens a tmux window and then fails.
+        expect(listAvailableHarnesses({
+            availability: { claude: true, gemini: false },
+            happyAgentAvailable: false,
+            selected: 'claude',
+        }).map((h) => h.key)).toEqual(['claude']);
+
+        expect(listAvailableHarnesses({
+            availability: { claude: true },
+            happyAgentAvailable: false,
+            selected: 'claude',
+        }).map((h) => h.key)).toEqual(['claude']);
+    });
+
+    it('is absent from the no-capabilities fallback', () => {
+        // A daemon old enough to report nothing predates geminiBin.ts, so its
+        // answer would have been wrong even if it had given one.
+        expect(listAvailableHarnesses({
+            availability: {},
+            happyAgentAvailable: false,
+            selected: null,
+        }).map((h) => h.key)).toEqual(['claude', 'codex', 'rig']);
     });
 });
