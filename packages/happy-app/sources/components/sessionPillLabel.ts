@@ -31,6 +31,7 @@
  */
 
 import {
+    MOBILE_COMPOSER_CAPSULE_GLYPH_SIZE,
     MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH,
     MOBILE_COMPOSER_METRICS,
 } from './agentInputLayout';
@@ -154,8 +155,23 @@ export const COMPOSER_MODEL_SEGMENT = {
      * arriving on a shipping model. With 5 it is 0.827 at 13pt — a HIGHER scale
      * than the 0.824 the smaller 12pt name managed on 6 — and `Opus 4.8 1M`,
      * the longest the Claude picker offers, still draws WHOLE at 375.
+     *
+     * 8 SINCE DROVE-353, AND THE RULE DID NOT CHANGE — the family it measures
+     * did. The rule is still "the tightest clearance the capsule's own glyph
+     * segments give their ink, rounded up to a whole point", still
+     * `ceil((segment - 20 * 0.9355) / 2)` and still asserted rather than
+     * declared. DROVE-353 took the segments from 27 to 33 so the `+` disc's own
+     * air is the floor, `eye`'s clearance went 4.145 -> 7.145, and this follows
+     * it up to 8.
+     *
+     * IT WOULD HAVE BEEN WRONG TO LEAVE AT 5, which is worth saying because
+     * leaving it would have been free. Clay's complaint is that the capsule's
+     * contents are squished; the name is one of those contents. Widening the
+     * three glyph segments and holding the name at the old air would have made
+     * the one segment carrying a VALUE the tightest thing in the capsule, which
+     * is the same defect moved one segment along.
      */
-    paddingHorizontal: 5,
+    paddingHorizontal: 8,
     /**
      * Smaller before shorter. A name that will not fit at 13pt is drawn
      * smaller before it is ever cut, down to this scale, because `Opus 5...`
@@ -384,9 +400,11 @@ export const COMPOSER_BUBBLE_ROW_GEOMETRY = {
     discs: 3,
     disc: MOBILE_COMPOSER_METRICS.primaryActionSize,
     /**
-     * `+` | capsule, capsule | spacer, mic | send. The spacer's floor is 0 and
-     * the spacer itself is what separates it from the mic, so there are three
-     * fixed gaps for five objects.
+     * `+` | capsule, capsule | mic, mic | send. Three, and since DROVE-353 they
+     * are three plain gaps between four objects rather than three gaps and a
+     * spacer between five: the capsule is the row's flexible child now, so the
+     * gap after it really is the gap to the mic and nothing sits in between.
+     * The COUNT is unchanged, which is why no budget moved for it.
      */
     gaps: 3,
     gap: MOBILE_COMPOSER_METRICS.controlGap,
@@ -450,15 +468,67 @@ export const COMPOSER_BUBBLE_ROW_GEOMETRY = {
  * — "I don't like that extra row" — so below this width the name is cut, and
  * the number matters again in the way it did originally.
  *
- * WHICH IS WHY IT IS BELOW EVERY PHONE THE APP SUPPORTS. 346 clears 375, the
- * narrowest handset statusRowLayout.spec.ts still supports, with 29pt to
+ * WHICH IS WHY IT IS BELOW EVERY PHONE THE APP SUPPORTS. 370 clears 375, the
+ * narrowest handset statusRowLayout.spec.ts still supports, with 5pt to
  * spare, and clears 390, 393, 430 and 440 by more. It does NOT clear 320, and
- * that is the one honest failure of the single row — the short names now fit
- * there and the long ones do not; the argument is on
+ * that is the one honest failure of the single row — the argument is on
  * `COMPOSER_BUBBLE_ROW_GEOMETRY` and it is not fixable by rearranging this row.
+ *
+ * AND IT WENT BACK UP, 346 -> 370, WHICH IS THE PRICE OF DROVE-353 STATED
+ * WHERE IT IS PAID. The glyph segments took the `+` disc's own clearance (27 ->
+ * 33, 18 off the budget) and the name's own air followed the same rule up (5 ->
+ * 8, 6 more), so 24 of the 29 points DROVE-331 had just banked go back out.
+ * That is not an oversight and it is not a regression smuggled past: Clay
+ * ranked the two against each other in the sentence that filed the ticket —
+ * "on a narrow phone with a long model name the icons keep their padding and
+ * the label gives" — so the icons hold and this line moves.
+ *
+ * WHAT IT COSTS IN PRACTICE, at the widths that exist: 375 draws the two
+ * 14-glyph names at 0.857 rather than whole, which is the state DROVE-320 left
+ * them in and DROVE-331 briefly improved on, and it is still a long way above
+ * `minimumFontScale`. 390 and up draw every name in either picker whole. 320
+ * loses every name — it kept `Opus 5` alone at 346 — and 320 has not been a
+ * supported width since statusRowLayout.spec.ts said so.
  */
-export const COMPOSER_ROW_MIN_MODEL_WIDTH = 346;
+export const COMPOSER_ROW_MIN_MODEL_WIDTH = 370;
 
+
+/**
+ * WHAT THE CAPSULE TAKES ON THE ROW: everything the fixed controls leave
+ * (DROVE-353).
+ *
+ * The row's interior, less the three discs and the three gaps between them.
+ * There is nothing else on the row, which is the point — no spacer, so no band
+ * between the capsule and the mic at any width.
+ *
+ * It is the same measurement `composerModelBudget` makes, one level out:
+ * `composerCapsuleWidth === composerModelBudget + glyphSegments * segment +
+ * dividers` at every width, asserted rather than assumed. The two exist
+ * separately because the row hands the capsule a width and the capsule hands
+ * the name a width, and a single function would hide the step where the icons
+ * take their padding.
+ */
+export function composerCapsuleWidth(screenWidth: number): number {
+    const g = COMPOSER_BUBBLE_ROW_GEOMETRY;
+    return screenWidth
+        - 2 * g.screenInset
+        - 2 * g.bubbleInset
+        - g.discs * g.disc
+        - g.gaps * g.gap;
+}
+
+/**
+ * The air each glyph segment keeps around its glyph (DROVE-353).
+ *
+ * Clay's floor is the `+` disc's own, and this is the measurement the floor is
+ * checked against: half of what the segment has left over its 20pt glyph. It
+ * does not move with the screen — that is the whole rule, and the ticket's
+ * words for it are "on a narrow phone with a long model name the icons keep
+ * their padding and the label gives".
+ */
+export function composerIconSegmentPadding(): number {
+    return (COMPOSER_BUBBLE_ROW_GEOMETRY.segment - MOBILE_COMPOSER_CAPSULE_GLYPH_SIZE) / 2;
+}
 
 /** Everything on the row but the name, which is what the name gets the rest of. */
 export function composerRowFixedWidth(): number {
@@ -514,7 +584,14 @@ export interface ComposerModelPresentation {
     outcome: ComposerModelOutcome;
     /** The type scale the name draws at: 1 whole, in [floor, 1) scaled, the floor when cut. */
     scale: number;
-    /** The width the segment takes on the row, which the resolver lays out with. */
+    /**
+     * The width the segment takes on the row, which the resolver lays out with.
+     *
+     * The whole remainder in every case since DROVE-353, never the name's own
+     * width: the segment is `flex: 1` inside the capsule and the capsule is
+     * `flex: 1` inside the row, so there is nothing left over anywhere for a
+     * spacer to hold.
+     */
     width: number;
     /** Points of the name at the floor that the ellipsis stands in for; 0 unless cut. */
     cut: number;
@@ -535,11 +612,15 @@ export interface ComposerModelPresentation {
  * `whole`; the other two are what a phone under `COMPOSER_ROW_MIN_MODEL_WIDTH`
  * draws.
  *
- *   whole      the name at 13pt, the segment as wide as the name
- *   scaled     the segment is the whole budget, the type is `scale` of 13pt,
+ *   whole      the name at 13pt, centred in the whole budget
+ *   scaled     the whole budget, the type is `scale` of 13pt,
  *              `scale` in [minimumFontScale, 1)
- *   truncated  the segment is the whole budget, the type is at the floor, and
+ *   truncated  the whole budget, the type is at the floor, and
  *              `cut` points of the name are behind the ellipsis
+ *
+ * THE SEGMENT IS THE BUDGET IN ALL THREE SINCE DROVE-353. It was the name's own
+ * width in the `whole` case, and what that left over is exactly the band Clay
+ * kept pointing at.
  *
  * `width` is what the segment takes on the row in every case, which is what
  * `flexShrink: 1, minWidth: 0` on the model segment resolves to on the phone
@@ -549,14 +630,21 @@ export interface ComposerModelPresentation {
  */
 export function composerModelPresentation(name: string, screenWidth: number): ComposerModelPresentation {
     const m = COMPOSER_MODEL_SEGMENT;
-    const budget = composerModelBudget(screenWidth);
+    const budget = Math.max(0, composerModelBudget(screenWidth));
     const whole = composerModelSegmentWidth(name);
-    if (whole <= budget) return { outcome: 'whole', scale: 1, width: whole, cut: 0 };
+    // THE SEGMENT IS THE BUDGET IN ALL THREE CASES SINCE DROVE-353. It used to
+    // be the NAME's width when the name fitted, and the difference was the
+    // empty band Clay photographed: a segment as wide as its text leaves a
+    // remainder, the remainder went to a spacer, and the spacer drew nothing.
+    // `flex: 1` on the segment (`resolveComposerBubbleSessionModelSegmentGeometry`)
+    // is the same statement in the style tree, and this is what the budget
+    // arithmetic has to say for the two to agree.
+    if (whole <= budget) return { outcome: 'whole', scale: 1, width: budget, cut: 0 };
     const atFloor = composerModelSegmentWidth(name, m.minimumFontScale);
     if (atFloor <= budget) {
         return { outcome: 'scaled', scale: composerModelScaleFor(name, screenWidth), width: budget, cut: 0 };
     }
-    return { outcome: 'truncated', scale: m.minimumFontScale, width: Math.max(0, budget), cut: atFloor - budget };
+    return { outcome: 'truncated', scale: m.minimumFontScale, width: budget, cut: atFloor - budget };
 }
 
 export interface SessionPillModelLike {

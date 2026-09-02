@@ -95,6 +95,44 @@ describe('both screens render the one composer (DROVE-345)', () => {
     });
 
     /**
+     * THE CAPSULE'S WIDTH RULE REACHES HOME FOR FREE (DROVE-353).
+     *
+     * Clay's complaint was photographed on the chat, and the fix is entirely in
+     * the shared component and the shared resolver — the capsule takes the
+     * row's slack, the spacer is mounted only where there is no capsule, and a
+     * glyph segment is the `+` disc's own air. Home mounts the same
+     * `ComposerBubble` and the same `ComposerSessionControls`, so it gets all
+     * three without a line of its own. That is the claim, and this is it held:
+     * neither screen may name the capsule's geometry, and both must take the
+     * segment's width from the one constant.
+     */
+    it('gives Home the same capsule width rule as the chat, by mounting not copying', () => {
+        for (const [screen, file] of Object.entries(screens)) {
+            const source = read(file);
+            // The segment's width from the shared constant, never a literal.
+            expect(source, screen).toContain('MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH');
+            expect(source, screen).toContain('segmentWidth={MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH}');
+            // And the capsule's own flex belongs to the resolver, so a screen
+            // cannot pin the capsule to its content again and put the band
+            // back.
+            for (const name of [
+                'COMPOSER_BUBBLE_SESSION_CAPSULE_GEOMETRY',
+                'COMPOSER_BUBBLE_SESSION_MODEL_SEGMENT_GEOMETRY',
+            ]) {
+                expect(source.includes(name), `${screen} names ${name}`).toBe(false);
+            }
+        }
+        // The capsule is the row's flexible child and the spacer stands in for
+        // it only when there is no capsule at all. Both facts live in the one
+        // file, which is what makes them land on both screens at once.
+        const shared = read('components/ComposerBubble.tsx');
+        expect(shared).toContain('controls ? null : <View style={styles.spacer} />');
+        const controls = read('components/ComposerSessionControls.tsx');
+        expect(controls).toContain('COMPOSER_BUBBLE_SESSION_CAPSULE_GEOMETRY');
+        expect(controls).toContain('COMPOSER_BUBBLE_SESSION_MODEL_SEGMENT_GEOMETRY');
+    });
+
+    /**
      * THE MATERIAL IS SPREAD, NEVER RESTATED.
      *
      * `COMPOSER_BUBBLE_SURFACE` may be named by a screen — Home's resting dock

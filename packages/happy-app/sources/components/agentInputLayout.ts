@@ -482,8 +482,89 @@ export const MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE = MOBILE_COMPOSER_METRICS.prima
  * capsule is 39 tall with `primaryActionSlop` above and below it, and the
  * segments are stacked side by side rather than one above the other, so a
  * finger landing between two of them lands on one of them.
+ *
+ * AND NONE OF THAT IS THE RULE ANY MORE (DROVE-353). Every derivation above
+ * asked the same question — what is the LEAST a segment can be and still let
+ * the row fit — because the row genuinely had no slack while the capsule was
+ * fighting for it. It has slack. `resolveComposerBubbleSessionCapsuleGeometry`
+ * sized the capsule to its CONTENT and a `flex: 1` spacer ate everything left
+ * over, so the row's free width went to nothing at all while these segments
+ * stayed pinned at the floor. Clay, fifth time of asking, over a photograph of
+ * exactly that: "Why is everything squished here? There's extra space."
+ *
+ * So the question changes from "the least that fits" to "the same air the
+ * `+` keeps", and the answer is `MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH` below.
+ * The ink table above still stands and is still what the clearances are read
+ * off; it is no longer what SETS the width.
  */
-export const MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH = 27;
+
+/**
+ * THE AIR THE `+` DISC KEEPS AROUND ITS GLYPH (DROVE-353).
+ *
+ * Not a new number and not a new measure: it is the one this file already
+ * states in its own words on `addIconSize`, "26 in 36 leaves 5 clear on every
+ * side". `primaryActionSize` has since gone to 39, so the same sentence now
+ * reads 6.5, and writing it as the subtraction is what stops it drifting from
+ * the two metrics it is made of.
+ *
+ * IT IS MEASURED ON THE GLYPH'S BOX, NOT ITS INK, and that matters enough to
+ * say. The `+` is a sparse mark — `IONICON_INK_RATIO.add` is 0.625, so its ink
+ * is 16.25 of the 26pt box and its clearance ON THE INK is 11.375. Held to the
+ * ink the capsule would need 42pt segments, wider than the disc itself, and
+ * would spend more of the model's name than the name has. The box is the
+ * honest comparison anyway: what a reader sees as "the air around the glyph"
+ * is the air around the glyph's own box, which is why the file wrote the
+ * sentence that way in the first place.
+ */
+export const MOBILE_COMPOSER_DISC_INNER_PADDING =
+    (MOBILE_COMPOSER_METRICS.primaryActionSize - MOBILE_COMPOSER_METRICS.addIconSize) / 2;
+
+/**
+ * The point size every glyph in the session capsule is drawn at.
+ *
+ * It lived as a bare `const size = 20` inside ComposerSessionControls.tsx and
+ * as a literal `20` in two derivations in sessionPillLabel.ts, which is three
+ * copies of one fact. The segment's width is made out of it now, so it is a
+ * metric.
+ */
+export const MOBILE_COMPOSER_CAPSULE_GLYPH_SIZE = 20;
+
+/**
+ * HOW WIDE A GLYPH SEGMENT IS: the glyph, plus the air the `+` keeps around
+ * its own (DROVE-353).
+ *
+ * 33, up from 27. Clay's rule, in his words: "every icon segment gets the same
+ * comfortable inner padding, at least the + disc's own inner padding." So the
+ * segment is not derived from what the row can spare any more, it is derived
+ * from the control beside it, and the row is what gives.
+ *
+ * WHAT EACH GLYPH NOW KEEPS, against the same ink table above and against the
+ * 27 it had:
+ *
+ *   lock-closed   13.75pt of ink   9.625 a side, was 6.625
+ *   volume-high   17.50            7.750, was 4.750
+ *   eye           18.71            7.145, was 4.145   <- the tightest
+ *
+ * Every one of those clears `MOBILE_COMPOSER_DISC_INNER_PADDING` on the ink as
+ * well as on the box, which was not asked for and is worth having: the
+ * capsule's tightest mark now has more air round it than the `+` has round its
+ * own box.
+ *
+ * WHAT IT COSTS, in the ledger DROVE-284 and DROVE-331 keep: the fixed row goes
+ * 219 -> 237, so the model's budget drops 18 at every width, and the 14-glyph
+ * names go back to scaling at 375 after DROVE-331 had just bought them whole.
+ * That is not a regression slipped past, it is Clay's own ranking — "on a
+ * narrow phone with a long model name the icons keep their padding and the
+ * label gives" — and `COMPOSER_ROW_MIN_MODEL_WIDTH` moves 346 -> 370 with it,
+ * still under every phone the app supports.
+ *
+ * THE TOUCH TARGET GAINS, for once. The paragraph above spent the horizontal
+ * axis down to a 28 x 51 box, 16 short of Apple's 44pt floor. At 33 the box is
+ * 33 x 51 and the shortfall is 11, which is the first time any of these
+ * tickets has moved that number back toward the floor rather than away.
+ */
+export const MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH =
+    MOBILE_COMPOSER_CAPSULE_GLYPH_SIZE + 2 * MOBILE_COMPOSER_DISC_INNER_PADDING;
 
 /**
  * READ-ALOUD'S FILL, INSET AS A PILL RATHER THAN BLED TO THE SEGMENT'S BOX
@@ -505,10 +586,12 @@ export const MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH = 27;
  * one mark — and 3pt clear of the capsule's rim above and below, one whole
  * point over DROVE-118's 2pt blob threshold. The radius is half the pill's
  * narrower side, so the shape is a stadium at every segment width, and that
- * is why DROVE-320's point off the segment needed no edit here: at the chat's
- * 27 x 39 segment it is a 25 x 33 pill, radius 12.5, where 28 gave 26 x 33 and
- * 13. `volume-high`, the widest everyday glyph, keeps 3.75pt of fill beyond
- * its 17.5pt of ink, still clear of the 2pt blob threshold.
+ * is why neither DROVE-320's point off the segment nor DROVE-353's six back on
+ * needed an edit here: at the chat's 33 x 39 segment it is a 31 x 33 pill,
+ * radius 15.5, where 27 gave 25 x 33 and 12.5 and 28 gave 26 x 33 and 13.
+ * `volume-high`, the widest everyday glyph, keeps 6.75pt of fill beyond its
+ * 17.5pt of ink at 33 where it kept 3.75 at 27, both clear of the blob
+ * threshold.
  *
  * NO COLOUR MOVES. The four faces, their fills and their tints are exactly
  * `composerAudioOutFill` / `composerAudioOutTint`, every fill still opaque and

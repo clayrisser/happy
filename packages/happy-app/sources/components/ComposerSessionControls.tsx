@@ -29,8 +29,14 @@ import {
     pendingOrSettled,
 } from './composerControlColour';
 import { permissionAccessibilityValue } from './autoAcceptRow';
-import { MOBILE_COMPOSER_SEGMENT_FILL_INSET } from './agentInputLayout';
-import { COMPOSER_BUBBLE_SESSION_CAPSULE_GEOMETRY } from './composerBubbleLayout';
+import {
+    MOBILE_COMPOSER_CAPSULE_GLYPH_SIZE,
+    MOBILE_COMPOSER_SEGMENT_FILL_INSET,
+} from './agentInputLayout';
+import {
+    COMPOSER_BUBBLE_SESSION_CAPSULE_GEOMETRY,
+    COMPOSER_BUBBLE_SESSION_MODEL_SEGMENT_GEOMETRY,
+} from './composerBubbleLayout';
 import {
     COMPOSER_MODEL_SEGMENT,
     COMPOSER_SESSION_CONTROL_SIZE,
@@ -319,7 +325,9 @@ export function unconfirmedAccessibilityValue(value: string | undefined, pending
  * whole of DROVE-227: a gauge with an invisible dial is a floating diagonal.
  */
 export function EffortGauge(props: { index: number; count: number; color: string; track: string }) {
-    const size = 20;
+    // The capsule's one glyph size, from the metric the segment's width is
+    // made out of rather than a third copy of the literal (DROVE-353).
+    const size = MOBILE_COMPOSER_CAPSULE_GLYPH_SIZE;
     const strokeWidth = 2;
     const centre = size / 2;
     const angle = effortGaugeAngle(props.index, props.count);
@@ -391,6 +399,17 @@ const styles = StyleSheet.create((theme) => ({
      * `flexShrink: 0`, so a name that runs under never squeezes them.
      */
     modelSegment: {
+        // THE REMAINDER, NOT THE NAME'S OWN WIDTH (DROVE-353). `flex: 1` read
+        // off the resolver, so this segment is the capsule less the three
+        // glyph segments and the three hairlines — which is
+        // `composerModelBudget`, measured from the other end. It is what
+        // deletes the row's spacer: there is no width left over anywhere for
+        // one to hold.
+        //
+        // ONLY THE FLEX COMES FROM THERE, the same split the glyph segments
+        // make: the resolver models the CHAT's 39pt capsule, and the height
+        // here is the caller's `size`, because Home's capsule is 44.
+        flex: COMPOSER_BUBBLE_SESSION_MODEL_SEGMENT_GEOMETRY.flex,
         // THE SEGMENT'S PADDING IS THE PILL'S INSET NOW (DROVE-343), and the
         // model's own air moved INSIDE the pill with the text. The drawn width
         // is unchanged — `MOBILE_COMPOSER_SEGMENT_FILL_INSET.horizontal` out
@@ -765,7 +784,7 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                         hears the state in the accessibility value. */}
                     <Ionicons
                         name={permissionModeGlyph(modeKind, modeKey)}
-                        size={20}
+                        size={MOBILE_COMPOSER_CAPSULE_GLYPH_SIZE}
                         color={pendingOrSettled(palette, permissionPending, autoAcceptColour(palette, autoAccept))}
                     />
                 </Control>
@@ -818,7 +837,7 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                 >
                     <Ionicons
                         name={readAloud.glyph}
-                        size={20}
+                        size={MOBILE_COMPOSER_CAPSULE_GLYPH_SIZE}
                         color={composerAudioOutTint(theme.dark, readAloud.fill)}
                     />
                 </Control>

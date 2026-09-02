@@ -766,19 +766,20 @@ describe('read-aloud as a capsule segment', () => {
                 - 2 * MOBILE_COMPOSER_SEGMENT_FILL_INSET.horizontal,
             height: 39 - 2 * MOBILE_COMPOSER_SEGMENT_FILL_INSET.vertical,
             // A stadium: half the SHORT axis, which the renderer derives as
-            // `Math.min(pill.width, pill.height) / 2`. 12.5 at a 27pt segment
-            // where it was 13 at 28 — it follows the segment rather than being
-            // a number typed once.
+            // `Math.min(pill.width, pill.height) / 2`. 15.5 at DROVE-353's 33pt
+            // segment, where it was 12.5 at 27 and 13 at 28 — it follows the
+            // segment rather than being a number typed once.
             borderRadius: Math.min(
                 MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH
                     - 2 * MOBILE_COMPOSER_SEGMENT_FILL_INSET.horizontal,
                 39 - 2 * MOBILE_COMPOSER_SEGMENT_FILL_INSET.vertical,
             ) / 2,
         });
-        expect(box.borderRadius).toBe(12.5);
-        expect(box.width).toBe(25);
-        // The fill still clears `volume-high`'s 17.5pt of ink on both sides.
-        expect((box.width - 20 * 0.875) / 2).toBeCloseTo(3.75, 3);
+        expect(box.borderRadius).toBe(15.5);
+        expect(box.width).toBe(31);
+        // The fill clears `volume-high`'s 17.5pt of ink by 6.75 a side now,
+        // where it cleared it by 3.75 at a 27pt segment (DROVE-353).
+        expect((box.width - 20 * 0.875) / 2).toBeCloseTo(6.75, 3);
         expect(MOBILE_COMPOSER_SEGMENT_FILL_INSET).toEqual({ horizontal: 1, vertical: 3 });
         // And the glyph is INSIDE the pill, so the pill centres it exactly as
         // the segment centred it — nothing moved but where the colour stops.
@@ -887,8 +888,9 @@ describe('read-aloud as a capsule segment', () => {
                 width: MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH, height: 39,
             });
         }
-        expect(MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH).toBe(27);
-        // The name sizes to itself and takes only the height.
+        expect(MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH).toBe(33);
+        // The name takes the capsule's remainder rather than a width of its
+        // own (DROVE-353), so it is still not one of these.
         const modelParts = stylePartsOf(press(renderer, 'Model'));
         expect(modelParts.some((part: any) => (
             part?.width === MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH
