@@ -44,21 +44,33 @@ func primary(_ tag: String) -> String {
     return normalize(tag).split(separator: "-").first.map(String.init) ?? normalize(tag)
 }
 
-/// `voicePick.ts`, in Swift: exact language tag if any voice has it, else the
-/// same primary subtag; then best quality, then name so a tie is not random.
+/// A novelty voice, as the module decides it (DroverVoicePick.swift): the
+/// OS trait where there is one, else the MacinTalk identifier shape. Albert is
+/// what this script measured at -24.03 LUFS, and DROVE-390 is why the reader
+/// no longer lands on it.
+func isNovelty(_ voice: AVSpeechSynthesisVoice) -> Bool {
+    if #available(macOS 14.0, *), voice.voiceTraits.contains(.isNoveltyVoice) { return true }
+    return voice.identifier.hasPrefix("com.apple.speech.synthesis.voice.")
+}
+
+/// DroverVoicePick.swift, in a script: exact language tag if any voice has
+/// it, else the same primary subtag; never a novelty voice; then the best
+/// quality, then the system default, then the stock compact voice, then the
+/// listing order. No name comparison, same as the module.
 func pickVoice(_ language: String) -> AVSpeechSynthesisVoice? {
     let all = AVSpeechSynthesisVoice.speechVoices()
     let wanted = normalize(language)
-    var candidates = all.filter { normalize($0.language) == wanted }
-    if candidates.isEmpty {
-        candidates = all.filter { primary($0.language) == primary(language) }
+    var spoken = all.filter { normalize($0.language) == wanted }
+    if spoken.isEmpty {
+        spoken = all.filter { primary($0.language) == primary(language) }
     }
-    if candidates.isEmpty { return nil }
-    return candidates.sorted {
-        let r = qualityRank($1.quality) - qualityRank($0.quality)
-        if r != 0 { return r < 0 }
-        return $0.name < $1.name
-    }.first
+    let candidates = spoken.filter { !isNovelty($0) }
+    let top = candidates.map { qualityRank($0.quality) }.max() ?? 1
+    if top > 1 { return candidates.first { qualityRank($0.quality) == top } }
+    let standard = AVSpeechSynthesisVoice(language: language)?.identifier
+    if let match = candidates.first(where: { $0.identifier == standard }) { return match }
+    if let stock = candidates.first(where: { $0.identifier.hasPrefix("com.apple.voice.compact.") }) { return stock }
+    return candidates.first
 }
 
 if args.first == "--list" {

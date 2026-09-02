@@ -544,8 +544,18 @@ public final class DroverSpeechModule: Module {
         /// Quality is the string JS types against: "default", "enhanced" or
         /// "premium". A Personal Voice (iOS 17) is flagged so the picker can
         /// label it; it is listed only once the user has authorised it.
+        ///
+        /// Two more flags since DROVE-390. `novelty` is what iOS 17's traits
+        /// say, or the MacinTalk identifier shape and the name list in
+        /// DroverVoicePick on an older system, so JS never reads with Albert.
+        /// `systemDefault` marks the voice AVSpeechSynthesisVoice(language:)
+        /// returns for its language, so JS can put it ahead of the other
+        /// compact voices the way this module does.
         AsyncFunction("listVoices") { () -> [[String: Any]] in
-            AVSpeechSynthesisVoice.speechVoices().map { voice in
+            let voices = AVSpeechSynthesisVoice.speechVoices()
+            let defaults = DroverSpeechModule.systemDefaults(for: voices)
+            return voices.map { voice in
+                let candidate = DroverSpeechModule.candidate(voice, defaults: defaults)
                 var entry: [String: Any] = [
                     "identifier": voice.identifier,
                     "name": voice.name,
@@ -554,6 +564,12 @@ public final class DroverSpeechModule: Module {
                 ]
                 if #available(iOS 17.0, *), voice.voiceTraits.contains(.isPersonalVoice) {
                     entry["personal"] = true
+                }
+                if DroverVoicePick.isNovelty(candidate) {
+                    entry["novelty"] = true
+                }
+                if candidate.systemDefault {
+                    entry["systemDefault"] = true
                 }
                 return entry
             }
@@ -814,12 +830,34 @@ public final class DroverSpeechModule: Module {
         return 1
     }
 
-    private static func normalizedTag(_ tag: String) -> String {
-        tag.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "_", with: "-").lowercased()
+    /// `AVSpeechSynthesisVoice(language:)` once per language in the list: the
+    /// identifier iOS itself would read with, keyed by normalised tag.
+    private static func systemDefaults(for voices: [AVSpeechSynthesisVoice]) -> [String: String] {
+        var defaults: [String: String] = [:]
+        for voice in voices {
+            let tag = DroverVoicePick.normalizedTag(voice.language)
+            if defaults[tag] == nil, let standard = AVSpeechSynthesisVoice(language: voice.language) {
+                defaults[tag] = standard.identifier
+            }
+        }
+        return defaults
     }
 
-    private static func primarySubtag(_ tag: String) -> String {
-        normalizedTag(tag).split(separator: "-").first.map(String.init) ?? ""
+    /// The voice as DroverVoicePick sees it. The novelty trait exists from
+    /// iOS 17; before that the pick falls back to its identifier shape and
+    /// name list, which is why both are there.
+    private static func candidate(_ voice: AVSpeechSynthesisVoice, defaults: [String: String]) -> DroverVoiceCandidate {
+        var novelty = false
+        if #available(iOS 17.0, *) {
+            novelty = voice.voiceTraits.contains(.isNoveltyVoice)
+        }
+        return DroverVoiceCandidate(
+            identifier: voice.identifier,
+            name: voice.name,
+            language: voice.language,
+            quality: qualityRank(voice.quality),
+            noveltyTrait: novelty,
+            systemDefault: defaults[DroverVoicePick.normalizedTag(voice.language)] == voice.identifier)
     }
 
     /// The audio route changing, forwarded to JS (DROVE-119).
@@ -1217,27 +1255,25 @@ public final class DroverSpeechModule: Module {
         }
     }
 
-    /// The same rule as pickVoice in sources/voice/voicePick.ts: the chosen
-    /// voice when it is installed, else the best quality for the language,
-    /// exact region first and the wider language when the region has none.
-    /// Nil hands the choice back to the synthesiser, which is what happened
-    /// for every utterance before DROVE-97.
+    /// The same rule as pickVoice in sources/voice/voicePick.ts, both of them
+    /// DroverVoicePick's: the chosen voice when it is installed, whatever it
+    /// is, else the pick over the installed voices for the language. Nil hands
+    /// the choice back to the synthesiser, which is what happened for every
+    /// utterance before DROVE-97, and since DROVE-390 is what a language with
+    /// nothing but novelty voices gets rather than one of them.
     private func bestVoice(language: String?, chosenId: String?) -> AVSpeechSynthesisVoice? {
         if let chosenId, !chosenId.isEmpty, let chosen = AVSpeechSynthesisVoice(identifier: chosenId) {
             return chosen
         }
         let wanted = language ?? AVSpeechSynthesisVoice.currentLanguageCode()
-        let all = AVSpeechSynthesisVoice.speechVoices()
-        let exact = all.filter { Self.normalizedTag($0.language) == Self.normalizedTag(wanted) }
-        let primary = Self.primarySubtag(wanted)
-        let candidates = exact.isEmpty
-            ? all.filter { Self.primarySubtag($0.language) == primary }
-            : exact
-        return candidates.max { a, b in
-            let rank = Self.qualityRank(a.quality) - Self.qualityRank(b.quality)
-            // max() wants "a < b"; on a tie the name decides so a pick is stable.
-            return rank != 0 ? rank < 0 : a.name > b.name
-        }
+        // Only this language's voices: the default lookup is one call per
+        // language, and this runs once per sentence.
+        let primary = DroverVoicePick.primarySubtag(wanted)
+        let spoken = AVSpeechSynthesisVoice.speechVoices().filter { DroverVoicePick.primarySubtag($0.language) == primary }
+        let defaults = Self.systemDefaults(for: spoken)
+        let candidates = spoken.map { Self.candidate($0, defaults: defaults) }
+        guard let picked = DroverVoicePick.pick(candidates, language: wanted) else { return nil }
+        return AVSpeechSynthesisVoice(identifier: picked.identifier)
     }
 
     //

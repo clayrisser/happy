@@ -45,6 +45,7 @@
     "watch:graft": "sh watch/scripts/with-ruby.sh watch/scripts/add-watch-targets.rb ios watch",
     "watch:verify": "sh watch/scripts/with-ruby.sh watch/scripts/verify-watch-targets.rb ios",
     "watch:test": "sh watch/scripts/test-shared.sh",
+    "speech:test": "sh modules/drover-speech/scripts/test-pick.sh",
     "prebuild:ios": "expo prebuild --platform ios && pnpm watch:graft && pnpm watch:verify"
   },
   "jest": {
