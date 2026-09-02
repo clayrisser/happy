@@ -38,6 +38,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { homedir } from 'node:os';
 import { createInterface } from 'node:readline';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -59,6 +60,8 @@ import { createSessionMetadata } from '@/utils/createSessionMetadata';
 import { setupOfflineReconnection } from '@/utils/setupOfflineReconnection';
 import { MessageQueue2 } from '@/utils/MessageQueue2';
 import { openDroverToolGate, piGateEnabled } from '@/codex/droverGate';
+import { configuration } from '@/configuration';
+import { piRegistrationLine } from './piRegistration';
 import { PiBackend, type PiGateDecision, type PiState } from './PiBackend';
 import { PiPermissionHandler } from './piPermissionHandler';
 import { findPiBin, PI_BIN } from './piBin';
@@ -443,9 +446,21 @@ export async function runPi(opts: RunPiOptions): Promise<void> {
     }
 
     try {
+        // WHERE it registered, not just THAT it did (DROVE-379). A session
+        // that does not turn up in the app is otherwise indistinguishable
+        // from one that went to another machine, account, home or server, and
+        // telling those apart cost a morning of reading logs.
+        const registration = piRegistrationLine({
+            machineId: settings.machineId,
+            happyHomeDir: configuration.happyHomeDir,
+            serverUrl: configuration.serverUrl,
+            account: process.env.DROVER_ACCOUNT,
+            homeDir: homedir(),
+        });
         process.stdout.write(
             `\npi session ${response?.id ?? sessionTag} — ${modelRef ?? 'no model'}\n`
             + `${piState.sessionId ? `pi session ${piState.sessionId}\n` : ''}`
+            + `${registration ? `${registration}\n` : ''}`
             + 'type here or send from the phone; ctrl-c ends it\n\n',
         );
 
