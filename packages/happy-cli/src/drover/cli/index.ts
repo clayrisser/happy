@@ -69,6 +69,11 @@ export const droverVerbs: readonly DroverVerb[] = [
         summary: 'Running sessions still on the CLI code the last build replaced, by name, and which of them relaunch themselves.',
         load: () => import('./stale-sessions'),
     },
+    {
+        name: 'status',
+        summary: 'Bus health, pending prompts, push delivery, gates, services. Reads only.',
+        load: () => import('./status'),
+    },
 ];
 
 /** Is this a verb the node CLI carries? */

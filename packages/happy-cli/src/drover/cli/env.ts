@@ -44,6 +44,33 @@ export interface DroverEnv {
     /** The local Happy self-host relay port and URL (DROVER_SERVER_MODE=relay). */
     relayPort: string;
     relayUrl: string;
+    /** One home for everything drover owns (DROVE-309). */
+    droverHome: string;
+    /** Which Happy server the CLI and the bridge talk to: official | relay. */
+    droverServerMode: string;
+    /** The Happy home holding credentials, settings and logs. */
+    droverHappyHome: string;
+    /** The account registry the flip reads. */
+    droverAccounts: string;
+}
+
+/**
+ * `drover_home_path <new> <legacy>` — where a tree drover owns lives TODAY.
+ *
+ * `drover home migrate` moves six trees under DROVER_HOME and leaves a symlink
+ * at each old path, so both spellings resolve afterwards; the canonical one is
+ * the new one. Before that run the new path does not exist and the legacy one
+ * is the only truth; on a fresh machine neither exists and new state goes
+ * straight under DROVER_HOME. So: the new path when it is there, else the
+ * legacy path when THAT is there, else the new path. A machine is never sent
+ * to an empty directory while its state sits in the other one.
+ *
+ * `[ -e ]` follows symlinks, so `existsSync` is the same test.
+ */
+export function droverHomePath(newPath: string, legacyPath: string): string {
+    if (existsSync(newPath)) return newPath;
+    if (existsSync(legacyPath)) return legacyPath;
+    return newPath;
 }
 
 type Env = Record<string, string | undefined>;
@@ -98,14 +125,29 @@ export function droverEnv(env: Env = process.env, home: string = homedir()): Dro
 
     const droverPort = pick('DROVER_PORT', '7970');
     const relayPort = pick('DROVER_RELAY_PORT', '7971');
+    const resolvedDroverDir = pick('DROVER_DIR', droverDir);
+    const droverHome = pick('DROVER_HOME', join(home, '.drover'));
+    const droverServerMode = pick('DROVER_SERVER_MODE', 'official');
+    // Official mode shares Clay's own ~/.happy so `happy` in a terminal and the
+    // bridge are the SAME account on the SAME server — otherwise the phone
+    // pairs with one of them and is blind to the other. Relay mode keeps its
+    // own home, because those credentials belong to a different server and must
+    // not overwrite the real ones.
+    const droverHappyHome = droverServerMode === 'relay'
+        ? pick('DROVER_HAPPY_HOME', join(stateDir, 'happy-home'))
+        : pick('DROVER_HAPPY_HOME', droverHomePath(join(droverHome, 'happy'), join(home, '.happy')));
     return {
-        droverDir: pick('DROVER_DIR', droverDir),
+        droverDir: resolvedDroverDir,
         forkDir: pick('FORK_DIR', forkDir),
         stateDir,
         droverPort,
         droverUrl: pick('DROVER_URL', `http://127.0.0.1:${droverPort}`),
         relayPort,
         relayUrl: pick('DROVER_RELAY_URL', `http://127.0.0.1:${relayPort}`),
+        droverHome,
+        droverServerMode,
+        droverHappyHome,
+        droverAccounts: pick('DROVER_ACCOUNTS', join(resolvedDroverDir, 'accounts.json')),
     };
 }
 
