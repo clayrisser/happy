@@ -217,6 +217,11 @@ export const droverVerbs: readonly DroverVerb[] = [
         summary: 'Bus health, pending prompts, push delivery, gates, services. Reads only.',
         load: () => import('./status'),
     },
+    {
+        name: 'providers',
+        summary: "OpenCode's custom model providers. The write half of `drover mcps`, and it never carries a key.",
+        load: () => import('./providers'),
+    },
 ];
 
 /** Is this a verb the node CLI carries? */
