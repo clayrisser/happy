@@ -44,7 +44,9 @@ import {
  *   shell         column, padding `bubbleInset`, gap `controlGap`, glass that
  *                 asks UIKit for the press only while the text row is held
  *     textRow     a plain view — the bubble's press target, drawing nothing
- *     actionRow   leading ‖ gap ‖ controls ‖ gap ‖ spacer ‖ trailing…
+ *     actionRow   leading ‖ gap ‖ controls ‖ gap ‖ trailing…, where `controls`
+ *                 is the flexible child and a spacer stands in for it when
+ *                 there are none (DROVE-353)
  *
  * WHY THE GAPS ARE CHILDREN rather than the row's `gap` property is on
  * `resolveComposerBubbleGapGeometry`: the row wants a fixed 6 in three places
@@ -77,11 +79,16 @@ export interface ComposerBubbleProps {
     overlay?: React.ReactNode;
     /** The leading control: the `+`. */
     leading?: React.ReactNode;
-    /** The session capsule, between the `+` and the row's slack. */
+    /**
+     * The session capsule, between the `+` and the mic. IT IS THE ROW'S SLACK
+     * since DROVE-353, rather than something sitting beside it.
+     */
     controls?: React.ReactNode;
     /**
-     * Everything after the spacer, in order, one `controlGap` between each: the
-     * mic and send in the chat, send alone on Home.
+     * Everything at the trailing end, in order, one `controlGap` between each:
+     * the mic and send in the chat, send alone on Home. One `controlGap` from
+     * the capsule too, with nothing in between — the empty band that used to
+     * sit here is DROVE-353.
      */
     trailing?: React.ReactNode[];
     /** The action row's own style, over the geometry. */
@@ -244,11 +251,16 @@ export function ComposerBubble({
                     {leading && controls ? <View style={styles.gap} /> : null}
                     {controls}
                     {controls ? <View style={styles.gap} /> : null}
-                    {/* A `flex: 1` spacer rather than `space-between`, so zen
-                        mode — which draws neither the `+` nor the capsule —
-                        still puts send at the trailing end instead of sliding
-                        it to the leading one. */}
-                    <View style={styles.spacer} />
+                    {/* THE SPACER ONLY WHEN THERE IS NO CAPSULE TO BE IT
+                        (DROVE-353). The capsule takes `flex: 1` now, so it is
+                        the row's flexible child and the gap above really is
+                        the gap to the mic. Mounting a second `flex: 1` child
+                        beside it would SPLIT the slack, which is the band Clay
+                        photographed at half width. With no controls — zen
+                        mode, Home before the dock opens — this is what still
+                        holds send at the trailing end rather than sliding it
+                        to the leading one. */}
+                    {controls ? null : <View style={styles.spacer} />}
                     {gapped}
                 </Animated.View>
             ) : null}

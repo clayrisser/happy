@@ -26,21 +26,30 @@ import {
  *                     add       the `+`, 39
  *                     gap       6
  *                     capsule   permission ‖ read-aloud ‖ effort ‖ model,
- *                               39 tall, 27 per glyph segment
+ *                               39 tall, FLEX 1, 33 per glyph segment
  *                     gap       6
- *                     spacer    flex 1, the row's only slack
  *                     mic       39
  *                     gap       6
  *                     primary   send / stop, 39
+ *
+ * THE SLACK IS THE CAPSULE'S SINCE DROVE-353, and there is no spacer in the
+ * row that draws one. It sat between the capsule and the mic taking `flex: 1`
+ * while the capsule sized to its content, so every point the row had spare went
+ * to a view that drew nothing and the capsule stayed at its floor beside it.
+ * Clay, five times, most recently over a photograph of the padlock, the
+ * speaker and the dial jammed against their hairlines: "Why is everything
+ * squished here? There's extra space." The spacer survives for the one case
+ * that still needs it — a row with no capsule at all — and is mounted only
+ * there.
  *
  * THE ACTION ROW HOLDS FOUR THINGS SINCE DROVE-284 — read-aloud's disc joined
  * the capsule — and the gaps are CHILDREN rather than the row's `gap` property.
  * That is not stylistic. The row needs a fixed 6 in three places and flexible
  * slack in exactly one, and a row-level `gap` applies to every boundary
- * including both sides of the spacer, which would have put 12 between the
- * capsule and the mic at the width where the row is fullest. A gap with a width is a child the layout engine resolves
- * like any other, which is the opposite of the hand-placed offset this file
- * exists to refuse.
+ * including both sides of the flexible child, which would have put 12 between
+ * the capsule and the mic. A gap with a width is a child the layout engine
+ * resolves like any other, which is the opposite of the hand-placed offset this
+ * file exists to refuse.
  *
  * WHY THIS DISSOLVES THE BUG RATHER THAN FIXING IT. Every earlier pass placed
  * a 36pt disc inside the row the text lives in, and that row's height is not
@@ -172,7 +181,24 @@ export function resolveComposerBubbleActionRowGeometry(): ComposerBubbleStyle {
     };
 }
 
-/** The spacer that holds send against the trailing end whatever else is drawn. */
+/**
+ * The spacer that holds send against the trailing end when NOTHING ELSE ON THE
+ * ROW CAN (DROVE-353).
+ *
+ * It used to be mounted always, and that is the bug Clay photographed five
+ * times. Two things on the row wanted the slack — the capsule, which draws
+ * something, and this, which draws nothing — and `flex: 1` here with a
+ * content-sized capsule handed every point of it to the one that draws
+ * nothing. At 375 that is 45pt of empty band between the capsule and the mic;
+ * at 430 it is 100.
+ *
+ * So the capsule is the row's flexible child now (see
+ * `resolveComposerBubbleSessionCapsuleGeometry`) and this is mounted only when
+ * there is no capsule to be it: zen mode, and Home before the dock opens. A row
+ * with two `flex: 1` children would SPLIT the slack, which is the same bug at
+ * half strength, so the two are mutually exclusive by construction rather than
+ * by a ratio anybody tuned.
+ */
 export function resolveComposerBubbleSpacerGeometry(): ComposerBubbleStyle {
     return { flex: 1 };
 }
@@ -195,17 +221,41 @@ export function resolveComposerBubbleGapGeometry(): ComposerBubbleStyle {
  * model's name (DROVE-236, DROVE-284). DROVE-281's auto-accept bolt sat in it
  * too, touching the padlock, until DROVE-331 sent it back to the sheet.
  *
- * It sizes to its CONTENT and shrinks through the model segment, which is the
- * one part of it with a width of its own. It does not take `flex: 1`: a
- * capsule that filled the middle would draw a lot of empty glass around a
- * short name on a wide phone, which is why the slack is a spacer beside it
- * rather than growth inside it.
+ * IT IS THE ROW'S FLEXIBLE CHILD NOW, AND THE REASON IT WAS NOT IS THE BUG
+ * (DROVE-353).
+ *
+ * This carried `flexShrink: 1` and no `flex`, so it sized to its CONTENT, and
+ * the comment here argued the case: "a capsule that filled the middle would
+ * draw a lot of empty glass around a short name on a wide phone, which is why
+ * the slack is a spacer beside it rather than growth inside it."
+ *
+ * The premise was wrong in the only way that matters. The slack does not stop
+ * existing when a spacer takes it — it becomes empty BUBBLE instead of empty
+ * capsule, which is worse, because the capsule beside it is then drawn at its
+ * floor. Clay, on the fifth screenshot of it: "Why is everything squished
+ * here? There's extra space." Both halves of that sentence are this one
+ * property.
+ *
+ * `flex: 1`, so the capsule's width is the row's width less the three fixed
+ * discs and the three gaps, and there is no band between it and the mic at any
+ * width. What the capsule then does with that width is the rest of this file
+ * and `sessionPillLabel.ts`: the glyph segments take the `+`'s own clearance
+ * (`MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH`), the hairlines take a point each,
+ * and the model's name takes the remainder — which is exactly
+ * `composerModelBudget`, unchanged in form, so the give-way order DROVE-331
+ * wrote still decides what the name does with it.
+ *
+ * The old comment's worry survives as a real one and is answered elsewhere: on
+ * a wide phone with a short name the remainder IS large, and the name is
+ * centred in it rather than left against the last hairline, so what the reader
+ * sees is a capsule with its name in the middle rather than a name shoved to
+ * one side of a long empty tail.
  */
 export function resolveComposerBubbleSessionCapsuleGeometry(): ComposerBubbleStyle {
     return {
         flexDirection: 'row',
         alignItems: 'center',
-        flexShrink: 1,
+        flex: 1,
         height: MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE,
     };
 }
@@ -230,7 +280,46 @@ export function resolveComposerBubbleSessionSegmentGeometry(): ComposerBubbleSty
         // rule, not the ceiling. Four of them at a disc's width is what forced
         // the second row Clay rejected; DROVE-284 cut them to the ink and Clay
         // has since ruled that over-tight (“spread them out”).
+        //
+        // 33 SINCE DROVE-353, and it is no longer a width the row can talk
+        // down. It is the capsule's 20pt glyph plus
+        // `MOBILE_COMPOSER_DISC_INNER_PADDING` either side — the same air the
+        // `+` keeps around its own glyph, which is Clay's rule stated as an
+        // addition. `flexShrink` is deliberately absent, so a long model name
+        // can never claim it back: the name gives first and gives alone.
         width: MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH,
+        height: MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE,
+        alignItems: 'center',
+    };
+}
+
+/**
+ * THE MODEL'S NAME: the capsule's last segment, and the only thing in it that
+ * takes what is left rather than a width of its own (DROVE-353).
+ *
+ * `flex: 1`, which is the whole of the distribution rule inside the capsule.
+ * The three glyph segments are fixed at
+ * `MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH`, the three hairlines are a point
+ * each, and this takes the remainder — so the capsule's width arrives from the
+ * row, the icons take their padding off the top, and the name gets whatever
+ * that leaves. `composerModelBudget` computes the same number from the other
+ * direction and `composerBubbleLayout.spec.ts` makes the two agree, which is
+ * what stops the model of the row and the drawn row disagreeing again.
+ *
+ * IT WAS THE NAME'S OWN WIDTH BEFORE, which is why the row needed a spacer at
+ * all. A segment as wide as its text leaves a remainder, and a remainder needs
+ * somewhere to go; the spacer was that somewhere, and it drew nothing. Now the
+ * remainder is inside the capsule and the name is centred in it.
+ *
+ * WHAT THE NAME DOES WHEN THE REMAINDER IS TOO SMALL is unchanged and is
+ * DROVE-331's order: full size, then down to `minimumFontScale`, then a tail
+ * ellipsis. `composerModelPresentation` says which of the three a given phone
+ * is on. Nothing here decides that — this only says the segment is the
+ * remainder, which is the fact the presentation is measured against.
+ */
+export function resolveComposerBubbleSessionModelSegmentGeometry(): ComposerBubbleStyle {
+    return {
+        flex: 1,
         height: MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE,
         alignItems: 'center',
     };
@@ -454,5 +543,6 @@ export const COMPOSER_BUBBLE_SPACER_GEOMETRY = resolveComposerBubbleSpacerGeomet
 export const COMPOSER_BUBBLE_GAP_GEOMETRY = resolveComposerBubbleGapGeometry();
 export const COMPOSER_BUBBLE_SESSION_CAPSULE_GEOMETRY = resolveComposerBubbleSessionCapsuleGeometry();
 export const COMPOSER_BUBBLE_SESSION_SEGMENT_GEOMETRY = resolveComposerBubbleSessionSegmentGeometry();
+export const COMPOSER_BUBBLE_SESSION_MODEL_SEGMENT_GEOMETRY = resolveComposerBubbleSessionModelSegmentGeometry();
 export const COMPOSER_BUBBLE_DISC_GEOMETRY = resolveComposerBubbleDiscGeometry();
 export const COMPOSER_BUBBLE_SURFACE = resolveComposerBubbleSurface();
