@@ -29,6 +29,9 @@ import { useAttachmentImage } from '@/hooks/useAttachmentImage';
 import { thumbhashToDataUri } from '@/utils/thumbhash';
 import { InlineImage } from './InlineImage';
 import type { CrossSessionImage, CrossSessionRender } from '@/utils/crossSessionAttachments';
+import { parseUserEnvelope } from '@/utils/userEnvelope';
+import { useAgentLabel } from '@/hooks/useAgentLabel';
+import { EnvelopeCard, envelopeAgentId } from './EnvelopeCard';
 
 
 export const MessageView = React.memo((props: {
@@ -134,6 +137,13 @@ function UserTextBlock(props: {
   // all of them.
   const crossSession = useCrossSessionMessage(props.sessionId, props.message.id);
 
+  // An envelope Claude Code injected as a user turn (DROVE-392): a subagent's
+  // report, a peer session's note, a background agent's notification, a
+  // reminder, a skill receipt. Read off the raw text, once per text; a turn
+  // Clay typed answers null after one character test.
+  const envelope = React.useMemo(() => parseUserEnvelope(props.message.text), [props.message.text]);
+  const envelopeLabel = useAgentLabel(props.sessionId, envelopeAgentId(envelope));
+
   const userMessageBubbleColor = useSetting('userMessageBubbleColor');
   const { theme } = useUnistyles();
   const bubblePalette = resolveUserMessageBubbleColor(userMessageBubbleColor, theme.dark);
@@ -158,7 +168,10 @@ function UserTextBlock(props: {
     return null;
   }
 
-  if (crossSession) {
+  // The phone's own message keeps DROVE-234's bubble: those are Clay's words,
+  // on his side, with the attribution under them. A PEER's wrapper, with a
+  // real Claude address on it, is not his and goes on a card like the rest.
+  if (crossSession && !(envelope?.kind === 'cross-session-message' && envelope.peer)) {
     return (
       <CrossSessionBlock
         render={crossSession}
@@ -167,6 +180,10 @@ function UserTextBlock(props: {
         onOptionPress={handleOptionPress}
       />
     );
+  }
+
+  if (envelope) {
+    return <EnvelopeCard envelope={envelope} agentLabel={envelopeLabel} sessionId={props.sessionId} />;
   }
 
   const parsed = parseLocalCommandMessage(props.message.displayText || props.message.text);
