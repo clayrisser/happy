@@ -21,7 +21,7 @@ import { StyleSheet } from 'react-native-unistyles';
 import { Typography } from '@/constants/Typography';
 import { ageLabel } from '@/sync/droverGates';
 import { machineDroverPane, type DroverPane } from '@/sync/machineFiles';
-import { paneTrouble, type PaneTarget } from '@/utils/worktreeSheetTabs';
+import { noMachineTrouble, paneStatus, paneTrouble, type PaneTarget } from '@/utils/worktreeSheetTabs';
 import {
     paneLines,
     paneRefreshMs,
@@ -97,7 +97,7 @@ export function WorktreeTerminalTab(props: WorktreeTerminalTabProps) {
         setPane(null);
         setTrouble(null);
         if (!machineId) {
-            setTrouble('This session is not on a machine the app knows.');
+            setTrouble(noMachineTrouble);
             return;
         }
         let cancelled = false;
@@ -131,11 +131,11 @@ export function WorktreeTerminalTab(props: WorktreeTerminalTabProps) {
         if (pane) scroll.current?.scrollToEnd({ animated: false });
     }, [pane]);
 
-    const status = pane
-        ? `${scopeLabel} · pane ${pane.pane} · ${ageLabel(pane.capturedAt)} ago${pane.redacted ? ` · ${pane.redacted} masked` : ''}`
-        : trouble
-            ? scopeLabel
-            : `${scopeLabel} · capturing`;
+    const status = paneStatus({
+        scopeLabel,
+        pane: pane ? { pane: pane.pane, age: ageLabel(pane.capturedAt), redacted: pane.redacted } : null,
+        troubled: trouble !== null,
+    });
 
     return (
         <View>

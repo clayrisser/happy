@@ -12,6 +12,7 @@ import {
     joinRel,
     ownScope,
     paneTargetFor,
+    paneStatus,
     paneTrouble,
     parentRel,
     scopeForRow,
@@ -81,10 +82,27 @@ describe('asking for a pane', () => {
         expect(paneTargetFor({ path: '/x', label: '~/x', sessionId: null }, () => 'never asked')).toEqual({ cwd: '/x' });
     });
 
-    it('turns the bus\'s short refusals into sentences and leaves the rest alone', () => {
-        expect(paneTrouble('no pane')).toContain('started by the daemon');
-        expect(paneTrouble('no live session in that worktree')).toContain('Worktrees tab');
+    it('gives each of the bus\'s refusals its own line and leaves the rest alone', () => {
+        // DROVE-359 cut these from paragraphs to fragments, so what is worth
+        // pinning is that the three still READ APART — a refusal you cannot
+        // tell from the next one is the same as no message. The length bar
+        // itself is copyDensity.spec.ts's.
+        expect(paneTrouble('no pane')).toMatch(/pane/);
+        expect(paneTrouble('no live session in that worktree')).toMatch(/running/);
+        expect(paneTrouble('no such session')).toMatch(/drover/);
+        const keys = ['no pane', 'no live session in that worktree', 'no such session'];
+        for (const key of keys) expect(paneTrouble(key)).not.toBe(key);
+        expect(new Set(keys.map(paneTrouble)).size).toBe(3);
         expect(paneTrouble('The drover bus is not running on this machine (drover bus).')).toBe('The drover bus is not running on this machine (drover bus).');
+    });
+
+    it('says which worktree the pane is from, and what it is doing when there is none', () => {
+        expect(paneStatus({ scopeLabel: '~/wt/x', pane: null, troubled: false })).toBe('~/wt/x · capturing');
+        expect(paneStatus({ scopeLabel: '~/wt/x', pane: null, troubled: true })).toBe('~/wt/x');
+        expect(paneStatus({ scopeLabel: '~/wt/x', pane: { pane: '%7', age: '4s', redacted: 0 }, troubled: false }))
+            .toBe('~/wt/x · pane %7 · 4s ago');
+        expect(paneStatus({ scopeLabel: '~/wt/x', pane: { pane: '%7', age: '4s', redacted: 3 }, troubled: false }))
+            .toBe('~/wt/x · pane %7 · 4s ago · 3 masked');
     });
 });
 

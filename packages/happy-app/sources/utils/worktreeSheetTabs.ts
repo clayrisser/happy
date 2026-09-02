@@ -104,22 +104,38 @@ export function paneTargetFor(
 }
 
 /**
- * The Terminal tab's sentence for a pane the bus would not give.
+ * The Terminal tab's line for a pane the bus would not give (DROVE-359).
  *
- * The bus's errors are short and keyed to its own registry; the tab says what
- * they mean for the person holding the phone.
+ * The bus's errors are keyed to its own registry, so each gets a line of the
+ * app's own. One fragment each: DROVE-346's rule is that the explanation goes
+ * behind a tap, into the docs, or nowhere, and these were three paragraphs
+ * about the daemon on a phone-width box. An error the app has no line for is
+ * handed through as the bus wrote it.
  */
 export function paneTrouble(error: string): string {
-    if (error === 'no pane') {
-        return 'This session has no terminal pane the drover can read. It was started by the daemon rather than in a terminal, or another session holds that pane.';
-    }
-    if (error === 'no live session in that worktree') {
-        return 'No live session in this worktree. Start one from the Worktrees tab and its terminal appears here.';
-    }
-    if (error === 'no such session') {
-        return 'The drover does not know this session yet. It appears once the session has fired a hook.';
-    }
+    if (error === 'no pane') return 'No terminal pane here';
+    if (error === 'no live session in that worktree') return 'Nothing running here';
+    if (error === 'no such session') return 'Not seen by the drover yet';
     return error;
+}
+
+/** Both tabs, for a session the app cannot place on a machine. */
+export const noMachineTrouble = 'No machine for this session';
+
+/**
+ * The Terminal tab's status line, built here so the copy is pinned rather
+ * than living in a template literal a scan cannot read.
+ */
+export function paneStatus(input: {
+    scopeLabel: string;
+    pane: { pane: string; age: string; redacted: number } | null;
+    troubled: boolean;
+}): string {
+    const { scopeLabel, pane, troubled } = input;
+    if (!pane) return troubled ? scopeLabel : `${scopeLabel} · capturing`;
+    const parts = [scopeLabel, `pane ${pane.pane}`, `${pane.age} ago`];
+    if (pane.redacted > 0) parts.push(`${pane.redacted} masked`);
+    return parts.join(' · ');
 }
 
 // --- the Files tab's path arithmetic ----------------------------------------

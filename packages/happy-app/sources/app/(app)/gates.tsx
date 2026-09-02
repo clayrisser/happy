@@ -233,14 +233,10 @@ function EmptyGates({ topContentInset }: { topContentInset: number }) {
     return (
         <View style={[styles.emptyContainer, { paddingTop: topContentInset }]}>
             <Ionicons name="checkmark-circle-outline" size={48} color={theme.colors.textSecondary} />
+            {/* The title is the whole message (DROVE-359). What lands on
+                this screen and why it is empty was a five-line paragraph
+                under a tick, read by whoever has nothing to read. */}
             <Text style={styles.emptyTitle}>Nothing waiting</Text>
-            <Text style={styles.emptyBody}>
-                Prompts from every session land here, so does anything an agent
-                has asked you to do, and so does every task list a session is
-                still working through. Nothing is here because no session is
-                blocked on you and none is holding an unfinished list — Claude
-                writes one when it plans multi-step work.
-            </Text>
             <PlaygroundLink />
         </View>
     );
@@ -587,13 +583,6 @@ const styles = StyleSheet.create((theme) => ({
         ...Typography.default('semiBold'),
         fontSize: 18,
         color: theme.colors.text,
-    },
-    emptyBody: {
-        ...Typography.default(),
-        fontSize: 14,
-        lineHeight: 20,
-        color: theme.colors.textSecondary,
-        textAlign: 'center',
     },
     card: {
         backgroundColor: theme.colors.surface,
