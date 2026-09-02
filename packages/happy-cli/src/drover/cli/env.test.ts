@@ -51,7 +51,20 @@ describe('droverEnv — defaults, then precedence', () => {
             droverUrl: 'http://127.0.0.1:7970',
             relayPort: '7971',
             relayUrl: 'http://127.0.0.1:7971',
+            // The rest of etc/drover.env (DROVE-309): DROVER_HOME is the single
+            // override, and the happy home resolves new-then-legacy — neither
+            // ~/.drover/happy nor ~/.happy exists under this fake HOME, so it is
+            // the new path.
+            droverHome: '/home/me/.drover',
+            droverServerMode: 'official',
+            droverHappyHome: '/home/me/.drover/happy',
+            droverAccounts: '/home/me/Projects/bitspur/cattle-drover/accounts.json',
         });
+    });
+
+    it('relay mode keeps its own happy home under STATE_DIR, not the real one', () => {
+        const e = droverEnv({ DROVER_SERVER_MODE: 'relay' }, '/home/me');
+        expect(e.droverHappyHome).toBe('/home/me/.local/state/cattle-drover/happy-home');
     });
 
     it('lets an exported var win over the default', () => {
