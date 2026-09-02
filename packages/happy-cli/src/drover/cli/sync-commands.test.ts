@@ -328,19 +328,17 @@ async function both(args: string[], over: Env = {}): Promise<Ran> {
 function snapshot(base: string): Record<string, string> {
     const out: Record<string, string> = {};
     const walk = (dir: string, rel: string): void => {
-        const seen: Record<string, number> = {};
         for (const name of readdirSync(dir).sort()) {
             const path = join(dir, name);
-            // A backup is named for the UTC second it was taken, so two runs a
-            // second apart name two different files for the same content. The
-            // second is replaced by the backup's POSITION, which keeps the count
-            // and the order the comparison is actually about.
-            const stamped = name.match(/^(.*)\.\d{8}T\d{6}Z\.json$/);
-            let plain = name;
-            if (stamped) {
-                seen[stamped[1]] = (seen[stamped[1]] ?? 0) + 1;
-                plain = `${stamped[1]}.#${seen[stamped[1]]}.json`;
-            }
+            // A backup is named for the UTC SECOND it was taken, so two writes
+            // inside one second overwrite each other and two a second apart do
+            // not. Which of those happens is wall-clock luck and identical in
+            // both implementations, so the second is folded out of the key and
+            // every backup of one prefix collapses onto the newest — whose
+            // content is the file as it stood before the last write, which both
+            // sides performed identically. The bytes are still compared; only
+            // the count of same-prefix backups, the part that is timing, is not.
+            const plain = name.replace(/^(.*)\.\d{8}T\d{6}Z\.json$/, '$1.<stamped>.json');
             const key = rel ? `${rel}/${plain}` : plain;
             const st = lstatSync(path);
             if (st.isSymbolicLink()) {
