@@ -25,7 +25,7 @@
  */
 
 import { spawnSync } from 'node:child_process'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { join } from 'node:path'
 
 import { realSessionsFile, sessionsUnder } from './testing/leakedSessions'
@@ -38,9 +38,32 @@ const packageRoot = fileURLToPath(new URL('..', import.meta.url)).replace(/\/$/,
 
 let sessionsBefore = new Set<string>()
 
+/**
+ * What the last run left behind, before this one starts anything (DROVE-389).
+ * An integration environment is stopped by its suite's afterAll, and a run
+ * that is killed never gets there: on 2026-09-02 three happy-servers, three
+ * expos and three daemons from this checkout's envs sat for an hour after a
+ * Claude Code restart took the run down. Every environment the harness makes
+ * carries the pid of the vitest that made it; one whose pid is gone is
+ * stopped and removed here, and said so, so the leak is at most one run long.
+ */
+async function sweepLeakedEnvironments(): Promise<void> {
+    const url = pathToFileURL(join(repoRoot, 'environments', 'environments.ts')).href
+    const environments = await import(url) as { sweepDeadHarnessEnvironments: () => Array<{ name: string; owner: number }> }
+    const swept = environments.sweepDeadHarnessEnvironments()
+    if (swept.length > 0) {
+        console.log(
+            `DROVE-389: stopped and removed ${swept.length} integration environment(s) whose vitest run died before its afterAll: `
+            + swept.map((s) => `${s.name} (pid ${s.owner})`).join(', '),
+        )
+    }
+}
+
 export async function setup() {
     process.env.VITEST_POOL_TIMEOUT = '60000'
     process.env.HAPPY_RUN_SANDBOX_NETWORK_TESTS = '1'
+
+    await sweepLeakedEnvironments()
 
     const unpackScript = join(packageRoot, 'scripts', 'unpack-tools.cjs')
     const unpackResult = spawnSync(process.execPath, [unpackScript], { stdio: 'pipe' })

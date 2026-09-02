@@ -25,7 +25,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { droverEnv } from './env';
 import {
@@ -43,6 +43,7 @@ import {
     transcriptCwd,
     type SessionsProbe,
 } from './sessions';
+import { encodeBase64, encrypt } from '../../api/encryption';
 
 /**
  * A throwaway HAPPY_HOME_DIR, pinned above every import. On 2026-09-01 a bench
@@ -788,6 +789,165 @@ describe.skipIf(!existsSync(shellVerb))('drover sessions — prints what the she
             expect(readFileSync(join(sw, '-Users-x-Projects-real', 'ffffffff-0000-4000-8000-000000000000.jsonl'), 'utf8')).toContain('Projects/real');
         } finally {
             rmSync(work, { recursive: true, force: true });
+        }
+    });
+});
+
+// --- harness sessions, from the daemon's ledger (DROVE-389) -----------------------
+//
+// The bus knows Claude Code's hooks and transcripts; the daemon's ledger knows
+// every session that reported itself, whatever its flavor. A codex or opencode
+// session started from the phone used to be on the phone and nowhere here.
+
+describe('drover sessions — harness sessions the bus does not carry come from the ledger', () => {
+    const NOW = Date.now();
+    const KEY = Buffer.alloc(32, 7);
+    const KEY64 = encodeBase64(KEY);
+    const A = 'aaaaaaaa-0000-0000-0000-000000000000';
+    const B = 'bbbbbbbb-0000-0000-0000-000000000000';
+    const C = 'cccccccc-0000-0000-0000-000000000000';
+    const D = 'dddddddd-0000-0000-0000-000000000000';
+    const E = 'eeeeeeee-0000-0000-0000-000000000000';
+    const F = 'ffffffff-0000-0000-0000-000000000000';
+    const DEAD_PID = 2 ** 22 - 1;
+
+    const BUS = JSON.stringify({
+        stale: false,
+        scannedAt: 1,
+        sessions: [{ id: A, state: 'live', account: 'a', pane: '%1', paneAmbiguous: false, cwd: '/Users/x/one', title: 'the claude one', subagents: [] }],
+    });
+
+    const entry = (md: Record<string, unknown>, savedAt: number): Record<string, unknown> => ({
+        agentStateVersion: 0, encryptionKey: KEY64, encryptionVariant: 'legacy', metadata: md, metadataVersion: 1, savedAt, seq: 0,
+    });
+    const MD_B = { path: '/Users/x/two', hostPid: process.pid, startedBy: 'daemon', lifecycleState: 'running', name: 'fix the build', flavor: 'codex' };
+    const MD_C = { path: '/Users/x/three', hostPid: DEAD_PID, startedBy: 'terminal', lifecycleState: 'running', name: 'count to ten', flavor: 'opencode' };
+    const LEDGER = {
+        sessions: {
+            [A]: entry({ path: '/Users/x/one', hostPid: process.pid, lifecycleState: 'running', flavor: 'claude' }, NOW - 3000),
+            [B]: entry(MD_B, NOW - 2000),
+            [C]: entry(MD_C, NOW - 1000),
+            [D]: entry({ path: '/Users/x/four', hostPid: process.pid, lifecycleState: 'running', name: 'a claude the bus forgot' }, NOW - 500),
+            [E]: entry({ path: '/Users/x/five', hostPid: process.pid, lifecycleState: 'archived', flavor: 'cursor', name: 'archived already' }, NOW - 400),
+            [F]: entry({ path: '/Users/x/six', hostPid: process.pid, lifecycleState: 'running', flavor: 'pi', name: 'from last month' }, NOW - 20 * 24 * 3600 * 1000),
+        },
+    };
+
+    let ledgerHome: string;
+    let bus: { url: string; close: () => Promise<void> };
+    let env: Env;
+
+    beforeEach(async () => {
+        ledgerHome = mkdtempSync(join(tmpdir(), 'sessions-ledger-'));
+        bus = await fakeBus(BUS);
+        env = { DROVER_URL: bus.url, DROVER_SESSIONS_TIMEOUT_S: '5', HAPPY_HOME_DIR: ledgerHome, HOME: '/Users/x', DROVER_SESSIONS_WIDTH: '160' };
+    });
+
+    afterEach(async () => {
+        await bus.close();
+        rmSync(ledgerHome, { recursive: true, force: true });
+    });
+
+    it('a bus body with nothing to add renders byte for byte as before, with no note', async () => {
+        const before = await capture([], env);
+        // A ledger with only claude in it, and one archived: nothing to add.
+        writeFileSync(join(ledgerHome, 'sessions.json'), JSON.stringify({ sessions: { [A]: LEDGER.sessions[A], [D]: LEDGER.sessions[D], [E]: LEDGER.sessions[E] } }));
+        const after = await capture([], env);
+        expect(after.out).toBe(before.out);
+        expect(after.err).toBe(before.err);
+        expect(after.out).not.toContain('FLAVOR');
+        expect(after.err).not.toContain('note:');
+    });
+
+    it('a codex and an opencode the bus does not know are rows, with a FLAVOR column; claude, archived and stale entries are not', async () => {
+        writeFileSync(join(ledgerHome, 'sessions.json'), JSON.stringify(LEDGER));
+        const r = await capture([], env);
+        expect(r.code).toBe(0);
+        const [header, ...rows] = r.lines;
+        expect(header).toContain('FLAVOR');
+        // FLAVOR stands in for HARNESS: the same fact at finer grain.
+        expect(header).not.toContain('HARNESS');
+        expect(rows.map((l) => l.slice(0, 8))).toEqual(['aaaaaaaa', 'cccccccc', 'bbbbbbbb']);
+        expect(rows[0]).toMatch(/\bclaude\b/);
+        expect(rows[1]).toMatch(/\bended\b/);
+        expect(rows[1]).toMatch(/\bopencode\b/);
+        expect(rows[1]).toContain('count to ten');
+        expect(rows[2]).toMatch(/\blive\b/);
+        expect(rows[2]).toMatch(/\bcodex\b/);
+        expect(rows[2]).toContain('fix the build');
+        expect(r.out).not.toContain('dddddddd');
+        expect(r.out).not.toContain('eeeeeeee');
+        expect(r.out).not.toContain('ffffffff');
+        // No login here, so the server was not asked, and the note says so.
+        expect(r.err).toContain(`note: no login under ${ledgerHome}; 2 daemon-registered row(s) shown from the ledger`);
+    });
+
+    it('--json carries the ledger rows marked as such, and never the key', async () => {
+        writeFileSync(join(ledgerHome, 'sessions.json'), JSON.stringify(LEDGER));
+        const r = await capture(['--json'], env);
+        expect(r.code).toBe(0);
+        const body = JSON.parse(r.out) as { sessions: Array<Record<string, unknown>> };
+        expect(body.sessions.map((s) => s.id)).toEqual([A, C, B]);
+        expect(body.sessions[0].source).toBeUndefined();
+        expect(body.sessions[1]).toMatchObject({ source: 'happy', flavor: 'opencode', harness: 'opencode', state: 'ended', hostPid: DEAD_PID, cwd: '/Users/x/three', title: 'count to ten' });
+        expect(body.sessions[2]).toMatchObject({ source: 'happy', flavor: 'codex', state: 'live', origin: 'daemon' });
+        expect(r.out).not.toContain(KEY64);
+        expect(r.out).not.toContain('encryptionKey');
+    });
+
+    it('the server\'s word: one it has archived is dropped, one it lists carries active, and the note is gone', async () => {
+        writeFileSync(join(ledgerHome, 'sessions.json'), JSON.stringify(LEDGER));
+        writeFileSync(join(ledgerHome, 'access.key'), JSON.stringify({ token: 't0k' }));
+        const server = await fakeBus(JSON.stringify({
+            sessions: [
+                { id: C, active: false, activeAt: 5, updatedAt: 5, metadata: encodeBase64(encrypt(KEY, 'legacy', { ...MD_C, lifecycleState: 'archived' })), metadataVersion: 2 },
+                { id: B, active: true, activeAt: 99, updatedAt: 99, metadata: encodeBase64(encrypt(KEY, 'legacy', MD_B)), metadataVersion: 1 },
+            ],
+        }));
+        try {
+            const r = await capture(['--json'], { ...env, HAPPY_SERVER_URL: server.url });
+            expect(r.code).toBe(0);
+            expect(r.err).toBe('');
+            const body = JSON.parse(r.out) as { sessions: Array<Record<string, unknown>> };
+            expect(body.sessions.map((s) => s.id)).toEqual([A, B]);
+            expect(body.sessions[1]).toMatchObject({ active: true, activeAt: 99 });
+        } finally {
+            await server.close();
+        }
+    });
+
+    it('a server that does not answer is one line on stderr, and the rows stand', async () => {
+        writeFileSync(join(ledgerHome, 'sessions.json'), JSON.stringify(LEDGER));
+        writeFileSync(join(ledgerHome, 'access.key'), JSON.stringify({ token: 't0k' }));
+        const port = await closedPort();
+        const r = await capture([], { ...env, HAPPY_SERVER_URL: `http://127.0.0.1:${port}`, DROVER_HAPPY_TIMEOUT_S: '1' });
+        expect(r.code).toBe(0);
+        expect(r.lines.map((l) => l.slice(0, 8).trim())).toEqual(['ID', 'aaaaaaaa', 'cccccccc', 'bbbbbbbb']);
+        expect(r.err).toMatch(/^note: the happy server did not answer \(.*\); 2 daemon-registered row\(s\) shown from the ledger/);
+    });
+
+    it('a bus row that names its harness gets the flavor spelled the server\'s way, and never a second row for the same id', async () => {
+        const two = JSON.stringify({
+            stale: false,
+            scannedAt: 1,
+            sessions: [
+                { id: A, state: 'live', account: 'a', cwd: '/Users/x/one', title: null, subagents: [], harness: 'claude-code' },
+                { id: B, state: 'idle', account: 'a', cwd: '/Users/x/two', title: 'bus knows this codex', subagents: [], harness: 'codex' },
+            ],
+        });
+        const other = await fakeBus(two);
+        writeFileSync(join(ledgerHome, 'sessions.json'), JSON.stringify(LEDGER));
+        try {
+            const r = await capture([], { ...env, DROVER_URL: other.url });
+            expect(r.code).toBe(0);
+            const [header, ...rows] = r.lines;
+            expect(header).toContain('FLAVOR');
+            expect(rows.map((l) => l.slice(0, 8))).toEqual(['aaaaaaaa', 'bbbbbbbb', 'cccccccc']);
+            expect(rows[1]).toMatch(/\bcodex\b/);
+            expect(rows[1]).toContain('bus knows this codex');
+            expect(r.out).not.toContain('fix the build');
+        } finally {
+            await other.close();
         }
     });
 });

@@ -65,6 +65,7 @@ import { join } from 'node:path';
 
 import { BusError, busGet } from './bus';
 import { droverEnv } from './env';
+import { flavorOf, ledgerFileOf, ledgerRows, readLedger, refreshRows } from './happyLedger';
 
 const HELP = `drover sessions — what is running, where, and on which account.
 
@@ -88,6 +89,10 @@ COLUMNS
           while every session is the same harness, which is every machine that
           has not started one of the others — a column with one value in it is
           noise, not information.
+  flavor  the server's word for the harness (claude · codex · cursor · opencode ·
+          gemini · pi), on every row once a session the daemon registered is in
+          the table (see HARNESS SESSIONS). It stands in for HARNESS then, since
+          it says the same thing at finer grain.
   acct    which account the session is on, worked out from the config dir the
           process is actually using rather than from a wrapper stamp, so a
           session started bare gets a name too (DROVE-31). A \`-\` here now means
@@ -111,6 +116,16 @@ COLUMNS
                   port, because that port is its only way in (DROVE-56). A
                   Claude session never says this — a missing pane there is a
                   detail, since the socket is the better channel anyway.
+
+HARNESS SESSIONS (DROVE-389). The bus registry is built from Claude Code's
+hooks and its transcripts, so a codex, cursor, opencode, gemini or pi session
+was on the phone and nowhere here. Every session that reports itself to the
+daemon is in <happy home>/sessions.json, whatever its flavor; the ones the bus
+does not carry are read from there and merged in, live while their process is
+and ended once it is gone, never a second row for a Claude session the bus
+already shows. The happy server is asked, best effort, which of them the phone
+has already archived; when it cannot be, one line on stderr says so.
+DROVER_HAPPY_TIMEOUT_S caps that ask (default 5).
 
 FIXTURES (DROVE-81). The bats and vitest harnesses used to run a real claude
 against the shared session store, so every test run left an idle row here. A
@@ -380,6 +395,9 @@ export interface TableRow {
     acct: string;
     subs: string;
     harness: string;
+    /** The server's word for the harness; drawn only once a row carries one. */
+    flavor: string;
+    hasFlavor: boolean;
     pane: string;
     mode: string;
     cwd: string;
@@ -441,6 +459,9 @@ export function tableRow(s: Session, home: string): TableRow {
         acct: clean(alt(s.account, '-')),
         subs,
         harness: clean(alt(s.harness, 'claude-code')),
+        // A bus row has no flavor of its own; its harness says it (DROVE-389).
+        flavor: clean(alt(s.flavor, flavorOf(alt(s.harness, 'claude-code')))),
+        hasFlavor: s.flavor !== undefined && s.flavor !== null,
         pane,
         mode,
         cwd: tilde(clean(alt(s.cwd, '-')), home),
@@ -462,19 +483,27 @@ export function renderTable(sessions: Session[], width: number, home: string): s
     const wsu = widest('SUBS', (r) => r.subs);
     const wpa = widest('PANE', (r) => r.pane);
     const wmo = widest('MODE', (r) => r.mode);
+    // FLAVOR once any row carries one, which is once the daemon's ledger has
+    // put a codex, cursor, opencode, gemini or pi session in the table
+    // (DROVE-389). It is the server's word for the same fact HARNESS states,
+    // at finer grain, so it stands in for HARNESS rather than sitting beside
+    // it: two columns saying one thing cost every row the width of a cwd.
+    const flavored = rows.some((r) => r.hasFlavor);
+    const wfl = flavored ? widest('FLAVOR', (r) => r.flavor) : 0;
     // HIDDEN while every session is the same harness: a column with one value
     // in it is noise, not information.
     const mixed = new Set(rows.map((r) => r.harness)).size > 1;
-    const wha = mixed ? widest('HARNESS', (r) => r.harness) : 0;
+    const wha = !flavored && mixed ? widest('HARNESS', (r) => r.harness) : 0;
     const tmax = rows.length === 0 ? 0 : Math.max(...rows.map((r) => jqLen(r.title)));
     const wti = tmax === 0 ? 0 : Math.min(24, Math.max(5, tmax));
-    const fixed = wid + wst + wac + wsu + wpa + wmo + 6 + (wha > 0 ? wha + 1 : 0);
+    const fixed = wid + wst + wac + wsu + wpa + wmo + 6 + (wha > 0 ? wha + 1 : 0) + (wfl > 0 ? wfl + 1 : 0);
     const wcw = Math.max(16, width - fixed - (wti > 0 ? wti + 1 : 0));
 
     const strip = (s: string): string => s.replace(/ +$/, '');
     const out: string[] = [];
     out.push(strip(
         `${pad('ID', wid)} ${pad('STATE', wst)} ${pad('ACCT', wac)} `
+        + (wfl > 0 ? `${pad('FLAVOR', wfl)} ` : '')
         + (wha > 0 ? `${pad('HARNESS', wha)} ` : '')
         + `${pad('SUBS', wsu)} ${pad('PANE', wpa)} ${pad('MODE', wmo)} `
         + (wti > 0 ? `${pad('CWD', wcw)} TITLE` : 'CWD'),
@@ -482,6 +511,7 @@ export function renderTable(sessions: Session[], width: number, home: string): s
     for (const r of rows) {
         out.push(strip(
             `${pad(r.id, wid)} ${pad(r.state, wst)} ${pad(r.acct, wac)} `
+            + (wfl > 0 ? `${pad(r.flavor, wfl)} ` : '')
             + (wha > 0 ? `${pad(r.harness, wha)} ` : '')
             + `${pad(r.subs, wsu)} ${pad(r.pane, wpa)} ${pad(r.mode, wmo)} `
             + (wti > 0 ? `${pad(tailTo(r.cwd, wcw), wcw)} ${headTo(r.title, wti)}` : tailTo(r.cwd, wcw)),
@@ -925,6 +955,26 @@ export async function run(args: string[], opts: SessionsOptions = {}): Promise<n
     // already reads as "no sessions" under DROVER_SHOW_FIXTURES=1, so the
     // crash is plainly the defect and not the contract.
     let sessions = arrayOf(body.sessions ?? []);
+
+    // HARNESS SESSIONS (DROVE-389). The bus knows what Claude Code's hooks and
+    // transcripts tell it; the daemon's ledger knows every session that
+    // reported itself, whatever its flavor. The rows the bus does not carry
+    // come from the ledger, newest first, capped like the bus's own list, and
+    // the server is asked which the phone has already archived. A bus body
+    // with nothing to add is rendered exactly as before, byte for byte.
+    const ledger = readLedger(ledgerFileOf(env, home), nowMs());
+    const known = new Set(sessions.map((s) => (s as Session)?.id));
+    let merged = ledgerRows(ledger).filter((r) => !known.has(r.id));
+    if (merged.length > 0) {
+        const timeoutMs = Number(env.DROVER_HAPPY_TIMEOUT_S || '5') * 1000;
+        const refreshed = await refreshRows(merged, ledger, env, home, timeoutMs);
+        if (refreshed.note) complain([refreshed.note]);
+        merged = refreshed.rows.slice(0, Number(parsed.limit || '20'));
+        sessions = [...sessions, ...merged];
+        body = { ...body, sessions };
+        count = sessions.length;
+    }
+
     if (!fixturesShown(env)) {
         const kept = sessions.filter((s) => !fixtureCwd((s as Session)?.cwd ?? null));
         const hidden = sessions.length - kept.length;
