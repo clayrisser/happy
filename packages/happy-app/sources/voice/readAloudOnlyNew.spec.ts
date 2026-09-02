@@ -65,6 +65,7 @@ describe('reading starts at what arrived (DROVE-226)', () => {
         );
         reader.setEnabled(true);
         reader.focus('s1');
+        reader.setSessionEnabled('s1', true);
     });
 
     afterEach(() => {
@@ -268,6 +269,7 @@ describe('reading starts at what arrived (DROVE-226)', () => {
         expect(said).toEqual([]);
 
         reader.setEnabled(true);
+        reader.setSessionEnabled('s1', true);
         reader.onHistory('s1', [prose('m1', 'Old.', 1), prose('m2', 'Also old.', 2)]);
         await tick(retryDelayMs * 3);
         expect(said).toEqual([]);

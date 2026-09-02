@@ -69,6 +69,7 @@ function rig(): Rig {
     });
     reader.setEnabled(true);
     reader.focus('s1');
+    reader.setSessionEnabled('s1', true);
     reader.addInterruptListener((reason) => captures.push(reason));
     // The exact dependencies audioRouteGuardService.ts wires, minus the
     // storage read and the watch: the decision layer against the real reader.

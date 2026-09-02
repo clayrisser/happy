@@ -4,8 +4,9 @@
  *
  * ## The bug, which is one gate in the wrong file
  *
- * `readAloud.setEnabled` is the MASTER SWITCH: what a session nobody has said
- * anything about reads (DROVE-297). Until this ticket its only caller was an
+ * `readAloud.setEnabled` was, when this was written, the MASTER SWITCH: what a
+ * session nobody had said anything about read (DROVE-297; DROVE-386 has since
+ * made it the capability instead, see below). Until this ticket its only caller was an
  * effect in `useVoiceComposer` gated on `active`, which is `!embedded` and is
  * set from `SessionView`. So the persisted `localSettings.readAloudEnabled`
  * reached the reader only while a non-embedded session screen was mounted, and
@@ -38,26 +39,50 @@
  * embedded one writing `false` over what the user is looking at — by having no
  * surface write it, rather than by picking the right surface.
  *
+ * ## What this file is now: a CAPABILITY, not a default (DROVE-386)
+ *
+ * The wiring above is unchanged and still the fix DROVE-301 shipped. What the
+ * setting MEANS on the far side of it changed once, and this paragraph is the
+ * whole of it.
+ *
+ * It used to be what a session nobody had touched inherited, and that turned
+ * out to be the bug. Clay leaves the switch on because he wants read-aloud to
+ * EXIST, so every session the reader had not been told about came up armed: a
+ * session he had just created started talking the moment he opened it, and
+ * after a relaunch — where the per-session map is empty by construction —
+ * every session he owned was armed at once. His words: "By default when I
+ * create a new session and go to it, why does it have reading enabled? Even if
+ * I close the app and reopen the app, by default reading should not be
+ * enabled."
+ *
+ * So `readAloud.setEnabled` no longer arms anything. It says the phone MAY
+ * read, it is what `drover read` reports as "off on the phone", and turning it
+ * off is still the kill that drops every per-session switch and every held
+ * position. Arming is `setSessionEnabled`, one session at a time, by his thumb
+ * or by `drover read <session>`.
+ *
  * ## What this deliberately does NOT change
  *
- * DROVE-297's model, whole. This is the DEFAULT a session inherits, not a
- * command: `setEnabled(true)` leaves a session he explicitly switched off still
- * off, and the composer's control still writes the session's own switch. The
- * only thing that moved is WHO tells the reader the default, not what the
- * default means.
+ * DROVE-297's model, whole: the take-the-voice rule, the composer's control
+ * writing the session's own switch, a visit to an unarmed session moving
+ * nothing.
  *
- * DROVE-179's "the reader follows him" is untouched, and is pinned in
- * readAloudNeverSilent.spec.ts: with the default on and no session individually
- * switched off, every session is enabled, so navigating takes the voice exactly
- * as before.
+ * DROVE-301's own acceptance criterion, which is this file's reason to exist:
+ * the setting still reaches the reader with NO SCREEN MOUNTED, at module
+ * scope, ahead of `startBackgroundAudio`. What it publishes at launch is now
+ * 'off', and that is correct rather than the teardown DROVE-301 refused —
+ * after a relaunch nothing IS reading, so there is no card to tear down. Arm a
+ * session and the card comes up, still with no SessionView anywhere. Both
+ * halves are pinned in readingDefault.spec.ts.
  *
- * DROVE-226's "a transcript loads silent" is untouched too, and this is the
- * question worth being explicit about, because arming the reader at launch
- * sounds like it should read history. It does not: `defaultEnabled` decides
+ * DROVE-226's "a transcript loads silent" is untouched: the switch decides
  * whether the reader MAY speak, and what it speaks comes from the timeline,
- * which at launch is empty and is only ever filled forward by sync. A cold
- * launch therefore comes up armed and silent, which is the state the card
- * describes.
+ * which at launch is empty and is only ever filled forward by sync.
+ *
+ * DROVE-179's "the reader follows him" keeps its real claim — a surface going
+ * away is not the session going away, which is `blur` — and loses only its
+ * corollary that with nothing to distinguish the sessions by every session is
+ * enabled. There is always something to distinguish them by now: his thumb.
  */
 
 export interface ReadingDefaultDeps {

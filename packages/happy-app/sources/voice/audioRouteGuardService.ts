@@ -86,10 +86,10 @@ function announce(): void {
 const guard = new AudioRouteGuard({
     route: () => audioRoute(),
     isSpeaking: () => readAloud.isSpeaking,
-    // The reader's own gate, and nothing else. Since DROVE-297 the persisted
-    // setting is only the DEFAULT a session inherits, so a session he switched
-    // on by hand reads with that setting off — and a guard that ANDed the two
-    // would have decided reading was off while it was speaking.
+    // The reader's own gate, and nothing else. The persisted setting is only
+    // the capability (DROVE-297, DROVE-386), so a session he switched on by
+    // hand reads with that setting off — and a guard that ANDed the two would
+    // have decided reading was off while it was speaking.
     isEnabled: () => readAloud.isEnabled,
     speaker: () => resolveSpeaker(),
     // THE pause of DROVE-233, on purpose: the same state and position the

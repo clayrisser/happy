@@ -203,13 +203,18 @@ audioCues.attach(readAloud);
 /**
  * The persisted setting reaches the reader with no screen mounted (DROVE-301).
  *
- * FIRST, AND THAT ORDER IS THE FIX. `startBackgroundAudio` publishes on its
- * first `apply()`, so a reader still sitting at its `defaultEnabled = false`
- * would have it publish `'off'` at launch — which native takes as a command to
- * tear the remote commands down and clear the card. Arming the default before
- * that call means a cold launch with read-aloud persisted ON comes up holding
- * the session and publishing `'reading'`, and the lock screen has a card from
- * the first second.
+ * FIRST, AND THAT ORDER IS STILL RIGHT. `startBackgroundAudio` publishes on its
+ * first `apply()`, and it must publish against a reader that has already heard
+ * the setting rather than one still at its default.
+ *
+ * WHAT IT PUBLISHES AT LAUNCH CHANGED WITH DROVE-386. The setting is a
+ * capability now, not something an un-switched session inherits, so a cold
+ * launch arms no session and the first publish is `'off'`. That is the honest
+ * state — after a relaunch nothing is reading, by Clay's rule — rather than
+ * the self-inflicted teardown DROVE-301 was filed about, which was a card that
+ * SHOULD have existed being cleared because no screen was up. Arm a session
+ * and `notifyTransport` puts the card up from here, with no SessionView
+ * anywhere, which is the criterion DROVE-301 actually asked for.
  *
  * WIRED HERE for the reason DROVE-300 and DROVE-302 wired the double and triple
  * presses here: this module has no react in it and runs once at import, so the

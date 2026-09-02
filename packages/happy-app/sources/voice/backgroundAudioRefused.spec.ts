@@ -68,6 +68,7 @@ describe('an audio session that refuses (DROVE-189)', () => {
         );
         reader.setEnabled(true);
         reader.focus('s1');
+        reader.setSessionEnabled('s1', true);
     });
 
     afterEach(() => {

@@ -62,6 +62,7 @@ describe('the composer and the voice (DROVE-162)', () => {
         const reader = new ReadAloudReader(engine);
         reader.setEnabled(true);
         reader.focus('s1');
+        reader.setSessionEnabled('s1', true);
         return { reader, engine };
     }
 

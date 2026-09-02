@@ -89,6 +89,7 @@ function opened(transcript: Message[]): { engine: FakeEngine; reader: ReadAloudR
     reader.onHistory('s1', transcript);
     reader.setEnabled(true);
     reader.focus('s1');
+    reader.setSessionEnabled('s1', true);
     return { engine, reader };
 }
 
@@ -185,6 +186,7 @@ describe('the standing rules survive the ingest (DROVE-285)', () => {
         });
         reader.setEnabled(true);
         reader.focus('s1');
+        reader.setSessionEnabled('s1', true);
         reader.onMessages('s1', [prose('a1', 'S1 first. S1 second. S1 third.', 300)]);
         await settle();
         engine.finishOne();
@@ -193,6 +195,7 @@ describe('the standing rules survive the ingest (DROVE-285)', () => {
         // a sound, so it stays spoken (DROVE-233's granularity) and the held
         // position is the sentence after it.
         reader.focus('s2');
+        reader.setSessionEnabled('s2', true);
         expect(reader.hasHeldReading('s1')).toBe(true);
 
         // The tap in s2 ingests s2's history and reads it.

@@ -249,14 +249,14 @@ export function useVoiceComposer(options: VoiceComposerOptions): VoiceComposerSt
         return () => { readAloud.blur(sessionId, 'left-session'); };
     }, [sessionId, active]);
 
-    // THE MASTER SWITCH IS NOT THIS HOOK'S, AND THAT IS DROVE-301 (it used to
-    // be an effect here). The persisted setting is the DEFAULT a session
-    // inherits (DROVE-297), it is app-wide, and it is now read app-wide, at
+    // THE CAPABILITY SWITCH IS NOT THIS HOOK'S, AND THAT IS DROVE-301 (it used
+    // to be an effect here). The persisted setting says whether the phone may
+    // read at all (DROVE-386), it is app-wide, and it is read app-wide, at
     // module scope in readAloudService.ts beside `startBackgroundAudio` and the
     // headphone presses. Turning read-aloud on from Settings, the channels
     // screen or the sheet therefore reaches the reader with no session screen
-    // mounted at all, and a cold launch with it persisted on comes up armed
-    // rather than publishing `'off'` and tearing the lock-screen card down.
+    // mounted at all. It arms no session — a cold launch comes up silent, and
+    // the card goes up when he arms one, still with no screen mounted.
     //
     // It also retires this file's own hazard rather than managing it: two of
     // these hooks can be mounted at once, the chat and an embedded side chat,

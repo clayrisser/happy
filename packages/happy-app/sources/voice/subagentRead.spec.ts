@@ -139,6 +139,7 @@ describe('the reader follows him into the subagent, then gives the session back'
         const reader = new ReadAloudReader(engine);
         reader.setEnabled(true);
         reader.focus('s1');
+        reader.setSessionEnabled('s1', true);
         return { reader, engine };
     }
 

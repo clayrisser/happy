@@ -8,7 +8,9 @@
  * take-the-voice rule in readingVoice.ts.
  *
  * `localSettings.readAloudEnabled` is still here and is still persisted, but
- * it is now the DEFAULT a session nobody has said anything about inherits.
+ * since DROVE-386 it is only the CAPABILITY — may this phone read at all. It
+ * arms nothing, which is why a session he just created comes up silent and why
+ * a relaunch leaves every session off.
  * Two surfaces write it: the "Read replies aloud" row on the channel sheet
  * (DROVE-72) and Settings > Voice. The composer used to be the third, and that
  * is exactly the bug this ticket fixed — switching reading on in one session

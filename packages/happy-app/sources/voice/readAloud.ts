@@ -711,27 +711,49 @@ export class ReadAloudReader {
      */
     private enabled = false;
     /**
-     * Reading, per session (DROVE-297). Absent means "inherit `defaultEnabled`".
+     * Reading, per session (DROVE-297). ABSENT MEANS OFF (DROVE-386).
      *
      * RUNTIME, never persisted, for exactly the reason the pause is runtime
      * (DROVE-233): coming back to a phone that is silently armed to read four
-     * sessions from yesterday is the failure this area keeps producing. A cold
-     * start therefore has every session inheriting the one persisted setting,
-     * which is the behaviour that shipped before this ticket.
+     * sessions from yesterday is the failure this area keeps producing. Since
+     * DROVE-386 that is true of a cold start too, because absent no longer
+     * inherits anything — a relaunch finds this map empty and every session
+     * off, whatever the persisted setting says.
+     *
+     * Clay: "Even if I close the app and reopen the app, by default reading
+     * should not be enabled — even if it was reading, if I close the app and
+     * reopen, it shouldn't."
+     *
+     * This map is the ONLY thing that arms a session. Nothing else may, which
+     * is what makes that sentence true by construction rather than by a launch
+     * path remembering to clear something.
      */
     private sessionEnabled = new Map<string, boolean>();
     /**
-     * What a session the reader has not been told about inherits — the
-     * persisted `localSettings.readAloudEnabled`, written by the settings
-     * screens and by nothing else since DROVE-297 moved the composer's control
-     * onto the session.
+     * MAY THIS PHONE READ AT ALL — the persisted `localSettings.readAloudEnabled`,
+     * written by the settings screens and by nothing else since DROVE-297 moved
+     * the composer's control onto the session.
      *
-     * With this on and no session individually switched off, every session is
-     * enabled, so navigating takes the voice exactly as it did before this
-     * ticket. That is the explicit reconciliation with DROVE-179's "the reader
-     * follows him", which is pinned in readAloudNeverSilent.spec.ts and is not
-     * being walked back: it is what happens when there is nothing to
-     * distinguish the sessions by.
+     * A CAPABILITY, NOT A DEFAULT, SINCE DROVE-386. It used to be what an
+     * un-switched session inherited, and that inheritance was the bug: he
+     * leaves the setting on because he wants read-aloud AVAILABLE, and every
+     * session the reader had not been told about — a session he just created,
+     * every session at all after a relaunch — came up armed. So it no longer
+     * reaches `enabledFor` at all. What survives, unchanged, is the half that
+     * was never in question:
+     *
+     *   OFF IS STILL THE KILL. `setEnabled(false)` drops every per-session
+     *   switch and every held position, because off is off everywhere at once.
+     *   ON IS STILL REPORTED. `readingReport().defaultEnabled` is what
+     *   `drover read` prints as "off on the phone", and DROVE-298's gate reads
+     *   it to refuse arming a session from a Mac on a phone whose read-aloud
+     *   is off entirely.
+     *
+     * WHAT WAS WALKED BACK, DELIBERATELY, is DROVE-179's "with nothing to
+     * distinguish the sessions by, every session is enabled". There is now
+     * always something to distinguish them by — his thumb — and DROVE-179's
+     * real claim, that a surface going away is not the session going away,
+     * is about `blur` and is untouched.
      */
     private defaultEnabled = false;
     /**
@@ -961,13 +983,18 @@ export class ReadAloudReader {
     }
 
     /**
-     * The MASTER switch: what a session nobody has said anything about reads
-     * (DROVE-297 re-pointed this; the settings screens still drive it).
+     * The CAPABILITY switch: may this phone read at all (DROVE-386; DROVE-297
+     * re-pointed it, the settings screens still drive it).
      *
      * Turning it off is the kill: every per-session switch and every held
      * position goes with it, because off subsumes pause and this is off
-     * everywhere at once (DROVE-289). Turning it on is a default, not a
-     * command — a session he has explicitly switched off stays off.
+     * everywhere at once (DROVE-289).
+     *
+     * TURNING IT ON ARMS NOTHING. It used to be a default a session inherited,
+     * and that is the bug DROVE-386 fixes: the setting he leaves on so the
+     * feature EXISTS must not be the reason a session he just opened starts
+     * talking. Arming is `setSessionEnabled`, one session at a time, by his
+     * thumb or by `drover read <session>`.
      *
      * Only ever called on a real flip. Two chat surfaces can be mounted and
      * both run the effect that calls this on mount, so a redundant call has to
@@ -984,7 +1011,14 @@ export class ReadAloudReader {
             // off subsumes pause. Coming back on is a START wherever he is.
             this.heldReadings.clear();
         }
-        this.applyEnabled(this.enabledFor(this.focused));
+        // THE CAPABILITY MOVING IS ITSELF WORTH TELLING (DROVE-386). It used
+        // to be reported only through `applyEnabled`, which was enough while
+        // turning it on armed the focused session and so always moved the
+        // voice. Now that it arms nothing, turning it on can leave the voice
+        // exactly where it was, and a surface that draws the setting would
+        // never hear. `applyEnabled` already told them if it moved; this is
+        // the other branch, not a second notification of the same fact.
+        if (!this.applyEnabled(this.enabledFor(this.focused))) this.notifyTransport();
     }
 
     /**
@@ -1001,11 +1035,23 @@ export class ReadAloudReader {
         this.applyEnabled(this.enabledFor(this.focused));
     }
 
-    /** Is reading switched on for this session? Its own switch, or the default. */
+    /**
+     * Is reading switched on for this session? ITS OWN SWITCH, AND NOTHING ELSE
+     * (DROVE-386).
+     *
+     * The one line this whole ticket is. It used to fall back to
+     * `defaultEnabled`, which armed every session nobody had touched; now an
+     * un-switched session is off, so a brand-new session is off and — because
+     * this map is runtime — so is every session after a relaunch.
+     *
+     * `null` is not a session and cannot be armed. It used to answer with the
+     * master default, which had the reader briefly claiming to be on with no
+     * session focused at all.
+     */
     private enabledFor(sessionId: string | null): boolean {
         if (this.suspended) return false;
-        if (sessionId === null) return this.defaultEnabled;
-        return this.sessionEnabled.get(sessionId) ?? this.defaultEnabled;
+        if (sessionId === null) return false;
+        return this.sessionEnabled.get(sessionId) ?? false;
     }
 
     /** Is reading switched on for this session? (DROVE-297.) */
@@ -1164,19 +1210,20 @@ export class ReadAloudReader {
      * must never be. Either way the button comes back to two states and a
      * pause cannot survive as a state nothing can see.
      */
-    private applyEnabled(enabled: boolean): void {
-        if (this.enabled === enabled) return;
+    private applyEnabled(enabled: boolean): boolean {
+        if (this.enabled === enabled) return false;
         this.enabled = enabled;
         this.setPausedSilently(false);
         if (!enabled) {
             this.interrupt('toggled-off');
             this.notifyTransport();
-            return;
+            return true;
         }
         // Switched back on with a sentence still owed to a session that
         // refused it (DROVE-189). Ask again now rather than on the timer.
         this.audioSessionRecovered();
         this.notifyTransport();
+        return true;
     }
 
     get isMicHeld(): boolean {

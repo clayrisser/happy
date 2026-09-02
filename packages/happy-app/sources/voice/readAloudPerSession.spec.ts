@@ -386,25 +386,36 @@ describe('reading per session, over the real reader (DROVE-297)', () => {
         expect(engine.spoken).not.toContain('Three.');
     });
 
-    it('the default arms a session nobody has said anything about (DROVE-179 kept)', async () => {
-        // With the persisted setting on and no session individually switched
-        // off, every session is enabled, so navigating takes the voice exactly
-        // as it did before this ticket. That is the reconciliation with
-        // DROVE-179's "the reader follows him", not a walk-back of it.
+    it('the capability arms NOTHING, and navigating to an unarmed session moves no voice (DROVE-386)', async () => {
+        // THIS ASSERTION IS INVERTED, ON PURPOSE, AND THIS IS THE REASON.
+        // It used to read "the default arms a session nobody has said anything
+        // about (DROVE-179 kept)" and assert `isSessionEnabled('anything-at-all')`
+        // was TRUE. That inheritance is the bug DROVE-386 was filed for: Clay
+        // leaves the setting on because he wants read-aloud to EXIST, and every
+        // session he had not touched — one he just created, and after a
+        // relaunch every session he owns — came up talking.
+        //
+        // DROVE-179's actual claim survives untouched: a surface going away is
+        // not the session going away, which is `blur`, and is pinned in
+        // readAloudNeverSilent.spec.ts. What is walked back is only its
+        // corollary "with nothing to distinguish the sessions by, every session
+        // is enabled". There is always something to distinguish them by now,
+        // and it is his thumb.
         reader.setEnabled(true);
-        expect(reader.isSessionEnabled('anything-at-all')).toBe(true);
+        expect(reader.isSessionEnabled('anything-at-all')).toBe(false);
         reader.visit('a');
+        await settle();
+        expect(reader.readingSessionId).toBe(null);
+        expect(reader.readingStateOf('a')).toBe('off');
+
+        // Armed by hand it reads, and a visit to an un-armed session leaves it
+        // reading — DROVE-297's rule, reached the new way round.
+        reader.setSessionEnabled('a', true);
         await readTwoOf('a', 'ma', 10);
         reader.visit('b');
         await settle();
-        expect(reader.readingSessionId).toBe('b');
-
-        // And one session switched off is the exception, not the rule.
-        reader.setSessionEnabled('c', false);
-        reader.visit('c');
-        await settle();
-        expect(reader.readingSessionId).toBe('b');
-        expect(reader.readingStateOf('c')).toBe('off');
+        expect(reader.readingSessionId).toBe('a');
+        expect(reader.readingStateOf('b')).toBe('off');
     });
 
     it('the master off silences everything and forgets every session switch', async () => {

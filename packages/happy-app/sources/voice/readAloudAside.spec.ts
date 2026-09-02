@@ -85,6 +85,7 @@ describe('spoken titles in the reading lane', () => {
         reader = new ReadAloudReader(engine, { asideFor: titleFor, skipMarker: '' });
         reader.setEnabled(true);
         reader.focus('s1');
+        reader.setSessionEnabled('s1', true);
     });
 
     it('says a title in its place, between the sentences around it', async () => {
@@ -138,6 +139,7 @@ describe('spoken titles in the reading lane', () => {
         const plain = new ReadAloudReader(engine);
         plain.setEnabled(true);
         plain.focus('s2');
+        plain.setSessionEnabled('s2', true);
         plain.onMessages('s2', [
             agentText('m1', 'Just prose.', 10),
             toolCall('t1', 'Should stay quiet', 20),
@@ -161,6 +163,7 @@ describe('the skip marker becomes a sound', () => {
         });
         reader.setEnabled(true);
         reader.focus('s1');
+        reader.setSessionEnabled('s1', true);
 
         // A stream still arriving, with more unspoken audio than the threshold:
         // the conditions the cut needs (DROVE-108).
@@ -188,6 +191,7 @@ describe('the skip marker becomes a sound', () => {
         const reader = new ReadAloudReader(engine, { now: () => now, maxBacklogSeconds: () => 1 });
         reader.setEnabled(true);
         reader.focus('s1');
+        reader.setSessionEnabled('s1', true);
         reader.onMessages('s1', [agentText('m1', 'One two three four five six seven eight.', 10)]);
         await settle();
         now += 100;
