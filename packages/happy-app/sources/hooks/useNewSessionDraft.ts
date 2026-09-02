@@ -25,6 +25,12 @@ interface NewSessionDraftState {
     effortLevel: string | null;
     sessionType: NewSessionSessionType;
     worktreeKey: string | null;
+    /**
+     * Read-aloud armed for the session about to start (DROVE-394): the
+     * sheet's speaker segment. In memory only, off by default, cleared by
+     * the start, so a relaunch never re-arms anything.
+     */
+    readAloud: boolean;
 
     setInput: (input: string) => void;
     setAttachments: (attachments: AttachmentPreview[]) => void;
@@ -44,6 +50,7 @@ interface NewSessionDraftState {
     setEffortLevel: (level: string) => void;
     setSessionType: (type: NewSessionSessionType) => void;
     setWorktreeKey: (key: string | null) => void;
+    setReadAloud: (on: boolean) => void;
 }
 
 function persist(state: NewSessionDraftState) {
@@ -76,6 +83,7 @@ export const useNewSessionDraft = create<NewSessionDraftState>()((set, get) => (
     effortLevel: initial?.effortLevel ?? null,
     sessionType: initial?.sessionType ?? 'simple',
     worktreeKey: initial?.worktreeKey ?? null,
+    readAloud: false,
 
     setInput: (input) => { set({ input }); persist(get()); },
     setAttachments: (attachments) => { set({ attachments }); },
@@ -88,4 +96,5 @@ export const useNewSessionDraft = create<NewSessionDraftState>()((set, get) => (
     setEffortLevel: (level) => { set({ effortLevel: level }); persist(get()); },
     setSessionType: (type) => { set({ sessionType: type }); persist(get()); },
     setWorktreeKey: (key) => { set({ worktreeKey: key }); persist(get()); },
+    setReadAloud: (on) => { set({ readAloud: on }); },
 }));

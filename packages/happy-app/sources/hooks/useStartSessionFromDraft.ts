@@ -11,6 +11,7 @@ import {
 import { sync } from '@/sync/sync';
 import { useNewSessionDraft } from '@/hooks/useNewSessionDraft';
 import { useNavigateToSession } from '@/hooks/useNavigateToSession';
+import { readAloud } from '@/voice/readAloudService';
 import { isMachineOnline } from '@/utils/machineUtils';
 import { resolveAbsolutePath } from '@/utils/pathUtils';
 import { createWorktree } from '@/utils/worktree';
@@ -434,6 +435,12 @@ export function useStartSessionFromDraft() {
 
             draft.setInput('');
             draft.setAttachments([]);
+            // The sheet's speaker (DROVE-394): DROVE-386's per-session arming,
+            // reached one screen earlier. Spent here, so a relaunch arms nothing.
+            if (draft.readAloud) {
+                readAloud.setSessionEnabled(sessionId, true);
+                draft.setReadAloud(false);
+            }
             navigateToSession(sessionId);
             if (prompt || attachments.length > 0) {
                 // The session is ready at this point. Open it immediately and

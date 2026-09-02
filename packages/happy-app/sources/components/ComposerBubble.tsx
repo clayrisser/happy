@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { View, type StyleProp, type ViewStyle } from 'react-native';
+import { Pressable, View, type StyleProp, type ViewStyle } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { StyleSheet } from 'react-native-unistyles';
 import { MobileGlassSurface } from './MobileGlass';
@@ -95,6 +95,18 @@ export interface ComposerBubbleProps {
     actionRowStyle?: StyleProp<ViewStyle>;
     /** Zen mode draws no button row at all. */
     showActionRow?: boolean;
+    /**
+     * THE WHOLE BUBBLE AS ONE BUTTON (DROVE-394).
+     *
+     * The sessions-list entry: the new-session sheet's composer, drawn at
+     * rest, where a tap anywhere opens the sheet. With this set the rows take
+     * no touches, the text row cannot lens the shell, and one `Pressable`
+     * wraps the surface. Nothing inside changes shape for it, which is what
+     * lets the entry and the sheet mount the same slots.
+     */
+    onPress?: () => void;
+    /** What the one button is called, when `onPress` is set. */
+    accessibilityLabel?: string;
 }
 
 const styles = StyleSheet.create(() => ({
@@ -147,6 +159,8 @@ export function ComposerBubble({
     trailing,
     actionRowStyle,
     showActionRow = true,
+    onPress,
+    accessibilityLabel,
 }: ComposerBubbleProps) {
     /**
      * WHICH MATERIAL THE COMPOSER IS ACTUALLY ON (DROVE-343).
@@ -189,7 +203,7 @@ export function ComposerBubble({
         }
         gapped.push(<React.Fragment key={`trailing-${index}`}>{node}</React.Fragment>);
     });
-    return (
+    const surface = (
         <MobileGlassSurface
             enabled={enabled}
             // THE MATERIAL, AND THE PRESS, from one object (DROVE-328,
@@ -203,7 +217,11 @@ export function ComposerBubble({
             // it, so it cannot be scoped to a region — but it can be scoped in
             // TIME. It goes on when the text row is held and off when it is
             // released, and a touch that starts on a control never turns it on.
-            interactive={resolveComposerShellInteractive(pressedTarget)}
+            // As one button (DROVE-394) it never goes on: the press is the
+            // wrapper's, and the shell holds still under it.
+            interactive={onPress ? false : resolveComposerShellInteractive(pressedTarget)}
+            // One button takes every touch itself; nothing inside may answer.
+            pointerEvents={onPress ? 'none' : undefined}
             style={[
                 styles.shell,
                 style,
@@ -265,5 +283,15 @@ export function ComposerBubble({
                 </Animated.View>
             ) : null}
         </MobileGlassSurface>
+    );
+    if (!onPress) return surface;
+    return (
+        <Pressable
+            onPress={onPress}
+            accessibilityRole="button"
+            accessibilityLabel={accessibilityLabel}
+        >
+            {surface}
+        </Pressable>
     );
 }

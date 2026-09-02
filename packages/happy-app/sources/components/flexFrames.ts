@@ -204,7 +204,12 @@ function place(node: FlexNode, x: number, y: number, width: number, height: numb
             const wants = typeof child.style.height === 'number'
                 ? child.style.height
                 : measureHeight(child, w);
-            const h = align === 'stretch' && child.style.height === undefined ? innerH : wants;
+            // A `'100%'` child is its parent's inner height, which is what a
+            // glass button's press surface asks for (DROVE-394).
+            const h = child.style.height === '100%'
+                || (align === 'stretch' && child.style.height === undefined)
+                ? innerH
+                : wants;
             const childY = align === 'center' ? innerY + (innerH - h) / 2 : innerY;
             frame.children.push(place(child, cursor, childY, w, h));
             cursor += w + gap;
@@ -215,7 +220,7 @@ function place(node: FlexNode, x: number, y: number, width: number, height: numb
     let cursor = innerY;
     for (const child of children) {
         const w = measureWidth(child, innerW);
-        const h = measureHeight(child, w);
+        const h = child.style.height === '100%' ? innerH : measureHeight(child, w);
         const childX = align === 'center' ? innerX + (innerW - w) / 2 : innerX;
         frame.children.push(place(child, childX, cursor, w, h));
         cursor += h + gap;

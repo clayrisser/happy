@@ -16,6 +16,7 @@ import { useActiveWord } from './autocomplete/useActiveWord';
 import { useActiveSuggestions } from './autocomplete/useActiveSuggestions';
 import { AgentInputAutocomplete } from './AgentInputAutocomplete';
 import { ComposerSheet } from './ComposerSheet';
+import { ComposerPickerRow, ComposerPickerSheet, type ComposerPickerOption } from './ComposerPickerSheet';
 import { TextInputState, MultiTextInputHandle } from './MultiTextInput';
 import { applySuggestion } from './autocomplete/applySuggestion';
 import { GitStatusBadge, useHasMeaningfulGitStatus } from './GitStatusBadge';
@@ -303,6 +304,8 @@ const MOBILE_COMPOSER_LINE_GEOMETRY = resolveMobileComposerLineGeometry();
  * dropped tap if the event never arrives.
  */
 const PICKER_KEYBOARD_FALLBACK_MS = 420;
+/** The effort sheet's Auto row, which is a reset rather than a level (DROVE-229). */
+const EFFORT_AUTO_KEY = '__auto';
 const MOBILE_ICON_ACTION_GEOMETRY = resolveMobileComposerActionGeometry('icon');
 /*
  * The four IN-BUBBLE variants are gone from here (DROVE-266). The `+`, the
@@ -1825,60 +1828,14 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         onPress: () => void,
         disabled?: boolean,
     ) => (
-        <Pressable
+        // The same row the phone's picker sheet draws (DROVE-394): one radio
+        // row for every composer picker, with its role and checked state.
+        <ComposerPickerRow
             key={key}
-            onPress={disabled ? undefined : onPress}
-            disabled={disabled}
-            accessibilityRole="radio"
-            accessibilityLabel={label}
-            accessibilityHint={description ?? undefined}
-            accessibilityState={{ checked: selected, disabled: !!disabled }}
-            style={({ pressed }) => ({
-                flexDirection: 'row',
-                alignItems: 'flex-start',
-                paddingHorizontal: 16,
-                paddingVertical: 8,
-                opacity: disabled ? 0.45 : 1,
-                backgroundColor: pressed && !disabled ? theme.colors.surfacePressed : 'transparent',
-            })}
-        >
-            <View style={{
-                width: 16,
-                height: 16,
-                borderRadius: 8,
-                borderWidth: 2,
-                borderColor: selected ? theme.colors.radio.active : theme.colors.radio.inactive,
-                alignItems: 'center',
-                justifyContent: 'center',
-                marginRight: 12,
-                marginTop: 2,
-            }}>
-                {selected && <View style={{
-                    width: 6,
-                    height: 6,
-                    borderRadius: 3,
-                    backgroundColor: theme.colors.radio.dot,
-                }} />}
-            </View>
-            <View style={{ flex: 1 }}>
-                <Text style={{
-                    fontSize: 14,
-                    color: selected ? theme.colors.radio.active : theme.colors.text,
-                    ...Typography.default(),
-                }}>
-                    {label}
-                </Text>
-                {!!description && (
-                    <Text style={{
-                        fontSize: 11,
-                        color: theme.colors.textSecondary,
-                        ...Typography.default(),
-                    }}>
-                        {description}
-                    </Text>
-                )}
-            </View>
-        </Pressable>
+            option={{ key, name: label, description, disabled }}
+            selected={selected}
+            onPress={onPress}
+        />
     );
 
     /*
@@ -2007,6 +1964,137 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
      * `hasEffortLevels` half of the call above.
      */
     const mobilePickerOpen = openSheet === 'list';
+    /**
+     * WHAT THE LIST SHEET DRAWS, for whichever picker is open (DROVE-394).
+     *
+     * The rows are `ComposerPickerSheet`'s now, shared with Home; this is only
+     * the catalog behind them. A row's own `disabled` is what refuses a pick,
+     * so nothing here needs to check twice.
+     */
+    const autoAcceptHeader = openPicker === 'permission' && !!props.sessionId ? (
+        /* AUTO-ACCEPT, at the top of the permission sheet (DROVE-277), and
+           THE ONE PLACE IT IS SET since DROVE-331 took DROVE-281's bolt off
+           the capsule. It sits above the mode list because it is the widest
+           thing on the sheet: while it is on, every Allow / Deny prompt in
+           this session is answered without being shown, whichever mode is
+           ticked underneath. A switch, not a radio, because it is not one of
+           the modes and must not read as picking one. The wording is the
+           safety feature and lives in autoAcceptRow.ts. */
+        <View
+            style={{
+                flexDirection: 'row',
+                alignItems: 'flex-start',
+                paddingHorizontal: 16,
+                paddingVertical: 8,
+                marginHorizontal: 8,
+                marginBottom: 4,
+                borderRadius: 14,
+                gap: 12,
+            }}
+        >
+            <Ionicons
+                name={autoAcceptGlyph(autoAccept)}
+                size={16}
+                color={autoAccept ? theme.colors.radio.active : theme.colors.textSecondary}
+                style={{ marginTop: 2 }}
+            />
+            <View style={{ flex: 1 }}>
+                <Text style={{
+                    fontSize: 14,
+                    color: theme.colors.text,
+                    ...Typography.default(),
+                }}>
+                    {AUTO_ACCEPT_TITLE}
+                </Text>
+                <Text style={{
+                    fontSize: 11,
+                    color: theme.colors.textSecondary,
+                    ...Typography.default(),
+                }}>
+                    {AUTO_ACCEPT_SUBTITLE}
+                </Text>
+            </View>
+            <Switch
+                value={autoAccept}
+                onValueChange={setAutoAccept}
+                accessibilityLabel={AUTO_ACCEPT_TITLE}
+                accessibilityHint={AUTO_ACCEPT_SUBTITLE}
+            />
+        </View>
+    ) : null;
+    const mobilePicker: {
+        title: string;
+        options: ComposerPickerOption[];
+        selectedKey: string | null | undefined;
+        onSelect: (key: string) => void;
+        header?: React.ReactNode;
+        empty?: string;
+    } = openPicker === 'permission' ? {
+        title: permissionTitle,
+        header: autoAcceptHeader,
+        options: availableModes.map((mode) => ({
+            key: mode.key,
+            name: withSandboxSuffix(mode.name, mode.key),
+            description: mode.description,
+            disabled: !props.onPermissionModeChange || !!mode.disabled,
+            icon: mode.semanticKind ? permissionKindIcon(mode.semanticKind) : undefined,
+        })),
+        selectedKey: permissionModeKey,
+        onSelect: (key) => {
+            const mode = availableModes.find((candidate) => candidate.key === key);
+            if (mode) handleSettingsSelect(mode);
+        },
+    } : openPicker === 'model' ? {
+        title: props.modelMode?.name ?? t('agentInput.model.title'),
+        options: availableModels.map((model) => ({
+            key: model.key,
+            name: model.name,
+            description: model.description,
+            disabled: !props.onModelModeChange || !!model.disabled,
+            icon: model.providerName
+                ? () => <ProviderIcon kind={model.providerKind} size={12} />
+                : undefined,
+        })),
+        selectedKey: props.modelMode?.key,
+        empty: t('agentInput.model.configureInCli'),
+        onSelect: (key) => {
+            const model = availableModels.find((candidate) => candidate.key === key);
+            if (!model) return;
+            hapticsLight();
+            props.onModelModeChange?.(model);
+        },
+    } : {
+        title: props.effortLevel?.name ?? t('agentInput.effort.title'),
+        options: [
+            // AUTO, at the head of the list (DROVE-229). It is a MODE, not a
+            // level: `/effort auto` hands the choice back to Claude Code, so
+            // it is not a seventh notch and it is not below `low`. Its wire
+            // value is the reset, `effortLevel: null`.
+            ...(props.onEffortKeyChange
+                ? [{ key: EFFORT_AUTO_KEY, name: 'Auto', description: 'Let the agent choose' }]
+                : []),
+            // Out of reach on this model: the row stays, with its reason, but
+            // it is not a pick (DROVE-101).
+            ...availableEffortLevels.map((level) => ({
+                key: level.key,
+                name: level.name,
+                description: level.description,
+                disabled: !!level.disabled,
+            })),
+        ],
+        selectedKey: props.effortLevel?.key ?? (props.onEffortKeyChange ? EFFORT_AUTO_KEY : null),
+        onSelect: (key) => {
+            if (key === EFFORT_AUTO_KEY) {
+                hapticsLight();
+                props.onEffortKeyChange?.(null);
+                return;
+            }
+            const level = availableEffortLevels.find((candidate) => candidate.key === key);
+            if (!level) return;
+            hapticsLight();
+            props.onEffortLevelChange?.(level);
+        },
+    };
 
 
     /** Whether the `+` is there to be drawn, which is what the field's leading padding turns on. */
@@ -2530,428 +2618,20 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     available={addContextAvailable}
                 />
 
-                {/* On Android, the permission, model and effort pickers the
-                    three session controls open (DROVE-111). On iOS those three
-                    are native menus anchored to the controls themselves, so
-                    nothing renders here at all. DROVE-83's intermediate
-                    session sheet is gone, and DROVE-123 took channels out to
-                    its own sheet. It was the last floating card off the
-                    composer strip until DROVE-147 put it on the sheet too. */}
-                <ComposerSheet
+                {/* Permission, model and effort: THE ONE PICKER SHEET
+                    (DROVE-394), which Home's capsule and Home's harness row
+                    open too. The rows used to be drawn here; a second copy on
+                    Home is what let the harness menu drop a pick. */}
+                <ComposerPickerSheet
                     open={mobilePickerOpen}
                     onClose={closePicker}
-                    keyboardShouldPersistTaps="always"
-                >
-                    {mobilePickerOpen && (
-                        <>
-                                {openPicker === 'permission' ? (
-                                    <View style={styles.overlaySection}>
-                                        <Text style={styles.overlaySectionTitle}>
-                                            {permissionTitle}
-                                        </Text>
-                                        {/* AUTO-ACCEPT, at the top of the permission
-                                            sheet (DROVE-277), and THE ONE PLACE IT IS
-                                            SET since DROVE-331 took DROVE-281's bolt
-                                            off the capsule. It sits above the mode
-                                            list rather than below it because it is the
-                                            widest thing on the sheet: while it is on,
-                                            every Allow / Deny prompt in this session is
-                                            answered without being shown, whichever mode
-                                            is ticked underneath. A switch, not a radio,
-                                            because it is not one of the modes and must
-                                            not read as picking one.
-
-                                            The wording is the safety feature and lives
-                                            in autoAcceptRow.ts, where a test can hold
-                                            it: it names what still asks, and it says
-                                            out loud that a restart turns this off. */}
-                                        {!!props.sessionId && (
-                                            <View
-                                                style={{
-                                                    flexDirection: 'row',
-                                                    alignItems: 'flex-start',
-                                                    paddingHorizontal: 16,
-                                                    paddingVertical: 8,
-                                                    marginHorizontal: 8,
-                                                    marginBottom: 4,
-                                                    borderRadius: 14,
-                                                    gap: 12,
-                                                }}
-                                            >
-                                                <Ionicons
-                                                    name={autoAcceptGlyph(autoAccept)}
-                                                    size={16}
-                                                    color={autoAccept ? theme.colors.radio.active : theme.colors.textSecondary}
-                                                    style={{ marginTop: 2 }}
-                                                />
-                                                <View style={{ flex: 1 }}>
-                                                    <Text style={{
-                                                        fontSize: 14,
-                                                        color: theme.colors.text,
-                                                        ...Typography.default(),
-                                                    }}>
-                                                        {AUTO_ACCEPT_TITLE}
-                                                    </Text>
-                                                    <Text style={{
-                                                        fontSize: 11,
-                                                        color: theme.colors.textSecondary,
-                                                        ...Typography.default(),
-                                                    }}>
-                                                        {AUTO_ACCEPT_SUBTITLE}
-                                                    </Text>
-                                                </View>
-                                                <Switch
-                                                    value={autoAccept}
-                                                    onValueChange={setAutoAccept}
-                                                    accessibilityLabel={AUTO_ACCEPT_TITLE}
-                                                    accessibilityHint={AUTO_ACCEPT_SUBTITLE}
-                                                />
-                                            </View>
-                                        )}
-                                        {availableModes.map((mode) => {
-                                            const isSelected = permissionModeKey === mode.key;
-                                            return (
-                                                <BubblePressable
-                                                    key={mode.key}
-                                                    disabled={!props.onPermissionModeChange || mode.disabled}
-                                                    onPress={() => handleSettingsSelect(mode)}
-                                                    accessibilityRole="radio"
-                                                    accessibilityLabel={withSandboxSuffix(mode.name, mode.key)}
-                                                    accessibilityHint={mode.description ?? undefined}
-                                                    accessibilityState={{
-                                                        checked: isSelected,
-                                                        disabled: !props.onPermissionModeChange || !!mode.disabled,
-                                                    }}
-                                                    style={({ pressed }) => ({
-                                                        flexDirection: 'row',
-                                                        alignItems: 'flex-start',
-                                                        paddingHorizontal: 16,
-                                                        paddingVertical: 8,
-                                                        marginHorizontal: 8,
-                                                        borderRadius: 14,
-                                                        backgroundColor: pressed
-                                                            ? theme.colors.surfacePressedOverlay
-                                                            : isSelected
-                                                                ? theme.colors.glass.backgroundSubtle
-                                                                : 'transparent',
-                                                        opacity: (!props.onPermissionModeChange || mode.disabled) ? 0.55 : 1,
-                                                    })}
-                                                >
-                                                    <View style={{
-                                                        width: 16,
-                                                        height: 16,
-                                                        borderRadius: 8,
-                                                        borderWidth: 2,
-                                                        borderColor: isSelected ? theme.colors.radio.active : theme.colors.radio.inactive,
-                                                        alignItems: 'center',
-                                                        justifyContent: 'center',
-                                                        marginRight: 12,
-                                                        marginTop: 2,
-                                                    }}>
-                                                        {isSelected && <View style={{
-                                                            width: 6,
-                                                            height: 6,
-                                                            borderRadius: 3,
-                                                            backgroundColor: theme.colors.radio.dot,
-                                                        }} />}
-                                                    </View>
-                                                    <View style={{ flex: 1 }}>
-                                                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
-                                                            {mode.semanticKind && (
-                                                                <Ionicons
-                                                                    name={permissionKindIcon(mode.semanticKind)}
-                                                                    size={13}
-                                                                    color={isSelected ? theme.colors.radio.active : theme.colors.textSecondary}
-                                                                />
-                                                            )}
-                                                            <Text style={{
-                                                                fontSize: 14,
-                                                                color: isSelected ? theme.colors.radio.active : theme.colors.text,
-                                                                ...Typography.default(),
-                                                            }}>
-                                                                {withSandboxSuffix(mode.name, mode.key)}
-                                                            </Text>
-                                                        </View>
-                                                        {!!mode.description && (
-                                                            <Text style={{
-                                                                fontSize: 11,
-                                                                color: theme.colors.textSecondary,
-                                                                ...Typography.default(),
-                                                            }}>
-                                                                {mode.description}
-                                                            </Text>
-                                                        )}
-                                                    </View>
-                                                </BubblePressable>
-                                            );
-                                        })}
-                                    </View>
-                                ) : (
-                                    <>
-                                        {openPicker === 'model' && (
-                                        <View style={styles.overlaySection}>
-                                            <Text style={styles.overlaySectionTitle}>
-                                                {props.modelMode?.name ?? t('agentInput.model.title')}
-                                            </Text>
-                                            {availableModels.length > 0 ? availableModels.map((model) => {
-                                                const isSelected = props.modelMode?.key === model.key;
-                                                return (
-                                                    <BubblePressable
-                                                        key={model.key}
-                                                        disabled={!props.onModelModeChange || model.disabled}
-                                                        onPress={() => {
-                                                            hapticsLight();
-                                                            props.onModelModeChange?.(model);
-                                                            closePicker();
-                                                        }}
-                                                        accessibilityRole="radio"
-                                                        accessibilityLabel={model.name}
-                                                        accessibilityHint={model.description ?? undefined}
-                                                        accessibilityState={{
-                                                            checked: isSelected,
-                                                            disabled: !props.onModelModeChange || !!model.disabled,
-                                                        }}
-                                                        style={({ pressed }) => ({
-                                                            flexDirection: 'row',
-                                                            alignItems: 'flex-start',
-                                                            paddingHorizontal: 16,
-                                                            paddingVertical: 8,
-                                                            marginHorizontal: 8,
-                                                            borderRadius: 14,
-                                                            backgroundColor: pressed
-                                                                ? theme.colors.surfacePressedOverlay
-                                                                : isSelected
-                                                                    ? theme.colors.glass.backgroundSubtle
-                                                                    : 'transparent',
-                                                            opacity: (!props.onModelModeChange || model.disabled) ? 0.55 : 1,
-                                                        })}
-                                                    >
-                                                        <View style={{
-                                                            width: 16,
-                                                            height: 16,
-                                                            borderRadius: 8,
-                                                            borderWidth: 2,
-                                                            borderColor: isSelected ? theme.colors.radio.active : theme.colors.radio.inactive,
-                                                            alignItems: 'center',
-                                                            justifyContent: 'center',
-                                                            marginRight: 12,
-                                                            marginTop: 2,
-                                                        }}>
-                                                            {isSelected && <View style={{
-                                                                width: 6,
-                                                                height: 6,
-                                                                borderRadius: 3,
-                                                                backgroundColor: theme.colors.radio.dot,
-                                                            }} />}
-                                                        </View>
-                                                        <View style={{ flex: 1 }}>
-                                                            {model.providerName ? (
-                                                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
-                                                                    <ProviderIcon kind={model.providerKind} size={12} />
-                                                                    <Text style={{
-                                                                        fontSize: 14,
-                                                                        color: isSelected ? theme.colors.radio.active : theme.colors.text,
-                                                                        ...Typography.default(),
-                                                                    }}>
-                                                                        {model.name}
-                                                                    </Text>
-                                                                </View>
-                                                            ) : (
-                                                                <Text style={{
-                                                                    fontSize: 14,
-                                                                    color: isSelected ? theme.colors.radio.active : theme.colors.text,
-                                                                    ...Typography.default(),
-                                                                }}>
-                                                                    {model.name}
-                                                                </Text>
-                                                            )}
-                                                            {!!model.description && (
-                                                                <Text style={{
-                                                                    fontSize: 11,
-                                                                    color: theme.colors.textSecondary,
-                                                                    ...Typography.default(),
-                                                                }}>
-                                                                    {model.description}
-                                                                </Text>
-                                                            )}
-                                                        </View>
-                                                    </BubblePressable>
-                                                );
-                                            }) : (
-                                                <Text style={{
-                                                    fontSize: 13,
-                                                    color: theme.colors.textSecondary,
-                                                    paddingHorizontal: 16,
-                                                    paddingVertical: 8,
-                                                    ...Typography.default(),
-                                                }}>
-                                                    {t('agentInput.model.configureInCli')}
-                                                </Text>
-                                            )}
-                                        </View>
-                                        )}
-                                        {openPicker === 'effort' && availableEffortLevels.length > 0 && props.onEffortLevelChange && (
-                                                <View style={styles.overlaySection}>
-                                                    <Text style={styles.overlaySectionTitle}>
-                                                        {props.effortLevel?.name ?? t('agentInput.effort.title')}
-                                                    </Text>
-                                                    {/* AUTO, at the head of the list (DROVE-229).
-                                                        It is a MODE, not a level: `/effort auto`
-                                                        hands the choice back to Claude Code, so it
-                                                        is not a seventh notch and it is not below
-                                                        `low` (DROVE-200). It was a pill on the
-                                                        slider's own popover, which is the surface
-                                                        that stopped taking touches; here it is a
-                                                        row like the levels beside it, on the sheet
-                                                        a tap opens. Its wire value is the reset,
-                                                        `effortLevel: null`, through the same
-                                                        `onEffortKeyChange` the drag commits on. */}
-                                                    {props.onEffortKeyChange ? (() => {
-                                                        const isSelected = !props.effortLevel;
-                                                        return (
-                                                            <BubblePressable
-                                                                key="__auto"
-                                                                onPress={() => {
-                                                                    hapticsLight();
-                                                                    props.onEffortKeyChange?.(null);
-                                                                    closePicker();
-                                                                }}
-                                                                accessibilityRole="radio"
-                                                                accessibilityLabel="Auto"
-                                                                accessibilityHint="Let the agent choose"
-                                                                accessibilityState={{ checked: isSelected }}
-                                                                style={({ pressed }) => ({
-                                                                    flexDirection: 'row',
-                                                                    alignItems: 'flex-start',
-                                                                    paddingHorizontal: 16,
-                                                                    paddingVertical: 8,
-                                                                    marginHorizontal: 8,
-                                                                    borderRadius: 14,
-                                                                    backgroundColor: pressed
-                                                                        ? theme.colors.surfacePressedOverlay
-                                                                        : isSelected
-                                                                            ? theme.colors.glass.backgroundSubtle
-                                                                            : 'transparent',
-                                                                })}
-                                                            >
-                                                                <View style={{
-                                                                    width: 16,
-                                                                    height: 16,
-                                                                    borderRadius: 8,
-                                                                    borderWidth: 2,
-                                                                    borderColor: isSelected ? theme.colors.radio.active : theme.colors.radio.inactive,
-                                                                    alignItems: 'center',
-                                                                    justifyContent: 'center',
-                                                                    marginRight: 12,
-                                                                    marginTop: 2,
-                                                                }}>
-                                                                    {isSelected && <View style={{
-                                                                        width: 6,
-                                                                        height: 6,
-                                                                        borderRadius: 3,
-                                                                        backgroundColor: theme.colors.radio.dot,
-                                                                    }} />}
-                                                                </View>
-                                                                <View style={{ flex: 1 }}>
-                                                                    <Text style={{
-                                                                        fontSize: 14,
-                                                                        color: isSelected ? theme.colors.radio.active : theme.colors.text,
-                                                                        ...Typography.default(),
-                                                                    }}>
-                                                                        Auto
-                                                                    </Text>
-                                                                    <Text style={{
-                                                                        fontSize: 11,
-                                                                        color: theme.colors.textSecondary,
-                                                                        ...Typography.default(),
-                                                                    }}>
-                                                                        Let the agent choose
-                                                                    </Text>
-                                                                </View>
-                                                            </BubblePressable>
-                                                        );
-                                                    })() : null}
-                                                    {availableEffortLevels.map((level) => {
-                                                        const isSelected = props.effortLevel?.key === level.key;
-                                                        // Out of reach on this model: the row
-                                                        // stays, with its reason, but it is not
-                                                        // a pick (DROVE-101).
-                                                        const isDisabled = !!level.disabled;
-                                                        return (
-                                                            <BubblePressable
-                                                                key={level.key}
-                                                                disabled={isDisabled}
-                                                                onPress={() => {
-                                                                    if (isDisabled) return;
-                                                                    hapticsLight();
-                                                                    props.onEffortLevelChange?.(level);
-                                                                    closePicker();
-                                                                }}
-                                                                accessibilityRole="radio"
-                                                                accessibilityLabel={level.name}
-                                                                accessibilityHint={level.description ?? undefined}
-                                                                accessibilityState={{ checked: isSelected, disabled: isDisabled }}
-                                                                style={({ pressed }) => ({
-                                                                    flexDirection: 'row',
-                                                                    alignItems: 'flex-start',
-                                                                    paddingHorizontal: 16,
-                                                                    paddingVertical: 8,
-                                                                    marginHorizontal: 8,
-                                                                    borderRadius: 14,
-                                                                    opacity: isDisabled ? 0.45 : 1,
-                                                                    backgroundColor: pressed && !isDisabled
-                                                                        ? theme.colors.surfacePressedOverlay
-                                                                        : isSelected
-                                                                            ? theme.colors.glass.backgroundSubtle
-                                                                            : 'transparent',
-                                                                })}
-                                                            >
-                                                                <View style={{
-                                                                    width: 16,
-                                                                    height: 16,
-                                                                    borderRadius: 8,
-                                                                    borderWidth: 2,
-                                                                    borderColor: isSelected ? theme.colors.radio.active : theme.colors.radio.inactive,
-                                                                    alignItems: 'center',
-                                                                    justifyContent: 'center',
-                                                                    marginRight: 12,
-                                                                    marginTop: 2,
-                                                                }}>
-                                                                    {isSelected && <View style={{
-                                                                        width: 6,
-                                                                        height: 6,
-                                                                        borderRadius: 3,
-                                                                        backgroundColor: theme.colors.radio.dot,
-                                                                    }} />}
-                                                                </View>
-                                                                <View style={{ flex: 1 }}>
-                                                                    <Text style={{
-                                                                        fontSize: 14,
-                                                                        color: isSelected ? theme.colors.radio.active : theme.colors.text,
-                                                                        ...Typography.default(),
-                                                                    }}>
-                                                                        {level.name}
-                                                                    </Text>
-                                                                    {!!level.description && (
-                                                                        <Text style={{
-                                                                            fontSize: 11,
-                                                                            color: theme.colors.textSecondary,
-                                                                            ...Typography.default(),
-                                                                        }}>
-                                                                            {level.description}
-                                                                        </Text>
-                                                                    )}
-                                                                </View>
-                                                            </BubblePressable>
-                                                        );
-                                                    })}
-                                                </View>
-                                        )}
-                                    </>
-                                )}
-                        </>
-                    )}
-                </ComposerSheet>
+                    title={mobilePicker.title}
+                    header={mobilePicker.header}
+                    options={mobilePicker.options}
+                    selectedKey={mobilePicker.selectedKey}
+                    empty={mobilePicker.empty}
+                    onSelect={mobilePicker.onSelect}
+                />
 
                 <AnimatedFade visible={props.showStatusDetails !== false}>
                     <AgentInputContextChips

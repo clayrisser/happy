@@ -290,6 +290,17 @@ export interface ComposerSessionControlsProps {
      * `shown` is what the caller reads to decide.
      */
     readAloud?: ComposerReadAloudSegment | null;
+    /**
+     * Drawn, and pressing nothing (DROVE-394).
+     *
+     * The sessions-list entry mounts this capsule with the new-session sheet's
+     * own props, so the two cannot drift, and a tap anywhere on the entry
+     * opens the sheet rather than a picker. Every segment stays, every press
+     * goes, and every glyph takes the placeholder's colour, which is the face
+     * send already wears when there is nothing to send. Not an `opacity`: an
+     * ancestor of a glass surface below full alpha stops the material drawing.
+     */
+    disabled?: boolean;
 }
 
 /** What VoiceOver adds while a pick is in flight, since colour reaches nobody there. */
@@ -709,8 +720,11 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
         segmentWidth = size,
         verticalSlop = 0,
         style,
+        disabled = false,
     } = props;
     const palette = composerControlPalette(theme.dark);
+    // The disabled face (DROVE-394): one colour for every glyph, and no press.
+    const ink = disabled ? theme.colors.textSecondary : null;
     const permissionPending = !!pending?.permission;
     const modelPending = !!pending?.model;
     const effortPending = !!pending?.effort;
@@ -776,7 +790,7 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
         // No rim: the fallback surface draws a hairline border and the discs on
         // this row do not. One separation mechanism, measured (DROVE-254).
         <GlassChromeSurface
-            interactive
+            interactive={!disabled}
             rim={false}
             radius={size / 2}
             tintColor={composerGlassTint(composerSessionCapsuleFill(theme.dark))}
@@ -791,7 +805,7 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                         permissionPending,
                     )}
                     open={openPicker === 'permission'}
-                    onPress={canOpenMode && onPress ? () => onPress('permission') : undefined}
+                    onPress={!disabled && canOpenMode && onPress ? () => onPress('permission') : undefined}
                     size={size}
                     segmentWidth={segmentWidth}
                     verticalSlop={verticalSlop}
@@ -818,7 +832,7 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                     <Ionicons
                         name={permissionModeGlyph(modeKind, modeKey)}
                         size={MOBILE_COMPOSER_CAPSULE_GLYPH_SIZE}
-                        color={pendingOrSettled(palette, permissionPending, autoAcceptColour(palette, autoAccept))}
+                        color={ink ?? pendingOrSettled(palette, permissionPending, autoAcceptColour(palette, autoAccept))}
                     />
                 </Control>
             ) : null}
@@ -861,8 +875,8 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                     accessibilityLabel={readAloud.accessibilityLabel}
                     toggled={readAloud.on}
                     open={false}
-                    onPress={readAloud.onPress}
-                    onLongPress={readAloud.onLongPress}
+                    onPress={disabled ? undefined : readAloud.onPress}
+                    onLongPress={disabled ? undefined : readAloud.onLongPress}
                     fill={readAloudFill}
                     size={size}
                     segmentWidth={segmentWidth}
@@ -871,7 +885,9 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                     <Ionicons
                         name={readAloud.glyph}
                         size={MOBILE_COMPOSER_CAPSULE_GLYPH_SIZE}
-                        color={composerAudioOutTint(theme.dark, readAloud.fill)}
+                        // A filled pill keeps its own tint: the state is the
+                        // fill's to say, disabled or not.
+                        color={ink && !readAloudFill ? ink : composerAudioOutTint(theme.dark, readAloud.fill)}
                     />
                 </Control>
             ) : null}
@@ -882,7 +898,7 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                     accessibilityLabel={effort.label}
                     accessibilityValue={unconfirmedAccessibilityValue(effort.value, effortPending)}
                     open={openPicker === 'effort'}
-                    onPress={canOpenEffort && onPress ? () => onPress('effort') : undefined}
+                    onPress={!disabled && canOpenEffort && onPress ? () => onPress('effort') : undefined}
                     size={size}
                     segmentWidth={segmentWidth}
                     verticalSlop={verticalSlop}
@@ -898,7 +914,7 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                     <EffortGauge
                         index={effortIndex!}
                         count={effortCount}
-                        color={pendingOrSettled(palette, effortPending, composerGlyphColour(palette))}
+                        color={ink ?? pendingOrSettled(palette, effortPending, composerGlyphColour(palette))}
                         track={composerGaugeTrack(theme.dark)}
                     />
                 </Control>
@@ -910,14 +926,14 @@ export const ComposerSessionControls = React.memo(function ComposerSessionContro
                     accessibilityLabel="Model"
                     accessibilityValue={unconfirmedAccessibilityValue(label.model!, modelPending)}
                     open={openPicker === 'model'}
-                    onPress={canOpenModel && onPress ? () => onPress('model') : undefined}
+                    onPress={!disabled && canOpenModel && onPress ? () => onPress('model') : undefined}
                     size={size}
                     segmentWidth={segmentWidth}
                     verticalSlop={verticalSlop}
                     wide
                 >
                     <Text
-                        style={[styles.model, modelPending && { color: palette.pending }]}
+                        style={[styles.model, modelPending && { color: palette.pending }, ink ? { color: ink } : null]}
                         numberOfLines={1}
                         // Smaller before shorter: the name scales rather than
                         // gaining an ellipsis, because `Opus 5...` is the
