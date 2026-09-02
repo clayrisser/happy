@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { ActivityIndicator, Keyboard, LayoutChangeEvent, Modal as RNModal, Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Keyboard, LayoutChangeEvent, Modal as RNModal, Platform, Pressable, ScrollView, Text, TextInput, View, type StyleProp, type ViewStyle } from 'react-native';
 import { Ionicons, Octicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -23,7 +23,10 @@ import { ComposerBubble } from './ComposerBubble';
 import { ComposerControlButton } from './ComposerControlButton';
 import { ComposerSessionControls, type ComposerSessionPicker } from './ComposerSessionControls';
 import { COMPOSER_IN_FIELD_DISC } from './composerControlColour';
-import { COMPOSER_BUBBLE_SURFACE } from './composerBubbleLayout';
+import {
+    COMPOSER_BUBBLE_CONTROLS_SLOT_GEOMETRY,
+    COMPOSER_BUBBLE_SURFACE,
+} from './composerBubbleLayout';
 import type { SessionPillLabel } from './sessionPillLabel';
 import { NativeOptionsPicker } from './NativeOptionsPicker';
 import { AgentInputAttachmentStrip } from './AgentInputAttachmentStrip';
@@ -94,6 +97,7 @@ import {
     resolveMobileComposerActionGeometry,
     resolveMobileCollapsedComposerGeometry,
     resolveMobileHomeComposerHeight,
+    resolveMobileHomeFieldHeight,
 } from './agentInputLayout';
 
 export const MOBILE_HOME_DOCK_CONTENT_INSET = 108;
@@ -535,10 +539,20 @@ function shakeOnce(value: SharedValue<number>) {
 function RefusableControl({
     refusing,
     onRefuse,
+    slot,
     children,
 }: {
     refusing: boolean;
     onRefuse: () => void;
+    /**
+     * What this wrapper owes the row it stands in (DROVE-375).
+     *
+     * A disc is fixed-size and a bare view round it is invisible to the layout.
+     * The CAPSULE is the action row's flexible child, and a bare view round
+     * THAT swallows the flex — so the slot the wrapper is filling is passed in
+     * and spread on it. See `resolveComposerControlsSlotGeometry`.
+     */
+    slot?: StyleProp<ViewStyle>;
     children: React.ReactNode;
 }) {
     const shake = useSharedValue(0);
@@ -546,7 +560,7 @@ function RefusableControl({
         transform: [{ translateX: shake.value }],
     }));
     return (
-        <Animated.View style={shakeStyle}>
+        <Animated.View style={[slot, shakeStyle]}>
             {children}
             {refusing && (
                 <Pressable
@@ -1005,12 +1019,27 @@ export const HomeDock = React.memo(({
         paddingTop: MOBILE_COMPOSER_METRICS.inputPaddingTop,
         paddingBottom: MOBILE_COMPOSER_METRICS.inputPaddingBottom,
     });
-    const focusedInputContainerHeight = Math.max(
-        MOBILE_COMPOSER_METRICS.inputMinHeight,
-        focusedInputLayout.height
-            + MOBILE_COMPOSER_METRICS.inputPaddingTop
-            + MOBILE_COMPOSER_METRICS.inputPaddingBottom,
-    );
+    /**
+     * THE FIELD'S HEIGHT COMES FROM THE SAME RESOLVER THE SHELL'S DOES
+     * (DROVE-375).
+     *
+     * This floored the field at `inputMinHeight`, 44 — the number the chat
+     * stopped using when DROVE-214 gave the bubble a button row and
+     * `MOBILE_COMPOSER_TEXT_ROW_BASE_HEIGHT`'s 30 replaced it. DROVE-345 wrote
+     * `resolveMobileHomeFieldHeight` for exactly this call and Home never
+     * adopted it, so the two ends of one column disagreed by 14pt: the shell
+     * is pinned to `resolveMobileHomeComposerHeight`, which budgets 30 for the
+     * field, while the field asked for 44. The button row was pushed 14pt PAST
+     * the bubble's bottom edge.
+     *
+     * It still DRAWS there — nothing in the composer is clipped on Liquid
+     * Glass (DROVE-202, DROVE-328) — which is why Clay photographed a `+` and
+     * a padlock cut by the bubble's rounded edge. And UIKit hit-tests a
+     * subview against its parent's bounds, so a row drawn outside the shell
+     * takes no touches at all: "when I tap submit nothing happens" was send
+     * painted where it could not be pressed.
+     */
+    const focusedInputContainerHeight = resolveMobileHomeFieldHeight(focusedInputLayout.height);
     // Home's own resolver since DROVE-196. The chat composer's card lost its
     // control row to the strip below it and its block height went 104 -> 102;
     // Home's focused composer is still ONE card holding the field and the row,
@@ -1698,7 +1727,11 @@ export const HomeDock = React.memo(({
                         </RefusableControl>
                     )}
                     controls={(
-                        <RefusableControl refusing={isSubmitting} onRefuse={refuse}>
+                        <RefusableControl
+                            refusing={isSubmitting}
+                            onRefuse={refuse}
+                            slot={COMPOSER_BUBBLE_CONTROLS_SLOT_GEOMETRY}
+                        >
                             <ComposerSessionControls
                                 label={sessionPillLabel}
                                 size={MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE}

@@ -261,6 +261,26 @@ export function resolveComposerBubbleSessionCapsuleGeometry(): ComposerBubbleSty
 }
 
 /**
+ * WHAT A WRAPPER ROUND THE CAPSULE HAS TO CARRY (DROVE-375).
+ *
+ * `flex: 1` above is a property of the capsule's relationship to the ROW, so it
+ * only means anything while the capsule is the row's direct child. Home puts a
+ * `RefusableControl` in between — a bare view carrying a shake transform, so it
+ * can refuse a tap while a session is being created — and a bare view sizes to
+ * its content. The capsule then had nothing to flex against: it shrank to its
+ * glyphs, the model segment (`flex: 1`, `minWidth: 0`) collapsed to nothing so
+ * the harness name vanished, and send was dragged off the trailing edge into
+ * the middle of the row. That is DROVE-353's band again, one wrapper along.
+ *
+ * So a screen that must wrap the capsule spreads THIS on the wrapper, and it is
+ * the capsule's own flex rather than a second `1` written down twice — a
+ * wrapper's whole job here is to pass the row's slack through unchanged.
+ */
+export function resolveComposerControlsSlotGeometry(): ComposerBubbleStyle {
+    return { flex: resolveComposerBubbleSessionCapsuleGeometry().flex };
+}
+
+/**
  * A glyph segment inside that capsule: permission mode, or the effort gauge.
  *
  * A square, and the glyph inside it is centred by the renderer's own
@@ -542,6 +562,7 @@ export const COMPOSER_BUBBLE_ACTION_ROW_GEOMETRY = resolveComposerBubbleActionRo
 export const COMPOSER_BUBBLE_SPACER_GEOMETRY = resolveComposerBubbleSpacerGeometry();
 export const COMPOSER_BUBBLE_GAP_GEOMETRY = resolveComposerBubbleGapGeometry();
 export const COMPOSER_BUBBLE_SESSION_CAPSULE_GEOMETRY = resolveComposerBubbleSessionCapsuleGeometry();
+export const COMPOSER_BUBBLE_CONTROLS_SLOT_GEOMETRY = resolveComposerControlsSlotGeometry();
 export const COMPOSER_BUBBLE_SESSION_SEGMENT_GEOMETRY = resolveComposerBubbleSessionSegmentGeometry();
 export const COMPOSER_BUBBLE_SESSION_MODEL_SEGMENT_GEOMETRY = resolveComposerBubbleSessionModelSegmentGeometry();
 export const COMPOSER_BUBBLE_DISC_GEOMETRY = resolveComposerBubbleDiscGeometry();
