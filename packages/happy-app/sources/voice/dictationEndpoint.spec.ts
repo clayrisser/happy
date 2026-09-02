@@ -69,6 +69,7 @@ function harness(base = '') {
     let draft = base;
     const capture = new DictationCapture(engine, dictationComposerEvents({
         base: () => draft,
+        current: () => composer,
         setComposerText: (text) => { composer = text; },
         send: () => { /* not under test here */ },
         onError: () => { /* not under test here */ },

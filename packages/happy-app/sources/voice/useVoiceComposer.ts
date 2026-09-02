@@ -211,6 +211,9 @@ export function useVoiceComposer(options: VoiceComposerOptions): VoiceComposerSt
             // DROVE-120) is tested against the same code the app runs.
             dictationComposerEvents({
                 base: () => baseRef.current,
+                // Read LIVE, so a late final can tell a composer it still owns
+                // from one the user has edited since (DROVE-360).
+                current: () => callbacks.current.getComposerText(),
                 setComposerText: (text) => callbacks.current.setComposerText(text),
                 send: () => callbacks.current.send(),
                 onError: (message) => callbacks.current.onError(message),
