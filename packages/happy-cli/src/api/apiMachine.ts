@@ -694,7 +694,11 @@ export class ApiMachineClient {
             || prev.codex !== newAvailability.codex
             || prev.gemini !== newAvailability.gemini
             || prev.openclaw !== newAvailability.openclaw
-            || prev.agy !== newAvailability.agy;
+            || prev.agy !== newAvailability.agy
+            // cursor and pi were missing from this list (DROVE-400), so a
+            // Cursor or pi install after daemon start never reached the app.
+            || prev.cursor !== newAvailability.cursor
+            || prev.pi !== newAvailability.pi;
         const resumeSupportChanged = !prevResume
             || prevResume.rpcAvailable !== newResumeSupport.rpcAvailable
             || prevResume.happyAgentAuthenticated !== newResumeSupport.happyAgentAuthenticated;
