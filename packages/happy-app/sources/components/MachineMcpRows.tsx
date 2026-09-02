@@ -9,9 +9,17 @@
  * machine detail screen is the obvious second home for it and because a screen
  * that already owns a login state machine does not need a second concern.
  *
- * READ-ONLY, and there is nothing here to press except the disclosure. He
- * deferred configuring MCPs from the phone outright; a row that looked
- * editable would be a promise this pass does not keep.
+ * ONE THING TO PRESS PER ROW (DROVE-291). This file used to say there was
+ * nothing here to press except the disclosure, because DROVE-274 deferred
+ * acting on a server outright. Clay overruled that holding the shipped list:
+ * "Shouldn't I be able to click on these and reconnect authenticate etc…". So a
+ * row now opens McpServerSheet — health, reconnect, re-authenticate — and only
+ * when the screen passes `onPressServer`, so the component still renders as the
+ * read it was for a caller that has nowhere to send you.
+ *
+ * CONFIGURING an MCP server is still deferred. Nothing here edits a config; the
+ * sheet's two verbs act on a server, they do not rewrite the file that declares
+ * it.
  *
  * COLLAPSED BY DEFAULT, which is the only decision in the file worth arguing.
  * Forty servers is the real number on Clay's Mac, and forty rows under each of
@@ -43,7 +51,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useUnistyles } from 'react-native-unistyles';
 
 import { Item } from '@/components/Item';
-import { mcpDivergenceSummary, type McpHarnessReport, type McpScope } from '@slopus/happy-wire';
+import { mcpDivergenceSummary, type McpHarnessReport, type McpScope, type McpServerSummary } from '@slopus/happy-wire';
 import {
     mcpEmptyReason,
     mcpReadAgo,
@@ -81,6 +89,15 @@ export interface MachineMcpRowsProps {
      * stays exactly what DROVE-296 shipped: a read.
      */
     onEditProviders?: () => void;
+    /**
+     * Tap one server (DROVE-291).
+     *
+     * Optional, so a screen with nowhere to send you still renders exactly the
+     * read DROVE-274 shipped. When it is absent the rows draw no chevron and
+     * take no press, because a row that looks tappable and is not is worse than
+     * one that never offered.
+     */
+    onPressServer?: (server: McpServerSummary) => void;
     /** Injectable so the clock is not a reason a test flakes. */
     now?: number;
 }
@@ -104,7 +121,7 @@ function divergenceLine(scope: McpScope): string {
 }
 
 export function MachineMcpRows(props: MachineMcpRowsProps) {
-    const { harness, readAt, expanded, onToggle, providersExpanded, onToggleProviders, onEditProviders, now } = props;
+    const { harness, readAt, expanded, onToggle, providersExpanded, onToggleProviders, onEditProviders, onPressServer, now } = props;
     const { theme } = useUnistyles();
 
     const base = harness.scopes[0];
@@ -269,6 +286,19 @@ export function MachineMcpRows(props: MachineMcpRowsProps) {
                 )}
             />
 
+            {/*
+              * THE ROW IS THE THING YOU PRESS NOW (DROVE-291). DROVE-274 said
+              * in this file that "there is nothing here to press except the
+              * disclosure", and Clay overruled it in one sentence: "Shouldn't I
+              * be able to click on these and reconnect authenticate etc…".
+              *
+              * THE DOT STILL MEANS WHAT IT MEANT, and that is deliberate. It is
+              * `enabled`, read from the config, which is a fact this screen
+              * already has for all forty rows. It is NOT health: health costs a
+              * probe per server and forty of them on a screen open would be a
+              * minute of connections nobody asked for. The health is one tap
+              * down, for the one server you are actually asking about.
+              */}
             {expanded && base?.servers.map((server) => (
                 <Item
                     key={server.name}
@@ -285,7 +315,8 @@ export function MachineMcpRows(props: MachineMcpRowsProps) {
                         color={server.enabled ? blue : grey}
                         style={{ width: 29, textAlign: 'center' }}
                     />}
-                    showChevron={false}
+                    onPress={onPressServer ? () => onPressServer(server) : undefined}
+                    showChevron={!!onPressServer}
                 />
             ))}
 

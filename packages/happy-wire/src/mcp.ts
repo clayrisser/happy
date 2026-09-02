@@ -358,3 +358,153 @@ export function mcpDivergenceSummary(harness: McpHarnessReport): string | null {
     for (const s of broken) parts.push(`${s.label} could not be read`);
     return parts.join(' · ');
 }
+
+// --- one server, acted on (DROVE-291) ----------------------------------------
+//
+// DROVE-274 above is the LIST, and it is read-only on purpose. Clay, holding it
+// on his phone: "Shouldn't I be able to click on these and reconnect
+// authenticate etc…". These are the types for that.
+//
+// THE HONESTY CONSTRAINT IS IN THE TYPE, which is why `observedAt` is not
+// optional. An MCP connection belongs to a SESSION — every harness starts its
+// servers when a session starts — so nothing on the machine may say a server
+// "is up". What it may say is what it saw when it asked, and when that was. A
+// state with no timestamp beside it reads as live, so the field is required and
+// the phone always renders it.
+
+/**
+ * What a reading found. Four values, and `unknown` is a real answer rather than
+ * a gap: two harnesses answer for every server at once and take longer than a
+ * tap, and one (Codex) has no verb that opens a connection at all.
+ */
+export type McpHealthState = 'connected' | 'failing' | 'needs-auth' | 'unknown';
+
+/** A logged line, already scrubbed on the machine. Never a value. */
+export interface McpLoggedError {
+    /** When the session logged it, not when we read it. */
+    at: number;
+    /**
+     * The sentence, with credentials, urls and absolute paths already replaced
+     * by markers on the machine. The phone renders it verbatim and must never
+     * try to "improve" it — the redaction happened where the original was.
+     */
+    text: string | null;
+}
+
+/**
+ * Whether an action is real for this server, and the sentence saying what it
+ * would actually do.
+ *
+ * `says` is present whether or not the action is available, and that is the
+ * point: "Codex has no verb that opens a connection" is the useful half of a
+ * disabled button, and a phone that only hid the button would leave somebody
+ * wondering why the row looks different.
+ */
+export interface McpAction {
+    available: boolean;
+    says: string;
+    /** The command the machine would run. Only when available. */
+    verb?: string;
+}
+
+/** One server's reading. */
+export interface McpHealth {
+    harness: string;
+    server: string;
+    transport: McpTransport;
+    enabled: boolean;
+    state: McpHealthState;
+    /** WHAT was found. Never when — that is `observedAt`, always beside it. */
+    says: string;
+    /** When the reading was taken. Required; see the note above. */
+    observedAt: number;
+    /** False when the machine could not ask at all. */
+    probed: boolean;
+    /** When a session last wrote about this server, if any did. */
+    lastSeen: number | null;
+    lastError: McpLoggedError | null;
+    /** Where `lastSeen`/`lastError` came from, e.g. 'session log'. */
+    observedFrom: string | null;
+    reconnect: McpAction;
+    reauth: McpAction;
+}
+
+export type McpHealthResult = { ok: true; health: McpHealth } | { ok: false; error: string };
+
+/**
+ * What a reconnect did. `ok` is whether the machine managed to ASK, not whether
+ * the server was healthy — a server that refused to connect is a successful
+ * reconnect with `state: 'failing'`, and conflating the two would make a broken
+ * server look like a broken button.
+ */
+export interface McpReconnectDone {
+    ok: boolean;
+    harness: string;
+    server: string;
+    did?: string;
+    state?: McpHealthState;
+    says?: string;
+    /** The sentence that stops a green tick meaning more than it does. */
+    note?: string;
+    observedAt?: number;
+    lastSeen?: number | null;
+    lastError?: McpLoggedError | null;
+    error?: string;
+}
+
+/**
+ * What a re-auth started. ONE STRING CROSSES THE WIRE and it is the name of a
+ * tmux window (DROVE-348, DROVE-318): the OAuth dance is between the harness on
+ * the Mac and the server's own login page, and the phone is told where to watch
+ * it, never handed a code, a token or a redirect url.
+ */
+export interface McpReauthStarted {
+    ok: boolean;
+    harness: string;
+    server: string;
+    /** `<session>:<window>`, what a human types to switch to it. */
+    window?: string;
+    verb?: string;
+    says?: string;
+    startedAt?: number;
+    error?: string;
+}
+
+export type McpActionResult<T> = T | { ok: false; error: string };
+
+/** Every key a health object may carry. The same allowlist argument as the
+ * server summaries above, and it matters more here: this is the first payload
+ * on this wire carrying free text a session wrote. */
+export const mcpHealthAllowedKeys: readonly string[] = Object.freeze([
+    'harness', 'server', 'transport', 'enabled', 'state', 'says',
+    'observedAt', 'probed', 'lastSeen', 'lastError', 'observedFrom',
+    'reconnect', 'reauth',
+]);
+
+/**
+ * Everything wrong with a health answer, as sentences. Empty means it is safe
+ * to send.
+ *
+ * Same job as `mcpReportLeaks`, same reason it is a runtime check: the producer
+ * is plain JS in another repository. The extra care is `lastError.text`, which
+ * is the only free text this wire has ever carried — so the walk also refuses a
+ * value that still LOOKS like a url or an absolute path, on the theory that a
+ * scrubber which stopped working must fail loudly here rather than quietly on
+ * the machine.
+ */
+export function mcpHealthLeaks(health: unknown): string[] {
+    const problems: string[] = [];
+    if (health === null || typeof health !== 'object') return ['the health answer is not an object'];
+    const forbidden = new Set(mcpForbiddenKeys.map((k) => k.toLowerCase()));
+    const allowed = new Set(mcpHealthAllowedKeys);
+    for (const key of Object.keys(health as Record<string, unknown>)) {
+        if (forbidden.has(key.toLowerCase())) problems.push(`health.${key} is a key that can carry a credential`);
+        if (!allowed.has(key)) problems.push(`health.${key} is not one of ${mcpHealthAllowedKeys.join(', ')}`);
+    }
+    const text = (health as McpHealth)?.lastError?.text;
+    if (typeof text === 'string') {
+        if (/[a-z][a-z0-9+.-]*:\/\//i.test(text)) problems.push('lastError.text still contains a url');
+        if (/(^|\s)\/(?:[A-Za-z0-9._-]+\/)+/.test(text)) problems.push('lastError.text still contains an absolute path');
+    }
+    return problems;
+}
