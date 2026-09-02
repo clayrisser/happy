@@ -197,7 +197,7 @@ export function sessionUpdateHandler(userId: string, socket: Socket, connection:
                 // stored and emitted under the OWNER's id: the rooms the
                 // CLI and the owner's phone sit in are keyed by it.
                 const access = await resolveSessionAccess(userId, sid);
-                if (!access || !roleAllows(access.role, 'answer')) {
+                if (!access || !roleAllows(access.role, 'send')) {
                     return;
                 }
                 const ownerId = access.ownerId;

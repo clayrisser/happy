@@ -77,7 +77,7 @@ export function v3SessionRoutes(app: Fastify) {
         const { after_seq, before_seq, limit } = request.query;
 
         // Owner or a read grant; anything else is not found (DROVE-388).
-        const access = await requireSessionRole(userId, sessionId, 'read');
+        const access = await requireSessionRole(userId, sessionId, 'view');
         if (!access) {
             return reply.code(404).send({ error: 'Session not found' });
         }
@@ -136,8 +136,8 @@ export function v3SessionRoutes(app: Fastify) {
         if (!access) {
             return reply.code(404).send({ error: 'Session not found' });
         }
-        if (!roleAllows(access.role, 'answer')) {
-            return reply.code(403).send({ error: 'read-only-grant' });
+        if (!roleAllows(access.role, 'send')) {
+            return reply.code(403).send({ error: 'view-only-grant' });
         }
         const ownerId = access.ownerId;
 

@@ -140,8 +140,8 @@ model Session {
 //
 
 enum SessionGrantRole {
-    read
-    answer
+    view
+    send
 }
 
 // One session handed to one other account. wrappedKey is the session's data
