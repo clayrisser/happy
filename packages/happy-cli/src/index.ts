@@ -27,6 +27,29 @@ import type { StartOptions } from '@/claude/runClaude'
   // Check if first argument is a subcommand
   const subcommand = args[0]
 
+  // The harness LAUNCHERS in node (DROVE-315 wave 3a). cattle-drover's
+  // libexec/drover-{codex,cursor,pi} are the PREFLIGHT in front of the runners
+  // further down this file — open the pane, name the missing binary, resolve
+  // the account token, turn a bare --resume into an id — and they are ported
+  // into src/drover/cli. Those three names are already arms below, so the
+  // generic verb dispatch (which sits under every one of them) can never reach
+  // them; this is the handover switch instead. Shell stays authoritative until
+  // the node path is proven, and DROVER_NODE_LAUNCHERS=1 routes to it. Lazy by
+  // construction: nothing loads unless the switch is on AND the name matches,
+  // so --version and a session start pay nothing (DROVE-314).
+  //
+  // opencode, tmux-enter, clone and the pickers need no switch — they are not
+  // arms here, so they fall through to the table like every other ported verb.
+  if (process.env.DROVER_NODE_LAUNCHERS === '1'
+    && (subcommand === 'codex' || subcommand === 'cursor' || subcommand === 'pi')) {
+    const { runDroverVerb } = await import('./drover/cli')
+    const code = await runDroverVerb(subcommand, args.slice(1))
+    if (code !== null) {
+      const { flushExit } = await import('./drover/cli/exit')
+      await flushExit(code)
+    }
+  }
+
   // DROVE-314: read-only verbs must not pay the session-supervisor cost.
   // `drover --version` (the daemon's version probe, run constantly) and
   // `drover --help` are pure reads, but when they fall through to the main

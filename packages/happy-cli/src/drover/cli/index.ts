@@ -114,6 +114,59 @@ export const droverVerbs: readonly DroverVerb[] = [
         summary: 'What the injected /flip slash command runs inside the claude child. Every path exits 0.',
         load: () => import('./flip-request'),
     },
+    // --- the harness launcher family (DROVE-315 wave 3a) --------------------
+    //
+    // `codex`, `cursor` and `pi` are also arms in src/index.ts, which sits
+    // above this table, so they are reached through the DROVER_NODE_LAUNCHERS
+    // switch there rather than by falling through. The rest fall through like
+    // every other verb. All of them share one pane opener, ./harness/tmuxEnter,
+    // for the same reason the shell had exactly one: which server, which
+    // session, and what a curated setup gets left alone is one set of rules.
+    {
+        name: 'tmux-enter',
+        summary: 'Open a tmux window on the user\'s own server and run a command in it. The one place a session gets a pane.',
+        load: () => import('./harness/tmuxEnter'),
+    },
+    {
+        name: 'codex',
+        summary: 'An OpenAI Codex session, managed like a Claude Code one.',
+        load: () => import('./codex'),
+    },
+    {
+        name: 'opencode',
+        summary: 'An OpenCode session drover can see and the phone can drive.',
+        load: () => import('./opencode'),
+    },
+    {
+        name: 'cursor',
+        summary: 'A Cursor agent session, managed like a Claude Code one.',
+        load: () => import('./cursor'),
+    },
+    {
+        name: 'pi',
+        summary: 'A pi session drover can see and the phone can drive. The local-model harness.',
+        load: () => import('./pi'),
+    },
+    {
+        name: 'clone',
+        summary: 'Seed a NEW session in another harness with this one\'s conversation. A flip moves accounts; a clone crosses harnesses.',
+        load: () => import('./clone'),
+    },
+    {
+        name: 'pick-cursor-chat',
+        summary: 'Pick a Cursor chat in this directory to resume. The id on stdout, the list on stderr.',
+        load: () => import('./pick-cursor-chat'),
+    },
+    {
+        name: 'pick-pi-model',
+        summary: 'Pick a model pi actually reports, by lookup against `pi --list-models`. Never free text.',
+        load: () => import('./pick-pi-model'),
+    },
+    {
+        name: 'pick-pi-session',
+        summary: 'Pick a pi session to resume, for this project.',
+        load: () => import('./pick-pi-session'),
+    },
 ];
 
 /** Is this a verb the node CLI carries? */
