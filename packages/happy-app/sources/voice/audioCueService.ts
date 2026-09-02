@@ -3,6 +3,7 @@ import { resolveAudioCues } from '@/sync/settings';
 import { gatesForSession } from '@/sync/droverGates';
 import { sessionDotFacts, sessionDotState } from '@/components/sessionDot';
 import { isLiveStatusFresh, summarizeLiveStatus } from '@/utils/liveStatus';
+import { agentLabelFrom } from '@/utils/agentLabel';
 import type { LiveStatus } from '@/utils/liveStatus';
 import type { Session } from '@/sync/storageTypes';
 import type { Message } from '@/sync/typesMessage';
@@ -238,7 +239,18 @@ class AudioCueService {
                 this.titles.reset();
             }
             const resolved = settings();
-            const decision = this.titles.observe(message, resolved);
+            // The agent's name for an envelope's id (DROVE-392), off the
+            // same two sources the card reads: the live tree, then the
+            // transcript's own Agent tool call. Asked only when a user turn
+            // turns out to be an envelope, which is rare.
+            const decision = this.titles.observe(message, resolved, (agentId) => {
+                const state = storage.getState();
+                return agentLabelFrom(
+                    state.sessions[sessionId]?.metadata?.liveStatus?.agents,
+                    state.sessionMessages[sessionId]?.messages,
+                    agentId,
+                );
+            });
             for (const event of decision.events) this.mixer.event(event);
             if (decision.events.length > 0) this.mixer.tick();
             return resolved.on ? decision.title : null;

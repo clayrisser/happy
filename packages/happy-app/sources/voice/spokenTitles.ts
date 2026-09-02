@@ -1,6 +1,13 @@
 import type { Message, ToolCall } from '@/sync/typesMessage';
 import type { AudioCueId } from './audioCues';
 import type { AudioCues } from '@/sync/settings';
+import {
+    envelopePreview,
+    parseUserEnvelope,
+    shortAgentId,
+    taskPreview,
+    taskStatusWord,
+} from '@/utils/userEnvelope';
 
 /**
  * The third thing read-aloud says (DROVE-112).
@@ -73,10 +80,63 @@ const nothing: TitleDecision = { events: [], title: null };
 /** Long enough to be useful, short enough that it is still a footnote. */
 const titleLimit = 80;
 
-function trim(text: string): string {
+/**
+ * A message from an agent is a report, not a tool's name, so it gets twice
+ * the room before the cut. Still a footnote: the whole report is on the card.
+ */
+export const envelopeTitleLimit = 160;
+
+function trim(text: string, limit = titleLimit): string {
     const clean = text.replace(/\s+/g, ' ').trim();
-    if (clean.length <= titleLimit) return clean;
-    return `${clean.slice(0, titleLimit).replace(/\s\S*$/, '')}…`;
+    if (clean.length <= limit) return clean;
+    return `${clean.slice(0, limit).replace(/\s\S*$/, '')}…`;
+}
+
+/** The agent's name for an id, or null when nothing on the phone knows it. */
+export type AgentLabelFor = (agentId: string) => string | null;
+
+/**
+ * What an injected user turn is worth out loud (DROVE-392), or null.
+ *
+ * The reader never reads a user turn as prose, so the tag was never SPOKEN;
+ * what was missing is the news. A subagent reporting in is the event Clay
+ * most wants to hear about eyes-free, so it is said the way an agent spawn
+ * is (`speakAgentTitles`): "message from <label>" and the report's first
+ * line. A background agent stopping is "<label> finished" and what it said.
+ * The tag, the lead line and the harness paragraph are never in the string,
+ * because the parser hands over parts and this file only ever reads parts.
+ *
+ * A reminder and a skill receipt are the harness talking to the model, and
+ * the phone's own relayed message is Clay's, so those three say nothing.
+ */
+export function spokenEnvelopeTitle(
+    text: string,
+    settings: Required<AudioCues>,
+    labelFor?: AgentLabelFor,
+): string | null {
+    if (!settings.speakTitles || !settings.speakAgentTitles) return null;
+    const envelope = parseUserEnvelope(text);
+    if (!envelope) return null;
+    switch (envelope.kind) {
+        case 'agent-message': {
+            const label = labelFor?.(envelope.from) ?? shortAgentId(envelope.from);
+            return trim(`message from ${label}. ${envelopePreview(envelope.body)}`, envelopeTitleLimit);
+        }
+        case 'cross-session-message':
+            if (!envelope.peer) return null;
+            return trim(`message from ${envelope.fromName}. ${envelopePreview(envelope.body)}`, envelopeTitleLimit);
+        case 'task-notification': {
+            const single = envelope.taskIds.length === 1 ? envelope.taskIds[0] : null;
+            const label = single
+                ? labelFor?.(single) ?? envelope.name ?? shortAgentId(single)
+                : envelope.name ?? `${envelope.taskIds.length} agents`;
+            const preview = taskPreview(envelope);
+            const outcome = `${label} ${taskStatusWord(envelope.status)}`;
+            return trim(preview.length > 0 ? `${outcome}. ${preview}` : outcome, envelopeTitleLimit);
+        }
+        default:
+            return null;
+    }
 }
 
 /** Task and Agent are the same tool under two names, as knownTools has it. */
@@ -153,13 +213,17 @@ export class SpokenTitleTracker {
      * What this message is worth. Called once per message per delivery; the
      * `seen` map is what makes a second delivery of the same call silent.
      */
-    observe(message: Message, settings: Required<AudioCues>): TitleDecision {
+    observe(message: Message, settings: Required<AudioCues>, labelFor?: AgentLabelFor): TitleDecision {
         if (message.kind === 'user-text') {
             // A new turn ends whatever run was open, and owes a reply cue.
             this.spokenInRun = 0;
             this.inRun = false;
             this.repliedInTurn = false;
-            return nothing;
+            // An injected envelope is a user turn to the state above and a
+            // line to say to the ear (DROVE-392). No cue: the agent's own
+            // finish sound already rode its tool call (DROVE-115).
+            const title = typeof message.text === 'string' ? spokenEnvelopeTitle(message.text, settings, labelFor) : null;
+            return title === null ? nothing : { events: [], title };
         }
         if (message.kind === 'agent-text') {
             // Prose between two tool calls is what makes them two runs, which
