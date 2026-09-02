@@ -12,11 +12,11 @@
 #   - the owner's session is invisible to the guest until granted: empty list,
 #     404 read, a silent socket;
 #   - the owner unwraps the session key with its box secret key, re-wraps it
-#     to the guest's box public key and grants read; the guest's list holds
+#     to the guest's box public key and grants view; the guest's list holds
 #     exactly that session with the re-wrapped bytes as dataEncryptionKey,
 #     the ciphertext it reads decrypts to the fixture with that key, and a
 #     message sent after the grant reaches its socket;
-#   - read cannot post (403); answer can, and the CLI's socket hears it;
+#   - view cannot post (403); send can, and the CLI's socket hears it;
 #   - a legacy session (no data key) cannot be granted (409);
 #   - the database holds the re-wrapped bytes and never the plaintext key;
 #   - after revoke the guest sees nothing again.
@@ -250,32 +250,32 @@ pg() {
 }
 
 @test "a guest cannot grant, list grants, or grant to itself" {
-    run client grant guest alpha owner read
+    run client grant guest alpha owner view
     [ "$(printf '%s' "$output" | jq -r .status)" = "403" ]
     [ "$(printf '%s' "$output" | jq -r .body.error)" = "guest-account" ]
     run client grants guest alpha
     [ "$(printf '%s' "$output" | jq -r .status)" = "403" ]
-    run client grant owner alpha owner read
+    run client grant owner alpha owner view
     [ "$(printf '%s' "$output" | jq -r .status)" = "400" ]
     [ "$(printf '%s' "$output" | jq -r .body.error)" = "cannot-grant-to-self" ]
 }
 
 @test "a malformed wrapped key and an unknown grantee are refused" {
     sid=$(state session-alpha .id)
-    run client http owner POST "/v1/sessions/$sid/grants" "{\"granteeContentPublicKey\":\"$(state guest .boxPublicKey)\",\"wrappedKey\":\"AAAA\",\"role\":\"read\"}"
+    run client http owner POST "/v1/sessions/$sid/grants" "{\"granteeContentPublicKey\":\"$(state guest .boxPublicKey)\",\"wrappedKey\":\"AAAA\",\"role\":\"view\"}"
     [ "$(printf '%s' "$output" | jq -r .status)" = "400" ]
     [ "$(printf '%s' "$output" | jq -r .body.error)" = "wrapped-key-malformed" ]
     wrapped=$(state wrapped-alpha-guest .wrappedKey)
     stranger=$(node -e 'process.stdout.write(require("crypto").randomBytes(32).toString("base64"))')
-    run client http owner POST "/v1/sessions/$sid/grants" "{\"granteeContentPublicKey\":\"$stranger\",\"wrappedKey\":\"$wrapped\",\"role\":\"read\"}"
+    run client http owner POST "/v1/sessions/$sid/grants" "{\"granteeContentPublicKey\":\"$stranger\",\"wrappedKey\":\"$wrapped\",\"role\":\"view\"}"
     [ "$(printf '%s' "$output" | jq -r .status)" = "404" ]
     [ "$(printf '%s' "$output" | jq -r .body.error)" = "grantee-not-found" ]
 }
 
-@test "the owner grants read by the guest's content key" {
-    run client grant owner alpha guest read
+@test "the owner grants view by the guest's content key" {
+    run client grant owner alpha guest view
     [ "$(printf '%s' "$output" | jq -r .status)" = "200" ]
-    [ "$(printf '%s' "$output" | jq -r .body.grant.role)" = "read" ]
+    [ "$(printf '%s' "$output" | jq -r .body.grant.role)" = "view" ]
     [ "$(printf '%s' "$output" | jq -r .body.grant.granteeAccountId)" = "$(state guest .accountId)" ]
     [ "$(printf '%s' "$output" | jq -r .body.grant.grantedById)" = "$(state owner .accountId)" ]
     run client grants owner alpha
@@ -287,7 +287,7 @@ pg() {
     run client list guest
     [ "$(printf '%s' "$output" | jq -r '.sessions | length')" = "1" ]
     [ "$(printf '%s' "$output" | jq -r '.sessions[0].id')" = "$(state session-alpha .id)" ]
-    [ "$(printf '%s' "$output" | jq -r '.sessions[0].role')" = "read" ]
+    [ "$(printf '%s' "$output" | jq -r '.sessions[0].role')" = "view" ]
     [ "$(printf '%s' "$output" | jq -r '.sessions[0].ownerId')" = "$(state owner .accountId)" ]
     [ "$(printf '%s' "$output" | jq -r '.sessions[0].dataEncryptionKey')" = "$(state wrapped-alpha-guest .wrappedKey)" ]
     # The owner's own row still carries the owner's wrap, not the guest's.
@@ -314,24 +314,24 @@ pg() {
     [ "$(printf '%s' "$output" | jq -r .guestReceived)" = "true" ]
 }
 
-@test "read cannot post; answer can, and the CLI's socket hears it" {
-    run client post guest alpha "$FIXTURE-guest-read" 2000
+@test "view cannot post; send can, and the CLI's socket hears it" {
+    run client post guest alpha "$FIXTURE-guest-view" 2000
     [ "$(printf '%s' "$output" | jq -r .status)" = "403" ]
-    [ "$(printf '%s' "$output" | jq -r .body.error)" = "read-only-grant" ]
+    [ "$(printf '%s' "$output" | jq -r .body.error)" = "view-only-grant" ]
     # Granting again replaces the role; no second row.
-    run client grant owner alpha guest answer id
+    run client grant owner alpha guest send id
     [ "$(printf '%s' "$output" | jq -r .status)" = "200" ]
-    [ "$(printf '%s' "$output" | jq -r .body.grant.role)" = "answer" ]
+    [ "$(printf '%s' "$output" | jq -r .body.grant.role)" = "send" ]
     run client grants owner alpha
     [ "$(printf '%s' "$output" | jq -r '.body.grants | length')" = "1" ]
-    [ "$(printf '%s' "$output" | jq -r '.body.grants[0].role')" = "answer" ]
-    run client post guest alpha "$FIXTURE-guest-answer" 5000
+    [ "$(printf '%s' "$output" | jq -r '.body.grants[0].role')" = "send" ]
+    run client post guest alpha "$FIXTURE-guest-send" 5000
     [ "$(printf '%s' "$output" | jq -r .status)" = "200" ]
     [ "$(printf '%s' "$output" | jq -r .cliReceived)" = "true" ]
     # And the owner reads the guest's message back under the session key.
     run client read owner alpha
     ciphertext=$(printf '%s' "$output" | jq -r '.messages[-1].c')
-    run client decrypt owner alpha "$ciphertext" "$FIXTURE-guest-answer"
+    run client decrypt owner alpha "$ciphertext" "$FIXTURE-guest-send"
     [ "$status" -eq 0 ]
 }
 
@@ -348,7 +348,7 @@ pg() {
     run client create-session owner legacy old
     [ "$status" -eq 0 ]
     [ "$(printf '%s' "$output" | jq -r .variant)" = "legacy" ]
-    run client grant owner old guest read
+    run client grant owner old guest view
     [ "$(printf '%s' "$output" | jq -r .status)" = "409" ]
     [ "$(printf '%s' "$output" | jq -r .body.error)" = "session-not-shareable" ]
     run client list guest

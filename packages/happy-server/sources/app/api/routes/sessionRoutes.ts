@@ -313,7 +313,7 @@ export function sessionRoutes(app: Fastify) {
         const { sessionId } = request.params;
 
         // Owner or a read grant; anything else is not found.
-        const access = await requireSessionRole(userId, sessionId, 'read');
+        const access = await requireSessionRole(userId, sessionId, 'view');
         if (!access) {
             return reply.code(404).send({ error: 'Session not found' });
         }

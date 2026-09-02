@@ -229,7 +229,7 @@ export function attachmentRoutes(app: Fastify) {
 
         // Owner or a read grant (DROVE-388): a grantee can open what the
         // session shows it, and attachments are part of that.
-        const access = await requireSessionRole(userId, sessionId, 'read');
+        const access = await requireSessionRole(userId, sessionId, 'view');
         if (!access) {
             return reply.code(404).send({ error: 'Session not found' });
         }
@@ -273,7 +273,7 @@ export function attachmentRoutes(app: Fastify) {
         const userId = request.userId;
 
         // Owner or a read grant (DROVE-388).
-        const access = await requireSessionRole(userId, sessionId, 'read');
+        const access = await requireSessionRole(userId, sessionId, 'view');
         if (!access) {
             return reply.code(404).send({ error: 'Session not found' });
         }

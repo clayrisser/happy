@@ -804,6 +804,8 @@ export interface SessionAgentModesPatch {
     remoteControl?: string | null;
 }
 
+export type SessionRole = 'owner' | 'view' | 'send';
+
 export interface Session {
     id: string,
     seq: number,
@@ -813,6 +815,14 @@ export interface Session {
     activeAt: number,
     /** Account-scoped Project linkage supplied beside the encrypted session. */
     projectId?: string | null,
+    /**
+     * What this account may do here (DROVE-388): `owner` for its own
+     * sessions, the grant's role for one it was given. Absent from relays
+     * that predate grants, which is read as owner.
+     */
+    role?: SessionRole,
+    /** The account that owns the session; the caller's own id for its own. */
+    ownerId?: string,
     metadata: Metadata | null,
     metadataVersion: number,
     agentState: AgentState | null,

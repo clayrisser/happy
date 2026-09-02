@@ -10,8 +10,8 @@ import type { Prisma, SessionGrantRole } from "@prisma/client";
  * wrapped bytes THAT CALLER can open and never sees a plaintext key.
  *
  *   owner   everything
- *   answer  read, subscribe, and send messages into the session
- *   read    read and subscribe
+ *   send    view, subscribe, and send messages into the session
+ *   view    view and subscribe
  *
  * Every session route resolves access through here rather than filtering on
  * `accountId: userId` by hand, so a missed check is a missed call to one
@@ -22,7 +22,7 @@ import type { Prisma, SessionGrantRole } from "@prisma/client";
 
 export type SessionRole = 'owner' | SessionGrantRole;
 
-const roleRank: Record<SessionRole, number> = { read: 1, answer: 2, owner: 3 };
+const roleRank: Record<SessionRole, number> = { view: 1, send: 2, owner: 3 };
 
 export function roleAllows(have: SessionRole, need: SessionRole): boolean {
     return roleRank[have] >= roleRank[need];

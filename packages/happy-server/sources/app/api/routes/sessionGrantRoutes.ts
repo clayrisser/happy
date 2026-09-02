@@ -21,13 +21,13 @@ import { isWrappedKeyShaped } from "@/app/session/sessionAccess";
  * session the caller does not own is not found.
  */
 
-const roleSchema = z.enum(['read', 'answer']);
+const roleSchema = z.enum(['view', 'send']);
 
 function grantOnWire(grant: {
     id: string;
     sessionId: string;
     granteeAccountId: string;
-    role: 'read' | 'answer';
+    role: 'view' | 'send';
     grantedById: string;
     createdAt: Date;
     updatedAt: Date;
