@@ -213,6 +213,11 @@ export const droverVerbs: readonly DroverVerb[] = [
         load: () => import('./pick-pi-session'),
     },
     {
+        name: 'trust',
+        summary: "Pre-accept Claude Code's workspace trust, bypass and first-run dialogs, and mirror every directory trusted on ANY account onto all of them.",
+        load: () => import('./trust'),
+    },
+    {
         name: 'status',
         summary: 'Bus health, pending prompts, push delivery, gates, services. Reads only.',
         load: () => import('./status'),
