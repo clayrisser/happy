@@ -217,6 +217,32 @@ import {
  * sentence's own index, and the retry resumes there rather than at the top of
  * the reply. `readAloudOnlyNew.spec.ts` holds the numbers.
  *
+ * A RESTART IS NOT A RESET (DROVE-193). Clay: "why does it start over reading
+ * when I restart the app." He force-quits and reopens constantly, because that
+ * is how every OTA reaches him, and every launch read the reply from the top
+ * again.
+ *
+ * DROVE-226 covers the half where the transcript reaches a FOCUSED reader:
+ * those pages come in as history, marked spoken, and say nothing. The half it
+ * cannot cover is a reply that is still being written. The socket redelivers
+ * that message with more text on it every few hundred milliseconds, and the
+ * count that says which of its sentences have already been queued is
+ * `queuedChunks`, which died with the process. So `already` is 0, every
+ * complete sentence is enqueued fresh, and the reply is read out from its
+ * first word. Same hole, reached from the other side, whenever the fetch lands
+ * before a screen mounts: the history is dropped for want of a focused
+ * session, and the next redelivery arrives live with nothing to dedupe against.
+ *
+ * So the spoken-once invariant is written down. One mark per session, on THIS
+ * device — the phone and the watch are two listeners and keep two positions —
+ * holding the message and the sentence within it that last made a sound.
+ * `focus` reads it, `enqueue` marks everything at or before it spoken, and
+ * from there DROVE-126 does the rest: `skipSpoken` steps over them, they are
+ * still in the timeline so his tap still reaches them, and everything after
+ * the mark is ordinary unread backlog that goes through DROVE-116's catch-up
+ * and jump like any other. `sync/localSettings.ts` holds the shape and the
+ * bound; `readAloudResume.spec.ts` holds the cases.
+ *
  * PAUSE IS A THIRD STATE, not a third way to be off (DROVE-233). `setPaused`
  * stops the voice and moves nothing — not the cursor, not a spoken mark — so a
  * resume is a plain `pump` from where it stood. That makes it neither a START
@@ -423,6 +449,41 @@ export interface ReadAloudOptions {
      * only from his tap — never from a scroll or a page arriving.
      */
     historyFor?: (sessionId: string) => readonly Message[];
+    /**
+     * Where this DEVICE got to in a session, from the launch before
+     * (DROVE-193). Null for a session it has never read.
+     *
+     * Read once, when the focus lands on the session, because that is the one
+     * moment a fresh process has a position and no timeline to hold it in.
+     * Injected like `historyFor` for the same reason: which store the mark
+     * lives in, and that it is device-local rather than account state, is the
+     * app's business and not a queue's.
+     */
+    resumeFrom?: (sessionId: string) => ReadAloudMark | null;
+    /**
+     * A sentence was said out loud, so the mark moves (DROVE-193). Fires only
+     * for a sentence that made a SOUND, and only when it is ahead of the mark
+     * already stored; see `rememberSpoken`.
+     */
+    onSpoke?: (sessionId: string, mark: ReadAloudMark) => void;
+}
+
+/**
+ * The furthest this device has read in a session (DROVE-193).
+ *
+ * A high-water mark, not a cursor: it only ever moves forward, so tapping
+ * back into the history to hear an old paragraph again cannot un-say the
+ * newer ones and make a restart repeat them.
+ *
+ * `key` is the reader's own dedupe key — a message id, or one prefixed
+ * `aside:` / `thinking:` — and `ordinal` is the sentence's position inside
+ * it. The persisted shape adds a write time for the prune and is otherwise
+ * this; see `ReadAloudResumeMarkSchema` in sync/localSettings.ts.
+ */
+export interface ReadAloudMark {
+    key: string;
+    createdAt: number;
+    ordinal: number;
 }
 
 /**
@@ -510,6 +571,18 @@ interface QueuedSentence {
     messageId: string;
     /** That message's createdAt: the one ordering the view and the queue share. */
     createdAt: number;
+    /**
+     * Where this sentence sits inside its message's own stream of sentences
+     * (DROVE-193). What the persisted read position is keyed by, together
+     * with the message id, because a position in the TIMELINE means nothing
+     * to the next launch: that array is rebuilt from whichever pages the
+     * fetch returned.
+     *
+     * Negative means "not a position in the transcript": a sentence borrowed
+     * from a subagent (DROVE-195) belongs to no message of this session, so
+     * it is never written into the mark.
+     */
+    ordinal: number;
     /**
      * It has been handed to the synthesiser once. Never again on the queue's
      * own initiative (DROVE-126). On the sentence rather than in the cursor
@@ -617,6 +690,13 @@ export class ReadAloudReader {
     private readonly onSkip: (() => void) | null;
     private readonly thinkingFor: ((message: Message, sessionId: string) => string | null) | null;
     private readonly historyFor: ((sessionId: string) => readonly Message[]) | null;
+    private readonly resumeFrom: ((sessionId: string) => ReadAloudMark | null) | null;
+    private readonly onSpoke: ((sessionId: string, mark: ReadAloudMark) => void) | null;
+    /**
+     * The focused session's read position from an earlier launch (DROVE-193),
+     * or null. Loaded when the focus lands and consulted only by `enqueue`.
+     */
+    private resumeAt: ReadAloudMark | null = null;
     private readonly interruptListeners = new Set<ReadAloudInterruptListener>();
     private readonly playheadListeners = new Set<ReadAloudPlayheadListener>();
     private readonly transportListeners = new Set<() => void>();
@@ -820,6 +900,8 @@ export class ReadAloudReader {
         this.onSkip = options.onSkip ?? null;
         this.thinkingFor = options.thinkingFor ?? null;
         this.historyFor = options.historyFor ?? null;
+        this.resumeFrom = options.resumeFrom ?? null;
+        this.onSpoke = options.onSpoke ?? null;
     }
 
     get isSpeaking(): boolean {
@@ -1309,6 +1391,9 @@ export class ReadAloudReader {
             messageId: at.messageId,
             createdAt: at.createdAt,
             spoken: false,
+            // Not a position in THIS session's transcript (DROVE-193): it is
+            // a subagent's row, so it never writes a read position.
+            ordinal: -1,
             aside: false,
             thinking: false,
         }));
@@ -1387,6 +1472,12 @@ export class ReadAloudReader {
         }
         this.holdFocused();
         this.focused = sessionId;
+        // Where this DEVICE got to in the session it is arriving at
+        // (DROVE-193). Read HERE, and only here, because focus is the one
+        // moment a launch that has no timeline yet has a position: every
+        // ingest below and after it is gated on being the focused session,
+        // so nothing can reach `enqueue` before this line has run.
+        this.resumeAt = sessionId !== null && this.resumeFrom !== null ? this.resumeFrom(sessionId) : null;
         // The voice arrives switched on or off according to the session it
         // arrived at (DROVE-297). `holdFocused` has already run, so it stashed
         // the OUTGOING session against the outgoing answer.
@@ -1658,7 +1749,7 @@ export class ReadAloudReader {
             const sentences = pending !== null ? [...complete, pending] : complete;
             const already = this.queuedChunks.get(message.id) ?? 0;
             if (sentences.length <= already) continue;
-            this.remember(sentences.slice(already), message.id, message.createdAt);
+            this.remember(sentences.slice(already), message.id, message.createdAt, already);
             this.queuedChunks.set(message.id, complete.length);
         }
     }
@@ -1682,7 +1773,7 @@ export class ReadAloudReader {
      * The cursor is a position in the array, so material inserted at or before
      * it moves with it. Nothing about the reading position changes.
      */
-    private remember(sentences: string[], messageId: string, createdAt: number): void {
+    private remember(sentences: string[], messageId: string, createdAt: number, baseOrdinal: number): void {
         if (sentences.length === 0) return;
         let at = this.timeline.length;
         for (let i = 0; i < this.timeline.length; i++) {
@@ -1691,13 +1782,14 @@ export class ReadAloudReader {
                 break;
             }
         }
-        const remembered = sentences.map((text) => ({
+        const remembered = sentences.map((text, i) => ({
             text,
             words: countWords(text),
             turn: this.turn,
             messageId,
             createdAt,
             spoken: true,
+            ordinal: baseOrdinal + i,
             aside: false,
             thinking: false,
         }));
@@ -1806,7 +1898,7 @@ export class ReadAloudReader {
                     // A held tail is over the moment something else lands, and
                     // it has to be said BEFORE the title or the two cross.
                     if (this.flushTails((id) => id !== message.id)) added = true;
-                    this.enqueue([aside], this.turn, message.id, message.createdAt, true);
+                    this.enqueue([aside], this.turn, message.id, message.createdAt, 0, true);
                     added = true;
                 }
             }
@@ -1829,7 +1921,7 @@ export class ReadAloudReader {
                     const sentences = pending !== null ? [...complete, pending] : complete;
                     if (sentences.length > already) {
                         if (this.flushTails((id) => id !== message.id)) added = true;
-                        this.enqueue(sentences.slice(already), this.turn, message.id, message.createdAt, false, true);
+                        this.enqueue(sentences.slice(already), this.turn, message.id, message.createdAt, already, false, true);
                         this.queuedChunks.set(thinkingKey, sentences.length);
                         added = true;
                     }
@@ -1850,7 +1942,7 @@ export class ReadAloudReader {
             const { complete, pending } = chunkStreamed(prose, false);
             const already = this.queuedChunks.get(message.id) ?? 0;
             if (complete.length > already) {
-                this.enqueue(complete.slice(already), this.turn, message.id, message.createdAt);
+                this.enqueue(complete.slice(already), this.turn, message.id, message.createdAt, already);
                 this.queuedChunks.set(message.id, complete.length);
                 added = proseAdded = true;
             }
@@ -1911,7 +2003,7 @@ export class ReadAloudReader {
                 for (const [id, tail] of [...state.pendingTails]) {
                     if (id === message.id) continue;
                     state.pendingTails.delete(id);
-                    this.pushHeld(state, [tail.text], tail.turn, id, tail.createdAt);
+                    this.pushHeld(state, [tail.text], tail.turn, id, tail.createdAt, state.queuedChunks.get(id) ?? 0);
                     state.queuedChunks.set(id, (state.queuedChunks.get(id) ?? 0) + 1);
                 }
                 state.latestCreatedAt = message.createdAt;
@@ -1920,7 +2012,7 @@ export class ReadAloudReader {
             const { complete, pending } = chunkStreamed(stripToSpeakableProse(message.text), false);
             const already = state.queuedChunks.get(message.id) ?? 0;
             if (complete.length > already) {
-                this.pushHeld(state, complete.slice(already), state.turn, message.id, message.createdAt);
+                this.pushHeld(state, complete.slice(already), state.turn, message.id, message.createdAt, already);
                 state.queuedChunks.set(message.id, complete.length);
             }
             if (pending !== null) {
@@ -1938,15 +2030,17 @@ export class ReadAloudReader {
         turn: number,
         messageId: string,
         createdAt: number,
+        baseOrdinal: number,
     ): void {
-        for (const text of sentences) {
+        for (let i = 0; i < sentences.length; i++) {
             state.timeline.push({
-                text,
-                words: countWords(text),
+                text: sentences[i],
+                words: countWords(sentences[i]),
                 turn,
                 messageId,
                 createdAt,
                 spoken: false,
+                ordinal: baseOrdinal + i,
                 aside: false,
                 thinking: false,
             });
@@ -2073,23 +2167,103 @@ export class ReadAloudReader {
         turn: number,
         messageId: string,
         createdAt: number,
+        baseOrdinal: number,
         aside = false,
         thinking = false,
     ): void {
         if (sentences.length === 0) return;
         this.abandonTurnsBefore(turn);
-        for (const text of sentences) {
+        for (let i = 0; i < sentences.length; i++) {
+            const ordinal = baseOrdinal + i;
             this.timeline.push({
-                text,
-                words: countWords(text),
+                text: sentences[i],
+                words: countWords(sentences[i]),
                 turn,
                 messageId,
                 createdAt,
-                spoken: false,
+                // ALREADY SAID IN AN EARLIER RUN OF THE APP (DROVE-193), and
+                // therefore spoken in exactly the sense DROVE-126 means. It
+                // goes in the timeline rather than being dropped, for
+                // `remember`'s reason: a sentence that is not in the timeline
+                // is one a tap cannot reach, and his tap is still the one way
+                // reading may start anywhere but the newest thing.
+                spoken: this.alreadyRead(createdAt, this.markKey(messageId, aside, thinking), ordinal),
+                ordinal,
                 aside,
                 thinking,
             });
         }
+    }
+
+    /**
+     * The key a sentence's read position is filed under (DROVE-193).
+     *
+     * The SAME key `queuedChunks` dedupes by, deliberately: a message can
+     * carry prose, a spoken title and a thought, each with its own stream of
+     * sentences and its own ordinal, so the message id alone would have a
+     * title at ordinal 0 mask the first sentence of the reply.
+     */
+    private markKey(messageId: string, aside: boolean, thinking: boolean): string {
+        if (aside) return `aside:${messageId}`;
+        if (thinking) return `thinking:${messageId}`;
+        return messageId;
+    }
+
+    /**
+     * Was this sentence already said, in an earlier run of the app
+     * (DROVE-193)?
+     *
+     * Two clauses, and the first is the one that does the work. Anything
+     * OLDER than the mark is behind the reading position by the only ordering
+     * the timeline has, so it was said, or was history and never going to be
+     * said; either way it is not new. The second clause is the same message
+     * the mark sits in, where the ordinal decides.
+     *
+     * A message older than the mark that has since GROWN is the case this
+     * gets deliberately wrong, and it is wrong in the safe direction: with
+     * `queuedChunks` gone there is no way to tell its new sentences from its
+     * old ones, and Clay's complaint is that he hears things twice, so the
+     * tie goes to silence. Its sentences are in the timeline and a tap still
+     * reads them.
+     */
+    private alreadyRead(createdAt: number, key: string, ordinal: number): boolean {
+        const mark = this.resumeAt;
+        if (mark === null) return false;
+        if (createdAt < mark.createdAt) return true;
+        return createdAt === mark.createdAt && key === mark.key && ordinal >= 0 && ordinal <= mark.ordinal;
+    }
+
+    /**
+     * A sentence made a sound, so this device's read position moves
+     * (DROVE-193).
+     *
+     * ON A SOUND, not on the hand-over. DROVE-189 proved those are different:
+     * `speak` REJECTS when the audio session refuses it, the sentence made no
+     * sound and is still owed, and a mark written at hand-over would have the
+     * next launch skip a sentence he never heard. So this hangs off the same
+     * resolved branch that clears `refusals`.
+     *
+     * The cost is a sentence cut mid-word — by a pause, a tap, or the app
+     * being force-quit while it was talking — which is not recorded and is
+     * said again on the next launch. That is the right side to be wrong on:
+     * he heard half of it, and hearing that one sentence again is the
+     * opposite of the whole transcript starting over.
+     *
+     * FORWARD ONLY. `alreadyRead` is the test, so a tap back into the history
+     * re-reads an old paragraph without dragging the mark back with it and
+     * making the next launch repeat everything after it.
+     */
+    private rememberSpoken(at: QueuedSentence | null): void {
+        if (at === null || this.onSpoke === null) return;
+        if (this.focused === null) return;
+        // Borrowed from a subagent (DROVE-195): it belongs to no message of
+        // this session, so it is no position in this session's transcript.
+        if (at.ordinal < 0) return;
+        const key = this.markKey(at.messageId, at.aside, at.thinking);
+        if (this.alreadyRead(at.createdAt, key, at.ordinal)) return;
+        const mark: ReadAloudMark = { key, createdAt: at.createdAt, ordinal: at.ordinal };
+        this.resumeAt = mark;
+        this.onSpoke(this.focused, mark);
     }
 
     /**
@@ -2164,7 +2338,7 @@ export class ReadAloudReader {
         for (const [id, tail] of [...this.pendingTails]) {
             if (!where(id)) continue;
             this.pendingTails.delete(id);
-            this.enqueue([tail.text], tail.turn, id, tail.createdAt);
+            this.enqueue([tail.text], tail.turn, id, tail.createdAt, this.queuedChunks.get(id) ?? 0);
             this.queuedChunks.set(id, (this.queuedChunks.get(id) ?? 0) + 1);
             flushed = true;
         }
@@ -2471,6 +2645,7 @@ export class ReadAloudReader {
                     return;
                 }
                 this.refusals = 0;
+                this.rememberSpoken(at);
                 this.pump();
             });
     }
