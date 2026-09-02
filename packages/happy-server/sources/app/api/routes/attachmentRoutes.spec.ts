@@ -37,7 +37,14 @@ const {
         ) ?? null;
     });
 
-    const dbMock = { session: { findFirst: sessionFindFirst } };
+    // resolveSessionAccess (DROVE-388) reads the row by id with the caller's
+    // grants; every session here is owned outright, so no grants.
+    const sessionFindUnique = vi.fn(async (args: any) => {
+        const s = state.sessions.find((row) => row.id === args?.where?.id);
+        return s ? { ...s, dataEncryptionKey: null, grants: [] } : null;
+    });
+
+    const dbMock = { session: { findFirst: sessionFindFirst, findUnique: sessionFindUnique } };
 
     const filesMock = {
         s3client: {
@@ -109,6 +116,9 @@ async function createApp() {
         }
         request.userId = userId;
     });
+    // Every user in these specs is an owner; the guest gate itself (DROVE-388)
+    // is proven by deploy/integration-tests/shared-sessions.bats.
+    typed.decorate("requireOwner", async () => {});
 
     // Octet-stream parser is normally registered in api.ts startApi() — mirror
     // that here so PUT bodies arrive as Buffer in the handler.

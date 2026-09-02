@@ -83,6 +83,9 @@ async function createApp() {
         }
         request.userId = userId;
     });
+    // Every user in these specs is an owner; the guest gate itself (DROVE-388)
+    // is proven by deploy/integration-tests/shared-sessions.bats.
+    typed.decorate("requireOwner", async () => {});
     machinesRoutes(typed);
     await typed.ready();
     return typed;

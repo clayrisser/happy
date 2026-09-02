@@ -177,6 +177,9 @@ async function createApp() {
         if (typeof userId !== 'string') return reply.code(401).send({ error: 'Unauthorized' });
         request.userId = userId;
     });
+    // Every user in these specs is an owner; the guest gate itself (DROVE-388)
+    // is proven by deploy/integration-tests/shared-sessions.bats.
+    typed.decorate('requireOwner', async () => {});
     app.addContentTypeParser('application/octet-stream', { parseAs: 'buffer' }, (_req, body, done) => done(null, body));
     projectRoutes(typed);
     await typed.ready();

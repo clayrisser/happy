@@ -99,6 +99,16 @@ const {
         return selectFields(row as unknown as Record<string, unknown>, args?.select) as SessionRecord;
     });
 
+    // resolveSessionAccess (DROVE-388) reads the row by id with the caller's
+    // grants; every session here is owned outright, so no grants.
+    const sessionFindUnique = vi.fn(async (args: any) => {
+        const row = state.sessions.find((session) => session.id === args?.where?.id);
+        if (!row) {
+            return null;
+        }
+        return { id: row.id, accountId: row.accountId, dataEncryptionKey: null, grants: [] };
+    });
+
     const sessionUpdate = vi.fn(async (args: any) => {
         const session = state.sessions.find((item) => item.id === args?.where?.id);
         if (!session) {
@@ -185,6 +195,7 @@ const {
     const dbMock = {
         session: {
             findFirst: sessionFindFirst,
+            findUnique: sessionFindUnique,
             update: sessionUpdate
         },
         account: {
@@ -248,6 +259,9 @@ async function createApp() {
         }
         request.userId = userId;
     });
+    // Every user in these specs is an owner; the guest gate itself (DROVE-388)
+    // is proven by deploy/integration-tests/shared-sessions.bats.
+    typed.decorate("requireOwner", async () => {});
 
     v3SessionRoutes(typed);
     await typed.ready();
