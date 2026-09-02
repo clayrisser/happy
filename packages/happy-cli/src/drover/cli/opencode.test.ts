@@ -17,7 +17,10 @@ import { describe, expect, it } from 'vitest';
 
 import { run, usage, type OpencodeIo } from './opencode';
 
-const drover = '/Users/clayrisser/Projects/bitspur/cattle-drover';
+// DROVER_DIR, so the differential runs against the checkout this lane pairs
+// with (the DROVE-377 launcher lives on a lane until it merges), and falls back
+// to the main checkout the way every other test here does.
+const drover = process.env.DROVER_DIR || '/Users/clayrisser/Projects/bitspur/cattle-drover';
 const shellOpencode = join(drover, 'libexec', 'drover-opencode');
 
 interface Recorded { lines: string[]; errs: string[]; bridges: string[][]; tui: string[][] }
@@ -37,7 +40,12 @@ function fakeIo(over: Partial<OpencodeIo> = {}): OpencodeIo & Recorded {
         readable: () => true,
         freePort: async () => 40404,
         startBridge: (script: string, argv: string[]) => { bridges.push([script, ...argv]); },
-        execTui: (bin: string, argv: string[]) => { tui.push([bin, ...argv]); return 0; },
+        // The pid a real spawn would report, so the bridge argv can be asserted.
+        execTui: async (bin: string, argv: string[], _env: unknown, started?: (pid: number) => void) => {
+            tui.push([bin, ...argv]);
+            started?.(4242);
+            return 0;
+        },
         enter: async () => 0,
         lines,
         errs,
@@ -119,6 +127,12 @@ describe('drover opencode', () => {
         expect(io.bridges[0][0]).toBe('/d/adapters/opencode-bridge.mjs');
         expect(io.bridges[0]).toContain('http://127.0.0.1:4321');
         expect(io.bridges[0]).toContain('%7');
+        // THE TUI'S PID, so the bridge can reap a TUI that outlives its pane
+        // (DROVE-377). Without it the bridge's only evidence of life is the
+        // API answering, and an orphan answers just fine.
+        const at = io.bridges[0].indexOf('--tui-pid');
+        expect(at).toBeGreaterThan(0);
+        expect(io.bridges[0][at + 1]).toBe('4242');
         expect(io.bridges[0].slice(-2)).toEqual(['--seed', '/tmp/s.md']);
 
         // The pane is the TUI and nothing else, and drover's port went with it.
