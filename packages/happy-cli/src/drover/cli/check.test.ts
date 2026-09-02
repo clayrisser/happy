@@ -588,10 +588,14 @@ describe.skipIf(!haveTree || !existsSync(shellVerb))('drover check — prints wh
                     .join('\n')),
             },
             {
+                // STATUSLINE, and that is the point: it is the one file that
+                // stays shell FOREVER (Clay's ruling — tmux re-runs it every 5s
+                // per client). A fixture built on any other shell row rots the
+                // day that row flips.
                 name: 'a shell-owned verb that IS routed',
                 apply: () => writeFileSync(drover, pristine.replace(
-                    '\trun "$libexec/drover-settings" "$@"',
-                    '\trun_node settings "$@" || :\n\trun "$libexec/drover-settings" "$@"',
+                    '\trun "$libexec/drover-statusline" "$@"',
+                    '\trun_node statusline "$@" || :\n\trun "$libexec/drover-statusline" "$@"',
                 )),
             },
         ];
