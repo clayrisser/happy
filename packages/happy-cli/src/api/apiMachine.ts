@@ -19,6 +19,7 @@ import { registerListWorktreesHandler } from '@/daemon/listWorktrees';
 import { registerMachineAccountsHandlers } from '@/drover/machineAccounts';
 import { registerMachineMcpsHandlers } from '@/drover/machineMcps';
 import { registerMachineFilesHandlers } from '@/drover/machineFiles';
+import { registerMachineProvidersHandlers } from '@/drover/machineProviders';
 import { registerDroverDemoPushHandler } from '@/drover/demo';
 import { PushNotificationClient } from './pushNotifications';
 import { detectCLIAvailability, CLIAvailability } from '@/utils/detectCLI';
@@ -175,6 +176,14 @@ export class ApiMachineClient {
         // time and the same reason: the worktree Clay tapped may have no
         // session in it to ask, and the reading is the drover's anyway.
         registerMachineFilesHandlers(this.rpcHandlerManager);
+
+        // And the WRITE half of that view: adding and configuring OpenCode's
+        // own custom providers (DROVE-276). Beside the read for the same
+        // reason it is on the daemon at all -- a provider belongs to the
+        // machine -- and it carries no credential, which is what let it ship
+        // while DROVE-304's plaintext log paths are still open. The phone
+        // sends the NAME of an environment variable; the key stays here.
+        registerMachineProvidersHandlers(this.rpcHandlerManager);
         // The channel demo's test push (DROVE-75). On the daemon for the same
         // reason the policy handler is: the phone wants to prove the push path
         // while nothing is running. Its own push client rather than the

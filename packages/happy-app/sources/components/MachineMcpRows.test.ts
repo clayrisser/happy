@@ -412,10 +412,30 @@ describe('the model providers, which is what Clay runs OpenCode FOR (DROVE-296)'
         expect(titles(tree)).toContain('Read just now');
     });
 
-    it('presses nothing but the two disclosures', () => {
+    it('presses nothing but the two disclosures when no editor is wired', () => {
         const tree = render({ harness: oc(), expanded: true, providersExpanded: true });
         const pressable = items(tree).filter((p) => typeof p.onPress === 'function');
         expect(pressable.map((p) => p.title)).toEqual(['MCP servers', 'Model providers']);
+    });
+
+    it('offers the editor only when the screen has somewhere to send you', () => {
+        // DROVE-276. The prop is optional so the machine detail screen can
+        // render this without a route for it, and so a harness that takes no
+        // provider list never draws the row. Absent, the section is exactly the
+        // read DROVE-296 shipped -- which the test above still holds.
+        const onEditProviders = () => {};
+        const tree = render({ harness: oc(), providersExpanded: true, onEditProviders });
+        const row = items(tree).find((p) => p.title === 'Add a provider');
+        expect(row).toBeTruthy();
+        expect(row!.onPress).toBe(onEditProviders);
+        // One fragment, no period: the copy density of every other subtitle on
+        // this screen.
+        expect(row!.subtitle).toBe('The key stays on the computer');
+    });
+
+    it('keeps the editor row behind the disclosure, like every other provider row', () => {
+        const tree = render({ harness: oc(), providersExpanded: false, onEditProviders: () => {} });
+        expect(titles(tree)).not.toContain('Add a provider');
     });
 });
 

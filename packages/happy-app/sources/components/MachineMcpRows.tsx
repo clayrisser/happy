@@ -72,6 +72,15 @@ export interface MachineMcpRowsProps {
      */
     providersExpanded?: boolean;
     onToggleProviders?: () => void;
+    /**
+     * Open the provider editor for this machine (DROVE-276).
+     *
+     * Optional, so the machine detail screen can render this component without
+     * offering an edit it has no route for, and so a harness that takes no
+     * provider list never draws the row. When it is absent the whole section
+     * stays exactly what DROVE-296 shipped: a read.
+     */
+    onEditProviders?: () => void;
     /** Injectable so the clock is not a reason a test flakes. */
     now?: number;
 }
@@ -95,7 +104,7 @@ function divergenceLine(scope: McpScope): string {
 }
 
 export function MachineMcpRows(props: MachineMcpRowsProps) {
-    const { harness, readAt, expanded, onToggle, providersExpanded, onToggleProviders, now } = props;
+    const { harness, readAt, expanded, onToggle, providersExpanded, onToggleProviders, onEditProviders, now } = props;
     const { theme } = useUnistyles();
 
     const base = harness.scopes[0];
@@ -157,6 +166,23 @@ export function MachineMcpRows(props: MachineMcpRowsProps) {
                     subtitleLines={0}
                     icon={<Ionicons name="ellipse-outline" size={29} color={grey} />}
                     showChevron={false}
+                />
+            )}
+            {/*
+              * The way in to editing them (DROVE-276), at the BOTTOM of the
+              * open list rather than beside the heading. The heading's job is
+              * still the count -- that is what this screen answers first --
+              * and a chevron there would compete with the disclosure's own.
+              * Absent when the screen has nowhere to send you, so this
+              * component still renders as the read DROVE-296 shipped.
+              */}
+            {providersExpanded && onEditProviders && (
+                <Item
+                    title="Add a provider"
+                    subtitle="The key stays on the computer"
+                    subtitleLines={0}
+                    icon={<Ionicons name="add-circle-outline" size={29} color={blue} />}
+                    onPress={onEditProviders}
                 />
             )}
             {providersExpanded && providers.providers.map((provider) => (

@@ -80,7 +80,7 @@
 
 import * as React from 'react';
 import { Linking, Platform, RefreshControl, View } from 'react-native';
-import { Stack, useLocalSearchParams } from 'expo-router';
+import { Stack, router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { StyleSheet } from 'react-native-unistyles';
 
@@ -472,6 +472,13 @@ export default function AccountsScreen() {
                                 ...prev,
                                 [`${machine.id}:${mh.harness}:providers`]: !prev[`${machine.id}:${mh.harness}:providers`],
                             }))}
+                            /* Editing them is a screen of its own (DROVE-276):
+                               a provider is five fields and a list of models,
+                               and this is a summary. Only OpenCode takes a
+                               provider list, so only OpenCode gets the row. */
+                            onEditProviders={mh.harness === 'opencode'
+                                ? () => router.push(`/settings/opencode-providers?machineId=${machine.id}`)
+                                : undefined}
                         />
                     );
                     // One row, used by every harness section, so a machine that
