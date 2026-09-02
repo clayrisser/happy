@@ -30,10 +30,20 @@ type EnvironmentsModule = {
     setEnvironmentTemplate: (name: string, template: EnvironmentTemplate) => void;
     startEnvironmentServices: (name: string) => Promise<void>;
     stopEnvironment: (name: string) => void;
+    sweepDeadHarnessEnvironments: () => Array<{ name: string; owner: number }>;
+    writeHarnessOwner: (name: string, pid: number) => void;
 };
 
+/**
+ * Loaded once and kept: the stop that runs from a signal handler or the exit
+ * hook cannot await an import, so it needs the module already here
+ * (DROVE-389).
+ */
+let loaded: EnvironmentsModule | undefined;
+
 async function loadEnvironmentManager(): Promise<EnvironmentsModule> {
-    return await import(ENVIRONMENTS_MODULE_URL) as EnvironmentsModule;
+    if (!loaded) loaded = await import(ENVIRONMENTS_MODULE_URL) as EnvironmentsModule;
+    return loaded;
 }
 
 export async function createIntegrationEnvironment(options?: { template?: EnvironmentTemplate; up?: boolean }): Promise<IntegrationEnvironment> {
@@ -43,6 +53,10 @@ export async function createIntegrationEnvironment(options?: { template?: Enviro
     const name = await environments.createEnvironment({ noSwitch: true });
 
     try {
+        // Ours, and this process's, before a single service starts: the sweep
+        // at the next run and cattle-drover's reaper both read this pid to tell
+        // a run that is still going from one that was killed (DROVE-389).
+        environments.writeHarnessOwner(name, process.pid);
         environments.setEnvironmentTemplate(name, template);
 
         if (shouldStart) {
@@ -86,4 +100,20 @@ export async function destroyIntegrationEnvironment(env: IntegrationEnvironment)
     const environments = await loadEnvironmentManager();
     environments.stopEnvironment(env.name);
     environments.removeEnvironment(env.name);
+}
+
+/**
+ * The same, synchronously, for the paths where nothing can await: a SIGTERM
+ * or SIGINT landing on the worker, or its exit. Only stops and removes what
+ * createIntegrationEnvironment already loaded the manager for; a call before
+ * that is a no-op rather than an import.
+ */
+export function destroyIntegrationEnvironmentNow(env: IntegrationEnvironment): boolean {
+    if (!loaded) return false;
+    try {
+        loaded.stopEnvironment(env.name);
+    } finally {
+        loaded.removeEnvironment(env.name);
+    }
+    return true;
 }

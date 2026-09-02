@@ -12,7 +12,9 @@ import { pathToFileURL } from "url";
 const REPO_ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const ENVIRONMENTS_ROOT = path.join(REPO_ROOT, "environments");
 const ENVIRONMENTS_DATA_DIR = path.join(ENVIRONMENTS_ROOT, "data");
-const ENVIRONMENTS_DIR = path.join(ENVIRONMENTS_DATA_DIR, "envs");
+// HAPPY_ENVIRONMENTS_DIR moves the whole envs tree, for a test of THIS file
+// that must not create or sweep anything under the real one (DROVE-389).
+const ENVIRONMENTS_DIR = process.env.HAPPY_ENVIRONMENTS_DIR || path.join(ENVIRONMENTS_DATA_DIR, "envs");
 const CURRENT_ENV_PATH = path.join(ENVIRONMENTS_DATA_DIR, "current.json");
 const LAB_RAT_PROJECT_TEMPLATE_DIR = path.join(ENVIRONMENTS_ROOT, "lab-rat-todo-project");
 
@@ -215,13 +217,156 @@ function isProcessAlive(pid: number): boolean {
     }
 }
 
-function killProcess(pid: number): void {
+function killProcess(pid: number, signal: NodeJS.Signals = "SIGTERM"): void {
     try {
         // Kill entire process group (detached processes get their own group)
-        process.kill(-pid, "SIGTERM");
+        process.kill(-pid, signal);
     } catch {
-        try { process.kill(pid, "SIGTERM"); } catch {}
+        try { process.kill(pid, signal); } catch {}
     }
+}
+
+/** A sync pause, for the stop path: it runs from signal handlers and exit hooks, where nothing can await. */
+function sleepSync(ms: number): void {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * Alive and still running, which is not the same question as kill -0 answers:
+ * a child of THIS process that has died stays a zombie, and answers kill -0,
+ * until the event loop gets round to reaping it. The stop below waits with
+ * the loop blocked, so without this every service it stopped would look
+ * alive for the whole three seconds and then be shot a second time.
+ */
+function isProcessRunning(pid: number): boolean {
+    if (!isProcessAlive(pid)) return false;
+    const stat = (spawnSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf-8" }).stdout ?? "").trim();
+    if (stat === "") return true;
+    return !stat.startsWith("Z");
+}
+
+/**
+ * TERM the process (group), give it three seconds, then KILL what is left.
+ * True when there was something to stop. A daemon that ignores TERM used to
+ * survive `pnpm env:down` and every test teardown that called it (DROVE-389).
+ */
+function stopProcess(pid: number): boolean {
+    if (!isProcessRunning(pid)) return false;
+    killProcess(pid, "SIGTERM");
+    for (let i = 0; i < 30 && isProcessRunning(pid); i++) sleepSync(100);
+    if (isProcessRunning(pid)) killProcess(pid, "SIGKILL");
+    return true;
+}
+
+// ============================================================================
+// Harness ownership (DROVE-389)
+// ============================================================================
+//
+// An environment the vitest harness makes belongs to the vitest process that
+// made it, and that pid is written here at creation. Three readers: the
+// harness's own sweep at the start of the next run
+// (sweepDeadHarnessEnvironments), cattle-drover's test reaper
+// (scripts/drover-test-reap.sh, which reads the same file to tell a live run
+// from a dead one before it kills anything), and `pnpm env:list`. An
+// environment made by hand (`pnpm env:up`) has no owner and is never swept: it
+// is meant to outlive the command that made it.
+//
+// WHY. Three `dist/index.mjs daemon start-sync` processes, each with its own
+// happy-server and expo, sat for an hour on 2026-09-02 after the vitest run
+// that seeded them was killed by a Claude Code restart. The run never reached
+// its afterAll, and nothing else knew the environments were anybody's.
+
+const HARNESS_OWNER_FILE = "harness-owner";
+
+export function writeHarnessOwner(name: string, pid: number): void {
+    fs.writeFileSync(path.join(getEnvironmentDir(name), HARNESS_OWNER_FILE), `${pid}\n`);
+}
+
+export function readHarnessOwner(name: string): number | null {
+    const file = path.join(getEnvironmentDir(name), HARNESS_OWNER_FILE);
+    if (!fs.existsSync(file)) return null;
+    const pid = parseInt(fs.readFileSync(file, "utf-8").trim(), 10);
+    return Number.isFinite(pid) && pid > 0 ? pid : null;
+}
+
+/** The daemon, by either spelling the harness starts it under. */
+const DAEMON_SHAPE = /(?:dist\/index\.mjs|src\/index\.ts) daemon start-sync/;
+
+/**
+ * Every daemon still carrying THIS environment's HAPPY_HOME_DIR, found by its
+ * environment rather than by any file. The pid file and daemon.state.json are
+ * the normal handles; this is the net under them, because the leaked daemons
+ * of 2026-09-02 had neither: seedEnvironment went through `daemon start`,
+ * which spawns the real daemon detached and exits, keeping no pid, and the
+ * daemon's own state file was gone by the time anyone looked. Only a process
+ * whose command line is the daemon's is named, never the vitest worker that
+ * carries the same variable.
+ */
+export function daemonPidsFor(cliHome: string): number[] {
+    const marker = `HAPPY_HOME_DIR=${cliHome}`;
+    const found: number[] = [];
+    if (process.platform === "linux") {
+        let entries: string[] = [];
+        try { entries = fs.readdirSync("/proc"); } catch { return found; }
+        for (const entry of entries) {
+            if (!/^\d+$/.test(entry)) continue;
+            const pid = Number(entry);
+            if (pid === process.pid) continue;
+            try {
+                const env = fs.readFileSync(`/proc/${entry}/environ`, "utf-8").split("\0");
+                if (!env.includes(marker)) continue;
+                const cmd = fs.readFileSync(`/proc/${entry}/cmdline`, "utf-8").split("\0").join(" ");
+                if (DAEMON_SHAPE.test(cmd)) found.push(pid);
+            } catch {
+                // Somebody else's process, or one that just exited.
+            }
+        }
+        return found;
+    }
+    const out = spawnSync("ps", ["-Eww", "-Ao", "pid=,command="], { encoding: "utf-8" }).stdout ?? "";
+    for (const line of out.split("\n")) {
+        const m = line.trim().match(/^(\d+) (.*)$/);
+        if (!m) continue;
+        const pid = Number(m[1]);
+        if (pid === process.pid) continue;
+        // ps -E prints argv and then the environment, space-joined. The marker
+        // has to stand as a whole word, so a home that is a prefix of another
+        // (…/envs/a against …/envs/ab) cannot match it.
+        if (!` ${m[2]} `.includes(` ${marker} `)) continue;
+        if (!DAEMON_SHAPE.test(m[2])) continue;
+        found.push(pid);
+    }
+    return found;
+}
+
+/**
+ * Stop every daemon of one environment: the one the pid file names, the one
+ * daemon.state.json names, and any other still carrying this home. How many
+ * were stopped.
+ */
+function stopDaemonsOf(envDir: string): number {
+    const cliHome = path.join(envDir, "cli", "home");
+    const seen = new Set<number>();
+    let killed = 0;
+    const consider = (pid: number | null | undefined, how: string): void => {
+        if (!pid || seen.has(pid)) return;
+        seen.add(pid);
+        if (stopProcess(pid)) {
+            console.log(`Stopping daemon (PID ${pid}, ${how})...`);
+            killed++;
+        }
+    };
+    consider(readPidFile(envDir, "daemon"), "pid file");
+    removePidFile(envDir, "daemon");
+    const daemonStatePath = path.join(cliHome, "daemon.state.json");
+    if (fs.existsSync(daemonStatePath)) {
+        try {
+            const daemonState = JSON.parse(fs.readFileSync(daemonStatePath, "utf-8"));
+            consider(daemonState.pid, "daemon.state.json");
+        } catch {}
+    }
+    for (const pid of daemonPidsFor(cliHome)) consider(pid, "its HAPPY_HOME_DIR");
+    return killed;
 }
 
 async function waitFor(check: () => boolean | Promise<boolean>, timeoutMs: number, label: string): Promise<void> {
@@ -453,29 +598,26 @@ export async function seedEnvironment(name: string): Promise<void> {
     const authenticatedWebUrl = buildAuthenticatedWebUrl(config.expoPort, token, secretBase64);
     writeEnvironmentConfig({ ...config, authenticatedWebUrl });
 
-    const daemonStatePath = path.join(envDir, "cli", "home", "daemon.state.json");
-    if (fs.existsSync(daemonStatePath)) {
-        try {
-            const daemonState = JSON.parse(fs.readFileSync(daemonStatePath, "utf-8"));
-            if (daemonState.pid && isProcessAlive(daemonState.pid)) {
-                console.log(`Stopping existing daemon (PID ${daemonState.pid})...`);
-                killProcess(daemonState.pid);
-                await new Promise(r => setTimeout(r, 1000));
-            }
-        } catch {}
-    }
+    stopDaemonsOf(envDir);
 
     const envVars = buildEnvVars(envDir, config.serverPort, config.expoPort);
     const daemonEnv = { ...process.env, ...envVars };
     delete daemonEnv.CLAUDECODE;
 
-    const happyBin = path.join(REPO_ROOT, "packages", "happy-cli", "bin", "happy.mjs");
-    const daemon = spawn("node", [happyBin, "daemon", "start"], {
+    // The daemon ITSELF, detached, and its pid kept beside the server's and
+    // the web's. This went through `happy.mjs daemon start` before, a launcher
+    // that spawns the real `daemon start-sync` detached and exits, so the only
+    // handle on the daemon was the state file it writes for itself, and when
+    // that file was gone the daemon was nobody's (DROVE-389). Same node flags
+    // as spawnHappyCLI, so the command line is the one every daemon has.
+    const cliEntry = path.join(REPO_ROOT, "packages", "happy-cli", "dist", "index.mjs");
+    const daemon = spawn(process.execPath, ["--no-warnings", "--no-deprecation", cliEntry, "daemon", "start-sync"], {
         env: daemonEnv,
         stdio: "ignore",
         detached: true,
     });
     daemon.unref();
+    if (daemon.pid) writePidFile(envDir, "daemon", daemon.pid);
 
     const machineRegistered = await waitFor(async () => {
         const res = await fetch(`${serverUrl}/v1/machines`, {
@@ -499,7 +641,7 @@ export function stopEnvironment(name: string): void {
         if (pid !== null) {
             if (isProcessAlive(pid)) {
                 console.log(`Stopping ${service} (PID ${pid})...`);
-                killProcess(pid);
+                stopProcess(pid);
                 killed++;
             } else {
                 console.log(`${service} PID ${pid} already dead.`);
@@ -508,17 +650,7 @@ export function stopEnvironment(name: string): void {
         }
     }
 
-    const daemonStatePath = path.join(envDir, "cli", "home", "daemon.state.json");
-    if (fs.existsSync(daemonStatePath)) {
-        try {
-            const daemonState = JSON.parse(fs.readFileSync(daemonStatePath, "utf-8"));
-            if (daemonState.pid && isProcessAlive(daemonState.pid)) {
-                console.log(`Stopping daemon (PID ${daemonState.pid})...`);
-                killProcess(daemonState.pid);
-                killed++;
-            }
-        } catch {}
-    }
+    killed += stopDaemonsOf(envDir);
 
     if (killed === 0) {
         console.log(`No running services found for "${name}".`);
@@ -536,6 +668,27 @@ export function removeEnvironment(name: string): void {
     }
     fs.rmSync(envDir, { recursive: true, force: true });
     console.log(`Removed environment: ${name}`);
+}
+
+/**
+ * Stop and remove every harness-owned environment whose owner is gone: the
+ * run that made it was killed before its afterAll (a Ctrl-C, a timeout, a
+ * Claude Code restart), so its server, web and daemon are still up with
+ * nobody to stop them. Called at the start of every vitest run
+ * (src/test-setup.ts), which is the earliest moment anything runs again on
+ * this checkout. An environment with no owner is somebody's by hand and is
+ * left alone. The names swept, so the caller can say so.
+ */
+export function sweepDeadHarnessEnvironments(): Array<{ name: string; owner: number }> {
+    const swept: Array<{ name: string; owner: number }> = [];
+    for (const name of listEnvironments()) {
+        const owner = readHarnessOwner(name);
+        if (owner === null || owner === process.pid || isProcessAlive(owner)) continue;
+        stopEnvironment(name);
+        removeEnvironment(name);
+        swept.push({ name, owner });
+    }
+    return swept;
 }
 
 // ============================================================================
@@ -578,6 +731,10 @@ function commandList() {
         console.log(`     Bundler: ${bundlerUrl} (${expoStatus})`);
         console.log(`     Web app: ${webAppUrl}`);
         console.log(`     Created: ${config.createdAt}`);
+        const owner = readHarnessOwner(envName);
+        if (owner !== null) {
+            console.log(`     Harness: vitest pid ${owner} (${isProcessAlive(owner) ? "running" : "gone; the next test run sweeps it"})`);
+        }
         console.log("");
     }
 }
