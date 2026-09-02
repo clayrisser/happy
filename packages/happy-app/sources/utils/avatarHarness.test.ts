@@ -8,6 +8,13 @@ describe('resolveAvatarHarness', () => {
         expect(resolveAvatarHarness('agy')).toBe('agy');
     });
 
+    // DROVE-379. A `drover pi` row carried no harness mark at all, so in a
+    // project card it was indistinguishable from the claude sessions beside
+    // it — which is what "the pi session never showed up" turned out to mean.
+    it('badges pi, which is an active harness with a shipped icon', () => {
+        expect(resolveAvatarHarness('pi')).toBe('pi');
+    });
+
     it('uses Happy for the Rig client regardless of provider flavor', () => {
         expect(resolveAvatarHarness('codex', 'rig')).toBe('rig');
         expect(resolveAvatarHarness(null, 'rig')).toBe('rig');
