@@ -139,7 +139,7 @@ export function validName(name: string): boolean {
 const nameRules = `  allowed: letters, digits, and . _ - @ +   (an email address is fine)
   refused: / space quotes and shell metacharacters, and a leading . or -`;
 
-interface Ctx {
+export interface Ctx {
     env: NodeJS.ProcessEnv;
     home: string;
     droverDir: string;
@@ -179,7 +179,7 @@ function quietly(path: string): void {
  * actually authenticate it in the terminal as it wasn't ACTUALLY
  * authenticated" is this check's absence.
  */
-function credentialOk(ctx: Ctx, configDir: string): 0 | 1 | 2 {
+export function credentialOk(ctx: Ctx, configDir: string): 0 | 1 | 2 {
     const env = { ...ctx.env };
     delete env.ANTHROPIC_API_KEY;
     delete env.ANTHROPIC_AUTH_TOKEN;
@@ -222,10 +222,31 @@ function credentialOk(ctx: Ctx, configDir: string): 0 | 1 | 2 {
  * Attempts at 0s and then 1, 2, 4, 8, 16, 16 … apart until the budget is
  * spent; the LAST answer wins, not the worst one.
  */
-function verifyWait(ctx: Ctx, configDir: string, budget?: number): { rc: 0 | 1 | 2; why: string } {
+export function verifyWait(ctx: Ctx, configDir: string, budget?: number): { rc: 0 | 1 | 2; why: string } {
     // Read FIRST and never retried: it is a key in a file this codebase stamps
     // itself, so it is true the moment the directory is made.
     if (!accountOnboarded(configDir, ctx.home)) return { rc: 1, why: 'first-run' };
+    return credentialWait(ctx, configDir, budget);
+}
+
+/**
+ * json_account_credential_wait — the CREDENTIAL half alone, retried.
+ *
+ * Split out of verifyWait at DROVE-315 wave 4 because the login asks for
+ * exactly this and not for the other half: it stamps first-run itself, before
+ * it opens the pane, so re-reading that key mid-login would answer a question
+ * about its own write rather than about the account.
+ *
+ * DROVE-251's measurement decided the shape. The gate refused a login that had
+ * worked: the card said Claude Code did not read ~/.claude-accounts/account-6
+ * as signed in, and minutes later that directory answered
+ * {"loggedIn": true} in 0.26s. The delay was not the Keychain — the item was
+ * written a full second BEFORE the identity that makes anything go looking for
+ * it — it was the probe, killed at its 20-second cap, whose empty capture the
+ * old rule read as a signed-out account. A check that did not run must not be
+ * read as a check that failed.
+ */
+export function credentialWait(ctx: Ctx, configDir: string, budget?: number): { rc: 0 | 1 | 2; why: string } {
     let spend = budget;
     if (spend === undefined) {
         const raw = ctx.env.DROVER_CREDENTIAL_WAIT_S ?? '';
@@ -255,7 +276,7 @@ function verify(ctx: Ctx, configDir: string): { rc: 0 | 1 | 2; why: string } {
  * starts at "Choose the text style that looks best with your terminal".
  * Never fatal: a config dir that could not be stamped still gets a login.
  */
-function settleFirstRun(ctx: Ctx, configDir: string): void {
+export function settleFirstRun(ctx: Ctx, configDir: string): void {
     const cfg = accountConfigFile(configDir, ctx.home);
     const dir = cfg.slice(0, cfg.lastIndexOf('/'));
     if (!existsSync(dir)) return;

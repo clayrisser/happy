@@ -1,0 +1,1 @@
+{"kind":"question","title":"Cursor login for jam failed","reason":"nobody approved the login within 900s","preview":"nobody approved the login within 900s","ttlMs":300000,"channel":"external","options":[{"id":"ok","label":"OK"}],"origin":{"harness":"drover","gate":"account-login","account":null,"sessionId":"sess-42","cwd":"/tmp/work","surface":null}}
