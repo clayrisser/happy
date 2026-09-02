@@ -69,6 +69,26 @@ export const droverVerbs: readonly DroverVerb[] = [
         summary: 'Running sessions still on the CLI code the last build replaced, by name, and which of them relaunch themselves.',
         load: () => import('./stale-sessions'),
     },
+    {
+        name: 'flip',
+        summary: 'Move a live session onto another Claude subscription, carrying the transcript. The escape hatch: never mediated by the policy.',
+        load: () => import('./flip'),
+    },
+    {
+        name: 'flip-policy',
+        summary: 'The per-session answer to "you have run out": rank the accounts by headroom, decide, or do it.',
+        load: () => import('./flip-policy'),
+    },
+    {
+        name: 'flip-menu',
+        summary: 'A tmux picker for which account this pane flips to, ordered by headroom with the key on every row.',
+        load: () => import('./flip-menu'),
+    },
+    {
+        name: 'flip-request',
+        summary: 'What the injected /flip slash command runs inside the claude child. Every path exits 0.',
+        load: () => import('./flip-request'),
+    },
 ];
 
 /** Is this a verb the node CLI carries? */

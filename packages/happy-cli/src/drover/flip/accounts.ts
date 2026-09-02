@@ -40,6 +40,8 @@ import { projectDirFor } from './transcript'
  *     as the LAST look before parking, and only when the family is known, so
  *     the answer can name the model to switch to.
  */
+import { orderByHeadroom, rankAccounts } from './rank'
+
 export type ModelDemand =
     | { kind: 'unknown' }
     | { kind: 'family'; family: string }
@@ -1371,8 +1373,25 @@ export function pickTarget(
     const here = accounts.find((a) => a.name === current)
     const twins = new Set(here ? loginTwins(here, accounts).map((a) => a.name) : [])
     const elsewhere = (rows: DroverAccount[]) => rows.filter((a) => a.name !== current && !twins.has(a.name))
-    const others = elsewhere(usable)
-    const backdoors = elsewhere(backdoor)
+    // HEADROOM, NOT POSITION, and through the ONE ranking (DROVE-315 wave 2b).
+    //
+    // These two lists used to be walked in REGISTRY order, and `others.find`
+    // below took the first row not cooling. That is exactly what BASED-117
+    // objected to: "registry position is not headroom, so the account it lands
+    // on can be the next one to run out." cattle-drover's flip-policy had the
+    // headroom ranking and never saw a real usage limit, because a real limit
+    // is detected here and never reaches a shell script (DROVE-4). So the
+    // ranking moved into rank.ts and this calls it: the account an automatic
+    // flip lands on is now the account the tmux picker puts at the top of its
+    // list, and `drover flip-policy rank` renders the same order.
+    //
+    // Ordered, not filtered. Every eligibility question above stays where it
+    // was — canStartSession, the back-door subtraction, the twin exclusion —
+    // and only the ORDER comes from the ranking, so a row this function would
+    // have considered is still considered.
+    const ranking = rankAccounts({ accounts, ledger, now, family, exclude: current })
+    const others = orderByHeadroom(elsewhere(usable), ranking)
+    const backdoors = orderByHeadroom(elsewhere(backdoor), ranking)
     // Nothing above the back door and no back door either: there is genuinely
     // nowhere to go, which is the `none` this always answered. With a back door
     // still standing the answer is NOT none — it is either the last resort
