@@ -91,14 +91,20 @@ if (!hasNoWarnings || !hasNoDeprecation) {
       }
       // NOTHING STARTS WHILE THE TREE IS MOVING (DROVE-369). `drover home
       // migrate` holds ~/.drover/migrating from its writer check to its end,
-      // and cattle-drover's bin/drover refuses a typed start on it. This loop
-      // is the one start that never passes through bin/drover — a flip or a
-      // rebuilt bundle exits 75 and is respawned right here — and on the real
-      // run of 2026-09-02 a respawned child was a writer under ~/.happy and
-      // ~/.claude-shared exactly while verify hashed them.
-      const migrating = migrationInProgress();
-      if (migrating) {
-        process.stderr.write(`drover: a state migration to ~/.drover is in progress (${migrating}); this session does not ${relaunching ? 'resume' : 'start'} until it finishes. Log: ~/.drover/migrate.log\n`);
+      // and cattle-drover's bin/drover waits a typed start out on it. This
+      // loop is the one start that never passes through bin/drover — a flip
+      // or a rebuilt bundle exits 75 and is respawned right here — and on the
+      // real run of 2026-09-02 a respawned child was a writer under ~/.happy
+      // and ~/.claude-shared exactly while verify hashed them.
+      //
+      // It WAITS, it does not refuse (run of 04:29Z). A refusal here was a
+      // closed pane with the reason lost inside it: the quiesce stopped the
+      // coordinator's Claude, Claude printed its own "Resume this session
+      // with" line, this loop refused twice on the lock, and all Clay saw was
+      // that line, twice, with no reason. The move takes about two minutes;
+      // the wait is ten, polled every two seconds, said once, and the reason
+      // is on the terminal before anything else happens.
+      if (!waitForMigration(relaunching)) {
         status = 3;
         break;
       }
@@ -153,6 +159,14 @@ if (!hasNoWarnings || !hasNoDeprecation) {
     }
   } finally {
     try { rmSync(relaunchDir, { recursive: true, force: true }); } catch { /* best effort */ }
+    // Claude turns mouse reporting on and does not always turn it off when it
+    // is signalled: the `0;66;29M0;66;29m` Clay saw at his prompt after the
+    // 04:29Z run was SGR mouse reports arriving after Claude had gone. So the
+    // supervisor, the last thing standing in the pane, resets it on its way
+    // out (X10, button-event, any-event tracking, and the SGR encoding).
+    if (process.stdout.isTTY) {
+      try { process.stdout.write('\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l'); } catch { /* best effort */ }
+    }
   }
 
   process.exit(status);
@@ -179,12 +193,50 @@ function readRelaunchRequest(path) {
 }
 
 /**
+ * Wait the migration out: one line when the lock is first seen, a poll every
+ * DROVER_MIGRATING_POLL seconds (2) for up to DROVER_MIGRATING_WAIT seconds
+ * (600), one line when it is gone, and false (the old refusal, with the reason
+ * already on the terminal) only if the wait runs out. Same two knobs, same
+ * defaults and the same sentences as etc/drover.env's drover_wait_if_migrating,
+ * which is the shell half of this for a typed start. DROVER_MIGRATING_WAIT=0
+ * is the refusal at once. A lock whose pid is gone is stepped over, as before.
+ */
+function waitForMigration(relaunching) {
+  const waitS = Number(process.env.DROVER_MIGRATING_WAIT ?? 600);
+  const pollS = Math.max(1, Number(process.env.DROVER_MIGRATING_POLL ?? 2) || 2);
+  const what = relaunching ? 'resume' : 'start';
+  let said = false;
+  const deadline = Date.now() + waitS * 1000;
+  for (;;) {
+    const migrating = migrationInProgress();
+    if (!migrating) {
+      if (said) process.stderr.write(`drover: the migration is done; ${relaunching ? 'resuming' : 'starting'} this session.\n`);
+      return true;
+    }
+    if (!(waitS > 0)) {
+      process.stderr.write(`drover: a state migration to ~/.drover is in progress (${migrating}); this session does not ${what} until it finishes. Log: ~/.drover/migrate.log\n`);
+      return false;
+    }
+    if (!said) {
+      process.stderr.write(`drover: a state migration to ~/.drover is in progress (${migrating}); this session does not ${what} until it finishes. Waiting for it, every ${pollS} s for up to ${waitS} s. Log: ~/.drover/migrate.log\n`);
+      said = true;
+    }
+    if (Date.now() >= deadline) {
+      process.stderr.write(`drover: the migration is still running after ${waitS} s; giving up. Start this session again once ~/.drover/migrating is gone${relaunching ? ` (drover --resume ${resumeIdOf(argvNow())})` : ''}.\n`);
+      return false;
+    }
+    // Synchronous on purpose, as above: the pane is holding a conversation.
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, pollS * 1000);
+  }
+}
+
+/**
  * The migration lock cattle-drover's `drover home migrate` holds while the
  * six state trees move under ~/.drover (DROVE-369): `<DROVER_HOME>/migrating`,
  * `pid=`, `started=` and `by=` one per line. Read the same way etc/drover.env's
- * drover_refuse_if_migrating reads it: a live pid means refuse, a pid that is
- * gone means a crashed run whose lock is stepped over, no file means go.
- * Returns a short description of the live run, or null.
+ * drover_wait_if_migrating reads it: a live pid means the run is live, a pid
+ * that is gone means a crashed run whose lock is stepped over (with a note),
+ * no file means go. Returns a short description of the live run, or null.
  */
 function migrationInProgress() {
   const home = process.env.DROVER_HOME || join(homedir(), '.drover');
@@ -202,7 +254,10 @@ function migrationInProgress() {
     } catch (e) {
       // ESRCH: nothing has that pid. Anything else (EPERM) is a live process
       // that is not ours, which is still a live process.
-      if (e && e.code === 'ESRCH') return null;
+      if (e && e.code === 'ESRCH') {
+        process.stderr.write(`drover: stale migration lock (${join(home, 'migrating')} names pid ${pid}, which is gone); stepping over it. Read ~/.drover/migrate.log, then remove the file.\n`);
+        return null;
+      }
     }
   }
   return `pid ${pid || '?'}, since ${since}`;
