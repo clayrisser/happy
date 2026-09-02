@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { ActivityIndicator, Keyboard, LayoutChangeEvent, Modal as RNModal, Platform, Pressable, ScrollView, Text, TextInput, View, type StyleProp, type ViewStyle } from 'react-native';
+import { ActivityIndicator, Keyboard, LayoutChangeEvent, Modal as RNModal, Platform, Pressable, Text, TextInput, View, type StyleProp, type ViewStyle } from 'react-native';
 import { Ionicons, Octicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -17,18 +17,14 @@ import Animated, {
     withTiming,
     type SharedValue,
 } from 'react-native-reanimated';
-import { MobileGlassSurface } from './MobileGlass';
-import { BubblePressable } from './BubblePressable';
 import { ComposerBubble } from './ComposerBubble';
 import { ComposerControlButton } from './ComposerControlButton';
 import { ComposerSessionControls, type ComposerSessionPicker } from './ComposerSessionControls';
+import { ComposerPickerSheet, type ComposerPickerOption } from './ComposerPickerSheet';
 import { COMPOSER_IN_FIELD_DISC } from './composerControlColour';
-import {
-    COMPOSER_BUBBLE_CONTROLS_SLOT_GEOMETRY,
-    COMPOSER_BUBBLE_SURFACE,
-} from './composerBubbleLayout';
-import type { SessionPillLabel } from './sessionPillLabel';
-import { NativeOptionsPicker } from './NativeOptionsPicker';
+import { COMPOSER_BUBBLE_CONTROLS_SLOT_GEOMETRY } from './composerBubbleLayout';
+import { audioOutButton } from './composerAudioOut';
+import { homeComposerCapsule, homeHarnessOptions, resolveHarnessPick } from './homeComposer';
 import { AgentInputAttachmentStrip } from './AgentInputAttachmentStrip';
 import { Typography } from '@/constants/Typography';
 import { layout } from './layout';
@@ -44,8 +40,6 @@ import { collectSessionPlaces, collectSessionWorkspaces } from '@/sync/agentSess
 import {
     collectMachineChoices,
     findMachineChoice,
-    machineChoiceAgentAvailable,
-    machineChoiceAgentVisible,
     resolveChoiceAgent,
     resolveWorktreeCreationMachine,
 } from '@/sync/machineChoices';
@@ -65,13 +59,11 @@ import { useImagePicker } from '@/hooks/useImagePicker';
 import { Modal } from '@/modal';
 import { resolveMultiTextInputLayout } from './multiTextInputLayout';
 import {
-    isHomeDockOptionSelectable,
     resolveCustomProjectPathSelection,
     resolveHomeDockBackdropPressAction,
     resolveHomeDockMachineSelection,
     resolveHomeDockPickerBackAction,
     resolveHomeDockPromptPlaceholder,
-    shouldUseNativeHomeDockMenus,
 } from './homeDockInteraction';
 import { registerHomeDockFocusListener, useHomeDockFocusStore } from './homeDockFocus';
 import {
@@ -82,25 +74,22 @@ import {
 import { StatusDot } from './StatusDot';
 import { Shaker, type ShakeInstance } from './Shaker';
 import { hapticsError } from './haptics';
-import { HARNESS_ORDER, getHarnessName } from '@/utils/harnessCatalog';
-import { getPermissionModeShortLabel } from '@/utils/permissionModeLabels';
+import { getHarnessName } from '@/utils/harnessCatalog';
 import { getRigMachineSessionCreation } from '@/sync/rigSessionCreation';
 import {
     MobileHeaderScrim,
     MOBILE_HOME_SCRIM_OVERLAY_OPACITY,
 } from './navigation/MobileHeaderScrim';
 import {
+    MOBILE_COMPOSER_BUBBLE_BASE_HEIGHT,
     MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE,
     MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH,
     MOBILE_COMPOSER_LAYOUT,
     MOBILE_COMPOSER_METRICS,
     resolveMobileComposerActionGeometry,
-    resolveMobileCollapsedComposerGeometry,
     resolveMobileHomeComposerHeight,
     resolveMobileHomeFieldHeight,
 } from './agentInputLayout';
-
-export const MOBILE_HOME_DOCK_CONTENT_INSET = 108;
 
 type EnvironmentSetting = 'machine' | 'project' | 'worktree';
 type AgentSetting = 'agent' | 'model' | 'permission' | 'effort';
@@ -109,8 +98,12 @@ type PickerPage = EnvironmentSetting | AgentSetting;
 const CUSTOM_PROJECT_PATH_KEY = '__custom_project_path__';
 
 const MOBILE_PRIMARY_ACTION_GEOMETRY = resolveMobileComposerActionGeometry('primary');
-const MOBILE_COLLAPSED_COMPOSER_GEOMETRY = resolveMobileCollapsedComposerGeometry();
 const MOBILE_HOME_DOCK_TOP_PADDING = 8;
+// The air the list keeps clear under the resting dock: the dock's top padding,
+// the bubble at rest, and the room the safe area and the shadow take below it.
+export const MOBILE_HOME_DOCK_CONTENT_INSET = MOBILE_HOME_DOCK_TOP_PADDING
+    + MOBILE_COMPOSER_BUBBLE_BASE_HEIGHT
+    + 44;
 // Sits in the gap the focused dock already leaves above the composer, so it
 // costs no layout: showing it must not move the pickers or the composer.
 const START_PROGRESS_ROW_HEIGHT = 18;
@@ -128,7 +121,7 @@ const styles = StyleSheet.create((theme) => ({
     bottomBackdrop: {
         ...StyleSheet.absoluteFillObject,
         top: MOBILE_HOME_DOCK_TOP_PADDING
-            + MOBILE_COLLAPSED_COMPOSER_GEOMETRY.shellHeight / 2,
+            + MOBILE_COMPOSER_BUBBLE_BASE_HEIGHT / 2,
     },
     safeArea: {
         paddingHorizontal: 16,
@@ -141,67 +134,9 @@ const styles = StyleSheet.create((theme) => ({
     safeAreaBehindFocus: {
         display: 'none',
     },
-    composerSurface: {
-        width: '100%',
-        maxWidth: layout.maxWidth,
-        height: MOBILE_COLLAPSED_COMPOSER_GEOMETRY.shellHeight,
-        alignSelf: 'center',
-        borderRadius: MOBILE_COLLAPSED_COMPOSER_GEOMETRY.shellRadius,
-        overflow: 'hidden',
-        borderWidth: StyleSheet.hairlineWidth,
-        borderColor: theme.colors.glass.border,
-        // Frosted glass is supplied by MobileGlassSurface on native. The dense
-        // material tint keeps backdrop detail from competing with this input.
-        backgroundColor: Platform.select({
-            ios: 'transparent',
-            android: theme.colors.glass.backgroundStrong,
-            default: theme.colors.glass.backgroundStrong,
-        }),
-    },
-    composerShadow: {
-        width: '100%',
-        maxWidth: layout.maxWidth,
-        alignSelf: 'center',
-        borderRadius: MOBILE_COLLAPSED_COMPOSER_GEOMETRY.shellRadius,
-        shadowColor: theme.colors.shadow.color,
-        shadowOffset: { width: 0, height: theme.dark ? 6 : 2 },
-        shadowOpacity: theme.dark ? 0.22 : 0.08,
-        shadowRadius: theme.dark ? 16 : 8,
-        elevation: theme.dark ? 4 : 2,
-    },
-    composerContent: {
-        flex: 1,
-        flexDirection: 'row',
-        alignItems: 'center',
-        paddingLeft: MOBILE_COLLAPSED_COMPOSER_GEOMETRY.contentPaddingLeft,
-        paddingRight: MOBILE_COLLAPSED_COMPOSER_GEOMETRY.contentPaddingRight,
-        gap: 4,
-    },
-    input: {
-        flex: 1,
-        minWidth: 0,
-        height: '100%',
-        paddingLeft: MOBILE_COLLAPSED_COMPOSER_GEOMETRY.inputPaddingLeft,
-        paddingRight: MOBILE_COLLAPSED_COMPOSER_GEOMETRY.inputPaddingRight,
-        paddingVertical: 0,
-        color: theme.colors.text,
-        fontSize: 17,
-        ...Typography.default(),
-    },
-    inputEntry: {
-        flex: 1,
-        minWidth: 0,
-        height: '100%',
-        justifyContent: 'center',
-        paddingLeft: MOBILE_COLLAPSED_COMPOSER_GEOMETRY.inputPaddingLeft,
-        paddingRight: MOBILE_COLLAPSED_COMPOSER_GEOMETRY.inputPaddingRight,
-    },
-    inputEntryText: {
-        color: theme.colors.text,
-        fontSize: 17,
-        ...Typography.default(),
-    },
-    inputEntryPlaceholder: {
+    // The entry's field: the focused field's own type, as a line of text
+    // rather than an input, because the whole bubble is the button (DROVE-394).
+    entryPlaceholder: {
         color: theme.colors.textSecondary,
     },
     /**
@@ -282,21 +217,6 @@ const styles = StyleSheet.create((theme) => ({
         paddingRight: MOBILE_COMPOSER_LAYOUT.inputContainerPaddingRight,
         paddingTop: MOBILE_COMPOSER_METRICS.inputPaddingTop,
         paddingBottom: MOBILE_COMPOSER_METRICS.inputPaddingBottom,
-    },
-    sendButton: {
-        ...MOBILE_PRIMARY_ACTION_GEOMETRY,
-        // HOME'S OWN SPACING, moved here from the shared disc (DROVE-214).
-        // The disc used to carry `marginLeft` so the chat's text would stop
-        // short of it inside the field; the chat's send button is on a row of
-        // its own now and the margin went with the arrangement. Home still
-        // wants air between its send and whatever precedes it, so it keeps the
-        // number rather than inheriting it, and the collapsed dock's field and
-        // the focused row both read the same 6.
-        marginLeft: MOBILE_COMPOSER_METRICS.controlGap,
-        backgroundColor: theme.colors.surfaceHighest,
-    },
-    sendButtonActive: {
-        backgroundColor: theme.dark ? '#F5F5F5' : theme.colors.button.primary.background,
     },
     primaryActionFlash: {
         ...StyleSheet.absoluteFillObject,
@@ -425,90 +345,6 @@ const styles = StyleSheet.create((theme) => ({
         marginLeft: 'auto',
         color: theme.colors.textSecondary,
         fontSize: 11,
-        ...Typography.default(),
-    },
-    settingsPosition: {
-        position: 'absolute',
-        left: 16,
-        right: 16,
-    },
-    settingsStack: {
-        width: '100%',
-        maxWidth: layout.maxWidth,
-        alignSelf: 'center',
-        gap: 10,
-    },
-    settingsSurface: {
-        width: '100%',
-        maxHeight: 270,
-        borderRadius: 24,
-        overflow: 'hidden',
-        borderWidth: StyleSheet.hairlineWidth,
-        borderColor: theme.colors.glass.border,
-        backgroundColor: Platform.select({
-            ios: theme.colors.glass.overlay,
-            default: theme.colors.glass.backgroundStrong,
-        }),
-        paddingVertical: 10,
-        paddingHorizontal: 12,
-    },
-    settingsHeader: {
-        minHeight: 40,
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 4,
-        paddingBottom: 4,
-    },
-    backButton: {
-        width: 36,
-        height: 36,
-        borderRadius: 18,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    settingsTitle: {
-        flex: 1,
-        minWidth: 0,
-        color: theme.colors.text,
-        fontSize: 14,
-        ...Typography.default('semiBold'),
-    },
-    optionList: {
-        flexGrow: 0,
-    },
-    option: {
-        minHeight: 48,
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 12,
-        paddingHorizontal: 8,
-        paddingVertical: 8,
-        borderRadius: 14,
-    },
-    optionPressed: {
-        backgroundColor: theme.colors.surfacePressedOverlay,
-    },
-    optionDisabled: {
-        opacity: 0.45,
-    },
-    optionCopy: {
-        flex: 1,
-        minWidth: 0,
-    },
-    optionLabel: {
-        color: theme.colors.textSecondary,
-        fontSize: 12,
-        ...Typography.default(),
-    },
-    optionValue: {
-        color: theme.colors.text,
-        fontSize: 15,
-        ...Typography.default(),
-    },
-    optionDescription: {
-        color: theme.colors.textSecondary,
-        fontSize: 12,
-        marginTop: 2,
         ...Typography.default(),
     },
 }));
@@ -651,19 +487,16 @@ export const HomeDock = React.memo(({
     const { theme } = useUnistyles();
     const safeArea = useSafeAreaInsets();
     const keyboard = useReanimatedKeyboardAnimation();
-    const inputRef = React.useRef<TextInput>(null);
     const focusedInputRef = React.useRef<TextInput>(null);
     const mountedRef = React.useRef(true);
     const focusAnimationTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-    const nativeMenuOpenRef = React.useRef(false);
+    // A row's tail work, run once the picker sheet's Modal is off the screen:
+    // a prompt raised under a sheet still sliding out comes up behind it.
+    const afterPickerSheetRef = React.useRef<(() => void) | null>(null);
     const focusPresentation = useSharedValue(0);
     const [isFocused, setIsFocused] = React.useState(false);
     const [focusModeVisible, setFocusModeVisible] = React.useState(false);
     const [focusedInputContentHeight, setFocusedInputContentHeight] = React.useState(0);
-    // Expo's Compose bridge can freeze a DropdownMenu trigger at 0x0 when it
-    // composes before React Native measures its child. Keep iOS/web unchanged,
-    // and use an in-modal React Native picker only on Android.
-    const useNativeMenus = shouldUseNativeHomeDockMenus(Platform.OS);
     const [sheetPage, setSheetPage] = React.useState<PickerPage | null>(null);
     const { selectedImages, pickImages, removeImage, clearImages } = useImagePicker();
     const agentType = useNewSessionDraft((state) => state.agentType);
@@ -683,6 +516,8 @@ export const HomeDock = React.memo(({
     const setPermissionMode = useNewSessionDraft((state) => state.setPermissionMode);
     const setModelMode = useNewSessionDraft((state) => state.setModelMode);
     const setEffortLevel = useNewSessionDraft((state) => state.setEffortLevel);
+    const draftReadAloud = useNewSessionDraft((state) => state.readAloud);
+    const setDraftReadAloud = useNewSessionDraft((state) => state.setReadAloud);
     const defaultOverrides = useSetting('agentDefaultOverrides');
     const machines = useAllMachines({ includeOffline: true });
     const sessions = useSessions();
@@ -863,27 +698,10 @@ export const HomeDock = React.memo(({
         return options;
     }, [agentType, canCreateWorktree, existingWorktrees, picksWorkspaces, supportsWorktree, worktreeKey]);
     const currentWorktree = resolveOption(worktreeOptions, [selectedWorktreeKey]);
-    // Common harnesses stay listed but disabled when unavailable, so the picker
-    // still reads as a choice. Antigravity is niche and stays entirely absent
-    // until this computer explicitly reports it installed.
-    const harnessKeys = React.useMemo<NewSessionAgentType[]>(() => (
-        (HARNESS_ORDER.includes(agentType) ? [...HARNESS_ORDER] : [agentType, ...HARNESS_ORDER])
-            .filter((key) => machineChoiceAgentVisible(selectedChoice, key))
-    ), [agentType, selectedChoice]);
-    const availableAgents = React.useMemo<ModeOption[]>(() => (
-        harnessKeys.map((key) => {
-            const agent = { key, name: getHarnessName(key) };
-            return machineChoiceAgentAvailable(selectedChoice, key)
-                ? agent
-                : {
-                    ...agent,
-                    disabled: true,
-                    description: key === 'rig'
-                        ? 'Drover Agent is not running on this computer'
-                        : 'Not installed on this machine',
-                };
-        })
-    ), [harnessKeys, selectedChoice]);
+    const availableAgents = React.useMemo<ModeOption[]>(
+        () => homeHarnessOptions(selectedChoice, agentType),
+        [agentType, selectedChoice],
+    );
     const resolvedAgentType = resolveChoiceAgent(selectedChoice, agentType);
     const defaults = React.useMemo(() => rigCreation
         ? {
@@ -939,25 +757,33 @@ export const HomeDock = React.memo(({
     const currentAgent = availableAgents.find((agent) => agent.key === agentType)
         ?? availableAgents[0]
         ?? { key: agentType, name: getHarnessName(agentType) };
-    const permissionLabel = getPermissionModeShortLabel(currentPermission);
     /**
-     * WHAT THE COMPOSER'S CAPSULE READS (DROVE-345).
+     * WHAT THE COMPOSER'S CAPSULE READS (DROVE-345, DROVE-394).
      *
-     * The same three values the three word-triggers carried, handed to the
-     * component the chat uses instead of drawn again here. There is no
-     * read-aloud segment, because there is no session to read from yet, and
-     * `ComposerSessionControls` draws no segment for a reader that is absent
-     * rather than a dead one (DROVE-284).
+     * Decided once in `homeComposerCapsule` and mounted twice: on the
+     * sessions-list entry, disabled, and on the sheet. The speaker is the
+     * fourth segment now, because the session composer draws one and this is
+     * that composer: it arms reading for the session about to start.
      */
     const composerDiscFill = theme.dark ? COMPOSER_IN_FIELD_DISC.dark : COMPOSER_IN_FIELD_DISC.light;
-    const sessionPillLabel: SessionPillLabel = {
-        mode: permissionLabel ?? currentPermission?.name ?? null,
-        model: currentModel?.name ?? currentAgent.name,
-        effort: currentEffort?.name ?? null,
-        // The joined form is the status chip's, and Home has no chip.
-        text: '',
+    const capsule = homeComposerCapsule({
+        agent: { key: currentAgent.key as NewSessionAgentType, name: currentAgent.name },
+        permission: currentPermission,
+        permissionOptions,
+        model: currentModel,
+        modelOptions,
+        effort: currentEffort,
+        effortOptions,
+        effortPickerOptions,
+    });
+    const audioOut = audioOutButton({ readAloudEnabled: draftReadAloud });
+    const readAloudSegment = {
+        glyph: audioOut.glyph,
+        fill: audioOut.fill,
+        on: audioOut.on,
+        accessibilityLabel: t(audioOut.labelKey),
+        onPress: () => setDraftReadAloud(!draftReadAloud),
     };
-    const effortIndex = effortOptions.findIndex((option) => option.key === currentEffort?.key);
     const focusedPromptPlaceholder = resolveHomeDockPromptPlaceholder(currentAgent.key, currentAgent.name);
     const canSubmit = !isSubmitting && (
         prompt.trim().length > 0 || selectedImages.length > 0
@@ -1071,17 +897,23 @@ export const HomeDock = React.memo(({
             Extrapolation.CLAMP,
         ),
     }));
+    /**
+     * NO OPACITY ON ANY ANCESTOR OF A GLASS SURFACE (DROVE-394).
+     *
+     * The shell, the button row and every control in it are
+     * `UIVisualEffectView`s, and UIKit does not draw an effect under an alpha
+     * below 1 on the view or any superview; one born under alpha 0 stays
+     * blank. Clay's photograph of the sheet had a bare `+`, a bare padlock
+     * and no capsule, all three inside a row that faded in from 0. So the
+     * shell and the row move, and nothing on the way to a glass surface fades.
+     * The resting dock already keeps this rule with `display` rather than
+     * `opacity` (`safeAreaBehindFocus`).
+     */
     const focusedComposerAnimationStyle = useAnimatedStyle(() => ({
         height: interpolate(
             focusPresentation.value,
             [0, 1],
-            [56, focusedComposerHeight],
-            Extrapolation.CLAMP,
-        ),
-        opacity: interpolate(
-            focusPresentation.value,
-            [0, 0.12, 1],
-            [0.72, 1, 1],
+            [MOBILE_COMPOSER_BUBBLE_BASE_HEIGHT, focusedComposerHeight],
             Extrapolation.CLAMP,
         ),
         transform: [{
@@ -1113,7 +945,6 @@ export const HomeDock = React.memo(({
             Extrapolation.CLAMP,
         );
         return {
-            opacity: reveal,
             transform: [{ translateY: 7 * (1 - reveal) }],
         };
     });
@@ -1138,7 +969,6 @@ export const HomeDock = React.memo(({
         if (focusAnimationTimerRef.current) {
             clearTimeout(focusAnimationTimerRef.current);
         }
-        nativeMenuOpenRef.current = false;
         focusPresentation.value = 0;
         setIsFocused(true);
         setFocusModeVisible(true);
@@ -1164,7 +994,6 @@ export const HomeDock = React.memo(({
     }, [focusRequestId, openFocusMode]);
 
     const finishCloseFocusMode = React.useCallback(() => {
-        nativeMenuOpenRef.current = false;
         setIsFocused(false);
         setFocusModeVisible(false);
         setSheetPage(null);
@@ -1176,7 +1005,6 @@ export const HomeDock = React.memo(({
             focusAnimationTimerRef.current = null;
         }
         focusedInputRef.current?.blur();
-        inputRef.current?.blur();
         Keyboard.dismiss();
         focusPresentation.value = withTiming(0, {
             duration: 180,
@@ -1254,7 +1082,7 @@ export const HomeDock = React.memo(({
     ];
     const agentRows: SettingsRow[] = [
         ...(currentModel ? [{ page: 'model', label: t('agentInput.model.title'), value: currentModel.name, icon: 'cube-outline' as const }] : []),
-        ...(currentPermission ? [{ page: 'permission', label: t('agentInput.permissionMode.title'), value: permissionLabel ?? currentPermission.name, icon: 'shield-outline' as const }] : []),
+        ...(currentPermission ? [{ page: 'permission', label: t('agentInput.permissionMode.title'), value: capsule.label.mode ?? currentPermission.name, icon: 'shield-outline' as const }] : []),
         ...(currentEffort ? [{ page: 'effort', label: t('agentInput.effort.title'), value: currentEffort.name, icon: 'speedometer-outline' as const }] : []),
     ];
 
@@ -1267,9 +1095,6 @@ export const HomeDock = React.memo(({
 
     const requestCustomProjectPath = () => {
         Keyboard.dismiss();
-        // Native menu actions are already deferred until dismissal by the
-        // picker wrapper, so presenting another delayed task here creates a
-        // stale prompt race when HomeDock unmounts.
         void (async () => {
             const path = await Modal.prompt(
                 t('machineLauncher.enterCustomPath'),
@@ -1304,7 +1129,8 @@ export const HomeDock = React.memo(({
                 selectedKey: currentProject?.key,
                 onSelect: (key) => {
                     if (key === CUSTOM_PROJECT_PATH_KEY) {
-                        requestCustomProjectPath();
+                        // After the sheet's Modal is gone, not under it.
+                        afterPickerSheetRef.current = requestCustomProjectPath;
                         return;
                     }
                     setPath(key);
@@ -1324,7 +1150,22 @@ export const HomeDock = React.memo(({
 
     const getAgentPickerConfig = (setting: AgentSetting): PickerConfig => {
         if (setting === 'agent') {
-            return { title: 'Harness', options: availableAgents, selectedKey: agentType, onSelect: (key) => selectAgent(key as NewSessionAgentType) };
+            return {
+                title: 'Harness',
+                options: availableAgents,
+                selectedKey: agentType,
+                // A harness this computer cannot run is refused here, visibly,
+                // rather than written and bounced by the availability effect
+                // below (DROVE-394). See `resolveHarnessPick`.
+                onSelect: (key) => {
+                    const pick = resolveHarnessPick(availableAgents, key);
+                    if (!pick) {
+                        refuse();
+                        return;
+                    }
+                    selectAgent(pick);
+                },
+            };
         }
         if (setting === 'model') {
             return { title: t('agentInput.model.title'), options: modelOptions, selectedKey: currentModel?.key, onSelect: setModelMode };
@@ -1364,24 +1205,21 @@ export const HomeDock = React.memo(({
      * dismissal state, so a second tap on the segment could not close it
      * because the segment never saw the tap. Clay ruled on the chat's copy of
      * this in DROVE-242 — "Shouldn't these show in sheets like the effort does"
-     * — and the capsule is the chat's control. The environment rows above keep
-     * their menus; nothing about them changed.
+     * — and the capsule is the chat's control. Since DROVE-394 the environment
+     * rows above open the same sheet; this predicate only names the pages the
+     * capsule's segments report, so the open one shows on its segment.
      */
     const composerSheetPage = (page: PickerPage | null): page is ComposerSessionPicker => (
         page === 'permission' || page === 'model' || page === 'effort'
     );
     const composerPicker = composerSheetPage(sheetPage) ? sheetPage : null;
-    const sheetVisible = sheetPage !== null && (!useNativeMenus || composerSheetPage(sheetPage));
-    const markNativeMenuOpen = React.useCallback(() => {
-        nativeMenuOpenRef.current = true;
-    }, []);
+    const sheetVisible = sheetPage !== null;
     const handleFocusBackdropPress = React.useCallback(() => {
         const action = resolveHomeDockBackdropPressAction({
-            nativeMenuOpen: useNativeMenus && nativeMenuOpenRef.current,
+            nativeMenuOpen: false,
             pickerVisible: sheetVisible,
             starting: isSubmitting,
         });
-        nativeMenuOpenRef.current = false;
         if (action === 'dismiss-menu') {
             return;
         }
@@ -1394,7 +1232,7 @@ export const HomeDock = React.memo(({
             return;
         }
         closeFocusMode();
-    }, [closeFocusMode, closePicker, isSubmitting, refuse, sheetVisible, useNativeMenus]);
+    }, [closeFocusMode, closePicker, isSubmitting, refuse, sheetVisible]);
 
     // Stop is about this screen, not about the machine. It gives the composer
     // back immediately and lets the kill run unwatched, because a Stop that
@@ -1404,66 +1242,21 @@ export const HomeDock = React.memo(({
         closeFocusMode();
     }, [closeFocusMode, onSubmitCancel]);
 
-    const renderPickerRowContent = (row: SettingsRow, compact: boolean) => (
-        <View style={compact ? styles.focusConfigRow : styles.option}>
-            <View style={styles.focusConfigIcon}>
-                <Ionicons
-                    name={row.icon}
-                    size={compact ? 21 : 18}
-                    color={theme.colors.text}
-                />
-            </View>
-            {compact ? (
-                <Text style={styles.focusConfigValue} numberOfLines={1}>{row.value}</Text>
-            ) : (
-                <View style={styles.optionCopy}>
-                    <Text style={styles.optionLabel}>{row.label}</Text>
-                    <Text style={styles.optionValue} numberOfLines={1}>{row.value}</Text>
+    const renderPickerRow = (row: SettingsRow) => (
+        <Pressable
+            key={row.page}
+            onPress={() => setSheetPage(row.page as PickerPage)}
+            accessibilityRole="button"
+            accessibilityLabel={`${row.label}: ${row.value}`}
+        >
+            <View style={styles.focusConfigRow}>
+                <View style={styles.focusConfigIcon}>
+                    <Ionicons name={row.icon} size={21} color={theme.colors.text} />
                 </View>
-            )}
-        </View>
+                <Text style={styles.focusConfigValue} numberOfLines={1}>{row.value}</Text>
+            </View>
+        </Pressable>
     );
-
-    const renderPickerRow = (row: SettingsRow, config: PickerConfig, compact: boolean) => {
-        if (!useNativeMenus) {
-            return (
-                <Pressable
-                    key={row.page}
-                    onPress={() => setSheetPage(row.page as PickerPage)}
-                    accessibilityRole="button"
-                    accessibilityLabel={`${row.label}: ${row.value}`}
-                >
-                    {renderPickerRowContent(row, compact)}
-                </Pressable>
-            );
-        }
-        return (
-            <NativeOptionsPicker
-                key={row.page}
-                title={config.title}
-                tintColor={compact ? theme.colors.text : undefined}
-                triggerLabel={row.value}
-                systemImage={{
-                    machine: 'desktopcomputer',
-                    project: 'folder',
-                    worktree: 'arrow.triangle.branch',
-                    agent: 'cpu',
-                    model: 'cube',
-                    permission: 'shield',
-                    effort: 'bolt',
-                }[row.page]}
-                options={config.options.map((option) => ({ key: option.key, label: option.name }))}
-                selectedKey={config.selectedKey}
-                onMenuOpen={markNativeMenuOpen}
-                onSelect={(key) => {
-                    nativeMenuOpenRef.current = false;
-                    config.onSelect(key);
-                }}
-            >
-                {renderPickerRowContent(row, compact)}
-            </NativeOptionsPicker>
-        );
-    };
 
     const renderEnvironmentPickers = () => environmentRows.map((row, index) => (
         <FocusConfigRevealRow
@@ -1473,163 +1266,98 @@ export const HomeDock = React.memo(({
             refusing={isSubmitting}
             onRefuse={refuse}
         >
-            {renderPickerRow(row, getPickerConfig(row.page as PickerPage), true)}
+            {renderPickerRow(row)}
         </FocusConfigRevealRow>
     ));
 
-    /*
-     * `renderMenuControl` lived here and is gone (DROVE-345).
+    /**
+     * EVERY PICKER ON THIS SCREEN IS THE COMPOSER'S PICKER SHEET (DROVE-394).
      *
-     * It wrapped the composer's three word-triggers — permission, the model,
-     * effort — in a `NativeSettingsMenu` on iOS and a sheet-opening `Pressable`
-     * everywhere else. The composer's capsule is the control now, and it opens
-     * sheets on every platform for DROVE-242's reason: a menu UIKit places and
-     * UIKit dismisses is outside the picker's own dismissal state, so a second
-     * tap on the segment could not close it. It had no other caller — the
-     * environment rows above use `renderPickerRow`, which reaches
-     * `NativeOptionsPicker` — so it is deleted rather than kept for a caller
-     * that does not exist.
+     * Clay: "for the millionth time this input box needs to match all the
+     * other input boxes; that should actually be a sheet that comes up." The
+     * harness was an iOS context menu and the rest a glass card of Home's own;
+     * both are gone. Machine, project, worktree, harness, model, permission
+     * and effort all open `ComposerPickerSheet`, the list the session capsule
+     * opens, and a row this computer cannot take is drawn disabled with its
+     * reason instead of being offered and dropped.
      */
-    // Only reached with a page selected: `sheetVisible` gates the whole sheet.
-    const renderSettingsSheet = (page: PickerPage) => {
-        const config = getPickerConfig(page);
-        return (
-            <View style={styles.settingsStack}>
-                <MobileGlassSurface
-                    nativeEffect
-                    intensity={78}
-                    glassEffectStyle="regular"
-                    style={styles.settingsSurface}
-                >
-                    <View style={styles.settingsHeader}>
-                        <Pressable
-                            onPress={closePicker}
-                            style={styles.backButton}
-                            accessibilityRole="button"
-                            accessibilityLabel={t('common.cancel')}
-                        >
-                            <Ionicons name="close" size={20} color={theme.colors.text} />
-                        </Pressable>
-                        <Text style={styles.settingsTitle} numberOfLines={1}>
-                            {config.title}
-                        </Text>
-                    </View>
-                    <ScrollView style={styles.optionList} keyboardShouldPersistTaps="always">
-                        {config.options.map((option) => {
-                            const selectable = isHomeDockOptionSelectable(option.disabled);
-                            const selected = option.key === config.selectedKey;
-                            return (
-                                <Pressable
-                                    key={option.key}
-                                    disabled={!selectable}
-                                    onPress={() => {
-                                        if (!selectable) return;
-                                        config.onSelect(option.key);
-                                        closePicker();
-                                    }}
-                                    style={({ pressed }) => [
-                                        styles.option,
-                                        !selectable && styles.optionDisabled,
-                                        pressed && selectable && styles.optionPressed,
-                                    ]}
-                                    accessibilityRole="button"
-                                    accessibilityState={{ disabled: !selectable, selected }}
-                                >
-                                    <View style={styles.focusConfigIcon}>
-                                        {selected && (
-                                            <Ionicons name="checkmark" size={16} color={theme.colors.text} />
-                                        )}
-                                    </View>
-                                    <View style={styles.optionCopy}>
-                                        <Text style={styles.optionValue} numberOfLines={1}>{option.name}</Text>
-                                        {!!option.description && (
-                                            <Text style={styles.optionDescription} numberOfLines={2}>
-                                                {option.description}
-                                            </Text>
-                                        )}
-                                    </View>
-                                </Pressable>
-                            );
-                        })}
-                    </ScrollView>
-                </MobileGlassSurface>
-            </View>
-        );
+    const pickerConfig = sheetPage ? getPickerConfig(sheetPage) : null;
+    const pickerOptions: ComposerPickerOption[] = (pickerConfig?.options ?? []).map((option) => ({
+        key: option.key,
+        name: option.name,
+        description: option.description,
+        disabled: option.disabled,
+    }));
+    const handlePickerSheetClosed = () => {
+        const go = afterPickerSheetRef.current;
+        afterPickerSheetRef.current = null;
+        go?.();
     };
 
-    const renderComposer = ({
-        ref,
-        onFocus,
-        onBlur,
-        onSend,
-        activateOnPress,
-    }: {
-        ref: React.RefObject<TextInput | null>;
-        onFocus: () => void;
-        onBlur: () => void;
-        onSend: () => void;
-        activateOnPress?: () => void;
-    }) => (
-        <View style={styles.composerShadow}>
-            {/* THE RESTING DOCK PILL, ON THE COMPOSER'S MATERIAL (DROVE-345).
-                `frosted` is expo-blur with rgba(20,20,22,0.82) painted over
-                it, and a blur of a black home screen is black, so what Clay
-                photographed was the overlay: a flat dark slab. It is the same
-                `liquid` the composer it opens into wears, spread from the same
-                object so the two cannot drift again. It is NOT interactive:
-                the pill is a target for the whole dock rather than a control,
-                and the composer's press rules are the bubble's (DROVE-343). */}
-            <MobileGlassSurface
-                {...COMPOSER_BUBBLE_SURFACE}
-                style={styles.composerSurface}
-            >
-                <View style={styles.composerContent}>
-                    {activateOnPress ? (
-                        <Pressable onPress={activateOnPress} style={styles.inputEntry}>
-                            <Text
-                                style={[styles.inputEntryText, !prompt && styles.inputEntryPlaceholder]}
-                                numberOfLines={1}
-                            >
-                                {prompt || 'Plan, ask, build…'}
-                            </Text>
-                        </Pressable>
-                    ) : (
-                        <TextInput
-                            ref={ref}
-                            value={prompt}
-                            onChangeText={onPromptChange}
-                            onSubmitEditing={() => canSubmit && onSend()}
-                            onFocus={onFocus}
-                            onBlur={onBlur}
-                            placeholder="Plan, ask, build…"
-                            placeholderTextColor={theme.colors.textSecondary}
-                            selectionColor={theme.colors.text}
-                            returnKeyType="send"
-                            autoCorrect
-                            style={styles.input}
+    /**
+     * THE ENTRY IS THE SHEET'S COMPOSER, AT REST (DROVE-394).
+     *
+     * Clay, on the sessions list: it should look the SAME as the input box
+     * inside a session, everything greyed out, and a tap anywhere on it
+     * should open the new-session options. So it is the same `ComposerBubble`
+     * with the same slots the sheet fills — the `+`, the capsule with the
+     * harness's own segments, send — every control disabled, and the bubble
+     * itself the one button. The placeholder stays "Plan, ask, build…".
+     */
+    const renderEntry = () => (
+        <View style={styles.focusedComposerShadow}>
+            <ComposerBubble
+                style={styles.focusedComposerSurface}
+                onPress={openFocusMode}
+                accessibilityLabel="New session"
+                leading={(
+                    <ComposerControlButton
+                        fill={composerDiscFill}
+                        disabled
+                        accessibilityRole="button"
+                        accessibilityLabel="Add image"
+                    >
+                        <Ionicons
+                            name="add"
+                            size={MOBILE_COMPOSER_METRICS.addIconSize}
+                            color={theme.colors.textSecondary}
                         />
-                    )}
-                    <BubblePressable
-                        onPress={onSend}
-                        disabled={!canSubmit}
-                        style={[styles.sendButton, canSubmit && styles.sendButtonActive]}
+                    </ComposerControlButton>
+                )}
+                controls={(
+                    <ComposerSessionControls
+                        label={capsule.label}
+                        size={MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE}
+                        segmentWidth={MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH}
+                        verticalSlop={MOBILE_COMPOSER_METRICS.primaryActionSlop}
+                        modeKey={capsule.modeKey}
+                        effortIndex={capsule.effortIndex}
+                        effortCount={capsule.effortCount}
+                        canOpen={capsule.canOpen}
+                        readAloud={readAloudSegment}
+                        disabled
+                    />
+                )}
+                trailing={[(
+                    <ComposerControlButton
+                        key="primary"
+                        disabled
                         accessibilityRole="button"
                         accessibilityLabel="Send"
                     >
-                        {isSubmitting ? (
-                            <ActivityIndicator size="small" color={theme.colors.textSecondary} />
-                        ) : (
-                            <Ionicons
-                                name="arrow-up"
-                                size={16}
-                                color={canSubmit
-                                    ? theme.dark ? '#111111' : theme.colors.button.primary.tint
-                                    : theme.colors.textSecondary}
-                            />
-                        )}
-                    </BubblePressable>
+                        <Ionicons name="arrow-up" size={16} color={theme.colors.textSecondary} />
+                    </ComposerControlButton>
+                )]}
+            >
+                <View style={styles.focusedInputReveal}>
+                    <Text
+                        style={[styles.focusedInput, !prompt && styles.entryPlaceholder]}
+                        numberOfLines={1}
+                    >
+                        {prompt || 'Plan, ask, build…'}
+                    </Text>
                 </View>
-            </MobileGlassSurface>
+            </ComposerBubble>
         </View>
     );
 
@@ -1674,17 +1402,17 @@ export const HomeDock = React.memo(({
      * as the dock opens, the measurement text that drives the field's height,
      * and the refusal blocker while a session is being created.
      *
-     * WHAT THE CAPSULE CARRIES HERE is the harness's three settings rather than
-     * a running session's four: permission, effort, the model. There is no
-     * read-aloud, because there is nothing to read yet, and
-     * `ComposerSessionControls` draws no segment for a reader that is absent
-     * rather than a dead one (DROVE-284).
+     * WHAT THE CAPSULE CARRIES HERE is the session composer's four
+     * (DROVE-394): permission, read-aloud, effort where the harness has
+     * levels, the model. Read-aloud arms reading for the session about to
+     * start, which is DROVE-386's per-session switch reached one screen
+     * earlier; `useStartSessionFromDraft` spends it.
      *
      * AND ALL THREE OPEN SHEETS, which is DROVE-242 reaching this screen. They
      * were native menus here; the capsule's segments report a picker and the
      * sheet is what draws it, so a second tap on a control can close it because
-     * the control sees the tap. The environment rows above still use their
-     * menus — nothing about them changed.
+     * the control sees the tap. The environment rows above open the same
+     * sheet since DROVE-394 (`renderPickerRow`).
      */
     const renderFocusedComposer = () => (
         <Shaker ref={composerShakerRef} style={styles.focusedComposerShadow}>
@@ -1733,19 +1461,16 @@ export const HomeDock = React.memo(({
                             slot={COMPOSER_BUBBLE_CONTROLS_SLOT_GEOMETRY}
                         >
                             <ComposerSessionControls
-                                label={sessionPillLabel}
+                                label={capsule.label}
                                 size={MOBILE_COMPOSER_BUBBLE_CONTROL_SIZE}
                                 segmentWidth={MOBILE_COMPOSER_CAPSULE_SEGMENT_WIDTH}
                                 verticalSlop={MOBILE_COMPOSER_METRICS.primaryActionSlop}
-                                modeKey={currentPermission?.key}
-                                effortIndex={effortIndex}
-                                effortCount={effortOptions.length}
+                                modeKey={capsule.modeKey}
+                                effortIndex={capsule.effortIndex}
+                                effortCount={capsule.effortCount}
                                 openPicker={composerPicker}
-                                canOpen={{
-                                    permission: permissionOptions.length > 0,
-                                    model: modelOptions.length > 0,
-                                    effort: effortPickerOptions.length > 0,
-                                }}
+                                canOpen={capsule.canOpen}
+                                readAloud={readAloudSegment}
                                 onPress={(picker) => setSheetPage(picker)}
                             />
                         </RefusableControl>
@@ -1857,15 +1582,7 @@ export const HomeDock = React.memo(({
                         focusModeVisible && styles.safeAreaBehindFocus,
                     ]}
                 >
-                    {renderComposer({
-                        ref: inputRef,
-                        onFocus: openFocusMode,
-                        onBlur: () => {
-                            if (!focusModeVisible) setIsFocused(false);
-                        },
-                        onSend: submit,
-                        activateOnPress: openFocusMode,
-                    })}
+                    {renderEntry()}
                 </View>
             </Animated.View>
 
@@ -1903,16 +1620,9 @@ export const HomeDock = React.memo(({
 
                     <Animated.View style={[styles.focusDock, keyboardStyle]}>
                         <View style={styles.focusConfig}>
-                            {sheetVisible && sheetPage ? renderSettingsSheet(sheetPage) : (
-                                <View style={styles.focusConfigGroup}>
-                                    {renderEnvironmentPickers()}
-                                </View>
-                            )}
-                            {/* The sheet is a single surface rather than a row
-                                of controls, so its refusal is the whole sheet. */}
-                            {isSubmitting && sheetVisible && sheetPage && (
-                                <Pressable style={styles.pressBlocker} onPress={refuse} />
-                            )}
+                            <View style={styles.focusConfigGroup}>
+                                {renderEnvironmentPickers()}
+                            </View>
                         </View>
                         <View style={[
                             styles.focusComposerArea,
@@ -1941,6 +1651,15 @@ export const HomeDock = React.memo(({
                             {renderFocusedComposer()}
                         </View>
                     </Animated.View>
+                    <ComposerPickerSheet
+                        open={sheetVisible}
+                        onClose={closePicker}
+                        onClosed={handlePickerSheetClosed}
+                        title={pickerConfig?.title ?? ''}
+                        options={pickerOptions}
+                        selectedKey={pickerConfig?.selectedKey}
+                        onSelect={(key) => pickerConfig?.onSelect(key)}
+                    />
                 </View>
             </RNModal>
 
