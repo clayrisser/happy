@@ -49,8 +49,28 @@ interface HeaderProps {
     subtitle?: string;
     headerLeft?: (() => React.ReactNode) | null;
     headerLeftGlass?: boolean;
+    /** See `headerRightInteractive`. */
+    headerLeftInteractive?: boolean;
     headerRight?: (() => React.ReactNode) | null;
     headerRightGlass?: boolean;
+    /**
+     * Whether the slot's glass answers a press with the platform's own swell
+     * (DROVE-356).
+     *
+     * The slots take whatever a screen puts in them, and what a screen puts in
+     * them is sometimes not a button: the message screen's trailing slot is a
+     * `ToolStatusIndicator`, and the sessions header's leading slot is the
+     * drover mark. A capsule that swells under a finger it cannot act on is a
+     * button that does nothing, which is worse than one that sits still. So
+     * the screen says, and the default is no.
+     *
+     * A slot holding SEVERAL actions still says it once. `isInteractive` is a
+     * property of the effect view, so one surface holding two `Pressable`s is
+     * how the system draws a grouped control (DROVE-169, DROVE-343): the
+     * segment under the finger answers, the presses stay separate, and the
+     * neighbouring slots are different surfaces and never move.
+     */
+    headerRightInteractive?: boolean;
     headerStyle?: any;
     headerTitleStyle?: any;
     headerSubtitleStyle?: any;
@@ -62,6 +82,15 @@ interface HeaderProps {
     headerBackdropAlwaysVisible?: boolean;
     headerBackdropVariant?: MobileHeaderScrimVariant;
     mobileTitleSurface?: 'glass' | 'plain';
+    /**
+     * Whether the title pill presses (DROVE-356).
+     *
+     * Same bargain as the slots. The session screen's title opens the session
+     * menu and swells for it (`ChatHeaderView`); the title on the shared header
+     * is a label on nearly every screen that renders one, so it stays inert
+     * until a screen says otherwise and puts a gesture in the node.
+     */
+    mobileTitleInteractive?: boolean;
     mobileTitleAlignment?: 'start' | 'center';
     safeAreaEnabled?: boolean;
 }
@@ -74,8 +103,10 @@ export const Header = React.memo((props: HeaderProps) => {
         subtitle,
         headerLeft,
         headerLeftGlass = false,
+        headerLeftInteractive = false,
         headerRight,
         headerRightGlass = true,
+        headerRightInteractive = false,
         headerStyle,
         headerTitleStyle,
         headerSubtitleStyle,
@@ -87,6 +118,7 @@ export const Header = React.memo((props: HeaderProps) => {
         headerBackdropAlwaysVisible = false,
         headerBackdropVariant = 'subtle',
         mobileTitleSurface = 'glass',
+        mobileTitleInteractive = false,
         mobileTitleAlignment = 'start',
         safeAreaEnabled = true,
     } = props;
@@ -209,18 +241,22 @@ export const Header = React.memo((props: HeaderProps) => {
                     centerMobileTitle && styles.mobileCenteredContent,
                     { height: contentHeight },
                 ]}>
-                    {/* Neither slot is `interactive` (DROVE-202). They take
-                        whatever a screen puts in them and `headerRightGlass`
-                        defaults to on, so one of them is a ToolStatusIndicator
-                        rather than a button; a capsule that answers a press it
-                        cannot act on is worse than one that sits still. Which
-                        slots earn it is a per-screen decision, not a default.
-                        The clip is gone either way, so the day one does it can
-                        grow. */}
+                    {/* Which slots are `interactive` is the SCREEN's call
+                        (DROVE-202, then DROVE-356). They take whatever a
+                        screen puts in them and `headerRightGlass` defaults to
+                        on, so one of them is a ToolStatusIndicator rather than
+                        a button; a capsule that answers a press it cannot act
+                        on is worse than one that sits still. What changed is
+                        that a screen can now SAY so, which is what the sessions
+                        header's filter + gear pill needed: it had been two real
+                        buttons drawing the material and never answering a
+                        press. The clip is gone either way, so the ones that do
+                        it can grow. */}
                     <View style={styles.leftContainer}>
                         {headerLeft && headerLeftUsesGlass && (
                             <GlassChromeSurface
                                 radius={MOBILE_GLASS_CONTROL_RADIUS}
+                                interactive={headerLeftInteractive}
                                 style={styles.leftControlGlass}
                             >
                                 <View style={styles.leftControlContent}>
@@ -243,6 +279,7 @@ export const Header = React.memo((props: HeaderProps) => {
                         {glassControlsEnabled && mobileTitleSurface === 'glass' && title ? (
                             <GlassChromeSurface
                                 radius={MOBILE_GLASS_CONTROL_RADIUS}
+                                interactive={mobileTitleInteractive}
                                 style={styles.mobileTitlePill}
                             >
                                 {titleContent}
@@ -254,6 +291,7 @@ export const Header = React.memo((props: HeaderProps) => {
                         {headerRight && headerRightUsesGlass && (
                             <GlassChromeSurface
                                 radius={MOBILE_GLASS_CONTROL_RADIUS}
+                                interactive={headerRightInteractive}
                                 style={styles.rightControlGlass}
                             >
                                 <View style={styles.rightControlContent}>
@@ -277,6 +315,16 @@ export const Header = React.memo((props: HeaderProps) => {
 interface ExtendedNavigationOptions extends Partial<NativeStackHeaderProps['options']> {
     headerSubtitle?: string;
     headerSubtitleStyle?: any;
+    /**
+     * A navigator screen's way of saying its trailing slot is a button
+     * (DROVE-356), since the navigator hands this component a render function
+     * and there is nothing in a node to read the answer off.
+     *
+     * Off by default, deliberately: the message screen's slot is a
+     * `ToolStatusIndicator`, and it is the one Clay photographed. A screen
+     * whose slot is a real control opts in.
+     */
+    headerRightInteractive?: boolean;
 }
 
 // Default back button component
@@ -402,6 +450,7 @@ const NavigationHeaderComponent: React.FC<NavigationHeaderComponentProps> = Reac
                 () => options.headerRight!({ canGoBack: !!back, tintColor: options.headerTintColor }) :
                 undefined
             }
+            headerRightInteractive={extendedOptions.headerRightInteractive === true}
             headerStyle={options.headerStyle}
             headerTitleStyle={options.headerTitleStyle}
             headerSubtitleStyle={extendedOptions.headerSubtitleStyle}
