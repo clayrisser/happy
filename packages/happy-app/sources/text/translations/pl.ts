@@ -610,7 +610,7 @@ export const pl: TranslationStructure = {
         },
         context: {
             detailContext: ({ used, total }: { used: string; total: string }) => `Kontekst ${used} / ${total}`,
-            percentContext: ({ percent }: { percent: number }) => `${percent}% kontekstu`,
+            percentContext: ({ percent }: { percent: number }) => `${percent}% kont.`,
             percentWeek: ({ percent }: { percent: number }) => `${percent}% tygodnia`,
         },
         usagePopup: {

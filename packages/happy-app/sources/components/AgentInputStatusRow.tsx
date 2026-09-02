@@ -27,7 +27,6 @@ import { useSessionTasks } from './SessionTasksList';
 import { sessionTasksBadge } from '@/utils/sessionTasks';
 import { StatusDot } from './StatusDot';
 import {
-    showsContextPercent,
     STATUS_ROW_GIVE_WAY,
     statusRowMetrics,
     statusRowQuotaText,
@@ -123,9 +122,10 @@ import type { SessionState } from '@/sync/sessionState';
  *   - the word "week" goes when an account heads the quota, because
  *     `jamrizzi 23%` is one fact about one account and the sheet spells the
  *     window out. With no account to head it the window keeps its name.
- *   - the context gauge drops its percent text while the main thread works, or
- *     whenever the account is on the row: the ring beside it fills with the
- *     same number and a tap still opens the exact figure.
+ *   - the context gauge's percent text is the FIRST thing the give-way order
+ *     takes when the line is over budget, and the only thing that takes it
+ *     (DROVE-372, correcting this): the ring beside it fills with the same
+ *     number and a tap still opens the exact figure.
  *   - a TOOL's name goes and the numbers stay whenever the row would not
  *     otherwise fit. That was a 360pt constant before the account was here; it
  *     is now asked of statusRowLayout's estimator with the row's real content,
@@ -233,6 +233,35 @@ import type { SessionState } from '@/sync/sessionState';
  * already on the wire. That split is deliberate — DROVE-220 means a session
  * running right now will never pick up a new CLI, so the half that could work
  * today does.
+ */
+
+/**
+ * AND DROVE-372 MADE IT THE SAME LINE ON EVERY HARNESS.
+ *
+ * Clay, on his first Codex session: "Codex was able to start, which is great,
+ * but why does it look different? The very bottom row looks different than the
+ * Claude one." The two rows he photographed shared exactly one slot, the dot,
+ * and even that was a different colour — Claude carried the clock, the tally,
+ * the workers, the account and the quota; Codex carried a context percent and
+ * a ring, and nothing else at all.
+ *
+ * It was always this component. What differed was upstream, and separately
+ * defensible in each place: `liveStatus` comes off one CLI path, the account
+ * comes off `usageBarGroups` which DROVE-352 narrows to the session's harness,
+ * and the context reading happened to be on Codex's stream and not Claude's.
+ * The result is a row whose SHAPE tracks the harness, which is the thing 231
+ * drew the three zones to prevent.
+ *
+ * So: `statusRowSlots.ts` writes the slot order down once, ABSENCE is the only
+ * difference a harness may make, and nothing is ever substituted into a gap.
+ * The context percent stopped being gated on the account in the same change
+ * (`statusRowLayout.ts` says why); the give-way order owns it now, as it owns
+ * every other fold on this row.
+ *
+ * The capsule's permission glyph stays harness-specific — a lock for Claude's
+ * permission mode, a shield for Codex's approval mode. Those are different
+ * axes with values that do not correspond, so one glyph for both would claim
+ * the two sessions are set the same way when they cannot be compared at all.
  */
 
 /**
@@ -615,8 +644,22 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
         ? usageToneColor(p.weekTone, theme)
         : theme.colors.textSecondary;
 
-    const showContextPercentText = !!context
-        && showsContextPercent(shownAccount, showPreciseContext, mainWorking);
+    /**
+     * THE READING IS OFFERED WHOLE, AND THE GIVE-WAY ORDER TAKES IT (DROVE-372).
+     *
+     * It used to be withheld here by `showsContextPercent` whenever an account
+     * was on the row or the main thread was working. The account is the problem
+     * term: it reaches the strip through `usageBarGroups`, which DROVE-352
+     * narrows to the session's own harness, so it is present on a Claude
+     * session and absent on a Codex one. The same slot therefore printed its
+     * number on Codex and drew a bare ring on Claude — a ring at 13% that Clay
+     * read, correctly, as a spinner, because nothing beside it said what it was
+     * measuring.
+     *
+     * Now the number is always offered and `STATUS_ROW_GIVE_WAY` folds it
+     * first, on measured width, identically for every harness. Short enough to
+     * usually survive since DROVE-346's `13% ctx`.
+     */
     const contextPercentText = context
         ? (showPreciseContext
             ? context.detail
@@ -659,7 +702,7 @@ export const AgentInputStatusRow = React.memo(function AgentInputStatusRow(p: St
         quotaWindow: quotaWindowText,
         quotaExpands: canOpenUsage,
         contextGauge: !!context,
-        contextPercent: showContextPercentText ? contextPercentText : null,
+        contextPercent: contextPercentText,
         // A tap on the ring asked for the long reading, so the give-way order
         // may not fold it back off (DROVE-250).
         contextPrecise: showPreciseContext,

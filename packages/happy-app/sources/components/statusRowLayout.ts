@@ -392,23 +392,37 @@ export function statusRowQuotaText(
 }
 
 /**
- * Whether the context gauge still prints its percent.
+ * THE CONTEXT PERCENT IS ALWAYS OFFERED, AND WIDTH ALONE TAKES IT (DROVE-372).
  *
- * Folded while the main thread works, because the live token count beside it
- * is the cost readout at that moment (DROVE-155), and equally once the account
- * is on the row (DROVE-138). Either way the ring carries the same number and a
- * tap prints the exact tokens, so the text is the cheapest thing on a full row
- * to lose.
+ * `showsContextPercent(account, precise, mainWorking)` used to stand here and
+ * withhold the number in two cases: while the main thread was working, on the
+ * grounds that the live token count beside it was the cost readout (DROVE-155),
+ * and whenever an account was on the row, on the grounds that the row was full
+ * (DROVE-138). The ring carried the same figure either way, so it read as a
+ * cheap saving.
+ *
+ * It was a second width heuristic, sitting outside the layout system, keyed on
+ * a fact that tracks the HARNESS. An account reaches the strip through
+ * `usageBarGroups`, which DROVE-352 narrows to the session's own harness — so
+ * a Claude session has one and a Codex session, with no codex row in the
+ * registry, does not. Which meant the same slot printed its number on Codex
+ * and hid it on Claude, and the two rows Clay photographed for DROVE-372
+ * disagreed about what the centre of the strip even says.
+ *
+ * So the row offers the percent unconditionally now and `STATUS_ROW_GIVE_WAY`
+ * decides, where `contextPercent` has been rank 0 all along: the first thing
+ * dropped when the line is over budget, on real measured width, by the same
+ * order for every harness. A crowded Claude row still loses the number, and it
+ * loses it for the reason Clay would give if asked — there was no room — not
+ * because of which CLI is on the other end.
+ *
+ * Clay, about this row and the composer before it: "why don't you use layout
+ * system for these things?"
+ *
+ * `contextPrecise` is the one exemption and it survives untouched: a tap asked
+ * for the long reading, so the fold may not take it back (DROVE-250).
  */
-export function showsContextPercent(
-    account: string | null | undefined,
-    precise: boolean,
-    mainWorking: boolean,
-): boolean {
-    if (precise) return true;
-    if (mainWorking) return false;
-    return !account?.trim();
-}
+
 
 /** One drawn segment and what it costs, in the order the row lays them out. */
 export interface StatusRowSegment {
