@@ -60,6 +60,21 @@ export const droverVerbs: readonly DroverVerb[] = [
         load: () => import('./todos'),
     },
     {
+        name: 'config',
+        summary: 'Every edit drover makes to a file it does not own, and the command that takes it back out.',
+        load: () => import('./config'),
+    },
+    {
+        name: 'install',
+        summary: 'Install the harnesses and the OS dependencies drover needs. Binaries only, never a login.',
+        load: () => import('./install'),
+    },
+    {
+        name: 'client',
+        summary: 'The standalone prompt subscriber for this tmux server: one per server, and how it picks up new code.',
+        load: () => import('./client'),
+    },
+    {
         name: 'share-sessions',
         summary: 'One session store for every account, so a flip stops copying transcripts. Dry run unless --apply.',
         load: () => import('./share-sessions'),

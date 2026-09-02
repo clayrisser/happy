@@ -5,6 +5,13 @@
  * file assigns unconditionally and it is sourced last. These pin that, and pin
  * the one rule that is easy to get wrong: local.env can override a value but
  * cannot move STATE_DIR, because STATE_DIR is how local.env was found.
+ *
+ * ONE HOME, NO XDG (DROVE-309). etc/drover.env stopped reading XDG_STATE_HOME
+ * when Clay ruled that everything drover owns lives under ~/.drover, on both
+ * platforms, and `XDG_*` is not consulted even when it is set. This file used
+ * to assert the opposite; the assertion is inverted here rather than deleted,
+ * because a node side that still honoured XDG would send half the stack to a
+ * directory the shell half has never heard of.
  */
 
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -46,11 +53,23 @@ describe('droverEnv — defaults, then precedence', () => {
         expect(e).toEqual({
             droverDir: '/home/me/Projects/bitspur/cattle-drover',
             forkDir: '/home/me/Projects/bitspur/happy',
-            stateDir: '/home/me/.local/state/cattle-drover',
+            droverHome: '/home/me/.drover',
+            // Neither ~/.drover/state nor ~/.local/state/cattle-drover exists
+            // under this synthetic home, so drover_home_path lands on the new
+            // one: a fresh machine writes straight under ~/.drover.
+            stateDir: '/home/me/.drover/state',
             droverPort: '7970',
             droverUrl: 'http://127.0.0.1:7970',
             relayPort: '7971',
             relayUrl: 'http://127.0.0.1:7971',
+            serverMode: 'official',
+            happyHome: '/home/me/.drover/happy',
+            accounts: '/home/me/Projects/bitspur/cattle-drover/accounts.json',
+            skipPermissions: '1',
+            skipBuild: '0',
+            distSettleS: '15',
+            localAsk: '1',
+            localAskTimeout: '120',
         });
     });
 
@@ -60,40 +79,75 @@ describe('droverEnv — defaults, then precedence', () => {
         expect(e.droverPort).toBe('9000');
     });
 
-    it('honours XDG_STATE_HOME for the state dir', () => {
+    it('does not consult XDG_STATE_HOME, on either platform (DROVE-309)', () => {
+        // The ruling, unprompted, on the ticket: "yeah yeah but it should all
+        // be in .drover". etc/drover.env reads DROVER_HOME and nothing else.
         const e = droverEnv({ XDG_STATE_HOME: '/xdg' }, '/home/me');
-        expect(e.stateDir).toBe('/xdg/cattle-drover');
+        expect(e.stateDir).toBe('/home/me/.drover/state');
+    });
+
+    it('DROVER_HOME moves the whole tree, which is how a test points at a temp home', () => {
+        const e = droverEnv({ DROVER_HOME: '/tmp/dh' }, '/home/me');
+        expect(e.droverHome).toBe('/tmp/dh');
+        expect(e.stateDir).toBe('/tmp/dh/state');
+        expect(e.happyHome).toBe('/tmp/dh/happy');
+    });
+
+    it('resolves a mover to the legacy path while that is where the bytes are', () => {
+        // Before `drover home migrate` has run, ~/.drover/state does not exist
+        // and ~/.local/state/cattle-drover is the only truth. Sending the
+        // machine to the empty new path would lose every ledger it has.
+        const home = mkdtempSync(join(tmpdir(), 'drover-home-'));
+        mkdirSync(join(home, '.local', 'state', 'cattle-drover'), { recursive: true });
+        mkdirSync(join(home, '.happy'), { recursive: true });
+
+        const before = droverEnv({}, home);
+        expect(before.stateDir).toBe(join(home, '.local', 'state', 'cattle-drover'));
+        expect(before.happyHome).toBe(join(home, '.happy'));
+
+        // After the move both exist (the migration leaves a symlink behind),
+        // and the canonical spelling is the new one.
+        mkdirSync(join(home, '.drover', 'state'), { recursive: true });
+        mkdirSync(join(home, '.drover', 'happy'), { recursive: true });
+        const after = droverEnv({}, home);
+        expect(after.stateDir).toBe(join(home, '.drover', 'state'));
+        expect(after.happyHome).toBe(join(home, '.drover', 'happy'));
+    });
+
+    it('relay mode keeps its own happy home, so it cannot overwrite the real credentials', () => {
+        const e = droverEnv({ DROVER_SERVER_MODE: 'relay', DROVER_HOME: '/tmp/dh' }, '/home/me');
+        expect(e.happyHome).toBe('/tmp/dh/state/happy-home');
     });
 
     it('lets local.env override an exported var, and cannot move STATE_DIR', () => {
-        const xdg = mkdtempSync(join(tmpdir(), 'drover-env-'));
-        mkdirSync(join(xdg, 'cattle-drover'));
+        const dh = mkdtempSync(join(tmpdir(), 'drover-env-'));
+        mkdirSync(join(dh, 'state'));
         // local.env names a new URL and even tries to move STATE_DIR.
         writeFileSync(
-            join(xdg, 'cattle-drover', 'local.env'),
+            join(dh, 'state', 'local.env'),
             'DROVER_URL=http://local:1\nSTATE_DIR=/somewhere/else\n',
         );
 
-        const e = droverEnv({ XDG_STATE_HOME: xdg, DROVER_URL: 'http://env:2' }, '/home/me');
+        const e = droverEnv({ DROVER_HOME: dh, DROVER_URL: 'http://env:2' }, '/home/me');
 
         expect(e.droverUrl).toBe('http://local:1'); // local.env beats the exported var
-        expect(e.stateDir).toBe(join(xdg, 'cattle-drover')); // ...but not STATE_DIR itself
+        expect(e.stateDir).toBe(join(dh, 'state')); // ...but not STATE_DIR itself
     });
 });
 
 describe('droverVar — a name drover.env does not define, read with its precedence', () => {
     it('takes the default, then the exported var, then local.env over both', () => {
-        const xdg = mkdtempSync(join(tmpdir(), 'drover-env-'));
-        mkdirSync(join(xdg, 'cattle-drover'));
+        const dh = mkdtempSync(join(tmpdir(), 'drover-env-'));
+        mkdirSync(join(dh, 'state'));
 
-        expect(droverVar('DROVER_SHARED_STORE', '/dflt', { XDG_STATE_HOME: xdg }, '/home/me')).toBe('/dflt');
+        expect(droverVar('DROVER_SHARED_STORE', '/dflt', { DROVER_HOME: dh }, '/home/me')).toBe('/dflt');
         expect(
-            droverVar('DROVER_SHARED_STORE', '/dflt', { XDG_STATE_HOME: xdg, DROVER_SHARED_STORE: '/exported' }, '/home/me'),
+            droverVar('DROVER_SHARED_STORE', '/dflt', { DROVER_HOME: dh, DROVER_SHARED_STORE: '/exported' }, '/home/me'),
         ).toBe('/exported');
 
-        writeFileSync(join(xdg, 'cattle-drover', 'local.env'), 'DROVER_SHARED_STORE=/local\n');
+        writeFileSync(join(dh, 'state', 'local.env'), 'DROVER_SHARED_STORE=/local\n');
         expect(
-            droverVar('DROVER_SHARED_STORE', '/dflt', { XDG_STATE_HOME: xdg, DROVER_SHARED_STORE: '/exported' }, '/home/me'),
+            droverVar('DROVER_SHARED_STORE', '/dflt', { DROVER_HOME: dh, DROVER_SHARED_STORE: '/exported' }, '/home/me'),
         ).toBe('/local');
     });
 });
