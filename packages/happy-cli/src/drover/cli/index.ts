@@ -125,6 +125,17 @@ export const droverVerbs: readonly DroverVerb[] = [
         load: () => import('./account-of'),
     },
     {
+        // A ROW OF ITS OWN, so node can answer the BARE NAME (DROVE-315 wave 4).
+        // The logic has been here since wave 2a, but it was reachable only
+        // through `drover account add|rm|rename`; with no row, `drover
+        // account-edit` fell past the table, and cattle-drover's owner table
+        // had to keep the verb on shell to stop the entry taking the word to
+        // Claude as a prompt. The argv is the shell file's, verb included.
+        name: 'account-edit',
+        summary: 'The registry, edited by the one command: add / rm / rename. Never touches a credential.',
+        load: () => import('./account-edit'),
+    },
+    {
         name: 'sessions',
         summary: 'What is running, where, and on which account. One session is one row, sized to the terminal.',
         load: () => import('./sessions'),
