@@ -64,10 +64,12 @@ export function mcpEmptyReason(harness: {
  * The footer under a harness that has no account group of its own — Codex and
  * OpenCode, today.
  *
- * It states what was found and then what cannot be done from here, and the
- * second half changed with DROVE-296: OpenCode now shows the providers as
- * well, and "Configuring MCP servers from the phone is not built yet" read as
- * though the providers above it were editable.
+ * It states what was found and then what can and cannot be done from here.
+ * That second half has moved twice. DROVE-296 added the providers, and
+ * "Configuring MCP servers from the phone is not built yet" then read as
+ * though the providers above it were editable. DROVE-276 made them editable,
+ * so the sentence now says which half is read-only rather than claiming both
+ * are.
  */
 export function mcpOnlyFooter(harness: {
     configured: boolean;
@@ -83,7 +85,10 @@ export function mcpOnlyFooter(harness: {
     if (p?.count) {
         parts.push(`${p.count} model provider${p.count === 1 ? '' : 's'}, asked of the harness itself.`);
     }
-    parts.push('Read-only here. Editing any of this from the phone is not built yet.');
+    // Half of this became editable in DROVE-276. The sentence says which half
+    // rather than staying comfortably vague: a footer that still claimed
+    // read-only would send somebody looking for a computer to do this on.
+    parts.push('MCP servers are read-only here. Model providers can be added and configured.');
     return parts.join(' ');
 }
 

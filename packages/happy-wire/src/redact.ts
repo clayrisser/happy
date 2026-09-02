@@ -166,6 +166,33 @@ const literalSecretPatterns: readonly RegExp[] = Object.freeze([
 ]);
 
 /**
+ * True when a string carries something shaped like an issued credential.
+ *
+ * The same patterns the redactor masks with, asked as a QUESTION instead. The
+ * redactor's job is to make a log safe after the fact; this one's is to refuse
+ * an input before it travels, which is what DROVE-276 needs: a provider added
+ * from the phone sends the NAME of an environment variable, so a value shaped
+ * like a key in any field means somebody typed the key itself and should be
+ * told where it goes instead.
+ *
+ * Refusing on the phone matters more than it looks. A value refused here never
+ * leaves the handset at all -- it is not encrypted, not relayed, not held in
+ * any buffer a crash dump could reach. The machine refuses the same shapes
+ * independently, so a client that skipped this gets nothing written either.
+ *
+ * The patterns are global, so `lastIndex` is reset before each use: a shared
+ * `/g` regex asked `test()` twice answers about the second half of the string.
+ */
+export function looksLikeSecret(value: unknown): boolean {
+    if (typeof value !== 'string' || !value) return false;
+    for (const pattern of literalSecretPatterns) {
+        pattern.lastIndex = 0;
+        if (pattern.test(value)) return true;
+    }
+    return false;
+}
+
+/**
  * `token: "abc"`, `"apiKey":"abc"`, `SECRET=abc` -- a credential key and the
  * value next to it, in any of the punctuations a stringifier produces.
  *
