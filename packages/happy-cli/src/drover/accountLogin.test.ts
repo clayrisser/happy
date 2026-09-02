@@ -2,9 +2,10 @@ import { describe, expect, it, vi } from 'vitest'
 
 import {
     accountLoginPath,
-    accountLoginSessionName,
+    accountLoginSocket,
+    accountLoginWindowName,
     buildAccountLoginArgv,
-    buildAccountLoginTmuxArgv,
+    buildAccountLoginEnv,
     startAccountLogin,
     validAccountName,
 } from './accountLogin'
@@ -59,7 +60,7 @@ describe('startAccountLogin', () => {
         expect(result).toEqual({ started: true, name: 'alt', harness: 'claude' })
         expect(launch).toHaveBeenCalledWith(
             ['/d/bin/drover', 'account', 'login', 'alt'],
-            'login-alt',
+            'login-claude-alt',
         )
     })
 
@@ -72,7 +73,7 @@ describe('startAccountLogin', () => {
         expect(result).toEqual({ started: true, name: null, harness: 'claude' })
         expect(launch).toHaveBeenCalledWith(
             ['/d/bin/drover', 'account', 'login'],
-            'login-new',
+            'login-claude-new',
         )
     })
 
@@ -95,7 +96,7 @@ describe('startAccountLogin', () => {
             ['/d/bin/drover', 'account', 'login', '--harness', 'cursor'],
             // The slug libexec/drover-cursor-login computes for itself: a cursor
             // account cannot be named after a config dir because it has none.
-            'login-cursor',
+            'login-cursor-new',
         )
     })
 
@@ -107,7 +108,7 @@ describe('startAccountLogin', () => {
         )
         expect(launch).toHaveBeenCalledWith(
             ['/d/bin/drover', 'account', 'login', 'jam', '--harness', 'cursor'],
-            'login-jam',
+            'login-cursor-jam',
         )
     })
 
@@ -151,32 +152,53 @@ describe('startAccountLogin', () => {
     })
 })
 
-describe('accountLoginSessionName', () => {
-    it('is a pure function of the account, because the name IS the lock', () => {
-        // Two taps for the same account have to want the same session name, or
+describe('accountLoginWindowName', () => {
+    it('is a pure function of the harness and the account, because the name IS the lock', () => {
+        // Two taps for the same account have to want the same window name, or
         // tmux has nothing to refuse and both logins race for one config dir.
-        expect(accountLoginSessionName('alt')).toBe('login-alt')
-        expect(accountLoginSessionName('alt')).toBe(accountLoginSessionName('alt'))
+        expect(accountLoginWindowName('alt')).toBe('login-claude-alt')
+        expect(accountLoginWindowName('alt')).toBe(accountLoginWindowName('alt'))
     })
 
-    it('spells an email address in what tmux allows in a session name', () => {
-        // tmux forbids `.` and `:` in a session name, and an account is named
-        // after the address that signed in.
-        expect(accountLoginSessionName('clayrisser@gmail.com'))
-            .toBe('login-clayrisser-gmail-com')
+    it('spells an email address in what tmux allows in a window name', () => {
+        // tmux forbids `.` and `:` in a name, and an account is named after the
+        // address that signed in.
+        expect(accountLoginWindowName('clayrisser@gmail.com'))
+            .toBe('login-claude-clayrisser-gmail-com')
+    })
+
+    it('carries the harness, because these names are read in a window list now', () => {
+        // On the old private socket `login-alt` was unambiguous; beside a day's
+        // work it is not (DROVE-348).
+        expect(accountLoginWindowName('jam', 'cursor')).toBe('login-cursor-jam')
+        expect(accountLoginWindowName('jam', 'claude')).toBe('login-claude-jam')
     })
 
     it('gives a nameless add a placeholder both taps collide on', () => {
         // Which account-N it lands on is decided inside the shell and renamed
         // to there; until then two nameless adds must not both start.
-        expect(accountLoginSessionName()).toBe('login-new')
-        expect(accountLoginSessionName('')).toBe('login-new')
-        expect(accountLoginSessionName('   ')).toBe('login-new')
-        // A nameless CURSOR add is `login-cursor`, matching the slug the cursor
-        // login script computes for itself, so the session this daemon opens is
-        // already the name the script wants (DROVE-270).
-        expect(accountLoginSessionName(null, 'cursor')).toBe('login-cursor')
-        expect(accountLoginSessionName('jam', 'cursor')).toBe('login-jam')
+        expect(accountLoginWindowName()).toBe('login-claude-new')
+        expect(accountLoginWindowName('')).toBe('login-claude-new')
+        expect(accountLoginWindowName('   ')).toBe('login-claude-new')
+        expect(accountLoginWindowName(null, 'cursor')).toBe('login-cursor-new')
+    })
+
+    it('is the string libexec/drover-login-session.sh builds', () => {
+        // login_window_name <harness> <slug> — one rule, two readers, and a
+        // drift here is a lock that does not lock.
+        expect(accountLoginWindowName('account-3', 'claude')).toBe('login-claude-account-3')
+    })
+})
+
+describe('accountLoginSocket', () => {
+    it('is the USER\'S server, which is what a bare tmux reaches', () => {
+        // DROVE-348 reversed the private `drover-login` socket: a login Clay
+        // cannot see is a login he cannot watch.
+        expect(accountLoginSocket({})).toBe('default')
+    })
+
+    it('follows DROVER_TMUX_SOCKET, the same variable the shell reads', () => {
+        expect(accountLoginSocket({ DROVER_TMUX_SOCKET: 'work' })).toBe('work')
     })
 })
 
@@ -205,25 +227,16 @@ describe('accountLoginPath', () => {
     })
 })
 
-describe('buildAccountLoginTmuxArgv', () => {
-    it('runs on its own socket so the session is not in anyone\'s picker', () => {
-        const argv = buildAccountLoginTmuxArgv({
-            argv: ['/d/bin/drover', 'account', 'login'],
-            session: 'login-new',
-            path: '/usr/bin',
-        })
-        expect(argv.slice(0, 5)).toEqual(['tmux', '-L', 'drover-login', 'new-session', '-d'])
-        expect(argv.slice(-3)).toEqual(['/d/bin/drover', 'account', 'login'])
+describe('buildAccountLoginEnv', () => {
+    it('hands the PATH over under its own name, which is the whole of DROVE-212', () => {
+        // ~/.local/bin is on an interactive shell's PATH and not on a launchd
+        // job's, so `command -v claude` failed with its stderr on /dev/null.
+        const env = buildAccountLoginEnv('/usr/bin:/home/u/.local/bin', { HOME: '/home/u' })
+        expect(env.DROVER_LOGIN_PATH).toBe('/usr/bin:/home/u/.local/bin')
     })
 
-    it('names the window control, which is how a live login is told from a corpse', () => {
-        const argv = buildAccountLoginTmuxArgv({
-            argv: ['/d/bin/drover', 'account', 'login'],
-            session: 'login-new',
-            path: '/usr/bin',
-        })
-        expect(argv).toContain('control')
-        expect(argv).toContain('DROVER_LOGIN_PATH=/usr/bin')
-        expect(argv).toContain('DROVER_LOGIN_SESSION=login-new')
+    it('keeps the rest of the environment, which decides which bus the card goes to', () => {
+        const env = buildAccountLoginEnv('/usr/bin', { DROVER_URL: 'http://127.0.0.1:7970' })
+        expect(env.DROVER_URL).toBe('http://127.0.0.1:7970')
     })
 })
